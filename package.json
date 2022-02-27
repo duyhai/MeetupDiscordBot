@@ -4,7 +4,7 @@
   "description": "A Discord bot for managing Meetup groups",
   "main": "dist/app.js",
   "scripts": {
-    "start": "tsc && node dist/index.js",
+    "start": "ts-node src/index.ts",
     "lint": "eslint . --ext .ts",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
@@ -29,6 +29,7 @@
   },
   "dependencies": {
     "discord.js": "^13.6.0",
-    "express": "^4.17.1"
+    "express": "^4.17.1",
+    "ts-node": "^10.5.0"
   }
 }
