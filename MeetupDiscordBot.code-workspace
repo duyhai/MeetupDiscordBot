@@ -5,7 +5,6 @@
         }
     ],
     "settings": {
-        "makefile.extensionOutputFolder": "./.vscode",
         "editor.defaultFormatter": "dbaeumer.vscode-eslint",
         "editor.formatOnSave": true,
         "eslint.format.enable": true,
