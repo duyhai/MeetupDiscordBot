@@ -1,5 +1,5 @@
-import {Client} from 'discord.js';
-import {Configuration} from './configuration';
+import { Client } from 'discord.js';
+import Configuration from './configuration';
 import interactionCreate from './listeners/interactionCreate';
 import ready from './listeners/ready';
 
@@ -14,4 +14,5 @@ const client = new Client({
 ready(client);
 interactionCreate(client);
 
+// eslint-disable-next-line @typescript-eslint/no-floating-promises
 client.login(token);

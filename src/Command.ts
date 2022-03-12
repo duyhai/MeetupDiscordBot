@@ -1,7 +1,9 @@
-import {BaseCommandInteraction,
+import {
+  BaseCommandInteraction,
   ChatInputApplicationCommandData,
-  Client} from 'discord.js';
+  Client,
+} from 'discord.js';
 
 export interface Command extends ChatInputApplicationCommandData {
-    run: (client: Client, interaction: BaseCommandInteraction) => void;
+  run: (client: Client, interaction: BaseCommandInteraction) => void;
 }
