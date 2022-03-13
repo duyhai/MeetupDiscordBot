@@ -11,5 +11,5 @@ https://www.dataschool.io/how-to-contribute-on-github/
 - Install node js: https://nodejs.org/en/ 
 - Install yarn: `npm install --global yarn`
 - Download dependencies: `yarn`
-- Fill out the API keys in the `.env` file
+- Fill out the API keys in the `.env` file then run `git update-index --skip-worktree .env` to prevent checking in your keys
 - Run the script: `export $(cat .env | xargs) && yarn start`
