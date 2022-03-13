@@ -12,4 +12,4 @@ https://www.dataschool.io/how-to-contribute-on-github/
 - Install yarn: `npm install --global yarn`
 - Download dependencies: `yarn`
 - Fill out the API keys in the `.env` file
-- Run the script: `yarn start`
+- Run the script: `export $(cat .env | xargs) && yarn start`
