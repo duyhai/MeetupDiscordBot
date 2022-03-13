@@ -1,11 +1,16 @@
 {
     "compilerOptions": {
-      "module": "commonjs",
+      "module": "ES2020",
       "esModuleInterop": true,
-      "target": "es6",
+      "target": "es2020",
       "moduleResolution": "node",
       "sourceMap": true,
       "outDir": "dist"
     },
-    "lib": ["es2015"]
+    "lib": ["es2020"],
+    "ts-node": {
+      "compilerOptions": {
+        "module": "commonjs"
+      }
+    }
   }
