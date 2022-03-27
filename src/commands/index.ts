@@ -1,6 +1,3 @@
-import { Command } from './interface';
-import OnboardUser from './onboardUser';
-
-const Commands: Command[] = [OnboardUser];
+const Commands = [];
 
 export default Commands;
