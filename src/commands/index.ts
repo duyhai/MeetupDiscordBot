@@ -1,7 +1,3 @@
-import CreateChannel from './createChannel';
-import { Command } from './interface';
-import OnboardUser from './onboardUser';
-
-const Commands: Command[] = [OnboardUser, CreateChannel];
+const Commands: Command[] = [];
 
 export default Commands;

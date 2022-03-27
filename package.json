@@ -30,6 +30,7 @@
   },
   "dependencies": {
     "discord.js": "^13.6.0",
+    "discordx": "^9.4.1",
     "express": "^4.17.1",
     "ts-node": "^10.5.0",
     "tslog": "^3.3.2"
