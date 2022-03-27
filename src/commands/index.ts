@@ -1,3 +1,5 @@
-const Commands: Command[] = [];
+import { CreateChannel } from './createChannel';
+
+const Commands = [CreateChannel];
 
 export default Commands;

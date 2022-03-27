@@ -1,55 +1,23 @@
 import {
-  BaseCommandInteraction,
-  CategoryChannel,
-  Channel,
-  Client,
-  Guild,
-  Permissions,
-  Role,
-  TextChannel,
+  BaseCommandInteraction, Channel, Client, CommandInteraction,
 } from 'discord.js';
-import { ApplicationCommandOptionTypes } from 'discord.js/typings/enums';
-import { Command } from './interface';
+import { Discord, Slash, SlashOption } from 'discordx';
 
-const zapierBotID = '368105370532577280';
-const botCommandsChannelID = '935815028140015616';
-const joinChannelID = '935080178181373992';
-const messageID = '935080771536953394';
+@Discord()
+export class CreateChannel {
+  @Slash('createchannel')
+  async createchannel(
+  @SlashOption('channel_name', { description: 'Name of the new channel.' })
+    channelName: string,
+    @SlashOption('channel_emoji', { description: 'Emoji for the channel.' })
+    channelEmoji: string,
+    @SlashOption('join_channel', { description: 'Category of the channel.' })
+    joinChannel: Channel,
 
-const CreateChannel: Command = {
-  name: 'createchannel',
-  description: 'Creates a new channel',
-  type: 'CHAT_INPUT',
-  options: [
-    {
-      name: 'channelname',
-      description: 'Name of the new channel.',
-      required: true,
-      type: ApplicationCommandOptionTypes.STRING,
-    },
-    {
-      name: 'channelemoji',
-      description: 'Emoji for the channel.',
-      required: true,
-      type: ApplicationCommandOptionTypes.STRING,
-    },
-    {
-      name: 'channelcategoryid',
-      description: 'CategoryID of the channel.',
-      required: true,
-      type: ApplicationCommandOptionTypes.STRING,
-    },
-  ],
-
-  run: async (client: Client, interaction: BaseCommandInteraction) => {
-    const optionsArray = interaction.options.data;
-    const channelName = optionsArray[0].value as string;
-    const emoji = optionsArray[1].value as string;
-    const categoryID = optionsArray[2].value as string;
-
-    const category = await client.channels.fetch(categoryID).catch() as unknown as CategoryChannel;
-
-    console.log(JSON.stringify((await client.guilds.fetch(interaction.guildId)).roles.cache));
+    interaction: CommandInteraction,
+  ) {
+    // const category = await client.channels.fetch(categoryID).catch()
+    // as unknown as CategoryChannel;
 
     // if (category === undefined || category.type !== 'GUILD_CATEGORY') {
     //   await interaction.followUp({
@@ -98,7 +66,5 @@ const CreateChannel: Command = {
     //   ephemeral: true,
     //   content: 'Channel is done!',
     // });
-  },
-};
-
-export default CreateChannel;
+  }
+}
