@@ -13,7 +13,6 @@ export function createMessageActionRow(buttonOptions: MessageButtonOptions[], cu
     buttonOptions.map((option, index) => {
       const button = new MessageButton();
       button.setLabel(option.label);
-      button.setLabel(option.label);
       button.setCustomId(`${customId}-${index}`);
       if (option.emoji) button.setEmoji(option.emoji);
       if (option.style) button.setStyle(option.style);
