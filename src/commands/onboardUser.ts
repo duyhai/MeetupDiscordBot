@@ -8,7 +8,7 @@ const OnboardUser: Command = {
   name: 'onboard_user',
   description: 'Returns a greeting',
   type: 'CHAT_INPUT',
-  run: (client: Client, interaction: BaseCommandInteraction) => {
+  run: async (client: Client, interaction: BaseCommandInteraction) => {
     const content = 'Hello there!';
 
     interaction.followUp({
