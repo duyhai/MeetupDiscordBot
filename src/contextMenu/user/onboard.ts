@@ -16,6 +16,10 @@ import {
 } from '../../constants';
 
 const strings = {
+  buttons: {
+    onboardLadies: 'OnboardLadies',
+    onboardNonLadies: 'OnboardMembers',
+  },
   welcomeMsg:
     (user: User, discussionJoinChannel: GuildBasedChannel, interestJoinChannel: GuildBasedChannel) => `Welcome ${user.toString()}. Have fun exploring the server! Check out some of our interest channels! ${discussionJoinChannel.toString()} ${interestJoinChannel.toString()}`,
   replyToModerator: 'User is onboarded! Please make sure you checked their intro, Meetup profile and name (FirstName + LastName/Initial)',
@@ -56,14 +60,14 @@ async function onboardUser(interaction: MessageContextMenuInteraction, isFemale:
 export class OnboardUser {
   @Permission(false)
   @Permission({ id: MODERATOR_ROLE_ID, type: 'ROLE', permission: true })
-  @ContextMenu('MESSAGE', 'OnboardGuys')
-  async onboardGuysHandler(interaction: MessageContextMenuInteraction) {
+  @ContextMenu('MESSAGE', strings.buttons.onboardNonLadies)
+  async onboardNonLadiesHandler(interaction: MessageContextMenuInteraction) {
     await onboardUser(interaction, false);
   }
 
   @Permission(false)
   @Permission({ id: MODERATOR_ROLE_ID, type: 'ROLE', permission: true })
-  @ContextMenu('MESSAGE', 'OnboardLadies')
+  @ContextMenu('MESSAGE', strings.buttons.onboardLadies)
   async onboardLadiesHandler(interaction: MessageContextMenuInteraction) {
     await onboardUser(interaction, true);
   }
