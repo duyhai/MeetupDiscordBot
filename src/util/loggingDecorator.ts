@@ -18,8 +18,12 @@ function loggingDecorator({
 }: LoggingDecoratorArgs) {
   const logger = new Logger({ name });
   let loggerFn = (args: unknown) => logger.info(args);
-  if (level === 'warn') loggerFn = (args: unknown) => logger.warn(args);
-  if (level === 'error') loggerFn = (args: unknown) => logger.error(args);
+  if (level === 'warn') {
+    loggerFn = (args: unknown) => logger.warn(args);
+  }
+  if (level === 'error') {
+    loggerFn = (args: unknown) => logger.error(args);
+  }
 
   return (
     target: unknown,
@@ -31,12 +35,16 @@ function loggingDecorator({
       ...descriptor,
       value: (...args: unknown[]) => {
         loggerFn(`Calling ${propertyKey}`);
-        if (logArgs) loggerFn(`Arguments: ${JSON.stringify(args)}`);
+        if (logArgs) {
+          loggerFn(`Arguments: ${JSON.stringify(args)}`);
+        }
         let result: unknown;
         if (typeof targetMethod.apply === 'function') {
           result = targetMethod.apply(this, args);
         }
-        if (logResult) loggerFn(`Result: ${JSON.stringify(result)}`);
+        if (logResult) {
+          loggerFn(`Result: ${JSON.stringify(result)}`);
+        }
       },
     };
   };

@@ -17,7 +17,8 @@ const strings = {
     discussionJoinChannel: GuildBasedChannel,
     interestJoinChannel: GuildBasedChannel
   ) =>
-    `Welcome ${user.toString()}. Have fun exploring the server! Check out some of our interest channels! ${discussionJoinChannel.toString()} ${interestJoinChannel.toString()}`,
+    `Welcome ${user.toString()}. Have fun exploring the server! \
+    Check out some of our interest channels! ${discussionJoinChannel.toString()} ${interestJoinChannel.toString()}`,
   replyToModerator:
     'User is onboarded! Please make sure you checked their intro, Meetup profile and name (FirstName + LastName/Initial)',
 };

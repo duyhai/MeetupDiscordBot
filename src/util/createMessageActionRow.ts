@@ -20,8 +20,12 @@ export function createMessageActionRow(
       const button = new MessageButton();
       button.setLabel(option.label);
       button.setCustomId(`${customId}-${index}`);
-      if (option.emoji) button.setEmoji(option.emoji);
-      if (option.style) button.setStyle(option.style);
+      if (option.emoji) {
+        button.setEmoji(option.emoji);
+      }
+      if (option.style) {
+        button.setStyle(option.style);
+      }
       return button;
     })
   );
