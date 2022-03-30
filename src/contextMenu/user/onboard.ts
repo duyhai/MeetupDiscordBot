@@ -1,74 +1,42 @@
 import {
-  Guild,
-  GuildBasedChannel,
   MessageContextMenuInteraction,
-  User,
+  UserContextMenuInteraction,
 } from 'discord.js';
-import {
-  ContextMenu, Discord, Permission,
-} from 'discordx';
-import {
-  DISCUSSION_JOIN_CHANNEL_ID,
-  INTEREST_JOIN_CHANNEL_ID,
-  LADIES_LOUNGE_ROLE_ID,
-  MODERATOR_ROLE_ID,
-  ONBOARDING_ROLE_ID,
-} from '../../constants';
-
-const strings = {
-  buttons: {
-    onboardLadies: 'OnboardLadies',
-    onboardNonLadies: 'OnboardMembers',
-  },
-  welcomeMsg:
-    (user: User, discussionJoinChannel: GuildBasedChannel, interestJoinChannel: GuildBasedChannel) => `Welcome ${user.toString()}. Have fun exploring the server! Check out some of our interest channels! ${discussionJoinChannel.toString()} ${interestJoinChannel.toString()}`,
-  replyToModerator: 'User is onboarded! Please make sure you checked their intro, Meetup profile and name (FirstName + LastName/Initial)',
-};
-
-async function addToLadiesLounge(guild: Guild, userId: string) {
-  const user = await guild.members.fetch(userId);
-  const ladiesRole = await guild.roles.fetch(LADIES_LOUNGE_ROLE_ID);
-  await user.roles.add(ladiesRole);
-}
-
-async function removeFromOnboarding(guild: Guild, userId: string) {
-  const user = await guild.members.fetch(userId);
-  const onboardingRole = await guild.roles.fetch(ONBOARDING_ROLE_ID);
-  await user.roles.remove(onboardingRole);
-}
-
-async function onboardUser(interaction: MessageContextMenuInteraction, isFemale: boolean) {
-  await interaction.deferReply({ ephemeral: true });
-  const { guild, targetMessage, client } = interaction;
-  const user = await client.users.fetch(targetMessage.author.id);
-  const discussionJoinChannel = await guild.channels.fetch(DISCUSSION_JOIN_CHANNEL_ID);
-  const interestJoinChannel = await guild.channels.fetch(INTEREST_JOIN_CHANNEL_ID);
-
-  if (isFemale) {
-    await addToLadiesLounge(guild, user.id);
-  }
-  await removeFromOnboarding(guild, user.id);
-
-  const userMessage = await interaction.channel.messages.fetch(interaction.targetMessage.id);
-  await userMessage.reply({
-    content: strings.welcomeMsg(user, discussionJoinChannel, interestJoinChannel),
-  });
-  await interaction.editReply({ content: strings.replyToModerator });
-}
+import { ContextMenu, Discord, Permission } from 'discordx';
+import { commandNames, MODERATOR_ROLE_ID } from '../../constants';
+import { onboardUser } from '../../lib/user/onboard';
 
 @Discord()
-export class OnboardUser {
+export class OnboardUserContextCommands {
   @Permission(false)
   @Permission({ id: MODERATOR_ROLE_ID, type: 'ROLE', permission: true })
-  @ContextMenu('MESSAGE', strings.buttons.onboardNonLadies)
-  async onboardNonLadiesHandler(interaction: MessageContextMenuInteraction) {
-    await onboardUser(interaction, false);
+  @ContextMenu('MESSAGE', commandNames.user.onboardNonLadies)
+  async onboardNonLadiesMsgHandler(interaction: MessageContextMenuInteraction) {
+    const { targetMessage } = interaction;
+    await onboardUser(interaction, targetMessage.author.id, false);
   }
 
   @Permission(false)
   @Permission({ id: MODERATOR_ROLE_ID, type: 'ROLE', permission: true })
-  @ContextMenu('MESSAGE', strings.buttons.onboardLadies)
-  async onboardLadiesHandler(interaction: MessageContextMenuInteraction) {
-    await onboardUser(interaction, true);
+  @ContextMenu('MESSAGE', commandNames.user.onboardLadies)
+  async onboardLadiesMsgHandler(interaction: MessageContextMenuInteraction) {
+    const { targetMessage } = interaction;
+    await onboardUser(interaction, targetMessage.author.id, true);
+  }
+
+  @Permission(false)
+  @Permission({ id: MODERATOR_ROLE_ID, type: 'ROLE', permission: true })
+  @ContextMenu('USER', commandNames.user.onboardNonLadies)
+  async onboardNonLadiesUserHandler(interaction: UserContextMenuInteraction) {
+    const { targetUser } = interaction;
+    await onboardUser(interaction, targetUser.id, false);
+  }
+
+  @Permission(false)
+  @Permission({ id: MODERATOR_ROLE_ID, type: 'ROLE', permission: true })
+  @ContextMenu('USER', commandNames.user.onboardLadies)
+  async onboardLadiesUserHandler(interaction: UserContextMenuInteraction) {
+    const { targetUser } = interaction;
+    await onboardUser(interaction, targetUser.id, true);
   }
 }

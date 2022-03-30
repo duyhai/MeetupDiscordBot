@@ -6,7 +6,8 @@
     },
     "extends": [
         "airbnb-typescript-base",
-        "plugin:@typescript-eslint/recommended"
+        "plugin:@typescript-eslint/recommended",
+        "prettier"
     ],
     "parser": "@typescript-eslint/parser",
     "parserOptions": {
@@ -15,10 +16,14 @@
         "project": "tsconfig.json"
     },
     "plugins": [
-        "@typescript-eslint"
+        "@typescript-eslint",
+        "prettier"
     ],
     "rules": {
         "class-methods-use-this": "off",
-        "import/prefer-default-export": "off"        
+        "import/prefer-default-export": "off",
+        "prettier/prettier": ["error", { "singleQuote": true }],
+        "arrow-body-style": "off",
+        "prefer-arrow-callback": "off"
     }
 }

@@ -1,5 +1,8 @@
 import {
-  EmojiIdentifierResolvable, MessageActionRow, MessageButton, MessageButtonStyleResolvable,
+  EmojiIdentifierResolvable,
+  MessageActionRow,
+  MessageButton,
+  MessageButtonStyleResolvable,
 } from 'discord.js';
 
 interface MessageButtonOptions {
@@ -8,7 +11,10 @@ interface MessageButtonOptions {
   style?: MessageButtonStyleResolvable;
 }
 
-export function createMessageActionRow(buttonOptions: MessageButtonOptions[], customId: string) {
+export function createMessageActionRow(
+  buttonOptions: MessageButtonOptions[],
+  customId: string
+) {
   return new MessageActionRow().setComponents(
     buttonOptions.map((option, index) => {
       const button = new MessageButton();
@@ -17,7 +23,7 @@ export function createMessageActionRow(buttonOptions: MessageButtonOptions[], cu
       if (option.emoji) button.setEmoji(option.emoji);
       if (option.style) button.setStyle(option.style);
       return button;
-    }),
+    })
   );
 }
 
