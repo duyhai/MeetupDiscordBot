@@ -4,6 +4,7 @@ import {
   BaseCommandInteraction,
   User,
 } from 'discord.js';
+import { Logger } from 'tslog';
 import {
   DISCUSSION_JOIN_CHANNEL_ID,
   INTEREST_JOIN_CHANNEL_ID,
@@ -21,7 +22,10 @@ const strings = {
     Check out some of our interest channels! ${discussionJoinChannel.toString()} ${interestJoinChannel.toString()}`,
   replyToModerator:
     'User is onboarded! Please make sure you checked their intro, Meetup profile and name (FirstName + LastName/Initial)',
+  invisibleCharacter: ' ',
 };
+
+const logger = new Logger({ name: 'onboardUser' });
 
 async function addToLadiesLounge(guild: Guild, userId: string) {
   const user = await guild.members.fetch(userId);
@@ -43,6 +47,9 @@ export async function onboardUser(
   await interaction.deferReply();
   const { guild, client } = interaction;
   const user = await client.users.fetch(userId);
+  const fullUsername = user.tag;
+
+  logger.info(`User ${fullUsername} is getting onboarded`);
   const discussionJoinChannel = await guild.channels.fetch(
     DISCUSSION_JOIN_CHANNEL_ID
   );
@@ -50,10 +57,26 @@ export async function onboardUser(
     INTEREST_JOIN_CHANNEL_ID
   );
 
+  const guildMember = await guild.members.fetch(userId);
+  if (!guildMember.nickname) {
+    const { username } = user;
+    // Ugly hack because of this:
+    // https://github.com/discord/discord-api-docs/issues/667
+    const paddedUsername = Array.from(username).join(
+      strings.invisibleCharacter
+    );
+    await guildMember.setNickname(paddedUsername);
+    logger.info(
+      `Explicitly set ${fullUsername}'s nickname to ${paddedUsername}`
+    );
+  }
+
   if (isFemale) {
     await addToLadiesLounge(guild, user.id);
+    logger.info(`User ${fullUsername} added to LadiesLounge`);
   }
   await removeFromOnboarding(guild, user.id);
+  logger.info(`User ${fullUsername} onboarded!`);
 
   await interaction.editReply({
     content: strings.welcomeMsg(
