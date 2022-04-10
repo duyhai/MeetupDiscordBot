@@ -6,7 +6,8 @@
     },
     "extends": [
         "airbnb-typescript-base",
-        "plugin:@typescript-eslint/recommended"
+        "plugin:@typescript-eslint/recommended",
+        "plugin:prettier/recommended"
     ],
     "parser": "@typescript-eslint/parser",
     "parserOptions": {
@@ -19,6 +20,13 @@
     ],
     "rules": {
         "class-methods-use-this": "off",
-        "import/prefer-default-export": "off"        
+        "import/prefer-default-export": "off",
+        "prettier/prettier": ["error", { "singleQuote": true }],
+        "curly": ["error", "all"],
+        "max-len": ["error", {"code": 140, "ignoreUrls": true}],
+        "no-confusing-arrow": ["error", { "allowParens": false }],        
+        "no-mixed-operators": "error",
+        "no-tabs": ["error", {"allowIndentationTabs": true}],
+        "linebreak-style": ["error", "unix"]
     }
 }

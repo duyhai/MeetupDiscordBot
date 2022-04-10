@@ -1,11 +1,29 @@
 import { Intents, Interaction, Message } from 'discord.js';
 import { Client } from 'discordx';
+import express, { Request, Response } from 'express';
 import { Logger } from 'tslog';
 import Configuration from './configuration';
 import './contextMenu';
 import './commands';
 
 const logger = new Logger({ name: 'MeetupBot' });
+
+/// ////////////////////////////////////////////////////////////////
+//                         EXPRESS SERVER                        //
+/// ////////////////////////////////////////////////////////////////
+
+const PORT = process.env.PORT || 5000;
+
+const app = express();
+app.use(express.urlencoded({ extended: true }));
+
+app.use('/', (_request: Request, response: Response) => {
+  response.sendStatus(200);
+});
+
+/// ////////////////////////////////////////////////////////////////
+//                          DISCORD CLIENT                       //
+/// ////////////////////////////////////////////////////////////////
 
 const client = new Client({
   simpleCommand: {
@@ -57,4 +75,9 @@ async function run() {
   await client.login(token);
 }
 
+/// ////////////////////////////////////////////////////////////////
+//                             RUN STUFF                         //
+/// ////////////////////////////////////////////////////////////////
+
 run().catch((error) => logger.error(JSON.stringify(error)));
+app.listen(PORT, () => logger.info(`Server started on port ${PORT}!`));

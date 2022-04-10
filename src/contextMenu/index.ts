@@ -1,5 +1,5 @@
-import { OnboardUser } from './user/onboard';
+import { OnboardUserContextCommands } from './user/onboard';
 
-const ContextCommands = [OnboardUser];
+const ContextCommands = [OnboardUserContextCommands];
 
 export default ContextCommands;
