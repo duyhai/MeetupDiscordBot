@@ -1,5 +1,5 @@
-import {Config} from './schema';
+import { Config } from './schema';
 
-export const devConfig : Config = {
+export const devConfig: Config = {
   discordAPIKey: '',
 };

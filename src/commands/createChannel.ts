@@ -1,6 +1,4 @@
-import {
-  BaseCommandInteraction, Channel, Client, CommandInteraction, TextChannel,
-} from 'discord.js';
+import { CommandInteraction, TextChannel } from 'discord.js';
 import { Discord, Slash, SlashOption } from 'discordx';
 
 // Create and setup channels
@@ -31,34 +29,36 @@ const strings = {
 export class CreateChannel {
   @Slash('create_channel')
   async createchannel(
-  @SlashOption('channel_name', { description: 'Name of the new channel.' })
+    @SlashOption('channel_name', { description: 'Name of the new channel.' })
     channelName: string,
     @SlashOption('channel_emoji', { description: 'Emoji for the channel.' })
     channelEmoji: string,
     @SlashOption('join_channel', { description: 'Category of the channel.' })
     joinChannel: TextChannel,
 
-    interaction: CommandInteraction,
+    interaction: CommandInteraction
   ) {
     const fullChannelName = channelEmoji + channelName;
 
-    if (interaction.guild.channels.cache.find(
-      (channel) => channel.name === fullChannelName,
-    ) != null) {
-      await interaction.reply(
-        {
-          ephemeral: true,
-          content: strings.duplicateChannel,
-        },
-      );
+    if (
+      interaction.guild.channels.cache.find(
+        (channel) => channel.name === fullChannelName
+      ) != null
+    ) {
+      await interaction.reply({
+        ephemeral: true,
+        content: strings.duplicateChannel,
+      });
       return;
     }
 
     // // TODO: check if second option is really just an emoji
 
-    const channelRole = await interaction.guild.roles.create({
-      name: channelName,
-    }).then((role) => role.setPermissions(0n)); // Clear permissions
+    const channelRole = await interaction.guild.roles
+      .create({
+        name: channelName,
+      })
+      .then((role) => role.setPermissions(0n)); // Clear permissions
 
     await interaction.guild.channels.create(fullChannelName, {
       type: 'GUILD_TEXT',
@@ -75,8 +75,9 @@ export class CreateChannel {
       ],
     });
 
-    const botCommandsChannel = interaction.guild.channels.cache
-      .get(botCommandsChannelID) as TextChannel;
+    const botCommandsChannel = interaction.guild.channels.cache.get(
+      botCommandsChannelID
+    ) as TextChannel;
     await botCommandsChannel.send(`z/channel ${joinChannelID}`);
     await botCommandsChannel.send(`z/message ${messageID}`);
     await botCommandsChannel.send(`z/add ${channelEmoji} ${channelName}`);
