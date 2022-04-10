@@ -5,10 +5,11 @@ import { Discord, Slash, SlashOption } from 'discordx';
 
 // Create and setup channels
 // - Decide on an emoji for the channel
-// - Create channel under discussions and categories and make it private. Make sure to include the emoji in the name.
+// - Create channel under discussions and categories and make it private.
+//        Make sure to include the emoji in the name.
 // - Create corresponding role and clear permissions
 // - Add Bot and freshly created role to channel
-// - Edit the role assignment message in join-discussion-channels // TODO
+// - Edit the role assignment message in join-discussion-channels       // TODO
 // - Set up the Zira bot to assign role when reacting to role assignment message:
 //   - Go to 🤖bot-commands
 //   - Get the join-discussion-channels id with the copy link option. In the case of Discussions category the link is https://discord.com/channels/912461362289061939/935080178181373992, so the id is 935080178181373992
@@ -18,7 +19,6 @@ import { Discord, Slash, SlashOption } from 'discordx';
 //   - Message z/add <emoji here> <role name>
 // - You're done!
 
-const zapierBotID = '368105370532577280';
 const botCommandsChannelID = '915035889174990899';
 const joinChannelID = '935080178181373992';
 const messageID = '935080771536953394';
@@ -29,7 +29,7 @@ const strings = {
 
 @Discord()
 export class CreateChannel {
-  @Slash('createchannel')
+  @Slash('create_channel')
   async createchannel(
   @SlashOption('channel_name', { description: 'Name of the new channel.' })
     channelName: string,
@@ -47,9 +47,11 @@ export class CreateChannel {
     ) != null) {
       await interaction.reply(
         {
+          ephemeral: true,
           content: strings.duplicateChannel,
         },
       );
+      return;
     }
 
     // // TODO: check if second option is really just an emoji
@@ -70,10 +72,6 @@ export class CreateChannel {
           id: channelRole.id,
           allow: ['VIEW_CHANNEL'],
         },
-        {
-          id: zapierBotID,
-          allow: ['VIEW_CHANNEL'],
-        },
       ],
     });
 
@@ -83,7 +81,7 @@ export class CreateChannel {
     await botCommandsChannel.send(`z/message ${messageID}`);
     await botCommandsChannel.send(`z/add ${channelEmoji} ${channelName}`);
 
-    await interaction.followUp({
+    await interaction.reply({
       ephemeral: true,
       content: 'Channel is done!',
     });
