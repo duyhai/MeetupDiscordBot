@@ -1,7 +1,31 @@
 import {
-  BaseCommandInteraction, Channel, Client, CommandInteraction,
+  BaseCommandInteraction, Channel, Client, CommandInteraction, TextChannel,
 } from 'discord.js';
 import { Discord, Slash, SlashOption } from 'discordx';
+
+// Create and setup channels
+// - Decide on an emoji for the channel
+// - Create channel under discussions and categories and make it private. Make sure to include the emoji in the name.
+// - Create corresponding role and clear permissions
+// - Add Bot and freshly created role to channel
+// - Edit the role assignment message in join-discussion-channels // TODO
+// - Set up the Zira bot to assign role when reacting to role assignment message:
+//   - Go to 🤖bot-commands
+//   - Get the join-discussion-channels id with the copy link option. In the case of Discussions category the link is https://discord.com/channels/912461362289061939/935080178181373992, so the id is 935080178181373992
+//   - Message z/channel <id here>
+//   - Get the role assignment message id similarly as above for the channel. Link should look like this: https://discord.com/channels/912461362289061939/935080178181373992/935080771536953394
+//   - Message z/message <id here>
+//   - Message z/add <emoji here> <role name>
+// - You're done!
+
+const zapierBotID = '368105370532577280';
+const botCommandsChannelID = '915035889174990899';
+const joinChannelID = '935080178181373992';
+const messageID = '935080771536953394';
+
+const strings = {
+  duplicateChannel: 'Channel with same name and emoji already exists!',
+};
 
 @Discord()
 export class CreateChannel {
@@ -12,59 +36,56 @@ export class CreateChannel {
     @SlashOption('channel_emoji', { description: 'Emoji for the channel.' })
     channelEmoji: string,
     @SlashOption('join_channel', { description: 'Category of the channel.' })
-    joinChannel: Channel,
+    joinChannel: TextChannel,
 
     interaction: CommandInteraction,
   ) {
-    // const category = await client.channels.fetch(categoryID).catch()
-    // as unknown as CategoryChannel;
+    const fullChannelName = channelEmoji + channelName;
 
-    // if (category === undefined || category.type !== 'GUILD_CATEGORY') {
-    //   await interaction.followUp({
-    //     ephemeral: true,
-    //     content: 'Error: category was not found!',
-    //   });
-    //   return;
-    // }
-
-    // const name = emoji + channelName;
-    // if (interaction.guild.channels.cache.find(
-    //   (c) => c.name.toLowerCase() === name,
-    // ) !== undefined) {
-    //   await interaction.followUp({
-    //     ephemeral: true,
-    //     content: 'Error: channel with this name already exists!',
-    //   });
-    //   return;
-    // }
+    if (interaction.guild.channels.cache.find(
+      (channel) => channel.name === fullChannelName,
+    ) != null) {
+      await interaction.reply(
+        {
+          content: strings.duplicateChannel,
+        },
+      );
+    }
 
     // // TODO: check if second option is really just an emoji
 
-    // const channel = await interaction.guild.channels.create(name, {
-    //   type: 'GUILD_TEXT',
-    // });
-    // await channel.setParent(category);
+    const channelRole = await interaction.guild.roles.create({
+      name: channelName,
+    }).then((role) => role.setPermissions(0n)); // Clear permissions
 
-    // const role = await interaction.guild.roles.create({
-    //   name: channelName,
-    // });
-    // const zapierBot = await interaction.guild.members.fetch(zapierBotID);
-    // await channel.permissionOverwrites.create(
-    //   interaction.guild.roles.everyone, // sometimes it returns undefined for no reason
-    //   { VIEW_CHANNEL: false },
-    // );
-    // await channel.permissionOverwrites.create(zapierBot, { VIEW_CHANNEL: true });
-    // await channel.permissionOverwrites.create(role, { VIEW_CHANNEL: true });
+    await interaction.guild.channels.create(fullChannelName, {
+      type: 'GUILD_TEXT',
+      parent: joinChannel.parent,
+      permissionOverwrites: [
+        {
+          id: interaction.guildId,
+          deny: ['VIEW_CHANNEL'],
+        },
+        {
+          id: channelRole.id,
+          allow: ['VIEW_CHANNEL'],
+        },
+        {
+          id: zapierBotID,
+          allow: ['VIEW_CHANNEL'],
+        },
+      ],
+    });
 
-    // const botCommandsChannel = interaction.guild.channels.cache
-    //   .get(botCommandsChannelID) as TextChannel;
-    // await botCommandsChannel.send(`z/channel ${joinChannelID}`);
-    // await botCommandsChannel.send(`z/message ${messageID}`);
-    // await botCommandsChannel.send(`z/add ${emoji} ${channelName}`);
+    const botCommandsChannel = interaction.guild.channels.cache
+      .get(botCommandsChannelID) as TextChannel;
+    await botCommandsChannel.send(`z/channel ${joinChannelID}`);
+    await botCommandsChannel.send(`z/message ${messageID}`);
+    await botCommandsChannel.send(`z/add ${channelEmoji} ${channelName}`);
 
-    // await interaction.followUp({
-    //   ephemeral: true,
-    //   content: 'Channel is done!',
-    // });
+    await interaction.followUp({
+      ephemeral: true,
+      content: 'Channel is done!',
+    });
   }
 }
