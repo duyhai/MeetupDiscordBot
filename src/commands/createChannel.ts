@@ -1,5 +1,5 @@
 import { CommandInteraction, TextChannel } from 'discord.js';
-import { Discord, Slash, SlashChoice, SlashOption } from 'discordx';
+import { Discord, Permission, Slash, SlashChoice, SlashOption } from 'discordx';
 import {
   BOT_COMMANDS_CHANNEL_ID,
   commandNames,
@@ -7,6 +7,7 @@ import {
   DISCUSSION_JOIN_MESSAGE_ID,
   INTEREST_JOIN_CHANNEL_ID,
   INTEREST_JOIN_MESSAGE_ID,
+  MODERATOR_ROLE_ID,
 } from '../constants';
 
 // Create and setup channels
@@ -61,6 +62,8 @@ const strings = {
 
 @Discord()
 export class CreateChannel {
+  @Permission(false)
+  @Permission({ id: MODERATOR_ROLE_ID, type: 'ROLE', permission: true })
   @Slash(commandNames.channel.create)
   async createchannel(
     @SlashOption(strings.options.channelName.name, {
