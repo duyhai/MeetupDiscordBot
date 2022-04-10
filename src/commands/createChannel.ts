@@ -1,5 +1,13 @@
 import { CommandInteraction, TextChannel } from 'discord.js';
-import { Discord, Slash, SlashOption } from 'discordx';
+import { Discord, Slash, SlashChoice, SlashOption } from 'discordx';
+import {
+  BOT_COMMANDS_CHANNEL_ID,
+  commandNames,
+  DISCUSSION_JOIN_CHANNEL_ID,
+  DISCUSSION_JOIN_MESSAGE_ID,
+  INTEREST_JOIN_CHANNEL_ID,
+  INTEREST_JOIN_MESSAGE_ID,
+} from '../constants';
 
 // Create and setup channels
 // - Decide on an emoji for the channel
@@ -17,24 +25,60 @@ import { Discord, Slash, SlashOption } from 'discordx';
 //   - Message z/add <emoji here> <role name>
 // - You're done!
 
-const botCommandsChannelID = '915035889174990899';
-const joinChannelID = '935080178181373992';
-const messageID = '935080771536953394';
-
 const strings = {
   duplicateChannel: 'Channel with same name and emoji already exists!',
+  options: {
+    channelName: {
+      name: 'channel_name',
+      description: 'Name of the new channel.',
+    },
+    channelEmoji: {
+      name: 'channel_emoji',
+      description: 'Emoji for the channel.',
+    },
+    joinChannel: {
+      name: 'channel_category',
+      description: 'Category of the channel.',
+    },
+  },
+  choices: {
+    channelCategory: {
+      discussion: {
+        name: 'Discussion',
+        value: 'discussion',
+        channelId: DISCUSSION_JOIN_CHANNEL_ID,
+        messageId: DISCUSSION_JOIN_MESSAGE_ID,
+      },
+      interest: {
+        name: 'Interest',
+        value: 'interest',
+        channelId: INTEREST_JOIN_CHANNEL_ID,
+        messageId: INTEREST_JOIN_MESSAGE_ID,
+      },
+    },
+  },
 };
 
 @Discord()
 export class CreateChannel {
-  @Slash('create_channel')
+  @Slash(commandNames.channel.create)
   async createchannel(
-    @SlashOption('channel_name', { description: 'Name of the new channel.' })
+    @SlashOption(strings.options.channelName.name, {
+      description: strings.options.channelName.description,
+    })
     channelName: string,
-    @SlashOption('channel_emoji', { description: 'Emoji for the channel.' })
+
+    @SlashOption(strings.options.channelEmoji.name, {
+      description: strings.options.channelEmoji.description,
+    })
     channelEmoji: string,
-    @SlashOption('join_channel', { description: 'Category of the channel.' })
-    joinChannel: TextChannel,
+
+    @SlashChoice(strings.choices.channelCategory.discussion)
+    @SlashChoice(strings.choices.channelCategory.interest)
+    @SlashOption(strings.options.joinChannel.name, {
+      description: strings.options.joinChannel.description,
+    })
+    channelCategory: string,
 
     interaction: CommandInteraction
   ) {
@@ -60,6 +104,14 @@ export class CreateChannel {
       })
       .then((role) => role.setPermissions(0n)); // Clear permissions
 
+    const channelInformation =
+      strings.choices.channelCategory[
+        channelCategory as keyof typeof strings.choices.channelCategory
+      ];
+
+    const joinChannel = await interaction.guild.channels.fetch(
+      channelInformation.channelId
+    );
     await interaction.guild.channels.create(fullChannelName, {
       type: 'GUILD_TEXT',
       parent: joinChannel.parent,
@@ -76,10 +128,10 @@ export class CreateChannel {
     });
 
     const botCommandsChannel = interaction.guild.channels.cache.get(
-      botCommandsChannelID
+      BOT_COMMANDS_CHANNEL_ID
     ) as TextChannel;
-    await botCommandsChannel.send(`z/channel ${joinChannelID}`);
-    await botCommandsChannel.send(`z/message ${messageID}`);
+    await botCommandsChannel.send(`z/channel ${channelInformation.channelId}`);
+    await botCommandsChannel.send(`z/message ${channelInformation.messageId}`);
     await botCommandsChannel.send(`z/add ${channelEmoji} ${channelName}`);
 
     await interaction.reply({
