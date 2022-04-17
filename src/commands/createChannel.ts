@@ -1,6 +1,7 @@
 import { CommandInteraction, TextChannel } from 'discord.js';
 import { Discord, Permission, Slash, SlashChoice, SlashOption } from 'discordx';
 import {
+  BOTS_ROLE_ID,
   BOT_COMMANDS_CHANNEL_ID,
   commandNames,
   DISCUSSION_JOIN_CHANNEL_ID,
@@ -9,6 +10,7 @@ import {
   INTEREST_JOIN_MESSAGE_ID,
   MODERATOR_ROLE_ID,
 } from '../constants';
+import { capitalize } from '../util/strings';
 
 // Create and setup channels
 // - Decide on an emoji for the channel
@@ -76,8 +78,14 @@ export class CreateChannel {
     })
     channelEmoji: string,
 
-    @SlashChoice(strings.choices.channelCategory.discussion)
-    @SlashChoice(strings.choices.channelCategory.interest)
+    @SlashChoice(
+      strings.choices.channelCategory.discussion.name,
+      strings.choices.channelCategory.discussion.value
+    )
+    @SlashChoice(
+      strings.choices.channelCategory.interest.name,
+      strings.choices.channelCategory.interest.value
+    )
     @SlashOption(strings.options.joinChannel.name, {
       description: strings.options.joinChannel.description,
     })
@@ -103,7 +111,7 @@ export class CreateChannel {
 
     const channelRole = await interaction.guild.roles
       .create({
-        name: channelName,
+        name: capitalize(channelName),
       })
       .then((role) => role.setPermissions(0n)); // Clear permissions
 
@@ -127,12 +135,20 @@ export class CreateChannel {
           id: channelRole.id,
           allow: ['VIEW_CHANNEL'],
         },
+        {
+          id: BOTS_ROLE_ID,
+          allow: ['VIEW_CHANNEL'],
+        },
       ],
     });
 
     const botCommandsChannel = interaction.guild.channels.cache.get(
       BOT_COMMANDS_CHANNEL_ID
     ) as TextChannel;
+    // TODO: Create Zira message so that this message modification can be a Zira command too
+    await botCommandsChannel.send(
+      `Please copy paste these commands one by one, then add the channel to the join channel message`
+    );
     await botCommandsChannel.send(`z/channel ${channelInformation.channelId}`);
     await botCommandsChannel.send(`z/message ${channelInformation.messageId}`);
     await botCommandsChannel.send(`z/add ${channelEmoji} ${channelName}`);
