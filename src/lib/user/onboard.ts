@@ -3,6 +3,7 @@ import {
   GuildBasedChannel,
   BaseCommandInteraction,
   User,
+  AnyChannel,
 } from 'discord.js';
 import { Logger } from 'tslog';
 import {
@@ -18,10 +19,12 @@ const strings = {
     discussionJoinChannel: GuildBasedChannel,
     interestJoinChannel: GuildBasedChannel
   ) =>
-    `Welcome ${user.toString()}. Have fun exploring the server! \
+    `Welcome ${user.toString()}. Have fun exploring the server!\
     Check out some of our interest channels! ${discussionJoinChannel.toString()} ${interestJoinChannel.toString()}`,
   replyToModerator:
     'User is onboarded! Please make sure you checked their intro, Meetup profile and name (FirstName + LastName/Initial)',
+  replyAddedToChannel: (channel: AnyChannel) =>
+    `You have been added to ${channel.toString()}. Have fun!`,
   invisibleCharacter: ' ',
 };
 
@@ -88,5 +91,29 @@ export async function onboardUser(
   await interaction.followUp({
     ephemeral: true,
     content: strings.replyToModerator,
+  });
+}
+
+export async function addToChannel(
+  interaction: BaseCommandInteraction,
+  channelId: string
+) {
+  await interaction.deferReply({
+    ephemeral: true,
+  });
+  const { user, guild } = interaction;
+  logger.info(
+    `User ${user.username} is being added to channel with ID: ${channelId}`
+  );
+
+  const channel = await guild.channels.fetch(channelId);
+
+  await channel.permissionOverwrites.create(user.id, {
+    VIEW_CHANNEL: true,
+  });
+
+  logger.info(`User ${user.username} is added to ${channel.name}`);
+  await interaction.editReply({
+    content: strings.replyAddedToChannel(channel),
   });
 }

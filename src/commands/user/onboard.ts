@@ -1,7 +1,11 @@
 import { CommandInteraction, User } from 'discord.js';
 import { Discord, Permission, Slash, SlashOption } from 'discordx';
-import { commandNames, MODERATOR_ROLE_ID } from '../../constants';
-import { onboardUser } from '../../lib/user/onboard';
+import {
+  commandNames,
+  LGBTQ_CHANNEL_ID,
+  MODERATOR_ROLE_ID,
+} from '../../constants';
+import { addToChannel, onboardUser } from '../../lib/user/onboard';
 
 const strings = {
   commandDescription: 'User to onboard',
@@ -33,5 +37,10 @@ export class OnboardUserCommands {
     interaction: CommandInteraction
   ) {
     await onboardUser(interaction, user.id, true);
+  }
+
+  @Slash(commandNames.user.onboardLGBTQ)
+  async onboardLGBTQUserHandler(interaction: CommandInteraction) {
+    await addToChannel(interaction, LGBTQ_CHANNEL_ID);
   }
 }
