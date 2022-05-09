@@ -5,11 +5,23 @@
         }
     ],
     "settings": {
-        "makefile.extensionOutputFolder": "./.vscode",
         "editor.defaultFormatter": "dbaeumer.vscode-eslint",
         "editor.formatOnSave": true,
         "eslint.format.enable": true,
-        "editor.tabSize": 2
+        "editor.tabSize": 2,
+        "eslint.packageManager": "yarn",
+        "eslint.run": "onSave",
+        "eslint.validate": [
+            "javascript",
+            "javascriptreact",
+            "typescript",
+            "typescriptreact"
+          ],
+        "files.eol": "\n",
+        "javascript.preferences.quoteStyle": "single",
+        "typescript.preferences.quoteStyle": "single",
+        "typescript.updateImportsOnFileMove.enabled": "always",
+        "javascript.updateImportsOnFileMove.enabled": "always"
     },
     "extensions": {
         "recommendations": [
