@@ -29,22 +29,22 @@ export class DeleteChannel {
   @Permission({ id: MODERATOR_ROLE_ID, type: 'ROLE', permission: true })
   @Slash(commandNames.channel.delete)
   async deletechannel(
-    interaction: CommandInteraction,
     @SlashOption(strings.options.channel.name, {
       description: strings.options.channel.description,
     })
     channel: TextChannel,
-    @SlashOption(strings.options.channel.name, {
-      description: strings.options.channel.description,
+    @SlashOption(strings.options.channelRole.name, {
+      description: strings.options.channelRole.description,
       required: false,
     })
-    channelRole?: Role
+    channelRole: Role | undefined,
+    interaction: CommandInteraction
   ): Promise<void> {
     logger.info(
-      `Deleting channel ${channel.toString()} and associated channel role ${channelRole?.toString()}`
+      `Deleting channel ${channel.name} and associated channel role ${channelRole?.name}`
     );
     let deletableRole: Role = channelRole;
-    if (channelRole === undefined) {
+    if (!channelRole) {
       logger.warn(
         `Channel role was not specified, searching for associated channel role`
       );
@@ -55,12 +55,12 @@ export class DeleteChannel {
             .toLowerCase()
             .includes(decamelize(role.name, { separator: '-' }))
         ) {
-          logger.info(`Associated channel role was found: ${role.toString()}`);
+          logger.info(`Associated channel role was found: ${role.name}`);
           deletableRole = role;
         }
       });
     }
-    if (deletableRole === undefined) {
+    if (!deletableRole) {
       logger.error(`Associated channel role not found, aborting command`);
       await interaction.reply({
         ephemeral: true,
@@ -72,7 +72,7 @@ export class DeleteChannel {
     await channel.delete();
 
     logger.info(
-      `Channel ${channel.toString()} and associated channel role ${deletableRole.toString()} is deleted`
+      `Channel ${channel.name} and associated channel role ${deletableRole.name} is deleted`
     );
     await interaction.reply({
       ephemeral: true,
