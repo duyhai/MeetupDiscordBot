@@ -2,9 +2,9 @@ import { Intents, Interaction, Message } from 'discord.js';
 import { Client } from 'discordx';
 import express, { Request, Response } from 'express';
 import { Logger } from 'tslog';
-import Configuration from './configuration';
-import './contextMenu';
-import './commands';
+import Commands from './commands/index.js';
+import Configuration from './configuration.js';
+import ContextCommands from './contextMenu/index.js';
 
 const logger = new Logger({ name: 'MeetupBot' });
 

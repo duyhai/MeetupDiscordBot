@@ -2,7 +2,8 @@
   "name": "meetupdiscordbot",
   "version": "1.0.0",
   "description": "A Discord bot for managing Meetup groups",
-  "main": "dist/app.js",
+  "type": "module",
+  "exports": "./dist/app.js",
   "scripts": {
     "start": "ts-node src/index.ts",
     "lint": "eslint --fix . --ext .ts",
@@ -38,5 +39,8 @@
     "express": "^4.17.1",
     "ts-node": "^10.5.0",
     "tslog": "^3.3.2"
+  },
+  "engines": {
+    "node": " >=14.13.1 || >=16.0.0"
   }
 }
