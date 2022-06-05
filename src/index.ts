@@ -16,11 +16,11 @@ const logger = new Logger({ name: 'MeetupBot' });
 const bree = new Bree({
   root: 'src',
   jobs: [
-    {
-      name: 'job that sometimes throws errors',
-      path: () => console.log(':)'),
-      interval: 'one second',
-    },
+    // {
+    //   name: 'job that sometimes throws errors',
+    //   path: () => console.log(':)'),
+    //   interval: 'one second',
+    // },
   ],
   errorHandler: (error, workerMetadata: Record<string, unknown>) => {
     logger.error(
@@ -78,7 +78,7 @@ client.once('ready', async () => {
   });
 
   // init permissions; enabled log to see changes
-  // await client.initApplicationPermissions(true);
+  await client.initApplicationPermissions(true);
 
   // uncomment this line to clear all guild commands,
   // useful when moving to global commands from guild commands

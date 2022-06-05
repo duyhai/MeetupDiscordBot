@@ -100,19 +100,19 @@ export class CreateChannel {
     logger.info(`Creating channel ${channelName} and associated channel role`);
     const fullChannelName = channelEmoji + channelName;
 
-    // logger.info('Checking for duplicate channels');
-    // if (
-    //   interaction.guild.channels.cache.find(
-    //     (channel) => channel.name === fullChannelName
-    //   ) != null
-    // ) {
-    //   logger.error(`Duplicate channel was found, aborting command`);
-    //   await interaction.reply({
-    //     ephemeral: true,
-    //     content: strings.duplicateChannel,
-    //   });
-    //   return;
-    // }
+    logger.info('Checking for duplicate channels');
+    if (
+      interaction.guild.channels.cache.find(
+        (channel) => channel.name === fullChannelName
+      ) != null
+    ) {
+      logger.error(`Duplicate channel was found, aborting command`);
+      await interaction.reply({
+        ephemeral: true,
+        content: strings.duplicateChannel,
+      });
+      return;
+    }
 
     // // TODO: check if second option is really just an emoji
 
@@ -123,18 +123,18 @@ export class CreateChannel {
       })
       .then((role) => role.setPermissions(0n)); // Clear permissions
 
-    // const channelInformation =
-    //   strings.choices.channelCategory[
-    //     channelCategory as keyof typeof strings.choices.channelCategory
-    //   ];
+    const channelInformation =
+      strings.choices.channelCategory[
+        channelCategory as keyof typeof strings.choices.channelCategory
+      ];
 
     logger.info('Creating channel');
-    // const joinChannel = await interaction.guild.channels.fetch(
-    //   channelInformation.channelId
-    // );
+    const joinChannel = await interaction.guild.channels.fetch(
+      channelInformation.channelId
+    );
     const channel = await interaction.guild.channels.create(fullChannelName, {
       type: 'GUILD_TEXT',
-      // parent: joinChannel.parent,
+      parent: joinChannel.parent,
       permissionOverwrites: [
         {
           id: interaction.guildId,
@@ -144,23 +144,23 @@ export class CreateChannel {
           id: channelRole.id,
           allow: ['VIEW_CHANNEL'],
         },
-        // {
-        //   id: BOTS_ROLE_ID,
-        //   allow: ['VIEW_CHANNEL'],
-        // },
+        {
+          id: BOTS_ROLE_ID,
+          allow: ['VIEW_CHANNEL'],
+        },
       ],
     });
 
-    // const botCommandsChannel = interaction.guild.channels.cache.get(
-    //   BOT_COMMANDS_CHANNEL_ID
-    // ) as TextChannel;
-    // // TODO: Create Zira message so that this message modification can be a Zira command too
-    // await botCommandsChannel.send(
-    //   `Please copy paste these commands one by one, then add the channel to the join channel message`
-    // );
-    // await botCommandsChannel.send(`z/channel ${channelInformation.channelId}`);
-    // await botCommandsChannel.send(`z/message ${channelInformation.messageId}`);
-    // await botCommandsChannel.send(`z/add ${channelEmoji} ${channelName}`);
+    const botCommandsChannel = interaction.guild.channels.cache.get(
+      BOT_COMMANDS_CHANNEL_ID
+    ) as TextChannel;
+    // TODO: Create Zira message so that this message modification can be a Zira command too
+    await botCommandsChannel.send(
+      `Please copy paste these commands one by one, then add the channel to the join channel message`
+    );
+    await botCommandsChannel.send(`z/channel ${channelInformation.channelId}`);
+    await botCommandsChannel.send(`z/message ${channelInformation.messageId}`);
+    await botCommandsChannel.send(`z/add ${channelEmoji} ${channelName}`);
 
     logger.info(
       `Channel ${channel.toString()} and associated channel role ${channelRole.toString()} is deleted`
