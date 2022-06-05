@@ -28,10 +28,12 @@
     "eslint-config-prettier": "^8.5.0",
     "eslint-plugin-import": "^2.25.4",
     "eslint-plugin-prettier": "^4.0.0",
-    "prettier": "^2.6.1",
+    "prettier": "^2.6.1", 
     "typescript": "^4.6.2"
   },
   "dependencies": {
+    "bree": "^8.0.3",
+    "decamelize": "^5.0.1",
     "discord.js": "^13.6.0",
     "discordx": "^9.4.1",
     "express": "^4.17.1",
