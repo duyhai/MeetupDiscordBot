@@ -2,9 +2,9 @@ import { Intents, Interaction, Message } from 'discord.js';
 import { Client } from 'discordx';
 import express, { Request, Response } from 'express';
 import { Logger } from 'tslog';
-import Configuration from './configuration';
-import './contextMenu';
-import './commands';
+import Commands from './commands/index.js';
+import Configuration from './configuration.js';
+import ContextCommands from './contextMenu/index.js';
 
 const logger = new Logger({ name: 'MeetupBot' });
 
@@ -51,7 +51,7 @@ client.once('ready', async () => {
   });
 
   // init permissions; enabled log to see changes
-  await client.initApplicationPermissions(true);
+  // await client.initApplicationPermissions(true);
 
   // uncomment this line to clear all guild commands,
   // useful when moving to global commands from guild commands

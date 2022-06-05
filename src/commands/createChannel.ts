@@ -1,5 +1,6 @@
 import { CommandInteraction, TextChannel } from 'discord.js';
 import { Discord, Permission, Slash, SlashChoice, SlashOption } from 'discordx';
+import { Logger } from 'tslog';
 import {
   BOTS_ROLE_ID,
   BOT_COMMANDS_CHANNEL_ID,
@@ -28,8 +29,11 @@ import { capitalize } from '../util/strings';
 //   - Message z/add <emoji here> <role name>
 // - You're done!
 
+const logger = new Logger({ name: 'CreateChannel' });
+
 const strings = {
   duplicateChannel: 'Channel with same name and emoji already exists!',
+  success: 'Channel is done!',
   options: {
     channelName: {
       name: 'channel_name',
@@ -93,13 +97,16 @@ export class CreateChannel {
 
     interaction: CommandInteraction
   ) {
+    logger.info(`Creating channel ${channelName} and associated channel role`);
     const fullChannelName = channelEmoji + channelName;
 
+    logger.info('Checking for duplicate channels');
     if (
       interaction.guild.channels.cache.find(
         (channel) => channel.name === fullChannelName
       ) != null
     ) {
+      logger.error(`Duplicate channel was found, aborting command`);
       await interaction.reply({
         ephemeral: true,
         content: strings.duplicateChannel,
@@ -109,6 +116,7 @@ export class CreateChannel {
 
     // // TODO: check if second option is really just an emoji
 
+    logger.info('Creating associated channel role');
     const channelRole = await interaction.guild.roles
       .create({
         name: capitalize(channelName),
@@ -120,10 +128,11 @@ export class CreateChannel {
         channelCategory as keyof typeof strings.choices.channelCategory
       ];
 
+    logger.info('Creating channel');
     const joinChannel = await interaction.guild.channels.fetch(
       channelInformation.channelId
     );
-    await interaction.guild.channels.create(fullChannelName, {
+    const channel = await interaction.guild.channels.create(fullChannelName, {
       type: 'GUILD_TEXT',
       parent: joinChannel.parent,
       permissionOverwrites: [
@@ -153,9 +162,12 @@ export class CreateChannel {
     await botCommandsChannel.send(`z/message ${channelInformation.messageId}`);
     await botCommandsChannel.send(`z/add ${channelEmoji} ${channelName}`);
 
+    logger.info(
+      `Channel ${channel.toString()} and associated channel role ${channelRole.toString()} is deleted`
+    );
     await interaction.reply({
       ephemeral: true,
-      content: 'Channel is done!',
+      content: strings.success,
     });
   }
 }

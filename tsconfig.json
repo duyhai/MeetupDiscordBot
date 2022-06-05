@@ -2,9 +2,9 @@
     "compilerOptions": {
       "experimentalDecorators": true,
       "emitDecoratorMetadata": true,
-      "module": "ES2020",
+      "module": "ESNext",
       "esModuleInterop": true,
-      "target": "es2020",
+      "target": "ESNext",
       "moduleResolution": "node",
       "sourceMap": true,
       "outDir": "dist"
@@ -12,7 +12,9 @@
     "lib": ["es2020"],
     "ts-node": {
       "compilerOptions": {
-        "module": "commonjs"
-      }
-    }
+        "module": "ES2020"
+      },
+      "esm": true
+    },
+    "module": "nodenext"
   }
