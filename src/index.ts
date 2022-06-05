@@ -1,4 +1,4 @@
-import Bree from 'bree/types';
+import Bree from 'bree';
 import { Intents, Interaction, Message } from 'discord.js';
 import { Client } from 'discordx';
 import express, { Request, Response } from 'express';
@@ -14,11 +14,12 @@ const logger = new Logger({ name: 'MeetupBot' });
 /// ////////////////////////////////////////////////////////////////
 
 const bree = new Bree({
+  root: 'src',
   jobs: [
     {
       name: 'job that sometimes throws errors',
       path: () => console.log(':)'),
-      interval: 'every second',
+      interval: 'one second',
     },
   ],
   errorHandler: (error, workerMetadata: Record<string, unknown>) => {
