@@ -4,6 +4,7 @@
   "description": "A Discord bot for managing Meetup groups",
   "main": "dist/app.js",
   "scripts": {
+    "dev": "bash scripts/dev_env.sh && ts-node src/index.ts",
     "start": "ts-node src/index.ts",
     "lint": "eslint --fix . --ext .ts",
     "test": "echo \"Error: no test specified\" && exit 1"

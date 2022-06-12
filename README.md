@@ -14,6 +14,6 @@ https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/workin
 - Install node js: https://nodejs.org/en/ 
 - Install yarn: `npm install --global yarn`
 - Download dependencies: `yarn`
-- Fill out the API keys in the `.env` file then run `git update-index --skip-worktree .env` to prevent checking in your keys
-- Run the script: `export $(cat .env | xargs) && yarn start`. If you have Heroku CLI (which we use to deploy the bot), you can also just run `heroku local`
+- Run the script with `yarn dev`
+- Fill out the API keys in the `.env` file
 - If you are on Windows, turn off auto CRLF with this command: `git config core.autocrlf false`
