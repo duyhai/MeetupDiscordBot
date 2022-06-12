@@ -3,7 +3,7 @@ import { Intents, Interaction, Message } from 'discord.js';
 import { Client } from 'discordx';
 import express, { Request, Response } from 'express';
 import { Logger } from 'tslog';
-import Configuration from './configuration';
+import * as Configuration from './configuration';
 import './contextMenu';
 import './commands';
 
@@ -98,8 +98,8 @@ client.on('messageCreate', async (message: Message) => {
 });
 
 async function run() {
-  const token = Configuration.discordAPIKey;
-  await client.login(token);
+  const token = Configuration.default.discordAPIKey;
+  await client.login(token!);
 }
 
 /// ////////////////////////////////////////////////////////////////
