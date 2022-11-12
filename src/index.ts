@@ -1,5 +1,5 @@
-import Bree from 'bree';
-import { Intents, Interaction, Message } from 'discord.js';
+// import Bree from 'bree';
+import { GatewayIntentBits, Interaction, Message } from 'discord.js';
 import { Client } from 'discordx';
 import express, { Request, Response } from 'express';
 import { Logger } from 'tslog';
@@ -13,27 +13,27 @@ const logger = new Logger({ name: 'MeetupBot' });
 //                           CRON JOB                            //
 /// ////////////////////////////////////////////////////////////////
 
-const bree = new Bree({
-  root: 'src',
-  jobs: [
-    // {
-    //   name: 'job that sometimes throws errors',
-    //   path: () => console.log(':)'),
-    //   interval: 'one second',
-    // },
-  ],
-  errorHandler: (error, workerMetadata: Record<string, unknown>) => {
-    logger.error(
-      `There was an error while running a worker ${JSON.stringify(
-        workerMetadata
-      )}`
-    );
+// const bree = new Bree({
+//   root: 'src',
+//   jobs: [
+//     // {
+//     //   name: 'job that sometimes throws errors',
+//     //   path: () => console.log(':)'),
+//     //   interval: 'one second',
+//     // },
+//   ],
+//   errorHandler: (error, workerMetadata: Record<string, unknown>) => {
+//     logger.error(
+//       `There was an error while running a worker ${JSON.stringify(
+//         workerMetadata
+//       )}`
+//     );
 
-    logger.error(error);
-  },
-});
+//     logger.error(error);
+//   },
+// });
 
-bree.start();
+// bree.start();
 
 /// ////////////////////////////////////////////////////////////////
 //                         EXPRESS SERVER                        //
@@ -57,11 +57,11 @@ const client = new Client({
     prefix: '!',
   },
   intents: [
-    Intents.FLAGS.GUILDS,
-    Intents.FLAGS.GUILD_MEMBERS,
-    Intents.FLAGS.GUILD_MESSAGES,
-    Intents.FLAGS.GUILD_MESSAGE_REACTIONS,
-    Intents.FLAGS.GUILD_VOICE_STATES,
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMembers,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.GuildMessageReactions,
+    GatewayIntentBits.GuildVoiceStates,
   ],
   // If you only want to use global commands only, comment this line
   botGuilds: [(botClient) => botClient.guilds.cache.map((guild) => guild.id)],
@@ -76,15 +76,6 @@ client.once('ready', async () => {
     guild: { log: true },
     global: { log: true },
   });
-
-  // init permissions; enabled log to see changes
-  await client.initApplicationPermissions(true);
-
-  // uncomment this line to clear all guild commands,
-  // useful when moving to global commands from guild commands
-  //  await client.clearApplicationCommands(
-  //    ...client.guilds.cache.map((g) => g.id)
-  //  );
 
   logger.info('Bot started');
 });

@@ -1,10 +1,10 @@
-import { CommandInteraction, User } from 'discord.js';
-import { Discord, Permission, Slash, SlashOption } from 'discordx';
 import {
-  commandNames,
-  LGBTQ_CHANNEL_ID,
-  MODERATOR_ROLE_ID,
-} from '../../constants';
+  ApplicationCommandOptionType,
+  CommandInteraction,
+  User,
+} from 'discord.js';
+import { Discord, Slash, SlashOption } from 'discordx';
+import { LGBTQ_CHANNEL_ID } from '../../constants';
 import { addToChannel, onboardUser } from '../../lib/user/onboard';
 
 const strings = {
@@ -13,12 +13,15 @@ const strings = {
 
 @Discord()
 export class OnboardUserCommands {
-  @Permission(false)
-  @Permission({ id: MODERATOR_ROLE_ID, type: 'ROLE', permission: true })
-  @Slash(commandNames.user.onboardNonLadies)
+  @Slash({
+    name: 'onboard_members',
+    description: 'Onboard member',
+  })
   async onboardNonLadiesUserHandler(
-    @SlashOption('user', {
+    @SlashOption({
+      name: 'user',
       description: strings.commandDescription,
+      type: ApplicationCommandOptionType.User,
     })
     user: User,
     interaction: CommandInteraction
@@ -26,12 +29,15 @@ export class OnboardUserCommands {
     await onboardUser(interaction, user.id, false);
   }
 
-  @Permission(false)
-  @Permission({ id: MODERATOR_ROLE_ID, type: 'ROLE', permission: true })
-  @Slash(commandNames.user.onboardLadies)
+  @Slash({
+    name: 'onboard_ladies',
+    description: 'Onboard member with access to LadiesLounge',
+  })
   async onboardLadiesUserHandler(
-    @SlashOption('user', {
+    @SlashOption({
+      name: 'user',
       description: strings.commandDescription,
+      type: ApplicationCommandOptionType.User,
     })
     user: User,
     interaction: CommandInteraction
@@ -39,7 +45,10 @@ export class OnboardUserCommands {
     await onboardUser(interaction, user.id, true);
   }
 
-  @Slash(commandNames.user.onboardLGBTQ)
+  @Slash({
+    name: 'taste_the_rainbow',
+    description: 'Self onboard to LGTBQ channel',
+  })
   async onboardLGBTQUserHandler(interaction: CommandInteraction) {
     await addToChannel(interaction, LGBTQ_CHANNEL_ID);
   }

@@ -1,9 +1,10 @@
 import {
   Guild,
   GuildBasedChannel,
-  BaseCommandInteraction,
+  CommandInteraction,
   User,
-  AnyChannel,
+  Channel,
+  NonThreadGuildBasedChannel,
 } from 'discord.js';
 import { Logger } from 'tslog';
 import {
@@ -21,12 +22,12 @@ const strings = {
   ) =>
     `
 Welcome ${user.toString()}. Check out some of our interest channels! ${discussionJoinChannel.toString()} ${interestJoinChannel.toString()} \
-Please make sure to turn off notifications for all messages and to mute channels you're not interested in if you're getting overwhelmed :)\ 
+Please make sure to turn off notifications for all messages and to mute channels you're not interested in if you're getting overwhelmed :) 
 Have fun exploring the server!
 `,
   replyToModerator:
     'User is onboarded! Please make sure you checked their intro, Meetup profile and name (FirstName + LastName/Initial)',
-  replyAddedToChannel: (channel: AnyChannel) =>
+  replyAddedToChannel: (channel: Channel) =>
     `You have been added to ${channel.toString()}. Have fun!`,
   invisibleCharacter: ' ',
 };
@@ -45,8 +46,9 @@ async function removeFromOnboarding(guild: Guild, userId: string) {
   await user.roles.remove(onboardingRole);
 }
 
+// @Permission({ id: MODERATOR_ROLE_ID, type: 'ROLE', permission: true })
 export async function onboardUser(
-  interaction: BaseCommandInteraction,
+  interaction: CommandInteraction,
   userId: string,
   isFemale: boolean
 ) {
@@ -98,7 +100,7 @@ export async function onboardUser(
 }
 
 export async function addToChannel(
-  interaction: BaseCommandInteraction,
+  interaction: CommandInteraction,
   channelId: string
 ) {
   await interaction.deferReply({
@@ -109,10 +111,12 @@ export async function addToChannel(
     `User ${user.username} is being added to channel with ID: ${channelId}`
   );
 
-  const channel = await guild.channels.fetch(channelId);
+  const channel = (await guild.channels.fetch(
+    channelId
+  )) as NonThreadGuildBasedChannel;
 
   await channel.permissionOverwrites.create(user.id, {
-    VIEW_CHANNEL: true,
+    ViewChannel: true,
   });
 
   logger.info(`User ${user.username} is added to ${channel.name}`);

@@ -1,15 +1,19 @@
-import { CommandInteraction, TextChannel } from 'discord.js';
-import { Discord, Permission, Slash, SlashChoice, SlashOption } from 'discordx';
+import {
+  ApplicationCommandOptionType,
+  ChannelType,
+  CommandInteraction,
+  PermissionsBitField,
+  TextChannel,
+} from 'discord.js';
+import { Discord, Slash, SlashChoice, SlashOption } from 'discordx';
 import { Logger } from 'tslog';
 import {
   BOTS_ROLE_ID,
   BOT_COMMANDS_CHANNEL_ID,
-  commandNames,
   DISCUSSION_JOIN_CHANNEL_ID,
   DISCUSSION_JOIN_MESSAGE_ID,
   INTEREST_JOIN_CHANNEL_ID,
   INTEREST_JOIN_MESSAGE_ID,
-  MODERATOR_ROLE_ID,
 } from '../constants';
 import { capitalize } from '../util/strings';
 
@@ -64,21 +68,27 @@ const strings = {
       },
     },
   },
+  description: 'Create channel',
 };
 
 @Discord()
 export class CreateChannel {
-  @Permission(false)
-  @Permission({ id: MODERATOR_ROLE_ID, type: 'ROLE', permission: true })
-  @Slash(commandNames.channel.create)
+  @Slash({
+    name: 'create_channel',
+    description: strings.description,
+  })
   async createchannel(
-    @SlashOption(strings.options.channelName.name, {
+    @SlashOption({
+      name: 'channel_name',
       description: strings.options.channelName.description,
+      type: ApplicationCommandOptionType.String,
     })
     channelName: string,
 
-    @SlashOption(strings.options.channelEmoji.name, {
+    @SlashOption({
+      name: 'channel_emoji',
       description: strings.options.channelEmoji.description,
+      type: ApplicationCommandOptionType.String,
     })
     channelEmoji: string,
 
@@ -90,8 +100,10 @@ export class CreateChannel {
       strings.choices.channelCategory.interest.name,
       strings.choices.channelCategory.interest.value
     )
-    @SlashOption(strings.options.joinChannel.name, {
+    @SlashOption({
+      name: 'channel_category',
       description: strings.options.joinChannel.description,
+      type: ApplicationCommandOptionType.String,
     })
     channelCategory: string,
 
@@ -132,21 +144,22 @@ export class CreateChannel {
     const joinChannel = await interaction.guild.channels.fetch(
       channelInformation.channelId
     );
-    const channel = await interaction.guild.channels.create(fullChannelName, {
-      type: 'GUILD_TEXT',
-      parent: joinChannel.parent,
+    const channel = await interaction.guild.channels.create({
+      name: fullChannelName,
+      parent: joinChannel.parentId,
+      type: ChannelType.GuildText,
       permissionOverwrites: [
         {
           id: interaction.guildId,
-          deny: ['VIEW_CHANNEL'],
+          deny: [PermissionsBitField.Flags.ViewChannel],
         },
         {
           id: channelRole.id,
-          allow: ['VIEW_CHANNEL'],
+          allow: [PermissionsBitField.Flags.ViewChannel],
         },
         {
           id: BOTS_ROLE_ID,
-          allow: ['VIEW_CHANNEL'],
+          allow: [PermissionsBitField.Flags.ViewChannel],
         },
       ],
     });

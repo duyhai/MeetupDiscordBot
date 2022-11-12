@@ -12,15 +12,3 @@ export const LGBTQ_CHANNEL_ID = '935434313183404062';
 
 export const INTEREST_JOIN_MESSAGE_ID = '935078311351177256';
 export const DISCUSSION_JOIN_MESSAGE_ID = '935080771536953394';
-
-export const commandNames = {
-  user: {
-    onboardLGBTQ: 'taste_the_rainbow',
-    onboardLadies: 'onboard_ladies',
-    onboardNonLadies: 'onboard_members',
-  },
-  channel: {
-    create: 'create_channel',
-    delete: 'delete_channel',
-  },
-};
