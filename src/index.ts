@@ -1,4 +1,3 @@
-// import Bree from 'bree';
 import { GatewayIntentBits, Interaction, Message } from 'discord.js';
 import { Client } from 'discordx';
 import express, { Request, Response } from 'express';
@@ -8,32 +7,6 @@ import './contextMenu';
 import './commands';
 
 const logger = new Logger({ name: 'MeetupBot' });
-
-/// ////////////////////////////////////////////////////////////////
-//                           CRON JOB                            //
-/// ////////////////////////////////////////////////////////////////
-
-// const bree = new Bree({
-//   root: 'src',
-//   jobs: [
-//     // {
-//     //   name: 'job that sometimes throws errors',
-//     //   path: () => console.log(':)'),
-//     //   interval: 'one second',
-//     // },
-//   ],
-//   errorHandler: (error, workerMetadata: Record<string, unknown>) => {
-//     logger.error(
-//       `There was an error while running a worker ${JSON.stringify(
-//         workerMetadata
-//       )}`
-//     );
-
-//     logger.error(error);
-//   },
-// });
-
-// bree.start();
 
 /// ////////////////////////////////////////////////////////////////
 //                         EXPRESS SERVER                        //
