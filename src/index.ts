@@ -20,7 +20,7 @@ const app = express();
 
 app.use(express.urlencoded({ extended: true }));
 
-app.use('/auth', auth);
+app.use('/auth/init', auth);
 
 app.use('/auth/callback', authCallback);
 

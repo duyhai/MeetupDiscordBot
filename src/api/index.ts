@@ -19,8 +19,8 @@ export const auth = (_request: Request, response: Response) => {
 };
 
 export const authCallback = (request: Request, response: Response) => {
-  meetupAuth.credentials
-    .getToken()
+  meetupAuth.code
+    .getToken(request.originalUrl)
     .then(async (user) => {
       logger.info(user);
       await user.refresh().then((updatedUser) => {
