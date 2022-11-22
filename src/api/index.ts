@@ -1,6 +1,9 @@
 import ClientOAuth2 from 'client-oauth2';
 import { Request, Response } from 'express';
+import { Logger } from 'tslog';
 import Configuration from '../configuration';
+
+const logger = new Logger({ name: 'Router' });
 
 const meetupAuth = new ClientOAuth2({
   clientId: Configuration.meetupAPIKey,
@@ -19,10 +22,10 @@ export const authCallback = (request: Request, response: Response) => {
   meetupAuth.code
     .getToken(request.originalUrl)
     .then(async (user) => {
-      console.log(user);
+      logger.info(user);
       await user.refresh().then((updatedUser) => {
-        console.log(updatedUser !== user);
-        console.log(updatedUser.accessToken);
+        logger.info(updatedUser !== user);
+        logger.info(updatedUser.accessToken);
       });
       // We should store the token into a database.
       return response.send(user.accessToken);
