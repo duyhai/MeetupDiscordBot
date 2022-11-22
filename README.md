@@ -14,6 +14,6 @@ https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/workin
 - Install node js: https://nodejs.org/en/ 
 - Install yarn: `npm install --global yarn`
 - Download dependencies: `yarn`
-- Run the script with `yarn dev`
+- Run the script with `yarn dev` or `heroku local`
 - Fill out the API keys in the `.env` file
 - If you are on Windows, turn off auto CRLF with this command: `git config core.autocrlf false`
