@@ -1,7 +1,9 @@
 import { GatewayIntentBits, Interaction, Message } from 'discord.js';
 import { Client } from 'discordx';
-import express, { Request, Response } from 'express';
+import express from 'express';
 import { Logger } from 'tslog';
+
+import { auth, authCallback, ok } from './api';
 import Configuration from './configuration';
 import './contextMenu';
 import './commands';
@@ -15,11 +17,14 @@ const logger = new Logger({ name: 'MeetupBot' });
 const PORT = process.env.PORT || 5000;
 
 const app = express();
+
 app.use(express.urlencoded({ extended: true }));
 
-app.use('/', (_request: Request, response: Response) => {
-  response.sendStatus(200);
-});
+app.use('/auth', auth);
+
+app.use('/auth/callback', authCallback);
+
+app.use('/', ok);
 
 /// ////////////////////////////////////////////////////////////////
 //                          DISCORD CLIENT                       //
