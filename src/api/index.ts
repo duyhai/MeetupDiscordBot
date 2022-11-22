@@ -21,12 +21,16 @@ export const auth = (_request: Request, response: Response) => {
 export const authCallback = (request: Request, response: Response) => {
   meetupAuth.code
     .getToken(request.originalUrl)
-    .then(async (user) => {
+    .then((user) => {
       logger.info(user);
-      await user.refresh().then((updatedUser) => {
-        logger.info(updatedUser !== user);
-        logger.info(updatedUser.accessToken);
-      });
+      user
+        .refresh()
+        .then((updatedUser) => {
+          logger.info(updatedUser !== user);
+          logger.info(updatedUser.accessToken);
+        })
+        .catch(() => {});
+
       // We should store the token into a database.
       return response.send(user.accessToken);
     })
