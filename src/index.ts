@@ -1,9 +1,11 @@
 import { GatewayIntentBits, Interaction, Message } from 'discord.js';
 import { Client } from 'discordx';
 import express from 'express';
+import session from 'express-session';
+import grant from 'grant';
+import { GraphQLClient, gql } from 'graphql-request';
 import { Logger } from 'tslog';
 
-import { auth, authCallback, ok } from './api';
 import Configuration from './configuration';
 import './contextMenu';
 import './commands';
@@ -20,11 +22,39 @@ const app = express();
 
 app.use(express.urlencoded({ extended: true }));
 
-app.use('/auth/init', auth);
+app
+  .use(session({ secret: 'grant', saveUninitialized: true, resave: false }))
+  .use(grant.express(Configuration.grant));
 
-app.use('/auth/callback', authCallback);
+// eslint-disable-next-line @typescript-eslint/no-misused-promises
+app.get('/persistConnection', async (req, res) => {
+  // logger.info(JSON.stringify(req.query, null, 2));
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+  const client = new GraphQLClient('https://api.meetup.com/gql', {
+    headers: {
+      authorization: `Bearer ${req.query.access_token.toString()}`,
+    },
+  });
+  const getUserMemberships = gql`
+    {
+      self {
+        id
+        name
+        memberships {
+          edges {
+            node {
+              id
+              name
+            }
+          }
+        }
+      }
+    }
+  `;
 
-app.use('/', ok);
+  const result: unknown = await client.request(getUserMemberships);
+  res.end(JSON.stringify(result, null, 2));
+});
 
 /// ////////////////////////////////////////////////////////////////
 //                          DISCORD CLIENT                       //
@@ -67,7 +97,7 @@ client.on('messageCreate', async (message: Message) => {
 });
 
 async function run() {
-  const token = Configuration.discordAPIKey;
+  const token = Configuration.discord.apiKey;
   await client.login(token);
 }
 
