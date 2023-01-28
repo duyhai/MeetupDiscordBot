@@ -15,10 +15,12 @@ const meetupAuth = new ClientOAuth2({
 });
 
 export const auth = (_request: Request, response: Response) => {
+  logger.info(meetupAuth.code.getUri());
   response.redirect(meetupAuth.code.getUri());
 };
 
 export const authCallback = (request: Request, response: Response) => {
+  logger.info(request.originalUrl);
   meetupAuth.code
     .getToken(request.originalUrl)
     .then((user) => {
@@ -34,7 +36,9 @@ export const authCallback = (request: Request, response: Response) => {
       // We should store the token into a database.
       return response.send(user.accessToken);
     })
-    .catch(() => {});
+    .catch((error) => {
+      logger.error(error);
+    });
 };
 
 export const ok = (_request: Request, response: Response) => {
