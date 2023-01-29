@@ -4,7 +4,7 @@ import {
   UserContextMenuCommandInteraction,
 } from 'discord.js';
 import { ContextMenu, Discord } from 'discordx';
-import { onboardUser } from '../../lib/user/onboard';
+import { onboardUser } from '../../lib/helpers/user/onboard';
 
 @Discord()
 export class OnboardUserContextCommands {

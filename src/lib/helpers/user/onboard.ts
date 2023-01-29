@@ -12,7 +12,7 @@ import {
   INTEREST_JOIN_CHANNEL_ID,
   LADIES_LOUNGE_ROLE_ID,
   ONBOARDING_ROLE_ID,
-} from '../../constants';
+} from '../../../constants';
 
 const strings = {
   welcomeMsg: (
@@ -46,38 +46,28 @@ async function removeFromOnboarding(guild: Guild, userId: string) {
   await user.roles.remove(onboardingRole);
 }
 
-// @Permission({ id: MODERATOR_ROLE_ID, type: 'ROLE', permission: true })
-export async function onboardUser(
+async function onboardUserCommon(
   interaction: CommandInteraction,
   userId: string,
-  isFemale: boolean
+  isFemale: boolean,
+  nickname?: string
 ) {
-  await interaction.deferReply();
   const { guild, client } = interaction;
   const user = await client.users.fetch(userId);
   const fullUsername = user.tag;
 
   logger.info(`User ${fullUsername} is getting onboarded`);
-  const discussionJoinChannel = await guild.channels.fetch(
-    DISCUSSION_JOIN_CHANNEL_ID
-  );
-  const interestJoinChannel = await guild.channels.fetch(
-    INTEREST_JOIN_CHANNEL_ID
-  );
 
   const guildMember = await guild.members.fetch(userId);
-  if (!guildMember.nickname) {
+  let targetNickName = nickname || guildMember.nickname;
+  if (!targetNickName) {
     const { username } = user;
     // Ugly hack because of this:
     // https://github.com/discord/discord-api-docs/issues/667
-    const paddedUsername = Array.from(username).join(
-      strings.invisibleCharacter
-    );
-    await guildMember.setNickname(paddedUsername);
-    logger.info(
-      `Explicitly set ${fullUsername}'s nickname to ${paddedUsername}`
-    );
+    targetNickName = Array.from(username).join(strings.invisibleCharacter);
   }
+  await guildMember.setNickname(targetNickName);
+  logger.info(`Explicitly set ${fullUsername}'s nickname to ${targetNickName}`);
 
   if (isFemale) {
     await addToLadiesLounge(guild, user.id);
@@ -85,7 +75,27 @@ export async function onboardUser(
   }
   await removeFromOnboarding(guild, user.id);
   logger.info(`User ${fullUsername} onboarded!`);
+}
 
+/*
+ * Function to onboard a target user
+ */
+export async function onboardUser(
+  interaction: CommandInteraction,
+  userId: string,
+  isFemale: boolean
+) {
+  const { guild, client } = interaction;
+  const user = await client.users.fetch(userId);
+  await interaction.deferReply();
+
+  const discussionJoinChannel = await guild.channels.fetch(
+    DISCUSSION_JOIN_CHANNEL_ID
+  );
+  const interestJoinChannel = await guild.channels.fetch(
+    INTEREST_JOIN_CHANNEL_ID
+  );
+  await onboardUserCommon(interaction, userId, isFemale);
   await interaction.editReply({
     content: strings.welcomeMsg(
       user,
@@ -96,6 +106,33 @@ export async function onboardUser(
   await interaction.followUp({
     ephemeral: true,
     content: strings.replyToModerator,
+  });
+}
+
+/*
+ * Function to onboard self
+ */
+export async function selfOnboardUser(
+  interaction: CommandInteraction,
+  nickname: string,
+  isFemale: boolean
+) {
+  const { guild, user } = interaction;
+  await interaction.deferReply({ ephemeral: true });
+
+  const discussionJoinChannel = await guild.channels.fetch(
+    DISCUSSION_JOIN_CHANNEL_ID
+  );
+  const interestJoinChannel = await guild.channels.fetch(
+    INTEREST_JOIN_CHANNEL_ID
+  );
+  await onboardUserCommon(interaction, user.id, isFemale, nickname);
+  await interaction.editReply({
+    content: strings.welcomeMsg(
+      user,
+      discussionJoinChannel,
+      interestJoinChannel
+    ),
   });
 }
 

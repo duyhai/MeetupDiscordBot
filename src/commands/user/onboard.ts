@@ -5,7 +5,7 @@ import {
 } from 'discord.js';
 import { Discord, Slash, SlashOption } from 'discordx';
 import { LGBTQ_CHANNEL_ID } from '../../constants';
-import { addToChannel, onboardUser } from '../../lib/user/onboard';
+import { addToChannel, onboardUser } from '../../lib/helpers/user/onboard';
 
 const strings = {
   commandDescription: 'User to onboard',
