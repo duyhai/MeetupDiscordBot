@@ -1,5 +1,6 @@
 export interface GetUserInfoResponse {
   self: {
+    gender: string;
     id: string;
     memberships: {
       edges: {
@@ -7,7 +8,7 @@ export interface GetUserInfoResponse {
           id: string;
           name: string;
         };
-      };
+      }[];
     };
     name: string;
   };

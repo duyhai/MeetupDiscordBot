@@ -8,7 +8,6 @@ import { Logger } from 'tslog';
 import Configuration from './configuration';
 import './contextMenu';
 import './commands';
-import { GqlMeetupClient } from './lib/client/meetup/gqlClient';
 
 const logger = new Logger({ name: 'MeetupBot' });
 
@@ -27,12 +26,12 @@ app
   .use(grant.express(Configuration.grant));
 
 app.get('/showToken', (req, res) => {
-  const client = new GqlMeetupClient(req.query.access_token.toString());
-
-  client
-    .getUserInfo()
-    .then((result: unknown) => res.end(JSON.stringify(result, null, 2)))
-    .catch((error) => logger.error(error));
+  const accessToken = req.query.access_token.toString();
+  res.end(
+    `Here is your Meetup Auth token: ${accessToken} 
+It's only active for an hour. Use it with the Meetup commands on Discord. 
+For example: /meetupSelfOnboard ${accessToken}`
+  );
 });
 
 /// ////////////////////////////////////////////////////////////////

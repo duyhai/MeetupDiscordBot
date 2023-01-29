@@ -21,6 +21,9 @@ export class GqlMeetupClient {
     return this.client
       .request<GetUserInfoResponse>(getUserInfo)
       .then((result) => result)
-      .catch((error) => logger.error(error));
+      .catch((error) => {
+        logger.error(error);
+        throw error;
+      });
   }
 }

@@ -9,8 +9,12 @@ interface ConfigurationSchema {
     apiKey: string;
     apiSecret: string;
     endpoint: string;
+    groupId: string;
   };
 }
+
+export const DISCORD_BOT_URL = 'https://meetup-discord-bot.herokuapp.com';
+export const DISCORD_BOT_MEETUP_OAUTH_URL = `${DISCORD_BOT_URL}/connect/meetup`;
 
 const Configuration: ConfigurationSchema = {
   discord: {
@@ -20,14 +24,14 @@ const Configuration: ConfigurationSchema = {
     apiKey: process.env.MEETUP_KEY,
     apiSecret: process.env.MEETUP_SECRET,
     endpoint: 'https://api.meetup.com/gql',
+    groupId: '7595882',
   },
   grant: {
     meetup: {
       key: process.env.MEETUP_KEY,
       secret: process.env.MEETUP_SECRET,
       callback: '/showToken',
-      redirect_uri:
-        'https://meetup-discord-bot.herokuapp.com/connect/meetup/callback',
+      redirect_uri: `${DISCORD_BOT_MEETUP_OAUTH_URL}/callback`,
       response: ['tokens'],
     },
   },
