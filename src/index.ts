@@ -3,12 +3,12 @@ import { Client } from 'discordx';
 import express from 'express';
 import session from 'express-session';
 import grant from 'grant';
-import { GraphQLClient, gql } from 'graphql-request';
 import { Logger } from 'tslog';
 
 import Configuration from './configuration';
 import './contextMenu';
 import './commands';
+import { GqlMeetupClient } from './lib/client/meetup/gqlClient';
 
 const logger = new Logger({ name: 'MeetupBot' });
 
@@ -26,34 +26,13 @@ app
   .use(session({ secret: 'grant', saveUninitialized: true, resave: false }))
   .use(grant.express(Configuration.grant));
 
-// eslint-disable-next-line @typescript-eslint/no-misused-promises
-app.get('/persistConnection', async (req, res) => {
-  // logger.info(JSON.stringify(req.query, null, 2));
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
-  const client = new GraphQLClient('https://api.meetup.com/gql', {
-    headers: {
-      authorization: `Bearer ${req.query.access_token.toString()}`,
-    },
-  });
-  const getUserMemberships = gql`
-    {
-      self {
-        id
-        name
-        memberships {
-          edges {
-            node {
-              id
-              name
-            }
-          }
-        }
-      }
-    }
-  `;
+app.get('/showToken', (req, res) => {
+  const client = new GqlMeetupClient(req.query.access_token.toString());
 
-  const result: unknown = await client.request(getUserMemberships);
-  res.end(JSON.stringify(result, null, 2));
+  client
+    .getUserInfo()
+    .then((result: unknown) => res.end(JSON.stringify(result, null, 2)))
+    .catch((error) => logger.error(error));
 });
 
 /// ////////////////////////////////////////////////////////////////

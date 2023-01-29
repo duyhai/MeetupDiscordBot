@@ -26,6 +26,7 @@ const strings = {
 
 const logger = new Logger({ name: 'DeleteChannel' });
 
+// TODO: Move implementation into lib
 @Discord()
 export class DeleteChannel {
   @Slash({

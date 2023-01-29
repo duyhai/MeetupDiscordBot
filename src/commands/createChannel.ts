@@ -17,6 +17,7 @@ import {
 } from '../constants';
 import { capitalize } from '../util/strings';
 
+// TODO: Move implementation into lib
 // Create and setup channels
 // - Decide on an emoji for the channel
 // - Create channel under discussions and categories and make it private.
