@@ -16,9 +16,10 @@ export class AuthUserCommands {
     description: `Get a Meetup Auth token.`,
   })
   async meetupGetAuthTokenHandler(interaction: CommandInteraction) {
-    await interaction.reply(
-      `Please click on this link to get your Meetup Auth token: ${DISCORD_BOT_MEETUP_OAUTH_URL}`
-    );
+    await interaction.reply({
+      ephemeral: true,
+      content: `Please click on this link to get your Meetup Auth token: ${DISCORD_BOT_MEETUP_OAUTH_URL}`,
+    });
   }
 
   @Slash({
