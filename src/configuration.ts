@@ -26,10 +26,9 @@ const Configuration: ConfigurationSchema = {
       key: process.env.MEETUP_KEY,
       secret: process.env.MEETUP_SECRET,
       callback: '/showToken',
-      // redirect_uri:
-      //   'https://meetup-discord-bot.herokuapp.com/connect/meetup/callback',
-      scope: 'basic group_join',
-      response: ['tokens', 'profile'],
+      redirect_uri:
+        'https://meetup-discord-bot.herokuapp.com/connect/meetup/callback',
+      response: ['tokens'],
     },
   },
 };

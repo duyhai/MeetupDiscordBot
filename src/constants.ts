@@ -12,3 +12,15 @@ export const LGBTQ_CHANNEL_ID = '935434313183404062';
 
 export const INTEREST_JOIN_MESSAGE_ID = '935078311351177256';
 export const DISCUSSION_JOIN_MESSAGE_ID = '935080771536953394';
+
+export type MeetupScopes =
+  | 'ageless'
+  | 'basic'
+  | 'event_management'
+  | 'group_edit'
+  | 'group_content_edit'
+  | 'group_join'
+  | 'messaging'
+  | 'profile_edit'
+  | 'reporting'
+  | 'rsvp';
