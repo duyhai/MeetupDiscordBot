@@ -1,14 +1,12 @@
 envs=(
   DISCORD_API_KEY
-  DATABASE_URL
-  REDIS_URL
   MEETUP_KEY
   MEETUP_SECRET
 )
 
 if [ ! -f .env ]; then
   for val in ${envs[@]}; do
-    echo $val= >> .env
+    echo export $val= >> .env
   done
 
   echo "Please fill out your keys in .env!"
@@ -16,3 +14,5 @@ if [ ! -f .env ]; then
 fi
 
 source .env
+
+ts-node src/index.ts
