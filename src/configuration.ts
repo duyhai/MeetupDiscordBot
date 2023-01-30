@@ -33,6 +33,7 @@ const Configuration: ConfigurationSchema = {
       callback: '/showToken',
       redirect_uri: `${DISCORD_BOT_MEETUP_OAUTH_URL}/callback`,
       response: ['tokens'],
+      dynamic: ['callback'],
     },
   },
 };
