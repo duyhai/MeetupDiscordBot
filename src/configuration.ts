@@ -13,7 +13,7 @@ interface ConfigurationSchema {
   };
 }
 
-export const DISCORD_BOT_URL = 'https://meetup-discord-bot.herokuapp.com';
+export const DISCORD_BOT_URL = 'https://meetup-discord-bot.fly.dev';
 export const DISCORD_BOT_MEETUP_OAUTH_URL = `${DISCORD_BOT_URL}/connect/meetup`;
 
 const Configuration: ConfigurationSchema = {
