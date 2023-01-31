@@ -8,6 +8,7 @@ import { Logger } from 'tslog';
 import Configuration from './configuration';
 import './contextMenu';
 import './commands';
+import { InMemoryCache } from './lib/cache/memoryCache';
 
 const logger = new Logger({ name: 'MeetupBot' });
 
@@ -25,13 +26,13 @@ app
   .use(session({ secret: 'grant', saveUninitialized: true, resave: false }))
   .use(grant.express(Configuration.grant));
 
-app.get('/showToken', (req, res) => {
+app.get('/persistToken/:tokenId', (req, res) => {
+  const { tokenId } = req.params;
   const accessToken = req.query.access_token.toString();
-  res.end(
-    `Here is your Meetup Auth token: ${accessToken} 
-It's only active for an hour. Use it with the Meetup commands on Discord. 
-For example: /meetupSelfOnboard ${accessToken}`
-  );
+  const userId = InMemoryCache.instance().get(tokenId);
+
+  InMemoryCache.instance().set(userId, accessToken);
+  res.end(`Connected to Meetup. You can close this window now!`);
 });
 
 /// ////////////////////////////////////////////////////////////////

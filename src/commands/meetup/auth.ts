@@ -1,9 +1,14 @@
 import { ApplicationCommandOptionType, CommandInteraction } from 'discord.js';
 import { Discord, Slash, SlashOption } from 'discordx';
 import { Logger } from 'tslog';
-import Configuration, {
-  DISCORD_BOT_MEETUP_OAUTH_URL,
-} from '../../configuration';
+import { v4 as uuidv4 } from 'uuid';
+
+import Configuration from '../../configuration';
+import {
+  BASIC_MEETUP_AUTH_SCOPES,
+  DISCORD_BOT_MEETUP_OAUTH_OVERRIDE_URL,
+} from '../../constants';
+import { InMemoryCache } from '../../lib/cache/memoryCache';
 import { GqlMeetupClient } from '../../lib/client/meetup/gqlClient';
 import { selfOnboardUser } from '../../lib/helpers/user/onboard';
 
@@ -16,9 +21,15 @@ export class AuthUserCommands {
     description: `Get a Meetup Auth token.`,
   })
   async meetupGetAuthTokenHandler(interaction: CommandInteraction) {
+    const tokenId = uuidv4();
+    InMemoryCache.instance().set(tokenId, interaction.user.id);
+
     await interaction.reply({
       ephemeral: true,
-      content: `Please click on this link to get your Meetup Auth token: ${DISCORD_BOT_MEETUP_OAUTH_URL}`,
+      content: `Please click on this link to get your Meetup Auth token: ${DISCORD_BOT_MEETUP_OAUTH_OVERRIDE_URL(
+        tokenId,
+        BASIC_MEETUP_AUTH_SCOPES
+      )}`,
     });
   }
 
@@ -33,9 +44,10 @@ export class AuthUserCommands {
         'Meetup Auth token you can get with the /meetup_get_auth_token command',
       type: ApplicationCommandOptionType.String,
     })
-    token: string,
+    _token: string,
     interaction: CommandInteraction
   ) {
+    const token = InMemoryCache.instance().get(interaction.user.id);
     const client = new GqlMeetupClient(token);
     const userInfo = await client.getUserInfo();
 

@@ -13,7 +13,7 @@ export const LGBTQ_CHANNEL_ID = '935434313183404062';
 export const INTEREST_JOIN_MESSAGE_ID = '935078311351177256';
 export const DISCUSSION_JOIN_MESSAGE_ID = '935080771536953394';
 
-export type MeetupScopes =
+export type MeetupScope =
   | 'ageless'
   | 'basic'
   | 'event_management'
@@ -24,3 +24,25 @@ export type MeetupScopes =
   | 'profile_edit'
   | 'reporting'
   | 'rsvp';
+
+export const BASIC_MEETUP_AUTH_SCOPES: MeetupScope[] = ['basic'];
+export const ELEVATED_MEETUP_AUTH_SCOPES: MeetupScope[] = [
+  'basic',
+  'event_management',
+];
+
+export const DISCORD_BOT_URL = 'https://meetup-discord-bot.herokuapp.com';
+export const DISCORD_BOT_MEETUP_OAUTH_URL = `${DISCORD_BOT_URL}/connect/meetup`;
+export const DISCORD_BOT_MEETUP_OAUTH_OVERRIDE_URL = (
+  tokenId?: string,
+  scopes?: MeetupScope[]
+) => {
+  const url = new URL(DISCORD_BOT_MEETUP_OAUTH_URL);
+  if (tokenId) {
+    url.searchParams.append('callback', `/persistToken/${tokenId}`);
+  }
+  if (scopes) {
+    url.searchParams.append('scope', scopes.join(' '));
+  }
+  return url.toString();
+};

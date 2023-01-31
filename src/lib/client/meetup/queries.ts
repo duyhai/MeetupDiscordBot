@@ -5,6 +5,7 @@ export const getUserInfo = gql`
     self {
       id
       name
+      gender
       memberships {
         edges {
           node {

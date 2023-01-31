@@ -1,4 +1,5 @@
 import { GrantConfig } from 'grant';
+import { DISCORD_BOT_MEETUP_OAUTH_URL } from './constants';
 
 interface ConfigurationSchema {
   discord: {
@@ -12,9 +13,6 @@ interface ConfigurationSchema {
     groupId: string;
   };
 }
-
-export const DISCORD_BOT_URL = 'https://meetup-discord-bot.herokuapp.com';
-export const DISCORD_BOT_MEETUP_OAUTH_URL = `${DISCORD_BOT_URL}/connect/meetup`;
 
 const Configuration: ConfigurationSchema = {
   discord: {
@@ -31,9 +29,10 @@ const Configuration: ConfigurationSchema = {
       key: process.env.MEETUP_KEY,
       secret: process.env.MEETUP_SECRET,
       callback: '/showToken',
+      // It's confusing, but the redirect url has "callback" in its path
       redirect_uri: `${DISCORD_BOT_MEETUP_OAUTH_URL}/callback`,
       response: ['tokens'],
-      dynamic: ['callback'],
+      dynamic: ['callback', 'scope'],
     },
   },
 };
