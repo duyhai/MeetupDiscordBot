@@ -66,7 +66,7 @@ async function onboardUserCommon(
     // https://github.com/discord/discord-api-docs/issues/667
     targetNickName = Array.from(username).join(strings.invisibleCharacter);
   }
-  await guildMember.setNickname(targetNickName);
+  // await guildMember.setNickname(targetNickName);
   logger.info(`Explicitly set ${fullUsername}'s nickname to ${targetNickName}`);
 
   if (isFemale) {
