@@ -27,6 +27,14 @@
         "no-confusing-arrow": ["error", { "allowParens": false }],        
         "no-mixed-operators": "error",
         "no-tabs": ["error", {"allowIndentationTabs": true}],
-        "linebreak-style": ["error", "unix"]
+        "linebreak-style": ["error", "unix"],
+        "@typescript-eslint/no-unused-vars": [
+            "warn", 
+            { 
+              "argsIgnorePattern": "^_",
+              "varsIgnorePattern": "^_",
+              "caughtErrorsIgnorePattern": "^_"
+            }
+          ]
     }
 }

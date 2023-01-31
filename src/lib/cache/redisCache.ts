@@ -4,19 +4,19 @@ import { KeyValueCache } from './base';
  * Wrapper around Redis
  */
 export class RedisCache implements KeyValueCache {
-  remove(key: string): void {
+  remove(_key: string): void {
     throw Error('Not Implemented');
   }
 
-  get(key: string): string {
+  get(_key: string): string {
     throw Error('Not Implemented');
   }
 
-  has(key: string): boolean {
+  has(_key: string): boolean {
     throw Error('Not Implemented');
   }
 
-  set(key: string, value: string): void {
+  set(_key: string, _value: string): void {
     throw Error('Not Implemented');
   }
 }
