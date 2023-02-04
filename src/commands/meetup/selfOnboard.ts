@@ -15,16 +15,7 @@ export class MeetupSelfOnboardCommands {
     name: 'meetup_self_onboard',
     description: `Self-service onboarding through the Meetup Bot. `,
   })
-  async meetupSelfOnboardHandler(
-    @SlashOption({
-      name: 'token',
-      description:
-        'Meetup Auth token you can get with the /meetup_get_auth_token command',
-      type: ApplicationCommandOptionType.String,
-    })
-    _token: string,
-    interaction: CommandInteraction
-  ) {
+  async meetupSelfOnboardHandler(interaction: CommandInteraction) {
     await discordCommandWrapper(interaction, async () => {
       await withMeetupClient(interaction, async (meetupClient) => {
         const userInfo = await meetupClient.getUserInfo();
