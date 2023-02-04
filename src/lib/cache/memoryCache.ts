@@ -32,12 +32,11 @@ export class InMemoryCache implements KeyValueCache {
     this.cache.removeItem(key);
   }
 
-  async get(key: string): Promise<string> {
+  async get(key: string): Promise<string | undefined> {
+    if (!this.cache.hasItem(key)) {
+      return undefined;
+    }
     return this.cache.retrieveItemValue(key);
-  }
-
-  async has(key: string): Promise<boolean> {
-    return this.cache.hasItem(key);
   }
 
   async set(key: string, value: string): Promise<void> {
