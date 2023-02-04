@@ -3,8 +3,8 @@
  */
 
 export interface KeyValueCache {
-  get(key: string): string;
-  has(key: string): boolean;
-  remove(key: string): void;
-  set(key: string, value: string): void;
+  get(key: string): Promise<string>;
+  has(key: string): Promise<boolean>;
+  remove(key: string): Promise<void>;
+  set(key: string, value: string): Promise<void>;
 }

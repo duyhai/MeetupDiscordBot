@@ -4,8 +4,10 @@ import {
   User,
 } from 'discord.js';
 import { Discord, Slash, SlashOption } from 'discordx';
-import { LGBTQ_CHANNEL_ID } from '../../constants';
-import { addToChannel, onboardUser } from '../../lib/helpers/user/onboard';
+import { LGBTQ_CHANNEL_ID } from '../constants';
+import { addToChannel } from '../lib/helpers/channel';
+import { onboardUser } from '../lib/helpers/onboardUser';
+import { discordCommandWrapper } from '../util/discord';
 
 const strings = {
   commandDescription: 'User to onboard',
@@ -26,7 +28,9 @@ export class OnboardUserCommands {
     user: User,
     interaction: CommandInteraction
   ) {
-    await onboardUser(interaction, user.id, false);
+    await discordCommandWrapper(interaction, async () => {
+      await onboardUser(interaction, user.id, false);
+    });
   }
 
   @Slash({
@@ -42,7 +46,9 @@ export class OnboardUserCommands {
     user: User,
     interaction: CommandInteraction
   ) {
-    await onboardUser(interaction, user.id, true);
+    await discordCommandWrapper(interaction, async () => {
+      await onboardUser(interaction, user.id, true);
+    });
   }
 
   @Slash({
@@ -50,6 +56,8 @@ export class OnboardUserCommands {
     description: 'Self onboard to LGTBQ channel',
   })
   async onboardLGBTQUserHandler(interaction: CommandInteraction) {
-    await addToChannel(interaction, LGBTQ_CHANNEL_ID);
+    await discordCommandWrapper(interaction, async () => {
+      await addToChannel(interaction, LGBTQ_CHANNEL_ID);
+    });
   }
 }

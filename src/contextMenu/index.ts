@@ -1,4 +1,4 @@
-import { OnboardUserContextCommands } from './user/onboard';
+import { OnboardUserContextCommands } from './onboardUser';
 
 const ContextCommands = [OnboardUserContextCommands];
 

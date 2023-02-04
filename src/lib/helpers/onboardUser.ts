@@ -1,18 +1,12 @@
-import {
-  Guild,
-  GuildBasedChannel,
-  CommandInteraction,
-  User,
-  Channel,
-  NonThreadGuildBasedChannel,
-} from 'discord.js';
+import { Guild, GuildBasedChannel, CommandInteraction, User } from 'discord.js';
 import { Logger } from 'tslog';
 import {
   DISCUSSION_JOIN_CHANNEL_ID,
   INTEREST_JOIN_CHANNEL_ID,
   LADIES_LOUNGE_ROLE_ID,
   ONBOARDING_ROLE_ID,
-} from '../../../constants';
+} from '../../constants';
+import { isAdmin } from '../../util/discord';
 
 const strings = {
   welcomeMsg: (
@@ -27,12 +21,10 @@ Have fun exploring the server!
 `,
   replyToModerator:
     'User is onboarded! Please make sure you checked their intro, Meetup profile and name (FirstName + LastName/Initial)',
-  replyAddedToChannel: (channel: Channel) =>
-    `You have been added to ${channel.toString()}. Have fun!`,
   invisibleCharacter: ' ',
 };
 
-const logger = new Logger({ name: 'onboardUser' });
+const logger = new Logger({ name: 'onboardUserHelper' });
 
 async function addToLadiesLounge(guild: Guild, userId: string) {
   const user = await guild.members.fetch(userId);
@@ -59,15 +51,19 @@ async function onboardUserCommon(
   logger.info(`User ${fullUsername} is getting onboarded`);
 
   const guildMember = await guild.members.fetch(userId);
-  let targetNickName = nickname || guildMember.nickname;
-  if (!targetNickName) {
-    const { username } = user;
-    // Ugly hack because of this:
-    // https://github.com/discord/discord-api-docs/issues/667
-    targetNickName = Array.from(username).join(strings.invisibleCharacter);
+  if (!isAdmin(guildMember)) {
+    let targetNickName = nickname || guildMember.nickname;
+    if (!targetNickName) {
+      const { username } = user;
+      // Ugly hack because of this:
+      // https://github.com/discord/discord-api-docs/issues/667
+      targetNickName = Array.from(username).join(strings.invisibleCharacter);
+    }
+    await guildMember.setNickname(targetNickName);
+    logger.info(
+      `Explicitly set ${fullUsername}'s nickname to ${targetNickName}`
+    );
   }
-  // await guildMember.setNickname(targetNickName);
-  logger.info(`Explicitly set ${fullUsername}'s nickname to ${targetNickName}`);
 
   if (isFemale) {
     await addToLadiesLounge(guild, user.id);
@@ -87,7 +83,6 @@ export async function onboardUser(
 ) {
   const { guild, client } = interaction;
   const user = await client.users.fetch(userId);
-  await interaction.deferReply();
 
   const discussionJoinChannel = await guild.channels.fetch(
     DISCUSSION_JOIN_CHANNEL_ID
@@ -97,15 +92,14 @@ export async function onboardUser(
   );
   await onboardUserCommon(interaction, userId, isFemale);
   await interaction.editReply({
+    content: strings.replyToModerator,
+  });
+  await interaction.followUp({
     content: strings.welcomeMsg(
       user,
       discussionJoinChannel,
       interestJoinChannel
     ),
-  });
-  await interaction.followUp({
-    ephemeral: true,
-    content: strings.replyToModerator,
   });
 }
 
@@ -118,8 +112,6 @@ export async function selfOnboardUser(
   isFemale: boolean
 ) {
   const { guild, user } = interaction;
-  await interaction.deferReply({ ephemeral: true });
-
   const discussionJoinChannel = await guild.channels.fetch(
     DISCUSSION_JOIN_CHANNEL_ID
   );
@@ -133,31 +125,5 @@ export async function selfOnboardUser(
       discussionJoinChannel,
       interestJoinChannel
     ),
-  });
-}
-
-export async function addToChannel(
-  interaction: CommandInteraction,
-  channelId: string
-) {
-  await interaction.deferReply({
-    ephemeral: true,
-  });
-  const { user, guild } = interaction;
-  logger.info(
-    `User ${user.username} is being added to channel with ID: ${channelId}`
-  );
-
-  const channel = (await guild.channels.fetch(
-    channelId
-  )) as NonThreadGuildBasedChannel;
-
-  await channel.permissionOverwrites.create(user.id, {
-    ViewChannel: true,
-  });
-
-  logger.info(`User ${user.username} is added to ${channel.name}`);
-  await interaction.editReply({
-    content: strings.replyAddedToChannel(channel),
   });
 }

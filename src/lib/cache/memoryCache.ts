@@ -3,7 +3,7 @@ import { MemoryCache } from 'memory-cache-node';
 import { KeyValueCache } from './base';
 
 const EXPIRATION_CHECK_INTERVAL_SECS = 60;
-const ITEM_TTL_SEC = 60 * 60;
+const ITEM_TTL_SEC = 50 * 60;
 const MAX_ITEMS = 1000000;
 
 /**
@@ -28,19 +28,19 @@ export class InMemoryCache implements KeyValueCache {
     return this.singleton;
   }
 
-  remove(key: string): void {
+  async remove(key: string): Promise<void> {
     this.cache.removeItem(key);
   }
 
-  get(key: string): string {
+  async get(key: string): Promise<string> {
     return this.cache.retrieveItemValue(key);
   }
 
-  has(key: string): boolean {
+  async has(key: string): Promise<boolean> {
     return this.cache.hasItem(key);
   }
 
-  set(key: string, value: string): void {
+  async set(key: string, value: string): Promise<void> {
     this.cache.storeExpiringItem(key, value, ITEM_TTL_SEC);
   }
 }

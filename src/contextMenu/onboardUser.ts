@@ -4,7 +4,8 @@ import {
   UserContextMenuCommandInteraction,
 } from 'discord.js';
 import { ContextMenu, Discord } from 'discordx';
-import { onboardUser } from '../../lib/helpers/user/onboard';
+import { onboardUser } from '../lib/helpers/onboardUser';
+import { discordCommandWrapper } from '../util/discord';
 
 @Discord()
 export class OnboardUserContextCommands {
@@ -15,8 +16,10 @@ export class OnboardUserContextCommands {
   async onboardNonLadiesMsgHandler(
     interaction: MessageContextMenuCommandInteraction
   ) {
-    const { targetMessage } = interaction;
-    await onboardUser(interaction, targetMessage.author.id, false);
+    await discordCommandWrapper(interaction, async () => {
+      const { targetMessage } = interaction;
+      await onboardUser(interaction, targetMessage.author.id, false);
+    });
   }
 
   @ContextMenu({
@@ -26,8 +29,10 @@ export class OnboardUserContextCommands {
   async onboardLadiesMsgHandler(
     interaction: MessageContextMenuCommandInteraction
   ) {
-    const { targetMessage } = interaction;
-    await onboardUser(interaction, targetMessage.author.id, true);
+    await discordCommandWrapper(interaction, async () => {
+      const { targetMessage } = interaction;
+      await onboardUser(interaction, targetMessage.author.id, true);
+    });
   }
 
   @ContextMenu({
@@ -37,8 +42,10 @@ export class OnboardUserContextCommands {
   async onboardNonLadiesUserHandler(
     interaction: UserContextMenuCommandInteraction
   ) {
-    const { targetUser } = interaction;
-    await onboardUser(interaction, targetUser.id, false);
+    await discordCommandWrapper(interaction, async () => {
+      const { targetUser } = interaction;
+      await onboardUser(interaction, targetUser.id, false);
+    });
   }
 
   @ContextMenu({
@@ -48,7 +55,9 @@ export class OnboardUserContextCommands {
   async onboardLadiesUserHandler(
     interaction: UserContextMenuCommandInteraction
   ) {
-    const { targetUser } = interaction;
-    await onboardUser(interaction, targetUser.id, true);
+    await discordCommandWrapper(interaction, async () => {
+      const { targetUser } = interaction;
+      await onboardUser(interaction, targetUser.id, true);
+    });
   }
 }

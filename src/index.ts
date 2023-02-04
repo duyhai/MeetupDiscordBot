@@ -26,13 +26,16 @@ app
   .use(session({ secret: 'grant', saveUninitialized: true, resave: false }))
   .use(grant.express(Configuration.grant));
 
-app.get('/persistToken/:tokenId', (req, res) => {
-  const { tokenId } = req.params;
+app.get('/persistToken/:maskedUserId', (req, res) => {
+  const { maskedUserId } = req.params;
   const accessToken = req.query.access_token.toString();
-  const userId = InMemoryCache.instance().get(tokenId);
-
-  InMemoryCache.instance().set(userId, accessToken);
-  res.end(`Connected to Meetup. You can close this window now!`);
+  InMemoryCache.instance()
+    .get(`maskedUserId-${maskedUserId}`)
+    .then((userId) =>
+      InMemoryCache.instance().set(`userId-${userId}`, accessToken)
+    )
+    .then(() => res.end(`Connected to Meetup. You can close this window now!`))
+    .catch(() => res.end(`Failed to connect to Meetup! Please try again.`));
 });
 
 /// ////////////////////////////////////////////////////////////////

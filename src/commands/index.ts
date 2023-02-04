@@ -1,10 +1,10 @@
 import { CreateChannel } from './createChannel';
 import { DeleteChannel } from './deleteChannel';
-import { AuthUserCommands } from './meetup/auth';
-import { OnboardUserCommands } from './user/onboard';
+import { MeetupSelfOnboardCommands } from './meetup/selfOnboard';
+import { OnboardUserCommands } from './onboardUser';
 
 const Commands = [
-  AuthUserCommands,
+  MeetupSelfOnboardCommands,
   OnboardUserCommands,
   CreateChannel,
   DeleteChannel,
