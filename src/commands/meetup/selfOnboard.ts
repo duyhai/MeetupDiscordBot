@@ -1,5 +1,5 @@
-import { ApplicationCommandOptionType, CommandInteraction } from 'discord.js';
-import { Discord, Slash, SlashOption } from 'discordx';
+import { CommandInteraction } from 'discord.js';
+import { Discord, Slash } from 'discordx';
 import { Logger } from 'tslog';
 
 import Configuration from '../../configuration';
@@ -28,7 +28,7 @@ export class MeetupSelfOnboardCommands {
           logger.warn(
             `Non-member user failed to onboard: ${interaction.user.username}`
           );
-          await interaction.reply(
+          await interaction.editReply(
             `You're not a member on Meetup. Please join the group and try onboarding again`
           );
           return;
