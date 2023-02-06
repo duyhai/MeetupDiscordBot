@@ -15,10 +15,10 @@ async function showMeetupTokenUrl(interaction: CommandInteraction) {
     interaction.user.id
   );
   await interaction.editReply({
-    content: `Please click on this link to get your Meetup Auth token: ${DISCORD_BOT_MEETUP_OAUTH_OVERRIDE_URL(
+    content: `Please click on this link to get your Meetup Auth token: <${DISCORD_BOT_MEETUP_OAUTH_OVERRIDE_URL(
       maskedUserId,
       BASIC_MEETUP_AUTH_SCOPES
-    )}`,
+    )}>`,
   });
 }
 
