@@ -15,4 +15,4 @@ fi
 
 source .env
 
-ts-node src/index.ts
+TS_NODE_DEBUG=true ts-node src/index.ts

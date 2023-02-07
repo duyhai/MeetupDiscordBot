@@ -11,6 +11,7 @@ interface ConfigurationSchema {
     apiSecret: string;
     endpoint: string;
     groupId: string;
+    groupUrlName: string;
   };
 }
 
@@ -23,6 +24,7 @@ const Configuration: ConfigurationSchema = {
     apiSecret: process.env.MEETUP_SECRET,
     endpoint: 'https://api.meetup.com/gql',
     groupId: '7595882',
+    groupUrlName: '1-5genasians',
   },
   grant: {
     meetup: {
