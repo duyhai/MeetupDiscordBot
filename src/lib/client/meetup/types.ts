@@ -29,10 +29,10 @@ export interface GetPastEventsResponse {
       edges: {
         node: {
           dateTime: string;
-          host?: {
+          hosts: {
             id: string;
             name: string;
-          };
+          }[];
         };
       }[];
       pageInfo: PageInfo;

@@ -33,7 +33,7 @@ export const getPastEvents = gql`
         edges {
           node {
             dateTime
-            host {
+            hosts {
               id
               name
             }

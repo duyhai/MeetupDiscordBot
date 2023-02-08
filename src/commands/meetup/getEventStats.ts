@@ -63,21 +63,23 @@ export class MeetupGetEventStatsCommands {
           });
           cursor = pastEvents.groupByUrlname.pastEvents.pageInfo.endCursor;
           pastEvents.groupByUrlname.pastEvents.edges.forEach((event) => {
-            const { host } = event.node;
+            const { hosts } = event.node;
             const eventDate = dayjs(event.node.dateTime);
 
             const isEventInRange =
               startDate.isBefore(eventDate) && endDate.isAfter(eventDate);
-            if (!host || !isEventInRange) {
+            if (!isEventInRange) {
               logger.info(`Skipping ${JSON.stringify(event)}`);
               return;
             }
 
-            const key = `${host.id}-${host.name}`;
-            if (!counter.has(key)) {
-              counter.set(key, 0);
-            }
-            counter.set(key, counter.get(key) + 1);
+            hosts.forEach((host) => {
+              const key = `${host.id}-${host.name}`;
+              if (!counter.has(key)) {
+                counter.set(key, 0);
+              }
+              counter.set(key, counter.get(key) + 1);
+            });
           });
         } while (pastEvents?.groupByUrlname.pastEvents.pageInfo.hasNextPage);
 
