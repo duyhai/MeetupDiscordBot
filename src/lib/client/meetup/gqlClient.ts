@@ -3,9 +3,10 @@ import { Logger } from 'tslog';
 import Configuration from '../../../configuration';
 import { getPastEvents, getUserInfo } from './queries';
 import {
-  GetPastEventsRequest,
+  GetPastEventsInput,
   GetPastEventsResponse,
   GetUserInfoResponse,
+  PaginationInput,
 } from './types';
 
 const logger = new Logger({ name: 'GqlMeetupClient' });
@@ -31,11 +32,11 @@ export class GqlMeetupClient {
       });
   }
 
-  public getPastEvents() {
+  public getPastEvents(input: PaginationInput) {
     return this.client
-      .request<GetPastEventsResponse, GetPastEventsRequest>(getPastEvents, {
+      .request<GetPastEventsResponse, GetPastEventsInput>(getPastEvents, {
         urlname: Configuration.meetup.groupUrlName,
-        connectionInput: {},
+        connectionInput: input,
       })
       .then((result) => result)
       .catch((error) => {

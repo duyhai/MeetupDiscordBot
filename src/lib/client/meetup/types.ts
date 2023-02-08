@@ -14,6 +14,13 @@ export interface GetUserInfoResponse {
   };
 }
 
+interface PageInfo {
+  endCursor: string;
+  hasNextPage: boolean;
+  hasPreviousPage: boolean;
+  startCursor: string;
+}
+
 export interface GetPastEventsResponse {
   groupByUrlname: {
     id: string;
@@ -21,29 +28,27 @@ export interface GetPastEventsResponse {
       count: number;
       edges: {
         node: {
-          host: {
+          dateTime: string;
+          host?: {
             id: string;
             name: string;
           };
         };
       }[];
-      pageInfo: {
-        endCursor: string;
-        hasNextPage: boolean;
-        hasPreviousPage: boolean;
-        startCursor: string;
-      };
+      pageInfo: PageInfo;
     };
   };
 }
 
-export interface GetPastEventsRequest {
-  connectionInput: {
-    after?: string;
-    before?: string;
-    first?: number;
-    last?: number;
-    reverse?: boolean;
-  };
+export interface PaginationInput {
+  after?: string;
+  before?: string;
+  first?: number;
+  last?: number;
+  reverse?: boolean;
+}
+
+export interface GetPastEventsInput {
+  connectionInput: PaginationInput;
   urlname: string;
 }

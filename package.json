@@ -35,6 +35,7 @@
     "typescript": "^4.6.2"
   },
   "dependencies": {
+    "dayjs": "^1.11.7",
     "decamelize": "^5.0.1",
     "discord.js": "^14.6.0",
     "discordx": "^11.4.0",
