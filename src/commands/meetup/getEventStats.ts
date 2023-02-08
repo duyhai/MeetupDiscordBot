@@ -77,6 +77,7 @@ export class MeetupGetEventStatsCommands {
         const formattedResult = Array.from(counter.entries())
           .map((entry: [string, number]) => [entry[1], entry[0].split('-')[1]])
           .sort()
+          .reverse()
           .join('\n');
         await interaction.editReply({
           content: formattedResult,
