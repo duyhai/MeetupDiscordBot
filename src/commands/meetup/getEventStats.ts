@@ -80,7 +80,10 @@ export class MeetupGetEventStatsCommands {
         );
         const formattedResult = Array.from(counter.entries())
           .map((entry: [string, number]) => [entry[1], entry[0].split('-')[1]])
-          .sort()
+          .sort(
+            (entry1: [number, string], entry2: [number, string]) =>
+              entry1[0] - entry2[0]
+          )
           .reverse()
           .map(
             (entry: [number, string], index: number) =>
