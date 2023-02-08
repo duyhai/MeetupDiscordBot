@@ -25,11 +25,14 @@ export const getPastEvents = gql`
       pastEvents(input: $connectionInput) {
         pageInfo {
           hasNextPage
+          hasPreviousPage
           startCursor
+          endCursor
         }
         count
         edges {
           node {
+            dateTime
             host {
               id
               name
