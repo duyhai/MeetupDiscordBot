@@ -84,7 +84,7 @@ export class MeetupGetEventStatsCommands {
           .reverse()
           .map(
             (entry: [number, string], index: number) =>
-              `${index}: ${entry[1]} ${entry[0]}`
+              `${index + 1}: ${entry[1]} ${entry[0]}`
           )
           .join('\n');
         await interaction.editReply({
