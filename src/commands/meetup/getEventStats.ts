@@ -88,7 +88,7 @@ export class MeetupGetEventStatsCommands {
           )
           .join('\n');
         await interaction.editReply({
-          content: `Hosting stats for ${year} ${startOfMonth.month()}
+          content: `Hosting stats for ${startOfMonth.format('YYYY MMMM')}
           
 ${formattedResult}
 
