@@ -74,13 +74,26 @@ export class MeetupGetEventStatsCommands {
           });
         } while (pastEvents?.groupByUrlname.pastEvents.pageInfo.hasNextPage);
 
+        const total = Array.from(counter.values()).reduce(
+          (sum, current) => sum + current,
+          0
+        );
         const formattedResult = Array.from(counter.entries())
           .map((entry: [string, number]) => [entry[1], entry[0].split('-')[1]])
           .sort()
           .reverse()
+          .map(
+            (entry: [number, string], index: number) =>
+              `${index}: ${entry[1]} ${entry[0]}`
+          )
           .join('\n');
         await interaction.editReply({
-          content: formattedResult,
+          content: `Hosting stats for ${year} ${startOfMonth.month()}
+          
+${formattedResult}
+
+Total: ${total}
+          `,
         });
       });
     });
