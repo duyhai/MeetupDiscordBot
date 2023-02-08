@@ -1,6 +1,6 @@
 import dayjs from 'dayjs';
-import { CommandInteraction } from 'discord.js';
-import { Discord, Slash } from 'discordx';
+import { ApplicationCommandOptionType, CommandInteraction } from 'discord.js';
+import { Discord, Slash, SlashOption } from 'discordx';
 import { Logger } from 'tslog';
 import { GetPastEventsResponse } from '../../lib/client/meetup/types';
 
@@ -17,12 +17,33 @@ export class MeetupGetEventStatsCommands {
     name: 'meetup_get_event_stats',
     description: `Getting event stats from Meetup`,
   })
-  async meetupGetStatsHandler(interaction: CommandInteraction) {
+  async meetupGetStatsHandler(
+    @SlashOption({
+      name: 'year',
+      description: 'The year to filter to',
+      type: ApplicationCommandOptionType.Number,
+      required: true,
+    })
+    year: number,
+    @SlashOption({
+      name: 'month',
+      description: 'The month to filter to',
+      type: ApplicationCommandOptionType.Number,
+      minValue: 1,
+      maxValue: 12,
+      required: true,
+    })
+    month: number,
+    interaction: CommandInteraction
+  ) {
     await discordCommandWrapper(interaction, async () => {
       await withMeetupClient(interaction, async (meetupClient) => {
         logger.info('Getting data');
-        const startOfLastMonth = dayjs().subtract(1, 'month').startOf('month');
-        const endOfLastMonth = startOfLastMonth.endOf('month');
+        const startOfMonth = dayjs()
+          .set('year', year)
+          .set('month', month)
+          .startOf('month');
+        const endOfMonth = startOfMonth.endOf('month');
         let cursor: string | undefined;
         let pastEvents: GetPastEventsResponse | undefined;
         const counter = new Map<string, number>();
@@ -37,8 +58,7 @@ export class MeetupGetEventStatsCommands {
             const { host } = event.node;
             const eventDate = dayjs(event.node.dateTime);
             const wasEventLastMonth =
-              startOfLastMonth.isBefore(eventDate) &&
-              endOfLastMonth.isAfter(eventDate);
+              startOfMonth.isBefore(eventDate) && endOfMonth.isAfter(eventDate);
             if (!host || !wasEventLastMonth) {
               logger.info(`Skipping ${JSON.stringify(event)}`);
               return;
@@ -51,8 +71,12 @@ export class MeetupGetEventStatsCommands {
           });
         } while (pastEvents?.groupByUrlname.pastEvents.pageInfo.hasNextPage);
 
+        const formattedResult = Array.from(counter.entries())
+          .map((entry: [string, number]) => [entry[1], entry[0].split('-')[0]])
+          .sort()
+          .join('\n');
         await interaction.editReply({
-          content: JSON.stringify(Array.from(counter.entries())),
+          content: formattedResult,
         });
       });
     });
