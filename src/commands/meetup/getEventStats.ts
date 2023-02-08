@@ -41,7 +41,7 @@ export class MeetupGetEventStatsCommands {
         logger.info('Getting data');
         const startOfMonth = dayjs()
           .set('year', year)
-          .set('month', month)
+          .set('month', month - 1)
           .startOf('month');
         const endOfMonth = startOfMonth.endOf('month');
         let cursor: string | undefined;
@@ -72,7 +72,7 @@ export class MeetupGetEventStatsCommands {
         } while (pastEvents?.groupByUrlname.pastEvents.pageInfo.hasNextPage);
 
         const formattedResult = Array.from(counter.entries())
-          .map((entry: [string, number]) => [entry[1], entry[0].split('-')[0]])
+          .map((entry: [string, number]) => [entry[1], entry[0].split('-')[1]])
           .sort()
           .join('\n');
         await interaction.editReply({
