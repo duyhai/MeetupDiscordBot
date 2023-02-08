@@ -44,7 +44,7 @@ export class MeetupGetEventStatsCommands {
           content: 'Fetching data',
         });
 
-        let startDate = dayjs().set('year', year);
+        let startDate = dayjs().set('year', year).startOf('year');
         let endDate = startDate.endOf('year');
         if (month !== 0) {
           startDate = startDate.set('month', month - 1);
