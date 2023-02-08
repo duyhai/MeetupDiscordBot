@@ -38,7 +38,10 @@ export class MeetupGetEventStatsCommands {
   ) {
     await discordCommandWrapper(interaction, async () => {
       await withMeetupClient(interaction, async (meetupClient) => {
-        logger.info('Getting data');
+        logger.info('Fetching data');
+        await interaction.editReply({
+          content: 'Fetching data',
+        });
         const startOfMonth = dayjs()
           .set('year', year)
           .set('month', month - 1)
