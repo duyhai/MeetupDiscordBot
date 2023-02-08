@@ -31,9 +31,8 @@ export class MeetupGetEventStatsCommands {
       type: ApplicationCommandOptionType.Number,
       minValue: 1,
       maxValue: 12,
-      required: true,
     })
-    month: number,
+    month: number | undefined,
     interaction: CommandInteraction
   ) {
     await discordCommandWrapper(interaction, async () => {
@@ -42,11 +41,14 @@ export class MeetupGetEventStatsCommands {
         await interaction.editReply({
           content: 'Fetching data',
         });
-        const startOfMonth = dayjs()
-          .set('year', year)
-          .set('month', month - 1)
-          .startOf('month');
+
+        let startOfMonth = dayjs().set('year', year);
+        if (month) {
+          startOfMonth = startOfMonth.set('month', month - 1);
+        }
+        startOfMonth = startOfMonth.startOf('month');
         const endOfMonth = startOfMonth.endOf('month');
+
         let cursor: string | undefined;
         let pastEvents: GetPastEventsResponse | undefined;
         const counter = new Map<string, number>();
@@ -60,12 +62,14 @@ export class MeetupGetEventStatsCommands {
           pastEvents.groupByUrlname.pastEvents.edges.forEach((event) => {
             const { host } = event.node;
             const eventDate = dayjs(event.node.dateTime);
+
             const wasEventLastMonth =
               startOfMonth.isBefore(eventDate) && endOfMonth.isAfter(eventDate);
             if (!host || !wasEventLastMonth) {
               logger.info(`Skipping ${JSON.stringify(event)}`);
               return;
             }
+
             const key = `${host.id}-${host.name}`;
             if (!counter.has(key)) {
               counter.set(key, 0);
