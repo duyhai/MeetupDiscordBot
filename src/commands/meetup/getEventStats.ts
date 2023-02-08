@@ -44,12 +44,13 @@ export class MeetupGetEventStatsCommands {
           content: 'Fetching data',
         });
 
-        let startOfMonth = dayjs().set('year', year);
+        let startDate = dayjs().set('year', year);
+        let endDate = startDate.endOf('year');
         if (month !== 0) {
-          startOfMonth = startOfMonth.set('month', month - 1);
+          startDate = startDate.set('month', month - 1);
+          startDate = startDate.startOf('month');
+          endDate = startDate.endOf('month');
         }
-        startOfMonth = startOfMonth.startOf('month');
-        const endOfMonth = startOfMonth.endOf('month');
 
         let cursor: string | undefined;
         let pastEvents: GetPastEventsResponse | undefined;
@@ -65,9 +66,9 @@ export class MeetupGetEventStatsCommands {
             const { host } = event.node;
             const eventDate = dayjs(event.node.dateTime);
 
-            const wasEventLastMonth =
-              startOfMonth.isBefore(eventDate) && endOfMonth.isAfter(eventDate);
-            if (!host || !wasEventLastMonth) {
+            const isEventInRange =
+              startDate.isBefore(eventDate) && endDate.isAfter(eventDate);
+            if (!host || !isEventInRange) {
               logger.info(`Skipping ${JSON.stringify(event)}`);
               return;
             }
@@ -97,7 +98,7 @@ export class MeetupGetEventStatsCommands {
           )
           .join('\n');
         await interaction.editReply({
-          content: `Hosting stats for ${startOfMonth.format('YYYY MMMM')}
+          content: `Hosting stats for ${startDate.format('YYYY MMMM')}
           
 ${formattedResult}
 
