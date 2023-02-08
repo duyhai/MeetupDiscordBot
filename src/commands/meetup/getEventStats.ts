@@ -51,7 +51,9 @@ export class MeetupGetEventStatsCommands {
           });
         } while (pastEvents?.groupByUrlname.pastEvents.pageInfo.hasNextPage);
 
-        await interaction.editReply({ content: JSON.stringify(counter) });
+        await interaction.editReply({
+          content: JSON.stringify(Array.from(counter.entries())),
+        });
       });
     });
   }
