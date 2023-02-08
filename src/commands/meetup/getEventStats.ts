@@ -27,12 +27,14 @@ export class MeetupGetEventStatsCommands {
     year: number,
     @SlashOption({
       name: 'month',
-      description: 'The month to filter to',
+      description:
+        'The month to filter to. Set it to 0 in order to disable filtering by month',
       type: ApplicationCommandOptionType.Number,
-      minValue: 1,
+      minValue: 0,
       maxValue: 12,
+      required: true,
     })
-    month: number | undefined,
+    month: number,
     interaction: CommandInteraction
   ) {
     await discordCommandWrapper(interaction, async () => {
@@ -43,7 +45,7 @@ export class MeetupGetEventStatsCommands {
         });
 
         let startOfMonth = dayjs().set('year', year);
-        if (month) {
+        if (month !== 0) {
           startOfMonth = startOfMonth.set('month', month - 1);
         }
         startOfMonth = startOfMonth.startOf('month');
