@@ -26,7 +26,8 @@ export class MeetupSelfOnboardCommands {
 
         if (!isMeetupGroupMember) {
           logger.warn(
-            `Non-member user failed to onboard: ${interaction.user.username}`
+            `Non-member user failed to onboard: ${interaction.user.username}. 
+            Membership info: ${JSON.stringify(userInfo.self.memberships.edges)}`
           );
           await interaction.editReply(
             `You're not a member on Meetup. Please join the group and try onboarding again`
