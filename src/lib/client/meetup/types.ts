@@ -1,17 +1,9 @@
-export interface GetUserInfoResponse {
-  self: {
-    gender: string;
-    id: string;
-    memberships: {
-      edges: {
-        node: {
-          id: string;
-          name: string;
-        };
-      }[];
-    };
-    name: string;
-  };
+export interface PaginationInput {
+  after?: string;
+  before?: string;
+  first?: number;
+  last?: number;
+  reverse?: boolean;
 }
 
 interface PageInfo {
@@ -21,31 +13,46 @@ interface PageInfo {
   startCursor: string;
 }
 
-export interface GetPastEventsResponse {
-  groupByUrlname: {
+export interface PaginatedData<TData> {
+  count: number;
+  edges: {
+    node: TData;
+  }[];
+  pageInfo: PageInfo;
+}
+
+interface UserInfo {
+  id: string;
+  name: string;
+}
+
+export interface GetUserInfoResponse {
+  self: {
+    gender: string;
     id: string;
-    pastEvents: {
-      count: number;
-      edges: {
-        node: {
-          dateTime: string;
-          hosts: {
-            id: string;
-            name: string;
-          }[];
-        };
-      }[];
-      pageInfo: PageInfo;
-    };
+    name: string;
   };
 }
 
-export interface PaginationInput {
-  after?: string;
-  before?: string;
-  first?: number;
-  last?: number;
-  reverse?: boolean;
+export interface GetUserMembershipInfoResponse {
+  self: {
+    memberships: PaginatedData<UserInfo>;
+  };
+}
+
+interface PastEvent {
+  dateTime: string;
+  hosts: {
+    id: string;
+    name: string;
+  }[];
+}
+
+export interface GetPastEventsResponse {
+  groupByUrlname: {
+    id: string;
+    pastEvents: PaginatedData<PastEvent>;
+  };
 }
 
 export interface GetPastEventsInput {

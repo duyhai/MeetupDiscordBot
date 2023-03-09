@@ -1,11 +1,12 @@
 import { GraphQLClient } from 'graphql-request';
 import { Logger } from 'tslog';
 import Configuration from '../../../configuration';
-import { getPastEvents, getUserInfo } from './queries';
+import { getPastEvents, getUserInfo, getUserMembershipInfo } from './queries';
 import {
   GetPastEventsInput,
   GetPastEventsResponse,
   GetUserInfoResponse,
+  GetUserMembershipInfoResponse,
   PaginationInput,
 } from './types';
 
@@ -25,6 +26,18 @@ export class GqlMeetupClient {
   public getUserInfo() {
     return this.client
       .request<GetUserInfoResponse>(getUserInfo)
+      .then((result) => result)
+      .catch((error) => {
+        logger.error(error);
+        throw error;
+      });
+  }
+
+  public getUserMembershipInfo(input: PaginationInput) {
+    return this.client
+      .request<GetUserMembershipInfoResponse>(getUserMembershipInfo, {
+        connectionInput: input,
+      })
       .then((result) => result)
       .catch((error) => {
         logger.error(error);

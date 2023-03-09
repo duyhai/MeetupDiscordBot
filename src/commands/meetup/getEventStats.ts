@@ -2,14 +2,12 @@ import dayjs from 'dayjs';
 import { ApplicationCommandOptionType, CommandInteraction } from 'discord.js';
 import { Discord, Slash, SlashOption } from 'discordx';
 import { Logger } from 'tslog';
-import { GetPastEventsResponse } from '../../lib/client/meetup/types';
+import { getPaginatedData } from '../../lib/client/meetup/paginationHelper';
 
 import { discordCommandWrapper } from '../../util/discord';
 import { withMeetupClient } from '../../util/meetup';
 
 const logger = new Logger({ name: 'MeetupGetStatsCommands' });
-
-const PAGINATION_SIZE = 100;
 
 @Discord()
 export class MeetupGetEventStatsCommands {
@@ -52,36 +50,30 @@ export class MeetupGetEventStatsCommands {
           endDate = startDate.endOf('month');
         }
 
-        let cursor: string | undefined;
-        let pastEvents: GetPastEventsResponse | undefined;
+        const pastEvents = await getPaginatedData(async (paginationInput) => {
+          const result = await meetupClient.getPastEvents(paginationInput);
+          return result.groupByUrlname.pastEvents;
+        });
         const counter = new Map<string, number>();
-        do {
-          // eslint-disable-next-line no-await-in-loop
-          pastEvents = await meetupClient.getPastEvents({
-            after: cursor,
-            first: PAGINATION_SIZE,
-          });
-          cursor = pastEvents.groupByUrlname.pastEvents.pageInfo.endCursor;
-          pastEvents.groupByUrlname.pastEvents.edges.forEach((event) => {
-            const { hosts } = event.node;
-            const eventDate = dayjs(event.node.dateTime);
+        pastEvents.forEach((event) => {
+          const { hosts } = event;
+          const eventDate = dayjs(event.dateTime);
 
-            const isEventInRange =
-              startDate.isBefore(eventDate) && endDate.isAfter(eventDate);
-            if (!isEventInRange) {
-              logger.info(`Skipping ${JSON.stringify(event)}`);
-              return;
+          const isEventInRange =
+            startDate.isBefore(eventDate) && endDate.isAfter(eventDate);
+          if (!isEventInRange) {
+            logger.info(`Skipping ${JSON.stringify(event)}`);
+            return;
+          }
+
+          hosts.forEach((host) => {
+            const key = `${host.id}-${host.name}`;
+            if (!counter.has(key)) {
+              counter.set(key, 0);
             }
-
-            hosts.forEach((host) => {
-              const key = `${host.id}-${host.name}`;
-              if (!counter.has(key)) {
-                counter.set(key, 0);
-              }
-              counter.set(key, counter.get(key) + 1);
-            });
+            counter.set(key, counter.get(key) + 1);
           });
-        } while (pastEvents?.groupByUrlname.pastEvents.pageInfo.hasNextPage);
+        });
 
         const total = Array.from(counter.values()).reduce(
           (sum, current) => sum + current,

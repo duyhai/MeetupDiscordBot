@@ -6,7 +6,21 @@ export const getUserInfo = gql`
       id
       name
       gender
-      memberships {
+    }
+  }
+`;
+
+export const getUserMembershipInfo = gql`
+  query ($connectionInput: ConnectionInput!) {
+    self {
+      memberships(input: $connectionInput) {
+        pageInfo {
+          hasNextPage
+          hasPreviousPage
+          startCursor
+          endCursor
+        }
+        count
         edges {
           node {
             id
