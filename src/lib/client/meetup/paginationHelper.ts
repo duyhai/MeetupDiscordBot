@@ -9,7 +9,7 @@ export async function getPaginatedData<TOutput>(
   ) => Promise<PaginatedData<TOutput>>
 ): Promise<TOutput[]> {
   let cursor: string | undefined;
-  let results: TOutput[] | undefined;
+  const results: TOutput[] = [];
   let pageResult: PaginatedData<TOutput> | undefined;
   do {
     // eslint-disable-next-line no-await-in-loop
