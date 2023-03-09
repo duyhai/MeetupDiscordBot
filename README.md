@@ -1,5 +1,5 @@
 # MeetupDiscordBot 
-A Discord bot for managing Meetup groups
+A Discord bot for managing the 1.5 Gen Asian Meetup group
 
 # How to fork repo and contribute back into the main repo
 https://www.dataschool.io/how-to-contribute-on-github/
