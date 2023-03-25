@@ -46,6 +46,9 @@ export const getPastEvents = gql`
         count
         edges {
           node {
+            title
+            going
+            maxTickets
             dateTime
             hosts {
               id

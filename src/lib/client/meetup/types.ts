@@ -42,10 +42,13 @@ export interface GetUserMembershipInfoResponse {
 
 interface PastEvent {
   dateTime: string;
+  going: number;
   hosts: {
     id: string;
     name: string;
   }[];
+  maxTickets: number;
+  title: string;
 }
 
 export interface GetPastEventsResponse {

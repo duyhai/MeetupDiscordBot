@@ -42,6 +42,11 @@ export class MeetupGetEventStatsCommands {
           content: 'Fetching data',
         });
 
+        const pastEvents = await getPaginatedData(async (paginationInput) => {
+          const result = await meetupClient.getPastEvents(paginationInput);
+          return result.groupByUrlname.pastEvents;
+        });
+
         let startDate = dayjs().set('year', year).startOf('year');
         let endDate = startDate.endOf('year');
         if (month !== 0) {
@@ -50,46 +55,46 @@ export class MeetupGetEventStatsCommands {
           endDate = startDate.endOf('month');
         }
 
-        const pastEvents = await getPaginatedData(async (paginationInput) => {
-          const result = await meetupClient.getPastEvents(paginationInput);
-          return result.groupByUrlname.pastEvents;
-        });
-        const counter = new Map<string, number>();
+        const hostEvents = new Map<string, Array<string>>();
         pastEvents.forEach((event) => {
           const { hosts } = event;
           const eventDate = dayjs(event.dateTime);
 
           const isEventInRange =
             startDate.isBefore(eventDate) && endDate.isAfter(eventDate);
-          if (!isEventInRange) {
+          if (!hosts.length || !isEventInRange) {
             logger.info(`Skipping ${JSON.stringify(event)}`);
             return;
           }
 
           hosts.forEach((host) => {
             const key = `${host.id}-${host.name}`;
-            if (!counter.has(key)) {
-              counter.set(key, 0);
+            if (!hostEvents.has(key)) {
+              hostEvents.set(key, []);
             }
-            counter.set(key, counter.get(key) + 1);
+            hostEvents
+              .get(key)
+              .push(`${event.title} (${event.going}/${event.maxTickets})`);
           });
         });
 
-        const total = Array.from(counter.values()).reduce(
-          (sum, current) => sum + current,
+        const total = Array.from(hostEvents.values()).reduce(
+          (sum, events) => sum + events.length,
           0
         );
-        const formattedResult = Array.from(counter.entries())
-          .map((entry: [string, number]) => [entry[1], entry[0].split('-')[1]])
+        const formattedResult = Array.from(hostEvents.entries())
           .sort(
-            (entry1: [number, string], entry2: [number, string]) =>
-              entry1[0] - entry2[0]
+            (entry1: [string, string[]], entry2: [string, string[]]) =>
+              entry1[1].length - entry2[1].length
           )
           .reverse()
-          .map(
-            (entry: [number, string], index: number) =>
-              `${index + 1}: ${entry[1]} ${entry[0]}`
-          )
+          .map((entry: [string, string[]], index: number) => {
+            const [idName, events] = entry;
+            const name = idName.split('-')[1];
+            const header = `${index + 1}: ${events.length} ${name}\n`;
+            const body = events.join('\n');
+            return header + body;
+          })
           .join('\n');
         await interaction.editReply({
           content: `Hosting stats for ${startDate.format('YYYY MMMM')}
