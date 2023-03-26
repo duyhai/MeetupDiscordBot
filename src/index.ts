@@ -62,10 +62,7 @@ client.once('ready', async () => {
   await client.guilds.fetch();
 
   // init all application commands
-  await client.initApplicationCommands({
-    guild: { log: true },
-    global: { log: true },
-  });
+  await client.initApplicationCommands();
 
   logger.info('Bot started');
 });

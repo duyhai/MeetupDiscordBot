@@ -4,7 +4,7 @@ import {
   CommandInteraction,
   GuildMember,
   PermissionFlagsBits,
-  WebhookEditMessageOptions,
+  WebhookMessageEditOptions,
 } from 'discord.js';
 
 /**
@@ -39,7 +39,7 @@ export async function withDiscordFileAttachment(
   fileName: string,
   attachmentData: string | NodeJS.ArrayBufferView,
   attachmentHandler: (
-    attachmentArgs: Pick<WebhookEditMessageOptions, 'files'>
+    attachmentArgs: Pick<WebhookMessageEditOptions, 'files'>
   ) => Promise<void>
 ) {
   const tmpFileName = `${crypto.randomBytes(16).toString('hex')}.tmp`;
