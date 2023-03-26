@@ -100,18 +100,22 @@ export class MeetupGetEventStatsCommands {
           })
           .join('\n');
         const header = `Hosting stats for ${startDate.format('YYYY MMMM')}`;
-        const result = `${header}
+        const result = `
+${header}
           
-        ${formattedResult}
-        
-        Total: ${total}
-                  `;
-        await withDiscordAttachment(header, result, async (attachmentArgs) => {
-          await interaction.editReply({
-            ...attachmentArgs,
-            content: 'Check the results in the attachment!',
-          });
-        });
+${formattedResult}
+
+Total: ${total}`;
+        await withDiscordAttachment(
+          `${header}.txt`,
+          result,
+          async (attachmentArgs) => {
+            await interaction.editReply({
+              ...attachmentArgs,
+              content: 'Check the results in the attachment!',
+            });
+          }
+        );
       });
     });
   }
