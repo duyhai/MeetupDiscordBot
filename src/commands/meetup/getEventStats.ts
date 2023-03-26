@@ -6,7 +6,7 @@ import { getPaginatedData } from '../../lib/client/meetup/paginationHelper';
 
 import {
   discordCommandWrapper,
-  withDiscordAttachment,
+  withDiscordFileAttachment,
 } from '../../util/discord';
 import { withMeetupClient } from '../../util/meetup';
 
@@ -106,7 +106,7 @@ ${header}
 ${formattedResult}
 
 Total: ${total}`;
-        await withDiscordAttachment(
+        await withDiscordFileAttachment(
           `${header}.txt`,
           result,
           async (attachmentArgs) => {

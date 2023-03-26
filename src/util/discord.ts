@@ -32,30 +32,20 @@ export async function discordCommandWrapper(
 /**
  * A wrapper for Discord to attach files. It handles cleaning up the files
  * @param fileName Attachment file name
- * @param attachmentDataGen The callback that generates the data for the attachment
+ * @param attachmentData The data for the attachment
  * @param attachmentHandler The callback that gets to use the attachmentArgs
- * @param description Description of the fileAttachment
  */
-export async function withDiscordAttachment(
+export async function withDiscordFileAttachment(
   fileName: string,
   attachmentData: string | NodeJS.ArrayBufferView,
   attachmentHandler: (
-    attachmentArgs: Pick<WebhookEditMessageOptions, 'files' | 'embeds'>
+    attachmentArgs: Pick<WebhookEditMessageOptions, 'files'>
   ) => Promise<void>
-  // description?: string
 ) {
   const tmpFileName = `${crypto.randomBytes(16).toString('hex')}.tmp`;
   try {
     fs.writeFileSync(tmpFileName, attachmentData);
     await attachmentHandler({
-      // embeds: [
-      //   {
-      //     description,
-      //     image: {
-      //       url: `attachment://${fileName}`,
-      //     },
-      //   },
-      // ],
       files: [
         {
           attachment: tmpFileName,
