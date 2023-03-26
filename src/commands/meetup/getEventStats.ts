@@ -4,7 +4,10 @@ import { Discord, Slash, SlashOption } from 'discordx';
 import { Logger } from 'tslog';
 import { getPaginatedData } from '../../lib/client/meetup/paginationHelper';
 
-import { discordCommandWrapper } from '../../util/discord';
+import {
+  discordCommandWrapper,
+  withDiscordAttachment,
+} from '../../util/discord';
 import { withMeetupClient } from '../../util/meetup';
 
 const logger = new Logger({ name: 'MeetupGetStatsCommands' });
@@ -96,13 +99,18 @@ export class MeetupGetEventStatsCommands {
             return header + body;
           })
           .join('\n');
-        await interaction.editReply({
-          content: `Hosting stats for ${startDate.format('YYYY MMMM')}
+        const header = `Hosting stats for ${startDate.format('YYYY MMMM')}`;
+        const result = `${header}
           
-${formattedResult}
-
-Total: ${total}
-          `,
+        ${formattedResult}
+        
+        Total: ${total}
+                  `;
+        await withDiscordAttachment(header, result, async (attachmentArgs) => {
+          await interaction.editReply({
+            ...attachmentArgs,
+            content: 'Check the results in the attachment!',
+          });
         });
       });
     });
