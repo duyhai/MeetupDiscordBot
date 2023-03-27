@@ -21,6 +21,31 @@ export const getUserMembershipInfo = gql`
   }
 `;
 
+export const getUserHostedEvents = gql`
+  query ($connectionInput: ConnectionInput!) {
+    self {
+      id
+      hostedEvents(input: $connectionInput) {
+        pageInfo {
+          hasNextPage
+          hasPreviousPage
+          startCursor
+          endCursor
+        }
+        count
+        edges {
+          node {
+            title
+            group {
+              id
+            }
+          }
+        }
+      }
+    }
+  }
+`;
+
 export const getPastEvents = gql`
   query ($urlname: String!, $connectionInput: ConnectionInput!) {
     groupByUrlname(urlname: $urlname) {

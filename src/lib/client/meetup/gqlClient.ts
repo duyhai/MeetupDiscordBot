@@ -1,10 +1,17 @@
 import { GraphQLClient } from 'graphql-request';
 import { Logger } from 'tslog';
 import Configuration from '../../../configuration';
-import { getPastEvents, getUserInfo, getUserMembershipInfo } from './queries';
+import {
+  getPastEvents,
+  getUserHostedEvents,
+  getUserInfo,
+  getUserMembershipInfo,
+} from './queries';
 import {
   GetPastEventsInput,
   GetPastEventsResponse,
+  GetUserHostedEventsInput,
+  GetUserHostedEventsResponse,
   GetUserInfoResponse,
   GetUserMembershipInfoResponse,
   PaginationInput,
@@ -38,6 +45,21 @@ export class GqlMeetupClient {
       .request<GetUserMembershipInfoResponse>(getUserMembershipInfo, {
         urlname: Configuration.meetup.groupUrlName,
       })
+      .then((result) => result)
+      .catch((error) => {
+        logger.error(error);
+        throw error;
+      });
+  }
+
+  public getUserHostedEvents(input: PaginationInput) {
+    return this.client
+      .request<GetUserHostedEventsResponse, GetUserHostedEventsInput>(
+        getUserHostedEvents,
+        {
+          connectionInput: input,
+        }
+      )
       .then((result) => result)
       .catch((error) => {
         logger.error(error);

@@ -26,13 +26,13 @@ Have fun exploring the server!
 
 const logger = new Logger({ name: 'onboardUserHelper' });
 
-async function addRole(guild: Guild, userId: string, role: Roles) {
+export async function addRole(guild: Guild, userId: string, role: Roles) {
   const user = await guild.members.fetch(userId);
   const ladiesRole = await guild.roles.fetch(SERVER_ROLES[role]);
   await user.roles.add(ladiesRole);
 }
 
-async function removeRole(guild: Guild, userId: string, role: Roles) {
+export async function removeRole(guild: Guild, userId: string, role: Roles) {
   const user = await guild.members.fetch(userId);
   const onboardingRole = await guild.roles.fetch(SERVER_ROLES[role]);
   await user.roles.remove(onboardingRole);

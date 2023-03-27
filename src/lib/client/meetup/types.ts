@@ -49,6 +49,22 @@ interface PastEvent {
   title: string;
 }
 
+interface HostedEvent {
+  group: { id: string };
+  title: string;
+}
+
+export interface GetUserHostedEventsResponse {
+  self: {
+    hostedEvents: PaginatedData<HostedEvent>;
+    id: string;
+  };
+}
+
+export interface GetUserHostedEventsInput {
+  connectionInput: PaginationInput;
+}
+
 export interface GetPastEventsResponse {
   groupByUrlname: {
     id: string;
