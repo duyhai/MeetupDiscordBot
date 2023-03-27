@@ -3,7 +3,7 @@ import { Discord, Slash } from 'discordx';
 import { Logger } from 'tslog';
 import Configuration from '../../configuration';
 import { getPaginatedData } from '../../lib/client/meetup/paginationHelper';
-import { addRole } from '../../lib/helpers/onboardUser';
+import { addServerRole } from '../../lib/helpers/onboardUser';
 
 import { discordCommandWrapper } from '../../util/discord';
 import { withMeetupClient } from '../../util/meetup';
@@ -19,6 +19,10 @@ export class MeetupGetUserRolesCommands {
   async meetupGetUserRolesHandler(interaction: CommandInteraction) {
     await discordCommandWrapper(interaction, async () => {
       await withMeetupClient(interaction, async (meetupClient) => {
+        await interaction.editReply({
+          content: 'Sit tight! Fetching data.',
+        });
+
         const membershipInfo = await meetupClient.getUserMembershipInfo();
         if (!membershipInfo.groupByUrlname.isMember) {
           logger.warn(
@@ -31,9 +35,21 @@ export class MeetupGetUserRolesCommands {
         }
 
         if (membershipInfo.groupByUrlname.isOrganizer) {
-          await addRole(interaction.guild, interaction.user.id, 'organizer');
-          await addRole(interaction.guild, interaction.user.id, 'moderator');
-          await addRole(interaction.guild, interaction.user.id, 'guest_host');
+          await addServerRole(
+            interaction.guild,
+            interaction.user.id,
+            'organizer'
+          );
+          await addServerRole(
+            interaction.guild,
+            interaction.user.id,
+            'moderator'
+          );
+          await addServerRole(
+            interaction.guild,
+            interaction.user.id,
+            'guest_host'
+          );
           logger.info(
             `Organizer, moderator, and guest host role added to: ${interaction.user.username}`
           );
@@ -50,7 +66,11 @@ export class MeetupGetUserRolesCommands {
             (event) => event.group.id === Configuration.meetup.groupId
           );
           if (didUserHostInGroup) {
-            await addRole(interaction.guild, interaction.user.id, 'guest_host');
+            await addServerRole(
+              interaction.guild,
+              interaction.user.id,
+              'guest_host'
+            );
             logger.info(
               `Guest host role added to: ${interaction.user.username}`
             );

@@ -6,7 +6,39 @@ export const SERVER_ROLES = {
   onboarding: '932906028725571594',
   organizer: '912474170594582568',
 };
-export type Roles = keyof typeof SERVER_ROLES;
+export type ServerRoles = keyof typeof SERVER_ROLES;
+
+export const REWARD_ROLES: Record<
+  'hosting' | 'attendance' | 'discord',
+  Record<500 | 100 | 50 | 20 | 5 | 1, string>
+> = {
+  hosting: {
+    500: '1089710397298331648',
+    100: '1089710357360164894',
+    50: '1089710295234134136',
+    20: '1089710257607024780',
+    5: '1089710221242421328',
+    1: '1089710066380324974',
+  },
+  attendance: {
+    500: '1089709985145036901',
+    100: '1089709897807052874',
+    50: '1089709848763043952',
+    20: '1089709798632734740',
+    5: '1089709738796789870',
+    1: '1089709549302317076',
+  },
+  discord: {
+    500: '1089710715134287923',
+    100: '1089710681659555911',
+    50: '1089710646335119450',
+    20: '1089710611383996426',
+    5: '1089710562834915381',
+    1: '1089710477656981564',
+  },
+};
+export type RewardRoles = keyof typeof REWARD_ROLES;
+export type RewardRoleLevels = keyof (typeof REWARD_ROLES)[RewardRoles];
 
 export const DISCUSSION_CATEGORY_ID = '912463814287585321';
 export const INTEREST_CATEGORY_ID = '912461362733645884';

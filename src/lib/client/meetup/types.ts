@@ -49,14 +49,25 @@ interface PastEvent {
   title: string;
 }
 
-interface HostedEvent {
+interface EventGroupInfo {
   group: { id: string };
   title: string;
 }
 
+export interface GetUserAttendedEventsResponse {
+  self: {
+    id: string;
+    pastEvents: PaginatedData<EventGroupInfo>;
+  };
+}
+
+export interface GetUserAttendedEventsInput {
+  connectionInput: PaginationInput;
+}
+
 export interface GetUserHostedEventsResponse {
   self: {
-    hostedEvents: PaginatedData<HostedEvent>;
+    hostedEvents: PaginatedData<EventGroupInfo>;
     id: string;
   };
 }

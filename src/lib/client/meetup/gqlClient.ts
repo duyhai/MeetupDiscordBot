@@ -3,6 +3,7 @@ import { Logger } from 'tslog';
 import Configuration from '../../../configuration';
 import {
   getPastEvents,
+  getUserAttendedEvents,
   getUserHostedEvents,
   getUserInfo,
   getUserMembershipInfo,
@@ -10,6 +11,8 @@ import {
 import {
   GetPastEventsInput,
   GetPastEventsResponse,
+  GetUserAttendedEventsInput,
+  GetUserAttendedEventsResponse,
   GetUserHostedEventsInput,
   GetUserHostedEventsResponse,
   GetUserInfoResponse,
@@ -45,6 +48,21 @@ export class GqlMeetupClient {
       .request<GetUserMembershipInfoResponse>(getUserMembershipInfo, {
         urlname: Configuration.meetup.groupUrlName,
       })
+      .then((result) => result)
+      .catch((error) => {
+        logger.error(error);
+        throw error;
+      });
+  }
+
+  public getUserAttendedEvents(input: PaginationInput) {
+    return this.client
+      .request<GetUserAttendedEventsResponse, GetUserAttendedEventsInput>(
+        getUserAttendedEvents,
+        {
+          connectionInput: input,
+        }
+      )
       .then((result) => result)
       .catch((error) => {
         logger.error(error);

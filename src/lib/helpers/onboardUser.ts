@@ -3,7 +3,10 @@ import { Logger } from 'tslog';
 import {
   DISCUSSION_JOIN_CHANNEL_ID,
   INTEREST_JOIN_CHANNEL_ID,
-  Roles,
+  RewardRoleLevels,
+  RewardRoles,
+  REWARD_ROLES,
+  ServerRoles,
   SERVER_ROLES,
 } from '../../constants';
 import { isAdmin } from '../../util/discord';
@@ -26,16 +29,54 @@ Have fun exploring the server!
 
 const logger = new Logger({ name: 'onboardUserHelper' });
 
-export async function addRole(guild: Guild, userId: string, role: Roles) {
+export async function addServerRole(
+  guild: Guild,
+  userId: string,
+  role: ServerRoles
+) {
   const user = await guild.members.fetch(userId);
-  const ladiesRole = await guild.roles.fetch(SERVER_ROLES[role]);
-  await user.roles.add(ladiesRole);
+  const serverRole = await guild.roles.fetch(SERVER_ROLES[role]);
+  await user.roles.add(serverRole);
 }
 
-export async function removeRole(guild: Guild, userId: string, role: Roles) {
+export async function addRewardRole(
+  guild: Guild,
+  userId: string,
+  role: RewardRoles,
+  levels: RewardRoleLevels[] = [1, 5, 20, 50, 100, 500]
+) {
   const user = await guild.members.fetch(userId);
-  const onboardingRole = await guild.roles.fetch(SERVER_ROLES[role]);
-  await user.roles.remove(onboardingRole);
+  await Promise.all(
+    levels.map(async (lvl) => {
+      const rewardRole = await guild.roles.fetch(REWARD_ROLES[role][lvl]);
+      await user.roles.add(rewardRole);
+    })
+  );
+}
+
+export async function removeServerRole(
+  guild: Guild,
+  userId: string,
+  role: ServerRoles
+) {
+  const user = await guild.members.fetch(userId);
+  const serverRole = await guild.roles.fetch(SERVER_ROLES[role]);
+  await user.roles.remove(serverRole);
+}
+
+export async function removeRewardRole(
+  guild: Guild,
+  userId: string,
+  role: RewardRoles,
+  levels: RewardRoleLevels[] = [1, 5, 20, 50, 100, 500]
+) {
+  const user = await guild.members.fetch(userId);
+  await Promise.all(
+    levels.map(async (lvl) => {
+      const rewardRole = await guild.roles.fetch(REWARD_ROLES[role][lvl]);
+      await user.roles.remove(rewardRole);
+    })
+  );
 }
 
 async function onboardUserCommon(
@@ -66,10 +107,10 @@ async function onboardUserCommon(
   }
 
   if (isFemale) {
-    await addRole(guild, user.id, 'ladies_lounge');
+    await addServerRole(guild, user.id, 'ladies_lounge');
     logger.info(`User ${fullUsername} added to LadiesLounge`);
   }
-  await removeRole(guild, user.id, 'onboarding');
+  await removeServerRole(guild, user.id, 'onboarding');
   logger.info(`User ${fullUsername} onboarded!`);
 }
 
