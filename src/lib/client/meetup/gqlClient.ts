@@ -1,7 +1,7 @@
 import { GraphQLClient } from 'graphql-request';
 import { Logger } from 'tslog';
 import Configuration from '../../../configuration';
-import { InMemoryCache } from '../../cache/memoryCache';
+import { cachedGqlRequest } from './cacheHelper';
 import {
   getPastGroupEvents,
   getUserHostedEvents,
@@ -14,6 +14,7 @@ import {
   GetUserHostedEventsInput,
   GetUserHostedEventsResponse,
   GetUserInfoResponse,
+  GetUserMembershipInfoInput,
   GetUserMembershipInfoResponse,
   PaginationInput,
 } from './types';
@@ -32,6 +33,7 @@ export class GqlMeetupClient {
   }
 
   public async getUserInfo() {
+    logger.info(`Calling getUserInfo with input: ${JSON.stringify({})}`);
     try {
       const result = await this.client.request<GetUserInfoResponse>(
         getUserInfo
@@ -44,13 +46,16 @@ export class GqlMeetupClient {
   }
 
   public async getUserMembershipInfo() {
+    logger.info(
+      `Calling getUserMembershipInfo with input: ${JSON.stringify({})}`
+    );
     try {
-      const result = await this.client.request<GetUserMembershipInfoResponse>(
-        getUserMembershipInfo,
-        {
-          urlname: Configuration.meetup.groupUrlName,
-        }
-      );
+      const result = await this.client.request<
+        GetUserMembershipInfoResponse,
+        GetUserMembershipInfoInput
+      >(getUserMembershipInfo, {
+        urlname: Configuration.meetup.groupUrlName,
+      });
       return result;
     } catch (error) {
       logger.error(error);
@@ -59,6 +64,9 @@ export class GqlMeetupClient {
   }
 
   public async getUserHostedEvents(input: PaginationInput) {
+    logger.info(
+      `Calling getUserHostedEvents with input: ${JSON.stringify(input)}`
+    );
     try {
       const result = await this.client.request<
         GetUserHostedEventsResponse,
@@ -74,25 +82,27 @@ export class GqlMeetupClient {
   }
 
   public async getPastGroupEvents(input: PaginationInput) {
-    const cacheKey = `getPastGroupEvents-${JSON.stringify(input)}`;
-    const data = await InMemoryCache.instance().get(cacheKey);
-    if (data) {
-      return JSON.parse(data) as GetPastGroupEventsResponse;
-    }
-
-    try {
-      const result = await this.client.request<
-        GetPastGroupEventsResponse,
-        GetPastGroupEventsInput
-      >(getPastGroupEvents, {
+    logger.info(
+      `Calling getPastGroupEvents with input: ${JSON.stringify(input)}`
+    );
+    // Can be cached because it doesn't retrieve user specific data
+    return cachedGqlRequest(
+      'getPastGroupEvents',
+      {
         urlname: Configuration.meetup.groupUrlName,
         connectionInput: input,
-      });
-      await InMemoryCache.instance().set(cacheKey, JSON.stringify(result));
-      return result;
-    } catch (error) {
-      logger.error(error);
-      throw error;
-    }
+      },
+      (callbackInput: GetPastGroupEventsInput) => {
+        try {
+          return this.client.request<
+            GetPastGroupEventsResponse,
+            GetPastGroupEventsInput
+          >(getPastGroupEvents, callbackInput);
+        } catch (error) {
+          logger.error(error);
+          throw error;
+        }
+      }
+    );
   }
 }

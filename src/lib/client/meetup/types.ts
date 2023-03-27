@@ -41,6 +41,10 @@ export interface GetUserMembershipInfoResponse {
   };
 }
 
+export interface GetUserMembershipInfoInput {
+  urlname: string;
+}
+
 interface PastEvent {
   dateTime: string;
   going: number;
