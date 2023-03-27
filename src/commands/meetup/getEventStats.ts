@@ -94,18 +94,18 @@ export class MeetupGetEventStatsCommands {
           .map((entry: [string, string[]], index: number) => {
             const [idName, events] = entry;
             const name = idName.split('-')[1];
-            const header = `#${index + 1}: ${events.length} ${name}\n`;
+            const header = `**#${index + 1}: ${events.length} ${name}**\n`;
             const body = events.map((event) => `    ${event}`).join('\n');
             return header + body;
           })
           .join('\n');
-        const header = `Hosting stats for ${startDate.format('YYYY MMMM')}`;
+        const header = `**Hosting stats for ${startDate.format('YYYY MMMM')}**`;
         const result = `
 ${header}
           
 ${formattedResult}
 
-Total: ${total}`;
+**Total: ${total}**`;
         await withDiscordFileAttachment(
           `${header}.txt`,
           result,
