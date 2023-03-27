@@ -70,8 +70,19 @@ export interface GetUserHostedEventsInput {
   connectionInput: PaginationInput;
 }
 
+type TicketStatus =
+  | 'YES'
+  | 'NO'
+  | 'WAITLIST'
+  | 'MAYBE'
+  | 'ATTENDED'
+  | 'NO_SHOW'
+  | 'HAVENT'
+  | 'EXCUSED_ABSENCE'
+  | 'YES_PENDING_PAYMENT';
+
 interface Ticket {
-  status: number;
+  status: TicketStatus;
   user: BaseUserInfo;
 }
 

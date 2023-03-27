@@ -32,11 +32,13 @@ export class MeetupGetBadgesCommands {
         });
 
         const getUserHostedEvents = pastEvents.filter((event) =>
-          event.hosts.some((host) => host.id === userInfo.self.id)
+          event.hosts.some(({ id }) => id === userInfo.self.id)
         );
         const getUserAttendedEvents = pastEvents.filter((event) =>
           event.tickets.edges.some(
-            (ticket) => ticket.node.user.id === userInfo.self.id
+            ({ node }) =>
+              ['YES', 'ATTENDED'].includes(node.status) &&
+              node.user.id === userInfo.self.id
           )
         );
 
@@ -56,7 +58,9 @@ export class MeetupGetBadgesCommands {
         await addRewardRole(guild, user.id, 'attendance', attendanceRewards);
 
         await interaction.editReply(
-          `Your Discord badges are all set up based on your Meetup status! Let us know if they are not accurate.`
+          `Your Discord badges are all set up based on your Meetup status!
+Hosted: ${hostedCount} Attended: ${attendedCount}
+Let us know if they are not accurate.`
         );
       });
     });
