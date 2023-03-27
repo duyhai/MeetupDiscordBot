@@ -3,8 +3,8 @@ import { Logger } from 'tslog';
 import {
   DISCUSSION_JOIN_CHANNEL_ID,
   INTEREST_JOIN_CHANNEL_ID,
-  LADIES_LOUNGE_ROLE_ID,
-  ONBOARDING_ROLE_ID,
+  Roles,
+  SERVER_ROLES,
 } from '../../constants';
 import { isAdmin } from '../../util/discord';
 
@@ -26,15 +26,15 @@ Have fun exploring the server!
 
 const logger = new Logger({ name: 'onboardUserHelper' });
 
-async function addToLadiesLounge(guild: Guild, userId: string) {
+async function addRole(guild: Guild, userId: string, role: Roles) {
   const user = await guild.members.fetch(userId);
-  const ladiesRole = await guild.roles.fetch(LADIES_LOUNGE_ROLE_ID);
+  const ladiesRole = await guild.roles.fetch(SERVER_ROLES[role]);
   await user.roles.add(ladiesRole);
 }
 
-async function removeFromOnboarding(guild: Guild, userId: string) {
+async function removeRole(guild: Guild, userId: string, role: Roles) {
   const user = await guild.members.fetch(userId);
-  const onboardingRole = await guild.roles.fetch(ONBOARDING_ROLE_ID);
+  const onboardingRole = await guild.roles.fetch(SERVER_ROLES[role]);
   await user.roles.remove(onboardingRole);
 }
 
@@ -66,10 +66,10 @@ async function onboardUserCommon(
   }
 
   if (isFemale) {
-    await addToLadiesLounge(guild, user.id);
+    await addRole(guild, user.id, 'ladies_lounge');
     logger.info(`User ${fullUsername} added to LadiesLounge`);
   }
-  await removeFromOnboarding(guild, user.id);
+  await removeRole(guild, user.id, 'onboarding');
   logger.info(`User ${fullUsername} onboarded!`);
 }
 
