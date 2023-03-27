@@ -11,23 +11,12 @@ export const getUserInfo = gql`
 `;
 
 export const getUserMembershipInfo = gql`
-  query ($connectionInput: ConnectionInput!) {
-    self {
-      memberships(input: $connectionInput) {
-        pageInfo {
-          hasNextPage
-          hasPreviousPage
-          startCursor
-          endCursor
-        }
-        count
-        edges {
-          node {
-            id
-            name
-          }
-        }
-      }
+  query ($urlname: String!) {
+    groupByUrlname(urlname: $urlname) {
+      id
+      name
+      isMember
+      isOrganizer
     }
   }
 `;

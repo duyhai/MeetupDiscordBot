@@ -21,11 +21,6 @@ export interface PaginatedData<TData> {
   pageInfo: PageInfo;
 }
 
-interface UserInfo {
-  id: string;
-  name: string;
-}
-
 export interface GetUserInfoResponse {
   self: {
     gender: string;
@@ -35,8 +30,11 @@ export interface GetUserInfoResponse {
 }
 
 export interface GetUserMembershipInfoResponse {
-  self: {
-    memberships: PaginatedData<UserInfo>;
+  groupByUrlname: {
+    id: string;
+    isMember: boolean;
+    isOrganizer: boolean;
+    name: string;
   };
 }
 

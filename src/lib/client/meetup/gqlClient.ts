@@ -33,10 +33,10 @@ export class GqlMeetupClient {
       });
   }
 
-  public getUserMembershipInfo(input: PaginationInput) {
+  public getUserMembershipInfo() {
     return this.client
       .request<GetUserMembershipInfoResponse>(getUserMembershipInfo, {
-        connectionInput: input,
+        urlname: Configuration.meetup.groupUrlName,
       })
       .then((result) => result)
       .catch((error) => {

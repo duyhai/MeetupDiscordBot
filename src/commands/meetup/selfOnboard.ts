@@ -2,8 +2,6 @@ import { CommandInteraction } from 'discord.js';
 import { Discord, Slash } from 'discordx';
 import { Logger } from 'tslog';
 
-import Configuration from '../../configuration';
-import { getPaginatedData } from '../../lib/client/meetup/paginationHelper';
 import { selfOnboardUser } from '../../lib/helpers/onboardUser';
 import { discordCommandWrapper } from '../../util/discord';
 import { withMeetupClient } from '../../util/meetup';
@@ -20,18 +18,9 @@ export class MeetupSelfOnboardCommands {
     await discordCommandWrapper(interaction, async () => {
       await withMeetupClient(interaction, async (meetupClient) => {
         const userInfo = await meetupClient.getUserInfo();
-        const membershipInfo = await getPaginatedData(
-          async (paginationInput) => {
-            const result = await meetupClient.getUserMembershipInfo(
-              paginationInput
-            );
-            return result.self.memberships;
-          }
-        );
+        const membershipInfo = await meetupClient.getUserMembershipInfo();
 
-        const isMeetupGroupMember = membershipInfo.some(
-          (groupInfo) => groupInfo.id === Configuration.meetup.groupId
-        );
+        const isMeetupGroupMember = membershipInfo.groupByUrlname.isMember;
 
         if (!isMeetupGroupMember) {
           logger.warn(
