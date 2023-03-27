@@ -46,32 +46,7 @@ export const getUserHostedEvents = gql`
   }
 `;
 
-export const getUserAttendedEvents = gql`
-  query ($connectionInput: ConnectionInput!) {
-    self {
-      id
-      pastEvents(input: $connectionInput) {
-        pageInfo {
-          hasNextPage
-          hasPreviousPage
-          startCursor
-          endCursor
-        }
-        count
-        edges {
-          node {
-            title
-            group {
-              id
-            }
-          }
-        }
-      }
-    }
-  }
-`;
-
-export const getPastEvents = gql`
+export const getPastGroupEvents = gql`
   query ($urlname: String!, $connectionInput: ConnectionInput!) {
     groupByUrlname(urlname: $urlname) {
       id
@@ -92,6 +67,24 @@ export const getPastEvents = gql`
             hosts {
               id
               name
+            }
+            tickets(input: { first: 200 }) {
+              pageInfo {
+                hasNextPage
+                hasPreviousPage
+                startCursor
+                endCursor
+              }
+              count
+              edges {
+                node {
+                  status
+                  user {
+                    id
+                    name
+                  }
+                }
+              }
             }
           }
         }

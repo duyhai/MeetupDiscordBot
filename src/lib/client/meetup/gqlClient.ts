@@ -1,18 +1,16 @@
 import { GraphQLClient } from 'graphql-request';
 import { Logger } from 'tslog';
 import Configuration from '../../../configuration';
+import { InMemoryCache } from '../../cache/memoryCache';
 import {
-  getPastEvents,
-  getUserAttendedEvents,
+  getPastGroupEvents,
   getUserHostedEvents,
   getUserInfo,
   getUserMembershipInfo,
 } from './queries';
 import {
-  GetPastEventsInput,
-  GetPastEventsResponse,
-  GetUserAttendedEventsInput,
-  GetUserAttendedEventsResponse,
+  GetPastGroupEventsInput,
+  GetPastGroupEventsResponse,
   GetUserHostedEventsInput,
   GetUserHostedEventsResponse,
   GetUserInfoResponse,
@@ -33,68 +31,68 @@ export class GqlMeetupClient {
     });
   }
 
-  public getUserInfo() {
-    return this.client
-      .request<GetUserInfoResponse>(getUserInfo)
-      .then((result) => result)
-      .catch((error) => {
-        logger.error(error);
-        throw error;
-      });
+  public async getUserInfo() {
+    try {
+      const result = await this.client.request<GetUserInfoResponse>(
+        getUserInfo
+      );
+      return result;
+    } catch (error) {
+      logger.error(error);
+      throw error;
+    }
   }
 
-  public getUserMembershipInfo() {
-    return this.client
-      .request<GetUserMembershipInfoResponse>(getUserMembershipInfo, {
-        urlname: Configuration.meetup.groupUrlName,
-      })
-      .then((result) => result)
-      .catch((error) => {
-        logger.error(error);
-        throw error;
-      });
-  }
-
-  public getUserAttendedEvents(input: PaginationInput) {
-    return this.client
-      .request<GetUserAttendedEventsResponse, GetUserAttendedEventsInput>(
-        getUserAttendedEvents,
+  public async getUserMembershipInfo() {
+    try {
+      const result = await this.client.request<GetUserMembershipInfoResponse>(
+        getUserMembershipInfo,
         {
-          connectionInput: input,
+          urlname: Configuration.meetup.groupUrlName,
         }
-      )
-      .then((result) => result)
-      .catch((error) => {
-        logger.error(error);
-        throw error;
-      });
+      );
+      return result;
+    } catch (error) {
+      logger.error(error);
+      throw error;
+    }
   }
 
-  public getUserHostedEvents(input: PaginationInput) {
-    return this.client
-      .request<GetUserHostedEventsResponse, GetUserHostedEventsInput>(
-        getUserHostedEvents,
-        {
-          connectionInput: input,
-        }
-      )
-      .then((result) => result)
-      .catch((error) => {
-        logger.error(error);
-        throw error;
+  public async getUserHostedEvents(input: PaginationInput) {
+    try {
+      const result = await this.client.request<
+        GetUserHostedEventsResponse,
+        GetUserHostedEventsInput
+      >(getUserHostedEvents, {
+        connectionInput: input,
       });
+      return result;
+    } catch (error) {
+      logger.error(error);
+      throw error;
+    }
   }
 
-  public getPastEvents(input: PaginationInput) {
-    return this.client
-      .request<GetPastEventsResponse, GetPastEventsInput>(getPastEvents, {
+  public async getPastGroupEvents(input: PaginationInput) {
+    const cacheKey = `getPastGroupEvents-${JSON.stringify(input)}`;
+    const data = await InMemoryCache.instance().get(cacheKey);
+    if (data) {
+      return JSON.parse(data) as GetPastGroupEventsResponse;
+    }
+
+    try {
+      const result = await this.client.request<
+        GetPastGroupEventsResponse,
+        GetPastGroupEventsInput
+      >(getPastGroupEvents, {
         urlname: Configuration.meetup.groupUrlName,
         connectionInput: input,
-      })
-      .then((result) => result)
-      .catch((error) => {
-        logger.error(error);
-        throw error;
       });
+      await InMemoryCache.instance().set(cacheKey, JSON.stringify(result));
+      return result;
+    } catch (error) {
+      logger.error(error);
+      throw error;
+    }
   }
 }

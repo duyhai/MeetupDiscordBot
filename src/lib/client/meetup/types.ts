@@ -1,3 +1,8 @@
+interface BaseUserInfo {
+  id: string;
+  name: string;
+}
+
 export interface PaginationInput {
   after?: string;
   before?: string;
@@ -24,9 +29,7 @@ export interface PaginatedData<TData> {
 export interface GetUserInfoResponse {
   self: {
     gender: string;
-    id: string;
-    name: string;
-  };
+  } & BaseUserInfo;
 }
 
 export interface GetUserMembershipInfoResponse {
@@ -41,28 +44,15 @@ export interface GetUserMembershipInfoResponse {
 interface PastEvent {
   dateTime: string;
   going: number;
-  hosts: {
-    id: string;
-    name: string;
-  }[];
+  hosts: BaseUserInfo[];
   maxTickets: number;
+  tickets: PaginatedData<Ticket>;
   title: string;
 }
 
 interface EventGroupInfo {
   group: { id: string };
   title: string;
-}
-
-export interface GetUserAttendedEventsResponse {
-  self: {
-    id: string;
-    pastEvents: PaginatedData<EventGroupInfo>;
-  };
-}
-
-export interface GetUserAttendedEventsInput {
-  connectionInput: PaginationInput;
 }
 
 export interface GetUserHostedEventsResponse {
@@ -76,14 +66,19 @@ export interface GetUserHostedEventsInput {
   connectionInput: PaginationInput;
 }
 
-export interface GetPastEventsResponse {
+interface Ticket {
+  status: number;
+  user: BaseUserInfo;
+}
+
+export interface GetPastGroupEventsResponse {
   groupByUrlname: {
     id: string;
     pastEvents: PaginatedData<PastEvent>;
   };
 }
 
-export interface GetPastEventsInput {
+export interface GetPastGroupEventsInput {
   connectionInput: PaginationInput;
   urlname: string;
 }

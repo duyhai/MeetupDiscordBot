@@ -42,11 +42,11 @@ export class MeetupGetEventStatsCommands {
       await withMeetupClient(interaction, async (meetupClient) => {
         logger.info('Fetching data');
         await interaction.editReply({
-          content: 'Fetching data',
+          content: 'Sit tight! Fetching data.',
         });
 
         const pastEvents = await getPaginatedData(async (paginationInput) => {
-          const result = await meetupClient.getPastEvents(paginationInput);
+          const result = await meetupClient.getPastGroupEvents(paginationInput);
           return result.groupByUrlname.pastEvents;
         });
 

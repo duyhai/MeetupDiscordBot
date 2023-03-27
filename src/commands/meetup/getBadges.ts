@@ -1,7 +1,6 @@
 import { CommandInteraction } from 'discord.js';
 import { Discord, Slash } from 'discordx';
 import { Logger } from 'tslog';
-import Configuration from '../../configuration';
 import { RewardRoleLevels } from '../../constants';
 import { getPaginatedData } from '../../lib/client/meetup/paginationHelper';
 import { addRewardRole, removeRewardRole } from '../../lib/helpers/onboardUser';
@@ -25,29 +24,24 @@ export class MeetupGetBadgesCommands {
         });
         const { guild, user } = interaction;
 
-        const getUserHostedEvents = await getPaginatedData(
-          async (paginationInput) => {
-            const result = await meetupClient.getUserHostedEvents(
-              paginationInput
-            );
-            return result.self.hostedEvents;
-          }
+        const userInfo = await meetupClient.getUserInfo();
+
+        const pastEvents = await getPaginatedData(async (paginationInput) => {
+          const result = await meetupClient.getPastGroupEvents(paginationInput);
+          return result.groupByUrlname.pastEvents;
+        });
+
+        const getUserHostedEvents = pastEvents.filter((event) =>
+          event.hosts.some((host) => host.id === userInfo.self.id)
         );
-        const getUserAttendedEvents = await getPaginatedData(
-          async (paginationInput) => {
-            const result = await meetupClient.getUserAttendedEvents(
-              paginationInput
-            );
-            return result.self.pastEvents;
-          }
+        const getUserAttendedEvents = pastEvents.filter((event) =>
+          event.tickets.edges.some(
+            (ticket) => ticket.node.user.id === userInfo.self.id
+          )
         );
 
-        const hostedCount = getUserHostedEvents.filter(
-          (event) => event.group.id === Configuration.meetup.groupId
-        ).length;
-        const attendedCount = getUserAttendedEvents.filter(
-          (event) => event.group.id === Configuration.meetup.groupId
-        ).length;
+        const hostedCount = getUserHostedEvents.length;
+        const attendedCount = getUserAttendedEvents.length;
         logger.info(JSON.stringify({ hostedCount, attendedCount }));
 
         const levels: RewardRoleLevels[] = [1, 5, 20, 50, 100, 500];
