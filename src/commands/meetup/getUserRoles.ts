@@ -32,9 +32,10 @@ export class MeetupGetUserRolesCommands {
 
         if (membershipInfo.groupByUrlname.isOrganizer) {
           await addRole(interaction.guild, interaction.user.id, 'organizer');
+          await addRole(interaction.guild, interaction.user.id, 'moderator');
           await addRole(interaction.guild, interaction.user.id, 'guest_host');
           logger.info(
-            `Organizer and guest host role added to: ${interaction.user.username}`
+            `Organizer, moderator, and guest host role added to: ${interaction.user.username}`
           );
         } else {
           const getUserHostedEvents = await getPaginatedData(
