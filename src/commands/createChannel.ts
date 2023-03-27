@@ -8,12 +8,12 @@ import {
 import { Discord, Slash, SlashChoice, SlashOption } from 'discordx';
 import { Logger } from 'tslog';
 import {
-  BOTS_ROLE_ID,
   BOT_COMMANDS_CHANNEL_ID,
   DISCUSSION_JOIN_CHANNEL_ID,
   DISCUSSION_JOIN_MESSAGE_ID,
   INTEREST_JOIN_CHANNEL_ID,
   INTEREST_JOIN_MESSAGE_ID,
+  SERVER_ROLES,
 } from '../constants';
 import { discordCommandWrapper } from '../util/discord';
 import { capitalize } from '../util/strings';
@@ -162,7 +162,7 @@ export class CreateChannel {
             allow: [PermissionsBitField.Flags.ViewChannel],
           },
           {
-            id: BOTS_ROLE_ID,
+            id: SERVER_ROLES.bots,
             allow: [PermissionsBitField.Flags.ViewChannel],
           },
         ],
