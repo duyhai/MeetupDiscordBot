@@ -94,8 +94,8 @@ export class MeetupGetEventStatsCommands {
           .map((entry: [string, string[]], index: number) => {
             const [idName, events] = entry;
             const name = idName.split('-')[1];
-            const header = `${index + 1}: ${events.length} ${name}\n`;
-            const body = events.join('\n');
+            const header = `#${index + 1}: ${events.length} ${name}\n`;
+            const body = events.map((event) => `    ${event}`).join('\n');
             return header + body;
           })
           .join('\n');
