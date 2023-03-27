@@ -14,7 +14,7 @@ const logger = new Logger({ name: 'MeetupGetStatsCommands' });
 export class MeetupGetBadgesCommands {
   @Slash({
     name: 'meetup_get_badges',
-    description: `Getting Discord badges based on Meetup stats`,
+    description: `Getting Discord badges based on Meetup stats. Output is private.`,
   })
   async meetupGetBadgesHandler(interaction: CommandInteraction) {
     await discordCommandWrapper(interaction, async () => {
@@ -31,11 +31,11 @@ export class MeetupGetBadgesCommands {
           return result.groupByUrlname.pastEvents;
         });
 
-        const getUserHostedEvents = pastEvents.filter((event) =>
-          event.hosts.some(({ id }) => id === userInfo.self.id)
+        const getUserHostedEvents = pastEvents.filter(({ hosts }) =>
+          hosts.some(({ id }) => id === userInfo.self.id)
         );
-        const getUserAttendedEvents = pastEvents.filter((event) =>
-          event.tickets.edges.some(
+        const getUserAttendedEvents = pastEvents.filter(({ tickets }) =>
+          tickets.edges.some(
             ({ node }) =>
               ['YES', 'ATTENDED'].includes(node.status) &&
               node.user.id === userInfo.self.id

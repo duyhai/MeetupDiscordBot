@@ -12,7 +12,7 @@ const logger = new Logger({ name: 'AuthUserCommands' });
 export class MeetupSelfOnboardCommands {
   @Slash({
     name: 'meetup_self_onboard',
-    description: `Self-service onboarding through the Meetup Bot. `,
+    description: `Self-service onboarding through the Meetup Bot. Output is private.`,
   })
   async meetupSelfOnboardHandler(interaction: CommandInteraction) {
     await discordCommandWrapper(interaction, async () => {

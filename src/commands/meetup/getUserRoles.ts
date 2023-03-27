@@ -14,7 +14,7 @@ const logger = new Logger({ name: 'MeetupGetStatsCommands' });
 export class MeetupGetUserRolesCommands {
   @Slash({
     name: 'meetup_get_user_roles',
-    description: `Getting Discord roles based on Meetup role`,
+    description: `Getting Discord roles based on Meetup role. Output is private.`,
   })
   async meetupGetUserRolesHandler(interaction: CommandInteraction) {
     await discordCommandWrapper(interaction, async () => {

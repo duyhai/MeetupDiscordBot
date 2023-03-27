@@ -29,7 +29,7 @@ export class MeetupGetEventStatsCommands {
     @SlashOption({
       name: 'month',
       description:
-        'The month to filter to. Set it to 0 in order to disable filtering by month',
+        'The month to filter to. Set it to 0 in order to disable filtering by month. Output is private.',
       type: ApplicationCommandOptionType.Number,
       minValue: 0,
       maxValue: 12,

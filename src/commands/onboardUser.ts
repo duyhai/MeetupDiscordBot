@@ -17,7 +17,7 @@ const strings = {
 export class OnboardUserCommands {
   @Slash({
     name: 'onboard_members',
-    description: 'Onboard member',
+    description: 'Onboard member. Output is public.',
   })
   async onboardNonLadiesUserHandler(
     @SlashOption({
@@ -35,7 +35,8 @@ export class OnboardUserCommands {
 
   @Slash({
     name: 'onboard_ladies',
-    description: 'Onboard member with access to LadiesLounge',
+    description:
+      'Onboard member with access to LadiesLounge. Output is private.',
   })
   async onboardLadiesUserHandler(
     @SlashOption({
@@ -53,7 +54,7 @@ export class OnboardUserCommands {
 
   @Slash({
     name: 'taste_the_rainbow',
-    description: 'Self onboard to LGTBQ channel',
+    description: 'Self onboard to LGTBQ channel. Output is private.',
   })
   async onboardLGBTQUserHandler(interaction: CommandInteraction) {
     await discordCommandWrapper(interaction, async () => {
