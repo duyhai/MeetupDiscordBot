@@ -40,10 +40,6 @@ export const REWARD_ROLES: Record<
 export type RewardRoles = keyof typeof REWARD_ROLES;
 export type RewardRoleLevels = keyof (typeof REWARD_ROLES)[RewardRoles];
 
-export const DISCUSSION_CATEGORY_ID = '912463814287585321';
-export const INTEREST_CATEGORY_ID = '912461362733645884';
-export const DISCUSSION_JOIN_CHANNEL_ID = '935080178181373992';
-export const INTEREST_JOIN_CHANNEL_ID = '935074582325506068';
 export const BOT_COMMANDS_CHANNEL_ID = '915035889174990899';
 export const LGBTQ_CHANNEL_ID = '935434313183404062';
 

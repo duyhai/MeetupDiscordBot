@@ -1,5 +1,5 @@
-import { CreateChannel } from './createChannel';
-import { DeleteChannel } from './deleteChannel';
+// import { CreateChannel } from './createChannel';
+// import { DeleteChannel } from './deleteChannel';
 import { MeetupGetBadgesCommands } from './meetup/getBadges';
 import { MeetupGetEventStatsCommands } from './meetup/getEventStats';
 import { MeetupGetUserRolesCommands } from './meetup/getUserRoles';
@@ -12,8 +12,8 @@ const Commands = [
   MeetupGetEventStatsCommands,
   MeetupGetUserRolesCommands,
   OnboardUserCommands,
-  CreateChannel,
-  DeleteChannel,
+  // CreateChannel,
+  // DeleteChannel,
 ];
 
 export default Commands;
