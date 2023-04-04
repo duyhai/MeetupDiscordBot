@@ -60,13 +60,18 @@ export class MeetupGetEventStatsCommands {
 
         const hostEvents = new Map<string, Array<string>>();
         pastEvents.forEach((event) => {
-          const { hosts } = event;
-          const eventDate = dayjs(event.dateTime);
+          const { hosts, dateTime, title, going, maxTickets, status } = event;
 
+          if (!['PUBLISHED', 'ACTIVE'].includes(status)) {
+            logger.info(`Skipping ${title}. Status: ${status}`);
+            return;
+          }
+
+          const eventDate = dayjs(dateTime);
           const isEventInRange =
             startDate.isBefore(eventDate) && endDate.isAfter(eventDate);
           if (!hosts.length || !isEventInRange) {
-            logger.info(`Skipping ${JSON.stringify(event)}`);
+            logger.info(`Skipping ${title}. Event date: ${dateTime}`);
             return;
           }
 
@@ -75,9 +80,7 @@ export class MeetupGetEventStatsCommands {
             if (!hostEvents.has(key)) {
               hostEvents.set(key, []);
             }
-            hostEvents
-              .get(key)
-              .push(`${event.title} (${event.going}/${event.maxTickets})`);
+            hostEvents.get(key).push(`${title} (${going}/${maxTickets})`);
           });
         });
 

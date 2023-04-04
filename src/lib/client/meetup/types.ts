@@ -45,11 +45,21 @@ export interface GetUserMembershipInfoInput {
   urlname: string;
 }
 
+type EventStatus =
+  | 'PUBLISHED'
+  | 'DRAFT'
+  | 'CANCELLED'
+  | 'CANCELLED_PERM'
+  | 'AUTOSCHED'
+  | 'ACTIVE'
+  | 'PAST';
+
 interface PastEvent {
   dateTime: string;
   going: number;
   hosts: BaseUserInfo[];
   maxTickets: number;
+  status: EventStatus;
   tickets: PaginatedData<Ticket>;
   title: string;
 }

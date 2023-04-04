@@ -68,6 +68,7 @@ export const getPastGroupEvents = gql`
               id
               name
             }
+            status
             tickets(input: { first: 200 }) {
               pageInfo {
                 hasNextPage
