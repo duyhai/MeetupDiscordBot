@@ -1,8 +1,6 @@
-import { Guild, GuildBasedChannel, CommandInteraction, User } from 'discord.js';
+import { Guild, CommandInteraction, User } from 'discord.js';
 import { Logger } from 'tslog';
 import {
-  DISCUSSION_JOIN_CHANNEL_ID,
-  INTEREST_JOIN_CHANNEL_ID,
   RewardRoleLevels,
   RewardRoles,
   REWARD_ROLES,
@@ -12,14 +10,10 @@ import {
 import { isAdmin } from '../../util/discord';
 
 const strings = {
-  welcomeMsg: (
-    user: User,
-    discussionJoinChannel: GuildBasedChannel,
-    interestJoinChannel: GuildBasedChannel
-  ) =>
+  welcomeMsg: (user: User) =>
     `
-Welcome ${user.toString()}. Check out some of our interest channels! ${discussionJoinChannel.toString()} ${interestJoinChannel.toString()} \
-Please make sure to turn off notifications for all messages and to mute channels you're not interested in if you're getting overwhelmed :) 
+Welcome ${user.toString()}. \
+Please go to Channels & Roles in the left menu to join different discussion channels. \
 Have fun exploring the server!
 `,
   replyToModerator:
@@ -122,25 +116,15 @@ export async function onboardUser(
   userId: string,
   isFemale: boolean
 ) {
-  const { guild, client } = interaction;
+  const { client } = interaction;
   const user = await client.users.fetch(userId);
 
-  const discussionJoinChannel = await guild.channels.fetch(
-    DISCUSSION_JOIN_CHANNEL_ID
-  );
-  const interestJoinChannel = await guild.channels.fetch(
-    INTEREST_JOIN_CHANNEL_ID
-  );
   await onboardUserCommon(interaction, userId, isFemale);
   await interaction.editReply({
     content: strings.replyToModerator,
   });
   await interaction.followUp({
-    content: strings.welcomeMsg(
-      user,
-      discussionJoinChannel,
-      interestJoinChannel
-    ),
+    content: strings.welcomeMsg(user),
   });
 }
 
@@ -152,19 +136,9 @@ export async function selfOnboardUser(
   nickname: string,
   isFemale: boolean
 ) {
-  const { guild, user } = interaction;
-  const discussionJoinChannel = await guild.channels.fetch(
-    DISCUSSION_JOIN_CHANNEL_ID
-  );
-  const interestJoinChannel = await guild.channels.fetch(
-    INTEREST_JOIN_CHANNEL_ID
-  );
+  const { user } = interaction;
   await onboardUserCommon(interaction, user.id, isFemale, nickname);
   await interaction.editReply({
-    content: strings.welcomeMsg(
-      user,
-      discussionJoinChannel,
-      interestJoinChannel
-    ),
+    content: strings.welcomeMsg(user),
   });
 }
