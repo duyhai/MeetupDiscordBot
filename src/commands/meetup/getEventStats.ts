@@ -62,7 +62,7 @@ export class MeetupGetEventStatsCommands {
         pastEvents.forEach((event) => {
           const { hosts, dateTime, title, going, maxTickets, status } = event;
 
-          if (!['PUBLISHED', 'ACTIVE'].includes(status)) {
+          if (!['PUBLISHED', 'ACTIVE', 'PAST'].includes(status)) {
             logger.info(`Skipping ${title}. Status: ${status}`);
             return;
           }
