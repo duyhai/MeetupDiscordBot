@@ -6,6 +6,9 @@ import {
   PermissionFlagsBits,
   WebhookMessageEditOptions,
 } from 'discord.js';
+import { Logger } from 'tslog';
+
+const logger = new Logger({ name: 'DiscordUtil' });
 
 /**
  * A wrapper for Discord commands to handle:
@@ -22,8 +25,9 @@ export async function discordCommandWrapper(
     await commandFn();
   } catch (error: unknown) {
     if (error instanceof Error) {
+      logger.error(error?.message);
       await interaction.editReply({
-        content: `Error: ${error.message}. Please reach out to a moderator for help.`,
+        content: `Error: ${error?.message}. Please reach out to a moderator for help.`,
       });
     }
   }

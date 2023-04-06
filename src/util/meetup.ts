@@ -1,4 +1,5 @@
 import { CommandInteraction } from 'discord.js';
+import { Logger } from 'tslog';
 import { v4 as uuidv4 } from 'uuid';
 import {
   BASIC_MEETUP_AUTH_SCOPES,
@@ -8,8 +9,13 @@ import { InMemoryCache } from '../lib/cache/memoryCache';
 import { GqlMeetupClient } from '../lib/client/meetup/gqlClient';
 import { spinWait } from './spinWait';
 
+const logger = new Logger({ name: 'MeetupUtil' });
+
 async function showMeetupTokenUrl(interaction: CommandInteraction) {
   const maskedUserId = uuidv4();
+  logger.info(
+    `Setting maskedUserId=${maskedUserId} for ${interaction.user.username}`
+  );
   await InMemoryCache.instance().set(
     `maskedUserId-${maskedUserId}`,
     interaction.user.id
@@ -35,6 +41,9 @@ export async function withMeetupClient(
   const tokenKey = `userId-${interaction.user.id}`;
   let token = await InMemoryCache.instance().get(tokenKey);
   if (!token) {
+    logger.info(
+      `Token not present for ${interaction.user.username} at ${tokenKey}. Getting token through OAuth`
+    );
     await showMeetupTokenUrl(interaction);
     token = await spinWait(() => InMemoryCache.instance().get(tokenKey), {
       timeoutMs: 60 * 1000,
