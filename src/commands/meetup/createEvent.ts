@@ -51,7 +51,7 @@ export class MeetupCreateEventCommands {
             denyButton
           );
 
-        await interaction.reply({
+        await interaction.editReply({
           components: [buttonRow],
         });
       });
