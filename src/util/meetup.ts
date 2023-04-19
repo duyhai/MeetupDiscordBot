@@ -1,4 +1,4 @@
-import { CommandInteraction } from 'discord.js';
+import { ButtonInteraction, CommandInteraction } from 'discord.js';
 import { Logger } from 'tslog';
 import { v4 as uuidv4 } from 'uuid';
 import {
@@ -11,7 +11,9 @@ import { spinWait } from './spinWait';
 
 const logger = new Logger({ name: 'MeetupUtil' });
 
-async function showMeetupTokenUrl(interaction: CommandInteraction) {
+async function showMeetupTokenUrl(
+  interaction: ButtonInteraction | CommandInteraction
+) {
   const maskedUserId = uuidv4();
   logger.info(
     `Setting maskedUserId=${maskedUserId} for ${interaction.user.username}`
@@ -35,7 +37,7 @@ async function showMeetupTokenUrl(interaction: CommandInteraction) {
  * @param commandFn Lambda for command implementation
  */
 export async function withMeetupClient(
-  interaction: CommandInteraction,
+  interaction: ButtonInteraction | CommandInteraction,
   commandFn: (meetupClient: GqlMeetupClient) => Promise<void>
 ) {
   const tokenKey = `userId-${interaction.user.id}`;

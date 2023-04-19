@@ -1,6 +1,7 @@
 import crypto from 'crypto';
 import fs from 'fs';
 import {
+  ButtonInteraction,
   CommandInteraction,
   GuildMember,
   PermissionFlagsBits,
@@ -17,7 +18,7 @@ const logger = new Logger({ name: 'DiscordUtil' });
  * @param commandFn Lambda for command implementation
  */
 export async function discordCommandWrapper(
-  interaction: CommandInteraction,
+  interaction: ButtonInteraction | CommandInteraction,
   commandFn: () => Promise<void>
 ) {
   await interaction.deferReply({ ephemeral: true });
