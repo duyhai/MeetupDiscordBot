@@ -39,7 +39,10 @@ export class MeetupCreateEventCommands {
   async meetupRequestApproveEventHandler(interaction: ButtonInteraction) {
     const newButtons = this.getRequestEventButtons();
     newButtons.components.forEach((btn) => btn.setDisabled(true));
-    await interaction.message.edit({ components: [newButtons] });
+    await interaction.message.edit({
+      content: interaction.message.content,
+      components: [newButtons],
+    });
     await interaction.reply({ ephemeral: true, content: ':+1:' });
   }
 
@@ -47,7 +50,10 @@ export class MeetupCreateEventCommands {
   async meetupRequestDenyEventHandler(interaction: ButtonInteraction) {
     const newButtons = this.getRequestEventButtons();
     newButtons.components.forEach((btn) => btn.setDisabled(true));
-    await interaction.message.edit({ components: [newButtons] });
+    await interaction.message.edit({
+      content: interaction.message.content,
+      components: [newButtons],
+    });
     await interaction.reply({ ephemeral: true, content: ':-1:' });
   }
 
