@@ -38,6 +38,7 @@ export class GqlMeetupClient {
       const result = await this.client.request<GetUserInfoResponse>(
         getUserInfo
       );
+      logger.info(`getUserInfo result: ${JSON.stringify(result)}`);
       return result;
     } catch (error) {
       logger.error(error);
@@ -56,6 +57,7 @@ export class GqlMeetupClient {
       >(getUserMembershipInfo, {
         urlname: Configuration.meetup.groupUrlName,
       });
+      logger.info(`getUserMembershipInfo result: ${JSON.stringify(result)}`);
       return result;
     } catch (error) {
       logger.error(error);
@@ -74,6 +76,7 @@ export class GqlMeetupClient {
       >(getUserHostedEvents, {
         connectionInput: input,
       });
+      // logger.info(`getUserMembershipInfo result: ${JSON.stringify(result)}`);
       return result;
     } catch (error) {
       logger.error(error);
@@ -92,12 +95,14 @@ export class GqlMeetupClient {
         urlname: Configuration.meetup.groupUrlName,
         connectionInput: input,
       },
-      (callbackInput: GetPastGroupEventsInput) => {
+      async (callbackInput: GetPastGroupEventsInput) => {
         try {
-          return this.client.request<
+          const result = await this.client.request<
             GetPastGroupEventsResponse,
             GetPastGroupEventsInput
           >(getPastGroupEvents, callbackInput);
+          // logger.info(`getUserMembershipInfo result: ${JSON.stringify(result)}`);
+          return result;
         } catch (error) {
           logger.error(error);
           throw error;

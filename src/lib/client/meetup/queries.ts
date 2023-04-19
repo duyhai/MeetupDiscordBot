@@ -17,6 +17,9 @@ export const getUserMembershipInfo = gql`
       name
       isMember
       isOrganizer
+      membershipMetadata {
+        noShowCount
+      }
     }
   }
 `;

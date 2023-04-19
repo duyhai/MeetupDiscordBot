@@ -2,6 +2,7 @@
 // import { DeleteChannel } from './deleteChannel';
 import { MeetupGetBadgesCommands } from './meetup/getBadges';
 import { MeetupGetEventStatsCommands } from './meetup/getEventStats';
+import { MeetupNoShowCommands } from './meetup/getNoShow';
 import { MeetupGetUserRolesCommands } from './meetup/getUserRoles';
 import { MeetupSelfOnboardCommands } from './meetup/selfOnboard';
 import { OnboardUserCommands } from './onboardUser';
@@ -12,6 +13,7 @@ const Commands = [
   MeetupGetEventStatsCommands,
   MeetupGetUserRolesCommands,
   OnboardUserCommands,
+  MeetupNoShowCommands,
   // CreateChannel,
   // DeleteChannel,
 ];
