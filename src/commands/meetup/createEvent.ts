@@ -76,7 +76,7 @@ export class MeetupCreateEventCommands {
           content: `${
             interaction.message.content
           }\n✅ Approved request by ${interaction.user.toString()}.\nLink to event: ${
-            newEvent.eventUrl
+            newEvent.event.eventUrl
           }`,
           components: [newButtons],
         });
