@@ -1,8 +1,10 @@
+import dayjs from 'dayjs';
+
 export function capitalize(str: string) {
   return str.charAt(0).toUpperCase() + str.slice(1);
 }
 
-export function stringToDate(dateStr: string): Date | undefined {
+export function stringToDate(dateStr: string): dayjs.Dayjs | undefined {
   // Create a regular expression to match the YYYY/MM/DD format
   const regex = /^\d{4}\/\d{2}\/\d{2}$/;
 
@@ -11,23 +13,11 @@ export function stringToDate(dateStr: string): Date | undefined {
     return undefined;
   }
 
-  // Split the string into year, month, and day components
-  const [yearStr, monthStr, dayStr] = dateStr.split('/');
-  const year = parseInt(yearStr, 10);
-  const month = parseInt(monthStr, 10);
-  const day = parseInt(dayStr, 10);
+  const date = dayjs(dateStr, 'YYYY/MM/DD');
 
-  // Create a new date object from the year, month, and day components
-  return new Date(year, month - 1, day);
-}
-
-export function dateChecker(dateStr: string): boolean {
-  // Create a new date object from the year, month, and day components
-  const date = stringToDate(dateStr);
-  if (!date) {
-    return false;
+  if (!date.isValid()) {
+    return undefined;
   }
 
-  // Use the isNaN function to check if the date is valid
-  return !Number.isNaN(date.getTime());
+  return date;
 }

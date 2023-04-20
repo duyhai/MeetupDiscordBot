@@ -12,7 +12,7 @@ import { Logger } from 'tslog';
 
 import { discordCommandWrapper } from '../../util/discord';
 import { withMeetupClient } from '../../util/meetup';
-import { dateChecker, stringToDate } from '../../util/strings';
+import { stringToDate } from '../../util/strings';
 
 const logger = new Logger({ name: 'MeetupCreateEventCommands' });
 
@@ -117,10 +117,14 @@ export class MeetupCreateEventCommands {
     interaction: CommandInteraction
   ) {
     await discordCommandWrapper(interaction, async () => {
-      if (!dateChecker(date)) {
+      const dateObj = stringToDate(date);
+      if (!dateObj) {
         throw new Error(
           'Invalid date. Please make sure your date has the format of YYYY/MM/DD and has valid values before trying again.'
         );
+      }
+      if (dateObj.isBefore(new Date())) {
+        throw new Error('Invalid date. Date cannot be in the past.');
       }
       if (title.includes('\n')) {
         throw new Error(
@@ -134,7 +138,7 @@ export class MeetupCreateEventCommands {
         const userInfo = await meetupClient.getUserInfo();
         const eventRequestInfo: EventRequest = {
           meetupUserId: userInfo.self.id,
-          eventDate: stringToDate(date),
+          eventDate: stringToDate(date).toDate(),
           eventTitle: title,
         };
 
