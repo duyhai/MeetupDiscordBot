@@ -65,9 +65,7 @@ export class MeetupCreateEventCommands {
           components: [newButtons],
         });
 
-        await interaction.editReply(
-          'Successfully connected to Meetup. You can dismiss this message.'
-        );
+        await interaction.editReply('Event request approved!');
       });
     });
   }
@@ -90,7 +88,8 @@ export class MeetupCreateEventCommands {
           content: `${interaction.message.content}\nDenied request.`,
           components: [newButtons],
         });
-        await interaction.reply({ ephemeral: true, content: ':-1:' });
+
+        await interaction.editReply('Event request denied!');
       });
     });
   }
@@ -139,14 +138,15 @@ export class MeetupCreateEventCommands {
           eventTitle: title,
         };
 
-        await interaction.editReply(
-          'Successfully connected to Meetup. You can dismiss this message.'
-        );
-        await interaction.followUp({
-          content: `${interaction.user.toString()} is requesting the creation of a new Meetup event`,
-        });
-        await interaction.followUp({
-          content: JSON.stringify(eventRequestInfo),
+        await interaction.deleteReply();
+        const replyContent = [
+          `${interaction.user.toString()} is requesting the creation of a new Meetup event`,
+          ...Object.entries(eventRequestInfo).map(
+            ([key, value]) => `${key}: ${String(value)}`
+          ),
+        ];
+        await interaction.reply({
+          content: replyContent.join('\n'),
           components: [this.getRequestEventButtons()],
         });
       });
