@@ -9,6 +9,8 @@ import {
   getUserMembershipInfo,
 } from './queries';
 import {
+  CreateEventInput,
+  CreateEventResponse,
   GetPastGroupEventsInput,
   GetPastGroupEventsResponse,
   GetUserHostedEventsInput,
@@ -109,5 +111,20 @@ export class GqlMeetupClient {
         }
       }
     );
+  }
+
+  public async createEvent(input: CreateEventInput) {
+    logger.info(`Calling createEvent with input: ${JSON.stringify({ input })}`);
+    try {
+      const result = await this.client.request<CreateEventResponse>(
+        getUserInfo,
+        { input }
+      );
+      logger.info(`createEvent result: ${JSON.stringify(result)}`);
+      return result;
+    } catch (error) {
+      logger.error(error);
+      throw error;
+    }
   }
 }

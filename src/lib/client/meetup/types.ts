@@ -110,3 +110,36 @@ export interface GetPastGroupEventsInput {
   connectionInput: PaginationInput;
   urlname: string;
 }
+
+export interface CreateEventInput {
+  communicationSettings: {
+    chat: boolean;
+    comments: boolean;
+  };
+  // covidPrecautions: undefined;
+  description: string;
+  duration: string;
+  eventHosts: number[];
+  featuredPhotoId: number;
+  fundraising: {
+    enabled: boolean;
+  };
+  groupUrlname: string;
+  isCopy: boolean;
+  publishStatus: string;
+  question: string;
+  rsvpSettings: {
+    guestLimit: number;
+    rsvpCloseDuration: string;
+    rsvpLimit: number;
+    rsvpOpenDuration: string;
+  };
+  selfRsvp: boolean;
+  startDateTime: Date;
+  title: string;
+  topics: number[];
+}
+
+export interface CreateEventResponse {
+  eventUrl: string;
+}

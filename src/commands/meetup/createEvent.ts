@@ -1,3 +1,4 @@
+import dayjs from 'dayjs';
 import {
   ActionRowBuilder,
   ApplicationCommandOptionType,
@@ -10,31 +11,28 @@ import {
 import { ButtonComponent, Discord, Slash, SlashOption } from 'discordx';
 import { Logger } from 'tslog';
 
+import { createEventTemplate } from '../../lib/client/meetup/templates/createEventTemplate';
 import { discordCommandWrapper } from '../../util/discord';
 import { withMeetupClient } from '../../util/meetup';
-import { stringToDate } from '../../util/strings';
 
 const logger = new Logger({ name: 'MeetupCreateEventCommands' });
 
+const DATE_FORMAT = 'YYYY/MM/DD';
 const TITLE_MAX_LENGTH = 80;
 const GUEST_HOST_PREFIX = '[Guest Host] ';
-
-interface EventRequest {
-  eventDate: Date;
-  eventTitle: string;
-  meetupUserId: string;
-}
 
 @Discord()
 export class MeetupCreateEventCommands {
   getRequestEventButtons() {
     const approveButton = new ButtonBuilder()
       .setLabel('Approve')
+      .setEmoji('✅')
       .setStyle(ButtonStyle.Success)
       .setCustomId('approve');
 
     const denyButton = new ButtonBuilder()
       .setLabel('Deny')
+      .setEmoji('❌')
       .setStyle(ButtonStyle.Danger)
       .setCustomId('deny');
 
@@ -57,15 +55,29 @@ export class MeetupCreateEventCommands {
           );
         }
 
+        const [, ...requestInfo] = interaction.message.content.split('\n');
+        requestInfo.pop();
+
+        const [meetupUserId, eventDate, eventTitle] = requestInfo.map((line) =>
+          line.split(':')[1].trim()
+        );
+
+        const newEvent = await meetupClient.createEvent({
+          ...createEventTemplate,
+          title: `${GUEST_HOST_PREFIX}${eventTitle}`,
+          startDateTime: dayjs(eventDate, DATE_FORMAT).toDate(),
+          eventHosts: [Number(meetupUserId)],
+        });
+
         const message = await interaction.message.fetch();
         const newButtons = this.getRequestEventButtons();
         newButtons.components.forEach((btn) => btn.setDisabled(true));
         await message.edit({
-          content: `${interaction.message.content}\nApproved request.`,
+          content: `${interaction.message.content}\n✅Approved request.\nLink to event: ${newEvent.eventUrl}`,
           components: [newButtons],
         });
 
-        await interaction.editReply('Event request approved!');
+        await interaction.editReply('✅Event request approved!');
       });
     });
   }
@@ -85,11 +97,11 @@ export class MeetupCreateEventCommands {
         const newButtons = this.getRequestEventButtons();
         newButtons.components.forEach((btn) => btn.setDisabled(true));
         await message.edit({
-          content: `${interaction.message.content}\nDenied request.`,
+          content: `${interaction.message.content}\n❌Denied request.`,
           components: [newButtons],
         });
 
-        await interaction.editReply('Event request denied!');
+        await interaction.editReply('❌Event request denied!');
       });
     });
   }
@@ -100,12 +112,31 @@ export class MeetupCreateEventCommands {
   })
   async meetupRequestEventHandler(
     @SlashOption({
-      name: 'date',
-      description: 'Date in the format of 2023/12/01',
-      type: ApplicationCommandOptionType.String,
+      name: 'year',
+      description: 'Specifiy the year for the event',
+      type: ApplicationCommandOptionType.Number,
       required: true,
+      minValue: dayjs().year(),
     })
-    date: string,
+    year: number,
+    @SlashOption({
+      name: 'month',
+      description: 'Specifiy the month for the event',
+      type: ApplicationCommandOptionType.Number,
+      required: true,
+      minValue: 1,
+      maxValue: 12,
+    })
+    month: number,
+    @SlashOption({
+      name: 'day',
+      description: 'Specifiy the day for the event',
+      type: ApplicationCommandOptionType.Number,
+      required: true,
+      minValue: 1,
+      maxValue: 31,
+    })
+    day: number,
     @SlashOption({
       name: 'title',
       description: 'Title for the event you want to host',
@@ -117,12 +148,7 @@ export class MeetupCreateEventCommands {
     interaction: CommandInteraction
   ) {
     await discordCommandWrapper(interaction, async () => {
-      const dateObj = stringToDate(date);
-      if (!dateObj) {
-        throw new Error(
-          'Invalid date. Please make sure your date has the format of YYYY/MM/DD and has valid values before trying again.'
-        );
-      }
+      const dateObj = dayjs(new Date(year, month - 1, day));
       if (dateObj.isBefore(new Date())) {
         throw new Error('Invalid date. Date cannot be in the past.');
       }
@@ -136,18 +162,14 @@ export class MeetupCreateEventCommands {
         logger.info(`User requested event: ${interaction.user.username}`);
 
         const userInfo = await meetupClient.getUserInfo();
-        const eventRequestInfo: EventRequest = {
-          meetupUserId: userInfo.self.id,
-          eventDate: stringToDate(date).toDate(),
-          eventTitle: title,
-        };
 
         await interaction.deleteReply();
         const replyContent = [
-          `${interaction.user.toString()} is requesting the creation of a new Meetup event`,
-          ...Object.entries(eventRequestInfo).map(
-            ([key, value]) => `${key}: ${String(value)}`
-          ),
+          `❗${interaction.user.toString()} is requesting the creation of a new Meetup event.❗`,
+          `meetupUserId: ${userInfo.self.id}`,
+          `eventDate: ${dateObj.format(DATE_FORMAT)}`,
+          `eventTitle: ${title}`,
+          `Organizers, please approve or deny below:`,
         ];
         await interaction.followUp({
           content: replyContent.join('\n'),
