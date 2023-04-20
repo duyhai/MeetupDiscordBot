@@ -37,10 +37,10 @@ export class MeetupCreateEventCommands {
 
   @ButtonComponent({ id: 'approve' })
   async meetupRequestApproveEventHandler(interaction: ButtonInteraction) {
-    logger.info(JSON.stringify(interaction.message));
+    const message = await interaction.message.fetch();
     const newButtons = this.getRequestEventButtons();
     newButtons.components.forEach((btn) => btn.setDisabled(true));
-    await interaction.message.edit({
+    await message.edit({
       content: interaction.message.content,
       components: [newButtons],
     });
@@ -49,10 +49,10 @@ export class MeetupCreateEventCommands {
 
   @ButtonComponent({ id: 'deny' })
   async meetupRequestDenyEventHandler(interaction: ButtonInteraction) {
-    logger.info(JSON.stringify(interaction.message));
+    const message = await interaction.message.fetch();
     const newButtons = this.getRequestEventButtons();
     newButtons.components.forEach((btn) => btn.setDisabled(true));
-    await interaction.message.edit({
+    await message.edit({
       content: interaction.message.content,
       components: [newButtons],
     });
