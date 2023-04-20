@@ -141,5 +141,5 @@ export interface CreateEventInput {
 }
 
 export interface CreateEventResponse {
-  event: { eventUrl: string };
+  createEvent: { event: { eventUrl: string } };
 }
