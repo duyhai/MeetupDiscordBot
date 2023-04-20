@@ -49,10 +49,9 @@ export class MeetupCreateEventCommands {
 
   @ButtonComponent({ id: 'deny' })
   async meetupRequestDenyEventHandler(interaction: ButtonInteraction) {
-    const message = await interaction.message.fetch();
     const newButtons = this.getRequestEventButtons();
     newButtons.components.forEach((btn) => btn.setDisabled(true));
-    await message.edit({
+    await interaction.message.edit({
       content: interaction.message.content,
       components: [newButtons],
     });
@@ -68,7 +67,8 @@ export class MeetupCreateEventCommands {
       await withMeetupClient(interaction, async (_meetupClient) => {
         logger.info(`User requested event: ${interaction.user.username}`);
 
-        await interaction.editReply({
+        await interaction.followUp({
+          content: `${interaction.user.username} is requesting the creation of a new Meetup event`,
           components: [this.getRequestEventButtons()],
         });
       });
