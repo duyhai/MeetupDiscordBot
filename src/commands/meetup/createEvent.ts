@@ -76,7 +76,7 @@ export class MeetupCreateEventCommands {
         await message.edit({
           content: `${
             interaction.message.content
-          }\n✅ Approved request by ${interaction.user.toString()}.\nLink to event: ${
+          }\n✅ Request approved by ${interaction.user.toString()}.\nLink to event: ${
             newEvent.createEvent.event.eventUrl
           }`,
           components: [newButtons],
@@ -104,7 +104,7 @@ export class MeetupCreateEventCommands {
         await message.edit({
           content: `${
             interaction.message.content
-          }\n❌ Denied request by ${interaction.user.toString()}.`,
+          }\n❌ Request denied by ${interaction.user.toString()}.`,
           components: [newButtons],
         });
 
