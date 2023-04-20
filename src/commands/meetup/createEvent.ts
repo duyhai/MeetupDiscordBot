@@ -149,7 +149,7 @@ export class MeetupCreateEventCommands {
             ([key, value]) => `${key}: ${String(value)}`
           ),
         ];
-        await interaction.reply({
+        await interaction.followUp({
           content: replyContent.join('\n'),
           components: [this.getRequestEventButtons()],
         });
