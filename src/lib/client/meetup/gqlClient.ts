@@ -2,6 +2,7 @@ import { GraphQLClient } from 'graphql-request';
 import { Logger } from 'tslog';
 import Configuration from '../../../configuration';
 import { cachedGqlRequest } from './cacheHelper';
+import { createEvent } from './mutations';
 import {
   getPastGroupEvents,
   getUserHostedEvents,
@@ -117,7 +118,7 @@ export class GqlMeetupClient {
     logger.info(`Calling createEvent with input: ${JSON.stringify({ input })}`);
     try {
       const result = await this.client.request<CreateEventResponse>(
-        getUserInfo,
+        createEvent,
         { input }
       );
       logger.info(`createEvent result: ${JSON.stringify(result)}`);

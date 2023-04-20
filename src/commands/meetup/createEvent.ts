@@ -75,13 +75,13 @@ export class MeetupCreateEventCommands {
         await message.edit({
           content: `${
             interaction.message.content
-          }\n✅Approved request by ${interaction.user.toString()}.\nLink to event: ${
+          }\n✅ Approved request by ${interaction.user.toString()}.\nLink to event: ${
             newEvent.eventUrl
           }`,
           components: [newButtons],
         });
 
-        await interaction.editReply('✅Event request approved!');
+        await interaction.editReply('✅ Event request approved!');
       });
     });
   }
@@ -103,11 +103,11 @@ export class MeetupCreateEventCommands {
         await message.edit({
           content: `${
             interaction.message.content
-          }\n❌Denied request by ${interaction.user.toString()}.`,
+          }\n❌ Denied request by ${interaction.user.toString()}.`,
           components: [newButtons],
         });
 
-        await interaction.editReply('❌Event request denied!');
+        await interaction.editReply('❌ Event request denied!');
       });
     });
   }
