@@ -17,7 +17,8 @@ import { withMeetupClient } from '../../util/meetup';
 
 const logger = new Logger({ name: 'MeetupCreateEventCommands' });
 
-const DATE_FORMAT = 'YYYY/MM/DD';
+const DEFAULT_START_TIME = 19;
+const DATE_FORMAT = 'YYYY-MM-DD';
 const TITLE_MAX_LENGTH = 80;
 const GUEST_HOST_PREFIX = '[Guest Host] ';
 
@@ -65,7 +66,7 @@ export class MeetupCreateEventCommands {
         const newEvent = await meetupClient.createEvent({
           ...createEventTemplate,
           title: `${GUEST_HOST_PREFIX}${eventTitle}`,
-          startDateTime: dayjs(eventDate, DATE_FORMAT).toDate(),
+          startDateTime: `${eventDate}T${DEFAULT_START_TIME}:00`,
           eventHosts: [Number(meetupUserId)],
         });
 

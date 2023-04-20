@@ -135,7 +135,7 @@ export interface CreateEventInput {
     rsvpOpenDuration: string;
   };
   selfRsvp: boolean;
-  startDateTime: Date;
+  startDateTime: string;
   title: string;
   topics: number[];
 }
