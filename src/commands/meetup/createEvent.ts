@@ -32,7 +32,7 @@ export class MeetupCreateEventCommands {
 
     const denyButton = new ButtonBuilder()
       .setLabel('Deny')
-      .setEmoji('❌')
+      .setEmoji('✖️')
       .setStyle(ButtonStyle.Danger)
       .setCustomId('deny');
 
@@ -73,7 +73,11 @@ export class MeetupCreateEventCommands {
         const newButtons = this.getRequestEventButtons();
         newButtons.components.forEach((btn) => btn.setDisabled(true));
         await message.edit({
-          content: `${interaction.message.content}\n✅Approved request.\nLink to event: ${newEvent.eventUrl}`,
+          content: `${
+            interaction.message.content
+          }\n✅Approved request by ${interaction.user.toString()}.\nLink to event: ${
+            newEvent.eventUrl
+          }`,
           components: [newButtons],
         });
 
@@ -97,7 +101,9 @@ export class MeetupCreateEventCommands {
         const newButtons = this.getRequestEventButtons();
         newButtons.components.forEach((btn) => btn.setDisabled(true));
         await message.edit({
-          content: `${interaction.message.content}\n❌Denied request.`,
+          content: `${
+            interaction.message.content
+          }\n❌Denied request by ${interaction.user.toString()}.`,
           components: [newButtons],
         });
 
