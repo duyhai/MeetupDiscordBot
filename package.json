@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "bash scripts/dev_env.sh",
     "start": "ts-node src/index.ts",
-    "lint": "eslint --fix . --ext .ts",
+    "lint": "eslint . --ext .ts",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "repository": {
