@@ -152,7 +152,14 @@ export interface CloseEventRsvpsInput {
   eventId: string;
 }
 
-// Create response interface for closeEventRsvps graphql mutation
 export interface CloseEventRsvpsResponse {
   closeEventRsvps: { event: { id: string } };
+}
+
+export interface PublishEventDraftInput {
+  eventId: string;
+}
+
+export interface PublishEventDraftResponse {
+  publishEventDraft: { event: { id: string } };
 }

@@ -76,9 +76,9 @@ export class MeetupCreateEventCommands {
           eventHosts: [Number(meetupUserId)],
         });
 
-        await meetupClient.closeEventRsvps({
-          eventId: newEvent.createEvent.event.id,
-        });
+        const eventId = newEvent.createEvent.event.id;
+        await meetupClient.publishEventDraft({ eventId });
+        await meetupClient.closeEventRsvps({ eventId });
 
         const message = await interaction.message.fetch();
         const newButtons = this.getRequestEventButtons();

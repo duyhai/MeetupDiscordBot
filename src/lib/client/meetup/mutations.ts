@@ -20,3 +20,13 @@ export const closeEventRsvps = gql`
     }
   }
 `;
+
+export const publishEventDraft = gql`
+  mutation ($input: PublishEventDraftInput!) {
+    publishEventDraft(input: $input) {
+      event {
+        id
+      }
+    }
+  }
+`;

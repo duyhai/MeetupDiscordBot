@@ -2,7 +2,7 @@ import { GraphQLClient } from 'graphql-request';
 import { Logger } from 'tslog';
 import Configuration from '../../../configuration';
 import { cachedGqlRequest } from './cacheHelper';
-import { closeEventRsvps, createEvent } from './mutations';
+import { closeEventRsvps, createEvent, publishEventDraft } from './mutations';
 import {
   getEvent,
   getPastGroupEvents,
@@ -24,6 +24,8 @@ import {
   GetUserMembershipInfoInput,
   GetUserMembershipInfoResponse,
   PaginationInput,
+  PublishEventDraftInput,
+  PublishEventDraftResponse,
 } from './types';
 
 const logger = new Logger({ name: 'GqlMeetupClient' });
@@ -157,6 +159,23 @@ export class GqlMeetupClient {
         { input }
       );
       logger.info(`closeEventRsvps result: ${JSON.stringify(result)}`);
+      return result;
+    } catch (error) {
+      logger.error(error);
+      throw error;
+    }
+  }
+
+  public async publishEventDraft(input: PublishEventDraftInput) {
+    logger.info(
+      `Calling publishEventDraft with input: ${JSON.stringify({ input })}`
+    );
+    try {
+      const result = await this.client.request<PublishEventDraftResponse>(
+        publishEventDraft,
+        { input }
+      );
+      logger.info(`publishEventDraft result: ${JSON.stringify(result)}`);
       return result;
     } catch (error) {
       logger.error(error);
