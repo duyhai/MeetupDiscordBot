@@ -96,3 +96,12 @@ export const getPastGroupEvents = gql`
     }
   }
 `;
+
+export const getEvent = gql`
+  query ($eventId: ID) {
+    event(id: $eventId) {
+      title
+      description
+    }
+  }
+`;

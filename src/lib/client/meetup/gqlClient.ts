@@ -4,6 +4,7 @@ import Configuration from '../../../configuration';
 import { cachedGqlRequest } from './cacheHelper';
 import { createEvent } from './mutations';
 import {
+  getEvent,
   getPastGroupEvents,
   getUserHostedEvents,
   getUserInfo,
@@ -12,6 +13,7 @@ import {
 import {
   CreateEventInput,
   CreateEventResponse,
+  GetEventResponse,
   GetPastGroupEventsInput,
   GetPastGroupEventsResponse,
   GetUserHostedEventsInput,
@@ -112,6 +114,20 @@ export class GqlMeetupClient {
         }
       }
     );
+  }
+
+  public async getEvent(id: string) {
+    logger.info(`Calling getEvent with input: ${JSON.stringify({ id })}`);
+    try {
+      const result = await this.client.request<GetEventResponse>(getEvent, {
+        id,
+      });
+      logger.info(`getEvent result: ${JSON.stringify(result)}`);
+      return result;
+    } catch (error) {
+      logger.error(error);
+      throw error;
+    }
   }
 
   public async createEvent(input: CreateEventInput) {

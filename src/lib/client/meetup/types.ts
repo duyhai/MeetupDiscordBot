@@ -143,3 +143,7 @@ export interface CreateEventInput {
 export interface CreateEventResponse {
   createEvent: { event: { eventUrl: string } };
 }
+
+export interface GetEventResponse {
+  event: { description: string; title: string };
+}

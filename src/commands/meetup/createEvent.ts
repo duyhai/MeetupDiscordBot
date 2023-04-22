@@ -11,7 +11,8 @@ import {
 import { ButtonComponent, Discord, Slash, SlashOption } from 'discordx';
 import { Logger } from 'tslog';
 
-import { createEventTemplate } from '../../lib/client/meetup/templates/createEventTemplate';
+import { DRAFT_EVENT_TEMPLATE_ID } from '../../constants';
+import { createEventTemplate } from '../../templates/createEventTemplate';
 import { discordCommandWrapper } from '../../util/discord';
 import { withMeetupClient } from '../../util/meetup';
 
@@ -63,8 +64,13 @@ export class MeetupCreateEventCommands {
           line.split(':')[1].trim()
         );
 
+        const draftEventTemplate = await meetupClient.getEvent(
+          DRAFT_EVENT_TEMPLATE_ID
+        );
+
         const newEvent = await meetupClient.createEvent({
           ...createEventTemplate,
+          description: draftEventTemplate.event.description,
           title: `${GUEST_HOST_PREFIX}${eventTitle}`,
           startDateTime: `${eventDate}T${DEFAULT_START_TIME}:00`,
           eventHosts: [Number(meetupUserId)],
@@ -173,9 +179,9 @@ export class MeetupCreateEventCommands {
         await interaction.deleteReply();
         const replyContent = [
           `❗${interaction.user.toString()} is requesting the creation of a new Meetup event.❗`,
-          `meetupUserId: ${userInfo.self.id}`,
-          `eventDate: ${dateObj.format(DATE_FORMAT)}`,
-          `eventTitle: ${title}`,
+          `Meetup User ID: ${userInfo.self.id}`,
+          `Event Date: ${dateObj.format(DATE_FORMAT)}`,
+          `Event Title: ${title}`,
           `Organizers, please approve or deny below:`,
         ];
         await interaction.followUp({
