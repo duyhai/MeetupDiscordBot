@@ -144,6 +144,12 @@ export interface CreateEventResponse {
   createEvent: { event: { eventUrl: string; id: string } };
 }
 
+export type EditEventInput = Partial<CreateEventInput> & { eventId: string };
+
+export interface EditEventResponse {
+  editEvent: { event: { eventUrl: string; id: string } };
+}
+
 export interface GetEventResponse {
   event: { description: string; title: string };
 }

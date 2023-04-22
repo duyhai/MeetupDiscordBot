@@ -2,7 +2,12 @@ import { GraphQLClient } from 'graphql-request';
 import { Logger } from 'tslog';
 import Configuration from '../../../configuration';
 import { cachedGqlRequest } from './cacheHelper';
-import { closeEventRsvps, createEvent, publishEventDraft } from './mutations';
+import {
+  closeEventRsvps,
+  createEvent,
+  editEvent,
+  publishEventDraft,
+} from './mutations';
 import {
   getEvent,
   getPastGroupEvents,
@@ -15,6 +20,8 @@ import {
   CloseEventRsvpsResponse,
   CreateEventInput,
   CreateEventResponse,
+  EditEventInput,
+  EditEventResponse,
   GetEventResponse,
   GetPastGroupEventsInput,
   GetPastGroupEventsResponse,
@@ -142,6 +149,20 @@ export class GqlMeetupClient {
         { input }
       );
       logger.info(`createEvent result: ${JSON.stringify(result)}`);
+      return result;
+    } catch (error) {
+      logger.error(error);
+      throw error;
+    }
+  }
+
+  public async editEvent(input: EditEventInput) {
+    logger.info(`Calling editEvent with input: ${JSON.stringify({ input })}`);
+    try {
+      const result = await this.client.request<EditEventResponse>(editEvent, {
+        input,
+      });
+      logger.info(`editEvent result: ${JSON.stringify(result)}`);
       return result;
     } catch (error) {
       logger.error(error);

@@ -77,8 +77,12 @@ export class MeetupCreateEventCommands {
         });
 
         const eventId = newEvent.createEvent.event.id;
-        await meetupClient.publishEventDraft({ eventId });
         await meetupClient.closeEventRsvps({ eventId });
+        // Have to set this again because close RSVP wipes it out...
+        await meetupClient.editEvent({
+          eventId,
+          rsvpSettings: createEventTemplate.rsvpSettings,
+        });
 
         const message = await interaction.message.fetch();
         const newButtons = this.getRequestEventButtons();

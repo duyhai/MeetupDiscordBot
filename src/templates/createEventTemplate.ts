@@ -14,7 +14,7 @@ export const createEventTemplate: CreateEventInput = {
     rsvpLimit: 12,
     guestLimit: 1,
   },
-  publishStatus: 'DRAFT',
+  publishStatus: 'PUBLISHED',
   // covidPrecautions: {},
   groupUrlname: '1-5genasians',
   selfRsvp: false,

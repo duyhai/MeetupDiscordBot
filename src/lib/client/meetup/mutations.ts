@@ -11,6 +11,17 @@ export const createEvent = gql`
   }
 `;
 
+export const editEvent = gql`
+  mutation ($input: EditEventInput!) {
+    editEvent(input: $input) {
+      event {
+        id
+        eventUrl
+      }
+    }
+  }
+`;
+
 export const closeEventRsvps = gql`
   mutation ($input: CloseEventRsvpsInput!) {
     closeEventRsvps(input: $input) {
