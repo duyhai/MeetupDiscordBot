@@ -76,6 +76,10 @@ export class MeetupCreateEventCommands {
           eventHosts: [Number(meetupUserId)],
         });
 
+        await meetupClient.closeEventRsvps({
+          eventId: newEvent.createEvent.event.id,
+        });
+
         const message = await interaction.message.fetch();
         const newButtons = this.getRequestEventButtons();
         newButtons.components.forEach((btn) => btn.setDisabled(true));

@@ -2,7 +2,7 @@ import { GraphQLClient } from 'graphql-request';
 import { Logger } from 'tslog';
 import Configuration from '../../../configuration';
 import { cachedGqlRequest } from './cacheHelper';
-import { createEvent } from './mutations';
+import { closeEventRsvps, createEvent } from './mutations';
 import {
   getEvent,
   getPastGroupEvents,
@@ -11,6 +11,8 @@ import {
   getUserMembershipInfo,
 } from './queries';
 import {
+  CloseEventRsvpsInput,
+  CloseEventRsvpsResponse,
   CreateEventInput,
   CreateEventResponse,
   GetEventResponse,
@@ -138,6 +140,23 @@ export class GqlMeetupClient {
         { input }
       );
       logger.info(`createEvent result: ${JSON.stringify(result)}`);
+      return result;
+    } catch (error) {
+      logger.error(error);
+      throw error;
+    }
+  }
+
+  public async closeEventRsvps(input: CloseEventRsvpsInput) {
+    logger.info(
+      `Calling closeEventRsvps with input: ${JSON.stringify({ input })}`
+    );
+    try {
+      const result = await this.client.request<CloseEventRsvpsResponse>(
+        closeEventRsvps,
+        { input }
+      );
+      logger.info(`closeEventRsvps result: ${JSON.stringify(result)}`);
       return result;
     } catch (error) {
       logger.error(error);

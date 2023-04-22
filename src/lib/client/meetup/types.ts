@@ -141,9 +141,18 @@ export interface CreateEventInput {
 }
 
 export interface CreateEventResponse {
-  createEvent: { event: { eventUrl: string } };
+  createEvent: { event: { eventUrl: string; id: string } };
 }
 
 export interface GetEventResponse {
   event: { description: string; title: string };
+}
+
+export interface CloseEventRsvpsInput {
+  eventId: string;
+}
+
+// Create response interface for closeEventRsvps graphql mutation
+export interface CloseEventRsvpsResponse {
+  closeEventRsvps: { event: { id: string } };
 }
