@@ -11,4 +11,4 @@ jobs:
         cache: 'npm'
     - run: npm i --include=dev
     - name: Run ESLint
-      run: npx eslint . --ext .ts
+      run: npm run lint
