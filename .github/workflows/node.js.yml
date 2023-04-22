@@ -9,6 +9,6 @@ jobs:
       with:
         node-version: 18
         cache: 'npm'
-    - run: npm i
+    - run: npm i --include=dev
     - name: Run ESLint
-      run: eslint . --ext .ts
+      run: npx eslint . --ext .ts
