@@ -6,7 +6,9 @@
   "scripts": {
     "dev": "bash scripts/dev_env.sh",
     "start": "ts-node src/index.ts",
-    "lint": "eslint --fix . --ext .ts",
+    "lint": "eslint . --ext .ts",
+    "lint:fix": "yarn lint -- --fix",
+
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "repository": {
@@ -31,6 +33,7 @@
     "eslint-config-prettier": "^8.8.0",
     "eslint-plugin-import": "^2.27.5",
     "eslint-plugin-prettier": "^4.2.1",
+    "eslint-plugin-typescript-sort-keys": "^2.3.0",
     "prettier": "^2.8.7",
     "typescript": "^5.0.2"
   },

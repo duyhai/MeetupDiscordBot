@@ -24,6 +24,7 @@ app.use(express.urlencoded({ extended: true }));
 
 app
   .use(session({ secret: 'grant', saveUninitialized: true, resave: false }))
+  // eslint-disable-next-line @typescript-eslint/no-misused-promises
   .use(grant.express(Configuration.grant));
 
 app.get('/persistToken/:maskedUserId', (req, res) => {
