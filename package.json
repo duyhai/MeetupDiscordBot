@@ -7,7 +7,8 @@
     "dev": "bash scripts/dev_env.sh",
     "start": "ts-node src/index.ts",
     "lint": "eslint . --ext .ts",
-    "lint:fix": "npm run lint -- --fix",
+    "lint:fix": "yarn lint -- --fix",
+
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "repository": {
