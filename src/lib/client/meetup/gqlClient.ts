@@ -116,11 +116,11 @@ export class GqlMeetupClient {
     );
   }
 
-  public async getEvent(id: string) {
+  public async getEvent(eventId: string) {
     logger.info(`Calling getEvent with input: ${JSON.stringify({ id })}`);
     try {
       const result = await this.client.request<GetEventResponse>(getEvent, {
-        id,
+        eventId,
       });
       logger.info(`getEvent result: ${JSON.stringify(result)}`);
       return result;
