@@ -82,9 +82,9 @@ export class MeetupCreateEventCommands {
         await message.edit({
           content: `${
             interaction.message.content
-          }\n✅ Request approved by ${interaction.user.toString()}.\nLink to event: ${
+          }\n✅ Request approved by ${interaction.user.toString()}.\nLink to event: <${
             newEvent.createEvent.event.eventUrl
-          }`,
+          }>`,
           components: [newButtons],
         });
 
