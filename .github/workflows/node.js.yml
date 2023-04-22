@@ -15,4 +15,4 @@ jobs:
         cmd: install
     - name: Lint
       uses: borales/actions-yarn@v4
-        cmd: run lint
+        cmd: lint
