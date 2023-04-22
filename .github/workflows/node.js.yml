@@ -8,7 +8,11 @@ jobs:
     - uses: actions/setup-node@v3
       with:
         node-version: 18
-        cache: 'npm'
-    - run: npm i --include=dev
-    - name: Run ESLint
-      run: npm run lint
+        cache: 'yarn'
+    - name: Install
+      uses: borales/actions-yarn@v4
+      with:
+        cmd: install
+    - name: Lint
+      uses: borales/actions-yarn@v4
+        cmd: run lint
