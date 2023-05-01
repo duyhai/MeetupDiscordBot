@@ -1,3 +1,4 @@
+import dayjs from 'dayjs';
 import {
   ActionRowBuilder,
   CommandInteraction,
@@ -26,13 +27,13 @@ export class MeetupGetUnannouncedEventsCommands {
     logger.info(`Selected event by ${interaction.user.id}: ${eventUrl}`);
 
     await interaction.reply({
-      content: `Requesting announcement for event ${eventUrl} by ${interaction.user.toString()}`,
+      content: `Announcement requested for event ${eventUrl} by ${interaction.user.toString()}`,
     });
   }
 
   @Slash({
     name: 'meetup_get_unannounced_events',
-    description: `Getting list of unannounced events. Output is private.`,
+    description: `Getting list of unannounced events for the next 3 weeks. Output is private.`,
   })
   async meetupGetUnannouncedEventsHandler(interaction: CommandInteraction) {
     await discordCommandWrapper(interaction, async () => {
@@ -53,7 +54,8 @@ export class MeetupGetUnannouncedEventsCommands {
         const filteredEvents = getUserHostedEvents.filter(
           (event) =>
             event.group.id === Configuration.meetup.groupId &&
-            event.uiActions.canAnnounce
+            event.uiActions.canAnnounce &&
+            dayjs(event.dateTime).isBefore(dayjs().add(3, 'week'))
         );
         const selectMenuOptions = filteredEvents.map((event, index) => ({
           label: `#${index + 1}: ${event.title}`,
