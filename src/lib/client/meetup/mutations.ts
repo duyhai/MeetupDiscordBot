@@ -41,3 +41,13 @@ export const publishEventDraft = gql`
     }
   }
 `;
+
+export const announceEvent = gql`
+  mutation ($input: AnnounceEventInput!) {
+    announceEvent(input: $input) {
+      event {
+        id
+      }
+    }
+  }
+`;

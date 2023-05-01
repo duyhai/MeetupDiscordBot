@@ -176,3 +176,11 @@ export interface PublishEventDraftInput {
 export interface PublishEventDraftResponse {
   publishEventDraft: { event: { id: string } };
 }
+
+export interface AnnounceEventInput {
+  eventId: string;
+}
+
+export interface AnnounceEventResponse {
+  announceEvent: { event: { id: string } };
+}

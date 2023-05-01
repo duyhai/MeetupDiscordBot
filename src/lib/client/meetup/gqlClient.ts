@@ -3,6 +3,7 @@ import { Logger } from 'tslog';
 import Configuration from '../../../configuration';
 import { cachedGqlRequest } from './cacheHelper';
 import {
+  announceEvent,
   closeEventRsvps,
   createEvent,
   editEvent,
@@ -16,6 +17,8 @@ import {
   getUserMembershipInfo,
 } from './queries';
 import {
+  AnnounceEventInput,
+  AnnounceEventResponse,
   CloseEventRsvpsInput,
   CloseEventRsvpsResponse,
   CreateEventInput,
@@ -197,6 +200,23 @@ export class GqlMeetupClient {
         { input }
       );
       logger.info(`publishEventDraft result: ${JSON.stringify(result)}`);
+      return result;
+    } catch (error) {
+      logger.error(error);
+      throw error;
+    }
+  }
+
+  public async announceEvent(input: AnnounceEventInput) {
+    logger.info(
+      `Calling announceEvent with input: ${JSON.stringify({ input })}`
+    );
+    try {
+      const result = await this.client.request<AnnounceEventResponse>(
+        announceEvent,
+        { input }
+      );
+      logger.info(`announceEvent result: ${JSON.stringify(result)}`);
       return result;
     } catch (error) {
       logger.error(error);
