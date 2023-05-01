@@ -93,14 +93,16 @@ export class MeetupGetUnannouncedEventsCommands {
             return result.self.hostedEvents;
           }
         );
-        const filteredEvents = getUserHostedEvents.filter(
-          (event) =>
-            event.group.id === Configuration.meetup.groupId &&
-            event.uiActions.canAnnounce
-        );
+        const filteredEvents = getUserHostedEvents
+          .filter(
+            (event) =>
+              event.group.id === Configuration.meetup.groupId &&
+              event.uiActions.canAnnounce
+          )
+          .slice(0, 5);
         const selectMenuOptions = filteredEvents.map((event, index) => ({
           label: `#${index + 1}: ${event.dateTime}`,
-          description: event.title,
+          description: event.title.slice(0, 20),
           value: event.eventUrl,
         }));
 
