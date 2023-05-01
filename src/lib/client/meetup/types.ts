@@ -61,6 +61,7 @@ interface PastEvent {
   dateTime: string;
   going: number;
   hosts: BaseUserInfo[];
+  id: string;
   maxTickets: number;
   status: EventStatus;
   tickets: PaginatedData<Ticket>;
@@ -68,8 +69,14 @@ interface PastEvent {
 }
 
 interface EventGroupInfo {
+  dateTime: string;
+  eventUrl: string;
   group: { id: string };
+  id: string;
   title: string;
+  uiActions: {
+    canAnnounce: boolean;
+  };
 }
 
 export interface GetUserHostedEventsResponse {
@@ -95,6 +102,7 @@ type TicketStatus =
   | 'YES_PENDING_PAYMENT';
 
 interface Ticket {
+  id: string;
   status: TicketStatus;
   user: BaseUserInfo;
 }
@@ -116,7 +124,6 @@ export interface CreateEventInput {
     chat: boolean;
     comments: boolean;
   };
-  // covidPrecautions: undefined;
   description: string;
   duration: string;
   eventHosts: number[];
@@ -151,7 +158,7 @@ export interface EditEventResponse {
 }
 
 export interface GetEventResponse {
-  event: { description: string; title: string };
+  event: { description: string; id: string; title: string };
 }
 
 export interface CloseEventRsvpsInput {

@@ -38,9 +38,15 @@ export const getUserHostedEvents = gql`
         count
         edges {
           node {
+            id
+            dateTime
+            eventUrl
             title
             group {
               id
+            }
+            uiActions {
+              canAnnounce
             }
           }
         }
@@ -63,6 +69,7 @@ export const getPastGroupEvents = gql`
         count
         edges {
           node {
+            id
             title
             going
             maxTickets
@@ -73,6 +80,7 @@ export const getPastGroupEvents = gql`
             }
             status
             tickets(input: { first: 200 }) {
+              id
               pageInfo {
                 hasNextPage
                 hasPreviousPage
@@ -100,6 +108,7 @@ export const getPastGroupEvents = gql`
 export const getEvent = gql`
   query ($eventId: ID) {
     event(id: $eventId) {
+      id
       title
       description
     }
