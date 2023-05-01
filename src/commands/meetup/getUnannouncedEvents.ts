@@ -98,8 +98,9 @@ export class MeetupGetUnannouncedEventsCommands {
             event.group.id === Configuration.meetup.groupId &&
             event.uiActions.canAnnounce
         );
-        const selectMenuOptions = filteredEvents.map((event) => ({
-          label: `${event.dateTime} - ${event.title}`,
+        const selectMenuOptions = filteredEvents.map((event, index) => ({
+          label: `#${index + 1}: ${event.dateTime}`,
+          description: event.title,
           value: event.eventUrl,
         }));
 
