@@ -1,12 +1,13 @@
 import dayjs from 'dayjs';
 import {
   ActionRowBuilder,
+  ApplicationCommandOptionType,
   CommandInteraction,
   MessageActionRowComponentBuilder,
   StringSelectMenuBuilder,
   StringSelectMenuInteraction,
 } from 'discord.js';
-import { Discord, SelectMenuComponent, Slash } from 'discordx';
+import { Discord, SelectMenuComponent, Slash, SlashOption } from 'discordx';
 import { Logger } from 'tslog';
 import Configuration from '../../configuration';
 import { getPaginatedData } from '../../lib/client/meetup/paginationHelper';
@@ -33,9 +34,22 @@ export class MeetupGetUnannouncedEventsCommands {
 
   @Slash({
     name: 'meetup_get_unannounced_events',
-    description: `Getting list of unannounced events for the next 3 weeks. Output is private.`,
+    description: `Getting list of unannounced events up to 8 weeks out. Output is private.`,
   })
-  async meetupGetUnannouncedEventsHandler(interaction: CommandInteraction) {
+  async meetupGetUnannouncedEventsHandler(
+    @SlashOption({
+      name: 'searchWindowByWeeks',
+      description:
+        'Set the search window for unannounced events in weeks. Default is 3.',
+      type: ApplicationCommandOptionType.Number,
+      minValue: 1,
+      maxValue: 8,
+      required: false,
+      default: 3,
+    })
+    searchWindowByWeeks: number,
+    interaction: CommandInteraction
+  ) {
     await discordCommandWrapper(interaction, async () => {
       await withMeetupClient(interaction, async (meetupClient) => {
         await interaction.editReply({
@@ -55,7 +69,9 @@ export class MeetupGetUnannouncedEventsCommands {
           (event) =>
             event.group.id === Configuration.meetup.groupId &&
             event.uiActions.canAnnounce &&
-            dayjs(event.dateTime).isBefore(dayjs().add(3, 'week'))
+            dayjs(event.dateTime).isBefore(
+              dayjs().add(searchWindowByWeeks, 'week')
+            )
         );
         const selectMenuOptions = filteredEvents.map((event, index) => ({
           label: `#${index + 1}: ${event.title}`,
