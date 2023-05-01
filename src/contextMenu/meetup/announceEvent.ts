@@ -20,7 +20,6 @@ function getMeetupEventId(text: string): string | null {
 export class MeetupAnnounceEventContextCommands {
   @ContextMenu({
     name: 'meetup_announce_event',
-    description: `Announce the event linked in the message`,
     type: ApplicationCommandType.Message,
   })
   async meetupAnnounceEventHandler(
