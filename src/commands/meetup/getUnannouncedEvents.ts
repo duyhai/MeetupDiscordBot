@@ -45,9 +45,8 @@ export class MeetupGetUnannouncedEventsCommands {
       minValue: 1,
       maxValue: 8,
       required: false,
-      default: 3,
     })
-    searchWindowByWeeks: number,
+    searchWindowByWeeks: number | undefined,
     interaction: CommandInteraction
   ) {
     await discordCommandWrapper(interaction, async () => {
@@ -70,7 +69,7 @@ export class MeetupGetUnannouncedEventsCommands {
             event.group.id === Configuration.meetup.groupId &&
             event.uiActions.canAnnounce &&
             dayjs(event.dateTime).isBefore(
-              dayjs().add(searchWindowByWeeks, 'week')
+              dayjs().add(searchWindowByWeeks ?? 3, 'week')
             )
         );
         const selectMenuOptions = filteredEvents.map((event, index) => ({
