@@ -25,7 +25,7 @@ export class MeetupGetUnannouncedEventsCommands {
     const eventUrl = interaction.values?.[0];
     logger.info(`Selected event by ${interaction.user.id}: ${eventUrl}`);
 
-    await interaction.followUp({
+    await interaction.reply({
       content: `Requesting announcement for event ${eventUrl} by ${interaction.user.toString()}`,
     });
   }
@@ -50,13 +50,11 @@ export class MeetupGetUnannouncedEventsCommands {
             return result.self.hostedEvents;
           }
         );
-        const filteredEvents = getUserHostedEvents
-          .filter(
-            (event) =>
-              event.group.id === Configuration.meetup.groupId &&
-              event.uiActions.canAnnounce
-          )
-          .slice(0, 5);
+        const filteredEvents = getUserHostedEvents.filter(
+          (event) =>
+            event.group.id === Configuration.meetup.groupId &&
+            event.uiActions.canAnnounce
+        );
         const selectMenuOptions = filteredEvents.map((event, index) => ({
           label: `#${index + 1}: ${event.title}`,
           description: event.dateTime,
