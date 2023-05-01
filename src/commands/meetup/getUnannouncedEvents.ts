@@ -1,14 +1,11 @@
 import {
   ActionRowBuilder,
-  ButtonBuilder,
-  ButtonInteraction,
-  ButtonStyle,
   CommandInteraction,
   MessageActionRowComponentBuilder,
   StringSelectMenuBuilder,
   StringSelectMenuInteraction,
 } from 'discord.js';
-import { ButtonComponent, Discord, SelectMenuComponent, Slash } from 'discordx';
+import { Discord, SelectMenuComponent, Slash } from 'discordx';
 import { Logger } from 'tslog';
 import Configuration from '../../configuration';
 import { getPaginatedData } from '../../lib/client/meetup/paginationHelper';
@@ -18,36 +15,8 @@ import { withMeetupClient } from '../../util/meetup';
 
 const logger = new Logger({ name: 'MeetupGetUnannouncedEventsCommands' });
 
-const EVENT_LINK_PREFIX = 'Event link: ';
-
 @Discord()
 export class MeetupGetUnannouncedEventsCommands {
-  @ButtonComponent({ id: 'request-announcement-button' })
-  async requestAnnouncementButtonHandler(interaction: ButtonInteraction) {
-    await discordCommandWrapper(interaction, async () => {
-      if (!interaction.message.content.includes(EVENT_LINK_PREFIX)) {
-        await interaction.editReply({
-          content: `This message doesn't contain an event link`,
-        });
-        logger.info(
-          `No event link found in message of ${interaction.user.id}. Message: ${interaction.message.content}`
-        );
-        return;
-      }
-
-      const [, ...requestInfo] = interaction.message.content.split('\n');
-      const eventUrl = requestInfo[0].replace(EVENT_LINK_PREFIX, '');
-      logger.info(
-        `Requesting announcement for event ${eventUrl} by ${interaction.user.id}`
-      );
-
-      await interaction.followUp({
-        content: `Requesting announcement for event ${eventUrl} by ${interaction.user.toString()}`,
-      });
-      await interaction.deleteReply();
-    });
-  }
-
   @SelectMenuComponent({ id: 'unannounced-menu' })
   async unannouncedEventSelectHandler(
     interaction: StringSelectMenuInteraction
@@ -56,20 +25,8 @@ export class MeetupGetUnannouncedEventsCommands {
     const eventUrl = interaction.values?.[0];
     logger.info(`Selected event by ${interaction.user.id}: ${eventUrl}`);
 
-    const messageContentWithoutLink = interaction.message.content
-      .split('\n')
-      .filter((line) => !line.includes(EVENT_LINK_PREFIX));
-
-    const messageContent = messageContentWithoutLink;
-    if (eventUrl !== 'none') {
-      messageContent.push(EVENT_LINK_PREFIX + eventUrl);
-    }
-
-    // update message
-    const message = await interaction.message.fetch();
-    await message.edit({
-      content: messageContent.join('\n'),
-      components: message.components,
+    await interaction.followUp({
+      content: `Requesting announcement for event ${eventUrl} by ${interaction.user.toString()}`,
     });
   }
 
@@ -101,8 +58,8 @@ export class MeetupGetUnannouncedEventsCommands {
           )
           .slice(0, 5);
         const selectMenuOptions = filteredEvents.map((event, index) => ({
-          label: `#${index + 1}: ${event.dateTime}`,
-          description: event.title.slice(0, 20),
+          label: `#${index + 1}: ${event.title}`,
+          description: event.dateTime,
           value: event.eventUrl,
         }));
 
@@ -110,16 +67,9 @@ export class MeetupGetUnannouncedEventsCommands {
           .addOptions(selectMenuOptions)
           .setCustomId('unannounced-menu');
 
-        const requestAnnounceButton = new ButtonBuilder()
-          .setLabel('Request Announcement')
-          .setEmoji('📢')
-          .setStyle(ButtonStyle.Primary)
-          .setCustomId('request-announcement-button');
-
         const buttonRow =
           new ActionRowBuilder<MessageActionRowComponentBuilder>().addComponents(
             selectMenu
-            // requestAnnounceButton
           );
 
         logger.info(
