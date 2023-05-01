@@ -102,7 +102,6 @@ type TicketStatus =
   | 'YES_PENDING_PAYMENT';
 
 interface Ticket {
-  id: string;
   status: TicketStatus;
   user: BaseUserInfo;
 }

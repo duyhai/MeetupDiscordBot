@@ -80,7 +80,6 @@ export const getPastGroupEvents = gql`
             }
             status
             tickets(input: { first: 200 }) {
-              id
               pageInfo {
                 hasNextPage
                 hasPreviousPage
