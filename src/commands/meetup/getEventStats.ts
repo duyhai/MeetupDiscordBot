@@ -67,6 +67,11 @@ export class MeetupGetEventStatsCommands {
             return;
           }
 
+          if (title.includes('[Open House]')) {
+            logger.info(`Skipping ${title}. Open House`);
+            return;
+          }
+
           const eventDate = dayjs(dateTime);
           const isEventInRange =
             startDate.isBefore(eventDate) && endDate.isAfter(eventDate);
