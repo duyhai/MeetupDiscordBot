@@ -38,7 +38,7 @@ export class MeetupGetUnannouncedEventsCommands {
   })
   async meetupGetUnannouncedEventsHandler(
     @SlashOption({
-      name: 'searchWindowByWeeks',
+      name: 'search_window_by_weeks',
       description:
         'Set the search window for unannounced events in weeks. Default is 3.',
       type: ApplicationCommandOptionType.Number,
