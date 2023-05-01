@@ -118,8 +118,8 @@ export class MeetupGetUnannouncedEventsCommands {
 
         const buttonRow =
           new ActionRowBuilder<MessageActionRowComponentBuilder>().addComponents(
-            selectMenu,
-            requestAnnounceButton
+            selectMenu
+            // requestAnnounceButton
           );
 
         logger.info(
