@@ -8,7 +8,6 @@
     "start": "ts-node src/index.ts",
     "lint": "eslint . --ext .ts",
     "lint:fix": "yarn lint -- --fix",
-
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "repository": {
@@ -40,8 +39,8 @@
   "dependencies": {
     "dayjs": "^1.11.7",
     "decamelize": "^5.0.1",
-    "discord.js": "^14.8.0",
-    "discordx": "^11.7.4",
+    "discord.js": "^14.9.0",
+    "discordx": "^11.7.6",
     "express": "^4.17.7",
     "express-session": "^1.17.3",
     "grant": "^5.4.21",
