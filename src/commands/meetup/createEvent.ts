@@ -60,8 +60,11 @@ export class MeetupCreateEventCommands {
         const [, ...requestInfo] = interaction.message.content.split('\n');
         requestInfo.pop();
 
-        const [meetupUserId, eventDate, eventTitle] = requestInfo.map((line) =>
-          line.split(':')[1].trim()
+        const [meetupUserId, eventDate, eventTitle] = requestInfo.map(
+          (line) => {
+            const key = line.split(': ')[0];
+            return line.slice(key.length + 2);
+          }
         );
 
         const draftEventTemplate = await meetupClient.getEvent(
