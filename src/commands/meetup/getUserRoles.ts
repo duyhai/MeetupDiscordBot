@@ -1,7 +1,6 @@
 import { CommandInteraction } from 'discord.js';
 import { Discord, Slash } from 'discordx';
 import { Logger } from 'tslog';
-import Configuration from '../../configuration';
 import { getPaginatedData } from '../../lib/client/meetup/paginationHelper';
 import { addServerRole } from '../../lib/helpers/onboardUser';
 
@@ -54,18 +53,19 @@ export class MeetupGetUserRolesCommands {
             `Organizer, moderator, and guest host role added to: ${interaction.user.username}`
           );
         } else {
-          const getUserHostedEvents = await getPaginatedData(
-            async (paginationInput) => {
-              const result = await meetupClient.getUserHostedEvents(
-                paginationInput
-              );
-              return result.self.hostedEvents;
-            }
+          const userInfo = await meetupClient.getUserInfo();
+
+          const pastEvents = await getPaginatedData(async (paginationInput) => {
+            const result = await meetupClient.getPastGroupEvents(
+              paginationInput
+            );
+            return result.groupByUrlname.pastEvents;
+          });
+
+          const getUserHostedEvents = pastEvents.filter(({ hosts }) =>
+            hosts.some(({ id }) => id === userInfo.self.id)
           );
-          const didUserHostInGroup = getUserHostedEvents.some(
-            (event) => event.group.id === Configuration.meetup.groupId
-          );
-          if (didUserHostInGroup) {
+          if (getUserHostedEvents.length > 0) {
             await addServerRole(
               interaction.guild,
               interaction.user.id,
