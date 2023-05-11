@@ -95,7 +95,7 @@ export class GqlMeetupClient {
       >(getUserHostedEvents, {
         connectionInput: input,
       });
-      // logger.info(`getUserMembershipInfo result: ${JSON.stringify(result)}`);
+      logger.info(`getUserHostedEvents result: ${JSON.stringify(result)}`);
       return result;
     } catch (error) {
       logger.error(error);
