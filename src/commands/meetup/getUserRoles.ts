@@ -65,6 +65,9 @@ export class MeetupGetUserRolesCommands {
           const getUserHostedEvents = pastEvents.filter(({ hosts }) =>
             hosts.some(({ id }) => id === userInfo.self.id)
           );
+          logger.info(
+            `Number of hosted events by ${interaction.user.username}: ${getUserHostedEvents.length}`
+          );
           if (getUserHostedEvents.length > 0) {
             await addServerRole(
               interaction.guild,
