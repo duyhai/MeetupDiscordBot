@@ -23,8 +23,8 @@ export const createEventTemplate: CreateEventInput = {
     enabled: false,
   },
   communicationSettings: {
-    chat: true,
-    comments: false,
+    chat: false,
+    comments: true,
   },
   isCopy: true,
 };
