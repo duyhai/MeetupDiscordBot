@@ -6,6 +6,7 @@ import grant from 'grant';
 import { Logger } from 'tslog';
 
 import Configuration from './configuration';
+import './buttonMenu';
 import './contextMenu';
 import './commands';
 import { InMemoryCache } from './lib/cache/memoryCache';
