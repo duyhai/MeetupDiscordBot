@@ -99,7 +99,10 @@ export class MeetupCreateEventCommands {
           components: [newButtons],
         });
 
-        await interaction.editReply('✅ Event request approved!');
+        await interaction.followUp({
+          content: '✅ Event request approved!',
+          ephemeral: true,
+        });
       });
     });
   }
@@ -125,7 +128,10 @@ export class MeetupCreateEventCommands {
           components: [newButtons],
         });
 
-        await interaction.editReply('❌ Event request denied!');
+        await interaction.followUp({
+          content: '❌ Event request denied!',
+          ephemeral: true,
+        });
       });
     });
   }

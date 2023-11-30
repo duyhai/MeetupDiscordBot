@@ -57,11 +57,12 @@ export class MeetupGetBadgesCommands {
         await addRewardRole(guild, user.id, 'hosting', hostingRewards);
         await addRewardRole(guild, user.id, 'attendance', attendanceRewards);
 
-        await interaction.editReply(
-          `Your Discord badges are all set up based on your Meetup status!
+        await interaction.followUp({
+          content: `Your Discord badges are all set up based on your Meetup status!
 Hosted: ${hostedCount} Attended: ${attendedCount}
-Let us know if they are not accurate.`
-        );
+Let us know if they are not accurate.`,
+          ephemeral: true,
+        });
       });
     });
   }

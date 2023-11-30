@@ -19,6 +19,8 @@ import { discordCommandWrapper } from '../util/discord';
 
 const logger = new Logger({ name: 'MessageModsCommands' });
 
+const MESSAGE_MOD_BUTTON_ID = 'message_mods';
+
 @Discord()
 export class MessageModsCommands {
   messageModsButton() {
@@ -26,7 +28,7 @@ export class MessageModsCommands {
       .setLabel('Message Mods')
       .setEmoji('📨')
       .setStyle(ButtonStyle.Primary)
-      .setCustomId('message_mods');
+      .setCustomId(MESSAGE_MOD_BUTTON_ID);
 
     const buttonRow =
       new ActionRowBuilder<MessageActionRowComponentBuilder>().addComponents(
@@ -83,7 +85,7 @@ export class MessageModsCommands {
     });
   }
 
-  @ButtonComponent({ id: 'message_mods' })
+  @ButtonComponent({ id: MESSAGE_MOD_BUTTON_ID })
   async meetupRequestApproveEventHandler(interaction: ButtonInteraction) {
     await discordCommandWrapper(interaction, async () => {
       logger.info(

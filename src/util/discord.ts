@@ -13,7 +13,8 @@ const logger = new Logger({ name: 'DiscordUtil' });
 
 /**
  * A wrapper for Discord commands to handle:
- * 1. Deferred reply: Command implementation either edit or follow up
+ * 1. Deferred reply: Command implementation either edit for in progress messages
+ * and follow up for messsages that should stick around after command is done
  * 2. Error handling: Retriable or fatal
  * @param commandFn Lambda for command implementation
  */
@@ -24,11 +25,14 @@ export async function discordCommandWrapper(
   await interaction.deferReply({ ephemeral: true });
   try {
     await commandFn();
+    await interaction.deleteReply();
   } catch (error: unknown) {
     if (error instanceof Error) {
       logger.error(error?.message);
       await interaction.editReply({
-        content: `Error: ${error?.message}. Please reach out to a moderator for help.`,
+        content: `${interaction.user.toString()} Error: ${
+          error?.message
+        }. Please reach out to a moderator for help.`,
       });
     }
   }

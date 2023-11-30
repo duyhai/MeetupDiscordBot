@@ -39,8 +39,9 @@ export class MeetupAnnounceEventContextCommands {
         await meetupClient.announceEvent({ eventId });
         logger.info(`Announced event ${eventId}`);
 
-        await interaction.editReply({
+        await interaction.followUp({
           content: `Announced event! ✅`,
+          ephemeral: true,
         });
         await targetMessage.react('✅');
       });

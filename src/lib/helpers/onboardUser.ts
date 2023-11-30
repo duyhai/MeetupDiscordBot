@@ -8,6 +8,7 @@ import {
   SERVER_ROLES,
 } from '../../constants';
 import { isAdmin } from '../../util/discord';
+import { GqlMeetupClient } from '../client/meetup/gqlClient';
 
 const strings = {
   welcomeMsg: (user: User) =>
@@ -120,8 +121,9 @@ export async function onboardUser(
   const user = await client.users.fetch(userId);
 
   await onboardUserCommon(interaction, userId, isFemale);
-  await interaction.editReply({
+  await interaction.followUp({
     content: strings.replyToModerator,
+    ephemeral: true,
   });
   await interaction.followUp({
     content: strings.welcomeMsg(user),
@@ -132,13 +134,44 @@ export async function onboardUser(
  * Function to onboard self
  */
 export async function selfOnboardUser(
-  interaction: CommandInteraction,
-  nickname: string,
-  isFemale: boolean
+  meetupClient: GqlMeetupClient,
+  interaction: CommandInteraction
 ) {
+  const userInfo = await meetupClient.getUserInfo();
+  const membershipInfo = await meetupClient.getUserMembershipInfo();
+
+  const isMeetupGroupMember = membershipInfo.groupByUrlname.isMember;
+
+  if (!isMeetupGroupMember) {
+    logger.warn(
+      `Non-member user failed to onboard: ${interaction.user.username}. 
+            Membership info: ${JSON.stringify(membershipInfo)}`
+    );
+    throw new Error(
+      `You're not a member on Meetup. Please join the group and try onboarding again`
+    );
+  }
+
+  const { name } = userInfo.self;
+  const cleanedName = name
+    .split(' ')
+    .map((namePart, index) => {
+      if (index === 0) {
+        return namePart;
+      }
+      return `${namePart.at(0)}.`;
+    })
+    .join(' ');
+
   const { user } = interaction;
-  await onboardUserCommon(interaction, user.id, isFemale, nickname);
-  await interaction.editReply({
+  await onboardUserCommon(
+    interaction,
+    user.id,
+    userInfo.self.gender === 'FEMALE',
+    cleanedName
+  );
+  await interaction.followUp({
     content: strings.welcomeMsg(user),
+    ephemeral: true,
   });
 }

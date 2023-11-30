@@ -19,9 +19,10 @@ export class MeetupNoShowCommands {
         logger.info(`Fetching no show count for ${interaction.user.username}`);
         const membershipInfo = await meetupClient.getUserMembershipInfo();
 
-        await interaction.editReply(
-          `Your no show count is ${membershipInfo.groupByUrlname.membershipMetadata.noShowCount}.`
-        );
+        await interaction.followUp({
+          content: `Your no show count is ${membershipInfo.groupByUrlname.membershipMetadata.noShowCount}.`,
+          ephemeral: true,
+        });
       });
     });
   }

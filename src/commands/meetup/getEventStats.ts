@@ -118,9 +118,10 @@ ${formattedResult}
           `${header}.txt`,
           result,
           async (attachmentArgs) => {
-            await interaction.editReply({
+            await interaction.followUp({
               ...attachmentArgs,
               content: 'Check the results in the attachment!',
+              ephemeral: true,
             });
           }
         );

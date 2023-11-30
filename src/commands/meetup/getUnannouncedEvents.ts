@@ -99,9 +99,10 @@ export class MeetupGetUnannouncedEventsCommands {
           });
           return;
         }
-        await interaction.editReply({
+        await interaction.followUp({
           components: [buttonRow],
           content: 'Select the event you want to get announced:',
+          ephemeral: true,
         });
       });
     });
