@@ -22,10 +22,13 @@ export async function discordCommandWrapper(
   interaction: ButtonInteraction | CommandInteraction,
   commandFn: () => Promise<void>
 ) {
-  await interaction.deferReply({ ephemeral: true });
+  const message = await interaction.reply({
+    content: 'Executing command',
+    ephemeral: true,
+  });
   try {
     await commandFn();
-    await interaction.deleteReply();
+    await message.delete();
   } catch (error: unknown) {
     if (error instanceof Error) {
       logger.error(error?.message);

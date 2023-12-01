@@ -94,8 +94,9 @@ export class MeetupGetUnannouncedEventsCommands {
         );
 
         if (filteredEvents.length === 0) {
-          await interaction.editReply({
+          await interaction.followUp({
             content: 'You have no unannounced events.',
+            ephemeral: true,
           });
           return;
         }

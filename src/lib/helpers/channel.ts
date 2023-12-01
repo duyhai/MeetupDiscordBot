@@ -30,7 +30,8 @@ export async function addToChannel(
   });
 
   logger.info(`User ${user.username} is added to ${channel.name}`);
-  await interaction.editReply({
+  await interaction.followUp({
     content: strings.replyAddedToChannel(channel),
+    ephemeral: true,
   });
 }
