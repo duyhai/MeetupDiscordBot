@@ -63,11 +63,6 @@ describe('getUserRoles', () => {
     expect(addServerRoleMock).toHaveBeenCalledWith(
       interaction.guild,
       interaction.user.id,
-      'moderator'
-    );
-    expect(addServerRoleMock).toHaveBeenCalledWith(
-      interaction.guild,
-      interaction.user.id,
       'guest_host'
     );
     expect(interaction.followUp).toHaveBeenCalledWith({

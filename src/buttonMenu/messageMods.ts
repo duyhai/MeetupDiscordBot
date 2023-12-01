@@ -112,7 +112,6 @@ export class MessageModsCommands {
         `Please use this feature instead of reaching out individually.`,
         `Your inquiry will be addressed within 48 hours. Thank you for your cooperation!`,
       ];
-      await interaction.deleteReply();
       await interaction.channel.send({
         content: replyContent.join('\n'),
         components: [this.messageModsButton()],

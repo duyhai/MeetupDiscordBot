@@ -1,4 +1,4 @@
-import { CommandInteraction } from 'discord.js';
+import { ButtonInteraction, CommandInteraction } from 'discord.js';
 import { Logger } from 'tslog';
 import { GqlMeetupClient } from '../client/meetup/gqlClient';
 import { getPaginatedData } from '../client/meetup/paginationHelper';
@@ -8,7 +8,7 @@ const logger = new Logger({ name: 'getUserRoles' });
 
 export async function getUserRoles(
   meetupClient: GqlMeetupClient,
-  interaction: CommandInteraction
+  interaction: CommandInteraction | ButtonInteraction
 ) {
   logger.info(`Getting user roles for ${interaction.user.username}`);
   await interaction.editReply({
@@ -28,7 +28,6 @@ export async function getUserRoles(
 
   if (membershipInfo.groupByUrlname.isOrganizer) {
     await addServerRole(interaction.guild, interaction.user.id, 'organizer');
-    await addServerRole(interaction.guild, interaction.user.id, 'moderator');
     await addServerRole(interaction.guild, interaction.user.id, 'guest_host');
     logger.info(
       `Organizer, moderator, and guest host role added to: ${interaction.user.username}`

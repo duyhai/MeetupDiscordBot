@@ -1,4 +1,4 @@
-import { Guild, CommandInteraction, User } from 'discord.js';
+import { Guild, CommandInteraction, User, ButtonInteraction } from 'discord.js';
 import { Logger } from 'tslog';
 import {
   RewardRoleLevels,
@@ -71,7 +71,7 @@ export async function removeRewardRole(
 }
 
 async function onboardUserCommon(
-  interaction: CommandInteraction,
+  interaction: CommandInteraction | ButtonInteraction,
   userId: string,
   isFemale: boolean,
   nickname?: string
@@ -131,7 +131,7 @@ export async function onboardUser(
  */
 export async function selfOnboardUser(
   meetupClient: GqlMeetupClient,
-  interaction: CommandInteraction
+  interaction: CommandInteraction | ButtonInteraction
 ) {
   const userInfo = await meetupClient.getUserInfo();
   const membershipInfo = await meetupClient.getUserMembershipInfo();

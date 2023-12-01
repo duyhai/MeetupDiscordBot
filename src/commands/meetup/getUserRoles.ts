@@ -14,7 +14,7 @@ export class MeetupGetUserRolesCommands {
   async meetupGetUserRolesHandler(interaction: CommandInteraction) {
     await discordCommandWrapper(interaction, async () => {
       await withMeetupClient(interaction, async (meetupClient) => {
-        return getUserRoles(meetupClient, interaction);
+        await getUserRoles(meetupClient, interaction);
       });
     });
   }
