@@ -8,7 +8,7 @@
     "start": "ts-node src/index.ts",
     "lint": "eslint . --ext .ts",
     "lint:fix": "yarn lint -- --fix",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "jest"
   },
   "repository": {
     "type": "git",
@@ -24,6 +24,8 @@
   "devDependencies": {
     "@types/express": "^4.17.7",
     "@types/express-session": "^1.17.7",
+    "@types/istanbul-lib-coverage": "^2.0.6",
+    "@types/jest": "^29.5.10",
     "@types/uuid": "^9.0.0",
     "@typescript-eslint/eslint-plugin": "^5.56.0",
     "@typescript-eslint/parser": "^5.56.0",
@@ -33,7 +35,9 @@
     "eslint-plugin-import": "^2.27.5",
     "eslint-plugin-prettier": "^4.2.1",
     "eslint-plugin-typescript-sort-keys": "^2.3.0",
+    "jest": "^29.7.0",
     "prettier": "^2.8.7",
+    "ts-jest": "^29.1.1",
     "typescript": "^5.0.2"
   },
   "dependencies": {

@@ -1,13 +1,13 @@
 {
-    "compilerOptions": {
-      "experimentalDecorators": true,
-      "emitDecoratorMetadata": true,
-      "esModuleInterop": true,
-      "target": "ES2020",
-      "outDir": "dist",
-      "moduleResolution": "node",
-      "inlineSourceMap": true, 
-    },
-    "include": ["./src/**/*"],
-    "exclude": ["node_modules", "__tests__"]
-  }
+  "compilerOptions": {
+    "experimentalDecorators": true,
+    "emitDecoratorMetadata": true,
+    "esModuleInterop": true,
+    "target": "ES2020",
+    "outDir": "dist",
+    "moduleResolution": "node",
+    "inlineSourceMap": true, 
+  },
+  "include": ["./src/**/*", "./tst/**/*", "./jest.config.js"],
+  "exclude": ["node_modules", "__tests__"]
+}
