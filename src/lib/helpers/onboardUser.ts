@@ -38,15 +38,11 @@ export async function addRewardRole(
   guild: Guild,
   userId: string,
   role: RewardRoles,
-  levels: RewardRoleLevels[] = [1, 5, 20, 50, 100, 500]
+  level: RewardRoleLevels
 ) {
   const user = await guild.members.fetch(userId);
-  await Promise.all(
-    levels.map(async (lvl) => {
-      const rewardRole = await guild.roles.fetch(REWARD_ROLES[role][lvl]);
-      await user.roles.add(rewardRole);
-    })
-  );
+  const rewardRole = await guild.roles.fetch(REWARD_ROLES[role][level]);
+  await user.roles.add(rewardRole);
 }
 
 export async function removeServerRole(

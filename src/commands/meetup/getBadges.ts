@@ -46,9 +46,9 @@ export class MeetupGetBadgesCommands {
         const attendedCount = getUserAttendedEvents.length;
         logger.info(JSON.stringify({ hostedCount, attendedCount }));
 
-        const levels: RewardRoleLevels[] = [1, 5, 20, 50, 100, 500];
-        const hostingRewards = levels.filter((num) => hostedCount >= num);
-        const attendanceRewards = levels.filter((num) => attendedCount >= num);
+        const levels: RewardRoleLevels[] = [500, 100, 50, 20, 5, 1];
+        const hostingRewards = levels.find((num) => hostedCount >= num);
+        const attendanceRewards = levels.find((num) => attendedCount >= num);
         logger.info(JSON.stringify({ hostingRewards, attendanceRewards }));
 
         await removeRewardRole(guild, user.id, 'hosting');
