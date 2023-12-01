@@ -52,7 +52,7 @@ export async function getUserRoles(
     }
   }
   await interaction.followUp({
-    content: `Your Meetup roles are all set up based on your Meetup status! Let us know if they are not accurate.`,
+    content: `Your Meetup roles are all set up based on your Meetup status!`,
     ephemeral: true,
   });
 }

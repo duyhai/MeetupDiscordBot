@@ -51,9 +51,7 @@ export async function getBadges(
   await addRewardRole(guild, user.id, 'attendance', attendanceRewards);
 
   await interaction.followUp({
-    content: `Your Discord badges are all set up based on your Meetup status!
-Hosted: ${hostedCount} Attended: ${attendedCount}
-Let us know if they are not accurate.`,
+    content: `Added Discord badges based on Meetup activity! Hosted: ${hostedCount} Attended: ${attendedCount}`,
     ephemeral: true,
   });
 }
