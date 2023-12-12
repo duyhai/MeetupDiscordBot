@@ -56,9 +56,10 @@ export class MessageModsCommands {
     if (thread) {
       // Cannot use follow up, because we cannot change ephemeral state for follow up messages
       // https://github.com/discordjs/discord.js/issues/5702
-      await interaction.followUp(
-        `Private message thread already exists at ${thread.toString()}`
-      );
+      await interaction.followUp({
+        content: `Private message thread already exists at ${thread.toString()}`,
+        ephemeral: true,
+      });
       logger.info(
         `Private message thread already exists at ${thread.toString()}`
       );
@@ -70,9 +71,10 @@ export class MessageModsCommands {
         type: ChannelType.PrivateThread,
       });
 
-      await interaction.followUp(
-        `Private message thread created at ${thread.toString()}`
-      );
+      await interaction.followUp({
+        content: `Private message thread created at ${thread.toString()}`,
+        ephemeral: true,
+      });
       logger.info(`Private message thread created at ${thread.toString()}`);
     }
 
