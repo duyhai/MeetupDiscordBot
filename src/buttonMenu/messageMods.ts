@@ -52,6 +52,7 @@ export class MessageModsCommands {
     })`;
     logger.info(`Looking for existing threads ${threadName}`);
 
+    await channel.threads.fetchArchived({ fetchAll: true }, true);
     let thread = channel.threads.cache.find((t) => t.name === threadName);
     if (thread) {
       // Cannot use follow up, because we cannot change ephemeral state for follow up messages
@@ -67,7 +68,7 @@ export class MessageModsCommands {
     } else {
       thread = await channel.threads.create({
         name: threadName,
-        autoArchiveDuration: ThreadAutoArchiveDuration.OneDay,
+        autoArchiveDuration: ThreadAutoArchiveDuration.OneWeek,
         type: ChannelType.PrivateThread,
       });
 
