@@ -1,3 +1,5 @@
+import { OAuth2Scopes } from 'discord.js';
+
 export const SERVER_ROLES = {
   bots: '931394368949067796',
   guest_host: '912473798085836821',
@@ -66,15 +68,30 @@ export const ELEVATED_MEETUP_AUTH_SCOPES: MeetupScope[] = [
   'event_management',
 ];
 
-export const DISCORD_BOT_URL = 'https://meetup-discord-bot.herokuapp.com';
-export const DISCORD_BOT_MEETUP_OAUTH_URL = `${DISCORD_BOT_URL}/connect/meetup`;
-export const DISCORD_BOT_MEETUP_OAUTH_OVERRIDE_URL = (
-  tokenId?: string,
-  scopes?: MeetupScope[]
-) => {
-  const url = new URL(DISCORD_BOT_MEETUP_OAUTH_URL);
+export const DISCORD_BOT_URL = process.env.TS_NODE_DEBUG
+  ? 'http://localhost:5000'
+  : 'https://meetup-discord-bot.herokuapp.com';
+
+interface MeetupOAuth {
+  name: 'meetup';
+  scopes?: MeetupScope[];
+  tokenId?: string;
+}
+
+interface DiscordOAuth {
+  name: 'discord';
+  scopes?: OAuth2Scopes[];
+  tokenId?: string;
+}
+
+export const generateOAuthUrl = ({
+  name,
+  scopes,
+  tokenId,
+}: MeetupOAuth | DiscordOAuth) => {
+  const url = new URL(`${DISCORD_BOT_URL}/connect/${name}`);
   if (tokenId) {
-    url.searchParams.append('callback', `/persistToken/${tokenId}`);
+    url.searchParams.append('callback', `/persistToken/${name}/${tokenId}`);
   }
   if (scopes) {
     url.searchParams.append('scope', scopes.join(' '));

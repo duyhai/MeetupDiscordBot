@@ -1,4 +1,9 @@
-import { GatewayIntentBits, Interaction, Message } from 'discord.js';
+import {
+  GatewayIntentBits,
+  Interaction,
+  Message,
+  OAuth2Scopes,
+} from 'discord.js';
 import { Client } from 'discordx';
 import express from 'express';
 import session from 'express-session';
@@ -9,6 +14,7 @@ import Configuration from './configuration';
 import './buttonMenu';
 import './contextMenu';
 import './commands';
+import { generateOAuthUrl } from './constants';
 import { InMemoryCache } from './lib/cache/memoryCache';
 
 const logger = new Logger({ name: 'MeetupBot' });
@@ -28,16 +34,25 @@ app
   // eslint-disable-next-line @typescript-eslint/no-misused-promises
   .use(grant.express(Configuration.grant));
 
-app.get('/persistToken/:maskedUserId', (req, res) => {
-  const { maskedUserId } = req.params;
+app.get('/persistToken/:name/:maskedUserId', (req, res) => {
+  const { maskedUserId, name } = req.params;
   const accessToken = req.query.access_token.toString();
   InMemoryCache.instance()
     .get(`maskedUserId-${maskedUserId}`)
     .then((userId) =>
-      InMemoryCache.instance().set(`userId-${userId}`, accessToken)
+      InMemoryCache.instance().set(`${userId}-${name}-accessToken`, accessToken)
     )
     .then(() => res.end(`Connected to Meetup. You can close this window now!`))
     .catch(() => res.end(`Failed to connect to Meetup! Please try again.`));
+});
+
+app.get('/linked-role', (_req, res) => {
+  res.redirect(
+    generateOAuthUrl({
+      name: 'discord',
+      scopes: [OAuth2Scopes.RoleConnectionsWrite],
+    })
+  );
 });
 
 /// ////////////////////////////////////////////////////////////////

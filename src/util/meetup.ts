@@ -1,10 +1,7 @@
 import { ButtonInteraction, CommandInteraction } from 'discord.js';
 import { Logger } from 'tslog';
 import { v4 as uuidv4 } from 'uuid';
-import {
-  BASIC_MEETUP_AUTH_SCOPES,
-  DISCORD_BOT_MEETUP_OAUTH_OVERRIDE_URL,
-} from '../constants';
+import { BASIC_MEETUP_AUTH_SCOPES, generateOAuthUrl } from '../constants';
 import { InMemoryCache } from '../lib/cache/memoryCache';
 import { GqlMeetupClient } from '../lib/client/meetup/gqlClient';
 import { spinWait } from './spinWait';
@@ -23,9 +20,12 @@ async function showMeetupTokenUrl(
     interaction.user.id
   );
   await interaction.editReply({
-    content: `Please click on this link to get your Meetup Auth token: <${DISCORD_BOT_MEETUP_OAUTH_OVERRIDE_URL(
-      maskedUserId,
-      BASIC_MEETUP_AUTH_SCOPES
+    content: `Please click on this link to get your Meetup Auth token: <${generateOAuthUrl(
+      {
+        name: 'meetup',
+        tokenId: maskedUserId,
+        scopes: BASIC_MEETUP_AUTH_SCOPES,
+      }
     )}>`,
   });
 }
@@ -40,7 +40,7 @@ export async function withMeetupClient(
   interaction: ButtonInteraction | CommandInteraction,
   commandFn: (meetupClient: GqlMeetupClient) => Promise<void>
 ) {
-  const tokenKey = `userId-${interaction.user.id}`;
+  const tokenKey = `${interaction.user.id}-meetup-accessToken`;
   let token = await InMemoryCache.instance().get(tokenKey);
   if (!token) {
     logger.info(
