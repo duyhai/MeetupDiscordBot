@@ -10,13 +10,21 @@ export class RedisCache implements KeyValueCache {
 
   private static singleton: RedisCache;
 
-  public constructor() {
+  private constructor() {
     this.client = redis.createClient({
       url: process.env.REDISCLOUD_URL,
     });
   }
 
-  async connect(): Promise<void> {
+  public static async instance(): Promise<RedisCache> {
+    if (this.singleton === undefined) {
+      this.singleton = new RedisCache();
+      await this.singleton.connect();
+    }
+    return this.singleton;
+  }
+
+  private async connect(): Promise<void> {
     await this.client.connect();
   }
 
