@@ -1,22 +1,35 @@
+import * as redis from 'redis';
 import { KeyValueCache } from './base';
 
+const ITEM_TTL_SEC = 60 * 60 * 12;
 /**
  * Wrapper around Redis
  */
 export class RedisCache implements KeyValueCache {
-  async remove(_key: string): Promise<void> {
-    throw Error('Not Implemented');
+  private client: redis.RedisClientType;
+
+  private static singleton: RedisCache;
+
+  public constructor() {
+    this.client = redis.createClient({
+      url: process.env.REDISCLOUD_URL,
+    });
   }
 
-  async get(_key: string): Promise<string> {
-    throw Error('Not Implemented');
+  async connect(): Promise<void> {
+    await this.client.connect();
   }
 
-  async has(_key: string): Promise<boolean> {
-    throw Error('Not Implemented');
+  async remove(key: string): Promise<void> {
+    await this.client.del(key);
   }
 
-  async set(_key: string, _value: string): Promise<void> {
-    throw Error('Not Implemented');
+  async get(key: string): Promise<string | undefined> {
+    const value = await this.client.get(key);
+    return value ?? undefined;
+  }
+
+  async set(key: string, value: string): Promise<void> {
+    await this.client.set(key, value, { EX: ITEM_TTL_SEC });
   }
 }

@@ -51,6 +51,7 @@
     "graphql": "^16.6.0",
     "graphql-request": "^5.1.0",
     "memory-cache-node": "^1.4.0",
+    "redis": "^4.6.13",
     "ts-node": "^10.9.1",
     "tslog": "^4.8.2",
     "uuid": "^9.0.0"

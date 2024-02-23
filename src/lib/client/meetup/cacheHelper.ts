@@ -1,5 +1,5 @@
 import { Logger } from 'tslog';
-import { InMemoryCache } from '../../cache/memoryCache';
+import { ApplicationCache } from '../../../util/cache';
 
 const logger = new Logger({ name: 'cachedGqlRequest' });
 
@@ -9,7 +9,8 @@ export async function cachedGqlRequest<TInput, TResponse>(
   datagenCallbackFn: (callbackInput: TInput) => Promise<TResponse>
 ): Promise<TResponse> {
   const cacheKey = `${requestName}-${JSON.stringify(datagenCallbackInput)}`;
-  const data = await InMemoryCache.instance().get(cacheKey);
+  const cache = await ApplicationCache();
+  const data = await cache.get(cacheKey);
   if (data) {
     logger.info(`Cache hit for ${cacheKey}`);
     return JSON.parse(data) as TResponse;
@@ -17,6 +18,6 @@ export async function cachedGqlRequest<TInput, TResponse>(
 
   logger.info(`Cache miss for ${cacheKey}`);
   const result = await datagenCallbackFn(datagenCallbackInput);
-  await InMemoryCache.instance().set(cacheKey, JSON.stringify(result));
+  await cache.set(cacheKey, JSON.stringify(result));
   return result;
 }
