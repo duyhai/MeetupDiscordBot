@@ -15,7 +15,7 @@ import './buttonMenu';
 import './contextMenu';
 import './commands';
 import { generateOAuthUrl } from './constants';
-import { ApplicationCache } from './util/cache';
+import { InMemoryCache } from './lib/cache/memoryCache';
 
 const logger = new Logger({ name: 'MeetupBot' });
 
@@ -37,19 +37,13 @@ app
 app.get('/persistToken/:name/:maskedUserId', (req, res) => {
   const { maskedUserId, name } = req.params;
   const accessToken = req.query.access_token.toString();
-  ApplicationCache()
-    .then((cache) => {
-      cache
-        .get(`maskedUserId-${maskedUserId}`)
-        .then((userId) =>
-          cache.set(`${userId}-${name}-accessToken`, accessToken)
-        )
-        .then(() =>
-          res.end(`Connected to Meetup. You can close this window now!`)
-        )
-        .catch(() => res.end(`Failed to connect to Meetup! Please try again.`));
-    })
-    .catch(() => res.end(`Failed to data store! Please try again.`));
+  InMemoryCache.instance()
+    .get(`maskedUserId-${maskedUserId}`)
+    .then((userId) =>
+      InMemoryCache.instance().set(`${userId}-${name}-accessToken`, accessToken)
+    )
+    .then(() => res.end(`Connected to Meetup. You can close this window now!`))
+    .catch(() => res.end(`Failed to connect to Meetup! Please try again.`));
 });
 
 app.get('/linked-role', (_req, res) => {
