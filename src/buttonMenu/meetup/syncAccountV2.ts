@@ -26,7 +26,7 @@ import { spinWait } from '../../util/spinWait';
 
 const logger = new Logger({ name: 'MeetupSyncAccount' });
 
-const SYNC_ACCOUNT_BUTTON_ID = 'sync_meetup_account';
+const SYNC_ACCOUNT_BUTTON_ID = 'sync_meetup_account_v2';
 
 const strings = {
   invisibleCharacter: ' ',
