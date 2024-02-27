@@ -1,23 +1,18 @@
-import {
-  APIApplicationRoleConnection,
-  APIApplicationRoleConnectionMetadata,
-  APIUser,
-} from 'discord.js';
+import { APIApplicationRoleConnection, APIUser } from 'discord.js';
 import { Logger } from 'tslog';
 import Configuration from '../../../configuration';
 import { ApplicationCache } from '../../../util/cache';
 import { APIAccessTokenResponse, Tokens } from './types';
 
-const logger = new Logger({ name: 'DiscordRestClient' });
+const logger = new Logger({ name: 'DiscordUserClient' });
 
 const API = {
   METADATA: `https://discord.com/api/v10/users/@me/applications/${Configuration.discord.oauthClientId}/role-connection`,
-  METADATA_REGISTER: `https://discord.com/api/v10/applications/${Configuration.discord.oauthClientId}/role-connections/metadata`,
   OAUTH: 'https://discord.com/api/v10/oauth2/token',
   SELF: 'https://discord.com/api/v10/oauth2/@me',
 };
 
-export class DiscordRestClient {
+export class DiscordUserClient {
   private tokens: Tokens;
 
   constructor(tokens: Tokens) {
@@ -25,7 +20,7 @@ export class DiscordRestClient {
   }
 
   private async makeRequest<TInput, TResponse>(
-    method: 'GET' | 'POST' | 'DEL' | 'PATCH',
+    method: 'GET' | 'PUT' | 'POST' | 'DEL' | 'PATCH',
     url: string,
     input?: TInput
   ): Promise<TResponse> {
@@ -47,10 +42,10 @@ export class DiscordRestClient {
     return data;
   }
 
-  public static async fromUserId(userId: string): Promise<DiscordRestClient> {
+  public static async fromUserId(userId: string): Promise<DiscordUserClient> {
     const cache = await ApplicationCache();
     const tokensJson = await cache.get(`${userId}-discord-accessToken`);
-    const client = new DiscordRestClient(JSON.parse(tokensJson) as Tokens);
+    const client = new DiscordUserClient(JSON.parse(tokensJson) as Tokens);
     await client.refreshAccessToken();
     return client;
   }
@@ -97,7 +92,7 @@ export class DiscordRestClient {
    * of the current user.
    */
   async pushMetadata(metadata: APIApplicationRoleConnection): Promise<void> {
-    return this.makeRequest('POST', API.METADATA, metadata);
+    return this.makeRequest('PUT', API.METADATA, metadata);
   }
 
   /**
@@ -106,15 +101,5 @@ export class DiscordRestClient {
    */
   async getMetadata(): Promise<APIApplicationRoleConnection> {
     return this.makeRequest('GET', API.METADATA);
-  }
-
-  /**
-   * Register the metadata to be stored by Discord. This should be a one time action.
-   * Note: uses a Bot token for authentication, not a user token.
-   */
-  async registerMetadata(
-    metadata: APIApplicationRoleConnectionMetadata[]
-  ): Promise<void> {
-    return this.makeRequest('POST', API.METADATA_REGISTER, metadata);
   }
 }

@@ -10,8 +10,8 @@ import { ButtonComponent, Discord, Slash } from 'discordx';
 import { Logger } from 'tslog';
 
 import { DISCORD_BOT_URL, RewardRoleLevels } from '../../constants';
-import { DiscordRestClient } from '../../lib/client/discord/client';
 import { Tokens } from '../../lib/client/discord/types';
+import { DiscordUserClient } from '../../lib/client/discord/userClient';
 import { GqlMeetupClient } from '../../lib/client/meetup/gqlClient';
 import { getPaginatedData } from '../../lib/client/meetup/paginationHelper';
 import {
@@ -78,7 +78,7 @@ export class MeetupSyncAccountCommandsV2 {
       }
       const discordTokens = JSON.parse(rawDiscordTokens) as Tokens;
       const meetupTokens = JSON.parse(rawMeetupTokens) as Tokens;
-      const discordClient = new DiscordRestClient(discordTokens);
+      const discordClient = new DiscordUserClient(discordTokens);
       const meetupClient = new GqlMeetupClient(meetupTokens.accessToken);
 
       const userInfo = await meetupClient.getUserInfo();

@@ -5,7 +5,7 @@ import {
 import { Discord, Slash } from 'discordx';
 
 import Configuration from '../../configuration';
-import { DiscordRestClient } from '../../lib/client/discord/client';
+import { DiscordBotClient } from '../../lib/client/discord/botClient';
 import { selfOnboardUser } from '../../lib/helpers/onboardUser';
 import { discordCommandWrapper } from '../../util/discord';
 import { withMeetupClient } from '../../util/meetup';
@@ -30,9 +30,7 @@ export class MeetupSelfOnboardCommands {
   })
   async registerLinkedRoleHandler(interaction: CommandInteraction) {
     await discordCommandWrapper(interaction, async () => {
-      const discordClient = new DiscordRestClient({
-        accessToken: Configuration.discord.apiKey,
-      });
+      const discordClient = new DiscordBotClient(Configuration.discord.apiKey);
       await discordClient.registerMetadata([
         {
           key: '15member',
