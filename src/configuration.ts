@@ -34,7 +34,7 @@ const Configuration: ConfigurationSchema = {
   grant: {
     defaults: {
       state: true,
-      response: ['raw', 'profile'],
+      response: ['raw'],
       transport: 'session',
     },
     // connect/discord => authorize => access => callback => connect/meetup
@@ -42,6 +42,7 @@ const Configuration: ConfigurationSchema = {
       key: process.env.DISCORD_CLIENT_ID,
       secret: process.env.DISCORD_SECRET,
       scope: [OAuth2Scopes.RoleConnectionsWrite, OAuth2Scopes.Identify],
+      redirect_uri: `${DISCORD_BOT_URL}/connect/discord/callback`,
     },
     // connect/meetup => authorize => access => callback => persistToken
     meetup: {

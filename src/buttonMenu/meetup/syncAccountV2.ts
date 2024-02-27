@@ -1,3 +1,4 @@
+import dayjs from 'dayjs';
 import {
   ActionRowBuilder,
   ButtonBuilder,
@@ -180,10 +181,11 @@ export class MeetupSyncAccountCommandsV2 {
         metadata: {
           '15member': 'true',
           organizer: 'true',
-          membersince:
-            membershipInfo.groupByUrlname.membershipMetadata.joinedDate,
-          eventsattended: attendedCount,
-          eventshosted: hostedCount,
+          membersince: dayjs(
+            membershipInfo.groupByUrlname.membershipMetadata.joinedDate
+          ).format('YYYY-MM-DD'),
+          eventsattended: attendedCount.toString(),
+          eventshosted: hostedCount.toString(),
         },
       });
 
