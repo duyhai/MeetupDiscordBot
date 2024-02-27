@@ -12,6 +12,7 @@ import './contextMenu';
 import './commands';
 import { generateOAuthUrl } from './constants';
 import { APIAccessTokenResponse, Tokens } from './lib/client/discord/types';
+import { DiscordUserClient } from './lib/client/discord/userClient';
 import { ApplicationCache } from './util/cache';
 
 const logger = new Logger({ name: 'MeetupBot' });
@@ -57,13 +58,15 @@ app.get('/connect/discord/callback', (async (req, res) => {
   // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-explicit-any
   const grantSession = (req.session as any).grant as GrantSession;
   logger.info(JSON.stringify(grantSession));
-  const profile = grantSession.response.profile as APIUser;
   const rawTokens = grantSession.response.raw as APIAccessTokenResponse;
   const tokens: Tokens = {
     accessToken: rawTokens.access_token,
     refreshToken: rawTokens.refresh_token,
     expiresAt: Date.now() + rawTokens.expires_in * 1000,
   };
+  const discordClient = new DiscordUserClient(tokens);
+  const profile = await discordClient.getUserData();
+  logger.info(JSON.stringify(profile));
   // logger.info(
   //   `Setting maskedUserId=${maskedUserId} for ${interaction.user.username}`
   // );
