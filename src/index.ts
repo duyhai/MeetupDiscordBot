@@ -67,7 +67,7 @@ app.get('/connect/discord/callback', (async (req, res) => {
   //   `Setting maskedUserId=${maskedUserId} for ${interaction.user.username}`
   // );
   const cache = await ApplicationCache();
-  await cache.set(`maskedUserId-${grantSession.state}`, profile.id);
+  await cache.set(`maskedUserId-${grantSession.state}`, profile.id.toString());
   await cache.set(`${profile.id}-discord-tokens`, JSON.stringify(tokens));
 
   res.redirect(generateOAuthUrl('meetup', { state: grantSession.state }));
