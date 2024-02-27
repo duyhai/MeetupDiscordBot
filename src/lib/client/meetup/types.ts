@@ -38,6 +38,7 @@ export interface GetUserMembershipInfoResponse {
     isMember: boolean;
     isOrganizer: boolean;
     membershipMetadata: {
+      joinedDate: string;
       noShowCount: number;
     };
     name: string;

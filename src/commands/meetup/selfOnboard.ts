@@ -1,11 +1,11 @@
 import {
-  APIApplicationRoleConnectionMetadata,
   ApplicationRoleConnectionMetadataType,
   CommandInteraction,
 } from 'discord.js';
 import { Discord, Slash } from 'discordx';
 
 import Configuration from '../../configuration';
+import { DiscordRestClient } from '../../lib/client/discord/client';
 import { selfOnboardUser } from '../../lib/helpers/onboardUser';
 import { discordCommandWrapper } from '../../util/discord';
 import { withMeetupClient } from '../../util/meetup';
@@ -30,12 +30,10 @@ export class MeetupSelfOnboardCommands {
   })
   async registerLinkedRoleHandler(interaction: CommandInteraction) {
     await discordCommandWrapper(interaction, async () => {
-      /**
-       * Register the metadata to be stored by Discord. This should be a one time action.
-       * Note: uses a Bot token for authentication, not a user token.
-       */
-      const url = `https://discord.com/api/v10/applications/${Configuration.discord.oauthClientId}/role-connections/metadata`;
-      const body: APIApplicationRoleConnectionMetadata[] = [
+      const discordClient = new DiscordRestClient({
+        accessToken: Configuration.discord.apiKey,
+      });
+      await discordClient.registerMetadata([
         {
           key: '15member',
           name: '1.5 Member',
@@ -55,33 +53,22 @@ export class MeetupSelfOnboardCommands {
           type: ApplicationRoleConnectionMetadataType.DatetimeGreaterThanOrEqual,
         },
         {
+          key: 'eventshosted',
+          name: 'Events Hosted',
+          description: 'Number of events hosted',
+          type: ApplicationRoleConnectionMetadataType.IntegerGreaterThanOrEqual,
+        },
+        {
           key: 'eventsattended',
           name: 'Events Attended',
           description: 'Number of events attended',
           type: ApplicationRoleConnectionMetadataType.IntegerGreaterThanOrEqual,
         },
-      ];
-
-      const response = await fetch(url, {
-        method: 'PUT',
-        body: JSON.stringify(body),
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bot ${Configuration.discord.apiKey}`,
-        },
+      ]);
+      await interaction.followUp({
+        ephemeral: true,
+        content: 'Success',
       });
-      if (response.ok) {
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
-        const data: string = await response.json();
-        await interaction.followUp({
-          ephemeral: true,
-          content: JSON.stringify(data),
-        });
-      } else {
-        // throw new Error(`Error pushing discord metadata schema: [${response.status}] ${response.statusText}`);
-        const data = await response.text();
-        await interaction.followUp({ ephemeral: true, content: data });
-      }
     });
   }
 }

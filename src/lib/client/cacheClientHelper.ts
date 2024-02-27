@@ -1,9 +1,9 @@
 import { Logger } from 'tslog';
-import { ApplicationCache } from '../../../util/cache';
+import { ApplicationCache } from '../../util/cache';
 
-const logger = new Logger({ name: 'cachedGqlRequest' });
+const logger = new Logger({ name: 'cachedClientRequest' });
 
-export async function cachedGqlRequest<TInput, TResponse>(
+export async function cachedClientRequest<TInput, TResponse>(
   requestName: string,
   datagenCallbackInput: TInput,
   datagenCallbackFn: (callbackInput: TInput) => Promise<TResponse>

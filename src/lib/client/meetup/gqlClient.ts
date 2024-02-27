@@ -1,7 +1,7 @@
 import { GraphQLClient } from 'graphql-request';
 import { Logger } from 'tslog';
 import Configuration from '../../../configuration';
-import { cachedGqlRequest } from './cacheHelper';
+import { cachedClientRequest } from '../cacheClientHelper';
 import {
   announceEvent,
   closeEventRsvps,
@@ -108,7 +108,7 @@ export class GqlMeetupClient {
       `Calling getPastGroupEvents with input: ${JSON.stringify(input)}`
     );
     // Can be cached because it doesn't retrieve user specific data
-    return cachedGqlRequest(
+    return cachedClientRequest(
       'getPastGroupEvents',
       {
         urlname: Configuration.meetup.groupUrlName,

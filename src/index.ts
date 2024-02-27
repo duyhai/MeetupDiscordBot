@@ -1,26 +1,23 @@
-import {
-  GatewayIntentBits,
-  Interaction,
-  Message,
-  OAuth2Scopes,
-} from 'discord.js';
+import { APIUser, GatewayIntentBits, Interaction, Message } from 'discord.js';
 import { Client } from 'discordx';
-import express from 'express';
+import express, { RequestHandler } from 'express';
 import session from 'express-session';
-import grant from 'grant';
+import grant, { GrantSession } from 'grant';
 import { Logger } from 'tslog';
+import { v4 as uuidv4 } from 'uuid';
 
 import Configuration from './configuration';
 import './buttonMenu';
 import './contextMenu';
 import './commands';
 import { generateOAuthUrl } from './constants';
+import { APIAccessTokenResponse, Tokens } from './lib/client/discord/types';
 import { ApplicationCache } from './util/cache';
 
 const logger = new Logger({ name: 'MeetupBot' });
 
 /// ////////////////////////////////////////////////////////////////
-//                         EXPRESS SERVER                        //
+//                         EXPRESS SERVER                         //
 /// ////////////////////////////////////////////////////////////////
 
 const PORT = process.env.PORT || 5000;
@@ -34,31 +31,50 @@ app
   // eslint-disable-next-line @typescript-eslint/no-misused-promises
   .use(grant.express(Configuration.grant));
 
-app.get('/persistToken/:name/:maskedUserId', (req, res) => {
-  const { maskedUserId, name } = req.params;
-  const accessToken = req.query.access_token.toString();
-  ApplicationCache()
-    .then((cache) => {
-      cache
-        .get(`maskedUserId-${maskedUserId}`)
-        .then((userId) =>
-          cache.set(`${userId}-${name}-accessToken`, accessToken)
-        )
-        .then(() =>
-          res.end(`Connected to Meetup. You can close this window now!`)
-        )
-        .catch(() => res.end(`Failed to connect to Meetup! Please try again.`));
-    })
-    .catch(() => res.end(`Failed to data store! Please try again.`));
-});
+app.get('/connect/meetup/callback', (async (req, res) => {
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-explicit-any
+  const grantSession = (req.session as any).grant as GrantSession;
+  const profile = grantSession.response.profile as APIUser;
+  logger.info(`Meetup profile response: ${JSON.stringify(profile)}`);
+  const rawTokens = grantSession.response.raw as APIAccessTokenResponse;
+  const tokens: Tokens = {
+    accessToken: rawTokens.access_token,
+    refreshToken: rawTokens.refresh_token,
+    expiresAt: Date.now() + rawTokens.expires_in * 1000,
+  };
+  const cache = await ApplicationCache();
+  try {
+    const userId = await cache.get(`maskedUserId-${grantSession.state}`);
+    await cache.set(`${userId}-meetup-tokens`, JSON.stringify(tokens));
+    res.end(`Connected to Meetup. You can close this window now!`);
+  } catch (err) {
+    res.end(`Failed to data store! Please try again.`);
+  }
+}) as RequestHandler);
 
-app.get('/linked-role', (_req, res) => {
-  res.redirect(
-    generateOAuthUrl({
-      name: 'discord',
-      scopes: [OAuth2Scopes.RoleConnectionsWrite],
-    })
-  );
+// TODO: Refactor into helper
+app.get('/connect/discord/callback', (async (req, res) => {
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-explicit-any
+  const grantSession = (req.session as any).grant as GrantSession;
+  const profile = grantSession.response.profile as APIUser;
+  const rawTokens = grantSession.response.raw as APIAccessTokenResponse;
+  const tokens: Tokens = {
+    accessToken: rawTokens.access_token,
+    refreshToken: rawTokens.refresh_token,
+    expiresAt: Date.now() + rawTokens.expires_in * 1000,
+  };
+  // logger.info(
+  //   `Setting maskedUserId=${maskedUserId} for ${interaction.user.username}`
+  // );
+  const cache = await ApplicationCache();
+  await cache.set(`maskedUserId-${grantSession.state}`, profile.id);
+  await cache.set(`${profile.id}-discord-tokens`, JSON.stringify(tokens));
+
+  res.redirect(generateOAuthUrl('meetup', { state: grantSession.state }));
+}) as RequestHandler);
+
+app.get('/discord-meetup-connect', (_req, res) => {
+  res.redirect(generateOAuthUrl('discord', { state: uuidv4() }));
 });
 
 /// ////////////////////////////////////////////////////////////////

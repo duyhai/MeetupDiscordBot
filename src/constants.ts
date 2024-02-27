@@ -1,5 +1,3 @@
-import { OAuth2Scopes } from 'discord.js';
-
 export const SERVER_ROLES = {
   bots: '931394368949067796',
   guest_host: '912473798085836821',
@@ -72,29 +70,15 @@ export const DISCORD_BOT_URL = process.env.TS_NODE_DEBUG
   ? 'http://localhost:5000'
   : 'https://meetup-discord-bot.herokuapp.com';
 
-interface MeetupOAuth {
-  name: 'meetup';
-  scopes?: MeetupScope[];
-  tokenId?: string;
-}
-
-interface DiscordOAuth {
-  name: 'discord';
-  scopes?: OAuth2Scopes[];
-  tokenId?: string;
-}
-
-export const generateOAuthUrl = ({
-  name,
-  scopes,
-  tokenId,
-}: MeetupOAuth | DiscordOAuth) => {
+export const generateOAuthUrl = (
+  name: 'meetup' | 'discord',
+  customParams?: Record<string, string>
+) => {
   const url = new URL(`${DISCORD_BOT_URL}/connect/${name}`);
-  if (tokenId) {
-    url.searchParams.append('callback', `/persistToken/${name}/${tokenId}`);
-  }
-  if (scopes) {
-    url.searchParams.append('scope', scopes.join(' '));
+  if (customParams) {
+    Object.entries(customParams).forEach(([key, value]) => {
+      url.searchParams.append(key, value);
+    });
   }
   return url.toString();
 };

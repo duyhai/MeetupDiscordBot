@@ -45,7 +45,7 @@
     "decamelize": "^5.0.1",
     "discord.js": "^14.14.1",
     "discordx": "^11.7.6",
-    "express": "^4.17.7",
+    "express": "^5.0.0-beta.1",
     "express-session": "^1.17.3",
     "grant": "^5.4.21",
     "graphql": "^16.6.0",

@@ -1,5 +1,6 @@
+import { OAuth2Scopes } from 'discord.js';
 import { GrantConfig } from 'grant';
-import { generateOAuthUrl } from './constants';
+import { BASIC_MEETUP_AUTH_SCOPES, DISCORD_BOT_URL } from './constants';
 
 interface ConfigurationSchema {
   discord: {
@@ -31,31 +32,25 @@ const Configuration: ConfigurationSchema = {
     groupUrlName: '1-5genasians',
   },
   grant: {
-    defaults: { state: true },
-    // connect/discord => authorize => access => callback => persistToken => connect/meetup
+    defaults: {
+      state: true,
+      response: ['raw', 'profile'],
+      transport: 'session',
+    },
+    // connect/discord => authorize => access => callback => connect/meetup
     discord: {
       key: process.env.DISCORD_CLIENT_ID,
       secret: process.env.DISCORD_SECRET,
-      // This gets overridden by the callback param to persistToken
-      callback: '/showToken',
-      redirect_uri: `${generateOAuthUrl({
-        name: 'discord',
-      })}/callback`,
-      response: ['tokens'],
-      dynamic: ['callback', 'scope'],
+      scope: [OAuth2Scopes.RoleConnectionsWrite, OAuth2Scopes.Identify],
     },
     // connect/meetup => authorize => access => callback => persistToken
     meetup: {
       key: process.env.MEETUP_KEY,
       secret: process.env.MEETUP_SECRET,
-      // This gets overridden by the callback param to persistToken
-      callback: '/showToken',
-      // It's confusing, but the redirect url has "callback" in its path
-      redirect_uri: `${generateOAuthUrl({
-        name: 'meetup',
-      })}/callback`,
-      response: ['tokens'],
-      dynamic: ['callback', 'scope'],
+      scope: BASIC_MEETUP_AUTH_SCOPES,
+      // We also use it as a key for the initiator's Discord id in our memory store.
+      dynamic: ['state'],
+      redirect_uri: `${DISCORD_BOT_URL}/connect/meetup/callback`,
     },
   },
 };

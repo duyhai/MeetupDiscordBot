@@ -1,7 +1,8 @@
 import { ButtonInteraction, CommandInteraction } from 'discord.js';
 import { Logger } from 'tslog';
 import { v4 as uuidv4 } from 'uuid';
-import { BASIC_MEETUP_AUTH_SCOPES, generateOAuthUrl } from '../constants';
+import { generateOAuthUrl } from '../constants';
+import { Tokens } from '../lib/client/discord/types';
 import { GqlMeetupClient } from '../lib/client/meetup/gqlClient';
 import { ApplicationCache } from './cache';
 import { spinWait } from './spinWait';
@@ -19,11 +20,8 @@ async function showMeetupTokenUrl(
   await cache.set(`maskedUserId-${maskedUserId}`, interaction.user.id);
   await interaction.editReply({
     content: `Please click on this link to get your Meetup Auth token: <${generateOAuthUrl(
-      {
-        name: 'meetup',
-        tokenId: maskedUserId,
-        scopes: BASIC_MEETUP_AUTH_SCOPES,
-      }
+      'meetup',
+      { state: maskedUserId }
     )}>`,
   });
 }
@@ -38,20 +36,21 @@ export async function withMeetupClient(
   interaction: ButtonInteraction | CommandInteraction,
   commandFn: (meetupClient: GqlMeetupClient) => Promise<void>
 ) {
-  const tokenKey = `${interaction.user.id}-meetup-accessToken`;
+  const tokenKey = `${interaction.user.id}-meetup-tokens`;
   const cache = await ApplicationCache();
-  let token = await cache.get(tokenKey);
-  if (!token) {
+  let rawTokens = await cache.get(tokenKey);
+  if (!rawTokens) {
     logger.info(
-      `Token not present for ${interaction.user.username} at ${tokenKey}. Getting token through OAuth`
+      `Tokens are not present for ${interaction.user.username} at ${tokenKey}. Getting token through OAuth`
     );
     await showMeetupTokenUrl(interaction);
-    token = await spinWait(() => cache.get(tokenKey), {
+    rawTokens = await spinWait(() => cache.get(tokenKey), {
       timeoutMs: 60 * 1000,
       message: 'Timeout waiting for Meetup authentication. Please try again',
       intervalMs: 1000,
     });
   }
-  const client = new GqlMeetupClient(token);
+  const tokens = JSON.parse(rawTokens) as Tokens;
+  const client = new GqlMeetupClient(tokens.accessToken);
   await commandFn(client);
 }
