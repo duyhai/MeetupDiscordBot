@@ -56,6 +56,7 @@ app.get('/connect/meetup/callback', (async (req, res) => {
 app.get('/connect/discord/callback', (async (req, res) => {
   // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-explicit-any
   const grantSession = (req.session as any).grant as GrantSession;
+  logger.info(JSON.stringify(grantSession));
   const profile = grantSession.response.profile as APIUser;
   const rawTokens = grantSession.response.raw as APIAccessTokenResponse;
   const tokens: Tokens = {
