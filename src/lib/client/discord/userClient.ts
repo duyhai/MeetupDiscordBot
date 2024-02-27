@@ -70,7 +70,9 @@ export class DiscordUserClient {
       this.tokens.expiresAt = Date.now() + response.expires_in * 1000;
       this.tokens.accessToken = response.access_token;
       this.tokens.refreshToken = response.refresh_token;
-      const { id: userId } = await this.getUserData();
+      const {
+        user: { id: userId },
+      } = await this.getUserData();
 
       const cache = await ApplicationCache();
       await cache.set(
@@ -83,7 +85,7 @@ export class DiscordUserClient {
   /**
    * Given a user based access token, fetch profile information for the current user.
    */
-  async getUserData(): Promise<APIUser> {
+  async getUserData(): Promise<{ user: APIUser }> {
     return this.makeRequest('GET', API.SELF);
   }
 
