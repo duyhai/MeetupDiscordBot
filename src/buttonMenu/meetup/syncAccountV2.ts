@@ -179,8 +179,8 @@ export class MeetupSyncAccountCommandsV2 {
         platform_name: '1.5 Meetup Bot',
         platform_username: `https://www.meetup.com/members/${userInfo.self.id}`,
         metadata: {
-          '15member': 'true',
-          organizer: 'true',
+          '15member': membershipInfo.groupByUrlname.isMember ? '1' : '0',
+          organizer: membershipInfo.groupByUrlname.isOrganizer ? '1' : '0',
           membersince: dayjs(
             membershipInfo.groupByUrlname.membershipMetadata.joinedDate
           ).format('YYYY-MM-DD'),
