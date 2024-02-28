@@ -33,31 +33,31 @@ export class MeetupSelfOnboardCommands {
       const discordClient = new DiscordBotClient(Configuration.discord.apiKey);
       await discordClient.registerMetadata([
         {
-          key: '15member',
+          key: '0_15member',
           name: '1.5 Member',
           description: 'Is 1.5 Member',
           type: ApplicationRoleConnectionMetadataType.BooleanEqual,
         },
         {
-          key: 'organizer',
+          key: '1_organizer',
           name: 'Organizer',
           description: 'Is Organizer',
           type: ApplicationRoleConnectionMetadataType.BooleanEqual,
         },
         {
-          key: 'membersince',
+          key: '2_membersince',
           name: 'Member Since',
           description: 'Days since joined 1.5',
           type: ApplicationRoleConnectionMetadataType.DatetimeGreaterThanOrEqual,
         },
         {
-          key: 'eventshosted',
+          key: '3_eventshosted',
           name: 'Events Hosted',
           description: 'Number of events hosted',
           type: ApplicationRoleConnectionMetadataType.IntegerGreaterThanOrEqual,
         },
         {
-          key: 'eventsattended',
+          key: '4_eventsattended',
           name: 'Events Attended',
           description: 'Number of events attended',
           type: ApplicationRoleConnectionMetadataType.IntegerGreaterThanOrEqual,

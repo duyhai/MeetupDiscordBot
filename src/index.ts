@@ -11,7 +11,6 @@ import './contextMenu';
 import './commands';
 import { generateOAuthUrl } from './constants';
 import { APIAccessTokenResponse, Tokens } from './lib/client/discord/types';
-import { DiscordUserClient } from './lib/client/discord/userClient';
 import { ApplicationCache } from './util/cache';
 
 const logger = new Logger({ name: 'MeetupBot' });
