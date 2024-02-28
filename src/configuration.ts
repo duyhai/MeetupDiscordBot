@@ -34,7 +34,8 @@ const Configuration: ConfigurationSchema = {
   grant: {
     defaults: {
       state: true,
-      response: ['raw'],
+      // Need to have tokens (not just raw) in order to get profile
+      response: ['raw', 'profile', 'tokens'],
       transport: 'session',
     },
     // connect/discord => authorize => access => callback => connect/meetup

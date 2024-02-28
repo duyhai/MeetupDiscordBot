@@ -24,16 +24,20 @@ export class DiscordUserClient {
     url: string,
     input?: TInput
   ): Promise<TResponse> {
-    const response = await fetch(url, {
+    const params = {
       method,
       body: input ? JSON.stringify(input) : undefined,
       headers: {
         Authorization: `Bearer ${this.tokens.accessToken}`,
-        ...(input ?? {}),
+        ...(input ? { 'Content-Type': 'application/json' } : {}),
       },
-    });
+    };
+    logger.info(`makeRequest - ${url} - ${JSON.stringify(params)}`);
+    const response = await fetch(url, params);
     if (!response.ok) {
-      const errorMsg = `Error making request to ${url}: [${response.status}] ${response.statusText}`;
+      const errorMsg = `Error making request to ${url}: [${response.status}] ${
+        response.statusText
+      } ${await response.text()}`;
       logger.error(errorMsg);
       throw new Error(errorMsg);
     }

@@ -20,14 +20,16 @@ export class DiscordBotClient {
     url: string,
     input?: TInput
   ): Promise<TResponse> {
-    const response = await fetch(url, {
+    const params = {
       method,
       body: input ? JSON.stringify(input) : undefined,
       headers: {
         Authorization: `Bot ${this.apiKey}`,
         ...(input ? { 'Content-Type': 'application/json' } : {}),
       },
-    });
+    };
+    logger.info(`makeRequest - ${url} - ${JSON.stringify(params)}`);
+    const response = await fetch(url, params);
     if (!response.ok) {
       const errorMsg = `Error making request to ${url}: [${response.status}] ${response.statusText}`;
       logger.error(errorMsg);

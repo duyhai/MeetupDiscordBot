@@ -4,7 +4,6 @@ import express, { RequestHandler } from 'express';
 import session from 'express-session';
 import grant, { GrantSession } from 'grant';
 import { Logger } from 'tslog';
-import { v4 as uuidv4 } from 'uuid';
 
 import Configuration from './configuration';
 import './buttonMenu';
@@ -64,21 +63,19 @@ app.get('/connect/discord/callback', (async (req, res) => {
     refreshToken: rawTokens.refresh_token,
     expiresAt: Date.now() + rawTokens.expires_in * 1000,
   };
-  const discordClient = new DiscordUserClient(tokens);
-  const profile = await discordClient.getUserData();
+  const profile = grantSession.response.profile as APIUser;
+  // const discordClient = new DiscordUserClient(tokens);
+  // const profile = await discordClient.getUserData();
   logger.info(JSON.stringify(profile));
-  // logger.info(
-  //   `Setting maskedUserId=${maskedUserId} for ${interaction.user.username}`
-  // );
   const cache = await ApplicationCache();
-  await cache.set(`maskedUserId-${grantSession.state}`, profile.user.id);
-  await cache.set(`${profile.user.id}-discord-tokens`, JSON.stringify(tokens));
-
+  await cache.set(`maskedUserId-${grantSession.state}`, profile.id);
+  await cache.set(`${profile.id}-discord-tokens`, JSON.stringify(tokens));
+  // res.end(`${JSON.stringify(grantSession)}`);
   res.redirect(generateOAuthUrl('meetup', { state: grantSession.state }));
 }) as RequestHandler);
 
 app.get('/discord-meetup-connect', (_req, res) => {
-  res.redirect(generateOAuthUrl('discord', { state: uuidv4() }));
+  res.redirect(generateOAuthUrl('discord'));
 });
 
 /// ////////////////////////////////////////////////////////////////

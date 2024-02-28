@@ -46,7 +46,10 @@ describe('getUserRoles', () => {
         id: '1',
         isMember: true,
         isOrganizer: true,
-        membershipMetadata: { noShowCount: 0 },
+        membershipMetadata: {
+          noShowCount: 0,
+          joinedDate: '2018-07-01T12:00:00-04:00',
+        },
         name: 'test',
       },
     });
@@ -66,7 +69,7 @@ describe('getUserRoles', () => {
       'guest_host'
     );
     expect(interaction.followUp).toHaveBeenCalledWith({
-      content: `Your Meetup roles are all set up based on your Meetup status! Let us know if they are not accurate.`,
+      content: `Your Meetup roles are all set up based on your Meetup status!`,
       ephemeral: true,
     });
   });
@@ -78,7 +81,10 @@ describe('getUserRoles', () => {
         id: '1',
         isMember: false,
         isOrganizer: false,
-        membershipMetadata: { noShowCount: 0 },
+        membershipMetadata: {
+          noShowCount: 0,
+          joinedDate: '2018-07-01T12:00:00-04:00',
+        },
         name: 'test',
       },
     });
@@ -95,7 +101,10 @@ describe('getUserRoles', () => {
         id: '1',
         isMember: true,
         isOrganizer: false,
-        membershipMetadata: { noShowCount: 0 },
+        membershipMetadata: {
+          noShowCount: 0,
+          joinedDate: '2018-07-01T12:00:00-04:00',
+        },
         name: 'test',
       },
     });
@@ -139,7 +148,10 @@ describe('getUserRoles', () => {
         id: '1',
         isMember: true,
         isOrganizer: false,
-        membershipMetadata: { noShowCount: 0 },
+        membershipMetadata: {
+          noShowCount: 0,
+          joinedDate: '2018-07-01T12:00:00-04:00',
+        },
         name: 'test',
       },
     });
