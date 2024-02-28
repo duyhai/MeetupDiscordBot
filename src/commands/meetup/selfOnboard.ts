@@ -51,15 +51,15 @@ export class MeetupSelfOnboardCommands {
           type: ApplicationRoleConnectionMetadataType.DatetimeGreaterThanOrEqual,
         },
         {
-          key: '3_eventshosted',
-          name: 'Events Hosted',
-          description: 'Number of events hosted',
+          key: '3_eventsattended',
+          name: 'Events Attended',
+          description: 'Number of events attended',
           type: ApplicationRoleConnectionMetadataType.IntegerGreaterThanOrEqual,
         },
         {
-          key: '4_eventsattended',
-          name: 'Events Attended',
-          description: 'Number of events attended',
+          key: '4_eventshosted',
+          name: 'Events Hosted',
+          description: 'Number of events hosted',
           type: ApplicationRoleConnectionMetadataType.IntegerGreaterThanOrEqual,
         },
       ]);
