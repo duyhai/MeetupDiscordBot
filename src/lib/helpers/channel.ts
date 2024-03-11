@@ -1,4 +1,5 @@
 import {
+  ButtonInteraction,
   Channel,
   CommandInteraction,
   NonThreadGuildBasedChannel,
@@ -13,7 +14,7 @@ const strings = {
 };
 
 export async function addToChannel(
-  interaction: CommandInteraction,
+  interaction: CommandInteraction | ButtonInteraction,
   channelId: string
 ) {
   const { user, guild } = interaction;

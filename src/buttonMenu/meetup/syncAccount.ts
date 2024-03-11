@@ -9,6 +9,8 @@ import {
 import { ButtonComponent, Discord, Slash } from 'discordx';
 import { Logger } from 'tslog';
 
+import { LGBTQ_CHANNEL_ID } from '../../constants';
+import { addToChannel } from '../../lib/helpers/channel';
 import { getBadges } from '../../lib/helpers/getBadges';
 import { getUserRoles } from '../../lib/helpers/getUserRoles';
 import { selfOnboardUser } from '../../lib/helpers/onboardUser';
@@ -18,6 +20,7 @@ import { withMeetupClient } from '../../util/meetup';
 const logger = new Logger({ name: 'MeetupSyncAccount' });
 
 const SYNC_ACCOUNT_BUTTON_ID = 'sync_meetup_account';
+const LGBTQ_BUTTON_ID = 'lgbtq';
 
 @Discord()
 export class MeetupSyncAccountCommands {
@@ -36,13 +39,34 @@ export class MeetupSyncAccountCommands {
   }
 
   @ButtonComponent({ id: SYNC_ACCOUNT_BUTTON_ID })
-  async meetupRequestApproveEventHandler(interaction: ButtonInteraction) {
+  async meetupSyncAccountEventHandler(interaction: ButtonInteraction) {
     await discordCommandWrapper(interaction, async () => {
       await withMeetupClient(interaction, async (meetupClient) => {
         await selfOnboardUser(meetupClient, interaction);
         await getUserRoles(meetupClient, interaction);
         await getBadges(meetupClient, interaction);
       });
+    });
+  }
+
+  lgbtqButton() {
+    const syncAccountButton = new ButtonBuilder()
+      .setLabel('Add me to the LGBTQ channel')
+      .setEmoji('🌈')
+      .setStyle(ButtonStyle.Primary)
+      .setCustomId(LGBTQ_BUTTON_ID);
+
+    const buttonRow =
+      new ActionRowBuilder<MessageActionRowComponentBuilder>().addComponents(
+        syncAccountButton
+      );
+    return buttonRow;
+  }
+
+  @ButtonComponent({ id: LGBTQ_BUTTON_ID })
+  async lgbtqEventHandler(interaction: ButtonInteraction) {
+    await discordCommandWrapper(interaction, async () => {
+      await addToChannel(interaction, LGBTQ_CHANNEL_ID);
     });
   }
 
@@ -64,6 +88,7 @@ Those are only available for verified Meetup group members. Please read the veri
         `Please click the button below to link your Meetup account. This will:\n`,
         `- Onboard you to the Discord server if you're part of the 1.5 Gen Asian Meetup group.`,
         `- Assign you special roles if applicable (eg: Guest Host, Organizer, etc)`,
+        `- Adds you to the Ladies Lounge if you set your gender to Female on Meetup`,
         `- Rewards you with Discord badges based on your Meetup activity\n`,
         `You can use this button to refresh your data in the future as well (eg: to get better badges).`,
       ];
@@ -72,6 +97,27 @@ Those are only available for verified Meetup group members. Please read the veri
         components: [this.syncAccountButton()],
       });
       logger.info(`Created sync account button`);
+    });
+  }
+
+  @Slash({
+    name: 'create_lgbtq_button',
+    description: `Creates a button that users can use to be added to the LGBTQ channel`,
+  })
+  async createLgbtqButtonHandler(interaction: CommandInteraction) {
+    await discordCommandWrapper(interaction, async () => {
+      logger.info(
+        `Creating lgbtq button on behalf of ${interaction.user.username}`
+      );
+
+      const replyContent = [
+        `Please click the button below to be added to the LGBTQ channel`,
+      ];
+      await interaction.channel.send({
+        content: replyContent.join('\n'),
+        components: [this.syncAccountButton()],
+      });
+      logger.info(`Created lgbtq button`);
     });
   }
 }
