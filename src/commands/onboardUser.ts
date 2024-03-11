@@ -1,8 +1,11 @@
 import { CommandInteraction } from 'discord.js';
 import { Discord, Slash } from 'discordx';
+import { Logger } from 'tslog';
 import { LGBTQ_CHANNEL_ID } from '../constants';
 import { addToChannel } from '../lib/helpers/channel';
 import { discordCommandWrapper } from '../util/discord';
+
+const logger = new Logger({ name: 'OnboardUserCommands' });
 
 @Discord()
 export class OnboardUserCommands {
@@ -12,6 +15,7 @@ export class OnboardUserCommands {
   })
   async onboardLGBTQUserHandler(interaction: CommandInteraction) {
     await discordCommandWrapper(interaction, async () => {
+      logger.info(`Adding ${interaction.user.username} to the LGBTQ channel`);
       await addToChannel(interaction, LGBTQ_CHANNEL_ID);
     });
   }

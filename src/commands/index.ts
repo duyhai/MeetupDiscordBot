@@ -6,6 +6,7 @@ import { MeetupGetUnannouncedEventsCommands } from './meetup/getUnannouncedEvent
 import { MeetupGetUserRolesCommands } from './meetup/getUserRoles';
 import { MeetupSelfOnboardCommands } from './meetup/selfOnboard';
 import { OnboardUserCommands } from './onboardUser';
+import { SendMessageCommands } from './sendMessage';
 
 const Commands = [
   MeetupCreateEventCommands,
@@ -16,6 +17,7 @@ const Commands = [
   MeetupGetUnannouncedEventsCommands,
   OnboardUserCommands,
   MeetupNoShowCommands,
+  SendMessageCommands,
 ];
 
 export default Commands;

@@ -81,7 +81,7 @@ export class MeetupSyncAccountCommands {
       );
 
       const replyContent = [
-        `__**Gaining full access with verification**__\n`,
+        `__**Gaining full access to the server with Meetup verification**__\n`,
         `We are restricting access to most of our chat rooms by default. \
 Those are only available for verified Meetup group members. Please read the verification instructions carefully below :slight_smile:\n`,
         `We integrated our Discord bot with the Meetup API in order to automatically verify member status with Meetup.`,
@@ -111,7 +111,7 @@ Those are only available for verified Meetup group members. Please read the veri
       );
 
       const replyContent = [
-        `Please click the button below to be added to the LGBTQ channel`,
+        `Besides the Ladies Lounge, there is also an LGBTQ channel that members can join by clicking the button below.`,
       ];
       await interaction.channel.send({
         content: replyContent.join('\n'),
