@@ -115,7 +115,7 @@ Those are only available for verified Meetup group members. Please read the veri
       ];
       await interaction.channel.send({
         content: replyContent.join('\n'),
-        components: [this.syncAccountButton()],
+        components: [this.lgbtqButton()],
       });
       logger.info(`Created lgbtq button`);
     });
