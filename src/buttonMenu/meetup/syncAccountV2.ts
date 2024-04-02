@@ -179,13 +179,13 @@ export class MeetupSyncAccountCommandsV2 {
         platform_name: '1.5 Meetup Bot',
         platform_username: `${userInfo.self.id}`,
         metadata: {
-          '0_15member': membershipInfo.groupByUrlname.isMember ? '1' : '0',
-          '1_organizer': membershipInfo.groupByUrlname.isOrganizer ? '1' : '0',
-          '2_membersince': dayjs(
+          is_member: membershipInfo.groupByUrlname.isMember ? '1' : '0',
+          is_organizer: membershipInfo.groupByUrlname.isOrganizer ? '1' : '0',
+          member_since: dayjs(
             membershipInfo.groupByUrlname.membershipMetadata.joinedDate
           ).format('YYYY-MM-DD'),
-          '3_eventsattended': attendedCount.toString(),
-          '4_eventshosted': hostedCount.toString(),
+          events_attended: attendedCount.toString(),
+          events_hosted: hostedCount.toString(),
         },
       });
 
