@@ -31,7 +31,7 @@ export async function discordCommandWrapper(
     await message.delete();
   } catch (error: unknown) {
     if (error instanceof Error) {
-      logger.error(error?.message);
+      logger.error(error);
       await interaction.editReply({
         content: `${interaction.user.toString()} Error: ${
           error?.message
