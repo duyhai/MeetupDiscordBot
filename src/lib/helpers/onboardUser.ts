@@ -14,7 +14,7 @@ const strings = {
   welcomeMsg: (user: User) =>
     `
 Welcome ${user.toString()}. \
-Please go to Channels & Roles in the left menu to join different discussion channels. \
+Please go to <id:browse> in the left menu to join different discussion channels. \
 Have fun exploring the server!
 `,
   replyToModerator:
@@ -151,6 +151,7 @@ export async function selfOnboardUser(
   const { name } = userInfo.self;
   const cleanedName = name
     .split(' ')
+    .filter(Boolean)
     .map((namePart, index) => {
       if (index === 0) {
         return namePart;

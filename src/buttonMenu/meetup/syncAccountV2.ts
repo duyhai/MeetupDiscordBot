@@ -177,7 +177,7 @@ export class MeetupSyncAccountCommandsV2 {
 
       await discordClient.pushMetadata({
         platform_name: '1.5 Meetup Bot',
-        platform_username: `${userInfo.self.id}`,
+        platform_username: `${userInfo.self.name}`,
         metadata: {
           is_member: membershipInfo.groupByUrlname.isMember ? '1' : '0',
           is_organizer: membershipInfo.groupByUrlname.isOrganizer ? '1' : '0',
