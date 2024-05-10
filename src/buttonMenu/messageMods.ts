@@ -89,7 +89,7 @@ export class MessageModsCommands {
   }
 
   @ButtonComponent({ id: MESSAGE_MOD_BUTTON_ID })
-  async meetupRequestApproveEventHandler(interaction: ButtonInteraction) {
+  async messageModsEventHandler(interaction: ButtonInteraction) {
     await discordCommandWrapper(interaction, async () => {
       logger.info(
         `Creating private message thread for ${interaction.user.username}`
