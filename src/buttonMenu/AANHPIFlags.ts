@@ -96,7 +96,7 @@ export class AANHPIFlagsCommands {
         : ''
     } ${userFlags.join('')}`;
     await guildMember.setNickname(
-      `${realName}${nameSuffix ? ` | ${nameSuffix}` : ''}`
+      `${realName}${nameSuffix ? ` |${nameSuffix}` : ''}`
     );
 
     let page = +interaction.message.content
