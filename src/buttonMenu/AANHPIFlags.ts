@@ -16,6 +16,7 @@ const logger = new Logger({ name: 'AANHPIFlagsCommands' });
 const DISCORD_ROW_SIZE = 5;
 const FLAG_PAGE_SIZE = 10;
 const FLAG_FAST_FORWARD_AMOUNT = 5;
+const MAX_FLAGS = 3;
 const AANHPI_FLAGS_BUTTON_ID = 'aanhpi_flags_buttons';
 
 const FLAGS = Flags.map((entry) => ({
@@ -27,9 +28,14 @@ const FLAGS = Flags.map((entry) => ({
 const FLAG_NUMBER_OF_PAGES = Math.ceil(FLAGS.length / FLAG_PAGE_SIZE);
 
 const MEME_NAME_SUFFIXES: Record<string, string> = {
-  buttholecat: 'Natural Liar', // David A.
+  buttholecat: 'Natural Liar 🧢', // David A.
   haitest: 'Test Account',
 };
+
+function parsePageFromMessage(message: string): number {
+  const page = +message.split('\n').at(-1).split(' ')[1].split('/')[0];
+  return page - 1; // The message was showing 1-based indexing for users
+}
 
 @Discord()
 export class AANHPIFlagsCommands {
@@ -54,16 +60,12 @@ export class AANHPIFlagsCommands {
     const guildMember = await interaction.guild.members.fetch(
       interaction.user.id
     );
-    const nickName = guildMember.nickname;
 
-    let realName = nickName;
-    let nameSuffix = '';
-    if (nickName.includes('|')) {
-      [realName, nameSuffix] = nickName.split('|').map((entry) => entry.trim());
-    }
-    let userFlags = FLAGS.filter((flag) => nameSuffix.includes(flag.emoji))
+    const { nickname } = guildMember;
+    const realName = nickname.split('|')[0].trim();
+    let userFlags = FLAGS.filter((flag) => nickname.includes(flag.emoji))
       .map((flag) => ({
-        pos: nameSuffix.indexOf(flag.emoji),
+        pos: nickname.indexOf(flag.emoji),
         value: flag.emoji,
       }))
       .sort((e1, e2) => e1.pos - e2.pos)
@@ -72,47 +74,50 @@ export class AANHPIFlagsCommands {
 
     const buttonEmoji = interaction.component.emoji.name;
     const shouldClearFlags = buttonEmoji === '🏳️';
-    const isFlagAlreadyPresent = nameSuffix.includes(buttonEmoji);
+    const isFlagAlreadyPresent = userFlags.some((flag) => flag === buttonEmoji);
     if (shouldClearFlags) {
-      logger.info(`Clearing flags from ${nameSuffix}`);
+      logger.info(`Clearing flags from ${nickname}`);
       userFlags = [];
     } else if (isFlagAlreadyPresent) {
-      logger.info(`Removing ${buttonEmoji} from ${nameSuffix}`);
+      logger.info(`Removing ${buttonEmoji} from ${nickname}`);
       userFlags = userFlags.filter((flag) => flag !== buttonEmoji);
     } else {
-      logger.info(`Adding ${buttonEmoji} to ${nameSuffix}`);
+      logger.info(`Adding ${buttonEmoji} to ${nickname}`);
       userFlags.push(buttonEmoji);
       logger.info(`Flags present in new name: ${userFlags.toString()}`);
     }
-    // Truncate to max 2
+    // Truncate to max MAX_FLAGS
     userFlags = userFlags.slice(
-      Math.max(0, userFlags.length - 2),
+      Math.max(0, userFlags.length - MAX_FLAGS),
       userFlags.length
     );
 
-    nameSuffix = `${
-      Object.keys(MEME_NAME_SUFFIXES).includes(interaction.user.username)
-        ? MEME_NAME_SUFFIXES[interaction.user.username]
-        : ''
-    } ${userFlags.join('')}`;
-    await guildMember.setNickname(
-      `${realName}${nameSuffix ? ` |${nameSuffix}` : ''}`
-    );
+    const newNameSuffixes = [];
+    if (Object.keys(MEME_NAME_SUFFIXES).includes(interaction.user.username)) {
+      logger.info(`Adding meme name suffixes ${userFlags.toString()}`);
+      newNameSuffixes.push(MEME_NAME_SUFFIXES[interaction.user.username]);
+    }
+    if (userFlags.length) {
+      logger.info(`Adding flags ${userFlags.toString()}`);
+      newNameSuffixes.push(userFlags.join(''));
+    }
 
-    let page = +interaction.message.content
-      .split('\n')
-      .at(-1)
-      .split(' ')[1]
-      .split('/')[0];
-    page -= 1; // The message was showing 1-based indexing for users
+    const newNickname = [realName];
+    if (newNameSuffixes.length) {
+      logger.info(`Adding newNameSuffixes ${newNameSuffixes.toString()}`);
+      newNickname.push(newNameSuffixes.join(' '));
+    }
+    await guildMember.setNickname(newNickname.join(' | '));
+
+    const page = parsePageFromMessage(interaction.message.content);
     let message = '';
     if (shouldClearFlags) {
       message = `Cleared all flags from your name!`;
     } else if (isFlagAlreadyPresent) {
-      message = `The flag ${buttonEmoji} has been removed from your name!`;
+      message = `The flag ${buttonEmoji} has been removed from your name! Your current flags are [${userFlags.toString()}]`;
     } else {
       message = `The flag ${buttonEmoji} has been added to your name! \
-If you had 2 flags in your name, the first one got replaced. Your current flags are ${userFlags.toString()}`;
+If you had ${MAX_FLAGS} flags in your name, the first one got replaced. Your current flags are [${userFlags.toString()}]`;
     }
     await interaction.update(await this.generateAANHPIFlagsNav(page, message));
   }
@@ -128,12 +133,7 @@ If you had 2 flags in your name, the first one got replaced. Your current flags 
       )}`
     );
 
-    let page = +interaction.message.content
-      .split('\n')
-      .at(-1)
-      .split(' ')[1]
-      .split('/')[0];
-    page -= 1; // The message was showing 1-based indexing for users
+    let page = parsePageFromMessage(interaction.message.content);
 
     const buttonEmoji = interaction.component.emoji;
     switch (buttonEmoji.name) {
@@ -175,7 +175,7 @@ If you had 2 flags in your name, the first one got replaced. Your current flags 
 
     const replyContent = [
       `Happy Asian, Native Hawaiian, Pacific Islander Heritage Month!
-Select (at most 2) flags here that best represents your background and heritage ❤️`,
+Select (at most ${MAX_FLAGS}) flags here that best represents your background and heritage ❤️`,
       ...(extraMessage ? ['', extraMessage] : []),
       ``,
       `Page: ${page + 1}/${FLAG_NUMBER_OF_PAGES}`,
@@ -184,6 +184,7 @@ Select (at most 2) flags here that best represents your background and heritage 
     const choiceButtonRows: ActionRowBuilder<MessageActionRowComponentBuilder>[] =
       [];
     for (let i = 0; i < flagsSlice.length; i += DISCORD_ROW_SIZE) {
+      const rowNumber = Math.ceil(i / DISCORD_ROW_SIZE);
       choiceButtonRows.push(
         new ActionRowBuilder<MessageActionRowComponentBuilder>().addComponents(
           flagsSlice
@@ -194,9 +195,7 @@ Select (at most 2) flags here that best represents your background and heritage 
                 .setLabel(entry.name)
                 .setStyle(ButtonStyle.Secondary)
                 .setCustomId(
-                  `${AANHPI_FLAGS_BUTTON_ID}_choice_${Math.ceil(
-                    i / DISCORD_ROW_SIZE
-                  )}_${index}`
+                  `${AANHPI_FLAGS_BUTTON_ID}_choice_${rowNumber}_${index}`
                 )
             )
         )
