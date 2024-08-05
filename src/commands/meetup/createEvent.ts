@@ -193,7 +193,6 @@ export class MeetupCreateEventCommands {
 
         const userInfo = await meetupClient.getUserInfo();
 
-        await interaction.deleteReply();
         const replyContent = [
           `❗${interaction.user.toString()} is requesting the creation of a new Meetup event.❗`,
           `Meetup User ID: ${userInfo.self.id}`,
