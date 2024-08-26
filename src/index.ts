@@ -77,6 +77,12 @@ app.get('/discord-meetup-connect', (_req, res) => {
   res.redirect(generateOAuthUrl('discord'));
 });
 
+app.get('/redirect', (req, res) => {
+  const url = new URL(req.url);
+  const redirectUrl = url.pathname.substring(1) + url.search;
+  return res.redirect(redirectUrl);
+});
+
 /// ////////////////////////////////////////////////////////////////
 //                          DISCORD CLIENT                       //
 /// ////////////////////////////////////////////////////////////////
