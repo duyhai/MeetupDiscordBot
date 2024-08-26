@@ -66,11 +66,9 @@ export const ELEVATED_MEETUP_AUTH_SCOPES: MeetupScope[] = [
   'event_management',
 ];
 
-export const DISCORD_BOT_URL =
-  (process.env.REDIRECT_PROXY ?? '') +
-  (process.env.TS_NODE_DEBUG
-    ? 'http://localhost:5000'
-    : 'https://meetup-discord-bot.herokuapp.com');
+export const DISCORD_BOT_URL = process.env.TS_NODE_DEBUG
+  ? 'https://meetup-discord-bot.herokuapp.com/redirect?url=http://localhost:5000'
+  : 'https://meetup-discord-bot.herokuapp.com';
 
 export const generateOAuthUrl = (
   name: 'meetup' | 'discord',

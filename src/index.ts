@@ -78,9 +78,12 @@ app.get('/discord-meetup-connect', (_req, res) => {
 });
 
 app.get('/redirect', (req, res) => {
-  const url = new URL(req.url);
-  const redirectUrl = url.pathname.substring(1) + url.search;
-  return res.redirect(redirectUrl);
+  const url = req.query.url?.toString();
+  logger.info(`Redirecting to ${url}`);
+  if (url) {
+    return res.redirect(url);
+  }
+  return res.send('Invalid url');
 });
 
 /// ////////////////////////////////////////////////////////////////
