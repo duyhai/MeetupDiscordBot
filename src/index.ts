@@ -91,7 +91,7 @@ app.get('/redirect/:url', (req, res) => {
       });
     }
     logger.info(`Redirecting to ${redirectUrl.toString()}`);
-    return res.redirect(url);
+    return res.redirect(redirectUrl.toString());
   }
   return res.send('Invalid url');
 });
