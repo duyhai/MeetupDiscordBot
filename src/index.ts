@@ -35,7 +35,7 @@ app.get('/connect/meetup/callback', (async (req, res) => {
   const grantSession = (req.session as any).grant as GrantSession;
   logger.info(`Meetup response: ${JSON.stringify(grantSession)}`);
   if (grantSession.response.error) {
-    res.end(grantSession.response.error);
+    res.end(JSON.stringify(grantSession.response.error));
     return;
   }
   const rawTokens = grantSession.response.raw as APIAccessTokenResponse;
@@ -60,7 +60,7 @@ app.get('/connect/discord/callback', (async (req, res) => {
   const grantSession = (req.session as any).grant as GrantSession;
   logger.info(`Discord response: ${JSON.stringify(grantSession)}`);
   if (grantSession.response.error) {
-    res.end(grantSession.response.error);
+    res.end(JSON.stringify(grantSession.response.error));
     return;
   }
   const rawTokens = grantSession.response.raw as APIAccessTokenResponse;
