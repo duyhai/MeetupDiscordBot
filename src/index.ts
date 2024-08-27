@@ -33,8 +33,11 @@ app
 app.get('/connect/meetup/callback', (async (req, res) => {
   // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-explicit-any
   const grantSession = (req.session as any).grant as GrantSession;
-  const profile = grantSession.response.profile as APIUser;
-  logger.info(`Meetup profile response: ${JSON.stringify(profile)}`);
+  logger.info(`Meetup response: ${JSON.stringify(grantSession)}`);
+  if (grantSession.response.error) {
+    res.end(grantSession.response.error);
+    return;
+  }
   const rawTokens = grantSession.response.raw as APIAccessTokenResponse;
   const tokens: Tokens = {
     accessToken: rawTokens.access_token,
@@ -55,7 +58,11 @@ app.get('/connect/meetup/callback', (async (req, res) => {
 app.get('/connect/discord/callback', (async (req, res) => {
   // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-explicit-any
   const grantSession = (req.session as any).grant as GrantSession;
-  logger.info(JSON.stringify(grantSession));
+  logger.info(`Discord response: ${JSON.stringify(grantSession)}`);
+  if (grantSession.response.error) {
+    res.end(grantSession.response.error);
+    return;
+  }
   const rawTokens = grantSession.response.raw as APIAccessTokenResponse;
   const tokens: Tokens = {
     accessToken: rawTokens.access_token,
@@ -63,13 +70,10 @@ app.get('/connect/discord/callback', (async (req, res) => {
     expiresAt: Date.now() + rawTokens.expires_in * 1000,
   };
   const profile = grantSession.response.profile as APIUser;
-  // const discordClient = new DiscordUserClient(tokens);
-  // const profile = await discordClient.getUserData();
   logger.info(JSON.stringify(profile));
   const cache = await ApplicationCache();
   await cache.set(`maskedUserId-${grantSession.state}`, profile.id);
   await cache.set(`${profile.id}-discord-tokens`, JSON.stringify(tokens));
-  // res.end(`${JSON.stringify(grantSession)}`);
   res.redirect(generateOAuthUrl('meetup', { state: grantSession.state }));
 }) as RequestHandler);
 
@@ -77,10 +81,16 @@ app.get('/discord-meetup-connect', (_req, res) => {
   res.redirect(generateOAuthUrl('discord'));
 });
 
-app.get('/redirect', (req, res) => {
-  const url = req.query.url?.toString();
-  logger.info(`Redirecting to ${url}`);
+app.get('/redirect/:url', (req, res) => {
+  const { url } = req.params;
   if (url) {
+    const redirectUrl = new URL(url);
+    if (req.query) {
+      Object.entries(req.query).forEach(([key, value]) => {
+        redirectUrl.searchParams.append(key, value.toString());
+      });
+    }
+    logger.info(`Redirecting to ${redirectUrl.toString()}`);
     return res.redirect(url);
   }
   return res.send('Invalid url');

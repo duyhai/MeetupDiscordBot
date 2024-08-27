@@ -66,19 +66,37 @@ export const ELEVATED_MEETUP_AUTH_SCOPES: MeetupScope[] = [
   'event_management',
 ];
 
-export const DISCORD_BOT_URL = process.env.TS_NODE_DEBUG
-  ? 'https://meetup-discord-bot.herokuapp.com/redirect?url=http://localhost:5000'
+const BASE_DISCORD_BOT_URL = process.env.TS_NODE_DEBUG
+  ? 'http://localhost:5000'
   : 'https://meetup-discord-bot.herokuapp.com';
+
+const debugRedirect = (url: string) => {
+  return `https://meetup-discord-bot.herokuapp.com/redirect/${encodeURIComponent(
+    url
+  )}`;
+};
+
+export const discordBotUrl = (path = '') => {
+  const url = new URL(BASE_DISCORD_BOT_URL);
+  url.pathname = path;
+  if (process.env.TS_NODE_DEBUG) {
+    return debugRedirect(url.toString());
+  }
+  return url.toString();
+};
 
 export const generateOAuthUrl = (
   name: 'meetup' | 'discord',
   customParams?: Record<string, string>
 ) => {
-  const url = new URL(`${DISCORD_BOT_URL}/connect/${name}`);
+  const url = new URL(`${BASE_DISCORD_BOT_URL}/connect/${name}`);
   if (customParams) {
     Object.entries(customParams).forEach(([key, value]) => {
       url.searchParams.append(key, value);
     });
+  }
+  if (process.env.TS_NODE_DEBUG) {
+    return debugRedirect(url.toString());
   }
   return url.toString();
 };

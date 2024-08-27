@@ -10,7 +10,7 @@ import {
 import { ButtonComponent, Discord, Slash } from 'discordx';
 import { Logger } from 'tslog';
 
-import { DISCORD_BOT_URL, RewardRoleLevels } from '../../constants';
+import { discordBotUrl, RewardRoleLevels } from '../../constants';
 import { Tokens } from '../../lib/client/discord/types';
 import { DiscordUserClient } from '../../lib/client/discord/userClient';
 import { GqlMeetupClient } from '../../lib/client/meetup/gqlClient';
@@ -62,7 +62,9 @@ export class MeetupSyncAccountCommandsV2 {
           `Tokens are not present for ${interaction.user.username} at ${meetupTokenKey} or ${discordTokenKey}. Getting token through OAuth`
         );
         await interaction.editReply({
-          content: `Please click on this link to connect your Discord and Meetup account: <${DISCORD_BOT_URL}/discord-meetup-connect>`,
+          content: `Please click on this link to connect your Discord and Meetup account: <${discordBotUrl(
+            'discord-meetup-connect'
+          )}>`,
         });
         rawDiscordTokens = await spinWait(() => cache.get(discordTokenKey), {
           timeoutMs: 60 * 1000,
