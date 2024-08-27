@@ -74,11 +74,11 @@ app.get('/connect/discord/callback', (async (req, res) => {
   const cache = await ApplicationCache();
   await cache.set(`maskedUserId-${grantSession.state}`, profile.id);
   await cache.set(`${profile.id}-discord-tokens`, JSON.stringify(tokens));
-  res.redirect(generateOAuthUrl('meetup', { state: grantSession.state }));
+  res.redirect(307, generateOAuthUrl('meetup', { state: grantSession.state }));
 }) as RequestHandler);
 
 app.get('/discord-meetup-connect', (_req, res) => {
-  res.redirect(generateOAuthUrl('discord'));
+  res.redirect(307, generateOAuthUrl('discord'));
 });
 
 app.get('/redirect/:url', (req, res) => {
@@ -91,7 +91,7 @@ app.get('/redirect/:url', (req, res) => {
       });
     }
     logger.info(`Redirecting to ${redirectUrl.toString()}`);
-    return res.redirect(redirectUrl.toString());
+    return res.redirect(307, redirectUrl.toString());
   }
   return res.send('Invalid url');
 });
