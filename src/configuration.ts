@@ -1,6 +1,10 @@
 import { OAuth2Scopes } from 'discord.js';
 import { GrantConfig } from 'grant';
-import { BASIC_MEETUP_AUTH_SCOPES, BASE_DISCORD_BOT_URL } from './constants';
+import {
+  BASIC_MEETUP_AUTH_SCOPES,
+  BASE_DISCORD_BOT_URL,
+  debugRedirect,
+} from './constants';
 
 interface ConfigurationSchema {
   discord: {
@@ -43,7 +47,9 @@ const Configuration: ConfigurationSchema = {
       key: process.env.DISCORD_CLIENT_ID,
       secret: process.env.DISCORD_SECRET,
       scope: [OAuth2Scopes.RoleConnectionsWrite, OAuth2Scopes.Identify],
-      redirect_uri: `${BASE_DISCORD_BOT_URL}/connect/discord/callback`,
+      redirect_uri: debugRedirect(
+        `${BASE_DISCORD_BOT_URL}/connect/discord/callback`
+      ),
     },
     // connect/meetup => authorize => access => callback => persistToken
     meetup: {
@@ -52,7 +58,9 @@ const Configuration: ConfigurationSchema = {
       scope: BASIC_MEETUP_AUTH_SCOPES,
       // We also use it as a key for the initiator's Discord id in our memory store.
       dynamic: ['state'],
-      redirect_uri: `${BASE_DISCORD_BOT_URL}/connect/meetup/callback`,
+      redirect_uri: debugRedirect(
+        `${BASE_DISCORD_BOT_URL}/connect/meetup/callback`
+      ),
     },
   },
 };

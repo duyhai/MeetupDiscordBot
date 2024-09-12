@@ -70,7 +70,7 @@ export const BASE_DISCORD_BOT_URL = process.env.TS_NODE_DEBUG
   ? 'http://localhost:5000'
   : 'https://meetup-discord-bot.herokuapp.com';
 
-const debugRedirect = (url: string) => {
+export const debugRedirect = (url: string) => {
   const encodedUrl = Buffer.from(url).toString('base64');
   return `https://meetup-discord-bot.herokuapp.com/redirect/${encodedUrl}`;
 };
