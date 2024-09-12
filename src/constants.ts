@@ -71,9 +71,8 @@ export const BASE_DISCORD_BOT_URL = process.env.TS_NODE_DEBUG
   : 'https://meetup-discord-bot.herokuapp.com';
 
 const debugRedirect = (url: string) => {
-  return `https://meetup-discord-bot.herokuapp.com/redirect/${encodeURIComponent(
-    url
-  )}`;
+  const encodedUrl = Buffer.from(url).toString('base64');
+  return `https://meetup-discord-bot.herokuapp.com/redirect/${encodedUrl}`;
 };
 
 export const discordBotUrl = (path = '') => {

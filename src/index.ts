@@ -84,7 +84,8 @@ app.get('/discord-meetup-connect', (_req, res) => {
 app.get('/redirect/:url', (req, res) => {
   const { url } = req.params;
   if (url) {
-    const redirectUrl = new URL(url);
+    const decodedUrl = Buffer.from(url, 'base64').toString('utf-8');
+    const redirectUrl = new URL(decodedUrl);
     if (req.query) {
       Object.entries(req.query).forEach(([key, value]) => {
         redirectUrl.searchParams.append(key, value.toString());
