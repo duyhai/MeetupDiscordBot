@@ -35,7 +35,7 @@ export async function discordCommandWrapper(
       await interaction.editReply({
         content: `${interaction.user.toString()} Error: ${
           error?.message
-        }. Please reach out to a moderator for help.`,
+        } Please reach out to a moderator for help.`,
       });
     }
   }
