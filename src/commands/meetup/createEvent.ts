@@ -58,12 +58,13 @@ export class MeetupCreateEventCommands {
         );
         const cache = await ApplicationCache();
         try {
-          if (await cache.get(lockKey)) {
+          // Acquire lock
+          // TODO: Refactor into lock function
+          if (!(await cache.exclusive_set(lockKey, lockId))) {
             throw new Error(
               'Someone is already approving this request. Please stand by and try again later.'
             );
           }
-          await cache.set(lockKey, lockId);
 
           const membershipInfo = await meetupClient.getUserMembershipInfo();
           if (!membershipInfo.groupByUrlname.isOrganizer) {
@@ -119,6 +120,7 @@ export class MeetupCreateEventCommands {
             ephemeral: true,
           });
         } finally {
+          // Free lock
           if ((await cache.get(lockKey)) === lockId) {
             await cache.remove(lockKey);
           }

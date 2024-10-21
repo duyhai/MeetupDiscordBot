@@ -42,4 +42,12 @@ export class InMemoryCache implements KeyValueCache {
   async set(key: string, value: string): Promise<void> {
     this.cache.storeExpiringItem(key, value, ITEM_TTL_SEC);
   }
+
+  async exclusive_set(key: string, value: string): Promise<boolean> {
+    if (this.cache.hasItem(key)) {
+      return false;
+    }
+    this.cache.storeExpiringItem(key, value, ITEM_TTL_SEC);
+    return true;
+  }
 }
