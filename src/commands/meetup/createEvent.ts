@@ -61,6 +61,12 @@ export class MeetupCreateEventCommands {
           // Acquire lock
           // TODO: Refactor into lock function
           if (!(await cache.exclusive_set(lockKey, lockId))) {
+            logger.info(
+              `Lock is already taken ${JSON.stringify({
+                key: lockKey,
+                lockId,
+              })}`
+            );
             throw new Error(
               'Someone is already approving this request. Please stand by and try again later.'
             );
@@ -114,14 +120,24 @@ export class MeetupCreateEventCommands {
             }>`,
             components: [newButtons],
           });
+          logger.info(`Event approved. Edited message: ${message.id}`);
 
           await interaction.followUp({
             content: '✅ Event request approved!',
             ephemeral: true,
           });
+          logger.info(
+            `Event approved. Responded to user: ${interaction.user.username}`
+          );
         } finally {
           // Free lock
+          logger.info(
+            `Checking lock to free ${JSON.stringify({ key: lockKey, lockId })}`
+          );
           if ((await cache.get(lockKey)) === lockId) {
+            logger.info(
+              `Freeing lock ${JSON.stringify({ key: lockKey, lockId })}`
+            );
             await cache.remove(lockKey);
           }
         }
