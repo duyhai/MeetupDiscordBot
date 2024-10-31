@@ -74,10 +74,16 @@ export class MeetupCreateEventCommands {
 
           const membershipInfo = await meetupClient.getUserMembershipInfo();
           if (!membershipInfo.groupByUrlname.isOrganizer) {
+            logger.info(
+              `User without permission tried to approve: ${interaction.user.username}`
+            );
             throw new Error(
               `You don't have permission to do this, silly. You're not an organizer`
             );
           }
+          logger.info(
+            `Permission check passed for: ${interaction.user.username}`
+          );
 
           const [, ...requestInfo] = interaction.message.content.split('\n');
           requestInfo.pop();
@@ -92,6 +98,7 @@ export class MeetupCreateEventCommands {
           const draftEventTemplate = await meetupClient.getEvent(
             DRAFT_EVENT_TEMPLATE_ID
           );
+          logger.info(`Fetched template event`);
 
           const newEvent = await meetupClient.createEvent({
             ...createEventTemplate,
@@ -100,6 +107,7 @@ export class MeetupCreateEventCommands {
             startDateTime: `${eventDate}T${DEFAULT_START_TIME}:00`,
             eventHosts: [Number(meetupUserId)],
           });
+          logger.info(`Event created`);
 
           const eventId = newEvent.createEvent.event.id;
           await meetupClient.closeEventRsvps({ eventId });
@@ -108,6 +116,7 @@ export class MeetupCreateEventCommands {
             eventId,
             rsvpSettings: createEventTemplate.rsvpSettings,
           });
+          logger.info(`Event RSVP closed`);
 
           const message = await interaction.message.fetch();
           const newButtons = this.getRequestEventButtons();
