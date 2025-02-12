@@ -1,10 +1,12 @@
 import {
   ActionRowBuilder,
   ButtonBuilder,
+  ButtonComponent as DiscordButtonComponent,
   ButtonInteraction,
   ButtonStyle,
   CommandInteraction,
   MessageActionRowComponentBuilder,
+  APIButtonComponentBase,
 } from 'discord.js';
 import { ButtonComponent, Discord, Slash } from 'discordx';
 import { Logger } from 'tslog';
@@ -72,7 +74,7 @@ export class AANHPIFlagsCommands {
       .map((flag) => flag.value);
     logger.info(`Flags present in name: ${userFlags.toString()}`);
 
-    const buttonEmoji = interaction.component.emoji.name;
+    const buttonEmoji = (interaction.component as DiscordButtonComponent).emoji.name;
     const shouldClearFlags = buttonEmoji === '🏳️';
     const isFlagAlreadyPresent = userFlags.some((flag) => flag === buttonEmoji);
     if (shouldClearFlags) {
@@ -135,7 +137,7 @@ If you had ${MAX_FLAGS} flags in your name, the first one got replaced. Your cur
 
     let page = parsePageFromMessage(interaction.message.content);
 
-    const buttonEmoji = interaction.component.emoji;
+    const buttonEmoji = (interaction.component as DiscordButtonComponent).emoji;
     switch (buttonEmoji.name) {
       case '⏪':
         page = Math.max(0, page - FLAG_FAST_FORWARD_AMOUNT);
