@@ -67,7 +67,7 @@ export const ELEVATED_MEETUP_AUTH_SCOPES: MeetupScope[] = [
 ];
 
 export const BASE_DISCORD_BOT_URL = process.env.TS_NODE_DEBUG
-  ? `http://localhost:${process.env.PORT || 5000}`
+  ? 'http://localhost:5000'
   : 'https://meetup-discord-bot.herokuapp.com';
 
 export const debugRedirect = (url: string) => {
