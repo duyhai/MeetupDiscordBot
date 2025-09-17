@@ -58,11 +58,16 @@ export const getUserHostedEvents = gql`
   }
 `;
 
-export const getPastGroupEvents = gql`
-  query ($urlname: String!, $first: Int!, $after: String) {
+export const getGroupEvents = gql`
+  query (
+    $urlname: String!
+    $first: Int!
+    $after: String
+    $filter: GroupEventFilter
+  ) {
     groupByUrlname(urlname: $urlname) {
       id
-      events(first: $first, after: $after, status: PAST) {
+      events(first: $first, after: $after, filter: $filter) {
         pageInfo {
           hasNextPage
           hasPreviousPage

@@ -74,15 +74,21 @@ type MembershipStatus =
   | 'UNAPPROVED';
 
 type EventStatus =
-  | 'PUBLISHED'
-  | 'DRAFT'
+  | 'ACTIVE'
+  | 'AUTOSCHED'
+  | 'AUTOSCHED_CANCELLED'
+  | 'AUTOSCHED_DRAFT'
+  | 'AUTOSCHED_FINISHED'
+  | 'BLOCKED'
   | 'CANCELLED'
   | 'CANCELLED_PERM'
-  | 'AUTOSCHED'
-  | 'ACTIVE'
-  | 'PAST';
+  | 'DRAFT'
+  | 'PAST'
+  | 'PENDING'
+  | 'PROPOSED'
+  | 'TEMPLATE';
 
-interface PastEvent {
+interface Event {
   dateTime: string;
   eventHosts: {
     member: BaseUserInfo;
@@ -93,6 +99,23 @@ interface PastEvent {
   };
   status: EventStatus;
   title: string;
+}
+
+export interface GroupEventFilter {
+  // Show only events starting after the specified date.
+  afterDateTime?: string;
+
+  // Show only events starting before the specified date.
+  beforeDateTime?: string;
+
+  // Show only events hosted by the specified member.
+  hostId?: string;
+
+  // Show only events in the specified statuses.
+  status?: EventStatus[];
+
+  // Show only events with title matching the specified string (case-insensitive).
+  title?: string;
 }
 
 interface EventGroupInfo {
@@ -134,15 +157,16 @@ interface Ticket {
   status: TicketStatus;
 }
 
-export interface GetPastGroupEventsResponse {
+export interface GetGroupEventsResponse {
   groupByUrlname: {
-    events: PaginatedData<PastEvent>;
+    events: PaginatedData<Event>;
     id: string;
   };
 }
 
-export interface GetPastGroupEventsInput {
+export interface GetGroupEventsInput {
   after?: string;
+  filter?: GroupEventFilter;
   first: number;
   urlname: string;
 }

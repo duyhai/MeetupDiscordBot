@@ -20,7 +20,9 @@ export async function getBadges(
   const userInfo = await meetupClient.getUserInfo();
 
   const pastEvents = await getPaginatedData(async (paginationInput) => {
-    const result = await meetupClient.getPastGroupEvents(paginationInput);
+    const result = await meetupClient.getGroupEvents(paginationInput, {
+      status: ['PAST'],
+    });
     return result.groupByUrlname.events;
   });
 

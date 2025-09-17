@@ -11,7 +11,7 @@ import {
 } from './mutations';
 import {
   getEvent,
-  getPastGroupEvents,
+  getGroupEvents,
   getUserHostedEvents,
   getUserInfo,
   getUserMembershipInfo,
@@ -26,13 +26,14 @@ import {
   EditEventInput,
   EditEventResponse,
   GetEventResponse,
-  GetPastGroupEventsInput,
-  GetPastGroupEventsResponse,
+  GetGroupEventsInput,
+  GetGroupEventsResponse,
   GetUserHostedEventsInput,
   GetUserHostedEventsResponse,
   GetUserInfoResponse,
   GetUserMembershipInfoInput,
   GetUserMembershipInfoResponse,
+  GroupEventFilter,
   PaginationInput,
   PublishEventDraftInput,
   PublishEventDraftResponse,
@@ -103,23 +104,25 @@ export class GqlMeetupClient {
     }
   }
 
-  public async getPastGroupEvents(input: PaginationInput) {
-    logger.info(
-      `Calling getPastGroupEvents with input: ${JSON.stringify(input)}`
-    );
+  public async getGroupEvents(
+    input: PaginationInput,
+    filter?: GroupEventFilter
+  ) {
+    logger.info(`Calling getGroupEvents with input: ${JSON.stringify(input)}`);
     // Can be cached because it doesn't retrieve user specific data
     return cachedClientRequest(
-      'getPastGroupEvents',
+      'getGroupEvents',
       {
         urlname: Configuration.meetup.groupUrlName,
         ...input,
+        filter,
       },
-      async (callbackInput: GetPastGroupEventsInput) => {
+      async (callbackInput: GetGroupEventsInput) => {
         try {
           const result = await this.client.request<
-            GetPastGroupEventsResponse,
-            GetPastGroupEventsInput
-          >(getPastGroupEvents, callbackInput);
+            GetGroupEventsResponse,
+            GetGroupEventsInput
+          >(getGroupEvents, callbackInput);
           // logger.info(`getUserMembershipInfo result: ${JSON.stringify(result)}`);
           return result;
         } catch (error) {

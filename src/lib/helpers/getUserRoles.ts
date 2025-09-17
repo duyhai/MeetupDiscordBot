@@ -35,14 +35,16 @@ export async function getUserRoles(
   } else {
     const userInfo = await meetupClient.getUserInfo();
 
-    const pastEvents = await getPaginatedData(async (paginationInput) => {
-      const result = await meetupClient.getPastGroupEvents(paginationInput);
-      return result.groupByUrlname.events;
-    });
-
-    const getUserHostedEvents = pastEvents.filter(({ eventHosts }) =>
-      eventHosts.some(({ member: { id } }) => id === userInfo.self.id)
+    const getUserHostedEvents = await getPaginatedData(
+      async (paginationInput) => {
+        const result = await meetupClient.getGroupEvents(paginationInput, {
+          status: ['PAST'],
+          hostId: userInfo.self.id,
+        });
+        return result.groupByUrlname.events;
+      }
     );
+
     logger.info(
       `Number of hosted events by ${interaction.user.username}: ${getUserHostedEvents.length}`
     );

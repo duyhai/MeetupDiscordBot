@@ -147,7 +147,9 @@ export class MeetupSyncAccountCommandsV2 {
       });
 
       const pastEvents = await getPaginatedData(async (paginationInput) => {
-        const result = await meetupClient.getPastGroupEvents(paginationInput);
+        const result = await meetupClient.getGroupEvents(paginationInput, {
+          status: ['PAST'],
+        });
         return result.groupByUrlname.events;
       });
 

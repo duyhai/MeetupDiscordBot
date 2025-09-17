@@ -8,7 +8,7 @@
 import { CommandInteraction, Guild } from 'discord.js';
 import { GqlMeetupClient } from '../../../src/lib/client/meetup/gqlClient';
 import * as paginationHelper from '../../../src/lib/client/meetup/paginationHelper';
-import { GetPastGroupEventsResponse } from '../../../src/lib/client/meetup/types';
+import { GetGroupEventsResponse } from '../../../src/lib/client/meetup/types';
 import { getUserRoles } from '../../../src/lib/helpers/getUserRoles';
 import * as onboardUser from '../../../src/lib/helpers/onboardUser';
 
@@ -128,7 +128,7 @@ describe('getUserRoles', () => {
     const getPaginatedDataMock = (fun) => fun();
     (paginationHelper as any).getPaginatedData = getPaginatedDataMock;
 
-    jest.spyOn(meetupClient, 'getPastGroupEvents').mockResolvedValue({
+    jest.spyOn(meetupClient, 'getGroupEvents').mockResolvedValue({
       groupByUrlname: {
         events: [
           {
@@ -136,7 +136,7 @@ describe('getUserRoles', () => {
           },
         ],
       },
-    } as unknown as GetPastGroupEventsResponse);
+    } as unknown as GetGroupEventsResponse);
 
     await getUserRoles(meetupClient, interaction);
 
@@ -178,11 +178,11 @@ describe('getUserRoles', () => {
     const getPaginatedDataMock = (fun) => fun();
     (paginationHelper as any).getPaginatedData = getPaginatedDataMock;
 
-    jest.spyOn(meetupClient, 'getPastGroupEvents').mockResolvedValueOnce({
+    jest.spyOn(meetupClient, 'getGroupEvents').mockResolvedValueOnce({
       groupByUrlname: {
         events: [], // No hosted events
       },
-    } as unknown as GetPastGroupEventsResponse);
+    } as unknown as GetGroupEventsResponse);
 
     await getUserRoles(meetupClient, interaction);
 
@@ -193,15 +193,11 @@ describe('getUserRoles', () => {
       'guest_host'
     );
 
-    jest.spyOn(meetupClient, 'getPastGroupEvents').mockResolvedValueOnce({
+    jest.spyOn(meetupClient, 'getGroupEvents').mockResolvedValueOnce({
       groupByUrlname: {
-        events: [
-          {
-            eventHosts: [{ member: { id: 'testUserId2' } }],
-          },
-        ],
+        events: [],
       },
-    } as unknown as GetPastGroupEventsResponse);
+    } as unknown as GetGroupEventsResponse);
 
     await getUserRoles(meetupClient, interaction);
 

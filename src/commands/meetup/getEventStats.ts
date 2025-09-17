@@ -45,11 +45,6 @@ export class MeetupGetEventStatsCommands {
           content: 'Sit tight! Fetching data.',
         });
 
-        const pastEvents = await getPaginatedData(async (paginationInput) => {
-          const result = await meetupClient.getPastGroupEvents(paginationInput);
-          return result.groupByUrlname.events;
-        });
-
         let startDate = dayjs().set('year', year).startOf('year');
         let endDate = startDate.endOf('year');
         if (month !== 0) {
@@ -58,25 +53,21 @@ export class MeetupGetEventStatsCommands {
           endDate = startDate.endOf('month');
         }
 
+        const pastEvents = await getPaginatedData(async (paginationInput) => {
+          const result = await meetupClient.getGroupEvents(paginationInput, {
+            status: ['PAST', 'ACTIVE', 'AUTOSCHED'],
+            afterDateTime: startDate.toISOString(),
+            beforeDateTime: endDate.toISOString(),
+          });
+          return result.groupByUrlname.events;
+        });
+
         const hostEvents = new Map<string, Array<string>>();
         pastEvents.forEach((event) => {
-          const { eventHosts, dateTime, title, rsvps, status } = event;
-
-          if (!['PUBLISHED', 'ACTIVE', 'PAST'].includes(status)) {
-            logger.info(`Skipping ${title}. Status: ${status}`);
-            return;
-          }
+          const { eventHosts, title, rsvps } = event;
 
           if (title.includes('[Open House]')) {
             logger.info(`Skipping ${title}. Open House`);
-            return;
-          }
-
-          const eventDate = dayjs(dateTime);
-          const isEventInRange =
-            startDate.isBefore(eventDate) && endDate.isAfter(eventDate);
-          if (!eventHosts.length || !isEventInRange) {
-            logger.info(`Skipping ${title}. Event date: ${dateTime}`);
             return;
           }
 
