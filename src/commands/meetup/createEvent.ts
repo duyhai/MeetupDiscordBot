@@ -73,7 +73,9 @@ export class MeetupCreateEventCommands {
           }
 
           const membershipInfo = await meetupClient.getUserMembershipInfo();
-          if (!membershipInfo.groupByUrlname.isOrganizer) {
+          if (
+            membershipInfo.groupByUrlname.membershipMetadata.status !== 'LEADER'
+          ) {
             logger.info(
               `User without permission tried to approve: ${interaction.user.username}`
             );
@@ -159,7 +161,9 @@ export class MeetupCreateEventCommands {
     await discordCommandWrapper(interaction, async () => {
       await withMeetupClient(interaction, async (meetupClient) => {
         const membershipInfo = await meetupClient.getUserMembershipInfo();
-        if (!membershipInfo.groupByUrlname.isOrganizer) {
+        if (
+          membershipInfo.groupByUrlname.membershipMetadata.status !== 'LEADER'
+        ) {
           throw new Error(
             `You don't have permission to do this, silly. You're not an organizer`
           );

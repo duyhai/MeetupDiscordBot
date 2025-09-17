@@ -93,7 +93,7 @@ export class GqlMeetupClient {
         GetUserHostedEventsResponse,
         GetUserHostedEventsInput
       >(getUserHostedEvents, {
-        connectionInput: input,
+        ...input,
       });
       logger.info(`getUserHostedEvents result: ${JSON.stringify(result)}`);
       return result;
@@ -112,7 +112,7 @@ export class GqlMeetupClient {
       'getPastGroupEvents',
       {
         urlname: Configuration.meetup.groupUrlName,
-        connectionInput: input,
+        ...input,
       },
       async (callbackInput: GetPastGroupEventsInput) => {
         try {

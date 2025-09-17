@@ -6,7 +6,7 @@ interface BaseUserInfo {
 export interface PaginationInput {
   after?: string;
   before?: string;
-  first?: number;
+  first: number;
   last?: number;
   reverse?: boolean;
 }
@@ -19,11 +19,11 @@ interface PageInfo {
 }
 
 export interface PaginatedData<TData> {
-  count: number;
   edges: {
     node: TData;
   }[];
   pageInfo: PageInfo;
+  totalCount: number;
 }
 
 export interface GetUserInfoResponse {
@@ -36,10 +36,10 @@ export interface GetUserMembershipInfoResponse {
   groupByUrlname: {
     id: string;
     isMember: boolean;
-    isOrganizer: boolean;
     membershipMetadata: {
-      joinedDate: string;
-      noShowCount: number;
+      joinTime: string;
+      rsvpStats: MembershipRsvpStats;
+      status: MembershipStatus;
     };
     name: string;
   };
@@ -48,6 +48,30 @@ export interface GetUserMembershipInfoResponse {
 export interface GetUserMembershipInfoInput {
   urlname: string;
 }
+
+export interface MembershipRsvpStats {
+  noShowCount: number;
+}
+
+type MembershipStatus =
+  | 'ABANDONED'
+  | 'ACTIVE'
+  // Active member that is not part of the Group's leadership team
+  | 'BLOCKED'
+  | 'BOOTED'
+  | 'BOUNCED'
+  | 'DEAD'
+  | 'GROUP_BLOCKED'
+  | 'GROUP_BLOCKED_ORG'
+  | 'INCOMPLETE'
+  | 'LEADER'
+  // Leaders are Organizers, Co-Organizers, Assistant Organizers, OR Event Organizers
+  | 'PENDING'
+  // Pending organizer join approval
+  | 'PENDING_PAYMENT'
+  // Pending membership dues payment
+  | 'REMOVED'
+  | 'UNAPPROVED';
 
 type EventStatus =
   | 'PUBLISHED'
@@ -60,12 +84,14 @@ type EventStatus =
 
 interface PastEvent {
   dateTime: string;
-  going: number;
-  hosts: BaseUserInfo[];
+  eventHosts: {
+    member: BaseUserInfo;
+  }[];
   id: string;
-  maxTickets: number;
+  rsvps: PaginatedData<Ticket> & {
+    yesCount: number;
+  };
   status: EventStatus;
-  tickets: PaginatedData<Ticket>;
   title: string;
 }
 
@@ -74,21 +100,22 @@ interface EventGroupInfo {
   eventUrl: string;
   group: { id: string };
   id: string;
-  title: string;
-  uiActions: {
-    canAnnounce: boolean;
+  networkEvent: {
+    isAnnounced: boolean;
   };
+  title: string;
 }
 
 export interface GetUserHostedEventsResponse {
   self: {
-    hostedEvents: PaginatedData<EventGroupInfo>;
     id: string;
+    memberEvents: PaginatedData<EventGroupInfo>;
   };
 }
 
 export interface GetUserHostedEventsInput {
-  connectionInput: PaginationInput;
+  after?: string;
+  first: number;
 }
 
 type TicketStatus =
@@ -103,19 +130,20 @@ type TicketStatus =
   | 'YES_PENDING_PAYMENT';
 
 interface Ticket {
+  member: BaseUserInfo;
   status: TicketStatus;
-  user: BaseUserInfo;
 }
 
 export interface GetPastGroupEventsResponse {
   groupByUrlname: {
+    events: PaginatedData<PastEvent>;
     id: string;
-    pastEvents: PaginatedData<PastEvent>;
   };
 }
 
 export interface GetPastGroupEventsInput {
-  connectionInput: PaginationInput;
+  after?: string;
+  first: number;
   urlname: string;
 }
 

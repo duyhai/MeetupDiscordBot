@@ -20,7 +20,7 @@ export class MeetupNoShowCommands {
         const membershipInfo = await meetupClient.getUserMembershipInfo();
 
         await interaction.followUp({
-          content: `Your no show count is ${membershipInfo.groupByUrlname.membershipMetadata.noShowCount}.`,
+          content: `Your no show count is ${membershipInfo.groupByUrlname.membershipMetadata.rsvpStats.noShowCount}.`,
           ephemeral: true,
         });
       });

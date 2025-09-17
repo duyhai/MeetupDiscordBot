@@ -47,7 +47,7 @@ export class MeetupGetEventStatsCommands {
 
         const pastEvents = await getPaginatedData(async (paginationInput) => {
           const result = await meetupClient.getPastGroupEvents(paginationInput);
-          return result.groupByUrlname.pastEvents;
+          return result.groupByUrlname.events;
         });
 
         let startDate = dayjs().set('year', year).startOf('year');
@@ -60,7 +60,7 @@ export class MeetupGetEventStatsCommands {
 
         const hostEvents = new Map<string, Array<string>>();
         pastEvents.forEach((event) => {
-          const { hosts, dateTime, title, going, maxTickets, status } = event;
+          const { eventHosts, dateTime, title, rsvps, status } = event;
 
           if (!['PUBLISHED', 'ACTIVE', 'PAST'].includes(status)) {
             logger.info(`Skipping ${title}. Status: ${status}`);
@@ -75,17 +75,19 @@ export class MeetupGetEventStatsCommands {
           const eventDate = dayjs(dateTime);
           const isEventInRange =
             startDate.isBefore(eventDate) && endDate.isAfter(eventDate);
-          if (!hosts.length || !isEventInRange) {
+          if (!eventHosts.length || !isEventInRange) {
             logger.info(`Skipping ${title}. Event date: ${dateTime}`);
             return;
           }
 
-          hosts.forEach((host) => {
-            const key = `${host.id}-${host.name}`;
+          eventHosts.forEach((host) => {
+            const key = `${host.member.id}-${host.member.name}`;
             if (!hostEvents.has(key)) {
               hostEvents.set(key, []);
             }
-            hostEvents.get(key).push(`${title} (${going}/${maxTickets})`);
+            hostEvents
+              .get(key)
+              .push(`${title} (${rsvps.yesCount}/${rsvps.totalCount})`);
           });
         });
 

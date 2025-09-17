@@ -45,10 +45,12 @@ describe('getUserRoles', () => {
       groupByUrlname: {
         id: '1',
         isMember: true,
-        isOrganizer: true,
         membershipMetadata: {
-          noShowCount: 0,
-          joinedDate: '2018-07-01T12:00:00-04:00',
+          status: 'LEADER',
+          joinTime: '2018-07-01T12:00:00-04:00',
+          rsvpStats: {
+            noShowCount: 0,
+          },
         },
         name: 'test',
       },
@@ -80,10 +82,12 @@ describe('getUserRoles', () => {
       groupByUrlname: {
         id: '1',
         isMember: false,
-        isOrganizer: false,
         membershipMetadata: {
-          noShowCount: 0,
-          joinedDate: '2018-07-01T12:00:00-04:00',
+          status: 'ACTIVE',
+          joinTime: '2018-07-01T12:00:00-04:00',
+          rsvpStats: {
+            noShowCount: 0,
+          },
         },
         name: 'test',
       },
@@ -100,10 +104,12 @@ describe('getUserRoles', () => {
       groupByUrlname: {
         id: '1',
         isMember: true,
-        isOrganizer: false,
         membershipMetadata: {
-          noShowCount: 0,
-          joinedDate: '2018-07-01T12:00:00-04:00',
+          status: 'ACTIVE',
+          joinTime: '2018-07-01T12:00:00-04:00',
+          rsvpStats: {
+            noShowCount: 0,
+          },
         },
         name: 'test',
       },
@@ -126,7 +132,7 @@ describe('getUserRoles', () => {
       groupByUrlname: {
         pastEvents: [
           {
-            hosts: [{ id: 'testUserId' }],
+            eventHosts: [{ member: { id: 'testUserId' } }],
           },
         ],
       },
@@ -147,10 +153,12 @@ describe('getUserRoles', () => {
       groupByUrlname: {
         id: '1',
         isMember: true,
-        isOrganizer: false,
         membershipMetadata: {
-          noShowCount: 0,
-          joinedDate: '2018-07-01T12:00:00-04:00',
+          status: 'ACTIVE',
+          joinTime: '2018-07-01T12:00:00-04:00',
+          rsvpStats: {
+            noShowCount: 0,
+          },
         },
         name: 'test',
       },
@@ -189,7 +197,7 @@ describe('getUserRoles', () => {
       groupByUrlname: {
         pastEvents: [
           {
-            hosts: [{ id: 'testUserId2' }],
+            eventHosts: [{ member: { id: 'testUserId2' } }],
           },
         ],
       },

@@ -16,27 +16,29 @@ export const getUserMembershipInfo = gql`
       id
       name
       isMember
-      isOrganizer
       membershipMetadata {
-        noShowCount
-        joinedDate
+        status
+        joinTime
+        rsvpStats {
+          noShowCount
+        }
       }
     }
   }
 `;
 
 export const getUserHostedEvents = gql`
-  query ($connectionInput: ConnectionInput!) {
+  query ($first: Int!, $after: String) {
     self {
       id
-      hostedEvents(input: $connectionInput) {
+      memberEvents(first: $first, after: $after, isHosting: true) {
         pageInfo {
           hasNextPage
           hasPreviousPage
           startCursor
           endCursor
         }
-        count
+        totalCount
         edges {
           node {
             id
@@ -46,8 +48,8 @@ export const getUserHostedEvents = gql`
             group {
               id
             }
-            uiActions {
-              canAnnounce
+            networkEvent {
+              isAnnounced
             }
           }
         }
@@ -57,41 +59,42 @@ export const getUserHostedEvents = gql`
 `;
 
 export const getPastGroupEvents = gql`
-  query ($urlname: String!, $connectionInput: ConnectionInput!) {
+  query ($urlname: String!, $first: Int!, $after: String) {
     groupByUrlname(urlname: $urlname) {
       id
-      pastEvents(input: $connectionInput) {
+      events(first: $first, after: $after, status: PAST) {
         pageInfo {
           hasNextPage
           hasPreviousPage
           startCursor
           endCursor
         }
-        count
+        totalCount
         edges {
           node {
             id
             title
-            going
-            maxTickets
             dateTime
-            hosts {
-              id
-              name
+            eventHosts {
+              member {
+                id
+                name
+              }
             }
             status
-            tickets(input: { first: 200 }) {
+            rsvps(first: 200) {
               pageInfo {
                 hasNextPage
                 hasPreviousPage
                 startCursor
                 endCursor
               }
-              count
+              yesCount
+              totalCount
               edges {
                 node {
                   status
-                  user {
+                  member {
                     id
                     name
                   }
@@ -106,7 +109,7 @@ export const getPastGroupEvents = gql`
 `;
 
 export const getEvent = gql`
-  query ($eventId: ID) {
+  query ($eventId: ID!) {
     event(id: $eventId) {
       id
       title

@@ -26,7 +26,7 @@ export async function getUserRoles(
     );
   }
 
-  if (membershipInfo.groupByUrlname.isOrganizer) {
+  if (membershipInfo.groupByUrlname.membershipMetadata.status === 'LEADER') {
     await addServerRole(interaction.guild, interaction.user.id, 'organizer');
     await addServerRole(interaction.guild, interaction.user.id, 'guest_host');
     logger.info(
@@ -37,11 +37,11 @@ export async function getUserRoles(
 
     const pastEvents = await getPaginatedData(async (paginationInput) => {
       const result = await meetupClient.getPastGroupEvents(paginationInput);
-      return result.groupByUrlname.pastEvents;
+      return result.groupByUrlname.events;
     });
 
-    const getUserHostedEvents = pastEvents.filter(({ hosts }) =>
-      hosts.some(({ id }) => id === userInfo.self.id)
+    const getUserHostedEvents = pastEvents.filter(({ eventHosts }) =>
+      eventHosts.some(({ member: { id } }) => id === userInfo.self.id)
     );
     logger.info(
       `Number of hosted events by ${interaction.user.username}: ${getUserHostedEvents.length}`

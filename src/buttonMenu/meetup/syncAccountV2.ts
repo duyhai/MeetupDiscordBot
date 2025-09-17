@@ -148,17 +148,17 @@ export class MeetupSyncAccountCommandsV2 {
 
       const pastEvents = await getPaginatedData(async (paginationInput) => {
         const result = await meetupClient.getPastGroupEvents(paginationInput);
-        return result.groupByUrlname.pastEvents;
+        return result.groupByUrlname.events;
       });
 
-      const getUserHostedEvents = pastEvents.filter(({ hosts }) =>
-        hosts.some(({ id }) => id === userInfo.self.id)
+      const getUserHostedEvents = pastEvents.filter(({ eventHosts }) =>
+        eventHosts.some(({ member: { id } }) => id === userInfo.self.id)
       );
-      const getUserAttendedEvents = pastEvents.filter(({ tickets }) =>
-        tickets.edges.some(
+      const getUserAttendedEvents = pastEvents.filter(({ rsvps }) =>
+        rsvps.edges.some(
           ({ node }) =>
             ['YES', 'ATTENDED'].includes(node.status) &&
-            node.user.id === userInfo.self.id
+            node.member.id === userInfo.self.id
         )
       );
 
@@ -182,9 +182,12 @@ export class MeetupSyncAccountCommandsV2 {
         platform_username: `${userInfo.self.name}`,
         metadata: {
           is_member: membershipInfo.groupByUrlname.isMember ? '1' : '0',
-          is_organizer: membershipInfo.groupByUrlname.isOrganizer ? '1' : '0',
+          is_organizer:
+            membershipInfo.groupByUrlname.membershipMetadata.status === 'LEADER'
+              ? '1'
+              : '0',
           member_since: dayjs(
-            membershipInfo.groupByUrlname.membershipMetadata.joinedDate
+            membershipInfo.groupByUrlname.membershipMetadata.joinTime
           ).format('YYYY-MM-DD'),
           events_attended: attendedCount.toString(),
           events_hosted: hostedCount.toString(),

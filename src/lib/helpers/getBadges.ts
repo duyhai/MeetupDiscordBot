@@ -21,17 +21,17 @@ export async function getBadges(
 
   const pastEvents = await getPaginatedData(async (paginationInput) => {
     const result = await meetupClient.getPastGroupEvents(paginationInput);
-    return result.groupByUrlname.pastEvents;
+    return result.groupByUrlname.events;
   });
 
-  const getUserHostedEvents = pastEvents.filter(({ hosts }) =>
-    hosts.some(({ id }) => id === userInfo.self.id)
+  const getUserHostedEvents = pastEvents.filter(({ eventHosts }) =>
+    eventHosts.some(({ member: { id } }) => id === userInfo.self.id)
   );
-  const getUserAttendedEvents = pastEvents.filter(({ tickets }) =>
-    tickets.edges.some(
+  const getUserAttendedEvents = pastEvents.filter(({ rsvps }) =>
+    rsvps.edges.some(
       ({ node }) =>
         ['YES', 'ATTENDED'].includes(node.status) &&
-        node.user.id === userInfo.self.id
+        node.member.id === userInfo.self.id
     )
   );
 

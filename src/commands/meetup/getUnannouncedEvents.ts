@@ -61,13 +61,13 @@ export class MeetupGetUnannouncedEventsCommands {
             const result = await meetupClient.getUserHostedEvents(
               paginationInput
             );
-            return result.self.hostedEvents;
+            return result.self.memberEvents;
           }
         );
         const filteredEvents = getUserHostedEvents.filter(
           (event) =>
             event.group.id === Configuration.meetup.groupId &&
-            event.uiActions.canAnnounce &&
+            !event.networkEvent.isAnnounced &&
             dayjs(event.dateTime).isBefore(
               dayjs().add(searchWindowByWeeks ?? 3, 'week')
             )

@@ -31,7 +31,7 @@ const Configuration: ConfigurationSchema = {
   meetup: {
     apiKey: process.env.MEETUP_KEY,
     apiSecret: process.env.MEETUP_SECRET,
-    endpoint: 'https://api.meetup.com/gql',
+    endpoint: 'https://api.meetup.com/gql-ext',
     groupId: '7595882',
     groupUrlName: '1-5genasians',
   },
