@@ -119,6 +119,7 @@ describe('getUserRoles', () => {
         id: 'testUserId',
         gender: 'MALE',
         name: 'Test',
+        memberUrl: '',
       },
     });
 
@@ -169,6 +170,7 @@ describe('getUserRoles', () => {
         id: 'testUserId',
         gender: 'MALE',
         name: 'Test',
+        memberUrl: '',
       },
     });
 

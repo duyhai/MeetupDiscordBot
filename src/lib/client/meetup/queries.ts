@@ -6,6 +6,7 @@ export const getUserInfo = gql`
       id
       name
       gender
+      memberUrl
     }
   }
 `;
@@ -80,10 +81,12 @@ export const getGroupEvents = gql`
             id
             title
             dateTime
+            eventUrl
             eventHosts {
               member {
                 id
                 name
+                memberUrl
               }
             }
             maxTickets
@@ -103,6 +106,7 @@ export const getGroupEvents = gql`
                   member {
                     id
                     name
+                    memberUrl
                   }
                 }
               }

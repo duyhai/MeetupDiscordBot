@@ -1,9 +1,11 @@
 import dayjs from 'dayjs';
+import LocalizedFormat from 'dayjs/plugin/localizedFormat';
 import { ApplicationCommandOptionType, CommandInteraction } from 'discord.js';
 import { Discord, Slash, SlashOption } from 'discordx';
 import { Logger } from 'tslog';
 import { getPaginatedData } from '../../lib/client/meetup/paginationHelper';
 
+import { BaseUserInfo } from '../../lib/client/meetup/types';
 import {
   discordCommandWrapper,
   withDiscordFileAttachment,
@@ -11,6 +13,7 @@ import {
 import { withMeetupClient } from '../../util/meetup';
 
 const logger = new Logger({ name: 'MeetupGetStatsCommands' });
+dayjs.extend(LocalizedFormat);
 
 @Discord()
 export class MeetupGetEventStatsCommands {
@@ -64,8 +67,10 @@ export class MeetupGetEventStatsCommands {
 
         let total = 0;
         const hostEvents = new Map<string, Array<string>>();
+        const hosts = new Map<string, BaseUserInfo>();
         pastEvents.forEach((event) => {
-          const { eventHosts, title, rsvps, maxTickets } = event;
+          const { eventHosts, title, rsvps, maxTickets, eventUrl, dateTime } =
+            event;
 
           if (title.includes('[Open House]')) {
             logger.info(`Skipping ${title}. Open House`);
@@ -74,13 +79,19 @@ export class MeetupGetEventStatsCommands {
 
           total += 1;
           eventHosts.forEach((host) => {
-            const key = `${host.member.id}-${host.member.name}`;
+            const key = host.member.id;
             if (!hostEvents.has(key)) {
               hostEvents.set(key, []);
             }
+
+            hosts.set(key, host.member);
             hostEvents
               .get(key)
-              .push(`${title} (${rsvps.yesCount}/${maxTickets})`);
+              .push(
+                `[${title} (${
+                  rsvps.yesCount
+                }/${maxTickets})](${eventUrl}) ${dayjs(dateTime).format('LLL')}`
+              );
           });
         });
 
@@ -91,8 +102,11 @@ export class MeetupGetEventStatsCommands {
           )
           .reverse()
           .map((entry: [string, string[]], index: number) => {
-            const [idName, events] = entry;
-            const header = `**#${index + 1}: ${events.length} ${idName}**\n`;
+            const [id, events] = entry;
+            const hostInfo = hosts.get(id);
+            const header = `**#${index + 1}: ${events.length} [${
+              hostInfo.name
+            }](${hostInfo.memberUrl}) ID: ${id}**\n`;
             const body = events.map((event) => `    ${event}`).join('\n');
             return header + body;
           })

@@ -1,5 +1,6 @@
-interface BaseUserInfo {
+export interface BaseUserInfo {
   id: string;
+  memberUrl: string;
   name: string;
 }
 
@@ -93,6 +94,7 @@ interface Event {
   eventHosts: {
     member: BaseUserInfo;
   }[];
+  eventUrl: string;
   id: string;
   maxTickets: number;
   rsvps: PaginatedData<Ticket> & {
