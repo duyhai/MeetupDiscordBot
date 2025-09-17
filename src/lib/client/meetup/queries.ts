@@ -86,6 +86,7 @@ export const getGroupEvents = gql`
                 name
               }
             }
+            maxTickets
             status
             rsvps(first: 200) {
               pageInfo {

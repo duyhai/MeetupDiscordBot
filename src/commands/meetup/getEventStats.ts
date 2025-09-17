@@ -62,15 +62,17 @@ export class MeetupGetEventStatsCommands {
           return result.groupByUrlname.events;
         });
 
+        let total = 0;
         const hostEvents = new Map<string, Array<string>>();
         pastEvents.forEach((event) => {
-          const { eventHosts, title, rsvps } = event;
+          const { eventHosts, title, rsvps, maxTickets } = event;
 
           if (title.includes('[Open House]')) {
             logger.info(`Skipping ${title}. Open House`);
             return;
           }
 
+          total += 1;
           eventHosts.forEach((host) => {
             const key = `${host.member.id}-${host.member.name}`;
             if (!hostEvents.has(key)) {
@@ -78,14 +80,10 @@ export class MeetupGetEventStatsCommands {
             }
             hostEvents
               .get(key)
-              .push(`${title} (${rsvps.yesCount}/${rsvps.totalCount})`);
+              .push(`${title} (${rsvps.yesCount}/${maxTickets})`);
           });
         });
 
-        const total = Array.from(hostEvents.values()).reduce(
-          (sum, events) => sum + events.length,
-          0
-        );
         const formattedResult = Array.from(hostEvents.entries())
           .sort(
             (entry1: [string, string[]], entry2: [string, string[]]) =>
@@ -94,8 +92,7 @@ export class MeetupGetEventStatsCommands {
           .reverse()
           .map((entry: [string, string[]], index: number) => {
             const [idName, events] = entry;
-            const name = idName.split('-')[1];
-            const header = `**#${index + 1}: ${events.length} ${name}**\n`;
+            const header = `**#${index + 1}: ${events.length} ${idName}**\n`;
             const body = events.map((event) => `    ${event}`).join('\n');
             return header + body;
           })

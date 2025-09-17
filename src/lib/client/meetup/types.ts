@@ -94,6 +94,7 @@ interface Event {
     member: BaseUserInfo;
   }[];
   id: string;
+  maxTickets: number;
   rsvps: PaginatedData<Ticket> & {
     yesCount: number;
   };
