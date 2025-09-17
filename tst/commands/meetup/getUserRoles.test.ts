@@ -130,7 +130,7 @@ describe('getUserRoles', () => {
 
     jest.spyOn(meetupClient, 'getPastGroupEvents').mockResolvedValue({
       groupByUrlname: {
-        pastEvents: [
+        events: [
           {
             eventHosts: [{ member: { id: 'testUserId' } }],
           },
@@ -180,7 +180,7 @@ describe('getUserRoles', () => {
 
     jest.spyOn(meetupClient, 'getPastGroupEvents').mockResolvedValueOnce({
       groupByUrlname: {
-        pastEvents: [], // No hosted events
+        events: [], // No hosted events
       },
     } as unknown as GetPastGroupEventsResponse);
 
@@ -195,7 +195,7 @@ describe('getUserRoles', () => {
 
     jest.spyOn(meetupClient, 'getPastGroupEvents').mockResolvedValueOnce({
       groupByUrlname: {
-        pastEvents: [
+        events: [
           {
             eventHosts: [{ member: { id: 'testUserId2' } }],
           },
