@@ -29,12 +29,25 @@ export async function getBadges(
   const getUserHostedEvents = pastEvents.filter(({ eventHosts }) =>
     eventHosts.some(({ member: { id } }) => id === userInfo.self.id)
   );
-  const getUserAttendedEvents = pastEvents.filter(({ rsvps }) =>
-    rsvps.edges.some(
-      ({ node }) =>
-        ['YES', 'ATTENDED'].includes(node.status) &&
-        node.member.id === userInfo.self.id
+
+  // TODO: Optimization opportunity. Filter to events that are after joinDate
+  const getUserAttendedEvents = (
+    await Promise.all(
+      pastEvents.map((event) =>
+        getPaginatedData(async (paginationInput) => {
+          const result = await meetupClient.getEventRsvps(
+            event.id,
+            paginationInput,
+            {
+              rsvpStatus: ['YES', 'ATTENDED'],
+            }
+          );
+          return result.event.rsvps;
+        })
+      )
     )
+  ).filter((rsvps) =>
+    rsvps.some(({ member }) => member.id === userInfo.self.id)
   );
 
   const hostedCount = getUserHostedEvents.length;

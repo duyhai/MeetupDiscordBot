@@ -156,12 +156,22 @@ export class MeetupSyncAccountCommandsV2 {
       const getUserHostedEvents = pastEvents.filter(({ eventHosts }) =>
         eventHosts.some(({ member: { id } }) => id === userInfo.self.id)
       );
-      const getUserAttendedEvents = pastEvents.filter(({ rsvps }) =>
-        rsvps.edges.some(
-          ({ node }) =>
-            ['YES', 'ATTENDED'].includes(node.status) &&
-            node.member.id === userInfo.self.id
+      const getUserAttendedEvents = await Promise.all(
+        pastEvents.map((event) =>
+          getPaginatedData(async (paginationInput) => {
+            const result = await meetupClient.getEventRsvps(
+              event.id,
+              paginationInput,
+              {
+                rsvpStatus: ['ATTENDED', 'YES'],
+              }
+            );
+            return result.event.rsvps;
+          })
         )
+      );
+      getUserAttendedEvents.filter((rsvp) =>
+        rsvp.some(({ member }) => member.id === userInfo.self.id)
       );
 
       const hostedCount = getUserHostedEvents.length;

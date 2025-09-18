@@ -11,6 +11,7 @@ import {
 } from './mutations';
 import {
   getEvent,
+  getEventRsvps,
   getGroupEvents,
   getUserHostedEvents,
   getUserInfo,
@@ -26,6 +27,8 @@ import {
   EditEventInput,
   EditEventResponse,
   GetEventResponse,
+  GetEventRsvpsInput,
+  GetEventRsvpsResponse,
   GetGroupEventsInput,
   GetGroupEventsResponse,
   GetUserHostedEventsInput,
@@ -37,6 +40,7 @@ import {
   PaginationInput,
   PublishEventDraftInput,
   PublishEventDraftResponse,
+  RsvpFilter,
 } from './types';
 
 const logger = new Logger({ name: 'GqlMeetupClient' });
@@ -123,7 +127,37 @@ export class GqlMeetupClient {
             GetGroupEventsResponse,
             GetGroupEventsInput
           >(getGroupEvents, callbackInput);
-          // logger.info(`getUserMembershipInfo result: ${JSON.stringify(result)}`);
+          // logger.info(`getGroupEvents result: ${JSON.stringify(result)}`);
+          return result;
+        } catch (error) {
+          logger.error(error);
+          throw error;
+        }
+      }
+    );
+  }
+
+  public async getEventRsvps(
+    eventId: string,
+    input: PaginationInput,
+    filter?: RsvpFilter
+  ) {
+    logger.info(`Calling getEventRsvps with input: ${JSON.stringify(input)}`);
+    // Can be cached because it doesn't retrieve user specific data
+    return cachedClientRequest(
+      'getEventRsvps',
+      {
+        eventId,
+        ...input,
+        filter,
+      },
+      async (callbackInput: GetEventRsvpsInput) => {
+        try {
+          const result = await this.client.request<
+            GetEventRsvpsResponse,
+            GetEventRsvpsInput
+          >(getEventRsvps, callbackInput);
+          // logger.info(`getEventRsvps result: ${JSON.stringify(result)}`);
           return result;
         } catch (error) {
           logger.error(error);

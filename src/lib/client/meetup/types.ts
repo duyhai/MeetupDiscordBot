@@ -89,7 +89,7 @@ type EventStatus =
   | 'PROPOSED'
   | 'TEMPLATE';
 
-interface Event {
+export interface Event {
   dateTime: string;
   eventHosts: {
     member: BaseUserInfo;
@@ -97,9 +97,6 @@ interface Event {
   eventUrl: string;
   id: string;
   maxTickets: number;
-  rsvps: PaginatedData<Ticket> & {
-    yesCount: number;
-  };
   status: EventStatus;
   title: string;
 }
@@ -119,6 +116,10 @@ export interface GroupEventFilter {
 
   // Show only events with title matching the specified string (case-insensitive).
   title?: string;
+}
+
+export interface RsvpFilter {
+  rsvpStatus: RsvpStatus[];
 }
 
 interface EventGroupInfo {
@@ -145,7 +146,7 @@ export interface GetUserHostedEventsInput {
   first: number;
 }
 
-type TicketStatus =
+type RsvpStatus =
   | 'YES'
   | 'NO'
   | 'WAITLIST'
@@ -156,9 +157,23 @@ type TicketStatus =
   | 'EXCUSED_ABSENCE'
   | 'YES_PENDING_PAYMENT';
 
-interface Ticket {
+export interface Rsvp {
   member: BaseUserInfo;
-  status: TicketStatus;
+  status: RsvpStatus;
+}
+
+export interface GetEventRsvpsResponse {
+  event: {
+    id: string;
+    rsvps: PaginatedData<Rsvp>;
+  };
+}
+
+export interface GetEventRsvpsInput {
+  after?: string;
+  eventId: string;
+  filter?: RsvpFilter;
+  first: number;
 }
 
 export interface GetGroupEventsResponse {

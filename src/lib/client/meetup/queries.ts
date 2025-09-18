@@ -59,6 +59,34 @@ export const getUserHostedEvents = gql`
   }
 `;
 
+export const getEventRsvps = gql`
+  query ($eventId: ID!, $first: Int!, $after: String, $filter: RsvpFilter) {
+    event(id: $eventId) {
+      id
+      rsvps(first: $first, after: $after, filter: $filter) {
+        pageInfo {
+          hasNextPage
+          hasPreviousPage
+          startCursor
+          endCursor
+        }
+        yesCount
+        totalCount
+        edges {
+          node {
+            status
+            member {
+              id
+              name
+              memberUrl
+            }
+          }
+        }
+      }
+    }
+  }
+`;
+
 export const getGroupEvents = gql`
   query (
     $urlname: String!
@@ -91,26 +119,6 @@ export const getGroupEvents = gql`
             }
             maxTickets
             status
-            rsvps(first: 200) {
-              pageInfo {
-                hasNextPage
-                hasPreviousPage
-                startCursor
-                endCursor
-              }
-              yesCount
-              totalCount
-              edges {
-                node {
-                  status
-                  member {
-                    id
-                    name
-                    memberUrl
-                  }
-                }
-              }
-            }
           }
         }
       }
