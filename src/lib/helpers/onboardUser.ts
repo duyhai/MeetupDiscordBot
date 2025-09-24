@@ -9,6 +9,7 @@ import {
 } from '../../constants';
 import { isAdmin } from '../../util/discord';
 import { GqlMeetupClient } from '../client/meetup/gqlClient';
+import { MemberGender } from '../client/meetup/types';
 
 const strings = {
   welcomeMsg: (user: User) =>
@@ -73,7 +74,7 @@ export async function removeRewardRole(
 async function onboardUserCommon(
   interaction: CommandInteraction | ButtonInteraction,
   userId: string,
-  isFemale: boolean,
+  gender: MemberGender,
   nickname?: string
 ) {
   const { guild, client } = interaction;
@@ -97,9 +98,19 @@ async function onboardUserCommon(
     );
   }
 
-  if (isFemale) {
-    await addServerRole(guild, user.id, 'ladies_lounge');
-    logger.info(`User ${fullUsername} added to LadiesLounge`);
+  switch (gender) {
+    case 'MALE': {
+      await addServerRole(guild, user.id, 'gents_lounge');
+      logger.info(`User ${fullUsername} added to GentsLounge`);
+      break;
+    }
+    case 'FEMALE': {
+      await addServerRole(guild, user.id, 'ladies_lounge');
+      logger.info(`User ${fullUsername} added to LadiesLounge`);
+      break;
+    }
+    default:
+      break;
   }
   await removeServerRole(guild, user.id, 'onboarding');
   logger.info(`User ${fullUsername} onboarded!`);
@@ -111,12 +122,12 @@ async function onboardUserCommon(
 export async function onboardUser(
   interaction: CommandInteraction,
   userId: string,
-  isFemale: boolean
+  gender: MemberGender
 ) {
   const { client } = interaction;
   const user = await client.users.fetch(userId);
 
-  await onboardUserCommon(interaction, userId, isFemale);
+  await onboardUserCommon(interaction, userId, gender);
   await interaction.followUp({
     content: strings.replyToModerator,
     ephemeral: true,
@@ -164,7 +175,7 @@ export async function selfOnboardUser(
   await onboardUserCommon(
     interaction,
     user.id,
-    userInfo.self.gender === 'FEMALE',
+    userInfo.self.gender,
     cleanedName
   );
   await interaction.followUp({

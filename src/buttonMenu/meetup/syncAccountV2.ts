@@ -133,11 +133,21 @@ export class MeetupSyncAccountCommandsV2 {
         );
       }
 
-      const isFemale = userInfo.self.gender === 'FEMALE';
-      if (isFemale) {
-        await addServerRole(guild, user.id, 'ladies_lounge');
-        logger.info(`User ${fullUsername} added to LadiesLounge`);
+      switch (userInfo.self.gender) {
+        case 'MALE': {
+          await addServerRole(guild, user.id, 'gents_lounge');
+          logger.info(`User ${fullUsername} added to GentsLounge`);
+          break;
+        }
+        case 'FEMALE': {
+          await addServerRole(guild, user.id, 'ladies_lounge');
+          logger.info(`User ${fullUsername} added to LadiesLounge`);
+          break;
+        }
+        default:
+          break;
       }
+
       await removeServerRole(guild, user.id, 'onboarding');
       logger.info(`User ${fullUsername} onboarded!`);
 
@@ -224,13 +234,14 @@ export class MeetupSyncAccountCommandsV2 {
       );
 
       const replyContent = [
-        `__**Gaining full access with verification**__\n`,
+        `__**Gaining full access to the server with Meetup verification**__\n`,
         `We are restricting access to most of our chat rooms by default. \
 Those are only available for verified Meetup group members. Please read the verification instructions carefully below :slight_smile:\n`,
         `We integrated our Discord bot with the Meetup API in order to automatically verify member status with Meetup.`,
         `Please click the button below to link your Meetup account. This will:\n`,
         `- Onboard you to the Discord server if you're part of the 1.5 Gen Asian Meetup group.`,
         `- Assign you special roles if applicable (eg: Guest Host, Organizer, etc)`,
+        `- Adds you to the Ladies or Gents Lounge based on the gender in your Meetup profile`,
         `- Rewards you with Discord badges based on your Meetup activity\n`,
         `You can use this button to refresh your data in the future as well (eg: to get better badges).`,
       ];

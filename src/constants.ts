@@ -2,6 +2,7 @@ export const SERVER_ROLES = {
   bots: '931394368949067796',
   guest_host: '912473798085836821',
   ladies_lounge: '935435362984161292',
+  gents_lounge: '1336180499231670374',
   moderator: '912474048775221270',
   onboarding: '932906028725571594',
   organizer: '912474170594582568',

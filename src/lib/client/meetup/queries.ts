@@ -1,14 +1,21 @@
 import { gql } from 'graphql-request';
 
+const UserFragment = gql`
+  fragment UserDetails on Member {
+    id
+    name
+    gender
+    memberUrl
+  }
+`;
+
 export const getUserInfo = gql`
   query {
     self {
-      id
-      name
-      gender
-      memberUrl
+      ...UserDetails
     }
   }
+  ${UserFragment}
 `;
 
 export const getUserMembershipInfo = gql`
@@ -76,15 +83,14 @@ export const getEventRsvps = gql`
           node {
             status
             member {
-              id
-              name
-              memberUrl
+              ...UserDetails
             }
           }
         }
       }
     }
   }
+  ${UserFragment}
 `;
 
 export const getGroupEvents = gql`
@@ -112,9 +118,7 @@ export const getGroupEvents = gql`
             eventUrl
             eventHosts {
               member {
-                id
-                name
-                memberUrl
+                ...UserDetails
               }
             }
             maxTickets
@@ -124,6 +128,7 @@ export const getGroupEvents = gql`
       }
     }
   }
+  ${UserFragment}
 `;
 
 export const getEvent = gql`

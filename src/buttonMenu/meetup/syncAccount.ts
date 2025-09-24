@@ -88,7 +88,7 @@ Those are only available for verified Meetup group members. Please read the veri
         `Please click the button below to link your Meetup account. This will:\n`,
         `- Onboard you to the Discord server if you're part of the 1.5 Gen Asian Meetup group.`,
         `- Assign you special roles if applicable (eg: Guest Host, Organizer, etc)`,
-        `- Adds you to the Ladies Lounge if you set your gender to Female on Meetup`,
+        `- Adds you to the Ladies or Gents Lounge based on the gender in your Meetup profile`,
         `- Rewards you with Discord badges based on your Meetup activity\n`,
         `You can use this button to refresh your data in the future as well (eg: to get better badges).`,
       ];
@@ -111,7 +111,7 @@ Those are only available for verified Meetup group members. Please read the veri
       );
 
       const replyContent = [
-        `Besides the Ladies Lounge, there is also an LGBTQ channel that members can join by clicking the button below.`,
+        `Besides the Ladies and Gents Lounge, there is also an LGBTQ channel that members can join by clicking the button below.`,
       ];
       await interaction.channel.send({
         content: replyContent.join('\n'),

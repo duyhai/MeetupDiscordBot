@@ -1,4 +1,7 @@
+export type MemberGender = 'FEMALE' | 'MALE' | 'NONE' | 'NOT_CHECKED' | 'OTHER';
+
 export interface BaseUserInfo {
+  gender: MemberGender;
   id: string;
   memberUrl: string;
   name: string;
@@ -28,9 +31,7 @@ export interface PaginatedData<TData> {
 }
 
 export interface GetUserInfoResponse {
-  self: {
-    gender: string;
-  } & BaseUserInfo;
+  self: BaseUserInfo;
 }
 
 export interface GetUserMembershipInfoResponse {
