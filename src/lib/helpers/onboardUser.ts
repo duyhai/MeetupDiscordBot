@@ -144,6 +144,8 @@ export async function selfOnboardUser(
   meetupClient: GqlMeetupClient,
   interaction: CommandInteraction | ButtonInteraction
 ) {
+  const { user: discordUser } = interaction;
+
   const userInfo = await meetupClient.getUserInfo();
   const membershipInfo = await meetupClient.getUserMembershipInfo();
 
@@ -164,22 +166,27 @@ export async function selfOnboardUser(
     .split(' ')
     .filter(Boolean)
     .map((namePart, index) => {
+      const formattedPart =
+        namePart.charAt(0).toUpperCase() + namePart.slice(1).toLowerCase();
+
       if (index === 0) {
-        return namePart;
+        return formattedPart;
       }
-      return `${namePart.at(0)}.`;
+      return `${formattedPart.at(0)}.`;
     })
     .join(' ');
 
-  const { user } = interaction;
+  logger.info(
+    `Updating ${discordUser.username}'s display name to ${cleanedName} (Meetup name: ${name}).`
+  );
   await onboardUserCommon(
     interaction,
-    user.id,
+    discordUser.id,
     userInfo.self.gender,
     cleanedName
   );
   await interaction.followUp({
-    content: strings.welcomeMsg(user),
+    content: strings.welcomeMsg(discordUser),
     ephemeral: true,
   });
 }
