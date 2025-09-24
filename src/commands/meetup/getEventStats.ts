@@ -200,10 +200,8 @@ ${formattedResult}
         const noShowMembers = new Map<string, BaseUserInfo>();
         const noShowEventsPerMember = new Map<string, Event[]>();
 
-        // TODO: Need to get rsvps in parallel somehow
-        // eslint-disable-next-line no-restricted-syntax
-        for (const event of pastEvents) {
-          // eslint-disable-next-line no-await-in-loop
+        // Create an array of promises, one for each event's RSVP fetch
+        const rsvpPromises = pastEvents.map(async (event) => {
           const rsvps = await getPaginatedData(async (paginationInput) => {
             const result = await meetupClient.getEventRsvps(
               event.id,
@@ -214,7 +212,15 @@ ${formattedResult}
             );
             return result.event.rsvps;
           });
+          // Return an object containing the event and its no-show rsvps
+          return { event, rsvps };
+        });
 
+        // Await all promises to resolve in parallel
+        const results = await Promise.all(rsvpPromises);
+
+        // Now iterate over the results and process the data
+        results.forEach(({ event, rsvps }) => {
           total += rsvps.length;
           rsvps.forEach((rsvp) => {
             const key = rsvp.member.id;
@@ -224,7 +230,7 @@ ${formattedResult}
             }
             noShowEventsPerMember.get(key).push(event);
           });
-        }
+        });
 
         const formattedResult = Array.from(noShowMembers.keys())
           .map((id: string) => {
