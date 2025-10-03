@@ -9,6 +9,7 @@ import { getPaginatedData } from '../../lib/client/meetup/paginationHelper';
 import { BaseUserInfo, Event } from '../../lib/client/meetup/types';
 import {
   discordCommandWrapper,
+  linkStr,
   withDiscordFileAttachment,
 } from '../../util/discord';
 import { withMeetupClient } from '../../util/meetup';
@@ -63,8 +64,25 @@ export class MeetupGetEventStatsCommands {
       required: true,
     })
     month: number,
+    @SlashOption({
+      name: 'show_dates',
+      description: 'Toggle whether to show event dates. Default is true.',
+      type: ApplicationCommandOptionType.Boolean,
+      required: false,
+    })
+    showDates: boolean | undefined,
+    @SlashOption({
+      name: 'include_links',
+      description: 'Toggle whether to include Meetup links. Default is true.',
+      type: ApplicationCommandOptionType.Boolean,
+      required: false,
+    })
+    includeLinks: boolean | undefined,
     interaction: CommandInteraction
   ) {
+    // Need to handle defaults here, because interaction param needs to be last
+    const shouldShowDates = showDates ?? true;
+    const shouldIncludeLinks = includeLinks ?? true;
     await discordCommandWrapper(interaction, async () => {
       await withMeetupClient(interaction, async (meetupClient) => {
         logger.info('Fetching data');
@@ -108,12 +126,13 @@ export class MeetupGetEventStatsCommands {
             }
 
             hosts.set(key, host.member);
+            const titleStr = `${title} (${rsvps.length}/${maxTickets})`;
             hostEvents
               .get(key)
               .push(
-                `[${title} (${
-                  rsvps.length
-                }/${maxTickets})](${eventUrl}) ${dayjs(dateTime).format('LLL')}`
+                `${
+                  shouldIncludeLinks ? linkStr(titleStr, eventUrl) : titleStr
+                } ${shouldShowDates ? dayjs(dateTime).format('LLL') : ''}`
               );
           });
         }
@@ -127,9 +146,11 @@ export class MeetupGetEventStatsCommands {
           .map((entry: [string, string[]], index: number) => {
             const [id, events] = entry;
             const hostInfo = hosts.get(id);
-            const header = `**#${index + 1}: ${events.length} [${
-              hostInfo.name
-            }](${hostInfo.memberUrl}) ID: ${id}**\n`;
+            const header = `**#${index + 1}: ${events.length} ${
+              shouldIncludeLinks
+                ? linkStr(hostInfo.name, hostInfo.memberUrl)
+                : hostInfo.name
+            } ID: ${id}**\n`;
             const body = events.map((event) => `    ${event}`).join('\n');
             return header + body;
           })
@@ -185,8 +206,25 @@ ${formattedResult}
       required: true,
     })
     month: number,
+    @SlashOption({
+      name: 'show_dates',
+      description: 'Toggle whether to show event dates. Default is true.',
+      type: ApplicationCommandOptionType.Boolean,
+      required: false,
+    })
+    showDates: boolean | undefined,
+    @SlashOption({
+      name: 'include_links',
+      description: 'Toggle whether to include Meetup links. Default is true.',
+      type: ApplicationCommandOptionType.Boolean,
+      required: false,
+    })
+    includeLinks: boolean | undefined,
     interaction: CommandInteraction
   ) {
+    // Need to handle defaults here, because interaction param needs to be last
+    const shouldShowDates = showDates ?? true;
+    const shouldIncludeLinks = includeLinks ?? true;
     await discordCommandWrapper(interaction, async () => {
       await withMeetupClient(interaction, async (meetupClient) => {
         logger.info('Fetching data');
@@ -236,13 +274,21 @@ ${formattedResult}
           .map((id: string) => {
             const memberInfo = noShowMembers.get(id);
             const noShows = noShowEventsPerMember.get(id);
-            const header = `**${noShows.length} [${memberInfo.name}](${memberInfo.memberUrl}) ID: ${memberInfo.id}**\n`;
+            const header = `**${noShows.length} ${
+              shouldIncludeLinks
+                ? linkStr(memberInfo.name, memberInfo.memberUrl)
+                : memberInfo.name
+            } ID: ${memberInfo.id}**\n`;
             const body = noShows
               .map(
                 (event) =>
-                  `    [${event.title}](${event.eventUrl}) ${dayjs(
-                    event.dateTime
-                  ).format('LLL')}`
+                  `    ${
+                    shouldIncludeLinks
+                      ? linkStr(event.title, event.eventUrl)
+                      : event.title
+                  } ${
+                    shouldShowDates ? dayjs(event.dateTime).format('LLL') : ''
+                  }`
               )
               .join('\n');
             return header + body;

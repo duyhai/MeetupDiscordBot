@@ -75,3 +75,7 @@ export async function withDiscordFileAttachment(
 export function isAdmin(member: GuildMember) {
   return member.permissions.has(PermissionFlagsBits.Administrator, true);
 }
+
+export function linkStr(text: string, link: string) {
+  return `[${text}](${link})`;
+}
