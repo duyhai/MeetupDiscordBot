@@ -56,6 +56,22 @@ export class GqlMeetupClient {
     });
   }
 
+  public async customRequest(query: string, args: string): Promise<string> {
+    logger.info(
+      `Calling customRequest with input: ${JSON.stringify({ query, args })}`
+    );
+    try {
+      const result = JSON.stringify(
+        await this.client.rawRequest(query, JSON.parse(args))
+      );
+      logger.info(`customRequest result: ${result}`);
+      return result;
+    } catch (error) {
+      logger.error(error);
+      throw error;
+    }
+  }
+
   public async getUserInfo() {
     logger.info(`Calling getUserInfo with input: ${JSON.stringify({})}`);
     try {

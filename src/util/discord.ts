@@ -4,6 +4,7 @@ import {
   ButtonInteraction,
   CommandInteraction,
   GuildMember,
+  ModalSubmitInteraction,
   PermissionFlagsBits,
   WebhookMessageEditOptions,
 } from 'discord.js';
@@ -19,7 +20,7 @@ const logger = new Logger({ name: 'DiscordUtil' });
  * @param commandFn Lambda for command implementation
  */
 export async function discordCommandWrapper(
-  interaction: ButtonInteraction | CommandInteraction,
+  interaction: ButtonInteraction | CommandInteraction | ModalSubmitInteraction,
   commandFn: () => Promise<void>
 ) {
   const message = await interaction.reply({

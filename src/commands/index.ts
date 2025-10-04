@@ -5,6 +5,7 @@ import { MeetupNoShowCommands } from './meetup/getNoShow';
 import { MeetupGetUnannouncedEventsCommands } from './meetup/getUnannouncedEvents';
 import { MeetupGetUserRolesCommands } from './meetup/getUserRoles';
 import { MeetupSelfOnboardCommands } from './meetup/selfOnboard';
+import { MeetupTestGqlCommands } from './meetup/testGQL';
 import { OnboardUserCommands } from './onboardUser';
 import { SendMessageCommands } from './sendMessage';
 
@@ -18,6 +19,7 @@ const Commands = [
   OnboardUserCommands,
   MeetupNoShowCommands,
   SendMessageCommands,
+  MeetupTestGqlCommands,
 ];
 
 export default Commands;

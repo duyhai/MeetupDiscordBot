@@ -1,4 +1,8 @@
-import { ButtonInteraction, CommandInteraction } from 'discord.js';
+import {
+  ButtonInteraction,
+  CommandInteraction,
+  ModalSubmitInteraction,
+} from 'discord.js';
 import { Logger } from 'tslog';
 import { v4 as uuidv4 } from 'uuid';
 import { generateOAuthUrl } from '../constants';
@@ -10,7 +14,7 @@ import { spinWait } from './spinWait';
 const logger = new Logger({ name: 'MeetupUtil' });
 
 async function showMeetupTokenUrl(
-  interaction: ButtonInteraction | CommandInteraction
+  interaction: ButtonInteraction | CommandInteraction | ModalSubmitInteraction
 ) {
   const maskedUserId = uuidv4();
   logger.info(
@@ -33,7 +37,7 @@ async function showMeetupTokenUrl(
  * @param commandFn Lambda for command implementation
  */
 export async function withMeetupClient(
-  interaction: ButtonInteraction | CommandInteraction,
+  interaction: ButtonInteraction | CommandInteraction | ModalSubmitInteraction,
   commandFn: (meetupClient: GqlMeetupClient) => Promise<void>
 ) {
   const tokenKey = `${interaction.user.id}-meetup-tokens`;
