@@ -1,5 +1,7 @@
 import dayjs from 'dayjs';
 import LocalizedFormat from 'dayjs/plugin/localizedFormat';
+import timezone from 'dayjs/plugin/timezone';
+import utc from 'dayjs/plugin/utc';
 import { ApplicationCommandOptionType, CommandInteraction } from 'discord.js';
 import { Discord, Slash, SlashOption } from 'discordx';
 import { Logger } from 'tslog';
@@ -14,8 +16,13 @@ import {
 } from '../../util/discord';
 import { withMeetupClient } from '../../util/meetup';
 
-const logger = new Logger({ name: 'MeetupGetStatsCommands' });
+dayjs.extend(utc);
+dayjs.extend(timezone);
 dayjs.extend(LocalizedFormat);
+// TODO: Get timezone from Meetup group instead
+dayjs.tz.setDefault('America/Los_Angeles');
+
+const logger = new Logger({ name: 'MeetupGetStatsCommands' });
 
 async function getEventsYearMonth(
   meetupClient: GqlMeetupClient,
@@ -25,8 +32,7 @@ async function getEventsYearMonth(
   let startDate = dayjs().set('year', year).startOf('year');
   let endDate = startDate.endOf('year');
   if (month !== 0) {
-    startDate = startDate.set('month', month - 1);
-    startDate = startDate.startOf('month');
+    startDate = startDate.set('month', month - 1).startOf('month');
     endDate = startDate.endOf('month');
   }
 
