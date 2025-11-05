@@ -12,6 +12,7 @@ import { ButtonComponent, Discord, Slash, SlashOption } from 'discordx';
 import { Logger } from 'tslog';
 
 import { DRAFT_EVENT_TEMPLATE_ID } from '../../constants';
+import { getPaginatedData } from '../../lib/client/meetup/paginationHelper';
 import { createEventTemplate } from '../../templates/createEventTemplate';
 import { ApplicationCache } from '../../util/cache';
 import { discordCommandWrapper } from '../../util/discord';
@@ -226,11 +227,23 @@ export class MeetupCreateEventCommands {
 
         const userInfo = await meetupClient.getUserInfo();
 
+        const getUserHostedEvents = await getPaginatedData(
+          async (paginationInput) => {
+            const result = await meetupClient.getGroupEvents(paginationInput, {
+              status: ['PAST'],
+              hostId: userInfo.self.id,
+            });
+            return result.groupByUrlname.events;
+          }
+        );
+
         const replyContent = [
           `❗${interaction.user.toString()} is requesting the creation of a new Meetup event.❗`,
           `Meetup User ID: ${userInfo.self.id}`,
+          `Number of hosted events: ${getUserHostedEvents.length}`,
           `Event Date: ${dateObj.format(DATE_FORMAT)}`,
           `Event Title: ${title}`,
+          `Please reach out to us if you have any questions while setting up your event.`,
           `Organizers, please approve or deny below:`,
         ];
         await interaction.followUp({
