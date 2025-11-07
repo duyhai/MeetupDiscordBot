@@ -81,7 +81,7 @@ export class MeetupCreateEventCommands {
             const [, ...requestInfo] = interaction.message.content.split('\n');
             requestInfo.pop();
 
-            const [meetupUserId, eventDate, eventTitle] = requestInfo.map(
+            const [meetupUserId, , eventDate, eventTitle] = requestInfo.map(
               (line) => {
                 const key = line.split(': ')[0];
                 return line.slice(key.length + 2);
