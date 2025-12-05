@@ -1,7 +1,4 @@
 import dayjs from 'dayjs';
-import LocalizedFormat from 'dayjs/plugin/localizedFormat';
-import timezone from 'dayjs/plugin/timezone';
-import utc from 'dayjs/plugin/utc';
 import { ApplicationCommandOptionType, CommandInteraction } from 'discord.js';
 import { Discord, Slash, SlashOption } from 'discordx';
 import { Logger } from 'tslog';
@@ -15,12 +12,7 @@ import {
   withDiscordFileAttachment,
 } from '../../util/discord';
 import { withMeetupClient } from '../../util/meetup';
-
-dayjs.extend(utc);
-dayjs.extend(timezone);
-dayjs.extend(LocalizedFormat);
-// TODO: Get timezone from Meetup group instead
-dayjs.tz.setDefault('America/Los_Angeles');
+import { tz } from '../../util/timezone';
 
 const logger = new Logger({ name: 'MeetupGetStatsCommands' });
 
@@ -29,7 +21,7 @@ async function getEventsYearMonth(
   year: number,
   month: number
 ) {
-  let startDate = dayjs().set('year', year).startOf('year');
+  let startDate = tz(dayjs()).set('year', year).startOf('year');
   let endDate = startDate.endOf('year');
   if (month !== 0) {
     startDate = startDate.set('month', month - 1).startOf('month');
@@ -138,7 +130,7 @@ export class MeetupGetEventStatsCommands {
               .push(
                 `${
                   shouldIncludeLinks ? linkStr(titleStr, eventUrl) : titleStr
-                } ${shouldShowDates ? dayjs(dateTime).format('LLL') : ''}`
+                } ${shouldShowDates ? tz(dayjs(dateTime)).format('LLL') : ''}`
               );
           });
         }
@@ -293,7 +285,9 @@ ${formattedResult}
                       ? linkStr(event.title, event.eventUrl)
                       : event.title
                   } ${
-                    shouldShowDates ? dayjs(event.dateTime).format('LLL') : ''
+                    shouldShowDates
+                      ? tz(dayjs(event.dateTime)).format('LLL')
+                      : ''
                   }`
               )
               .join('\n');

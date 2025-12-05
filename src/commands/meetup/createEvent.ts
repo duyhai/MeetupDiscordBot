@@ -18,6 +18,7 @@ import { ApplicationCache } from '../../util/cache';
 import { discordCommandWrapper } from '../../util/discord';
 import { withLock } from '../../util/lock';
 import { withMeetupClient } from '../../util/meetup';
+import { tz } from '../../util/timezone';
 
 const logger = new Logger({ name: 'MeetupCreateEventCommands' });
 
@@ -212,7 +213,7 @@ export class MeetupCreateEventCommands {
     interaction: CommandInteraction
   ) {
     await discordCommandWrapper(interaction, async () => {
-      const dateObj = dayjs(new Date(year, month - 1, day));
+      const dateObj = tz(dayjs(new Date(year, month - 1, day)));
       if (dateObj.isBefore(new Date())) {
         throw new Error('Invalid date. Date cannot be in the past.');
       }

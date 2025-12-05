@@ -24,6 +24,7 @@ import {
 import { ApplicationCache } from '../../util/cache';
 import { discordCommandWrapper, isAdmin } from '../../util/discord';
 import { spinWait } from '../../util/spinWait';
+import { tz } from '../../util/timezone';
 
 const logger = new Logger({ name: 'MeetupSyncAccount' });
 
@@ -208,8 +209,8 @@ export class MeetupSyncAccountCommandsV2 {
             membershipInfo.groupByUrlname.membershipMetadata.status === 'LEADER'
               ? '1'
               : '0',
-          member_since: dayjs(
-            membershipInfo.groupByUrlname.membershipMetadata.joinTime
+          member_since: tz(
+            dayjs(membershipInfo.groupByUrlname.membershipMetadata.joinTime)
           ).format('YYYY-MM-DD'),
           events_attended: attendedCount.toString(),
           events_hosted: hostedCount.toString(),
