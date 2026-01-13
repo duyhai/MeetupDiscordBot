@@ -6,6 +6,7 @@ import grant, { GrantSession } from 'grant';
 import { Logger } from 'tslog';
 
 import Configuration from './configuration';
+import { getAuthLandingPage } from './templates/authLanding';
 import './buttonMenu';
 import './contextMenu';
 import './commands';
@@ -35,7 +36,9 @@ app.get('/connect/meetup/callback', (async (req, res) => {
   const grantSession = (req.session as any).grant as GrantSession;
   logger.info(`Meetup response: ${JSON.stringify(grantSession)}`);
   if (grantSession.response.error) {
-    res.end(JSON.stringify(grantSession.response.error));
+    res.send(
+      getAuthLandingPage('error', JSON.stringify(grantSession.response.error))
+    );
     return;
   }
   const rawTokens = grantSession.response.raw as APIAccessTokenResponse;
@@ -48,9 +51,16 @@ app.get('/connect/meetup/callback', (async (req, res) => {
   try {
     const userId = await cache.get(`maskedUserId-${grantSession.state}`);
     await cache.set(`${userId}-meetup-tokens`, JSON.stringify(tokens));
-    res.end(`Connected to Meetup. You can close this window now!`);
+    res.send(
+      getAuthLandingPage(
+        'success',
+        'Connected to Meetup. You can close this window now!'
+      )
+    );
   } catch (err) {
-    res.end(`Failed to data store! Please try again.`);
+    res.send(
+      getAuthLandingPage('error', 'Failed to data store! Please try again.')
+    );
   }
 }) as RequestHandler);
 
