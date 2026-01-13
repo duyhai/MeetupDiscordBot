@@ -31,6 +31,7 @@ async function showMeetupTokenUrl(
 
   const button = new ButtonBuilder()
     .setLabel('Connect to Meetup')
+    .setEmoji('🧲')
     .setStyle(ButtonStyle.Link)
     .setURL(oauthUrl);
 

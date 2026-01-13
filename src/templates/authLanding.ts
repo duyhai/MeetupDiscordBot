@@ -13,6 +13,8 @@ export const getAuthLandingPage = (
   const title = isSuccess ? 'Success!' : 'Something went wrong';
   const color = isSuccess ? '#5865F2' : '#ED4245'; // Discord Blurple or Red
   const icon = isSuccess ? successIcon : failIcon;
+  const deepLink = 'discord://';
+  const webLink = 'https://discord.com/channels/@me';
 
   return `
 <!DOCTYPE html>
@@ -75,14 +77,18 @@ export const getAuthLandingPage = (
         </div>
         <h1>${title}</h1>
         <p>${message}</p>
-        <a href="discord://" class="btn">Back to Discord</a>
+        <a href="${webLink}" class="btn" onclick="setTimeout(function(){ window.location = '${deepLink}'; }, 25);">Back to Discord</a>
     </div>
     <script>
         window.onload = function() {
             if ("${status}" === "success") {
+                // Try deep link immediately
+                window.location.href = "${deepLink}";
+                
+                // Fallback to web link if deep link fails (though browser handling varies)
                 setTimeout(function() {
-                    window.location.href = "discord://";
-                }, 1000);
+                     window.location.href = "${webLink}";
+                }, 1500);
             }
         }
     </script>
