@@ -6,12 +6,12 @@ import grant, { GrantSession } from 'grant';
 import { Logger } from 'tslog';
 
 import Configuration from './configuration';
-import { getAuthLandingPage } from './templates/authLanding';
 import './buttonMenu';
 import './contextMenu';
 import './commands';
 import { generateOAuthUrl } from './constants';
 import { APIAccessTokenResponse, Tokens } from './lib/client/discord/types';
+import { getAuthLandingPage } from './templates/authLanding';
 import { ApplicationCache } from './util/cache';
 
 const logger = new Logger({ name: 'MeetupBot' });
