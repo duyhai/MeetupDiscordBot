@@ -1,6 +1,10 @@
 import {
+  ActionRowBuilder,
+  ButtonBuilder,
   ButtonInteraction,
+  ButtonStyle,
   CommandInteraction,
+  MessageActionRowComponentBuilder,
   ModalSubmitInteraction,
 } from 'discord.js';
 import { Logger } from 'tslog';
@@ -22,11 +26,22 @@ async function showMeetupTokenUrl(
   );
   const cache = await ApplicationCache();
   await cache.set(`maskedUserId-${maskedUserId}`, interaction.user.id);
+
+  const oauthUrl = generateOAuthUrl('meetup', { state: maskedUserId });
+
+  const button = new ButtonBuilder()
+    .setLabel('Connect to Meetup')
+    .setStyle(ButtonStyle.Link)
+    .setURL(oauthUrl);
+
+  const row =
+    new ActionRowBuilder<MessageActionRowComponentBuilder>().addComponents(
+      button
+    );
+
   await interaction.editReply({
-    content: `Please click on this link to get your Meetup Auth token: <${generateOAuthUrl(
-      'meetup',
-      { state: maskedUserId }
-    )}>`,
+    content: 'Please connect your Meetup account:',
+    components: [row],
   });
 }
 
