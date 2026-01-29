@@ -18,6 +18,7 @@ import { ApplicationCache } from '../../util/cache';
 import { discordCommandWrapper } from '../../util/discord';
 import { withLock } from '../../util/lock';
 import { withMeetupClient } from '../../util/meetup';
+import { getRandomTip } from '../../util/tips';
 
 const logger = new Logger({ name: 'MeetupCreateEventCommands' });
 
@@ -93,9 +94,20 @@ export class MeetupCreateEventCommands {
             );
             logger.info(`Fetched template event`);
 
+            // Add the tip to the end of the description
+            const tip = interaction.message.content
+              .split('\n')
+              .find((line) => line.startsWith('💡 Host Tip: '))
+              ?.replace('💡 Host Tip: ', '');
+
+            let description = draftEventTemplate.event.description;
+            if (tip) {
+              description = `Host Tip of the Day:\n${tip}\n\n${description}`;
+            }
+
             const newEvent = await meetupClient.createEvent({
               ...createEventTemplate,
-              description: draftEventTemplate.event.description,
+              description,
               title: `${GUEST_HOST_PREFIX}${eventTitle}`,
               startDateTime: `${eventDate}T${DEFAULT_START_TIME}:00`,
               eventHosts: [Number(meetupUserId)],
@@ -115,11 +127,9 @@ export class MeetupCreateEventCommands {
             const newButtons = this.getRequestEventButtons();
             newButtons.components.forEach((btn) => btn.setDisabled(true));
             await message.edit({
-              content: `${
-                interaction.message.content
-              }\n✅ Request approved by ${interaction.user.toString()}.\nLink to event: <${
-                newEvent.createEvent.event.eventUrl
-              }>`,
+              content: `${interaction.message.content
+                }\n✅ Request approved by ${interaction.user.toString()}.\nLink to event: <${newEvent.createEvent.event.eventUrl
+                }>`,
               components: [newButtons],
             });
             logger.info(`Event approved. Edited message: ${message.id}`);
@@ -156,9 +166,8 @@ export class MeetupCreateEventCommands {
         const newButtons = this.getRequestEventButtons();
         newButtons.components.forEach((btn) => btn.setDisabled(true));
         await message.edit({
-          content: `${
-            interaction.message.content
-          }\n❌ Request denied by ${interaction.user.toString()}.`,
+          content: `${interaction.message.content
+            }\n❌ Request denied by ${interaction.user.toString()}.`,
           components: [newButtons],
         });
 
@@ -243,6 +252,7 @@ export class MeetupCreateEventCommands {
           `Number of hosted events: ${getUserHostedEvents.length}`,
           `Event Date: ${dateObj.format(DATE_FORMAT)}`,
           `Event Title: ${title}`,
+          `💡 Host Tip: ${getRandomTip()}`,
           `Please reach out to us if you have any questions while setting up your event.`,
           `Organizers, please approve or deny below:`,
         ];
