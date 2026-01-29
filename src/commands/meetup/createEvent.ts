@@ -97,12 +97,11 @@ export class MeetupCreateEventCommands {
             // Add the tip to the end of the description
             const tip = interaction.message.content
               .split('\n')
-              .find((line) => line.startsWith('💡 Host Tip: '))
-              ?.replace('💡 Host Tip: ', '');
+              .find((line) => line.startsWith('💡 Host Tip: '));
 
             let description = draftEventTemplate.event.description;
             if (tip) {
-              description = `Host Tip of the Day:\n${tip}\n\n${description}`;
+              description = `${tip}\n\n${description}`;
             }
 
             const newEvent = await meetupClient.createEvent({
@@ -252,7 +251,7 @@ export class MeetupCreateEventCommands {
           `Number of hosted events: ${getUserHostedEvents.length}`,
           `Event Date: ${dateObj.format(DATE_FORMAT)}`,
           `Event Title: ${title}`,
-          `💡 Host Tip: ${getRandomTip()}`,
+          `💡 Host Tip: ${getRandomTip()} 💡`,
           `Please reach out to us if you have any questions while setting up your event.`,
           `Organizers, please approve or deny below:`,
         ];
