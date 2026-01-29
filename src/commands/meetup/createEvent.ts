@@ -79,15 +79,16 @@ export class MeetupCreateEventCommands {
               `Permission check passed for: ${interaction.user.username}`
             );
 
-            const [, ...requestInfo] = interaction.message.content.split('\n');
-            requestInfo.pop();
+            const lines = interaction.message.content.split('\n');
 
-            const [meetupUserId, , eventDate, eventTitle] = requestInfo.map(
-              (line) => {
-                const key = line.split(': ')[0];
-                return line.slice(key.length + 2);
-              }
-            );
+            const getValue = (key: string) => {
+              const line = lines.find((l) => l.startsWith(key));
+              return line ? line.slice(key.length) : '';
+            };
+
+            const meetupUserId = getValue('**Meetup User ID**: ');
+            const eventDate = getValue('**Event Date**: ');
+            const eventTitle = getValue('**Event Title**: ');
 
             const draftEventTemplate = await meetupClient.getEvent(
               DRAFT_EVENT_TEMPLATE_ID
@@ -95,13 +96,11 @@ export class MeetupCreateEventCommands {
             logger.info(`Fetched template event`);
 
             // Add the tip to the end of the description
-            const tip = interaction.message.content
-              .split('\n')
-              .find((line) => line.startsWith('💡 Host Tip: '));
+            const tip = lines.find((line) => line.startsWith('💡 **Host Tip**: '));
 
             let description = draftEventTemplate.event.description;
             if (tip) {
-              description = `${tip}\n\n${description}`;
+              description = `${tip.replace('**Host Tip**', 'Host Tip')}\n\n${description}`;
             }
 
             const newEvent = await meetupClient.createEvent({
@@ -247,11 +246,12 @@ export class MeetupCreateEventCommands {
 
         const replyContent = [
           `❗${interaction.user.toString()} is requesting the creation of a new Meetup event.❗`,
-          `Meetup User ID: ${userInfo.self.id}`,
-          `Number of hosted events: ${getUserHostedEvents.length}`,
-          `Event Date: ${dateObj.format(DATE_FORMAT)}`,
-          `Event Title: ${title}`,
-          `💡 Host Tip: ${getRandomTip()} 💡`,
+          `**Meetup User ID**: ${userInfo.self.id}`,
+          `**Number of hosted events**: ${getUserHostedEvents.length}`,
+          `**Event Date**: ${dateObj.format(DATE_FORMAT)}`,
+          `**Event Title**: ${title}`,
+          ``,
+          `💡 **Host Tip**: ${getRandomTip()} 💡`,
           `Please reach out to us if you have any questions while setting up your event.`,
           `Organizers, please approve or deny below:`,
         ];
