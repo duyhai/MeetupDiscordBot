@@ -96,11 +96,16 @@ export class MeetupCreateEventCommands {
             logger.info(`Fetched template event`);
 
             // Add the tip to the end of the description
-            const tip = lines.find((line) => line.startsWith('💡 **Host Tip**: '));
+            const tip = lines.find((line) =>
+              line.startsWith('💡 **Host Tip**: ')
+            );
 
-            let description = draftEventTemplate.event.description;
+            let { description } = draftEventTemplate.event;
             if (tip) {
-              description = `${tip.replace('**Host Tip**', 'Host Tip')}\n\n${description}`;
+              description = `${tip.replace(
+                '**Host Tip**',
+                'Host Tip'
+              )}\n\n${description}`;
             }
 
             const newEvent = await meetupClient.createEvent({
@@ -125,9 +130,11 @@ export class MeetupCreateEventCommands {
             const newButtons = this.getRequestEventButtons();
             newButtons.components.forEach((btn) => btn.setDisabled(true));
             await message.edit({
-              content: `${interaction.message.content
-                }\n✅ Request approved by ${interaction.user.toString()}.\nLink to event: <${newEvent.createEvent.event.eventUrl
-                }>`,
+              content: `${
+                interaction.message.content
+              }\n✅ Request approved by ${interaction.user.toString()}.\nLink to event: <${
+                newEvent.createEvent.event.eventUrl
+              }>`,
               components: [newButtons],
             });
             logger.info(`Event approved. Edited message: ${message.id}`);
@@ -164,8 +171,9 @@ export class MeetupCreateEventCommands {
         const newButtons = this.getRequestEventButtons();
         newButtons.components.forEach((btn) => btn.setDisabled(true));
         await message.edit({
-          content: `${interaction.message.content
-            }\n❌ Request denied by ${interaction.user.toString()}.`,
+          content: `${
+            interaction.message.content
+          }\n❌ Request denied by ${interaction.user.toString()}.`,
           components: [newButtons],
         });
 
