@@ -1,3 +1,4 @@
+import dayjs from 'dayjs';
 import { GraphQLClient } from 'graphql-request';
 import { Logger } from 'tslog';
 import Configuration from '../../../configuration';
@@ -131,13 +132,33 @@ export class GqlMeetupClient {
     logger.info(
       `Calling getGroupEvents with input: ${JSON.stringify({ input, filter })}`
     );
+
+    let requestFilter = filter;
+    let originalBeforeDateTime: number | undefined;
+    let originalAfterDateTime: number | undefined;
+
+    if (filter) {
+      if (filter.afterDateTime) {
+        originalAfterDateTime = dayjs(filter.afterDateTime).valueOf();
+      }
+      if (filter.beforeDateTime) {
+        originalBeforeDateTime = dayjs(filter.beforeDateTime).valueOf();
+        // Workaround: Expand query by 1 month to catch events ending later but starting within range
+        const beforeDate = dayjs(filter.beforeDateTime);
+        requestFilter = {
+          ...filter,
+          beforeDateTime: beforeDate.add(1, 'month').toISOString(),
+        };
+      }
+    }
+
     // Can be cached because it doesn't retrieve user specific data
     return cachedClientRequest(
       'getGroupEvents',
       {
         urlname: Configuration.meetup.groupUrlName,
         ...input,
-        filter,
+        filter: requestFilter,
       },
       async (callbackInput: GetGroupEventsInput) => {
         try {
@@ -145,6 +166,32 @@ export class GqlMeetupClient {
             GetGroupEventsResponse,
             GetGroupEventsInput
           >(getGroupEvents, callbackInput);
+
+          // Workaround: Filter in code by startDate, because Meetup filters by endDate
+          if (
+            result.groupByUrlname?.events?.edges &&
+            (originalBeforeDateTime !== undefined ||
+              originalAfterDateTime !== undefined)
+          ) {
+            result.groupByUrlname.events.edges =
+              result.groupByUrlname.events.edges.filter((edge) => {
+                const eventTime = dayjs(edge.node.dateTime).valueOf();
+                if (
+                  originalAfterDateTime !== undefined &&
+                  eventTime < originalAfterDateTime
+                ) {
+                  return false;
+                }
+                if (
+                  originalBeforeDateTime !== undefined &&
+                  eventTime > originalBeforeDateTime
+                ) {
+                  return false;
+                }
+                return true;
+              });
+          }
+
           logger.info(`getGroupEvents result: ${JSON.stringify(result)}`);
           return result;
         } catch (error) {
