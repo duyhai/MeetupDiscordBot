@@ -145,7 +145,7 @@ export class GqlMeetupClient {
             GetGroupEventsResponse,
             GetGroupEventsInput
           >(getGroupEvents, callbackInput);
-          // logger.info(`getGroupEvents result: ${JSON.stringify(result)}`);
+          logger.info(`getGroupEvents result: ${JSON.stringify(result)}`);
           return result;
         } catch (error) {
           logger.error(error);
