@@ -128,7 +128,9 @@ export class GqlMeetupClient {
     input: PaginationInput,
     filter?: GroupEventFilter
   ) {
-    logger.info(`Calling getGroupEvents with input: ${JSON.stringify({ input, filter })}`);
+    logger.info(
+      `Calling getGroupEvents with input: ${JSON.stringify({ input, filter })}`
+    );
     // Can be cached because it doesn't retrieve user specific data
     return cachedClientRequest(
       'getGroupEvents',
@@ -158,7 +160,13 @@ export class GqlMeetupClient {
     input: PaginationInput,
     filter?: RsvpFilter
   ) {
-    logger.info(`Calling getEventRsvps with input: ${JSON.stringify({ eventId, input, filter })}`);
+    logger.info(
+      `Calling getEventRsvps with input: ${JSON.stringify({
+        eventId,
+        input,
+        filter,
+      })}`
+    );
     // Can be cached because it doesn't retrieve user specific data
     return cachedClientRequest(
       'getEventRsvps',
