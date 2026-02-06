@@ -7,8 +7,8 @@ import {
   ServerRoles,
   SERVER_ROLES,
 } from '../../constants';
-import { isAdmin } from '../../util/discord';
 import { ApplicationCache } from '../../util/cache';
+import { isAdmin } from '../../util/discord';
 import { GqlMeetupClient } from '../client/meetup/gqlClient';
 import { MemberGender } from '../client/meetup/types';
 
