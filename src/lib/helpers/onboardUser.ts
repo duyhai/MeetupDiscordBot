@@ -8,6 +8,7 @@ import {
   SERVER_ROLES,
 } from '../../constants';
 import { isAdmin } from '../../util/discord';
+import { ApplicationCache } from '../../util/cache';
 import { GqlMeetupClient } from '../client/meetup/gqlClient';
 import { MemberGender } from '../client/meetup/types';
 
@@ -152,6 +153,9 @@ export async function selfOnboardUser(
   const isMeetupGroupMember = membershipInfo.groupByUrlname.isMember;
 
   if (!isMeetupGroupMember) {
+    const cache = await ApplicationCache();
+    await cache.remove(`${interaction.user.id}-meetup-tokens`);
+
     logger.warn(
       `Non-member user failed to onboard: ${interaction.user.username}. 
             Membership info: ${JSON.stringify(membershipInfo)}`

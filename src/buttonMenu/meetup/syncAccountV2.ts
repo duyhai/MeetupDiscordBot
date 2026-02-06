@@ -90,6 +90,8 @@ export class MeetupSyncAccountCommandsV2 {
       const isMeetupGroupMember = membershipInfo.groupByUrlname.isMember;
 
       if (!isMeetupGroupMember) {
+        await cache.remove(discordTokenKey);
+        await cache.remove(meetupTokenKey);
         logger.warn(
           `Non-member user failed to onboard: ${interaction.user.username}. 
             Membership info: ${JSON.stringify(membershipInfo)}`
