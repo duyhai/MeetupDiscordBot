@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-misused-promises */
 import { APIUser, GatewayIntentBits, Interaction, Message } from 'discord.js';
 import { Client } from 'discordx';
 import express, { RequestHandler } from 'express';
@@ -37,7 +38,7 @@ app.get('/connect/meetup/callback', (async (req, res) => {
   logger.info(`Meetup response: ${JSON.stringify(grantSession)}`);
   if (grantSession.response.error) {
     res.send(
-      getAuthLandingPage('error', JSON.stringify(grantSession.response.error))
+      getAuthLandingPage('error', JSON.stringify(grantSession.response.error)),
     );
     return;
   }
@@ -54,12 +55,12 @@ app.get('/connect/meetup/callback', (async (req, res) => {
     res.send(
       getAuthLandingPage(
         'success',
-        'Connected to Meetup. You can close this window now!'
-      )
+        'Connected to Meetup. You can close this window now!',
+      ),
     );
   } catch (err) {
     res.send(
-      getAuthLandingPage('error', 'Failed to data store! Please try again.')
+      getAuthLandingPage('error', 'Failed to data store! Please try again.'),
     );
   }
 }) as RequestHandler);

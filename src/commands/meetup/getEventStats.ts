@@ -19,7 +19,7 @@ const logger = new Logger({ name: 'MeetupGetStatsCommands' });
 async function getEventsYearMonth(
   meetupClient: GqlMeetupClient,
   year: number,
-  month: number
+  month: number,
 ) {
   let startDate = tz(dayjs()).set('year', year).startOf('year');
   let endDate = startDate.endOf('year');
@@ -76,7 +76,7 @@ export class MeetupGetEventStatsCommands {
       required: false,
     })
     includeLinks: boolean | undefined,
-    interaction: CommandInteraction
+    interaction: CommandInteraction,
   ) {
     // Need to handle defaults here, because interaction param needs to be last
     const shouldShowDates = showDates ?? true;
@@ -111,7 +111,7 @@ export class MeetupGetEventStatsCommands {
               paginationInput,
               {
                 rsvpStatus: ['ATTENDED', 'YES'],
-              }
+              },
             );
             return result.event.rsvps;
           });
@@ -130,7 +130,7 @@ export class MeetupGetEventStatsCommands {
               .push(
                 `${
                   shouldIncludeLinks ? linkStr(titleStr, eventUrl) : titleStr
-                } ${shouldShowDates ? tz(dayjs(dateTime)).format('LLL') : ''}`
+                } ${shouldShowDates ? tz(dayjs(dateTime)).format('LLL') : ''}`,
               );
           });
         }
@@ -138,7 +138,7 @@ export class MeetupGetEventStatsCommands {
         const formattedResult = Array.from(hostEvents.entries())
           .sort(
             (entry1: [string, string[]], entry2: [string, string[]]) =>
-              entry1[1].length - entry2[1].length
+              entry1[1].length - entry2[1].length,
           )
           .reverse()
           .map((entry: [string, string[]], index: number) => {
@@ -176,7 +176,7 @@ ${formattedResult}
               content: 'Check the results in the attachment!',
               ephemeral: true,
             });
-          }
+          },
         );
       });
     });
@@ -218,7 +218,7 @@ ${formattedResult}
       required: false,
     })
     includeLinks: boolean | undefined,
-    interaction: CommandInteraction
+    interaction: CommandInteraction,
   ) {
     // Need to handle defaults here, because interaction param needs to be last
     const shouldShowDates = showDates ?? true;
@@ -244,7 +244,7 @@ ${formattedResult}
               paginationInput,
               {
                 rsvpStatus: ['NO_SHOW'],
-              }
+              },
             );
             return result.event.rsvps;
           });
@@ -288,7 +288,7 @@ ${formattedResult}
                     shouldShowDates
                       ? tz(dayjs(event.dateTime)).format('LLL')
                       : ''
-                  }`
+                  }`,
               )
               .join('\n');
             return header + body;
@@ -317,7 +317,7 @@ ${formattedResult}
               content: 'Check the results in the attachment!',
               ephemeral: true,
             });
-          }
+          },
         );
       });
     });

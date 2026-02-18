@@ -33,22 +33,22 @@ export class MeetupTestGqlCommands {
             new TextInputBuilder()
               .setCustomId(TEST_GQL_MODAL_QUERY_ID)
               .setLabel('Query/Mutation string')
-              .setStyle(TextInputStyle.Paragraph)
+              .setStyle(TextInputStyle.Paragraph),
           ),
           new ActionRowBuilder<TextInputBuilder>().addComponents(
             new TextInputBuilder()
               .setCustomId(TEST_GQL_MODAL_ARGS_ID)
               .setLabel('Args (JSON string)')
-              .setStyle(TextInputStyle.Paragraph)
-          )
-        )
+              .setStyle(TextInputStyle.Paragraph),
+          ),
+        ),
     );
   }
 
   @ModalComponent({ id: TEST_GQL_MODAL_ID })
   async TestGQLInputForm(interaction: ModalSubmitInteraction): Promise<void> {
     const [query, args] = [TEST_GQL_MODAL_QUERY_ID, TEST_GQL_MODAL_ARGS_ID].map(
-      (id) => interaction.fields.getTextInputValue(id)
+      (id) => interaction.fields.getTextInputValue(id),
     );
 
     await discordCommandWrapper(interaction, async () => {
@@ -66,7 +66,7 @@ export class MeetupTestGqlCommands {
               content: 'Check the results in the attachment!',
               ephemeral: true,
             });
-          }
+          },
         );
       });
     });

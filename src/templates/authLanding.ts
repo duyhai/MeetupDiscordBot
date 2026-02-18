@@ -7,7 +7,7 @@ const failIcon =
 
 export const getAuthLandingPage = (
   status: 'success' | 'error',
-  message: string
+  message: string,
 ) => {
   const isSuccess = status === 'success';
   const title = isSuccess ? 'Success!' : 'Something went wrong';

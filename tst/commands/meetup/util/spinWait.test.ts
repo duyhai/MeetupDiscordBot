@@ -21,7 +21,7 @@ describe('spinWait', () => {
     const fn = jest.fn().mockResolvedValue(false); // Always returns falsy value
 
     await expect(
-      spinWait(fn, { timeoutMs: 100, intervalMs: 10, message: 'Timeout' })
+      spinWait(fn, { timeoutMs: 100, intervalMs: 10, message: 'Timeout' }),
     ).rejects.toThrow('Timeout');
 
     expect(fn).toHaveBeenCalled();

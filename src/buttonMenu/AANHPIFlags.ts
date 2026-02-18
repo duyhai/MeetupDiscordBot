@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-misused-promises */
 import {
   ActionRowBuilder,
   ButtonBuilder,
@@ -5,6 +6,7 @@ import {
   ButtonStyle,
   CommandInteraction,
   MessageActionRowComponentBuilder,
+  ButtonComponent as DiscordButtonComponent,
 } from 'discord.js';
 import { ButtonComponent, Discord, Slash } from 'discordx';
 import { Logger } from 'tslog';
@@ -33,7 +35,7 @@ const MEME_NAME_SUFFIXES: Record<string, string> = {
 };
 
 function parsePageFromMessage(message: string): number {
-  const page = +message.split('\n').at(-1).split(' ')[1].split('/')[0];
+  const page = +message.split('\n').slice(-1)[0].split(' ')[1].split('/')[0];
   return page - 1; // The message was showing 1-based indexing for users
 }
 
@@ -53,12 +55,12 @@ export class AANHPIFlagsCommands {
   async handleChoice(interaction: ButtonInteraction): Promise<void> {
     logger.info(
       `AANHPI Flags menu choice button pressed by ${interaction.user.toString()}! ${JSON.stringify(
-        interaction.component
-      )}`
+        interaction.component,
+      )}`,
     );
 
     const guildMember = await interaction.guild.members.fetch(
-      interaction.user.id
+      interaction.user.id,
     );
 
     const { nickname } = guildMember;
@@ -72,7 +74,9 @@ export class AANHPIFlagsCommands {
       .map((flag) => flag.value);
     logger.info(`Flags present in name: ${userFlags.toString()}`);
 
-    const buttonEmoji = interaction.component.emoji.name;
+    const buttonEmoji = (
+      interaction.component as unknown as DiscordButtonComponent
+    ).emoji.name;
     const shouldClearFlags = buttonEmoji === '🏳️';
     const isFlagAlreadyPresent = userFlags.some((flag) => flag === buttonEmoji);
     if (shouldClearFlags) {
@@ -89,7 +93,7 @@ export class AANHPIFlagsCommands {
     // Truncate to max MAX_FLAGS
     userFlags = userFlags.slice(
       Math.max(0, userFlags.length - MAX_FLAGS),
-      userFlags.length
+      userFlags.length,
     );
 
     const newNameSuffixes = [];
@@ -129,13 +133,18 @@ If you had ${MAX_FLAGS} flags in your name, the first one got replaced. Your cur
   async handleNav(interaction: ButtonInteraction): Promise<void> {
     logger.info(
       `AANHPI Flags menu nav button pressed by ${interaction.user.toString()}! ${JSON.stringify(
-        interaction.component
-      )}`
+        interaction.component,
+      )}`,
     );
 
     let page = parsePageFromMessage(interaction.message.content);
 
-    const buttonEmoji = interaction.component.emoji;
+    const buttonEmoji = (
+      interaction.component as unknown as DiscordButtonComponent
+    ).emoji as {
+      name: string;
+    };
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
     switch (buttonEmoji.name) {
       case '⏪':
         page = Math.max(0, page - FLAG_FAST_FORWARD_AMOUNT);
@@ -149,7 +158,7 @@ If you had ${MAX_FLAGS} flags in your name, the first one got replaced. Your cur
       case '⏩':
         page = Math.min(
           FLAG_NUMBER_OF_PAGES - 1,
-          page + FLAG_FAST_FORWARD_AMOUNT
+          page + FLAG_FAST_FORWARD_AMOUNT,
         );
         break;
       default:
@@ -161,7 +170,7 @@ If you had ${MAX_FLAGS} flags in your name, the first one got replaced. Your cur
 
   async generateAANHPIFlagsNav(
     page = 0,
-    extraMessage = ''
+    extraMessage = '',
   ): Promise<{
     components: ActionRowBuilder<MessageActionRowComponentBuilder>[];
     content: string;
@@ -170,7 +179,7 @@ If you had ${MAX_FLAGS} flags in your name, the first one got replaced. Your cur
     const sliceStartIndex = FLAG_PAGE_SIZE * page;
     const flagsSlice = FLAGS.slice(
       sliceStartIndex,
-      sliceStartIndex + FLAG_PAGE_SIZE
+      sliceStartIndex + FLAG_PAGE_SIZE,
     );
 
     const replyContent = [
@@ -195,10 +204,10 @@ Select (at most ${MAX_FLAGS}) flags here that best represents your background an
                 .setLabel(entry.name)
                 .setStyle(ButtonStyle.Secondary)
                 .setCustomId(
-                  `${AANHPI_FLAGS_BUTTON_ID}_choice_${rowNumber}_${index}`
-                )
-            )
-        )
+                  `${AANHPI_FLAGS_BUTTON_ID}_choice_${rowNumber}_${index}`,
+                ),
+            ),
+        ),
       );
     }
 
@@ -208,7 +217,7 @@ Select (at most ${MAX_FLAGS}) flags here that best represents your background an
           new ButtonBuilder()
             .setEmoji(dir)
             .setStyle(ButtonStyle.Primary)
-            .setCustomId(`${AANHPI_FLAGS_BUTTON_ID}_nav_${index}`)
+            .setCustomId(`${AANHPI_FLAGS_BUTTON_ID}_nav_${index}`),
         ),
         new ButtonBuilder()
           .setEmoji('🏳️')
@@ -226,7 +235,7 @@ Select (at most ${MAX_FLAGS}) flags here that best represents your background an
   async meetupRequestApproveEventHandler(interaction: ButtonInteraction) {
     await discordCommandWrapper(interaction, async () => {
       logger.info(
-        `Creating AANHPI Flags menu on behalf of ${interaction.user.username}`
+        `Creating AANHPI Flags menu on behalf of ${interaction.user.username}`,
       );
       await interaction.followUp({
         ephemeral: true,
@@ -243,7 +252,7 @@ Select (at most ${MAX_FLAGS}) flags here that best represents your background an
   async createAANHPIFlagsButtonHandler(interaction: CommandInteraction) {
     await discordCommandWrapper(interaction, async () => {
       logger.info(
-        `Creating AANHPI Flags flow on behalf of ${interaction.user.username}`
+        `Creating AANHPI Flags flow on behalf of ${interaction.user.username}`,
       );
       await interaction.channel.send({
         content: 'Click on the button below to show off your heritage!',
@@ -254,7 +263,7 @@ Select (at most ${MAX_FLAGS}) flags here that best represents your background an
               .setEmoji('🏳️')
               .setLabel('Click Me')
               .setStyle(ButtonStyle.Primary)
-              .setCustomId(AANHPI_FLAGS_BUTTON_ID)
+              .setCustomId(AANHPI_FLAGS_BUTTON_ID),
           ),
         ],
       });

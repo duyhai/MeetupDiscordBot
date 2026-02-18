@@ -34,7 +34,7 @@ export class RedisCache implements KeyValueCache {
 
   async get(key: string): Promise<string | undefined> {
     const value = await this.client.get(key);
-    return value ?? undefined;
+    return (value as string | null) ?? undefined;
   }
 
   async set(key: string, value: string): Promise<void> {
