@@ -21,7 +21,7 @@ const logger = new Logger({ name: 'MeetupGetUnannouncedEventsCommands' });
 export class MeetupGetUnannouncedEventsCommands {
   @SelectMenuComponent({ id: 'unannounced-menu' })
   async unannouncedEventSelectHandler(
-    interaction: StringSelectMenuInteraction,
+    interaction: StringSelectMenuInteraction
   ): Promise<void> {
     // extract selected value
     const eventUrl = interaction.values?.[0];
@@ -47,7 +47,7 @@ export class MeetupGetUnannouncedEventsCommands {
       required: false,
     })
     searchWindowByWeeks: number | undefined,
-    interaction: CommandInteraction,
+    interaction: CommandInteraction
   ) {
     await discordCommandWrapper(interaction, async () => {
       await withMeetupClient(interaction, async (meetupClient) => {
@@ -58,18 +58,19 @@ export class MeetupGetUnannouncedEventsCommands {
 
         const getUserHostedEvents = await getPaginatedData(
           async (paginationInput) => {
-            const result =
-              await meetupClient.getUserHostedEvents(paginationInput);
+            const result = await meetupClient.getUserHostedEvents(
+              paginationInput
+            );
             return result.self.memberEvents;
-          },
+          }
         );
         const filteredEvents = getUserHostedEvents.filter(
           (event) =>
             event.group.id === Configuration.meetup.groupId &&
             !event.networkEvent.isAnnounced &&
             dayjs(event.dateTime).isBefore(
-              dayjs().add(searchWindowByWeeks ?? 3, 'week'),
-            ),
+              dayjs().add(searchWindowByWeeks ?? 3, 'week')
+            )
         );
         const selectMenuOptions = filteredEvents.map((event, index) => ({
           label: `#${index + 1}: ${event.title}`,
@@ -83,13 +84,13 @@ export class MeetupGetUnannouncedEventsCommands {
 
         const buttonRow =
           new ActionRowBuilder<MessageActionRowComponentBuilder>().addComponents(
-            selectMenu,
+            selectMenu
           );
 
         logger.info(
           `Unannounced events for ${interaction.user.id} are: ${JSON.stringify(
-            filteredEvents,
-          )}}`,
+            filteredEvents
+          )}}`
         );
 
         if (filteredEvents.length === 0) {

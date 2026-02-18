@@ -45,7 +45,7 @@ export class MeetupCreateEventCommands {
     const buttonRow =
       new ActionRowBuilder<MessageActionRowComponentBuilder>().addComponents(
         approveButton,
-        denyButton,
+        denyButton
       );
     return buttonRow;
   }
@@ -69,14 +69,14 @@ export class MeetupCreateEventCommands {
               'LEADER'
             ) {
               logger.info(
-                `User without permission tried to approve: ${interaction.user.username}`,
+                `User without permission tried to approve: ${interaction.user.username}`
               );
               throw new Error(
-                `You don't have permission to do this, silly. You're not an organizer`,
+                `You don't have permission to do this, silly. You're not an organizer`
               );
             }
             logger.info(
-              `Permission check passed for: ${interaction.user.username}`,
+              `Permission check passed for: ${interaction.user.username}`
             );
 
             const lines = interaction.message.content.split('\n');
@@ -91,20 +91,20 @@ export class MeetupCreateEventCommands {
             const eventTitle = getValue('**Event Title**: ');
 
             const draftEventTemplate = await meetupClient.getEvent(
-              DRAFT_EVENT_TEMPLATE_ID,
+              DRAFT_EVENT_TEMPLATE_ID
             );
             logger.info(`Fetched template event`);
 
             // Add the tip to the end of the description
             const tip = lines.find((line) =>
-              line.startsWith('💡 **Host Tip**: '),
+              line.startsWith('💡 **Host Tip**: ')
             );
 
             let { description } = draftEventTemplate.event;
             if (tip) {
               description = `${tip.replace(
                 '**Host Tip**',
-                'Host Tip',
+                'Host Tip'
               )}\n\n${description}`;
             }
 
@@ -144,7 +144,7 @@ export class MeetupCreateEventCommands {
               ephemeral: true,
             });
             logger.info(
-              `Event approved. Responded to user: ${interaction.user.username}`,
+              `Event approved. Responded to user: ${interaction.user.username}`
             );
           },
           errorMsg:
@@ -163,7 +163,7 @@ export class MeetupCreateEventCommands {
           membershipInfo.groupByUrlname.membershipMetadata.status !== 'LEADER'
         ) {
           throw new Error(
-            `You don't have permission to do this, silly. You're not an organizer`,
+            `You don't have permission to do this, silly. You're not an organizer`
           );
         }
 
@@ -224,7 +224,7 @@ export class MeetupCreateEventCommands {
       maxLength: TITLE_MAX_LENGTH - GUEST_HOST_PREFIX.length,
     })
     title: string,
-    interaction: CommandInteraction,
+    interaction: CommandInteraction
   ) {
     await discordCommandWrapper(interaction, async () => {
       const dateObj = dayjs(new Date(year, month - 1, day));
@@ -233,7 +233,7 @@ export class MeetupCreateEventCommands {
       }
       if (title.includes('\n')) {
         throw new Error(
-          'Invalid title. Please make sure it has no new line characters before trying again.',
+          'Invalid title. Please make sure it has no new line characters before trying again.'
         );
       }
 
@@ -249,7 +249,7 @@ export class MeetupCreateEventCommands {
               hostId: userInfo.self.id,
             });
             return result.groupByUrlname.events;
-          },
+          }
         );
 
         const replyContent = [

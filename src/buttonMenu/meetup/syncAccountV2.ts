@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-misused-promises */
 import dayjs from 'dayjs';
 import {
   ActionRowBuilder,
@@ -45,7 +44,7 @@ export class MeetupSyncAccountCommandsV2 {
 
     const buttonRow =
       new ActionRowBuilder<MessageActionRowComponentBuilder>().addComponents(
-        syncAccountButton,
+        syncAccountButton
       );
     return buttonRow;
   }
@@ -60,11 +59,11 @@ export class MeetupSyncAccountCommandsV2 {
       let rawMeetupTokens = await cache.get(meetupTokenKey);
       if (!rawMeetupTokens || !rawDiscordTokens) {
         logger.info(
-          `Tokens are not present for ${interaction.user.username} at ${meetupTokenKey} or ${discordTokenKey}. Getting token through OAuth`,
+          `Tokens are not present for ${interaction.user.username} at ${meetupTokenKey} or ${discordTokenKey}. Getting token through OAuth`
         );
         await interaction.editReply({
           content: `Please click on this link to connect your Discord and Meetup account: <${discordBotUrl(
-            'discord-meetup-connect',
+            'discord-meetup-connect'
           )}>`,
         });
         rawDiscordTokens = await spinWait(() => cache.get(discordTokenKey), {
@@ -95,10 +94,10 @@ export class MeetupSyncAccountCommandsV2 {
         await cache.remove(meetupTokenKey);
         logger.warn(
           `Non-member user failed to onboard: ${interaction.user.username}. 
-            Membership info: ${JSON.stringify(membershipInfo)}`,
+            Membership info: ${JSON.stringify(membershipInfo)}`
         );
         throw new Error(
-          `You're not a member on Meetup. Please join the group and try onboarding again`,
+          `You're not a member on Meetup. Please join the group and try onboarding again`
         );
       }
 
@@ -109,7 +108,7 @@ export class MeetupSyncAccountCommandsV2 {
           if (index === 0) {
             return namePart;
           }
-          return `${namePart.charAt(0)}.`;
+          return `${namePart.at(0)}.`;
         })
         .join(' ');
 
@@ -127,12 +126,12 @@ export class MeetupSyncAccountCommandsV2 {
           // Ugly hack because of this:
           // https://github.com/discord/discord-api-docs/issues/667
           targetNickName = Array.from(username).join(
-            strings.invisibleCharacter,
+            strings.invisibleCharacter
           );
         }
         await guildMember.setNickname(targetNickName);
         logger.info(
-          `Explicitly set ${fullUsername}'s nickname to ${targetNickName}`,
+          `Explicitly set ${fullUsername}'s nickname to ${targetNickName}`
         );
       }
 
@@ -167,7 +166,7 @@ export class MeetupSyncAccountCommandsV2 {
       });
 
       const getUserHostedEvents = pastEvents.filter(({ eventHosts }) =>
-        eventHosts.some(({ member: { id } }) => id === userInfo.self.id),
+        eventHosts.some(({ member: { id } }) => id === userInfo.self.id)
       );
       const getUserAttendedEvents = await Promise.all(
         pastEvents.map((event) =>
@@ -177,14 +176,14 @@ export class MeetupSyncAccountCommandsV2 {
               paginationInput,
               {
                 rsvpStatus: ['ATTENDED', 'YES'],
-              },
+              }
             );
             return result.event.rsvps;
-          }),
-        ),
+          })
+        )
       );
       getUserAttendedEvents.filter((rsvp) =>
-        rsvp.some(({ member }) => member.id === userInfo.self.id),
+        rsvp.some(({ member }) => member.id === userInfo.self.id)
       );
 
       const hostedCount = getUserHostedEvents.length;
@@ -212,7 +211,7 @@ export class MeetupSyncAccountCommandsV2 {
               ? '1'
               : '0',
           member_since: dayjs(
-            membershipInfo.groupByUrlname.membershipMetadata.joinTime,
+            membershipInfo.groupByUrlname.membershipMetadata.joinTime
           ).format('YYYY-MM-DD'),
           events_attended: attendedCount.toString(),
           events_hosted: hostedCount.toString(),
@@ -233,7 +232,7 @@ export class MeetupSyncAccountCommandsV2 {
   async createSyncAccountButtonHandler(interaction: CommandInteraction) {
     await discordCommandWrapper(interaction, async () => {
       logger.info(
-        `Creating sync account button on behalf of ${interaction.user.username}`,
+        `Creating sync account button on behalf of ${interaction.user.username}`
       );
 
       const replyContent = [

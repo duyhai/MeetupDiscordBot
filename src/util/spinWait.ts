@@ -9,7 +9,7 @@ interface TimeoutOptions {
 
 export async function spinWait<TResult>(
   fn: () => Promise<TResult>,
-  { timeoutMs = 5000, message = 'Timeout', intervalMs = 100 }: TimeoutOptions,
+  { timeoutMs = 5000, message = 'Timeout', intervalMs = 100 }: TimeoutOptions
 ) {
   const startTime = Date.now();
 

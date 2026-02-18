@@ -17,7 +17,7 @@ export class InMemoryCache implements KeyValueCache {
   private constructor() {
     this.cache = new MemoryCache<string, string>(
       EXPIRATION_CHECK_INTERVAL_SECS,
-      MAX_ITEMS,
+      MAX_ITEMS
     );
   }
 

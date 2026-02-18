@@ -59,11 +59,11 @@ export class GqlMeetupClient {
 
   public async customRequest(query: string, args: string): Promise<string> {
     logger.info(
-      `Calling customRequest with input: ${JSON.stringify({ query, args })}`,
+      `Calling customRequest with input: ${JSON.stringify({ query, args })}`
     );
     try {
       const result = JSON.stringify(
-        await this.client.rawRequest(query, JSON.parse(args)),
+        await this.client.rawRequest(query, JSON.parse(args))
       );
       logger.info(`customRequest result: ${result}`);
       return result;
@@ -76,8 +76,9 @@ export class GqlMeetupClient {
   public async getUserInfo() {
     logger.info(`Calling getUserInfo with input: ${JSON.stringify({})}`);
     try {
-      const result =
-        await this.client.request<GetUserInfoResponse>(getUserInfo);
+      const result = await this.client.request<GetUserInfoResponse>(
+        getUserInfo
+      );
       logger.info(`getUserInfo result: ${JSON.stringify(result)}`);
       return result;
     } catch (error) {
@@ -88,7 +89,7 @@ export class GqlMeetupClient {
 
   public async getUserMembershipInfo() {
     logger.info(
-      `Calling getUserMembershipInfo with input: ${JSON.stringify({})}`,
+      `Calling getUserMembershipInfo with input: ${JSON.stringify({})}`
     );
     try {
       const result = await this.client.request<
@@ -107,7 +108,7 @@ export class GqlMeetupClient {
 
   public async getUserHostedEvents(input: PaginationInput) {
     logger.info(
-      `Calling getUserHostedEvents with input: ${JSON.stringify(input)}`,
+      `Calling getUserHostedEvents with input: ${JSON.stringify(input)}`
     );
     try {
       const result = await this.client.request<
@@ -126,10 +127,10 @@ export class GqlMeetupClient {
 
   public async getGroupEvents(
     input: PaginationInput,
-    filter?: GroupEventFilter,
+    filter?: GroupEventFilter
   ) {
     logger.info(
-      `Calling getGroupEvents with input: ${JSON.stringify({ input, filter })}`,
+      `Calling getGroupEvents with input: ${JSON.stringify({ input, filter })}`
     );
 
     let requestFilter = filter;
@@ -197,21 +198,21 @@ export class GqlMeetupClient {
           logger.error(error);
           throw error;
         }
-      },
+      }
     );
   }
 
   public async getEventRsvps(
     eventId: string,
     input: PaginationInput,
-    filter?: RsvpFilter,
+    filter?: RsvpFilter
   ) {
     logger.info(
       `Calling getEventRsvps with input: ${JSON.stringify({
         eventId,
         input,
         filter,
-      })}`,
+      })}`
     );
     // Can be cached because it doesn't retrieve user specific data
     return cachedClientRequest(
@@ -233,7 +234,7 @@ export class GqlMeetupClient {
           logger.error(error);
           throw error;
         }
-      },
+      }
     );
   }
 
@@ -256,7 +257,7 @@ export class GqlMeetupClient {
     try {
       const result = await this.client.request<CreateEventResponse>(
         createEvent,
-        { input },
+        { input }
       );
       logger.info(`createEvent result: ${JSON.stringify(result)}`);
       return result;
@@ -282,12 +283,12 @@ export class GqlMeetupClient {
 
   public async closeEventRsvps(input: CloseEventRsvpsInput) {
     logger.info(
-      `Calling closeEventRsvps with input: ${JSON.stringify({ input })}`,
+      `Calling closeEventRsvps with input: ${JSON.stringify({ input })}`
     );
     try {
       const result = await this.client.request<CloseEventRsvpsResponse>(
         closeEventRsvps,
-        { input },
+        { input }
       );
       logger.info(`closeEventRsvps result: ${JSON.stringify(result)}`);
       return result;
@@ -299,12 +300,12 @@ export class GqlMeetupClient {
 
   public async publishEventDraft(input: PublishEventDraftInput) {
     logger.info(
-      `Calling publishEventDraft with input: ${JSON.stringify({ input })}`,
+      `Calling publishEventDraft with input: ${JSON.stringify({ input })}`
     );
     try {
       const result = await this.client.request<PublishEventDraftResponse>(
         publishEventDraft,
-        { input },
+        { input }
       );
       logger.info(`publishEventDraft result: ${JSON.stringify(result)}`);
       return result;
@@ -316,12 +317,12 @@ export class GqlMeetupClient {
 
   public async announceEvent(input: AnnounceEventInput) {
     logger.info(
-      `Calling announceEvent with input: ${JSON.stringify({ input })}`,
+      `Calling announceEvent with input: ${JSON.stringify({ input })}`
     );
     try {
       const result = await this.client.request<AnnounceEventResponse>(
         announceEvent,
-        { input },
+        { input }
       );
       logger.info(`announceEvent result: ${JSON.stringify(result)}`);
       return result;

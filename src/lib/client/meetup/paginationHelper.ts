@@ -5,8 +5,8 @@ const PAGINATION_SIZE = 100;
 // TODO: Add option to limit and also a processing callback
 export async function getPaginatedData<TOutput>(
   paginatedCall: (
-    paginationInput: PaginationInput,
-  ) => Promise<PaginatedData<TOutput>>,
+    paginationInput: PaginationInput
+  ) => Promise<PaginatedData<TOutput>>
 ): Promise<TOutput[]> {
   let cursor: string | undefined;
   const results: TOutput[] = [];

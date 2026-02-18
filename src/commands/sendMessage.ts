@@ -30,11 +30,11 @@ export class SendMessageCommands {
       type: ApplicationCommandOptionType.Boolean,
     })
     isSilent: boolean,
-    interaction: CommandInteraction,
+    interaction: CommandInteraction
   ) {
     await discordCommandWrapper(interaction, async () => {
       logger.info(
-        `${interaction.user.username} is sending a message via Meetup Bot: ${message}`,
+        `${interaction.user.username} is sending a message via Meetup Bot: ${message}`
       );
       await interaction.channel.send({
         content: message,

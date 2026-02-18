@@ -23,7 +23,7 @@ export class MeetupAnnounceEventContextCommands {
     type: ApplicationCommandType.Message,
   })
   async meetupAnnounceEventHandler(
-    interaction: MessageContextMenuCommandInteraction,
+    interaction: MessageContextMenuCommandInteraction
   ) {
     await discordCommandWrapper(interaction, async () => {
       await withMeetupClient(interaction, async (meetupClient) => {

@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-misused-promises */
 import {
   ActionRowBuilder,
   ButtonBuilder,
@@ -34,7 +33,7 @@ export class MeetupSyncAccountCommands {
 
     const buttonRow =
       new ActionRowBuilder<MessageActionRowComponentBuilder>().addComponents(
-        syncAccountButton,
+        syncAccountButton
       );
     return buttonRow;
   }
@@ -59,7 +58,7 @@ export class MeetupSyncAccountCommands {
 
     const buttonRow =
       new ActionRowBuilder<MessageActionRowComponentBuilder>().addComponents(
-        syncAccountButton,
+        syncAccountButton
       );
     return buttonRow;
   }
@@ -78,7 +77,7 @@ export class MeetupSyncAccountCommands {
   async createSyncAccountButtonHandler(interaction: CommandInteraction) {
     await discordCommandWrapper(interaction, async () => {
       logger.info(
-        `Creating sync account button on behalf of ${interaction.user.username}`,
+        `Creating sync account button on behalf of ${interaction.user.username}`
       );
 
       const replyContent = [
@@ -108,7 +107,7 @@ Those are only available for verified Meetup group members. Please read the veri
   async createLgbtqButtonHandler(interaction: CommandInteraction) {
     await discordCommandWrapper(interaction, async () => {
       logger.info(
-        `Creating lgbtq button on behalf of ${interaction.user.username}`,
+        `Creating lgbtq button on behalf of ${interaction.user.username}`
       );
 
       const replyContent = [

@@ -18,7 +18,7 @@ export class DiscordBotClient {
   private async makeRequest<TInput, TResponse>(
     method: 'GET' | 'PUT' | 'POST' | 'DEL' | 'PATCH',
     url: string,
-    input?: TInput,
+    input?: TInput
   ): Promise<TResponse> {
     const params = {
       method,
@@ -45,7 +45,7 @@ export class DiscordBotClient {
    * Note: uses a Bot token for authentication, not a user token.
    */
   async registerMetadata(
-    metadata: APIApplicationRoleConnectionMetadata[],
+    metadata: APIApplicationRoleConnectionMetadata[]
   ): Promise<void> {
     return this.makeRequest('PUT', API.METADATA_REGISTER, metadata);
   }

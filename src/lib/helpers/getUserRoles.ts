@@ -8,7 +8,7 @@ const logger = new Logger({ name: 'getUserRoles' });
 
 export async function getUserRoles(
   meetupClient: GqlMeetupClient,
-  interaction: CommandInteraction | ButtonInteraction,
+  interaction: CommandInteraction | ButtonInteraction
 ) {
   logger.info(`Getting user roles for ${interaction.user.username}`);
   await interaction.editReply({
@@ -19,10 +19,10 @@ export async function getUserRoles(
   if (!membershipInfo.groupByUrlname.isMember) {
     logger.warn(
       `Non-member user failed to get user roles. 
-      Membership info: ${JSON.stringify(membershipInfo)}`,
+      Membership info: ${JSON.stringify(membershipInfo)}`
     );
     throw new Error(
-      `You're not a member on Meetup. Please join the group and try onboarding again`,
+      `You're not a member on Meetup. Please join the group and try onboarding again`
     );
   }
 
@@ -30,7 +30,7 @@ export async function getUserRoles(
     await addServerRole(interaction.guild, interaction.user.id, 'organizer');
     await addServerRole(interaction.guild, interaction.user.id, 'guest_host');
     logger.info(
-      `Organizer, moderator, and guest host role added to: ${interaction.user.username}`,
+      `Organizer, moderator, and guest host role added to: ${interaction.user.username}`
     );
   } else {
     const userInfo = await meetupClient.getUserInfo();
@@ -42,11 +42,11 @@ export async function getUserRoles(
           hostId: userInfo.self.id,
         });
         return result.groupByUrlname.events;
-      },
+      }
     );
 
     logger.info(
-      `Number of hosted events by ${interaction.user.username}: ${getUserHostedEvents.length}`,
+      `Number of hosted events by ${interaction.user.username}: ${getUserHostedEvents.length}`
     );
     if (getUserHostedEvents.length > 0) {
       await addServerRole(interaction.guild, interaction.user.id, 'guest_host');

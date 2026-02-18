@@ -87,7 +87,7 @@ export const discordBotUrl = (path = '') => {
 
 export const generateOAuthUrl = (
   name: 'meetup' | 'discord',
-  customParams?: Record<string, string>,
+  customParams?: Record<string, string>
 ) => {
   const url = new URL(`${BASE_DISCORD_BOT_URL}/connect/${name}`);
   if (customParams) {

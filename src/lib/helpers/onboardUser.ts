@@ -29,7 +29,7 @@ const logger = new Logger({ name: 'onboardUserHelper' });
 export async function addServerRole(
   guild: Guild,
   userId: string,
-  role: ServerRoles,
+  role: ServerRoles
 ) {
   const user = await guild.members.fetch(userId);
   const serverRole = await guild.roles.fetch(SERVER_ROLES[role]);
@@ -40,7 +40,7 @@ export async function addRewardRole(
   guild: Guild,
   userId: string,
   role: RewardRoles,
-  level: RewardRoleLevels,
+  level: RewardRoleLevels
 ) {
   const user = await guild.members.fetch(userId);
   const rewardRole = await guild.roles.fetch(REWARD_ROLES[role][level]);
@@ -50,7 +50,7 @@ export async function addRewardRole(
 export async function removeServerRole(
   guild: Guild,
   userId: string,
-  role: ServerRoles,
+  role: ServerRoles
 ) {
   const user = await guild.members.fetch(userId);
   const serverRole = await guild.roles.fetch(SERVER_ROLES[role]);
@@ -61,14 +61,14 @@ export async function removeRewardRole(
   guild: Guild,
   userId: string,
   role: RewardRoles,
-  levels: RewardRoleLevels[] = [1, 5, 20, 50, 100, 500],
+  levels: RewardRoleLevels[] = [1, 5, 20, 50, 100, 500]
 ) {
   const user = await guild.members.fetch(userId);
   await Promise.all(
     levels.map(async (lvl) => {
       const rewardRole = await guild.roles.fetch(REWARD_ROLES[role][lvl]);
       await user.roles.remove(rewardRole);
-    }),
+    })
   );
 }
 
@@ -76,7 +76,7 @@ async function onboardUserCommon(
   interaction: CommandInteraction | ButtonInteraction,
   userId: string,
   gender: MemberGender,
-  nickname?: string,
+  nickname?: string
 ) {
   const { guild, client } = interaction;
   const user = await client.users.fetch(userId);
@@ -95,7 +95,7 @@ async function onboardUserCommon(
     }
     await guildMember.setNickname(targetNickName);
     logger.info(
-      `Explicitly set ${fullUsername}'s nickname to ${targetNickName}`,
+      `Explicitly set ${fullUsername}'s nickname to ${targetNickName}`
     );
   }
 
@@ -123,7 +123,7 @@ async function onboardUserCommon(
 export async function onboardUser(
   interaction: CommandInteraction,
   userId: string,
-  gender: MemberGender,
+  gender: MemberGender
 ) {
   const { client } = interaction;
   const user = await client.users.fetch(userId);
@@ -143,7 +143,7 @@ export async function onboardUser(
  */
 export async function selfOnboardUser(
   meetupClient: GqlMeetupClient,
-  interaction: CommandInteraction | ButtonInteraction,
+  interaction: CommandInteraction | ButtonInteraction
 ) {
   const { user: discordUser } = interaction;
 
@@ -158,10 +158,10 @@ export async function selfOnboardUser(
 
     logger.warn(
       `Non-member user failed to onboard: ${interaction.user.username}. 
-            Membership info: ${JSON.stringify(membershipInfo)}`,
+            Membership info: ${JSON.stringify(membershipInfo)}`
     );
     throw new Error(
-      `You're not a member on Meetup. Please join the group and try onboarding again`,
+      `You're not a member on Meetup. Please join the group and try onboarding again`
     );
   }
 
@@ -176,18 +176,18 @@ export async function selfOnboardUser(
       if (index === 0) {
         return formattedPart;
       }
-      return `${formattedPart.charAt(0)}.`;
+      return `${formattedPart.at(0)}.`;
     })
     .join(' ');
 
   logger.info(
-    `Updating ${discordUser.username}'s display name to ${cleanedName} (Meetup name: ${name}).`,
+    `Updating ${discordUser.username}'s display name to ${cleanedName} (Meetup name: ${name}).`
   );
   await onboardUserCommon(
     interaction,
     discordUser.id,
     userInfo.self.gender,
-    cleanedName,
+    cleanedName
   );
   await interaction.followUp({
     content: strings.welcomeMsg(discordUser),

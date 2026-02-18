@@ -18,11 +18,11 @@ import { spinWait } from './spinWait';
 const logger = new Logger({ name: 'MeetupUtil' });
 
 async function showMeetupTokenUrl(
-  interaction: ButtonInteraction | CommandInteraction | ModalSubmitInteraction,
+  interaction: ButtonInteraction | CommandInteraction | ModalSubmitInteraction
 ) {
   const maskedUserId = uuidv4();
   logger.info(
-    `Setting maskedUserId=${maskedUserId} for ${interaction.user.username}`,
+    `Setting maskedUserId=${maskedUserId} for ${interaction.user.username}`
   );
   const cache = await ApplicationCache();
   await cache.set(`maskedUserId-${maskedUserId}`, interaction.user.id);
@@ -37,7 +37,7 @@ async function showMeetupTokenUrl(
 
   const row =
     new ActionRowBuilder<MessageActionRowComponentBuilder>().addComponents(
-      button,
+      button
     );
 
   await interaction.editReply({
@@ -54,14 +54,14 @@ async function showMeetupTokenUrl(
  */
 export async function withMeetupClient(
   interaction: ButtonInteraction | CommandInteraction | ModalSubmitInteraction,
-  commandFn: (meetupClient: GqlMeetupClient) => Promise<void>,
+  commandFn: (meetupClient: GqlMeetupClient) => Promise<void>
 ) {
   const tokenKey = `${interaction.user.id}-meetup-tokens`;
   const cache = await ApplicationCache();
   let rawTokens = await cache.get(tokenKey);
   if (!rawTokens) {
     logger.info(
-      `Tokens are not present for ${interaction.user.username} at ${tokenKey}. Getting token through OAuth`,
+      `Tokens are not present for ${interaction.user.username} at ${tokenKey}. Getting token through OAuth`
     );
     await showMeetupTokenUrl(interaction);
     rawTokens = await spinWait(() => cache.get(tokenKey), {
