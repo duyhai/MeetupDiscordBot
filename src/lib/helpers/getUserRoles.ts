@@ -1,5 +1,6 @@
 import { ButtonInteraction, CommandInteraction } from 'discord.js';
 import { Logger } from 'tslog';
+import { GUEST_HOST_BLACKLIST } from '../../constants';
 import { GqlMeetupClient } from '../client/meetup/gqlClient';
 import { getPaginatedData } from '../client/meetup/paginationHelper';
 import { addServerRole } from './onboardUser';
@@ -26,15 +27,20 @@ export async function getUserRoles(
     );
   }
 
-  if (membershipInfo.groupByUrlname.membershipMetadata.status === 'LEADER') {
+  const isBlacklisted = GUEST_HOST_BLACKLIST.includes(interaction.user.id);
+
+  if (
+    !isBlacklisted &&
+    membershipInfo.groupByUrlname.membershipMetadata.status === 'LEADER'
+  ) {
     await addServerRole(interaction.guild, interaction.user.id, 'organizer');
+
     await addServerRole(interaction.guild, interaction.user.id, 'guest_host');
     logger.info(
-      `Organizer, moderator, and guest host role added to: ${interaction.user.username}`
+      `Organizer and guest host roles added to: ${interaction.user.username}`
     );
-  } else {
+  } else if (!isBlacklisted) {
     const userInfo = await meetupClient.getUserInfo();
-
     const getUserHostedEvents = await getPaginatedData(
       async (paginationInput) => {
         const result = await meetupClient.getGroupEvents(paginationInput, {

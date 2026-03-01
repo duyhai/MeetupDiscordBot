@@ -9,6 +9,8 @@ export const SERVER_ROLES = {
 };
 export type ServerRoles = keyof typeof SERVER_ROLES;
 
+export const GUEST_HOST_BLACKLIST: string[] = ['888634122925383681'];
+
 export const REWARD_ROLES: Record<
   'hosting' | 'attendance' | 'discord',
   Record<500 | 100 | 50 | 20 | 5 | 1, string>
