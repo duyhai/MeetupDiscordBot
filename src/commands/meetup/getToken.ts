@@ -31,6 +31,7 @@ export class MeetupGetTokenCommands {
           : '';
 
         await interaction.followUp({
+          ephemeral: true,
           content: [
             '🔑 **Your Meetup Access Token** (keep this private!)',
             '```',
