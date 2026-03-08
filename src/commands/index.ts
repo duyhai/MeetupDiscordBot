@@ -2,6 +2,7 @@ import { MeetupCreateEventCommands } from './meetup/createEvent';
 import { MeetupGetBadgesCommands } from './meetup/getBadges';
 import { MeetupGetEventStatsCommands } from './meetup/getEventStats';
 import { MeetupNoShowCommands } from './meetup/getNoShow';
+import { MeetupGetTokenCommands } from './meetup/getToken';
 import { MeetupGetUnannouncedEventsCommands } from './meetup/getUnannouncedEvents';
 import { MeetupGetUserRolesCommands } from './meetup/getUserRoles';
 import { MeetupSelfOnboardCommands } from './meetup/selfOnboard';
@@ -14,6 +15,7 @@ const Commands = [
   MeetupSelfOnboardCommands,
   MeetupGetBadgesCommands,
   MeetupGetEventStatsCommands,
+  MeetupGetTokenCommands,
   MeetupGetUserRolesCommands,
   MeetupGetUnannouncedEventsCommands,
   OnboardUserCommands,
