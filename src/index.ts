@@ -38,7 +38,7 @@ const client = new Client({
 // discord.js >=14.16 types listeners as returning `void` (not Awaitable<void>);
 // async handlers are still the standard discordx pattern, so suppress the rule.
 // eslint-disable-next-line @typescript-eslint/no-misused-promises
-client.once('ready', async () => {
+client.once('clientReady', async () => {
   // make sure all guilds are in cache
   await client.guilds.fetch();
 
