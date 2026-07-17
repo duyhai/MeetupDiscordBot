@@ -35,7 +35,10 @@ const client = new Client({
   botGuilds: [(botClient) => botClient.guilds.cache.map((guild) => guild.id)],
 });
 
-client.once('ready', async () => {
+// discord.js >=14.16 types listeners as returning `void` (not Awaitable<void>);
+// async handlers are still the standard discordx pattern, so suppress the rule.
+// eslint-disable-next-line @typescript-eslint/no-misused-promises
+client.once('clientReady', async () => {
   // make sure all guilds are in cache
   await client.guilds.fetch();
 
@@ -45,10 +48,12 @@ client.once('ready', async () => {
   logger.info('Bot started');
 });
 
+// eslint-disable-next-line @typescript-eslint/no-misused-promises
 client.on('interactionCreate', async (interaction: Interaction) => {
   await client.executeInteraction(interaction);
 });
 
+// eslint-disable-next-line @typescript-eslint/no-misused-promises
 client.on('messageCreate', async (message: Message) => {
   await client.executeCommand(message);
 });

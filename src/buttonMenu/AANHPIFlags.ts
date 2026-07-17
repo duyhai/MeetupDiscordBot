@@ -72,7 +72,12 @@ export class AANHPIFlagsCommands {
       .map((flag) => flag.value);
     logger.info(`Flags present in name: ${userFlags.toString()}`);
 
-    const buttonEmoji = interaction.component.emoji.name;
+    // discord.js >=14.16 widened `component` to include SKU-id buttons, which
+    // have no `emoji` property; narrow before accessing it.
+    const buttonEmoji =
+      'emoji' in interaction.component
+        ? interaction.component.emoji.name
+        : undefined;
     const shouldClearFlags = buttonEmoji === '🏳️';
     const isFlagAlreadyPresent = userFlags.some((flag) => flag === buttonEmoji);
     if (shouldClearFlags) {
@@ -135,7 +140,11 @@ If you had ${MAX_FLAGS} flags in your name, the first one got replaced. Your cur
 
     let page = parsePageFromMessage(interaction.message.content);
 
-    const buttonEmoji = interaction.component.emoji;
+    // See note above: SKU-id buttons have no `emoji` property.
+    const buttonEmoji =
+      'emoji' in interaction.component
+        ? interaction.component.emoji
+        : undefined;
     switch (buttonEmoji.name) {
       case '⏪':
         page = Math.max(0, page - FLAG_FAST_FORWARD_AMOUNT);
