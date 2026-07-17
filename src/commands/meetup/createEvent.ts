@@ -11,14 +11,14 @@ import {
 import { ButtonComponent, Discord, Slash, SlashOption } from 'discordx';
 import { Logger } from 'tslog';
 
-import { DRAFT_EVENT_TEMPLATE_ID } from '../../constants';
-import { getPaginatedData } from '../../lib/client/meetup/paginationHelper';
-import { createEventTemplate } from '../../templates/createEventTemplate';
-import { ApplicationCache } from '../../util/cache';
-import { discordCommandWrapper } from '../../util/discord';
-import { withLock } from '../../util/lock';
-import { withMeetupClient } from '../../util/meetup';
-import { getRandomTip } from '../../util/tips';
+import { DRAFT_EVENT_TEMPLATE_ID } from '../../constants.js';
+import { getPaginatedData } from '../../lib/client/meetup/paginationHelper.js';
+import { createEventTemplate } from '../../templates/createEventTemplate.js';
+import { ApplicationCache } from '../../util/cache.js';
+import { discordCommandWrapper } from '../../util/discord.js';
+import { withLock } from '../../util/lock.js';
+import { withMeetupClient } from '../../util/meetup.js';
+import { getRandomTip } from '../../util/tips.js';
 
 const logger = new Logger({ name: 'MeetupCreateEventCommands' });
 

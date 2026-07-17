@@ -1,9 +1,9 @@
 import nock from 'nock';
 
-import Configuration from '../../src/configuration';
-import { GqlMeetupClient } from '../../src/lib/client/meetup/gqlClient';
-import { getPaginatedData } from '../../src/lib/client/meetup/paginationHelper';
-import { GroupEventFilter } from '../../src/lib/client/meetup/types';
+import Configuration from '../../src/configuration.js';
+import { GqlMeetupClient } from '../../src/lib/client/meetup/gqlClient.js';
+import { getPaginatedData } from '../../src/lib/client/meetup/paginationHelper.js';
+import { GroupEventFilter } from '../../src/lib/client/meetup/types.js';
 
 // These tests intercept the real HTTP calls graphql-request makes (rather
 // than mocking GqlMeetupClient itself), so they exercise the full chain used

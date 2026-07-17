@@ -4,11 +4,11 @@ import {
 } from 'discord.js';
 import { Discord, Slash } from 'discordx';
 
-import Configuration from '../../configuration';
-import { DiscordBotClient } from '../../lib/client/discord/botClient';
-import { selfOnboardUser } from '../../lib/helpers/onboardUser';
-import { discordCommandWrapper } from '../../util/discord';
-import { withMeetupClient } from '../../util/meetup';
+import Configuration from '../../configuration.js';
+import { DiscordBotClient } from '../../lib/client/discord/botClient.js';
+import { selfOnboardUser } from '../../lib/helpers/onboardUser.js';
+import { discordCommandWrapper } from '../../util/discord.js';
+import { withMeetupClient } from '../../util/meetup.js';
 
 @Discord()
 export class MeetupSelfOnboardCommands {

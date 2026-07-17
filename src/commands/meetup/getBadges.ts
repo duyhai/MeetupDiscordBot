@@ -1,9 +1,9 @@
 import { CommandInteraction } from 'discord.js';
 import { Discord, Slash } from 'discordx';
-import { getBadges } from '../../lib/helpers/getBadges';
+import { getBadges } from '../../lib/helpers/getBadges.js';
 
-import { discordCommandWrapper } from '../../util/discord';
-import { withMeetupClient } from '../../util/meetup';
+import { discordCommandWrapper } from '../../util/discord.js';
+import { withMeetupClient } from '../../util/meetup.js';
 
 @Discord()
 export class MeetupGetBadgesCommands {

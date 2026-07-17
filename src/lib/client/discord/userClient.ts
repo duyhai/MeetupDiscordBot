@@ -1,8 +1,8 @@
 import { APIApplicationRoleConnection, APIUser } from 'discord.js';
 import { Logger } from 'tslog';
-import Configuration from '../../../configuration';
-import { ApplicationCache } from '../../../util/cache';
-import { APIAccessTokenResponse, Tokens } from './types';
+import Configuration from '../../../configuration.js';
+import { ApplicationCache } from '../../../util/cache.js';
+import { APIAccessTokenResponse, Tokens } from './types.js';
 
 const logger = new Logger({ name: 'DiscordUserClient' });
 

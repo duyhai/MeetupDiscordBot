@@ -1,5 +1,5 @@
 import * as redis from 'redis';
-import { KeyValueCache } from './base';
+import { KeyValueCache } from './base.js';
 
 const ITEM_TTL_SEC = 60 * 60 * 12;
 /**

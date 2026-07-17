@@ -1,4 +1,4 @@
-import { PaginatedData, PaginationInput } from './types';
+import { PaginatedData, PaginationInput } from './types.js';
 
 const PAGINATION_SIZE = 100;
 

@@ -1,6 +1,6 @@
 import crypto from 'crypto';
 
-import { RedisCache } from '../../src/lib/cache/redisCache';
+import { RedisCache } from '../../src/lib/cache/redisCache.js';
 
 // Exercises RedisCache against a real Redis instance rather than mocking the
 // `redis` package -- TTL/NX behavior is exactly what a mock would paper

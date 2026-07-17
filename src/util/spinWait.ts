@@ -1,5 +1,5 @@
 /* eslint-disable no-await-in-loop */
-import { sleep } from './sleep';
+import { sleep } from './sleep.js';
 
 interface TimeoutOptions {
   intervalMs: number;

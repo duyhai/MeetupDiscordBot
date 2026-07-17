@@ -1,6 +1,6 @@
 import { MemoryCache } from 'memory-cache-node';
 
-import { KeyValueCache } from './base';
+import { KeyValueCache } from './base.js';
 
 const EXPIRATION_CHECK_INTERVAL_SECS = 60;
 const ITEM_TTL_SEC = 50 * 60;

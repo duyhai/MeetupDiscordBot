@@ -1,4 +1,4 @@
-import { spinWait } from '../../../../src/util/spinWait';
+import { spinWait } from '../../../../src/util/spinWait.js';
 
 describe('spinWait', () => {
   beforeEach(() => {

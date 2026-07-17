@@ -2,8 +2,8 @@ import { CommandInteraction } from 'discord.js';
 import { Discord, Slash } from 'discordx';
 import { Logger } from 'tslog';
 
-import { discordCommandWrapper } from '../../util/discord';
-import { withMeetupClient } from '../../util/meetup';
+import { discordCommandWrapper } from '../../util/discord.js';
+import { withMeetupClient } from '../../util/meetup.js';
 
 const logger = new Logger({ name: 'MeetupNoShowCommands' });
 

@@ -5,8 +5,8 @@ import { Logger } from 'tslog';
 import './buttonMenu';
 import './contextMenu';
 import './commands';
-import app from './app';
-import Configuration from './configuration';
+import app from './app.js';
+import Configuration from './configuration.js';
 
 const logger = new Logger({ name: 'MeetupBot' });
 

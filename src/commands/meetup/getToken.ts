@@ -1,9 +1,9 @@
 import { CommandInteraction } from 'discord.js';
 import { Discord, Slash } from 'discordx';
-import { Tokens } from '../../lib/client/discord/types';
-import { ApplicationCache } from '../../util/cache';
-import { discordCommandWrapper } from '../../util/discord';
-import { withMeetupClient } from '../../util/meetup';
+import { Tokens } from '../../lib/client/discord/types.js';
+import { ApplicationCache } from '../../util/cache.js';
+import { discordCommandWrapper } from '../../util/discord.js';
+import { withMeetupClient } from '../../util/meetup.js';
 
 @Discord()
 export class MeetupGetTokenCommands {
