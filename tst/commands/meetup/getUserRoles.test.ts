@@ -1,5 +1,4 @@
 /* eslint-disable
-  @typescript-eslint/no-unsafe-member-access,
   @typescript-eslint/no-explicit-any,
   @typescript-eslint/no-unsafe-return,
   @typescript-eslint/no-unsafe-call,
@@ -80,12 +79,12 @@ describe('getUserRoles', () => {
     expect(addServerRoleMock).toHaveBeenCalledWith(
       interaction.guild,
       interaction.user.id,
-      'organizer'
+      'organizer',
     );
     expect(addServerRoleMock).toHaveBeenCalledWith(
       interaction.guild,
       interaction.user.id,
-      'guest_host'
+      'guest_host',
     );
     expect(interaction.followUp).toHaveBeenCalledWith({
       content: `Your Meetup roles are all set up based on your Meetup status!`,
@@ -111,7 +110,7 @@ describe('getUserRoles', () => {
     });
 
     await expect(getUserRoles(meetupClient, interaction)).rejects.toThrow(
-      `You're not a member on Meetup. Please join the group and try onboarding again`
+      `You're not a member on Meetup. Please join the group and try onboarding again`,
     );
   });
 
@@ -160,7 +159,7 @@ describe('getUserRoles', () => {
     expect(addServerRoleMock).toHaveBeenCalledWith(
       interaction.guild,
       interaction.user.id,
-      'guest_host'
+      'guest_host',
     );
   });
 
@@ -207,7 +206,7 @@ describe('getUserRoles', () => {
     expect(addServerRoleMock).not.toHaveBeenCalledWith(
       interaction.guild,
       interaction.user.id,
-      'guest_host'
+      'guest_host',
     );
 
     vi.mocked(meetupClient.getGroupEvents).mockResolvedValueOnce({
@@ -222,7 +221,7 @@ describe('getUserRoles', () => {
     expect(addServerRoleMock).not.toHaveBeenCalledWith(
       interaction.guild,
       interaction.user.id,
-      'guest_host'
+      'guest_host',
     );
   });
 });

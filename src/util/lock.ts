@@ -23,7 +23,7 @@ export async function withLock({
   logger.info(`Acquiring lock ${JSON.stringify({ key: lockKey, id: lockId })}`);
   if (!(await cache.exclusive_set(lockKey, lockId))) {
     logger.info(
-      `Lock is already taken ${JSON.stringify({ key: lockKey, id: lockId })}`
+      `Lock is already taken ${JSON.stringify({ key: lockKey, id: lockId })}`,
     );
     throw new Error(errorMsg);
   }
@@ -33,11 +33,11 @@ export async function withLock({
   } finally {
     // Free lock
     logger.info(
-      `Checking lock to free ${JSON.stringify({ key: lockKey, id: lockId })}`
+      `Checking lock to free ${JSON.stringify({ key: lockKey, id: lockId })}`,
     );
     if ((await cache.get(lockKey)) === lockId) {
       logger.info(
-        `Freeing lock ${JSON.stringify({ key: lockKey, id: lockId })}`
+        `Freeing lock ${JSON.stringify({ key: lockKey, id: lockId })}`,
       );
       await cache.remove(lockKey);
     }
