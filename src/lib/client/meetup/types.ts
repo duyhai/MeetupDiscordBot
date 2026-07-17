@@ -47,9 +47,9 @@ export interface GetUserMembershipInfoResponse {
   };
 }
 
-export interface GetUserMembershipInfoInput {
+export type GetUserMembershipInfoInput = {
   urlname: string;
-}
+};
 
 export interface MembershipRsvpStats {
   noShowCount: number;
@@ -142,10 +142,10 @@ export interface GetUserHostedEventsResponse {
   };
 }
 
-export interface GetUserHostedEventsInput {
+export type GetUserHostedEventsInput = {
   after?: string;
   first: number;
-}
+};
 
 type RsvpStatus =
   | 'YES'
@@ -170,12 +170,12 @@ export interface GetEventRsvpsResponse {
   };
 }
 
-export interface GetEventRsvpsInput {
+export type GetEventRsvpsInput = {
   after?: string;
   eventId: string;
   filter?: RsvpFilter;
   first: number;
-}
+};
 
 export interface GetGroupEventsResponse {
   groupByUrlname: {
@@ -184,12 +184,12 @@ export interface GetGroupEventsResponse {
   };
 }
 
-export interface GetGroupEventsInput {
+export type GetGroupEventsInput = {
   after?: string;
   filter?: GroupEventFilter;
   first: number;
   urlname: string;
-}
+};
 
 export interface CreateEventInput {
   communicationSettings: {
