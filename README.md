@@ -17,3 +17,11 @@ https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/workin
 - Run the script with `yarn dev`
 - Fill out the API keys in the `.env` file
 - If you are on Windows, turn off auto CRLF with this command: `git config core.autocrlf false`
+
+# Testing
+We have two tiers of automated tests: fast unit tests and slower integration tests that hit real services.
+- Unit tests: `yarn test` — no network or external services required. Runs on the pre-push hook and in CI.
+- Integration tests: `yarn test:integration` — covers OAuth routes, the GraphQL client, and Redis caching.
+- Run both: `yarn test:all`
+- The Redis integration suite is gated on the `REDISCLOUD_URL` env var: if unset, it skips with a warning. To run it locally, start a Redis (e.g. `docker run --rm -p 6379:6379 redis` or `brew install redis && redis-server`) and run `REDISCLOUD_URL=redis://localhost:6379 yarn test:integration`.
+- The pre-push hook only runs unit tests (integration tests need Redis) — CI runs the integration tier separately, so don't expect `git push` locally to catch integration failures.
