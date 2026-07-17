@@ -21,6 +21,11 @@
     "rules": {
         "class-methods-use-this": "off",
         "import/prefer-default-export": "off",
+        "import/extensions": [
+            "error",
+            "ignorePackages",
+            { "ts": "never" }
+        ],
         "prettier/prettier": ["error", { "singleQuote": true }],
         "curly": ["error", "all"],
         "max-len": ["error", {"code": 140, "ignoreUrls": true}],

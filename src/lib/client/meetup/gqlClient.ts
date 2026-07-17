@@ -1,15 +1,15 @@
 import dayjs from 'dayjs';
 import { GraphQLClient } from 'graphql-request';
 import { Logger } from 'tslog';
-import Configuration from '../../../configuration';
-import { cachedClientRequest } from '../cacheClientHelper';
+import Configuration from '../../../configuration.js';
+import { cachedClientRequest } from '../cacheClientHelper.js';
 import {
   announceEvent,
   closeEventRsvps,
   createEvent,
   editEvent,
   publishEventDraft,
-} from './mutations';
+} from './mutations.js';
 import {
   getEvent,
   getEventRsvps,
@@ -17,7 +17,7 @@ import {
   getUserHostedEvents,
   getUserInfo,
   getUserMembershipInfo,
-} from './queries';
+} from './queries.js';
 import {
   AnnounceEventInput,
   AnnounceEventResponse,
@@ -42,7 +42,7 @@ import {
   PublishEventDraftInput,
   PublishEventDraftResponse,
   RsvpFilter,
-} from './types';
+} from './types.js';
 
 const logger = new Logger({ name: 'GqlMeetupClient' });
 

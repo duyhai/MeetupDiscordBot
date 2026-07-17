@@ -1,9 +1,9 @@
 import { ButtonInteraction, CommandInteraction } from 'discord.js';
 import { Logger } from 'tslog';
-import { RewardRoleLevels } from '../../constants';
-import { GqlMeetupClient } from '../client/meetup/gqlClient';
-import { getPaginatedData } from '../client/meetup/paginationHelper';
-import { addRewardRole, removeRewardRole } from './onboardUser';
+import { RewardRoleLevels } from '../../constants.js';
+import { GqlMeetupClient } from '../client/meetup/gqlClient.js';
+import { getPaginatedData } from '../client/meetup/paginationHelper.js';
+import { addRewardRole, removeRewardRole } from './onboardUser.js';
 
 const logger = new Logger({ name: 'getUserRoles' });
 

@@ -2,13 +2,14 @@
   "compilerOptions": {
     "experimentalDecorators": true,
     "esModuleInterop": true,
-    "target": "ES2020",
+    "target": "ES2022",
     "lib": ["ES2022"],
     "outDir": "dist",
-    "moduleResolution": "node",
-    "inlineSourceMap": true, 
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "inlineSourceMap": true,
     "resolveJsonModule": true
   },
-  "include": ["./src/**/*", "./tst/**/*", "./jest.config.js"],
+  "include": ["./src/**/*", "./tst/**/*", "./jest.config.cjs"],
   "exclude": ["node_modules", "__tests__"]
 }

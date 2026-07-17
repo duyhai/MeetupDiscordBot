@@ -1,9 +1,9 @@
 import { ButtonInteraction, CommandInteraction } from 'discord.js';
 import { Logger } from 'tslog';
-import { GUEST_HOST_BLACKLIST } from '../../constants';
-import { GqlMeetupClient } from '../client/meetup/gqlClient';
-import { getPaginatedData } from '../client/meetup/paginationHelper';
-import { addServerRole } from './onboardUser';
+import { GUEST_HOST_BLACKLIST } from '../../constants.js';
+import { GqlMeetupClient } from '../client/meetup/gqlClient.js';
+import { getPaginatedData } from '../client/meetup/paginationHelper.js';
+import { addServerRole } from './onboardUser.js';
 
 const logger = new Logger({ name: 'getUserRoles' });
 

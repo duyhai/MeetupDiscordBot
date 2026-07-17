@@ -9,11 +9,11 @@ import {
 } from 'discord.js';
 import { Logger } from 'tslog';
 import { v4 as uuidv4 } from 'uuid';
-import { generateOAuthUrl } from '../constants';
-import { Tokens } from '../lib/client/discord/types';
-import { GqlMeetupClient } from '../lib/client/meetup/gqlClient';
-import { ApplicationCache } from './cache';
-import { spinWait } from './spinWait';
+import { generateOAuthUrl } from '../constants.js';
+import { Tokens } from '../lib/client/discord/types.js';
+import { GqlMeetupClient } from '../lib/client/meetup/gqlClient.js';
+import { ApplicationCache } from './cache.js';
+import { spinWait } from './spinWait.js';
 
 const logger = new Logger({ name: 'MeetupUtil' });
 

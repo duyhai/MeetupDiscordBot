@@ -6,11 +6,11 @@
   @typescript-eslint/unbound-method 
 */
 import { CommandInteraction, Guild } from 'discord.js';
-import { GqlMeetupClient } from '../../../src/lib/client/meetup/gqlClient';
-import * as paginationHelper from '../../../src/lib/client/meetup/paginationHelper';
-import { GetGroupEventsResponse } from '../../../src/lib/client/meetup/types';
-import { getUserRoles } from '../../../src/lib/helpers/getUserRoles';
-import * as onboardUser from '../../../src/lib/helpers/onboardUser';
+import { GqlMeetupClient } from '../../../src/lib/client/meetup/gqlClient.js';
+import * as paginationHelper from '../../../src/lib/client/meetup/paginationHelper.js';
+import { GetGroupEventsResponse } from '../../../src/lib/client/meetup/types.js';
+import { getUserRoles } from '../../../src/lib/helpers/getUserRoles.js';
+import * as onboardUser from '../../../src/lib/helpers/onboardUser.js';
 
 // Mocking the external dependencies
 jest.mock('../../../src/lib/client/meetup/gqlClient');

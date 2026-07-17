@@ -1,6 +1,6 @@
 import { Logger } from 'tslog';
-import { InMemoryCache } from '../lib/cache/memoryCache';
-import { RedisCache } from '../lib/cache/redisCache';
+import { InMemoryCache } from '../lib/cache/memoryCache.js';
+import { RedisCache } from '../lib/cache/redisCache.js';
 
 const logger = new Logger({ name: 'withLock' });
 

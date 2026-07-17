@@ -6,11 +6,11 @@ import {
   REWARD_ROLES,
   ServerRoles,
   SERVER_ROLES,
-} from '../../constants';
-import { ApplicationCache } from '../../util/cache';
-import { isAdmin } from '../../util/discord';
-import { GqlMeetupClient } from '../client/meetup/gqlClient';
-import { MemberGender } from '../client/meetup/types';
+} from '../../constants.js';
+import { ApplicationCache } from '../../util/cache.js';
+import { isAdmin } from '../../util/discord.js';
+import { GqlMeetupClient } from '../client/meetup/gqlClient.js';
+import { MemberGender } from '../client/meetup/types.js';
 
 const strings = {
   welcomeMsg: (user: User) =>

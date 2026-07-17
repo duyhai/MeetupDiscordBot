@@ -4,8 +4,8 @@ import {
   UserContextMenuCommandInteraction,
 } from 'discord.js';
 import { ContextMenu, Discord } from 'discordx';
-import { onboardUser } from '../lib/helpers/onboardUser';
-import { discordCommandWrapper } from '../util/discord';
+import { onboardUser } from '../lib/helpers/onboardUser.js';
+import { discordCommandWrapper } from '../util/discord.js';
 
 const OnboardUserCommands = {
   onboardGents: 'onboard_gents',

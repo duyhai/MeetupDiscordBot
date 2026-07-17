@@ -9,13 +9,13 @@ import {
 import { ButtonComponent, Discord, Slash } from 'discordx';
 import { Logger } from 'tslog';
 
-import { LGBTQ_CHANNEL_ID } from '../../constants';
-import { addToChannel } from '../../lib/helpers/channel';
-import { getBadges } from '../../lib/helpers/getBadges';
-import { getUserRoles } from '../../lib/helpers/getUserRoles';
-import { selfOnboardUser } from '../../lib/helpers/onboardUser';
-import { discordCommandWrapper } from '../../util/discord';
-import { withMeetupClient } from '../../util/meetup';
+import { LGBTQ_CHANNEL_ID } from '../../constants.js';
+import { addToChannel } from '../../lib/helpers/channel.js';
+import { getBadges } from '../../lib/helpers/getBadges.js';
+import { getUserRoles } from '../../lib/helpers/getUserRoles.js';
+import { selfOnboardUser } from '../../lib/helpers/onboardUser.js';
+import { discordCommandWrapper } from '../../util/discord.js';
+import { withMeetupClient } from '../../util/meetup.js';
 
 const logger = new Logger({ name: 'MeetupSyncAccount' });
 

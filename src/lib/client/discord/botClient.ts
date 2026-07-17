@@ -1,6 +1,6 @@
 import { APIApplicationRoleConnectionMetadata } from 'discord.js';
 import { Logger } from 'tslog';
-import Configuration from '../../../configuration';
+import Configuration from '../../../configuration.js';
 
 const logger = new Logger({ name: 'DiscordBotClient' });
 

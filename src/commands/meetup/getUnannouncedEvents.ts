@@ -9,11 +9,11 @@ import {
 } from 'discord.js';
 import { Discord, SelectMenuComponent, Slash, SlashOption } from 'discordx';
 import { Logger } from 'tslog';
-import Configuration from '../../configuration';
-import { getPaginatedData } from '../../lib/client/meetup/paginationHelper';
+import Configuration from '../../configuration.js';
+import { getPaginatedData } from '../../lib/client/meetup/paginationHelper.js';
 
-import { discordCommandWrapper } from '../../util/discord';
-import { withMeetupClient } from '../../util/meetup';
+import { discordCommandWrapper } from '../../util/discord.js';
+import { withMeetupClient } from '../../util/meetup.js';
 
 const logger = new Logger({ name: 'MeetupGetUnannouncedEventsCommands' });
 

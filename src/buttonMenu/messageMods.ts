@@ -14,8 +14,8 @@ import {
 import { ButtonComponent, Discord, Slash, SlashOption } from 'discordx';
 import { Logger } from 'tslog';
 
-import { SERVER_ROLES } from '../constants';
-import { discordCommandWrapper } from '../util/discord';
+import { SERVER_ROLES } from '../constants.js';
+import { discordCommandWrapper } from '../util/discord.js';
 
 const logger = new Logger({ name: 'MessageModsCommands' });
 

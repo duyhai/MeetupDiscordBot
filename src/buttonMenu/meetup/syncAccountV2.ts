@@ -10,20 +10,20 @@ import {
 import { ButtonComponent, Discord, Slash } from 'discordx';
 import { Logger } from 'tslog';
 
-import { discordBotUrl, RewardRoleLevels } from '../../constants';
-import { Tokens } from '../../lib/client/discord/types';
-import { DiscordUserClient } from '../../lib/client/discord/userClient';
-import { GqlMeetupClient } from '../../lib/client/meetup/gqlClient';
-import { getPaginatedData } from '../../lib/client/meetup/paginationHelper';
+import { discordBotUrl, RewardRoleLevels } from '../../constants.js';
+import { Tokens } from '../../lib/client/discord/types.js';
+import { DiscordUserClient } from '../../lib/client/discord/userClient.js';
+import { GqlMeetupClient } from '../../lib/client/meetup/gqlClient.js';
+import { getPaginatedData } from '../../lib/client/meetup/paginationHelper.js';
 import {
   addRewardRole,
   addServerRole,
   removeRewardRole,
   removeServerRole,
-} from '../../lib/helpers/onboardUser';
-import { ApplicationCache } from '../../util/cache';
-import { discordCommandWrapper, isAdmin } from '../../util/discord';
-import { spinWait } from '../../util/spinWait';
+} from '../../lib/helpers/onboardUser.js';
+import { ApplicationCache } from '../../util/cache.js';
+import { discordCommandWrapper, isAdmin } from '../../util/discord.js';
+import { spinWait } from '../../util/spinWait.js';
 
 const logger = new Logger({ name: 'MeetupSyncAccount' });
 

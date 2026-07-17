@@ -1,14 +1,32 @@
 import { APIUser } from 'discord.js';
 import express, { RequestHandler } from 'express';
 import session from 'express-session';
-import grant, { GrantSession } from 'grant';
+import * as grantModule from 'grant';
+import {
+  ExpressMiddleware,
+  GrantConfig,
+  GrantInstance,
+  GrantOptions,
+  GrantSession,
+} from 'grant';
 import { Logger } from 'tslog';
 
-import Configuration from './configuration';
-import { generateOAuthUrl } from './constants';
-import { APIAccessTokenResponse, Tokens } from './lib/client/discord/types';
-import { getAuthLandingPage } from './templates/authLanding';
-import { ApplicationCache } from './util/cache';
+import Configuration from './configuration.js';
+import { generateOAuthUrl } from './constants.js';
+import { APIAccessTokenResponse, Tokens } from './lib/client/discord/types.js';
+import { getAuthLandingPage } from './templates/authLanding.js';
+import { ApplicationCache } from './util/cache.js';
+
+// grant ships an ESM-style .d.ts over a CJS module, so the type-checker's view
+// of the import diverges between nodenext (tsx/tsc: `.default` is typed as the
+// whole namespace) and ts-jest's CommonJS transform (`.default` is the grant
+// function). At runtime `.default` is module.exports in both worlds (grant
+// sets `grant.default = grant`), so cast it once to its real shape.
+const grant = grantModule.default as unknown as {
+  express(
+    config: GrantConfig | GrantOptions
+  ): ExpressMiddleware & GrantInstance;
+};
 
 const logger = new Logger({ name: 'MeetupBot' });
 

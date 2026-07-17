@@ -4,7 +4,7 @@ import {
   BASIC_MEETUP_AUTH_SCOPES,
   BASE_DISCORD_BOT_URL,
   debugRedirect,
-} from './constants';
+} from './constants.js';
 
 interface ConfigurationSchema {
   discord: {

@@ -1,5 +1,5 @@
 import { Logger } from 'tslog';
-import { ApplicationCache } from '../../util/cache';
+import { ApplicationCache } from '../../util/cache.js';
 
 const logger = new Logger({ name: 'cachedClientRequest' });
 

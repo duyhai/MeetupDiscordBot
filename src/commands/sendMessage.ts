@@ -5,7 +5,7 @@ import {
 } from 'discord.js';
 import { Discord, Slash, SlashOption } from 'discordx';
 import { Logger } from 'tslog';
-import { discordCommandWrapper } from '../util/discord';
+import { discordCommandWrapper } from '../util/discord.js';
 
 const logger = new Logger({ name: 'SendMessageCommands' });
 

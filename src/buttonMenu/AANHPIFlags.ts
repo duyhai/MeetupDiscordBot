@@ -8,8 +8,11 @@ import {
 } from 'discord.js';
 import { ButtonComponent, Discord, Slash } from 'discordx';
 import { Logger } from 'tslog';
-import { discordCommandWrapper } from '../util/discord';
-import Flags from './flags.json';
+import { discordCommandWrapper } from '../util/discord.js';
+// Prettier 2.x cannot parse import attributes (`with { type: 'json' }`),
+// which nodenext ESM requires for JSON imports; drop this once on Prettier 3.
+// eslint-disable-next-line prettier/prettier
+import Flags from './flags.json' with { type: 'json' };
 
 const logger = new Logger({ name: 'AANHPIFlagsCommands' });
 

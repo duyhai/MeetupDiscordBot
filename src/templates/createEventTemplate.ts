@@ -1,4 +1,4 @@
-import { CreateEventInput } from '../lib/client/meetup/types';
+import { CreateEventInput } from '../lib/client/meetup/types.js';
 
 export const createEventTemplate: CreateEventInput = {
   title: 'Organizer Event Template',

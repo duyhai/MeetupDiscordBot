@@ -1,9 +1,9 @@
 import { CommandInteraction } from 'discord.js';
 import { Discord, Slash } from 'discordx';
 
-import { getUserRoles } from '../../lib/helpers/getUserRoles';
-import { discordCommandWrapper } from '../../util/discord';
-import { withMeetupClient } from '../../util/meetup';
+import { getUserRoles } from '../../lib/helpers/getUserRoles.js';
+import { discordCommandWrapper } from '../../util/discord.js';
+import { withMeetupClient } from '../../util/meetup.js';
 
 @Discord()
 export class MeetupGetUserRolesCommands {

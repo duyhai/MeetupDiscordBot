@@ -7,9 +7,9 @@ import request from 'supertest';
 import app, {
   discordConnectCallbackHandler,
   meetupConnectCallbackHandler,
-} from '../../src/app';
-import { generateOAuthUrl } from '../../src/constants';
-import { ApplicationCache } from '../../src/util/cache';
+} from '../../src/app.js';
+import { generateOAuthUrl } from '../../src/constants.js';
+import { ApplicationCache } from '../../src/util/cache.js';
 
 // Must match the `secret` passed to `session(...)` in src/app.ts.
 const SESSION_SECRET = 'grant';

@@ -10,8 +10,8 @@ import { Discord, ModalComponent, Slash } from 'discordx';
 import {
   discordCommandWrapper,
   withDiscordFileAttachment,
-} from '../../util/discord';
-import { withMeetupClient } from '../../util/meetup';
+} from '../../util/discord.js';
+import { withMeetupClient } from '../../util/meetup.js';
 
 const TEST_GQL_MODAL_ID = 'TestGQLInputForm';
 const TEST_GQL_MODAL_QUERY_ID = 'TestGQLInputQuery';

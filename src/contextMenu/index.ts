@@ -1,5 +1,5 @@
-import { MeetupAnnounceEventContextCommands } from './meetup/announceEvent';
-import { OnboardUserContextCommands } from './onboardUser';
+import { MeetupAnnounceEventContextCommands } from './meetup/announceEvent.js';
+import { OnboardUserContextCommands } from './onboardUser.js';
 
 const ContextCommands = [
   OnboardUserContextCommands,

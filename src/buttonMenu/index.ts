@@ -1,7 +1,7 @@
-import { AANHPIFlagsCommands } from './AANHPIFlags';
-import { MeetupSyncAccountCommands } from './meetup/syncAccount';
-import { MeetupSyncAccountCommandsV2 } from './meetup/syncAccountV2';
-import { MessageModsCommands } from './messageMods';
+import { AANHPIFlagsCommands } from './AANHPIFlags.js';
+import { MeetupSyncAccountCommands } from './meetup/syncAccount.js';
+import { MeetupSyncAccountCommandsV2 } from './meetup/syncAccountV2.js';
+import { MessageModsCommands } from './messageMods.js';
 
 const Commands = [
   AANHPIFlagsCommands,

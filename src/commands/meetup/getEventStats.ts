@@ -2,17 +2,17 @@ import dayjs from 'dayjs';
 import { ApplicationCommandOptionType, CommandInteraction } from 'discord.js';
 import { Discord, Slash, SlashOption } from 'discordx';
 import { Logger } from 'tslog';
-import { GqlMeetupClient } from '../../lib/client/meetup/gqlClient';
-import { getPaginatedData } from '../../lib/client/meetup/paginationHelper';
+import { GqlMeetupClient } from '../../lib/client/meetup/gqlClient.js';
+import { getPaginatedData } from '../../lib/client/meetup/paginationHelper.js';
 
-import { BaseUserInfo, Event } from '../../lib/client/meetup/types';
+import { BaseUserInfo, Event } from '../../lib/client/meetup/types.js';
 import {
   discordCommandWrapper,
   linkStr,
   withDiscordFileAttachment,
-} from '../../util/discord';
-import { withMeetupClient } from '../../util/meetup';
-import { tz } from '../../util/timezone';
+} from '../../util/discord.js';
+import { withMeetupClient } from '../../util/meetup.js';
+import { tz } from '../../util/timezone.js';
 
 const logger = new Logger({ name: 'MeetupGetStatsCommands' });
 

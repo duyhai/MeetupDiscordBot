@@ -1,9 +1,9 @@
 import { CommandInteraction } from 'discord.js';
 import { Discord, Slash } from 'discordx';
 import { Logger } from 'tslog';
-import { LGBTQ_CHANNEL_ID } from '../constants';
-import { addToChannel } from '../lib/helpers/channel';
-import { discordCommandWrapper } from '../util/discord';
+import { LGBTQ_CHANNEL_ID } from '../constants.js';
+import { addToChannel } from '../lib/helpers/channel.js';
+import { discordCommandWrapper } from '../util/discord.js';
 
 const logger = new Logger({ name: 'OnboardUserCommands' });
 
