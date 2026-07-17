@@ -23,7 +23,7 @@ import { ApplicationCache } from './util/cache.js';
 // `grant.default = grant`), so cast it once to its real shape.
 const grant = grantModule.default as unknown as {
   express(
-    config: GrantConfig | GrantOptions
+    config: GrantConfig | GrantOptions,
   ): ExpressMiddleware & GrantInstance;
 };
 
@@ -44,14 +44,14 @@ app
 // credentials to consider a provider "configured".
 export const meetupConnectCallbackHandler: RequestHandler = (async (
   req,
-  res
+  res,
 ) => {
   // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-explicit-any
   const grantSession = (req.session as any).grant as GrantSession;
   logger.info(`Meetup response: ${JSON.stringify(grantSession)}`);
   if (grantSession.response.error) {
     res.send(
-      getAuthLandingPage('error', JSON.stringify(grantSession.response.error))
+      getAuthLandingPage('error', JSON.stringify(grantSession.response.error)),
     );
     return;
   }
@@ -68,12 +68,12 @@ export const meetupConnectCallbackHandler: RequestHandler = (async (
     res.send(
       getAuthLandingPage(
         'success',
-        'Connected to Meetup. You can close this window now!'
-      )
+        'Connected to Meetup. You can close this window now!',
+      ),
     );
-  } catch (err) {
+  } catch (_err) {
     res.send(
-      getAuthLandingPage('error', 'Failed to data store! Please try again.')
+      getAuthLandingPage('error', 'Failed to data store! Please try again.'),
     );
   }
 }) as RequestHandler;
@@ -81,7 +81,7 @@ export const meetupConnectCallbackHandler: RequestHandler = (async (
 // TODO: Refactor into helper
 export const discordConnectCallbackHandler: RequestHandler = (async (
   req,
-  res
+  res,
 ) => {
   // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-explicit-any
   const grantSession = (req.session as any).grant as GrantSession;

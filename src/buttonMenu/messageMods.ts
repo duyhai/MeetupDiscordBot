@@ -32,14 +32,14 @@ export class MessageModsCommands {
 
     const buttonRow =
       new ActionRowBuilder<MessageActionRowComponentBuilder>().addComponents(
-        messageModsButton
+        messageModsButton,
       );
     return buttonRow;
   }
 
   async createThreadForUser(
     interaction: ButtonInteraction | CommandInteraction,
-    user: User
+    user: User,
   ) {
     const { channel, guild } = interaction;
 
@@ -62,7 +62,7 @@ export class MessageModsCommands {
         ephemeral: true,
       });
       logger.info(
-        `Private message thread already exists at ${thread.toString()}`
+        `Private message thread already exists at ${thread.toString()}`,
       );
       await thread.setArchived(false);
     } else {
@@ -80,7 +80,7 @@ export class MessageModsCommands {
     }
 
     const moderatorRole = guild.roles.cache.find(
-      (role) => role.id === SERVER_ROLES.moderator
+      (role) => role.id === SERVER_ROLES.moderator,
     );
     await thread.send({
       content: `${moderatorRole.toString()} ${user.toString()}`,
@@ -92,7 +92,7 @@ export class MessageModsCommands {
   async messageModsEventHandler(interaction: ButtonInteraction) {
     await discordCommandWrapper(interaction, async () => {
       logger.info(
-        `Creating private message thread for ${interaction.user.username}`
+        `Creating private message thread for ${interaction.user.username}`,
       );
 
       await this.createThreadForUser(interaction, interaction.user);
@@ -106,7 +106,7 @@ export class MessageModsCommands {
   async createModMessageButtonHandler(interaction: CommandInteraction) {
     await discordCommandWrapper(interaction, async () => {
       logger.info(
-        `Creating mod messages button on behalf of ${interaction.user.username}`
+        `Creating mod messages button on behalf of ${interaction.user.username}`,
       );
 
       const replyContent = [
@@ -135,12 +135,12 @@ export class MessageModsCommands {
       required: true,
     })
     user: User,
-    interaction: CommandInteraction
+    interaction: CommandInteraction,
   ) {
     await discordCommandWrapper(interaction, async () => {
       const fetchedUser = await interaction.client.users.fetch(user.id);
       logger.info(
-        `Creating private message thread for ${fetchedUser.username}`
+        `Creating private message thread for ${fetchedUser.username}`,
       );
 
       await this.createThreadForUser(interaction, fetchedUser);

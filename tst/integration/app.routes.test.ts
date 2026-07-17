@@ -30,7 +30,7 @@ function buildCallbackTestApp(store: session.Store) {
       saveUninitialized: true,
       resave: false,
       store,
-    })
+    }),
   );
   testApp.get('/connect/discord/callback', discordConnectCallbackHandler);
   testApp.get('/connect/meetup/callback', meetupConnectCallbackHandler);
@@ -40,7 +40,7 @@ function buildCallbackTestApp(store: session.Store) {
 function seedSession(
   store: session.Store,
   sid: string,
-  grant: Record<string, unknown>
+  grant: Record<string, unknown>,
 ): Promise<void> {
   return new Promise((resolve, reject) => {
     // express-session's Store.createSession reads sess.cookie.expires
@@ -50,7 +50,7 @@ function seedSession(
       store.set as (
         sid: string,
         session: unknown,
-        cb: (err?: Error) => void
+        cb: (err?: Error) => void,
       ) => void
     )(
       sid,
@@ -61,7 +61,7 @@ function seedSession(
         } else {
           resolve();
         }
-      }
+      },
     );
   });
 }

@@ -9,7 +9,7 @@ const logger = new Logger({ name: 'getUserRoles' });
 
 export async function getBadges(
   meetupClient: GqlMeetupClient,
-  interaction: CommandInteraction | ButtonInteraction
+  interaction: CommandInteraction | ButtonInteraction,
 ) {
   logger.info(`Getting badges for ${interaction.user.username}`);
   await interaction.editReply({
@@ -27,7 +27,7 @@ export async function getBadges(
   });
 
   const getUserHostedEvents = pastEvents.filter(({ eventHosts }) =>
-    eventHosts.some(({ member: { id } }) => id === userInfo.self.id)
+    eventHosts.some(({ member: { id } }) => id === userInfo.self.id),
   );
 
   // TODO: Optimization opportunity. Filter to events that are after joinDate
@@ -40,14 +40,14 @@ export async function getBadges(
             paginationInput,
             {
               rsvpStatus: ['YES', 'ATTENDED'],
-            }
+            },
           );
           return result.event.rsvps;
-        })
-      )
+        }),
+      ),
     )
   ).filter((rsvps) =>
-    rsvps.some(({ member }) => member.id === userInfo.self.id)
+    rsvps.some(({ member }) => member.id === userInfo.self.id),
   );
 
   const hostedCount = getUserHostedEvents.length;
