@@ -1,27 +1,45 @@
-/* eslint-disable 
+/* eslint-disable
   @typescript-eslint/no-unsafe-member-access,
   @typescript-eslint/no-explicit-any,
   @typescript-eslint/no-unsafe-return,
   @typescript-eslint/no-unsafe-call,
-  @typescript-eslint/unbound-method 
+  @typescript-eslint/unbound-method
 */
 import { CommandInteraction, Guild } from 'discord.js';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { GqlMeetupClient } from '../../../src/lib/client/meetup/gqlClient.js';
 import * as paginationHelper from '../../../src/lib/client/meetup/paginationHelper.js';
 import { GetGroupEventsResponse } from '../../../src/lib/client/meetup/types.js';
 import { getUserRoles } from '../../../src/lib/helpers/getUserRoles.js';
 import * as onboardUser from '../../../src/lib/helpers/onboardUser.js';
 
-// Mocking the external dependencies
-jest.mock('../../../src/lib/client/meetup/gqlClient');
-jest.mock('../../../src/lib/client/meetup/paginationHelper');
-jest.mock('../../../src/lib/helpers/onboardUser');
+// Mocking the external dependencies.
+// Real ESM module namespaces are frozen, so mutating
+// `(module as any).fn = mock` after an auto-mock (the previous approach here)
+// doesn't work under real ESM. Instead each mocked module's factory provides
+// the mock functions directly, and tests reach them via `vi.mocked(...)`.
+vi.mock('../../../src/lib/client/meetup/gqlClient.js', () => ({
+  GqlMeetupClient: vi.fn().mockImplementation(function GqlMeetupClientMock() {
+    return {
+      getUserMembershipInfo: vi.fn(),
+      getUserInfo: vi.fn(),
+      getGroupEvents: vi.fn(),
+    };
+  }),
+}));
+vi.mock('../../../src/lib/client/meetup/paginationHelper.js', () => ({
+  getPaginatedData: vi.fn(),
+}));
+vi.mock('../../../src/lib/helpers/onboardUser.js', () => ({
+  addServerRole: vi.fn(),
+}));
 
 describe('getUserRoles', () => {
   let interaction: CommandInteraction;
   let meetupClient: GqlMeetupClient;
 
   beforeEach(() => {
+    vi.clearAllMocks();
     interaction = {
       user: {
         username: 'testUser',
@@ -32,8 +50,8 @@ describe('getUserRoles', () => {
           cache: new Map<string, unknown>(), // Replace with roles if needed
         },
       } as Guild,
-      editReply: jest.fn(),
-      followUp: jest.fn(),
+      editReply: vi.fn(),
+      followUp: vi.fn(),
     } as unknown as CommandInteraction;
 
     meetupClient = new GqlMeetupClient('1234');
@@ -41,7 +59,7 @@ describe('getUserRoles', () => {
 
   it('should add roles for organizer', async () => {
     // Set up mock data for organizer
-    jest.spyOn(meetupClient, 'getUserMembershipInfo').mockResolvedValue({
+    vi.mocked(meetupClient.getUserMembershipInfo).mockResolvedValue({
       groupByUrlname: {
         id: '1',
         isMember: true,
@@ -56,8 +74,7 @@ describe('getUserRoles', () => {
       },
     });
 
-    const addServerRoleMock = jest.fn();
-    (onboardUser as any).addServerRole = addServerRoleMock;
+    const addServerRoleMock = vi.mocked(onboardUser.addServerRole);
     await getUserRoles(meetupClient, interaction);
 
     expect(addServerRoleMock).toHaveBeenCalledWith(
@@ -78,7 +95,7 @@ describe('getUserRoles', () => {
 
   it('should handle non-member user', async () => {
     // Set up mock data for non-member user
-    jest.spyOn(meetupClient, 'getUserMembershipInfo').mockResolvedValue({
+    vi.mocked(meetupClient.getUserMembershipInfo).mockResolvedValue({
       groupByUrlname: {
         id: '1',
         isMember: false,
@@ -100,7 +117,7 @@ describe('getUserRoles', () => {
 
   it('should handle non-organizer user with hosted events', async () => {
     // Set up mock data for non-organizer user with hosted events
-    jest.spyOn(meetupClient, 'getUserMembershipInfo').mockResolvedValue({
+    vi.mocked(meetupClient.getUserMembershipInfo).mockResolvedValue({
       groupByUrlname: {
         id: '1',
         isMember: true,
@@ -114,7 +131,7 @@ describe('getUserRoles', () => {
         name: 'test',
       },
     });
-    jest.spyOn(meetupClient, 'getUserInfo').mockResolvedValue({
+    vi.mocked(meetupClient.getUserInfo).mockResolvedValue({
       self: {
         id: 'testUserId',
         gender: 'MALE',
@@ -123,13 +140,12 @@ describe('getUserRoles', () => {
       },
     });
 
-    const addServerRoleMock = jest.fn();
-    (onboardUser as any).addServerRole = addServerRoleMock;
+    const addServerRoleMock = vi.mocked(onboardUser.addServerRole);
 
-    const getPaginatedDataMock = (fun) => fun();
-    (paginationHelper as any).getPaginatedData = getPaginatedDataMock;
+    const getPaginatedDataMock = vi.mocked(paginationHelper.getPaginatedData);
+    getPaginatedDataMock.mockImplementation((fun: any) => fun());
 
-    jest.spyOn(meetupClient, 'getGroupEvents').mockResolvedValue({
+    vi.mocked(meetupClient.getGroupEvents).mockResolvedValue({
       groupByUrlname: {
         events: [
           {
@@ -150,7 +166,7 @@ describe('getUserRoles', () => {
 
   it('should handle non-organizer user without hosted events', async () => {
     // Set up mock data for non-organizer user without hosted events
-    jest.spyOn(meetupClient, 'getUserMembershipInfo').mockResolvedValue({
+    vi.mocked(meetupClient.getUserMembershipInfo).mockResolvedValue({
       groupByUrlname: {
         id: '1',
         isMember: true,
@@ -165,7 +181,7 @@ describe('getUserRoles', () => {
       },
     });
 
-    jest.spyOn(meetupClient, 'getUserInfo').mockResolvedValue({
+    vi.mocked(meetupClient.getUserInfo).mockResolvedValue({
       self: {
         id: 'testUserId',
         gender: 'MALE',
@@ -174,13 +190,12 @@ describe('getUserRoles', () => {
       },
     });
 
-    const addServerRoleMock = jest.fn();
-    (onboardUser as any).addServerRole = addServerRoleMock;
+    const addServerRoleMock = vi.mocked(onboardUser.addServerRole);
 
-    const getPaginatedDataMock = (fun) => fun();
-    (paginationHelper as any).getPaginatedData = getPaginatedDataMock;
+    const getPaginatedDataMock = vi.mocked(paginationHelper.getPaginatedData);
+    getPaginatedDataMock.mockImplementation((fun: any) => fun());
 
-    jest.spyOn(meetupClient, 'getGroupEvents').mockResolvedValueOnce({
+    vi.mocked(meetupClient.getGroupEvents).mockResolvedValueOnce({
       groupByUrlname: {
         events: [], // No hosted events
       },
@@ -195,7 +210,7 @@ describe('getUserRoles', () => {
       'guest_host'
     );
 
-    jest.spyOn(meetupClient, 'getGroupEvents').mockResolvedValueOnce({
+    vi.mocked(meetupClient.getGroupEvents).mockResolvedValueOnce({
       groupByUrlname: {
         events: [],
       },

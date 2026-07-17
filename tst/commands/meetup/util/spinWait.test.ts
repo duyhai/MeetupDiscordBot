@@ -1,12 +1,13 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { spinWait } from '../../../../src/util/spinWait.js';
 
 describe('spinWait', () => {
   beforeEach(() => {
-    jest.clearAllMocks();
+    vi.clearAllMocks();
   });
 
   it('should return the result if fn resolves to a truthy value immediately', async () => {
-    const fn = jest.fn().mockResolvedValue(true);
+    const fn = vi.fn().mockResolvedValue(true);
     const result = await spinWait(fn, {
       timeoutMs: 100,
       intervalMs: 10,
@@ -18,7 +19,7 @@ describe('spinWait', () => {
   });
 
   it('should throw an error when timeout is reached', async () => {
-    const fn = jest.fn().mockResolvedValue(false); // Always returns falsy value
+    const fn = vi.fn().mockResolvedValue(false); // Always returns falsy value
 
     await expect(
       spinWait(fn, { timeoutMs: 100, intervalMs: 10, message: 'Timeout' })
@@ -28,7 +29,7 @@ describe('spinWait', () => {
   });
 
   it('should return the result if fn eventually resolves to a truthy value', async () => {
-    const fn = jest
+    const fn = vi
       .fn()
       .mockResolvedValueOnce(false) // Initially returns falsy
       .mockResolvedValueOnce(true); // Returns truthy on second call

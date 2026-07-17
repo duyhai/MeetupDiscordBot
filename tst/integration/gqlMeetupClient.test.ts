@@ -1,4 +1,5 @@
 import nock from 'nock';
+import { afterEach, describe, expect, it } from 'vitest';
 
 import Configuration from '../../src/configuration.js';
 import { GqlMeetupClient } from '../../src/lib/client/meetup/gqlClient.js';

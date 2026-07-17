@@ -3,6 +3,7 @@ import { sign } from 'cookie-signature';
 import express from 'express';
 import session from 'express-session';
 import request from 'supertest';
+import { describe, expect, it } from 'vitest';
 
 import app, {
   discordConnectCallbackHandler,

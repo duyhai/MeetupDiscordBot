@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import { beforeAll, describe, expect, it } from 'vitest';
 
 import { RedisCache } from '../../src/lib/cache/redisCache.js';
 
