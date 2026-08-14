@@ -8,6 +8,7 @@ import { Logger } from 'tslog';
 
 import { linkStr } from '../../util/discord.js';
 import { ApplicationMemberRepository } from '../../util/memberRepository.js';
+import { MeetupIdConflictError } from '../repositories/types.js';
 import { logActivity, logAlert } from './discordLogger.js';
 
 const logger = new Logger({ name: 'memberLink' });
@@ -86,6 +87,16 @@ export async function recordMeetupLink(
   } catch (error) {
     if (error instanceof DuplicateMeetupAccountError) {
       throw error;
+    }
+    // The unique constraint caught a concurrent link that slipped past the
+    // pre-check above; treat it exactly like the pre-checked duplicate.
+    if (error instanceof MeetupIdConflictError) {
+      await logAlert(client, {
+        title: 'Duplicate Meetup link blocked',
+        description: `${user.toString()} tried to link ${meetupLink}, already linked to another member (caught by unique constraint).`,
+        fields: [{ name: 'Meetup ID', value: info.meetupId }],
+      });
+      throw new DuplicateMeetupAccountError(strings.duplicateAccount);
     }
     logger.error(`Failed to record Meetup link: ${String(error)}`);
     await logAlert(client, {

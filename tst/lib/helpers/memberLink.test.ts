@@ -67,6 +67,22 @@ describe('recordMeetupLink', () => {
     expect(vi.mocked(discordLogger.logAlert)).toHaveBeenCalledTimes(1);
   });
 
+  it('blocks a concurrent duplicate link that slips past the pre-check', async () => {
+    await recordMeetupLink(makeInteraction('discord-1'), info, 'self_onboard');
+    // Simulate the check-then-write race: the pre-check misses the row that
+    // the repository's unique constraint will still reject.
+    vi.spyOn(repo, 'findByMeetupId').mockResolvedValue(undefined);
+
+    await expect(
+      recordMeetupLink(makeInteraction('discord-2'), info, 'sync_v2'),
+    ).rejects.toThrow(DuplicateMeetupAccountError);
+
+    expect(await repo.findByDiscordId('discord-2')).toBeUndefined();
+    expect(vi.mocked(discordLogger.logAlert)).toHaveBeenCalledTimes(1);
+    const [, entry] = vi.mocked(discordLogger.logAlert).mock.calls[0];
+    expect(entry.title).toContain('Duplicate Meetup link blocked');
+  });
+
   it('alerts (but allows) when a user switches Meetup accounts', async () => {
     await recordMeetupLink(makeInteraction(), info, 'self_onboard');
     await recordMeetupLink(

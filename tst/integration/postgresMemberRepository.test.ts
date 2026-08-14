@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import { beforeAll, describe, expect, it } from 'vitest';
 
 import { PostgresMemberRepository } from '../../src/lib/repositories/postgresMemberRepository.js';
+import { MeetupIdConflictError } from '../../src/lib/repositories/types.js';
 
 // Exercises the repository against a real Postgres (upsert conflict targets,
 // TIMESTAMPTZ round-trips, and partial-unique semantics are exactly what a
@@ -79,7 +80,7 @@ const freshMember = () => ({
       await repo.upsert(linked);
       await expect(
         repo.upsert({ ...freshMember(), meetupId: linked.meetupId }),
-      ).rejects.toThrow(); // unique violation on meetup_id
+      ).rejects.toThrow(MeetupIdConflictError); // unique violation on meetup_id
     });
 
     it('remove deletes the row', async () => {

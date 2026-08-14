@@ -2,6 +2,7 @@ import pg from 'pg';
 import { Logger } from 'tslog';
 
 import {
+  MeetupIdConflictError,
   MemberRecord,
   MemberRepository,
   MemberUpsert,
@@ -97,28 +98,44 @@ export class PostgresMemberRepository implements MemberRepository {
   }
 
   async upsert(member: MemberUpsert): Promise<MemberRecord> {
-    const result = await this.pool.query<MemberRow>(
-      `INSERT INTO members
-         (discord_user_id, meetup_id, meetup_name, meetup_member_url, onboard_method, onboarded_by)
-       VALUES ($1, $2, $3, $4, $5, $6)
-       ON CONFLICT (discord_user_id) DO UPDATE SET
-         meetup_id = EXCLUDED.meetup_id,
-         meetup_name = EXCLUDED.meetup_name,
-         meetup_member_url = EXCLUDED.meetup_member_url,
-         onboard_method = EXCLUDED.onboard_method,
-         onboarded_by = EXCLUDED.onboarded_by,
-         last_synced_at = now()
-       RETURNING *`,
-      [
-        member.discordUserId,
-        member.meetupId,
-        member.meetupName,
-        member.meetupMemberUrl,
-        member.onboardMethod,
-        member.onboardedBy,
-      ],
-    );
-    return toRecord(result.rows[0]);
+    try {
+      const result = await this.pool.query<MemberRow>(
+        `INSERT INTO members
+           (discord_user_id, meetup_id, meetup_name, meetup_member_url, onboard_method, onboarded_by)
+         VALUES ($1, $2, $3, $4, $5, $6)
+         ON CONFLICT (discord_user_id) DO UPDATE SET
+           meetup_id = EXCLUDED.meetup_id,
+           meetup_name = EXCLUDED.meetup_name,
+           meetup_member_url = EXCLUDED.meetup_member_url,
+           onboard_method = EXCLUDED.onboard_method,
+           onboarded_by = EXCLUDED.onboarded_by,
+           last_synced_at = now()
+         RETURNING *`,
+        [
+          member.discordUserId,
+          member.meetupId,
+          member.meetupName,
+          member.meetupMemberUrl,
+          member.onboardMethod,
+          member.onboardedBy,
+        ],
+      );
+      return toRecord(result.rows[0]);
+    } catch (error) {
+      // discord_user_id conflicts are absorbed by ON CONFLICT, so a unique
+      // violation here can only be the meetup_id constraint — surface it as
+      // the typed conflict the memberLink layer knows how to handle.
+      if (
+        error instanceof pg.DatabaseError &&
+        error.code === '23505' &&
+        error.constraint === 'members_meetup_id_key'
+      ) {
+        throw new MeetupIdConflictError(
+          `meetup id ${member.meetupId} is already linked to another member`,
+        );
+      }
+      throw error;
+    }
   }
 
   async findByDiscordId(
