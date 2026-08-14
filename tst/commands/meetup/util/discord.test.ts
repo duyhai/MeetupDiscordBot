@@ -57,6 +57,19 @@ describe('discordCommandWrapper logging hooks', () => {
     expect(vi.mocked(discordLogger.logAlert)).not.toHaveBeenCalled();
   });
 
+  it('still logs success when the progress-reply delete fails', async () => {
+    const interaction = makeInteraction({
+      reply: vi.fn().mockResolvedValue({
+        delete: vi.fn().mockRejectedValue(new Error('Unknown Message')),
+      }),
+    });
+    await discordCommandWrapper(interaction, async () => {});
+
+    expect(vi.mocked(discordLogger.logActivity)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(discordLogger.logAlert)).not.toHaveBeenCalled();
+    expect(interaction.editReply).not.toHaveBeenCalled();
+  });
+
   it('skips the generic alert for duplicate-link blocks (already alerted)', async () => {
     const interaction = makeInteraction();
     await discordCommandWrapper(interaction, async () => {

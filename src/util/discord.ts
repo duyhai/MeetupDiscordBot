@@ -48,7 +48,16 @@ export async function discordCommandWrapper(
   const action = describeInteraction(interaction);
   try {
     await commandFn();
-    await message.delete();
+    // Deleting the ephemeral progress reply is cleanup, not part of the
+    // command: its failure (e.g. interaction token expiry) must not turn a
+    // successful command into a false "failed" alert.
+    try {
+      await message.delete();
+    } catch (deleteError: unknown) {
+      logger.warn(
+        `Could not delete progress reply for ${action}: ${String(deleteError)}`,
+      );
+    }
     await logActivity(interaction.client, {
       title: `${action} used`,
       description: `By ${interaction.user.toString()} (${
