@@ -89,5 +89,15 @@ const freshMember = () => ({
 
       expect(await repo.findByDiscordId(member.discordUserId)).toBeUndefined();
     });
+
+    it('listAll includes a freshly upserted member', async () => {
+      const member = freshMember();
+      await repo.upsert(member);
+
+      const all = await repo.listAll();
+      expect(
+        all.some((row) => row.discordUserId === member.discordUserId)
+      ).toBe(true);
+    });
   }
 );

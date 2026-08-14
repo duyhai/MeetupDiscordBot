@@ -55,6 +55,8 @@ function toRecord(row: MemberRow): MemberRecord {
 export class PostgresMemberRepository implements MemberRepository {
   private pool: pg.Pool;
 
+  private schemaEnsured: Promise<void> | undefined;
+
   private static singleton: PostgresMemberRepository;
 
   private constructor() {
@@ -67,6 +69,7 @@ export class PostgresMemberRepository implements MemberRepository {
       max: 5, // Essential-0 allows 20 connections total; leave headroom
       // Heroku Postgres requires TLS but uses certs node rejects by default
       ssl: isLocal ? undefined : { rejectUnauthorized: false },
+      allowExitOnIdle: true, // lets test processes exit cleanly instead of waiting on idle clients
     });
     // Heroku recycles idle connections; without a listener the resulting
     // pool 'error' event would crash the process.
@@ -78,9 +81,20 @@ export class PostgresMemberRepository implements MemberRepository {
   public static async instance(): Promise<PostgresMemberRepository> {
     if (this.singleton === undefined) {
       this.singleton = new PostgresMemberRepository();
-      await this.singleton.pool.query(CREATE_TABLE_SQL);
     }
-    return this.singleton;
+    const repo = this.singleton;
+    if (repo.schemaEnsured === undefined) {
+      repo.schemaEnsured = (async () => {
+        await repo.pool.query(CREATE_TABLE_SQL);
+      })();
+    }
+    try {
+      await repo.schemaEnsured;
+    } catch (error) {
+      repo.schemaEnsured = undefined; // retry on next call
+      throw error;
+    }
+    return repo;
   }
 
   async upsert(member: MemberUpsert): Promise<MemberRecord> {
