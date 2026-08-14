@@ -14,7 +14,7 @@ const REDIS_AVAILABLE = Boolean(process.env.REDISCLOUD_URL);
 if (!REDIS_AVAILABLE) {
   // eslint-disable-next-line no-console
   console.warn(
-    'Skipping RedisCache integration tests: set REDISCLOUD_URL to a reachable Redis to run them.'
+    'Skipping RedisCache integration tests: set REDISCLOUD_URL to a reachable Redis to run them.',
   );
 }
 
@@ -27,7 +27,7 @@ if (!REDIS_AVAILABLE) {
 
   it('returns undefined for a key that was never set', async () => {
     expect(
-      await cache.get(`missing-key-${crypto.randomUUID()}`)
+      await cache.get(`missing-key-${crypto.randomUUID()}`),
     ).toBeUndefined();
   });
 

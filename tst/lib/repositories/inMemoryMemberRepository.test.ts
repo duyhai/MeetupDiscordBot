@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { InMemoryMemberRepository } from '../../../src/lib/repositories/inMemoryMemberRepository.js';
+import { MeetupIdConflictError } from '../../../src/lib/repositories/types.js';
 
 const linkedMember = {
   discordUserId: 'discord-1',
@@ -55,6 +56,25 @@ describe('InMemoryMemberRepository', () => {
     const row = await repo.findByDiscordId('discord-2');
     expect(row?.meetupId).toBeNull();
     expect(row?.onboardedBy).toBe('mod-1');
+  });
+
+  it('rejects claiming a meetup id held by another user, matching Postgres', async () => {
+    const repo = new InMemoryMemberRepository();
+    await repo.upsert(linkedMember);
+
+    await expect(
+      repo.upsert({ ...linkedMember, discordUserId: 'discord-2' }),
+    ).rejects.toThrow(MeetupIdConflictError);
+    expect(await repo.findByDiscordId('discord-2')).toBeUndefined();
+  });
+
+  it('allows multiple null meetupId rows to coexist', async () => {
+    const repo = new InMemoryMemberRepository();
+    const nullRow = { ...linkedMember, meetupId: null };
+    await repo.upsert({ ...nullRow, discordUserId: 'discord-2' });
+    await repo.upsert({ ...nullRow, discordUserId: 'discord-3' });
+
+    expect(await repo.listAll()).toHaveLength(2);
   });
 
   it('remove deletes the row', async () => {

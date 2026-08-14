@@ -1,6 +1,11 @@
-/* eslint-disable typescript-sort-keys/interface */
-
 export type OnboardMethod = 'self_onboard' | 'sync_v2' | 'manual';
+
+/**
+ * Raised by upsert when the meetup id is already claimed by a different
+ * Discord user (Postgres UNIQUE violation, or the in-memory equivalent).
+ * Closes the check-then-write race in the duplicate pre-check.
+ */
+export class MeetupIdConflictError extends Error {}
 
 export interface MemberRecord {
   discordUserId: string;

@@ -1,5 +1,8 @@
 import * as redis from 'redis';
+import { Logger } from 'tslog';
 import { KeyValueCache } from './base.js';
+
+const logger = new Logger({ name: 'RedisCache' });
 
 const ITEM_TTL_SEC = 60 * 60 * 12;
 /**
@@ -13,6 +16,11 @@ export class RedisCache implements KeyValueCache {
   private constructor() {
     this.client = redis.createClient({
       url: process.env.REDISCLOUD_URL,
+    });
+    // node-redis emits 'error' on connection drops; without a listener the
+    // event would crash the process.
+    this.client.on('error', (error) => {
+      logger.error(`Redis client error: ${String(error)}`);
     });
   }
 

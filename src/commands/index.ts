@@ -8,6 +8,7 @@ import { MeetupGetUserRolesCommands } from './meetup/getUserRoles.js';
 import { MeetupSelfOnboardCommands } from './meetup/selfOnboard.js';
 import { MeetupTestGqlCommands } from './meetup/testGQL.js';
 import { UnlinkAccountCommands } from './meetup/unlinkAccount.js';
+import { MeetupWhoisCommands } from './meetup/whoisAccount.js';
 import { OnboardUserCommands } from './onboardUser.js';
 import { SendMessageCommands } from './sendMessage.js';
 
@@ -24,6 +25,7 @@ const Commands = [
   SendMessageCommands,
   MeetupTestGqlCommands,
   UnlinkAccountCommands,
+  MeetupWhoisCommands,
 ];
 
 export default Commands;

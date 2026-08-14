@@ -19,21 +19,21 @@ export function shouldRunDigestNow(now: Date): boolean {
 
 export function collectUnlinkedMemberIds(
   members: { hasOnboardingRole: boolean; id: string; isBot: boolean }[],
-  rows: MemberRecord[]
+  rows: MemberRecord[],
 ): string[] {
   const linkedIds = new Set(
-    rows.filter((row) => row.meetupId !== null).map((row) => row.discordUserId)
+    rows.filter((row) => row.meetupId !== null).map((row) => row.discordUserId),
   );
   return members
     .filter(
       (member) =>
-        !member.isBot && !member.hasOnboardingRole && !linkedIds.has(member.id)
+        !member.isBot && !member.hasOnboardingRole && !linkedIds.has(member.id),
     )
     .map((member) => member.id);
 }
 
 export function formatUnlinkedDigest(
-  unlinkedIds: string[]
+  unlinkedIds: string[],
 ): LogEntry | undefined {
   if (unlinkedIds.length === 0) {
     return undefined;
@@ -47,16 +47,7 @@ export function formatUnlinkedDigest(
   };
 }
 
-async function runDigestOnce(client: Client): Promise<void> {
-  const cache = await ApplicationCache();
-  const today = new Date().toISOString().slice(0, 10);
-  // exclusive_set guards against double-posting across dyno restarts; the
-  // cache TTL (12h on Redis) is fine because the key encodes the date.
-  const claimed = await cache.exclusive_set(`unlinked-digest-${today}`, '1');
-  if (!claimed) {
-    return;
-  }
-
+export async function runDigestOnce(client: Client): Promise<void> {
   const guilds = await client.guilds.fetch();
   const guildId = guilds.first()?.id;
   if (!guildId) {
@@ -74,8 +65,19 @@ async function runDigestOnce(client: Client): Promise<void> {
       isBot: member.user.bot,
       hasOnboardingRole: member.roles.cache.has(SERVER_ROLES.onboarding),
     })),
-    rows
+    rows,
   );
+
+  // Claim the day only after the fallible collection succeeds, so a failed
+  // run leaves the claim unconsumed and a restart within the hour can retry.
+  // exclusive_set guards against double-posting across dyno restarts; the
+  // cache TTL (12h on Redis) is fine because the key encodes the date.
+  const cache = await ApplicationCache();
+  const today = new Date().toISOString().slice(0, 10);
+  const claimed = await cache.exclusive_set(`unlinked-digest-${today}`, '1');
+  if (!claimed) {
+    return;
+  }
 
   const entry = formatUnlinkedDigest(unlinked);
   if (entry) {
@@ -95,7 +97,7 @@ export function startUnlinkedDigestScheduler(client: Client): void {
       return;
     }
     runDigestOnce(client).catch((error) =>
-      logger.error(`Unlinked digest failed: ${String(error)}`)
+      logger.error(`Unlinked digest failed: ${String(error)}`),
     );
   };
   tick();

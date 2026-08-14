@@ -16,7 +16,7 @@ import { logActivity, logAlert } from '../lib/helpers/discordLogger.js';
 const logger = new Logger({ name: 'DiscordUtil' });
 
 export function describeInteraction(
-  interaction: ButtonInteraction | CommandInteraction | ModalSubmitInteraction
+  interaction: ButtonInteraction | CommandInteraction | ModalSubmitInteraction,
 ): string {
   if (interaction.isChatInputCommand?.()) {
     return `/${interaction.commandName}`;
@@ -39,7 +39,7 @@ export function describeInteraction(
  */
 export async function discordCommandWrapper(
   interaction: ButtonInteraction | CommandInteraction | ModalSubmitInteraction,
-  commandFn: () => Promise<void>
+  commandFn: () => Promise<void>,
 ) {
   const message = await interaction.reply({
     content: 'Executing command',
@@ -48,7 +48,16 @@ export async function discordCommandWrapper(
   const action = describeInteraction(interaction);
   try {
     await commandFn();
-    await message.delete();
+    // Deleting the ephemeral progress reply is cleanup, not part of the
+    // command: its failure (e.g. interaction token expiry) must not turn a
+    // successful command into a false "failed" alert.
+    try {
+      await message.delete();
+    } catch (deleteError: unknown) {
+      logger.warn(
+        `Could not delete progress reply for ${action}: ${String(deleteError)}`,
+      );
+    }
     await logActivity(interaction.client, {
       title: `${action} used`,
       description: `By ${interaction.user.toString()} (${
@@ -58,12 +67,18 @@ export async function discordCommandWrapper(
   } catch (error: unknown) {
     if (error instanceof Error) {
       logger.error(error);
-      await logAlert(interaction.client, {
-        title: `${action} failed`,
-        description: `User: ${interaction.user.toString()} (${
-          interaction.user.username
-        })\nError: ${error.message}`,
-      });
+      // Errors marked alertHandled (e.g. DuplicateMeetupAccountError) posted
+      // their own, more specific alert at the throw site.
+      const alertHandled =
+        (error as { alertHandled?: boolean }).alertHandled === true;
+      if (!alertHandled) {
+        await logAlert(interaction.client, {
+          title: `${action} failed`,
+          description: `User: ${interaction.user.toString()} (${
+            interaction.user.username
+          })\nError: ${error.message}`,
+        });
+      }
       await interaction.editReply({
         content: `${interaction.user.toString()} Error: ${
           error?.message
@@ -83,8 +98,8 @@ export async function withDiscordFileAttachment(
   fileName: string,
   attachmentData: string | NodeJS.ArrayBufferView,
   attachmentHandler: (
-    attachmentArgs: Pick<WebhookMessageEditOptions, 'files'>
-  ) => Promise<void>
+    attachmentArgs: Pick<WebhookMessageEditOptions, 'files'>,
+  ) => Promise<void>,
 ) {
   const tmpFileName = `${crypto.randomBytes(16).toString('hex')}.tmp`;
   try {
@@ -110,6 +125,21 @@ export function isAdmin(member: GuildMember) {
 
 export function hasAnyServerRole(member: GuildMember, roles: ServerRoles[]) {
   return roles.some((role) => member.roles.cache.has(SERVER_ROLES[role]));
+}
+
+/**
+ * Throws with the given message unless the invoking member is an admin,
+ * moderator, or organizer. Widen a command's audience by passing more roles.
+ */
+export async function requireModOrOrganizer(
+  interaction: CommandInteraction,
+  errorMessage: string,
+  roles: ServerRoles[] = ['moderator', 'organizer'],
+) {
+  const member = await interaction.guild.members.fetch(interaction.user.id);
+  if (!isAdmin(member) && !hasAnyServerRole(member, roles)) {
+    throw new Error(errorMessage);
+  }
 }
 
 export function linkStr(text: string, link: string) {

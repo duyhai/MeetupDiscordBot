@@ -1,6 +1,7 @@
 import {
   ApplicationCommandOptionType,
   CommandInteraction,
+  PermissionFlagsBits,
   User,
 } from 'discord.js';
 import { Discord, Slash, SlashOption } from 'discordx';
@@ -28,6 +29,10 @@ export class UnlinkAccountCommands {
   @Slash({
     name: 'meetup_unlink',
     description: "Remove a member's stored Meetup link (mods/organizers only)",
+    // Hides the command from members without mod permissions; the role check
+    // inside the handler stays authoritative. Guild admins can re-grant
+    // visibility per role under Server Settings → Integrations.
+    defaultMemberPermissions: PermissionFlagsBits.ModerateMembers,
   })
   async meetupUnlinkHandler(
     @SlashOption({
@@ -37,7 +42,7 @@ export class UnlinkAccountCommands {
       required: true,
     })
     user: User,
-    interaction: CommandInteraction
+    interaction: CommandInteraction,
   ) {
     await discordCommandWrapper(interaction, async () => {
       const member = await interaction.guild.members.fetch(interaction.user.id);
@@ -60,7 +65,7 @@ export class UnlinkAccountCommands {
 
       await repo.remove(user.id);
       logger.info(
-        `${interaction.user.username} unlinked member record for ${user.username}`
+        `${interaction.user.username} unlinked member record for ${user.username}`,
       );
       await logActivity(interaction.client, {
         title: 'Member record unlinked',

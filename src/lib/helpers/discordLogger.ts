@@ -4,14 +4,10 @@ import { Logger } from 'tslog';
 import {
   BOT_ACTIVITY_LOG_CHANNEL_ID,
   BOT_ALERTS_CHANNEL_ID,
+  EMBED_COLORS,
 } from '../../constants.js';
 
 const logger = new Logger({ name: 'discordLogger' });
-
-const COLORS = {
-  activity: 0x2ecc71, // green
-  alert: 0xe74c3c, // red
-};
 
 export interface LogEntry {
   description?: string;
@@ -27,7 +23,7 @@ async function postToChannel(
   client: Client,
   channelId: string,
   color: number,
-  entry: LogEntry
+  entry: LogEntry,
 ): Promise<void> {
   try {
     const channel = await client.channels.fetch(channelId);
@@ -57,16 +53,16 @@ async function postToChannel(
 
 export async function logActivity(
   client: Client,
-  entry: LogEntry
+  entry: LogEntry,
 ): Promise<void> {
   await postToChannel(
     client,
     BOT_ACTIVITY_LOG_CHANNEL_ID,
-    COLORS.activity,
-    entry
+    EMBED_COLORS.activity,
+    entry,
   );
 }
 
 export async function logAlert(client: Client, entry: LogEntry): Promise<void> {
-  await postToChannel(client, BOT_ALERTS_CHANNEL_ID, COLORS.alert, entry);
+  await postToChannel(client, BOT_ALERTS_CHANNEL_ID, EMBED_COLORS.alert, entry);
 }

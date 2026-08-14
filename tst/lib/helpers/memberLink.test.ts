@@ -39,7 +39,7 @@ describe('recordMeetupLink', () => {
     vi.clearAllMocks();
     repo = new InMemoryMemberRepository();
     vi.mocked(memberRepository.ApplicationMemberRepository).mockResolvedValue(
-      repo
+      repo,
     );
   });
 
@@ -60,11 +60,27 @@ describe('recordMeetupLink', () => {
     await recordMeetupLink(makeInteraction('discord-1'), info, 'self_onboard');
 
     await expect(
-      recordMeetupLink(makeInteraction('discord-2'), info, 'sync_v2')
+      recordMeetupLink(makeInteraction('discord-2'), info, 'sync_v2'),
     ).rejects.toThrow(DuplicateMeetupAccountError);
 
     expect(await repo.findByDiscordId('discord-2')).toBeUndefined();
     expect(vi.mocked(discordLogger.logAlert)).toHaveBeenCalledTimes(1);
+  });
+
+  it('blocks a concurrent duplicate link that slips past the pre-check', async () => {
+    await recordMeetupLink(makeInteraction('discord-1'), info, 'self_onboard');
+    // Simulate the check-then-write race: the pre-check misses the row that
+    // the repository's unique constraint will still reject.
+    vi.spyOn(repo, 'findByMeetupId').mockResolvedValue(undefined);
+
+    await expect(
+      recordMeetupLink(makeInteraction('discord-2'), info, 'sync_v2'),
+    ).rejects.toThrow(DuplicateMeetupAccountError);
+
+    expect(await repo.findByDiscordId('discord-2')).toBeUndefined();
+    expect(vi.mocked(discordLogger.logAlert)).toHaveBeenCalledTimes(1);
+    const [, entry] = vi.mocked(discordLogger.logAlert).mock.calls[0];
+    expect(entry.title).toContain('Duplicate Meetup link blocked');
   });
 
   it('alerts (but allows) when a user switches Meetup accounts', async () => {
@@ -72,11 +88,11 @@ describe('recordMeetupLink', () => {
     await recordMeetupLink(
       makeInteraction(),
       { ...info, meetupId: 'meetup-2' },
-      'self_onboard'
+      'self_onboard',
     );
 
     expect((await repo.findByDiscordId('discord-1'))?.meetupId).toBe(
-      'meetup-2'
+      'meetup-2',
     );
     expect(vi.mocked(discordLogger.logAlert)).toHaveBeenCalledTimes(1);
   });
@@ -91,11 +107,11 @@ describe('recordMeetupLink', () => {
 
   it('swallows repository failures and alerts instead of throwing', async () => {
     vi.mocked(memberRepository.ApplicationMemberRepository).mockRejectedValue(
-      new Error('db down')
+      new Error('db down'),
     );
 
     await expect(
-      recordMeetupLink(makeInteraction(), info, 'self_onboard')
+      recordMeetupLink(makeInteraction(), info, 'self_onboard'),
     ).resolves.toBeUndefined();
     expect(vi.mocked(discordLogger.logAlert)).toHaveBeenCalledTimes(1);
   });
@@ -108,13 +124,12 @@ describe('recordManualOnboard', () => {
     vi.clearAllMocks();
     repo = new InMemoryMemberRepository();
     vi.mocked(memberRepository.ApplicationMemberRepository).mockResolvedValue(
-      repo
+      repo,
     );
   });
 
   it('records a null-meetup row and alerts (deprecated flow)', async () => {
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
-    await recordManualOnboard(makeInteraction('mod-1') as any, 'target-1');
+    await recordManualOnboard(makeInteraction('mod-1'), 'target-1');
 
     const row = await repo.findByDiscordId('target-1');
     expect(row).toMatchObject({
@@ -129,22 +144,21 @@ describe('recordManualOnboard', () => {
     await recordMeetupLink(makeInteraction('target-1'), info, 'self_onboard');
     vi.clearAllMocks();
     vi.mocked(memberRepository.ApplicationMemberRepository).mockResolvedValue(
-      repo
+      repo,
     );
 
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
-    await recordManualOnboard(makeInteraction('mod-1') as any, 'target-1');
+    await recordManualOnboard(makeInteraction('mod-1'), 'target-1');
 
     expect((await repo.findByDiscordId('target-1'))?.meetupId).toBe('meetup-1');
   });
 
   it('never throws on repository failure', async () => {
     vi.mocked(memberRepository.ApplicationMemberRepository).mockRejectedValue(
-      new Error('db down')
+      new Error('db down'),
     );
     await expect(
       // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
-      recordManualOnboard(makeInteraction('mod-1') as any, 'target-1')
+      recordManualOnboard(makeInteraction('mod-1') as any, 'target-1'),
     ).resolves.toBeUndefined();
     expect(vi.mocked(discordLogger.logAlert)).toHaveBeenCalledTimes(1);
   });

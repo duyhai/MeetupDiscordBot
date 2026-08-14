@@ -8,6 +8,7 @@ import { Logger } from 'tslog';
 
 import { linkStr } from '../../util/discord.js';
 import { ApplicationMemberRepository } from '../../util/memberRepository.js';
+import { MeetupIdConflictError } from '../repositories/types.js';
 import { logActivity, logAlert } from './discordLogger.js';
 
 const logger = new Logger({ name: 'memberLink' });
@@ -17,7 +18,11 @@ const strings = {
     'This Meetup account is already linked to another Discord account — please contact the mods.',
 };
 
-export class DuplicateMeetupAccountError extends Error {}
+export class DuplicateMeetupAccountError extends Error {
+  // The duplicate alert is posted where this is thrown; the marker tells
+  // discordCommandWrapper to skip its generic failure alert.
+  readonly alertHandled = true;
+}
 
 export interface MeetupLinkInfo {
   meetupId: string;
@@ -35,7 +40,7 @@ export interface MeetupLinkInfo {
 export async function recordMeetupLink(
   interaction: ButtonInteraction | CommandInteraction,
   info: MeetupLinkInfo,
-  method: 'self_onboard' | 'sync_v2'
+  method: 'self_onboard' | 'sync_v2',
 ): Promise<void> {
   const { client, user } = interaction;
   const meetupLink = linkStr(info.meetupName, info.meetupMemberUrl);
@@ -87,11 +92,21 @@ export async function recordMeetupLink(
     if (error instanceof DuplicateMeetupAccountError) {
       throw error;
     }
+    // The unique constraint caught a concurrent link that slipped past the
+    // pre-check above; treat it exactly like the pre-checked duplicate.
+    if (error instanceof MeetupIdConflictError) {
+      await logAlert(client, {
+        title: 'Duplicate Meetup link blocked',
+        description: `${user.toString()} tried to link ${meetupLink}, already linked to another member (caught by unique constraint).`,
+        fields: [{ name: 'Meetup ID', value: info.meetupId }],
+      });
+      throw new DuplicateMeetupAccountError(strings.duplicateAccount);
+    }
     logger.error(`Failed to record Meetup link: ${String(error)}`);
     await logAlert(client, {
       title: 'Database write failed during onboarding',
       description: `Could not record Meetup link for ${user.toString()}: ${String(
-        error
+        error,
       )}`,
     });
   }
@@ -107,7 +122,7 @@ export async function recordManualOnboard(
     | CommandInteraction
     | MessageContextMenuCommandInteraction
     | UserContextMenuCommandInteraction,
-  targetUserId: string
+  targetUserId: string,
 ): Promise<void> {
   const { client, user: mod } = interaction;
   try {

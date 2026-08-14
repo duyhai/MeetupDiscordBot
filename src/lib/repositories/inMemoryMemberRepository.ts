@@ -1,4 +1,9 @@
-import { MemberRecord, MemberRepository, MemberUpsert } from './types.js';
+import {
+  MeetupIdConflictError,
+  MemberRecord,
+  MemberRepository,
+  MemberUpsert,
+} from './types.js';
 
 /**
  * Map-backed MemberRepository used for local development (no DATABASE_URL)
@@ -17,6 +22,17 @@ export class InMemoryMemberRepository implements MemberRepository {
   }
 
   async upsert(member: MemberUpsert): Promise<MemberRecord> {
+    // Mirror the members.meetup_id UNIQUE constraint in Postgres.
+    if (member.meetupId !== null) {
+      const claimedBy = Array.from(this.members.values()).find(
+        (record) => record.meetupId === member.meetupId,
+      );
+      if (claimedBy && claimedBy.discordUserId !== member.discordUserId) {
+        throw new MeetupIdConflictError(
+          `meetup id ${member.meetupId} is already linked to another member`,
+        );
+      }
+    }
     const existing = this.members.get(member.discordUserId);
     const now = new Date();
     const record: MemberRecord = {
@@ -29,7 +45,7 @@ export class InMemoryMemberRepository implements MemberRepository {
   }
 
   async findByDiscordId(
-    discordUserId: string
+    discordUserId: string,
   ): Promise<MemberRecord | undefined> {
     const record = this.members.get(discordUserId);
     return record ? { ...record } : undefined;
@@ -37,7 +53,7 @@ export class InMemoryMemberRepository implements MemberRepository {
 
   async findByMeetupId(meetupId: string): Promise<MemberRecord | undefined> {
     const record = Array.from(this.members.values()).find(
-      (r) => r.meetupId === meetupId
+      (r) => r.meetupId === meetupId,
     );
     return record ? { ...record } : undefined;
   }

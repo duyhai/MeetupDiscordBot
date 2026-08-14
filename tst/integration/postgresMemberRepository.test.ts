@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import { beforeAll, describe, expect, it } from 'vitest';
 
 import { PostgresMemberRepository } from '../../src/lib/repositories/postgresMemberRepository.js';
+import { MeetupIdConflictError } from '../../src/lib/repositories/types.js';
 
 // Exercises the repository against a real Postgres (upsert conflict targets,
 // TIMESTAMPTZ round-trips, and partial-unique semantics are exactly what a
@@ -14,7 +15,7 @@ const POSTGRES_AVAILABLE = Boolean(process.env.DATABASE_URL);
 if (!POSTGRES_AVAILABLE) {
   // eslint-disable-next-line no-console
   console.warn(
-    'Skipping PostgresMemberRepository integration tests: set DATABASE_URL to a reachable Postgres to run them.'
+    'Skipping PostgresMemberRepository integration tests: set DATABASE_URL to a reachable Postgres to run them.',
   );
 }
 
@@ -47,7 +48,7 @@ const freshMember = () => ({
 
       expect(stored.firstOnboardedAt).toBeInstanceOf(Date);
       expect(await repo.findByDiscordId(member.discordUserId)).toMatchObject(
-        member
+        member,
       );
       expect(await repo.findByMeetupId(member.meetupId)).toMatchObject(member);
     });
@@ -78,8 +79,8 @@ const freshMember = () => ({
       const linked = freshMember();
       await repo.upsert(linked);
       await expect(
-        repo.upsert({ ...freshMember(), meetupId: linked.meetupId })
-      ).rejects.toThrow(); // unique violation on meetup_id
+        repo.upsert({ ...freshMember(), meetupId: linked.meetupId }),
+      ).rejects.toThrow(MeetupIdConflictError); // unique violation on meetup_id
     });
 
     it('remove deletes the row', async () => {
@@ -89,5 +90,15 @@ const freshMember = () => ({
 
       expect(await repo.findByDiscordId(member.discordUserId)).toBeUndefined();
     });
-  }
+
+    it('listAll includes a freshly upserted member', async () => {
+      const member = freshMember();
+      await repo.upsert(member);
+
+      const all = await repo.listAll();
+      expect(
+        all.some((row) => row.discordUserId === member.discordUserId),
+      ).toBe(true);
+    });
+  },
 );
