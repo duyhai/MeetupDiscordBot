@@ -146,5 +146,6 @@ describe('recordManualOnboard', () => {
       // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
       recordManualOnboard(makeInteraction('mod-1') as any, 'target-1')
     ).resolves.toBeUndefined();
+    expect(vi.mocked(discordLogger.logAlert)).toHaveBeenCalledTimes(1);
   });
 });

@@ -124,15 +124,16 @@ export async function recordManualOnboard(
         onboardedBy: mod.id,
       });
     }
-
-    const message =
-      `${mod.toString()} manually onboarded <@${targetUserId}>. ` +
-      `They have no Meetup account on record and should go through automated verification.`;
-    await logAlert(client, {
-      title: 'Manual onboard used (deprecated flow)',
-      description: message,
-    });
   } catch (error) {
     logger.error(`Failed to record manual onboard: ${String(error)}`);
   }
+  // The deprecated-flow alert must reach moderators even when the DB is
+  // unavailable; logAlert never throws.
+  const message =
+    `${mod.toString()} manually onboarded <@${targetUserId}>. ` +
+    `They have no Meetup account on record and should go through automated verification.`;
+  await logAlert(client, {
+    title: 'Manual onboard used (deprecated flow)',
+    description: message,
+  });
 }
