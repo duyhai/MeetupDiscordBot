@@ -27,7 +27,7 @@ const MOD_ONLY_VISIBILITY = PermissionFlagsBits.ModerateMembers;
 @Discord()
 export class MeetupWhoisCommands {
   @Slash({
-    name: 'meetup_whois_user',
+    name: 'meetup_whois_discorduser',
     description:
       "Look up a Discord member's linked Meetup account (mods/organizers only)",
     defaultMemberPermissions: MOD_ONLY_VISIBILITY,
@@ -49,7 +49,7 @@ export class MeetupWhoisCommands {
   }
 
   @Slash({
-    name: 'meetup_whois_meetup',
+    name: 'meetup_whois_meetupuser',
     description:
       'Look up which Discord account claimed a Meetup profile (mods/organizers only)',
     defaultMemberPermissions: MOD_ONLY_VISIBILITY,
