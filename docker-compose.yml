@@ -12,11 +12,14 @@ services:
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: meetup_bot
     ports:
-      - '5432:5432'
+      # Loopback only: never expose the trivially-credentialed dev DB to the LAN.
+      - '127.0.0.1:5432:5432'
     volumes:
       - meetup-bot-postgres-data:/var/lib/postgresql/data
     healthcheck:
-      test: ['CMD-SHELL', 'pg_isready -U postgres -d meetup_bot']
+      # -h 127.0.0.1 probes TCP: during first-boot init the image briefly serves
+      # a unix-socket-only temporary server that would otherwise report ready.
+      test: ['CMD-SHELL', 'pg_isready -h 127.0.0.1 -U postgres -d meetup_bot']
       interval: 5s
       timeout: 5s
       retries: 10
@@ -25,7 +28,8 @@ services:
     image: redis:7-alpine
     container_name: meetup-bot-redis
     ports:
-      - '6379:6379'
+      # Loopback only: never expose the unauthenticated dev Redis to the LAN.
+      - '127.0.0.1:6379:6379'
     healthcheck:
       test: ['CMD', 'redis-cli', 'ping']
       interval: 5s

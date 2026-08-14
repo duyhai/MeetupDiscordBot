@@ -29,7 +29,7 @@ We have two tiers of automated tests: fast unit tests and slower integration tes
 - Unit tests: `yarn test` — no network or external services required. Runs on the pre-push hook and in CI.
 - Integration tests: `yarn test:integration` — covers OAuth routes, the GraphQL client, and Redis caching.
 - Run both: `yarn test:all`
-- The Redis integration suite is gated on the `REDISCLOUD_URL` env var: if unset, it skips with a warning. To run it locally, start a Redis (e.g. `docker run --rm -p 6379:6379 redis` or `brew install redis && redis-server`) and run `REDISCLOUD_URL=redis://localhost:6379 yarn test:integration`.
+- The Redis and Postgres integration suites are gated on the `REDISCLOUD_URL` / `DATABASE_URL` env vars: if unset, they skip with a warning. To run them locally, use the Docker stack below (`yarn test:integration:docker` is the one-shot version).
 - The pre-push hook only runs unit tests (integration tests need Redis) — CI runs the integration tier separately, so don't expect `git push` locally to catch integration failures.
 
 # Local testing with Docker
@@ -70,3 +70,5 @@ For a one-shot run that boots the stack, wires the env vars, and runs the integr
 yarn test:integration:docker
 ```
 (This leaves the containers running; use `yarn docker:down` afterwards.)
+
+The Postgres data volume survives `yarn docker:down`. If the schema ever changes shape or you want a clean slate, reset with `docker compose down -v`.
