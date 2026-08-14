@@ -8,8 +8,7 @@ import { MeetupIdConflictError } from '../../src/lib/repositories/types.js';
 // TIMESTAMPTZ round-trips, and partial-unique semantics are exactly what a
 // mock would paper over). Requires DATABASE_URL; skipped otherwise, matching
 // the RedisCache integration suite pattern. Locally:
-//   docker run --rm -p 5432:5432 -e POSTGRES_PASSWORD=pw postgres
-//   DATABASE_URL=postgres://postgres:pw@localhost:5432/postgres yarn test:integration
+//   yarn test:integration:docker   (boots the Docker stack and wires the env)
 const POSTGRES_AVAILABLE = Boolean(process.env.DATABASE_URL);
 
 if (!POSTGRES_AVAILABLE) {
