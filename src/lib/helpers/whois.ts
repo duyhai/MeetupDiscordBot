@@ -10,10 +10,12 @@ export function parseMeetupMemberId(input: string): string | undefined {
   if (/^\d+$/.test(trimmed)) {
     return trimmed;
   }
-  // The lookbehind rejects lookalike domains (fakemeetup.com, evil.meetup.com);
-  // the optional locale segment accepts localized URLs (meetup.com/es/members/...).
+  // Anchored to the start of the (trimmed) input so the host must actually be
+  // meetup.com — lookalike domains and meetup.com embedded in a hostile URL's
+  // path (evil.com/meetup.com/members/...) are both rejected. The optional
+  // locale segment accepts localized URLs (meetup.com/es/members/...).
   const match =
-    /(?<![\w.-])(?:www\.)?meetup\.com\/(?:[a-z]{2}(?:-[A-Za-z]{2})?\/)?members\/(\d+)(?:[/?#]|$)/.exec(
+    /^(?:https?:\/\/)?(?:www\.)?meetup\.com\/(?:[a-z]{2}(?:-[a-z]{2})?\/)?members\/(\d+)(?:[/?#]|$)/i.exec(
       trimmed,
     );
   return match ? match[1] : undefined;

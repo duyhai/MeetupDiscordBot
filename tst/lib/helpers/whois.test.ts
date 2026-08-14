@@ -71,6 +71,30 @@ describe('parseMeetupMemberId', () => {
     expect(
       parseMeetupMemberId('https://evil.meetup.com/members/123456/'),
     ).toBeUndefined();
+    expect(
+      parseMeetupMemberId('https://meetup.com.evil.com/members/123456/'),
+    ).toBeUndefined();
+    expect(
+      parseMeetupMemberId('https://meetup.com@evil.com/members/123456/'),
+    ).toBeUndefined();
+  });
+
+  it('rejects meetup.com embedded in a hostile URL path', () => {
+    expect(
+      parseMeetupMemberId('https://evil.com/meetup.com/members/123456/'),
+    ).toBeUndefined();
+    expect(
+      parseMeetupMemberId('https://evil.com/www.meetup.com/members/123456/'),
+    ).toBeUndefined();
+  });
+
+  it('accepts mixed-case hosts (hostnames are case-insensitive)', () => {
+    expect(parseMeetupMemberId('https://Meetup.com/members/186893524/')).toBe(
+      '186893524',
+    );
+    expect(
+      parseMeetupMemberId('https://WWW.MEETUP.COM/members/186893524/'),
+    ).toBe('186893524');
   });
 });
 
