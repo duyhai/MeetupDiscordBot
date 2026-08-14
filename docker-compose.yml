@@ -1,0 +1,36 @@
+# Local testing stack for MeetupDiscordBot: Postgres + Redis.
+# Brought up via `yarn docker:up` (scripts/docker-setup.sh), which also prints
+# the DATABASE_URL / REDISCLOUD_URL exports the integration suite reads.
+name: meetup-bot
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: meetup-bot-postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: meetup_bot
+    ports:
+      - '5432:5432'
+    volumes:
+      - meetup-bot-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U postgres -d meetup_bot']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: meetup-bot-redis
+    ports:
+      - '6379:6379'
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  meetup-bot-postgres-data:

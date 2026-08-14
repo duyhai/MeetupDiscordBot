@@ -11,7 +11,10 @@
     "lint:fix": "yarn lint -- --fix",
     "test": "vitest run",
     "test:integration": "vitest run --config vitest.integration.config.ts",
+    "test:integration:docker": "yarn docker:up && DATABASE_URL=postgres://postgres:postgres@localhost:5432/meetup_bot REDISCLOUD_URL=redis://localhost:6379 yarn test:integration",
     "test:all": "yarn test && yarn test:integration",
+    "docker:up": "bash scripts/docker-setup.sh",
+    "docker:down": "bash scripts/docker-setup.sh down",
     "prepare": "husky"
   },
   "repository": {
