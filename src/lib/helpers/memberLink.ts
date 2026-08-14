@@ -18,7 +18,11 @@ const strings = {
     'This Meetup account is already linked to another Discord account — please contact the mods.',
 };
 
-export class DuplicateMeetupAccountError extends Error {}
+export class DuplicateMeetupAccountError extends Error {
+  // The duplicate alert is posted where this is thrown; the marker tells
+  // discordCommandWrapper to skip its generic failure alert.
+  readonly alertHandled = true;
+}
 
 export interface MeetupLinkInfo {
   meetupId: string;

@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { SERVER_ROLES } from '../../../../src/constants.js';
 import * as discordLogger from '../../../../src/lib/helpers/discordLogger.js';
+import { DuplicateMeetupAccountError } from '../../../../src/lib/helpers/memberLink.js';
 import {
   describeInteraction,
   discordCommandWrapper,
@@ -54,6 +55,20 @@ describe('discordCommandWrapper logging hooks', () => {
     const [, entry] = vi.mocked(discordLogger.logActivity).mock.calls[0];
     expect(entry.title).toContain('/test_command');
     expect(vi.mocked(discordLogger.logAlert)).not.toHaveBeenCalled();
+  });
+
+  it('skips the generic alert for duplicate-link blocks (already alerted)', async () => {
+    const interaction = makeInteraction();
+    await discordCommandWrapper(interaction, async () => {
+      throw new DuplicateMeetupAccountError('already linked');
+    });
+
+    expect(vi.mocked(discordLogger.logAlert)).not.toHaveBeenCalled();
+    expect(interaction.editReply).toHaveBeenCalledTimes(1);
+    const [editArgs] = vi.mocked(interaction.editReply).mock.calls[0] as [
+      { content: string },
+    ];
+    expect(editArgs.content).toContain('already linked');
   });
 
   it('posts an alert entry on error and still edits the reply', async () => {

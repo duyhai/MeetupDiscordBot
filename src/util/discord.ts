@@ -58,12 +58,18 @@ export async function discordCommandWrapper(
   } catch (error: unknown) {
     if (error instanceof Error) {
       logger.error(error);
-      await logAlert(interaction.client, {
-        title: `${action} failed`,
-        description: `User: ${interaction.user.toString()} (${
-          interaction.user.username
-        })\nError: ${error.message}`,
-      });
+      // Errors marked alertHandled (e.g. DuplicateMeetupAccountError) posted
+      // their own, more specific alert at the throw site.
+      const alertHandled =
+        (error as { alertHandled?: boolean }).alertHandled === true;
+      if (!alertHandled) {
+        await logAlert(interaction.client, {
+          title: `${action} failed`,
+          description: `User: ${interaction.user.toString()} (${
+            interaction.user.username
+          })\nError: ${error.message}`,
+        });
+      }
       await interaction.editReply({
         content: `${interaction.user.toString()} Error: ${
           error?.message
