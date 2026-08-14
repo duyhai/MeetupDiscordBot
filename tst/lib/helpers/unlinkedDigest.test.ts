@@ -98,7 +98,7 @@ describe('runDigestOnce', () => {
         claimedKeys.add(key);
         return true;
       },
-    } as Awaited<ReturnType<typeof cache.ApplicationCache>>);
+    } as unknown as Awaited<ReturnType<typeof cache.ApplicationCache>>);
     vi.mocked(memberRepository.ApplicationMemberRepository).mockResolvedValue({
       listAll: async () => [],
     } as unknown as Awaited<
