@@ -1,10 +1,25 @@
-import { describe, expect, it } from 'vitest';
+/* eslint-disable @typescript-eslint/unbound-method */
+import { CommandInteraction } from 'discord.js';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import * as discordLogger from '../../../src/lib/helpers/discordLogger.js';
 import {
   formatMemberFields,
   parseMeetupMemberId,
+  whoisByDiscordUser,
+  whoisByMeetupInput,
 } from '../../../src/lib/helpers/whois.js';
+import { InMemoryMemberRepository } from '../../../src/lib/repositories/inMemoryMemberRepository.js';
 import { MemberRecord } from '../../../src/lib/repositories/types.js';
+import * as memberRepository from '../../../src/util/memberRepository.js';
+
+vi.mock('../../../src/lib/helpers/discordLogger.js', () => ({
+  logActivity: vi.fn().mockResolvedValue(undefined),
+  logAlert: vi.fn().mockResolvedValue(undefined),
+}));
+vi.mock('../../../src/util/memberRepository.js', () => ({
+  ApplicationMemberRepository: vi.fn(),
+}));
 
 const linkedRow: MemberRecord = {
   discordUserId: 'discord-1',
@@ -95,6 +110,92 @@ describe('parseMeetupMemberId', () => {
     expect(
       parseMeetupMemberId('https://WWW.MEETUP.COM/members/186893524/'),
     ).toBe('186893524');
+  });
+});
+
+describe('whois lookup helpers', () => {
+  let repo: InMemoryMemberRepository;
+
+  function makeInteraction() {
+    return {
+      client: {},
+      user: { id: 'mod-1', username: 'modUser', toString: () => '<@mod-1>' },
+      followUp: vi.fn().mockResolvedValue(undefined),
+    } as unknown as CommandInteraction;
+  }
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    repo = new InMemoryMemberRepository();
+    vi.mocked(memberRepository.ApplicationMemberRepository).mockResolvedValue(
+      repo,
+    );
+    await repo.upsert({
+      discordUserId: 'discord-1',
+      meetupId: '186893524',
+      meetupName: 'Test User',
+      meetupMemberUrl: 'https://www.meetup.com/members/186893524/',
+      onboardMethod: 'self_onboard',
+      onboardedBy: null,
+    });
+  });
+
+  it('replies with an embed and audits the target on a user lookup', async () => {
+    const interaction = makeInteraction();
+    await whoisByDiscordUser(interaction, 'discord-1');
+
+    const followUpArgs = vi.mocked(interaction.followUp).mock.calls[0][0] as {
+      embeds: unknown[];
+      ephemeral: boolean;
+    };
+    expect(followUpArgs.ephemeral).toBe(true);
+    expect(followUpArgs.embeds).toHaveLength(1);
+    expect(vi.mocked(discordLogger.logActivity)).toHaveBeenCalledTimes(1);
+    const [, entry] = vi.mocked(discordLogger.logActivity).mock.calls[0];
+    expect(entry.description).toContain('<@mod-1>');
+    expect(entry.description).toContain('<@discord-1>');
+  });
+
+  it('reports and audits a user lookup with no record, without alerting', async () => {
+    const interaction = makeInteraction();
+    await whoisByDiscordUser(interaction, 'discord-unknown');
+
+    const followUpArgs = vi.mocked(interaction.followUp).mock.calls[0][0] as {
+      content: string;
+    };
+    expect(followUpArgs.content).toContain('no member record');
+    expect(vi.mocked(discordLogger.logAlert)).not.toHaveBeenCalled();
+    const [, entry] = vi.mocked(discordLogger.logActivity).mock.calls[0];
+    expect(entry.description).toContain('no record');
+  });
+
+  it('resolves a meetup URL to the claiming Discord account and audits it', async () => {
+    const interaction = makeInteraction();
+    await whoisByMeetupInput(
+      interaction,
+      'https://www.meetup.com/members/186893524/',
+    );
+
+    const followUpArgs = vi.mocked(interaction.followUp).mock.calls[0][0] as {
+      embeds: unknown[];
+    };
+    expect(followUpArgs.embeds).toHaveLength(1);
+    const [, entry] = vi.mocked(discordLogger.logActivity).mock.calls[0];
+    expect(entry.description).toContain('186893524');
+  });
+
+  it('rejects unparseable meetup input as an ephemeral reply, not an alert', async () => {
+    const interaction = makeInteraction();
+    await expect(
+      whoisByMeetupInput(interaction, 'https://evil.com/meetup.com/members/1/'),
+    ).resolves.toBeUndefined();
+
+    const followUpArgs = vi.mocked(interaction.followUp).mock.calls[0][0] as {
+      content: string;
+    };
+    expect(followUpArgs.content).toContain("Couldn't parse");
+    expect(vi.mocked(discordLogger.logAlert)).not.toHaveBeenCalled();
+    expect(vi.mocked(discordLogger.logActivity)).not.toHaveBeenCalled();
   });
 });
 
