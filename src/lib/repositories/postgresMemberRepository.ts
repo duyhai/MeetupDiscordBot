@@ -1,5 +1,6 @@
 /* eslint-disable typescript-sort-keys/interface */
 import pg from 'pg';
+import { Logger } from 'tslog';
 
 import {
   MemberRecord,
@@ -7,6 +8,8 @@ import {
   MemberUpsert,
   OnboardMethod,
 } from './types.js';
+
+const logger = new Logger({ name: 'PostgresMemberRepository' });
 
 const CREATE_TABLE_SQL = `
 CREATE TABLE IF NOT EXISTS members (
@@ -64,6 +67,11 @@ export class PostgresMemberRepository implements MemberRepository {
       max: 5, // Essential-0 allows 20 connections total; leave headroom
       // Heroku Postgres requires TLS but uses certs node rejects by default
       ssl: isLocal ? undefined : { rejectUnauthorized: false },
+    });
+    // Heroku recycles idle connections; without a listener the resulting
+    // pool 'error' event would crash the process.
+    this.pool.on('error', (error) => {
+      logger.error(`Postgres pool error: ${String(error)}`);
     });
   }
 
