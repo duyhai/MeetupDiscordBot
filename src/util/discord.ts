@@ -10,7 +10,25 @@ import {
 } from 'discord.js';
 import { Logger } from 'tslog';
 
+import { SERVER_ROLES, ServerRoles } from '../constants.js';
+import { logActivity, logAlert } from '../lib/helpers/discordLogger.js';
+
 const logger = new Logger({ name: 'DiscordUtil' });
+
+export function describeInteraction(
+  interaction: ButtonInteraction | CommandInteraction | ModalSubmitInteraction
+): string {
+  if (interaction.isChatInputCommand?.()) {
+    return `/${interaction.commandName}`;
+  }
+  if ('commandName' in interaction) {
+    return `/${interaction.commandName}`;
+  }
+  if (interaction.isButton?.()) {
+    return `button:${interaction.customId}`;
+  }
+  return `modal:${interaction.customId}`;
+}
 
 /**
  * A wrapper for Discord commands to handle:
@@ -27,12 +45,25 @@ export async function discordCommandWrapper(
     content: 'Executing command',
     ephemeral: true,
   });
+  const action = describeInteraction(interaction);
   try {
     await commandFn();
     await message.delete();
+    await logActivity(interaction.client, {
+      title: `${action} used`,
+      description: `By ${interaction.user.toString()} (${
+        interaction.user.username
+      })`,
+    });
   } catch (error: unknown) {
     if (error instanceof Error) {
       logger.error(error);
+      await logAlert(interaction.client, {
+        title: `${action} failed`,
+        description: `User: ${interaction.user.toString()} (${
+          interaction.user.username
+        })\nError: ${error.message}`,
+      });
       await interaction.editReply({
         content: `${interaction.user.toString()} Error: ${
           error?.message
@@ -75,6 +106,10 @@ export async function withDiscordFileAttachment(
 
 export function isAdmin(member: GuildMember) {
   return member.permissions.has(PermissionFlagsBits.Administrator, true);
+}
+
+export function hasAnyServerRole(member: GuildMember, roles: ServerRoles[]) {
+  return roles.some((role) => member.roles.cache.has(SERVER_ROLES[role]));
 }
 
 export function linkStr(text: string, link: string) {
