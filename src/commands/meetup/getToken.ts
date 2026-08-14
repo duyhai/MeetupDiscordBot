@@ -20,7 +20,7 @@ export class MeetupGetTokenCommands {
 
         if (!rawTokens) {
           throw new Error(
-            '❌ No Meetup token found. Please connect your Meetup account first using `/meetup_self_onboard` or another Meetup command.'
+            '❌ No Meetup token found. Please connect your Meetup account first using `/meetup_self_onboard` or another Meetup command.',
           );
         }
 

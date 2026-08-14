@@ -6,7 +6,7 @@ const logger = new Logger({ name: 'cachedClientRequest' });
 export async function cachedClientRequest<TInput, TResponse>(
   requestName: string,
   datagenCallbackInput: TInput,
-  datagenCallbackFn: (callbackInput: TInput) => Promise<TResponse>
+  datagenCallbackFn: (callbackInput: TInput) => Promise<TResponse>,
 ): Promise<TResponse> {
   const cacheKey = `${requestName}-${JSON.stringify(datagenCallbackInput)}`;
   const cache = await ApplicationCache();

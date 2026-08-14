@@ -1,5 +1,3 @@
-/* eslint-disable typescript-sort-keys/interface */
-
 export type OnboardMethod = 'self_onboard' | 'sync_v2' | 'manual';
 
 export interface MemberRecord {

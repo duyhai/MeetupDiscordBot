@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-explicit-any, @typescript-eslint/unbound-method */
+/* eslint-disable @typescript-eslint/unbound-method */
 import { ButtonInteraction, CommandInteraction, GuildMember } from 'discord.js';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -74,7 +74,7 @@ describe('hasAnyServerRole', () => {
   const memberWithRoles = (...roleIds: string[]) =>
     ({
       roles: { cache: new Map(roleIds.map((id) => [id, {}])) },
-    } as unknown as GuildMember);
+    }) as unknown as GuildMember;
 
   it('matches when the member has one of the roles', () => {
     const member = memberWithRoles(SERVER_ROLES.moderator);

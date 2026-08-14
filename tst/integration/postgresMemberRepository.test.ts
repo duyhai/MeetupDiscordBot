@@ -14,7 +14,7 @@ const POSTGRES_AVAILABLE = Boolean(process.env.DATABASE_URL);
 if (!POSTGRES_AVAILABLE) {
   // eslint-disable-next-line no-console
   console.warn(
-    'Skipping PostgresMemberRepository integration tests: set DATABASE_URL to a reachable Postgres to run them.'
+    'Skipping PostgresMemberRepository integration tests: set DATABASE_URL to a reachable Postgres to run them.',
   );
 }
 
@@ -47,7 +47,7 @@ const freshMember = () => ({
 
       expect(stored.firstOnboardedAt).toBeInstanceOf(Date);
       expect(await repo.findByDiscordId(member.discordUserId)).toMatchObject(
-        member
+        member,
       );
       expect(await repo.findByMeetupId(member.meetupId)).toMatchObject(member);
     });
@@ -78,7 +78,7 @@ const freshMember = () => ({
       const linked = freshMember();
       await repo.upsert(linked);
       await expect(
-        repo.upsert({ ...freshMember(), meetupId: linked.meetupId })
+        repo.upsert({ ...freshMember(), meetupId: linked.meetupId }),
       ).rejects.toThrow(); // unique violation on meetup_id
     });
 
@@ -96,8 +96,8 @@ const freshMember = () => ({
 
       const all = await repo.listAll();
       expect(
-        all.some((row) => row.discordUserId === member.discordUserId)
+        all.some((row) => row.discordUserId === member.discordUserId),
       ).toBe(true);
     });
-  }
+  },
 );

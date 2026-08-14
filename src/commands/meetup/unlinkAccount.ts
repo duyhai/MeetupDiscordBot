@@ -37,7 +37,7 @@ export class UnlinkAccountCommands {
       required: true,
     })
     user: User,
-    interaction: CommandInteraction
+    interaction: CommandInteraction,
   ) {
     await discordCommandWrapper(interaction, async () => {
       const member = await interaction.guild.members.fetch(interaction.user.id);
@@ -60,7 +60,7 @@ export class UnlinkAccountCommands {
 
       await repo.remove(user.id);
       logger.info(
-        `${interaction.user.username} unlinked member record for ${user.username}`
+        `${interaction.user.username} unlinked member record for ${user.username}`,
       );
       await logActivity(interaction.client, {
         title: 'Member record unlinked',

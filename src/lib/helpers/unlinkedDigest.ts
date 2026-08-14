@@ -19,21 +19,21 @@ export function shouldRunDigestNow(now: Date): boolean {
 
 export function collectUnlinkedMemberIds(
   members: { hasOnboardingRole: boolean; id: string; isBot: boolean }[],
-  rows: MemberRecord[]
+  rows: MemberRecord[],
 ): string[] {
   const linkedIds = new Set(
-    rows.filter((row) => row.meetupId !== null).map((row) => row.discordUserId)
+    rows.filter((row) => row.meetupId !== null).map((row) => row.discordUserId),
   );
   return members
     .filter(
       (member) =>
-        !member.isBot && !member.hasOnboardingRole && !linkedIds.has(member.id)
+        !member.isBot && !member.hasOnboardingRole && !linkedIds.has(member.id),
     )
     .map((member) => member.id);
 }
 
 export function formatUnlinkedDigest(
-  unlinkedIds: string[]
+  unlinkedIds: string[],
 ): LogEntry | undefined {
   if (unlinkedIds.length === 0) {
     return undefined;
@@ -74,7 +74,7 @@ async function runDigestOnce(client: Client): Promise<void> {
       isBot: member.user.bot,
       hasOnboardingRole: member.roles.cache.has(SERVER_ROLES.onboarding),
     })),
-    rows
+    rows,
   );
 
   const entry = formatUnlinkedDigest(unlinked);
@@ -95,7 +95,7 @@ export function startUnlinkedDigestScheduler(client: Client): void {
       return;
     }
     runDigestOnce(client).catch((error) =>
-      logger.error(`Unlinked digest failed: ${String(error)}`)
+      logger.error(`Unlinked digest failed: ${String(error)}`),
     );
   };
   tick();

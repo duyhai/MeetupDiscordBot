@@ -27,7 +27,7 @@ async function postToChannel(
   client: Client,
   channelId: string,
   color: number,
-  entry: LogEntry
+  entry: LogEntry,
 ): Promise<void> {
   try {
     const channel = await client.channels.fetch(channelId);
@@ -57,13 +57,13 @@ async function postToChannel(
 
 export async function logActivity(
   client: Client,
-  entry: LogEntry
+  entry: LogEntry,
 ): Promise<void> {
   await postToChannel(
     client,
     BOT_ACTIVITY_LOG_CHANNEL_ID,
     COLORS.activity,
-    entry
+    entry,
   );
 }
 

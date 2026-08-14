@@ -16,7 +16,7 @@ export const ApplicationMemberRepository =
     if (!warned) {
       warned = true;
       logger.warn(
-        'DATABASE_URL is not set - falling back to in-memory member storage. Member links will NOT survive restarts.'
+        'DATABASE_URL is not set - falling back to in-memory member storage. Member links will NOT survive restarts.',
       );
     }
     return InMemoryMemberRepository.instance();

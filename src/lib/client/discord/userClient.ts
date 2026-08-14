@@ -22,7 +22,7 @@ export class DiscordUserClient {
   private async makeRequest<TInput, TResponse>(
     method: 'GET' | 'PUT' | 'POST' | 'DEL' | 'PATCH',
     url: string,
-    input?: TInput
+    input?: TInput,
   ): Promise<TResponse> {
     const params = {
       method,
@@ -69,7 +69,7 @@ export class DiscordUserClient {
           client_secret: Configuration.discord.oauthSecret,
           grant_type: 'refresh_token',
           refresh_token: this.tokens.accessToken,
-        }
+        },
       );
       this.tokens.expiresAt = Date.now() + response.expires_in * 1000;
       this.tokens.accessToken = response.access_token;
@@ -81,7 +81,7 @@ export class DiscordUserClient {
       const cache = await ApplicationCache();
       await cache.set(
         `${userId}-discord-accessToken`,
-        JSON.stringify(this.tokens)
+        JSON.stringify(this.tokens),
       );
     }
   }

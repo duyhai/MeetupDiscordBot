@@ -35,7 +35,7 @@ export interface MeetupLinkInfo {
 export async function recordMeetupLink(
   interaction: ButtonInteraction | CommandInteraction,
   info: MeetupLinkInfo,
-  method: 'self_onboard' | 'sync_v2'
+  method: 'self_onboard' | 'sync_v2',
 ): Promise<void> {
   const { client, user } = interaction;
   const meetupLink = linkStr(info.meetupName, info.meetupMemberUrl);
@@ -91,7 +91,7 @@ export async function recordMeetupLink(
     await logAlert(client, {
       title: 'Database write failed during onboarding',
       description: `Could not record Meetup link for ${user.toString()}: ${String(
-        error
+        error,
       )}`,
     });
   }
@@ -107,7 +107,7 @@ export async function recordManualOnboard(
     | CommandInteraction
     | MessageContextMenuCommandInteraction
     | UserContextMenuCommandInteraction,
-  targetUserId: string
+  targetUserId: string,
 ): Promise<void> {
   const { client, user: mod } = interaction;
   try {

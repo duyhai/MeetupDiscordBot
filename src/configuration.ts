@@ -48,7 +48,7 @@ const Configuration: ConfigurationSchema = {
       secret: process.env.DISCORD_SECRET,
       scope: [OAuth2Scopes.RoleConnectionsWrite, OAuth2Scopes.Identify],
       redirect_uri: debugRedirect(
-        `${BASE_DISCORD_BOT_URL}/connect/discord/callback`
+        `${BASE_DISCORD_BOT_URL}/connect/discord/callback`,
       ),
     },
     // connect/meetup => authorize => access => callback => persistToken
@@ -59,7 +59,7 @@ const Configuration: ConfigurationSchema = {
       // We also use it as a key for the initiator's Discord id in our memory store.
       dynamic: ['state'],
       redirect_uri: debugRedirect(
-        `${BASE_DISCORD_BOT_URL}/connect/meetup/callback`
+        `${BASE_DISCORD_BOT_URL}/connect/meetup/callback`,
       ),
     },
   },

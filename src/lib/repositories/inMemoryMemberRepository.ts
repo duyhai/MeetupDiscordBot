@@ -29,7 +29,7 @@ export class InMemoryMemberRepository implements MemberRepository {
   }
 
   async findByDiscordId(
-    discordUserId: string
+    discordUserId: string,
   ): Promise<MemberRecord | undefined> {
     const record = this.members.get(discordUserId);
     return record ? { ...record } : undefined;
@@ -37,7 +37,7 @@ export class InMemoryMemberRepository implements MemberRepository {
 
   async findByMeetupId(meetupId: string): Promise<MemberRecord | undefined> {
     const record = Array.from(this.members.values()).find(
-      (r) => r.meetupId === meetupId
+      (r) => r.meetupId === meetupId,
     );
     return record ? { ...record } : undefined;
   }

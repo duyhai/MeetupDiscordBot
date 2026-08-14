@@ -15,7 +15,7 @@ import {
 
 function makeClient(
   sendMock: ReturnType<typeof vi.fn>,
-  options?: { fetchFails?: boolean }
+  options?: { fetchFails?: boolean },
 ) {
   const channel = Object.create(TextChannel.prototype) as TextChannel;
   (channel as any).send = sendMock;

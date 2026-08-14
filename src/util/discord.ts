@@ -16,7 +16,7 @@ import { logActivity, logAlert } from '../lib/helpers/discordLogger.js';
 const logger = new Logger({ name: 'DiscordUtil' });
 
 export function describeInteraction(
-  interaction: ButtonInteraction | CommandInteraction | ModalSubmitInteraction
+  interaction: ButtonInteraction | CommandInteraction | ModalSubmitInteraction,
 ): string {
   if (interaction.isChatInputCommand?.()) {
     return `/${interaction.commandName}`;
@@ -39,7 +39,7 @@ export function describeInteraction(
  */
 export async function discordCommandWrapper(
   interaction: ButtonInteraction | CommandInteraction | ModalSubmitInteraction,
-  commandFn: () => Promise<void>
+  commandFn: () => Promise<void>,
 ) {
   const message = await interaction.reply({
     content: 'Executing command',
@@ -83,8 +83,8 @@ export async function withDiscordFileAttachment(
   fileName: string,
   attachmentData: string | NodeJS.ArrayBufferView,
   attachmentHandler: (
-    attachmentArgs: Pick<WebhookMessageEditOptions, 'files'>
-  ) => Promise<void>
+    attachmentArgs: Pick<WebhookMessageEditOptions, 'files'>,
+  ) => Promise<void>,
 ) {
   const tmpFileName = `${crypto.randomBytes(16).toString('hex')}.tmp`;
   try {

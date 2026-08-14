@@ -20,7 +20,7 @@ export class OnboardUserContextCommands {
     type: ApplicationCommandType.Message,
   })
   async onboardMembersMsgHandler(
-    interaction: MessageContextMenuCommandInteraction
+    interaction: MessageContextMenuCommandInteraction,
   ) {
     await discordCommandWrapper(interaction, async () => {
       const { targetMessage } = interaction;
@@ -33,7 +33,7 @@ export class OnboardUserContextCommands {
     type: ApplicationCommandType.Message,
   })
   async onboardLadiesMsgHandler(
-    interaction: MessageContextMenuCommandInteraction
+    interaction: MessageContextMenuCommandInteraction,
   ) {
     await discordCommandWrapper(interaction, async () => {
       const { targetMessage } = interaction;
@@ -46,7 +46,7 @@ export class OnboardUserContextCommands {
     type: ApplicationCommandType.Message,
   })
   async onboardGentsMsgHandler(
-    interaction: MessageContextMenuCommandInteraction
+    interaction: MessageContextMenuCommandInteraction,
   ) {
     await discordCommandWrapper(interaction, async () => {
       const { targetMessage } = interaction;
@@ -59,7 +59,7 @@ export class OnboardUserContextCommands {
     type: ApplicationCommandType.User,
   })
   async onboardMembersUserHandler(
-    interaction: UserContextMenuCommandInteraction
+    interaction: UserContextMenuCommandInteraction,
   ) {
     await discordCommandWrapper(interaction, async () => {
       const { targetUser } = interaction;
@@ -72,7 +72,7 @@ export class OnboardUserContextCommands {
     type: ApplicationCommandType.User,
   })
   async onboardLadiesUserHandler(
-    interaction: UserContextMenuCommandInteraction
+    interaction: UserContextMenuCommandInteraction,
   ) {
     await discordCommandWrapper(interaction, async () => {
       const { targetUser } = interaction;
@@ -85,7 +85,7 @@ export class OnboardUserContextCommands {
     type: ApplicationCommandType.User,
   })
   async onboardGentsUserHandler(
-    interaction: UserContextMenuCommandInteraction
+    interaction: UserContextMenuCommandInteraction,
   ) {
     await discordCommandWrapper(interaction, async () => {
       const { targetUser } = interaction;

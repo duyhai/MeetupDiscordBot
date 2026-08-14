@@ -1,4 +1,3 @@
-/* eslint-disable typescript-sort-keys/interface */
 import pg from 'pg';
 import { Logger } from 'tslog';
 
@@ -117,17 +116,17 @@ export class PostgresMemberRepository implements MemberRepository {
         member.meetupMemberUrl,
         member.onboardMethod,
         member.onboardedBy,
-      ]
+      ],
     );
     return toRecord(result.rows[0]);
   }
 
   async findByDiscordId(
-    discordUserId: string
+    discordUserId: string,
   ): Promise<MemberRecord | undefined> {
     const result = await this.pool.query<MemberRow>(
       'SELECT * FROM members WHERE discord_user_id = $1',
-      [discordUserId]
+      [discordUserId],
     );
     return result.rows[0] ? toRecord(result.rows[0]) : undefined;
   }
@@ -135,7 +134,7 @@ export class PostgresMemberRepository implements MemberRepository {
   async findByMeetupId(meetupId: string): Promise<MemberRecord | undefined> {
     const result = await this.pool.query<MemberRow>(
       'SELECT * FROM members WHERE meetup_id = $1',
-      [meetupId]
+      [meetupId],
     );
     return result.rows[0] ? toRecord(result.rows[0]) : undefined;
   }
