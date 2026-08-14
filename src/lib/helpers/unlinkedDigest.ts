@@ -47,16 +47,7 @@ export function formatUnlinkedDigest(
   };
 }
 
-async function runDigestOnce(client: Client): Promise<void> {
-  const cache = await ApplicationCache();
-  const today = new Date().toISOString().slice(0, 10);
-  // exclusive_set guards against double-posting across dyno restarts; the
-  // cache TTL (12h on Redis) is fine because the key encodes the date.
-  const claimed = await cache.exclusive_set(`unlinked-digest-${today}`, '1');
-  if (!claimed) {
-    return;
-  }
-
+export async function runDigestOnce(client: Client): Promise<void> {
   const guilds = await client.guilds.fetch();
   const guildId = guilds.first()?.id;
   if (!guildId) {
@@ -76,6 +67,17 @@ async function runDigestOnce(client: Client): Promise<void> {
     })),
     rows,
   );
+
+  // Claim the day only after the fallible collection succeeds, so a failed
+  // run leaves the claim unconsumed and a restart within the hour can retry.
+  // exclusive_set guards against double-posting across dyno restarts; the
+  // cache TTL (12h on Redis) is fine because the key encodes the date.
+  const cache = await ApplicationCache();
+  const today = new Date().toISOString().slice(0, 10);
+  const claimed = await cache.exclusive_set(`unlinked-digest-${today}`, '1');
+  if (!claimed) {
+    return;
+  }
 
   const entry = formatUnlinkedDigest(unlinked);
   if (entry) {
