@@ -61,6 +61,11 @@ export class PostgresMemberRepository implements MemberRepository {
 
   private constructor() {
     const connectionString = process.env.DATABASE_URL;
+    if (!connectionString) {
+      throw new Error(
+        'PostgresMemberRepository requires DATABASE_URL to be set',
+      );
+    }
     const isLocal =
       connectionString.includes('localhost') ||
       connectionString.includes('127.0.0.1');
