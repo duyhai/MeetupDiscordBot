@@ -49,6 +49,10 @@ export type RewardRoleLevels = keyof (typeof REWARD_ROLES)[RewardRoles];
 export const BOT_COMMANDS_CHANNEL_ID = '915035889174990899';
 export const LGBTQ_CHANNEL_ID = '935434313183404062';
 
+// Meetup bot log channels (created by scripts/createLogChannels.ts)
+export const BOT_ACTIVITY_LOG_CHANNEL_ID = '1537755629849149442';
+export const BOT_ALERTS_CHANNEL_ID = '1537755631602237473';
+
 export const INTEREST_JOIN_MESSAGE_ID = '935078311351177256';
 export const DISCUSSION_JOIN_MESSAGE_ID = '935080771536953394';
 
