@@ -7,6 +7,7 @@ import './contextMenu';
 import './commands';
 import app from './app.js';
 import Configuration from './configuration.js';
+import { startUnlinkedDigestScheduler } from './lib/helpers/unlinkedDigest.js';
 
 const logger = new Logger({ name: 'MeetupBot' });
 
@@ -44,6 +45,8 @@ client.once('clientReady', async () => {
 
   // init all application commands
   await client.initApplicationCommands();
+
+  startUnlinkedDigestScheduler(client);
 
   logger.info('Bot started');
 });

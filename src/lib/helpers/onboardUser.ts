@@ -11,6 +11,7 @@ import { ApplicationCache } from '../../util/cache.js';
 import { isAdmin } from '../../util/discord.js';
 import { GqlMeetupClient } from '../client/meetup/gqlClient.js';
 import { MemberGender } from '../client/meetup/types.js';
+import { recordManualOnboard, recordMeetupLink } from './memberLink.js';
 
 const strings = {
   welcomeMsg: (user: User) =>
@@ -129,6 +130,7 @@ export async function onboardUser(
   const user = await client.users.fetch(userId);
 
   await onboardUserCommon(interaction, userId, gender);
+  await recordManualOnboard(interaction, userId);
   await interaction.followUp({
     content: strings.replyToModerator,
     ephemeral: true,
@@ -182,6 +184,15 @@ export async function selfOnboardUser(
 
   logger.info(
     `Updating ${discordUser.username}'s display name to ${cleanedName} (Meetup name: ${name}).`,
+  );
+  await recordMeetupLink(
+    interaction,
+    {
+      meetupId: userInfo.self.id,
+      meetupName: userInfo.self.name,
+      meetupMemberUrl: userInfo.self.memberUrl,
+    },
+    'self_onboard',
   );
   await onboardUserCommon(
     interaction,

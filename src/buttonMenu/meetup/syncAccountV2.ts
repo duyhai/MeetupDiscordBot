@@ -15,6 +15,7 @@ import { Tokens } from '../../lib/client/discord/types.js';
 import { DiscordUserClient } from '../../lib/client/discord/userClient.js';
 import { GqlMeetupClient } from '../../lib/client/meetup/gqlClient.js';
 import { getPaginatedData } from '../../lib/client/meetup/paginationHelper.js';
+import { recordMeetupLink } from '../../lib/helpers/memberLink.js';
 import {
   addRewardRole,
   addServerRole,
@@ -100,6 +101,16 @@ export class MeetupSyncAccountCommandsV2 {
           `You're not a member on Meetup. Please join the group and try onboarding again`,
         );
       }
+
+      await recordMeetupLink(
+        interaction,
+        {
+          meetupId: userInfo.self.id,
+          meetupName: userInfo.self.name,
+          meetupMemberUrl: userInfo.self.memberUrl,
+        },
+        'sync_v2',
+      );
 
       const { name } = userInfo.self;
       const cleanedName = name
