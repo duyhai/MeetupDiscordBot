@@ -127,6 +127,21 @@ export function hasAnyServerRole(member: GuildMember, roles: ServerRoles[]) {
   return roles.some((role) => member.roles.cache.has(SERVER_ROLES[role]));
 }
 
+/**
+ * Throws with the given message unless the invoking member is an admin,
+ * moderator, or organizer. Widen a command's audience by passing more roles.
+ */
+export async function requireModOrOrganizer(
+  interaction: CommandInteraction,
+  errorMessage: string,
+  roles: ServerRoles[] = ['moderator', 'organizer'],
+) {
+  const member = await interaction.guild.members.fetch(interaction.user.id);
+  if (!isAdmin(member) && !hasAnyServerRole(member, roles)) {
+    throw new Error(errorMessage);
+  }
+}
+
 export function linkStr(text: string, link: string) {
   return `[${text}](${link})`;
 }
