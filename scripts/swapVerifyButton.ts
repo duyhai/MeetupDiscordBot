@@ -4,13 +4,12 @@
 //   Rollback: source .env && npx tsx scripts/swapVerifyButton.ts --rollback
 // Run exactly once per direction; verify in Discord afterwards.
 import {
-  ActionRow,
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
   Client,
+  ComponentType,
   GatewayIntentBits,
-  MessageActionRowComponent,
   MessageActionRowComponentBuilder,
   TextChannel,
 } from 'discord.js';
@@ -37,8 +36,9 @@ async function main() {
   const target = messages.find(
     (message) =>
       message.author.id === client.user?.id &&
-      (message.components as ActionRow<MessageActionRowComponent>[]).some(
+      message.components.some(
         (row) =>
+          row.type === ComponentType.ActionRow &&
           row.components.some(
             (component) =>
               'customId' in component && component.customId === fromId,
