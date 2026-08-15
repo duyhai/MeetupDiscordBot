@@ -49,14 +49,48 @@ pop(): void               // drops the newest entry, whichever subsystem added
 render(): RenderedMessage | undefined   // undefined when empty
 ```
 
-An entry carries any combination of `content`, `embeds`, and `components`.
-`render` joins the entries' `content` with newlines and concatenates their
-`embeds` and `components` in stack order. An empty stack renders `undefined`,
+An entry carries any combination of `content`, `embeds`, and `components`, and
+a `status` (see *Status and colour* below). `render` collects the entries'
+`content` into a single status embed, and concatenates their `embeds` and
+`components` in stack order after it. An empty stack renders `undefined`,
 which means "this surface has no message".
 
 The stack is generic over embed and component types (defaulting to `unknown`)
 and never inspects them — it only concatenates. Platform payload limits are
 **not** applied here; they belong to the adapter.
+
+### Status and colour
+
+Output renders as an embed rather than plain text, so it reads as bot output
+and can carry state in its colour. Each entry declares a status:
+
+| Status      | Colour | Meaning                        |
+| ----------- | ------ | ------------------------------ |
+| `success`   | green  | finished, everything fine      |
+| `error`     | red    | failed                         |
+| `pending`   | yellow | in process                     |
+| `attention` | orange | done, but a human should look  |
+
+A surface renders one status embed, so the per-entry statuses reduce to a
+single colour by severity: **red > orange > yellow > green**. Any failed entry
+makes the message red; otherwise any entry needing attention makes it orange;
+otherwise any still-running entry makes it yellow; otherwise green. A flow
+therefore sits yellow while it runs and settles green, or lands red the moment
+something fails.
+
+Colours join the existing `EMBED_COLORS` in `constants.ts` — `success` and
+`error` reuse the activity green and alert red already there, with yellow and
+orange added — so the bot's log channels and its replies share one palette.
+
+The embed's title is the action name the wrapper already computes with
+`describeInteraction` (`/meetup_whois_discorduser`, `button:sync_meetup_account_v2`),
+which labels the output without any caller passing it.
+
+**Mentions and pings.** A user mention inside an embed renders as a link but
+does **not** notify. The public welcome message depends on pinging the new
+member, so an entry may set `plain: true` to place its text in the message
+content instead of the embed description. This is the exception, not the
+default: it exists for text that must notify someone.
 
 **`Surface`** — a stack bound to a flusher, plus flush policy.
 
@@ -140,9 +174,10 @@ parts of `messageMods.ts`) and the `discordLogger` channels. Those are not
 fragmentation and keep their current behaviour.
 
 **Wrapper changes.** `discordCommandWrapper` stops its reply-then-delete
-dance. It seeds an "executing" entry, removes that entry before returning, and
-on error appends an error entry instead of calling `editReply`. The final
-message is exactly the flow's real output.
+dance. It seeds an "executing" entry with `pending` status, removes that entry
+before returning, and on error appends an `error` entry instead of calling
+`editReply`. The final message is exactly the flow's real output, in the colour
+its outcome earned.
 
 Two consequences of that, both intended. A command whose flow appends nothing
 ends with an empty ephemeral stack and therefore no message, matching today's
@@ -153,7 +188,11 @@ one message containing the result, with no progress flicker.
 ## Testing
 
 `MessageStack` is pure: append/update/pop, ordering, ID lookup, render
-joining, and the empty-stack case are direct unit tests.
+joining, and the empty-stack case are direct unit tests. Colour severity gets
+its own table-driven test — each status alone, and the precedence pairs that
+matter (a `pending` entry alongside an `error` renders red, `attention` beats
+`pending`) — plus one asserting a `plain: true` entry lands in the message
+content and not the embed description, since that is what keeps a ping working.
 
 Surface and manager behaviour uses a fake flusher — no Discord mocking, which
 is the payoff of the injected lambda:
@@ -183,3 +222,6 @@ complaint.
 - **Two stacks, not one with a flag.** At most one ephemeral and one public
   message; either may be absent.
 - **Convert everything in one PR** rather than migrating flow by flow.
+- **One status embed per surface**, coloured by the most severe entry status,
+  rather than one embed per entry — stacking an embed per step would reproduce
+  the visual clutter this change exists to remove.
