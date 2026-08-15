@@ -1,4 +1,4 @@
-import express, { RequestHandler } from 'express';
+import express, { ErrorRequestHandler, RequestHandler } from 'express';
 import { Logger } from 'tslog';
 
 import {
@@ -28,6 +28,8 @@ const strings = {
   exchangeFailed:
     'Could not complete the connection. Please go back to Discord and try again.',
   meetupSuccess: 'Connected to Meetup. Heading back to Discord…',
+  unexpected:
+    'Something went wrong on our end. Please go back to Discord and try again in a moment.',
 };
 
 const errorPage = (
@@ -131,5 +133,14 @@ app.get('/redirect/:url', (req, res) => {
   }
   return res.send('Invalid url');
 });
+
+// Express 5 forwards rejected async handler promises here. Anything that
+// escapes a handler (e.g. the cache being unreachable) must still land the
+// user on the branded page with a way back to Discord, never on Express's
+// stack-trace page.
+app.use(((error, _req, res, _next) => {
+  logger.error(`Unhandled OAuth route error: ${String(error)}`);
+  res.status(500).send(getAuthLandingPage('error', strings.unexpected));
+}) as ErrorRequestHandler);
 
 export default app;

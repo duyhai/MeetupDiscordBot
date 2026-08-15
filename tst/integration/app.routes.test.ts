@@ -1,6 +1,6 @@
 import nock from 'nock';
 import request from 'supertest';
-import { afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import app from '../../src/app.js';
 import { createOAuthState } from '../../src/lib/client/oauth/state.js';
@@ -134,6 +134,20 @@ describe('cookie-free OAuth chain', () => {
     );
     expect(res.status).toBe(502);
     expect(res.text).toContain('Could not complete');
+  });
+
+  it('renders the branded page when the cache is unreachable', async () => {
+    const cache = await ApplicationCache();
+    const getSpy = vi
+      .spyOn(cache, 'get')
+      .mockRejectedValueOnce(new Error('cache down'));
+
+    const res = await request(app).get('/connect/discord?state=whatever');
+
+    expect(res.status).toBe(500);
+    expect(res.text).toContain('discord://-/channels/');
+    expect(res.text).not.toContain('<pre>');
+    getSpy.mockRestore();
   });
 
   it('keeps the /redirect trampoline working', async () => {
