@@ -53,6 +53,11 @@ export const LGBTQ_CHANNEL_ID = '935434313183404062';
 export const BOT_ACTIVITY_LOG_CHANNEL_ID = '1537755629849149442';
 export const BOT_ALERTS_CHANNEL_ID = '1537755631602237473';
 
+// OAuth landing page destinations
+export const GUILD_ID = '912461362289061939';
+export const WELCOME_CHANNEL_ID = '1180262246685868303'; // 👋🏼welcome-to-the-server
+export const GET_VERIFIED_CHANNEL_ID = '1091256923703222293'; // ✅get-verified-for-full-access
+
 // Embed accent colors, centralized as the seed of a future branding profile.
 export const EMBED_COLORS = {
   activity: 0x2ecc71, // green

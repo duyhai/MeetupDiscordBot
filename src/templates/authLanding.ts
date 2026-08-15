@@ -1,3 +1,9 @@
+import {
+  GET_VERIFIED_CHANNEL_ID,
+  GUILD_ID,
+  WELCOME_CHANNEL_ID,
+} from '../constants.js';
+
 const successIcon =
   // eslint-disable-next-line @stylistic/max-len
   '<svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>';
@@ -13,8 +19,11 @@ export const getAuthLandingPage = (
   const title = isSuccess ? 'Success!' : 'Something went wrong';
   const color = isSuccess ? '#5865F2' : '#ED4245'; // Discord Blurple or Red
   const icon = isSuccess ? successIcon : failIcon;
-  const deepLink = 'discord://';
-  const webLink = 'https://discord.com/channels/@me';
+  const targetChannelId = isSuccess
+    ? WELCOME_CHANNEL_ID
+    : GET_VERIFIED_CHANNEL_ID;
+  const deepLink = `discord://-/channels/${GUILD_ID}/${targetChannelId}`;
+  const webLink = `https://discord.com/channels/${GUILD_ID}/${targetChannelId}`;
 
   return `
 <!DOCTYPE html>
