@@ -50,9 +50,9 @@ render(): RenderedMessage | undefined   // undefined when empty
 ```
 
 An entry carries any combination of `content`, `embeds`, and `components`, and
-a `status` (see *Status and colour* below). `render` collects the entries'
-`content` into a single status embed, and concatenates their `embeds` and
-`components` in stack order after it. An empty stack renders `undefined`,
+a `status` (see *Status and colour* below). `render` joins the entries'
+`content` with newlines into the message content, and concatenates their
+`embeds` and `components` in stack order. An empty stack renders `undefined`,
 which means "this surface has no message".
 
 The stack is generic over embed and component types (defaulting to `unknown`)
@@ -71,7 +71,19 @@ and can carry state in its colour. Each entry declares a status:
 | `pending`   | yellow | in process                     |
 | `attention` | orange | done, but a human should look  |
 
-A surface renders one status embed, so the per-entry statuses reduce to a
+The stack's text is the **message content**; the embed is a compact status
+banner carrying only the colour and a label (`In progress`, `Finished`,
+`Needs attention`, `Error`). Discord renders content above embeds, so the
+banner sits beneath the output as a footer — there is no way to place an embed
+above text in the same message.
+
+Keeping the text in the content rather than an embed description matters for
+more than layout: **a user mention inside an embed renders as a link but does
+not notify.** The public welcome message depends on pinging the new member, so
+holding every line in the content keeps pings working everywhere with no
+per-entry exception.
+
+A surface renders one status banner, so the per-entry statuses reduce to a
 single colour by severity: **red > orange > yellow > green**. Any failed entry
 makes the message red; otherwise any entry needing attention makes it orange;
 otherwise any still-running entry makes it yellow; otherwise green. A flow
@@ -82,15 +94,14 @@ Colours join the existing `EMBED_COLORS` in `constants.ts` — `success` and
 `error` reuse the activity green and alert red already there, with yellow and
 orange added — so the bot's log channels and its replies share one palette.
 
-The embed's title is the action name the wrapper already computes with
-`describeInteraction` (`/meetup_whois_discorduser`, `button:sync_meetup_account_v2`),
-which labels the output without any caller passing it.
+The banner's title is the status label; the action name the wrapper already
+computes with `describeInteraction` (`/meetup_whois_discorduser`,
+`button:sync_meetup_account_v2`) goes in the embed footer, labelling the
+output without any caller passing it.
 
-**Mentions and pings.** A user mention inside an embed renders as a link but
-does **not** notify. The public welcome message depends on pinging the new
-member, so an entry may set `plain: true` to place its text in the message
-content instead of the embed description. This is the exception, not the
-default: it exists for text that must notify someone.
+A surface whose entries carry no status renders no banner — the public
+welcome message is plain text with nothing to report, and shouldn't grow a
+decorative embed.
 
 **`Surface`** — a stack bound to a flusher, plus flush policy.
 
@@ -191,8 +202,9 @@ one message containing the result, with no progress flicker.
 joining, and the empty-stack case are direct unit tests. Colour severity gets
 its own table-driven test — each status alone, and the precedence pairs that
 matter (a `pending` entry alongside an `error` renders red, `attention` beats
-`pending`) — plus one asserting a `plain: true` entry lands in the message
-content and not the embed description, since that is what keeps a ping working.
+`pending`). One test asserts entry text lands in the message content and never
+in an embed description, since that is what keeps mentions pinging; another
+asserts a statusless surface renders no banner.
 
 Surface and manager behaviour uses a fake flusher — no Discord mocking, which
 is the payoff of the injected lambda:
@@ -225,3 +237,6 @@ complaint.
 - **One status embed per surface**, coloured by the most severe entry status,
   rather than one embed per entry — stacking an embed per step would reproduce
   the visual clutter this change exists to remove.
+- **Text in the message content, status in the embed.** Putting the body in an
+  embed description would have looked tidier but silently broken every ping,
+  and Discord cannot render an embed above content anyway.
