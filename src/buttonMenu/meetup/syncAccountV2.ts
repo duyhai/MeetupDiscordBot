@@ -233,6 +233,13 @@ export class MeetupSyncAccountCommandsV2 {
         },
       });
 
+      // The progress line ("connect your accounts" / "Sit tight!") is pure
+      // transient status -- once the flow reaches this point that work is
+      // done, so drop it instead of letting it linger and drag the banner's
+      // reduced status down to pending.
+      if (progressId) {
+        replyStack(interaction).ephemeral.remove(progressId);
+      }
       replyStack(interaction).ephemeral.append({
         content: `Done`,
         status: 'success',

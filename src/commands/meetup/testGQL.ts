@@ -54,14 +54,19 @@ export class MeetupTestGqlCommands {
 
     await discordCommandWrapper(interaction, async () => {
       await withMeetupClient(interaction, async (meetupClient) => {
-        replyStack(interaction).ephemeral.append({
+        const progressId = replyStack(interaction).ephemeral.append({
           content: 'Sit tight! Fetching data.',
           status: 'pending',
         });
         const result = await meetupClient.customRequest(query, args);
+        // The result is delivered as a file attachment, not through the
+        // stack, so the progress line has done its job -- drop it rather
+        // than let it linger and pin the banner at pending.
+        //
         // Not converted to the stack: withDiscordFileAttachment deletes its
         // temp file the moment this callback returns, but a stack flush is
         // debounced and would try to upload the file after it's gone.
+        replyStack(interaction).ephemeral.remove(progressId);
         await withDiscordFileAttachment(
           `result.txt`,
           result,

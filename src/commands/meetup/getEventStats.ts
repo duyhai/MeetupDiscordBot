@@ -85,7 +85,7 @@ export class MeetupGetEventStatsCommands {
     await discordCommandWrapper(interaction, async () => {
       await withMeetupClient(interaction, async (meetupClient) => {
         logger.info('Fetching data');
-        replyStack(interaction).ephemeral.append({
+        const progressId = replyStack(interaction).ephemeral.append({
           content: 'Sit tight! Fetching data.',
           status: 'pending',
         });
@@ -169,6 +169,10 @@ ${header}
 ${formattedResult}
 
 **Total: ${total}**`;
+        // The result is delivered as a file attachment, not through the
+        // stack, so the progress line has done its job -- drop it rather
+        // than let it linger and pin the banner at pending.
+        replyStack(interaction).ephemeral.remove(progressId);
         await withDiscordFileAttachment(
           `${header}.txt`,
           result,
@@ -228,7 +232,7 @@ ${formattedResult}
     await discordCommandWrapper(interaction, async () => {
       await withMeetupClient(interaction, async (meetupClient) => {
         logger.info('Fetching data');
-        replyStack(interaction).ephemeral.append({
+        const progressId = replyStack(interaction).ephemeral.append({
           content: 'Sit tight! Fetching data.',
           status: 'pending',
         });
@@ -311,6 +315,10 @@ ${header}
 ${formattedResult}
 
 **Total: ${total}**`;
+        // The result is delivered as a file attachment, not through the
+        // stack, so the progress line has done its job -- drop it rather
+        // than let it linger and pin the banner at pending.
+        replyStack(interaction).ephemeral.remove(progressId);
         await withDiscordFileAttachment(
           `${header}.txt`,
           result,

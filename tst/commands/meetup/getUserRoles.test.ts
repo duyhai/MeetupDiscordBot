@@ -6,6 +6,7 @@
 */
 import { CommandInteraction, Guild } from 'discord.js';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { EMBED_COLORS } from '../../../src/constants.js';
 import { GqlMeetupClient } from '../../../src/lib/client/meetup/gqlClient.js';
 import * as paginationHelper from '../../../src/lib/client/meetup/paginationHelper.js';
 import { GetGroupEventsResponse } from '../../../src/lib/client/meetup/types.js';
@@ -94,11 +95,22 @@ describe('getUserRoles', () => {
     await replyStack(interaction).flushAll();
     expect(interaction.editReply).toHaveBeenCalledTimes(1);
     const [payload] = vi.mocked(interaction.editReply).mock.calls[0] as [
-      { content: string },
+      {
+        content: string;
+        embeds: { toJSON: () => { title?: string; color?: number } }[];
+      },
     ];
+    // The transient "Sit tight! Fetching data." progress line is removed
+    // once the flow finishes, so only the terminal line should remain and
+    // the status banner must have settled green, not stayed pending/yellow.
     expect(payload.content).toBe(
-      'Sit tight! Fetching data.\nYour Meetup roles are all set up based on your Meetup status!',
+      'Your Meetup roles are all set up based on your Meetup status!',
     );
+    const statusEmbed = payload.embeds.at(-1)?.toJSON();
+    expect(statusEmbed?.title).toBe('Finished');
+    expect(statusEmbed?.title).not.toBe('In progress');
+    expect(statusEmbed?.color).toBe(EMBED_COLORS.activity);
+    expect(statusEmbed?.color).not.toBe(EMBED_COLORS.pending);
   });
 
   it('should handle non-member user', async () => {

@@ -14,7 +14,7 @@ export async function getBadges(
   interaction: CommandInteraction | ButtonInteraction,
 ) {
   logger.info(`Getting badges for ${interaction.user.username}`);
-  replyStack(interaction).ephemeral.append({
+  const progressId = replyStack(interaction).ephemeral.append({
     content: 'Sit tight! Fetching data.',
     status: 'pending',
   });
@@ -60,6 +60,7 @@ export async function getBadges(
   await addRewardRole(guild, user.id, 'hosting', hostingRewards);
   await addRewardRole(guild, user.id, 'attendance', attendanceRewards);
 
+  replyStack(interaction).ephemeral.remove(progressId);
   replyStack(interaction).ephemeral.append({
     content: `Added Discord badges based on Meetup activity! Hosted: ${hostedCount} Attended: ${attendedCount}`,
     status: 'success',

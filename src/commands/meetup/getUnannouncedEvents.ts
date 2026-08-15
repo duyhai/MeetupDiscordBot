@@ -52,7 +52,7 @@ export class MeetupGetUnannouncedEventsCommands {
   ) {
     await discordCommandWrapper(interaction, async () => {
       await withMeetupClient(interaction, async (meetupClient) => {
-        replyStack(interaction).ephemeral.append({
+        const progressId = replyStack(interaction).ephemeral.append({
           content: 'Sit tight! Fetching data.',
           status: 'pending',
         });
@@ -94,6 +94,7 @@ export class MeetupGetUnannouncedEventsCommands {
           )}}`,
         );
 
+        replyStack(interaction).ephemeral.remove(progressId);
         if (filteredEvents.length === 0) {
           replyStack(interaction).ephemeral.append({
             content: 'You have no unannounced events.',

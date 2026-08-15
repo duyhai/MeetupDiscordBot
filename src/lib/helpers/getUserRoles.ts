@@ -13,7 +13,7 @@ export async function getUserRoles(
   interaction: CommandInteraction | ButtonInteraction,
 ) {
   logger.info(`Getting user roles for ${interaction.user.username}`);
-  replyStack(interaction).ephemeral.append({
+  const progressId = replyStack(interaction).ephemeral.append({
     content: 'Sit tight! Fetching data.',
     status: 'pending',
   });
@@ -61,6 +61,7 @@ export async function getUserRoles(
       logger.info(`Guest host role added to: ${interaction.user.username}`);
     }
   }
+  replyStack(interaction).ephemeral.remove(progressId);
   replyStack(interaction).ephemeral.append({
     content: `Your Meetup roles are all set up based on your Meetup status!`,
     status: 'success',
