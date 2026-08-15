@@ -131,4 +131,79 @@ describe('Surface flushing', () => {
 
     expect(ephemeralFlushes).toHaveLength(0);
   });
+
+  it('serializes flushes so mutations during a flush result in sequential calls with latest content', async () => {
+    const ephemeralFlushes: (RenderedMessage | undefined)[] = [];
+    let resolveFlusher: (() => void) | undefined;
+    let flushNumber = 0;
+    const manager = new StackManager({
+      flushers: {
+        ephemeral: async (rendered) => {
+          ephemeralFlushes.push(rendered);
+          flushNumber += 1;
+          // Only the first flush returns a delayed promise; second resolves immediately.
+          if (flushNumber === 1) {
+            return new Promise<void>((resolve) => {
+              resolveFlusher = resolve;
+            });
+          }
+        },
+        public: async () => {},
+      },
+      debounceMs: DEBOUNCE_MS,
+      maxAgeMs: MAX_AGE_MS,
+    });
+
+    // First mutation, triggers debounce.
+    manager.ephemeral.append({ content: 'first' });
+    // Wait for debounce to fire the first flush.
+    await vi.advanceTimersByTimeAsync(DEBOUNCE_MS);
+    // First flush is now in flight (hung on the flusher promise).
+
+    // Mutation arrives while the first flush is in flight.
+    manager.ephemeral.append({ content: 'second' });
+    // This marks dirty and schedules another debounce.
+    await vi.advanceTimersByTimeAsync(1); // Just enough to schedule the timer.
+
+    // Resolve the first flush so the second can proceed.
+    resolveFlusher?.();
+    await vi.advanceTimersByTimeAsync(DEBOUNCE_MS + 1);
+
+    // Two sequential calls, each with the latest content at the time of that call.
+    expect(ephemeralFlushes).toHaveLength(2);
+    expect(ephemeralFlushes[0]?.content).toBe('first');
+    expect(ephemeralFlushes[1]?.content).toBe('first\nsecond');
+  });
+
+  it('re-sends content after a failed flush on subsequent flushAll', async () => {
+    let shouldFail = true;
+    const ephemeralFlushes: (RenderedMessage | undefined)[] = [];
+    const manager = new StackManager({
+      flushers: {
+        ephemeral: async (rendered) => {
+          ephemeralFlushes.push(rendered);
+          if (shouldFail) {
+            throw new Error('transient failure');
+          }
+        },
+        public: async () => {},
+      },
+      debounceMs: DEBOUNCE_MS,
+      maxAgeMs: MAX_AGE_MS,
+    });
+
+    manager.ephemeral.append({ content: 'important' });
+    await manager.flushAll();
+
+    expect(ephemeralFlushes).toHaveLength(1);
+
+    // Now the flusher will succeed.
+    shouldFail = false;
+    await manager.flushAll();
+
+    // Content is re-sent because the surface stayed dirty after the failure.
+    expect(ephemeralFlushes).toHaveLength(2);
+    expect(ephemeralFlushes[0]?.content).toBe('important');
+    expect(ephemeralFlushes[1]?.content).toBe('important');
+  });
 });

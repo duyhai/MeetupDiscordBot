@@ -23,6 +23,8 @@ export class Surface<TEmbed = unknown, TComponent = unknown> {
 
   private dirty = false;
 
+  private inFlight: Promise<void> | undefined;
+
   constructor(
     private readonly flusher: Flusher<TEmbed, TComponent>,
     private readonly options: SurfaceOptions,
@@ -61,16 +63,29 @@ export class Surface<TEmbed = unknown, TComponent = unknown> {
       clearTimeout(this.timer);
       this.timer = undefined;
     }
+    const run = (this.inFlight ?? Promise.resolve()).then(() =>
+      this.publishPending(),
+    );
+    // Swallow here so one failure can't poison the chain for later flushes.
+    this.inFlight = run.catch((): void => undefined);
+    await run;
+  }
+
+  /** Publishes pending state. Restores dirty flag on failure. Never throws. */
+  private async publishPending(): Promise<void> {
     if (!this.dirty) {
       return;
     }
-    this.dirty = false;
     if (this.options.isExpired()) {
+      this.dirty = false;
       return;
     }
+    this.dirty = false;
     try {
       await this.flusher(this.stack.render());
     } catch (error) {
+      // Keep the surface dirty so the state is not silently dropped.
+      this.dirty = true;
       // Output must never break the command that produced it.
       logger.error(`Flush failed: ${String(error)}`);
     }
