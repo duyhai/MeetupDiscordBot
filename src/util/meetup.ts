@@ -17,13 +17,14 @@ import { spinWait } from './spinWait.js';
 
 const logger = new Logger({ name: 'MeetupUtil' });
 
+const OAUTH_HOP_TIMEOUT_MS = 3 * 60 * 1000;
+
 async function showMeetupTokenUrl(
   interaction: ButtonInteraction | CommandInteraction | ModalSubmitInteraction,
 ) {
   const maskedUserId = await createOAuthState(interaction.user.id);
-  logger.info(
-    `Setting maskedUserId=${maskedUserId} for ${interaction.user.username}`,
-  );
+  // Never log the state itself: it is a bearer credential for this flow.
+  logger.info(`Issued OAuth state for ${interaction.user.username}`);
 
   const oauthUrl = generateOAuthUrl('meetup', { state: maskedUserId });
 
@@ -63,7 +64,9 @@ export async function withMeetupClient(
     );
     await showMeetupTokenUrl(interaction);
     rawTokens = await spinWait(() => cache.get(tokenKey), {
-      timeoutMs: 60 * 1000,
+      // Matches the V2 hop budget: the iOS hand-off to Safari can require a
+      // sign-in before consent, and the interaction token lasts ~15 minutes.
+      timeoutMs: OAUTH_HOP_TIMEOUT_MS,
       message: 'Timeout waiting for Meetup authentication. Please try again',
       intervalMs: 1000,
     });
