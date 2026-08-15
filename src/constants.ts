@@ -97,15 +97,6 @@ export const debugRedirect = (url: string) => {
   return `https://meetup-discord-bot.herokuapp.com/redirect/${encodedUrl}`;
 };
 
-export const discordBotUrl = (path = '') => {
-  const url = new URL(BASE_DISCORD_BOT_URL);
-  url.pathname = path;
-  if (process.env.TS_NODE_DEBUG) {
-    return debugRedirect(url.toString());
-  }
-  return url.toString();
-};
-
 export const generateOAuthUrl = (
   name: 'meetup' | 'discord',
   customParams?: Record<string, string>,

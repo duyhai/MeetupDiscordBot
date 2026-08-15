@@ -143,8 +143,7 @@ export class MeetupSyncAccountCommandsV2 {
         })
         .join(' ');
 
-      const { user: cachedUser, guild, client } = interaction;
-      const user = await client.users.fetch(cachedUser.id);
+      const { user: cachedUser, guild } = interaction;
 
       await onboardUserCommon(
         interaction,
@@ -192,11 +191,16 @@ export class MeetupSyncAccountCommandsV2 {
       const attendanceRewards = levels.find((num) => attendedCount >= num);
       logger.info(JSON.stringify({ hostingRewards, attendanceRewards }));
 
-      await removeRewardRole(guild, user.id, 'hosting');
-      await removeRewardRole(guild, user.id, 'attendance');
+      await removeRewardRole(guild, cachedUser.id, 'hosting');
+      await removeRewardRole(guild, cachedUser.id, 'attendance');
 
-      await addRewardRole(guild, user.id, 'hosting', hostingRewards);
-      await addRewardRole(guild, user.id, 'attendance', attendanceRewards);
+      await addRewardRole(guild, cachedUser.id, 'hosting', hostingRewards);
+      await addRewardRole(
+        guild,
+        cachedUser.id,
+        'attendance',
+        attendanceRewards,
+      );
 
       await discordClient.pushMetadata({
         platform_name: '1.5 Meetup Bot',

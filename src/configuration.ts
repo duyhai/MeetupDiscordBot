@@ -28,4 +28,34 @@ const Configuration: ConfigurationSchema = {
   },
 };
 
+const REQUIRED_VARS = [
+  'DISCORD_API_KEY',
+  'DISCORD_CLIENT_ID',
+  'DISCORD_SECRET',
+  'MEETUP_KEY',
+  'MEETUP_SECRET',
+];
+
+/**
+ * Fails the boot instead of letting a missing credential surface later as a
+ * confusing provider error (arctic will happily build an authorize URL with
+ * `client_id=undefined`). REDISCLOUD_URL is required outside local dev
+ * because the in-memory cache fallback is per-process: OAuth state written
+ * on one dyno is invisible to the callback that lands on another, so every
+ * flow fails — silently.
+ */
+export function assertRequiredConfiguration(
+  env: Record<string, string | undefined> = process.env,
+): void {
+  const required = env.TS_NODE_DEBUG
+    ? REQUIRED_VARS
+    : [...REQUIRED_VARS, 'REDISCLOUD_URL'];
+  const missing = required.filter((name) => !env[name]);
+  if (missing.length > 0) {
+    throw new Error(
+      `Missing required environment variables: ${missing.join(', ')}`,
+    );
+  }
+}
+
 export default Configuration;

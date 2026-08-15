@@ -18,7 +18,8 @@
 - Lint must pass (`yarn lint`); commit messages end with `Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>`.
 - **Redirect URIs are registered with the providers and must not change:** always `debugRedirect(`${BASE_DISCORD_BOT_URL}/connect/<provider>/callback`)` — the same value in the authorize URL and in the token exchange.
 - OAuth endpoints (verified): Discord authorize `https://discord.com/oauth2/authorize` (arctic's provider), Discord token `https://discord.com/api/oauth2/token`; Meetup authorize `https://secure.meetup.com/oauth2/authorize`, Meetup token `https://secure.meetup.com/oauth2/access`.
-- Discord scopes exactly `[OAuth2Scopes.Identify, OAuth2Scopes.RoleConnectionsWrite]`; Meetup scopes `BASIC_MEETUP_AUTH_SCOPES`; Discord authorize always carries `prompt=none`.
+- Discord scopes exactly `[OAuth2Scopes.Identify, OAuth2Scopes.RoleConnectionsWrite]`; Meetup scopes `BASIC_MEETUP_AUTH_SCOPES`.
+- ~~Discord authorize always carries `prompt=none`.~~ **Superseded during implementation:** `prompt=none` is never sent. At launch nobody is a returning authorizer, and when iOS lands the round-trip in a browser signed into a different Discord account it silently issues tokens for the wrong account instead of prompting. The later sections of this plan still describe the original intent; the code and its tests are authoritative.
 - Cache key contracts (existing consumers depend on them): `maskedUserId-{state}` → Discord user ID; `{discordUserId}-discord-tokens` and `{discordUserId}-meetup-tokens` → JSON `Tokens` (`{ accessToken, refreshToken, expiresAt }`).
 - **The V1 button (`sync_meetup_account`) must keep working after every task in this plan** — Phase 1 ships with V1 still live.
 - IDs: guild `912461362289061939`, welcome channel `1180262246685868303`, get-verified channel `1091256923703222293`.
