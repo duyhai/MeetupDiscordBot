@@ -240,7 +240,6 @@ Select (at most ${MAX_FLAGS}) flags here that best represents your background an
         `Creating AANHPI Flags menu on behalf of ${interaction.user.username}`,
       );
       replyStack(interaction).ephemeral.append({
-        status: 'success',
         ...(await this.generateAANHPIFlagsNav()),
       });
       logger.info(`Created AANHPI Flags menu`);

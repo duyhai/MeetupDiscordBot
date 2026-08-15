@@ -41,13 +41,17 @@ export async function discordCommandWrapper(
   });
   try {
     await commandFn();
-    stack.ephemeral.remove(workingId);
+    // Removed only after logActivity settles (it swallows its own errors, so
+    // this never throws) so any future throwing call between the two can
+    // never race the catch block's update(workingId, ...) against an
+    // already-removed entry, which would silently drop the user-facing error.
     await logActivity(interaction.client, {
       title: `${action} used`,
       description: `By ${interaction.user.toString()} (${
         interaction.user.username
       })`,
     });
+    stack.ephemeral.remove(workingId);
   } catch (thrown: unknown) {
     // Non-Error throws (a bare string, a rejected promise carrying a plain
     // object) must still clear the seeded pending entry and alert -- else

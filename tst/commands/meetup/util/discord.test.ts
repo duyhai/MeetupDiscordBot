@@ -123,6 +123,25 @@ describe('discordCommandWrapper', () => {
     expect(vi.mocked(interaction.editReply)).not.toHaveBeenCalled();
   });
 
+  it('still surfaces an error if something throws after commandFn resolves', async () => {
+    // The pending "Working on it…" entry (workingId) must still exist when
+    // any later step in the try block throws, so the catch block's
+    // stack.ephemeral.update(workingId, ...) actually replaces it with the
+    // error instead of being a no-op against an already-removed entry. This
+    // guards the ordering fix: workingId is now removed only after
+    // logActivity settles, not before it.
+    vi.mocked(discordLogger.logActivity).mockRejectedValueOnce(
+      new Error('log channel unreachable'),
+    );
+    const interaction = makeInteraction();
+    await discordCommandWrapper(interaction, async () => {});
+
+    const [payload] = vi.mocked(interaction.editReply).mock.calls[0] as [
+      { content: string },
+    ];
+    expect(payload.content).toContain('log channel unreachable');
+  });
+
   it('disposes the manager so the registry does not grow', async () => {
     const interaction = makeInteraction();
     await discordCommandWrapper(interaction, async () => {

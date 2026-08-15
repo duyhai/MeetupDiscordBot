@@ -66,17 +66,21 @@ export async function withMeetupClient(
       `Tokens are not present for ${interaction.user.username} at ${tokenKey}. Getting token through OAuth`,
     );
     const progressId = await showMeetupTokenUrl(interaction);
-    rawTokens = await spinWait(() => cache.get(tokenKey), {
-      // Matches the V2 hop budget: the iOS hand-off to Safari can require a
-      // sign-in before consent, and the interaction token lasts ~15 minutes.
-      timeoutMs: OAUTH_HOP_TIMEOUT_MS,
-      message: 'Timeout waiting for Meetup authentication. Please try again',
-      intervalMs: 1000,
-    });
-    // The connect-your-account prompt stays pending and visible for the
-    // whole spinWait; once the tokens land the account is connected, so
-    // drop it rather than let it drag the final banner to pending.
-    replyStack(interaction).ephemeral.remove(progressId);
+    try {
+      rawTokens = await spinWait(() => cache.get(tokenKey), {
+        // Matches the V2 hop budget: the iOS hand-off to Safari can require a
+        // sign-in before consent, and the interaction token lasts ~15 minutes.
+        timeoutMs: OAUTH_HOP_TIMEOUT_MS,
+        message: 'Timeout waiting for Meetup authentication. Please try again',
+        intervalMs: 1000,
+      });
+    } finally {
+      // The connect-your-account prompt stays pending and visible for the
+      // whole spinWait; once the tokens land (or the wait times out) the
+      // prompt is no longer actionable, so drop it unconditionally rather
+      // than let a timeout leave a stale OAuth button under the error.
+      replyStack(interaction).ephemeral.remove(progressId);
+    }
   }
   const tokens = JSON.parse(rawTokens) as Tokens;
   const client = new GqlMeetupClient(tokens.accessToken);

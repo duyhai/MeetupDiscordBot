@@ -57,10 +57,15 @@ describe('onboarding output', () => {
     stack.publicSurface.append({ content: 'Welcome <@u1>!' });
     await stack.flushAll();
 
-    const [payload] = vi.mocked(interaction.channel.send).mock.calls[0] as [
-      { content: string; embeds: unknown[] },
+    // Public output goes through the interaction webhook (followUp), not
+    // channel.send: it works even where the bot lacks SEND_MESSAGES in the
+    // channel and does not require interaction.channel to be resolved.
+    const [payload] = vi.mocked(interaction.followUp).mock.calls[0] as [
+      { content: string; embeds: unknown[]; ephemeral: boolean },
     ];
     expect(payload.content).toBe('Welcome <@u1>!');
     expect(payload.embeds).toEqual([]);
+    expect(payload.ephemeral).toBe(false);
+    expect(vi.mocked(interaction.channel.send)).not.toHaveBeenCalled();
   });
 });

@@ -80,6 +80,25 @@ describe('toDiscordPayload', () => {
 
     expect(payload.content).toBe('');
   });
+
+  it('keeps the status banner instead of slicing it away when content embeds fill the limit', () => {
+    // A stack already carrying 10 content embeds plus a status must not lose
+    // the banner to Discord's 10-embed cap: content embeds are sliced to 9
+    // first so the banner (pushed last) always survives the final slice.
+    const payload = toDiscordPayload(
+      {
+        embeds: Array.from({ length: 10 }, () => ({}) as any),
+        components: [],
+        status: 'success',
+      },
+      '/test_command',
+    );
+
+    expect(payload.embeds).toHaveLength(10);
+    const banner = payload.embeds.at(-1)?.toJSON();
+    expect(banner.title).toBe('Finished');
+    expect(banner.footer?.text).toBe('/test_command');
+  });
 });
 
 describe('ephemeral flusher', () => {
@@ -113,6 +132,20 @@ describe('ephemeral flusher', () => {
     expect(args.ephemeral).toBe(true);
   });
 
+  it('propagates a null/non-object rejection instead of throwing inside errorCode', async () => {
+    // errorCode reads `.code` off the rejection; a bare null/undefined
+    // rejection (no `.code` property to read) must not itself throw a
+    // TypeError -- it should fall through to the generic rethrow below.
+    const interaction = makeInteraction({
+      editReply: vi.fn().mockRejectedValue(null),
+    });
+    const { ephemeral } = createDiscordFlushers(interaction);
+
+    await expect(
+      ephemeral({ content: 'x', embeds: [], components: [] }),
+    ).rejects.toBeNull();
+  });
+
   it('gives up quietly when the interaction token is dead', async () => {
     const interaction = makeInteraction({
       editReply: vi.fn().mockRejectedValue(new DiscordAPIErrorStub(50027)),
@@ -142,16 +175,21 @@ describe('ephemeral flusher', () => {
     expect(vi.mocked(interaction.deleteReply)).toHaveBeenCalledTimes(2);
   });
 
-  it('deletes the recreated followUp message after a dismissal, when the stack empties', async () => {
-    const deleteRecreated = vi.fn().mockResolvedValue(undefined);
+  it('deletes the recreated followUp message via the webhook route (deleteReply(id)), when the stack empties', async () => {
+    // Ephemeral messages can only be removed through the interaction
+    // webhook's deleteMessage route; Message#delete() (the channel-message
+    // route) is rejected by Discord for ephemeral messages. discord.js's
+    // `deleteReply(id)` delegates to exactly that route. Deliberately omit
+    // `delete` from the recreated handle so this test would fail (with a
+    // TypeError) against the old `recreated.delete()` implementation.
+    const deleteReply = vi.fn().mockResolvedValue(undefined);
     const interaction = makeInteraction({
       editReply: vi
         .fn()
         .mockResolvedValueOnce({ id: 'm1' })
         .mockRejectedValueOnce(new DiscordAPIErrorStub(10008)),
-      followUp: vi
-        .fn()
-        .mockResolvedValue({ id: 'm2', delete: deleteRecreated }),
+      followUp: vi.fn().mockResolvedValue({ id: 'm2' }),
+      deleteReply,
     });
     const { ephemeral } = createDiscordFlushers(interaction);
 
@@ -159,33 +197,45 @@ describe('ephemeral flusher', () => {
     await ephemeral({ content: 'first\nsecond', embeds: [], components: [] });
     await ephemeral(undefined);
 
-    expect(deleteRecreated).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(interaction.deleteReply)).not.toHaveBeenCalled();
+    expect(deleteReply).toHaveBeenCalledTimes(1);
+    expect(deleteReply).toHaveBeenCalledWith('m2');
   });
 });
 
 describe('public flusher', () => {
-  it('sends to the channel then edits that message', async () => {
+  it('publishes the first message with followUp (ephemeral: false), then edits it', async () => {
+    // Public output must go through the webhook (interaction.followUp), not
+    // channel.send: followUp works even where the bot lacks SEND_MESSAGES in
+    // the channel and does not require interaction.channel to be resolved.
+    // channel.send is deliberately left unset on this interaction so this
+    // test would fail (TypeError on the null cast) against the old
+    // `channel.send` implementation.
     const edit = vi.fn().mockResolvedValue(undefined);
     const interaction = makeInteraction({
-      channel: { send: vi.fn().mockResolvedValue({ id: 'p1', edit }) },
+      followUp: vi.fn().mockResolvedValue({ id: 'p1', edit }),
+      channel: null,
     });
     const { public: publicFlusher } = createDiscordFlushers(interaction);
 
     await publicFlusher({ content: 'hello', embeds: [], components: [] });
     await publicFlusher({ content: 'hello again', embeds: [], components: [] });
 
-    expect(vi.mocked(interaction.channel.send)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(interaction.followUp)).toHaveBeenCalledTimes(1);
+    const [args] = vi.mocked(interaction.followUp).mock.calls[0] as [
+      { content: string; ephemeral: boolean },
+    ];
+    expect(args.content).toBe('hello');
+    expect(args.ephemeral).toBe(false);
     expect(edit).toHaveBeenCalledTimes(1);
   });
 
   it('does nothing when the stack empties and nothing was ever sent', async () => {
-    const send = vi.fn().mockResolvedValue({ id: 'p1' });
-    const interaction = makeInteraction({ channel: { send } });
+    const followUp = vi.fn().mockResolvedValue({ id: 'p1' });
+    const interaction = makeInteraction({ followUp, channel: null });
     const { public: publicFlusher } = createDiscordFlushers(interaction);
 
     await publicFlusher(undefined);
 
-    expect(send).not.toHaveBeenCalled();
+    expect(followUp).not.toHaveBeenCalled();
   });
 });

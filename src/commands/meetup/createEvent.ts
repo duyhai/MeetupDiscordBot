@@ -267,7 +267,6 @@ export class MeetupCreateEventCommands {
         replyStack(interaction).publicSurface.append({
           content: replyContent.join('\n'),
           components: [this.getRequestEventButtons()],
-          status: 'success',
         });
       });
     });

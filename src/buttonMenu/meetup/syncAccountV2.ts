@@ -93,18 +93,26 @@ export class MeetupSyncAccountCommandsV2 {
         // browser to Safari, where the user may have to sign in to Discord,
         // consent, then sign in to Meetup. The interaction token lasts ~15
         // minutes, so these fit well inside the budget.
-        rawDiscordTokens = await spinWait(() => cache.get(discordTokenKey), {
-          timeoutMs: OAUTH_HOP_TIMEOUT_MS,
-          message:
-            'Timeout waiting for Discord authentication. Please try again',
-          intervalMs: 1000,
-        });
-        rawMeetupTokens = await spinWait(() => cache.get(meetupTokenKey), {
-          timeoutMs: OAUTH_HOP_TIMEOUT_MS,
-          message:
-            'Timeout waiting for Meetup authentication. Please try again',
-          intervalMs: 1000,
-        });
+        try {
+          rawDiscordTokens = await spinWait(() => cache.get(discordTokenKey), {
+            timeoutMs: OAUTH_HOP_TIMEOUT_MS,
+            message:
+              'Timeout waiting for Discord authentication. Please try again',
+            intervalMs: 1000,
+          });
+          rawMeetupTokens = await spinWait(() => cache.get(meetupTokenKey), {
+            timeoutMs: OAUTH_HOP_TIMEOUT_MS,
+            message:
+              'Timeout waiting for Meetup authentication. Please try again',
+            intervalMs: 1000,
+          });
+        } catch (error) {
+          // A timeout on either hop leaves the "connect your accounts" prompt
+          // with a now-useless button; drop it so the final error message
+          // doesn't render underneath a stale OAuth button.
+          replyStack(interaction).ephemeral.remove(progressId);
+          throw error;
+        }
       }
       const discordTokens = JSON.parse(rawDiscordTokens) as Tokens;
       const meetupTokens = JSON.parse(rawMeetupTokens) as Tokens;

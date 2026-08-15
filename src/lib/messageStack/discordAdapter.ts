@@ -6,7 +6,6 @@ import {
   Message,
   MessageActionRowComponentBuilder,
   ModalSubmitInteraction,
-  TextBasedChannel,
 } from 'discord.js';
 import { Logger } from 'tslog';
 
@@ -52,6 +51,9 @@ interface DiscordPayload {
 }
 
 function errorCode(error: unknown): number | undefined {
+  if (!error || typeof error !== 'object') {
+    return undefined;
+  }
   const code = (error as { code?: unknown }).code;
   return typeof code === 'number' ? code : undefined;
 }
@@ -76,7 +78,14 @@ export function toDiscordPayload(
   rendered: RenderedMessage<Embed, Row>,
   action: string,
 ): DiscordPayload {
-  const embeds = [...rendered.embeds];
+  // Reserve a slot for the banner up front: slicing content embeds down to 9
+  // first (rather than pushing the banner then slicing to 10) guarantees a
+  // status-bearing surface always shows its banner instead of losing it to a
+  // full content-embed array.
+  const contentEmbeds = rendered.status
+    ? rendered.embeds.slice(0, MAX_EMBEDS - 1)
+    : rendered.embeds;
+  const embeds = [...contentEmbeds];
   if (rendered.status) {
     embeds.push(
       new EmbedBuilder()
@@ -85,8 +94,8 @@ export function toDiscordPayload(
         .setFooter({ text: action }),
     );
   }
-  if (embeds.length > MAX_EMBEDS) {
-    logger.warn(`Stack produced ${embeds.length} embeds; truncating`);
+  if (rendered.embeds.length > MAX_EMBEDS) {
+    logger.warn(`Stack produced ${rendered.embeds.length} embeds; truncating`);
   }
   if (rendered.components.length > MAX_ROWS) {
     logger.warn(
@@ -114,11 +123,16 @@ function createEphemeralFlusher(
       // exists, so an unresolved deferred reply must always be cleared here
       // -- not only after a publish -- or it would sit showing "thinking..."
       // forever. Unlike the public flusher, this is not gated on `published`.
-      await (recreated ? recreated.delete() : interaction.deleteReply()).catch(
-        (error) => {
+      // Discord does not allow deleting an ephemeral message through the
+      // channel-message route (Message#delete()); only the interaction
+      // webhook's deleteMessage route applies to it. `deleteReply` given a
+      // message id delegates to exactly that (`this.webhook.deleteMessage`),
+      // so it is what removes a recreated ephemeral followUp, too.
+      await interaction
+        .deleteReply(recreated ? recreated.id : undefined)
+        .catch((error) => {
           logger.warn(`Could not remove empty stack message: ${String(error)}`);
-        },
-      );
+        });
       recreated = undefined;
       return;
     }
@@ -168,10 +182,10 @@ function createPublicFlusher(
 
     const payload = toDiscordPayload(rendered, action);
     if (!message) {
-      const channel = interaction.channel as TextBasedChannel & {
-        send: (payload: DiscordPayload) => Promise<Message>;
-      };
-      message = await channel.send(payload);
+      // A webhook message on the interaction token: works even where the bot
+      // lacks SEND_MESSAGES in the channel, and does not require
+      // interaction.channel to be resolved (unlike channel.send).
+      message = await interaction.followUp({ ...payload, ephemeral: false });
       return;
     }
     try {
