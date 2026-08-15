@@ -26,6 +26,8 @@ import {
   onboardUserCommon,
   removeRewardRole,
 } from '../../lib/helpers/onboardUser.js';
+import { replyStack } from '../../lib/messageStack/registry.js';
+import { EntryId } from '../../lib/messageStack/types.js';
 import { ApplicationCache } from '../../util/cache.js';
 import { discordCommandWrapper } from '../../util/discord.js';
 import { spinWait } from '../../util/spinWait.js';
@@ -60,6 +62,9 @@ export class MeetupSyncAccountCommandsV2 {
       const meetupTokenKey = `${interaction.user.id}-meetup-tokens`;
       let rawDiscordTokens = await cache.get(discordTokenKey);
       let rawMeetupTokens = await cache.get(meetupTokenKey);
+      // Tracks the single progress entry so later progress updates replace it
+      // in place instead of stacking new lines onto the ephemeral message.
+      let progressId: EntryId | undefined;
       if (!rawMeetupTokens || !rawDiscordTokens) {
         logger.info(
           `Tokens are not present for ${interaction.user.username} at ${meetupTokenKey} or ${discordTokenKey}. Getting token through OAuth`,
@@ -79,9 +84,10 @@ export class MeetupSyncAccountCommandsV2 {
           new ActionRowBuilder<MessageActionRowComponentBuilder>().addComponents(
             connectButton,
           );
-        await interaction.editReply({
+        progressId = replyStack(interaction).ephemeral.append({
           content: 'Please connect your Discord and Meetup accounts:',
           components: [row],
+          status: 'pending',
         });
         // Generous windows: on iOS the flow hands off from Discord's in-app
         // browser to Safari, where the user may have to sign in to Discord,
@@ -153,9 +159,17 @@ export class MeetupSyncAccountCommandsV2 {
       );
 
       logger.info(`Getting badges for ${interaction.user.username}`);
-      await interaction.editReply({
-        content: 'Sit tight! Fetching data.',
-      });
+      if (progressId) {
+        replyStack(interaction).ephemeral.update(progressId, {
+          content: 'Sit tight! Fetching data.',
+          status: 'pending',
+        });
+      } else {
+        progressId = replyStack(interaction).ephemeral.append({
+          content: 'Sit tight! Fetching data.',
+          status: 'pending',
+        });
+      }
 
       const pastEvents = await getPaginatedData(async (paginationInput) => {
         const result = await meetupClient.getGroupEvents(paginationInput, {
@@ -219,9 +233,9 @@ export class MeetupSyncAccountCommandsV2 {
         },
       });
 
-      await interaction.followUp({
+      replyStack(interaction).ephemeral.append({
         content: `Done`,
-        ephemeral: true,
+        status: 'success',
       });
     });
   }

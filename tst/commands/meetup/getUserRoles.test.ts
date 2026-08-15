@@ -11,6 +11,7 @@ import * as paginationHelper from '../../../src/lib/client/meetup/paginationHelp
 import { GetGroupEventsResponse } from '../../../src/lib/client/meetup/types.js';
 import { getUserRoles } from '../../../src/lib/helpers/getUserRoles.js';
 import * as onboardUser from '../../../src/lib/helpers/onboardUser.js';
+import { replyStack } from '../../../src/lib/messageStack/registry.js';
 
 // Mocking the external dependencies.
 // Real ESM module namespaces are frozen, so mutating
@@ -37,9 +38,13 @@ describe('getUserRoles', () => {
   let interaction: CommandInteraction;
   let meetupClient: GqlMeetupClient;
 
+  let testId = 0;
+
   beforeEach(() => {
     vi.clearAllMocks();
+    testId += 1;
     interaction = {
+      id: `getUserRoles-test-${testId}`,
       user: {
         username: 'testUser',
         id: '123456789012345678', // Replace with a valid user ID
@@ -49,8 +54,8 @@ describe('getUserRoles', () => {
           cache: new Map<string, unknown>(), // Replace with roles if needed
         },
       } as Guild,
-      editReply: vi.fn(),
-      followUp: vi.fn(),
+      editReply: vi.fn().mockResolvedValue({ id: 'm1' }),
+      followUp: vi.fn().mockResolvedValue({ id: 'm2' }),
     } as unknown as CommandInteraction;
 
     meetupClient = new GqlMeetupClient('1234');
@@ -86,10 +91,14 @@ describe('getUserRoles', () => {
       interaction.user.id,
       'guest_host',
     );
-    expect(interaction.followUp).toHaveBeenCalledWith({
-      content: `Your Meetup roles are all set up based on your Meetup status!`,
-      ephemeral: true,
-    });
+    await replyStack(interaction).flushAll();
+    expect(interaction.editReply).toHaveBeenCalledTimes(1);
+    const [payload] = vi.mocked(interaction.editReply).mock.calls[0] as [
+      { content: string },
+    ];
+    expect(payload.content).toBe(
+      'Sit tight! Fetching data.\nYour Meetup roles are all set up based on your Meetup status!',
+    );
   });
 
   it('should handle non-member user', async () => {

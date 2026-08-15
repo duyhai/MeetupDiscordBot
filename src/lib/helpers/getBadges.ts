@@ -3,6 +3,7 @@ import { Logger } from 'tslog';
 import { RewardRoleLevels } from '../../constants.js';
 import { GqlMeetupClient } from '../client/meetup/gqlClient.js';
 import { getPaginatedData } from '../client/meetup/paginationHelper.js';
+import { replyStack } from '../messageStack/registry.js';
 import { countAttendedEvents, countHostedEvents } from './eventStats.js';
 import { addRewardRole, removeRewardRole } from './onboardUser.js';
 
@@ -13,8 +14,9 @@ export async function getBadges(
   interaction: CommandInteraction | ButtonInteraction,
 ) {
   logger.info(`Getting badges for ${interaction.user.username}`);
-  await interaction.editReply({
+  replyStack(interaction).ephemeral.append({
     content: 'Sit tight! Fetching data.',
+    status: 'pending',
   });
   const { guild, user } = interaction;
 
@@ -58,8 +60,8 @@ export async function getBadges(
   await addRewardRole(guild, user.id, 'hosting', hostingRewards);
   await addRewardRole(guild, user.id, 'attendance', attendanceRewards);
 
-  await interaction.followUp({
+  replyStack(interaction).ephemeral.append({
     content: `Added Discord badges based on Meetup activity! Hosted: ${hostedCount} Attended: ${attendedCount}`,
-    ephemeral: true,
+    status: 'success',
   });
 }

@@ -3,6 +3,7 @@ import { Logger } from 'tslog';
 import { GUEST_HOST_BLACKLIST } from '../../constants.js';
 import { GqlMeetupClient } from '../client/meetup/gqlClient.js';
 import { getPaginatedData } from '../client/meetup/paginationHelper.js';
+import { replyStack } from '../messageStack/registry.js';
 import { addServerRole } from './onboardUser.js';
 
 const logger = new Logger({ name: 'getUserRoles' });
@@ -12,8 +13,9 @@ export async function getUserRoles(
   interaction: CommandInteraction | ButtonInteraction,
 ) {
   logger.info(`Getting user roles for ${interaction.user.username}`);
-  await interaction.editReply({
+  replyStack(interaction).ephemeral.append({
     content: 'Sit tight! Fetching data.',
+    status: 'pending',
   });
 
   const membershipInfo = await meetupClient.getUserMembershipInfo();
@@ -59,8 +61,8 @@ export async function getUserRoles(
       logger.info(`Guest host role added to: ${interaction.user.username}`);
     }
   }
-  await interaction.followUp({
+  replyStack(interaction).ephemeral.append({
     content: `Your Meetup roles are all set up based on your Meetup status!`,
-    ephemeral: true,
+    status: 'success',
   });
 }

@@ -7,6 +7,7 @@ import { Discord, Slash } from 'discordx';
 import Configuration from '../../configuration.js';
 import { DiscordBotClient } from '../../lib/client/discord/botClient.js';
 import { selfOnboardUser } from '../../lib/helpers/onboardUser.js';
+import { replyStack } from '../../lib/messageStack/registry.js';
 import { discordCommandWrapper } from '../../util/discord.js';
 import { withMeetupClient } from '../../util/meetup.js';
 
@@ -63,9 +64,9 @@ export class MeetupSelfOnboardCommands {
           type: ApplicationRoleConnectionMetadataType.IntegerGreaterThanOrEqual,
         },
       ]);
-      await interaction.followUp({
-        ephemeral: true,
+      replyStack(interaction).ephemeral.append({
         content: 'Success',
+        status: 'success',
       });
     });
   }

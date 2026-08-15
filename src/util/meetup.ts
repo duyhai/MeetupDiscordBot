@@ -12,6 +12,7 @@ import { generateOAuthUrl } from '../constants.js';
 import { createOAuthState } from '../lib/client/oauth/state.js';
 import { Tokens } from '../lib/client/discord/types.js';
 import { GqlMeetupClient } from '../lib/client/meetup/gqlClient.js';
+import { replyStack } from '../lib/messageStack/registry.js';
 import { ApplicationCache } from './cache.js';
 import { spinWait } from './spinWait.js';
 
@@ -39,9 +40,10 @@ async function showMeetupTokenUrl(
       button,
     );
 
-  await interaction.editReply({
+  replyStack(interaction).ephemeral.append({
     content: 'Please connect your Meetup account:',
     components: [row],
+    status: 'pending',
   });
 }
 

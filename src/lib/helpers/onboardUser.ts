@@ -11,6 +11,7 @@ import { ApplicationCache } from '../../util/cache.js';
 import { isAdmin } from '../../util/discord.js';
 import { GqlMeetupClient } from '../client/meetup/gqlClient.js';
 import { MemberGender } from '../client/meetup/types.js';
+import { replyStack } from '../messageStack/registry.js';
 import { recordManualOnboard, recordMeetupLink } from './memberLink.js';
 
 const strings = {
@@ -131,11 +132,11 @@ export async function onboardUser(
 
   await onboardUserCommon(interaction, userId, gender);
   await recordManualOnboard(interaction, userId);
-  await interaction.followUp({
+  replyStack(interaction).ephemeral.append({
     content: strings.replyToModerator,
-    ephemeral: true,
+    status: 'attention',
   });
-  await interaction.followUp({
+  replyStack(interaction).publicSurface.append({
     content: strings.welcomeMsg(user),
   });
 }
@@ -200,8 +201,8 @@ export async function selfOnboardUser(
     userInfo.self.gender,
     cleanedName,
   );
-  await interaction.followUp({
+  replyStack(interaction).ephemeral.append({
     content: strings.welcomeMsg(discordUser),
-    ephemeral: true,
+    status: 'success',
   });
 }
