@@ -132,17 +132,15 @@ describe('Surface flushing', () => {
     expect(ephemeralFlushes).toHaveLength(0);
   });
 
-  it('serializes flushes so mutations during a flush result in sequential calls with latest content', async () => {
+  it('serializes flushes so concurrent flush() calls are queued, not overlapped', async () => {
     const ephemeralFlushes: (RenderedMessage | undefined)[] = [];
     let resolveFlusher: (() => void) | undefined;
-    let flushNumber = 0;
     const manager = new StackManager({
       flushers: {
         ephemeral: async (rendered) => {
           ephemeralFlushes.push(rendered);
-          flushNumber += 1;
-          // Only the first flush returns a delayed promise; second resolves immediately.
-          if (flushNumber === 1) {
+          // First call is delayed; second resolves immediately.
+          if (ephemeralFlushes.length === 1) {
             return new Promise<void>((resolve) => {
               resolveFlusher = resolve;
             });
@@ -158,20 +156,30 @@ describe('Surface flushing', () => {
     manager.ephemeral.append({ content: 'first' });
     // Wait for debounce to fire the first flush.
     await vi.advanceTimersByTimeAsync(DEBOUNCE_MS);
-    // First flush is now in flight (hung on the flusher promise).
+    // First flusher is now hung (pending).
 
     // Mutation arrives while the first flush is in flight.
     manager.ephemeral.append({ content: 'second' });
-    // This marks dirty and schedules another debounce.
-    await vi.advanceTimersByTimeAsync(1); // Just enough to schedule the timer.
 
-    // Resolve the first flush so the second can proceed.
-    resolveFlusher?.();
-    await vi.advanceTimersByTimeAsync(DEBOUNCE_MS + 1);
+    // Explicitly trigger a second flush while the first is still pending.
+    // Without inFlight serialization, this would invoke the flusher immediately,
+    // creating concurrent flusher calls. With serialization, it waits for the first.
+    const secondFlush = manager.ephemeral.flush();
 
-    // Two sequential calls, each with the latest content at the time of that call.
-    expect(ephemeralFlushes).toHaveLength(2);
+    // At this point, without the inFlight chain, the second flusher would have already
+    // been called concurrently, so ephemeralFlushes.length would be 2. With serialization,
+    // the second flush() is blocked waiting for the first to complete, so it's still 1.
+    expect(ephemeralFlushes).toHaveLength(1);
     expect(ephemeralFlushes[0]?.content).toBe('first');
+
+    // Resolve the first flusher.
+    resolveFlusher?.();
+
+    // Wait for the promise chain to drain and the second flusher call to complete.
+    await secondFlush;
+
+    // Now the second flusher call should have happened with the latest content.
+    expect(ephemeralFlushes).toHaveLength(2);
     expect(ephemeralFlushes[1]?.content).toBe('first\nsecond');
   });
 
