@@ -10,29 +10,25 @@ import {
 import { ButtonComponent, Discord, Slash } from 'discordx';
 import { Logger } from 'tslog';
 
-import { discordBotUrl, RewardRoleLevels } from '../../constants.js';
+import { generateOAuthUrl, RewardRoleLevels } from '../../constants.js';
 import { Tokens } from '../../lib/client/discord/types.js';
 import { DiscordUserClient } from '../../lib/client/discord/userClient.js';
 import { GqlMeetupClient } from '../../lib/client/meetup/gqlClient.js';
 import { getPaginatedData } from '../../lib/client/meetup/paginationHelper.js';
+import { createOAuthState } from '../../lib/client/oauth/state.js';
 import { recordMeetupLink } from '../../lib/helpers/memberLink.js';
 import {
   addRewardRole,
-  addServerRole,
+  onboardUserCommon,
   removeRewardRole,
-  removeServerRole,
 } from '../../lib/helpers/onboardUser.js';
 import { ApplicationCache } from '../../util/cache.js';
-import { discordCommandWrapper, isAdmin } from '../../util/discord.js';
+import { discordCommandWrapper } from '../../util/discord.js';
 import { spinWait } from '../../util/spinWait.js';
 
 const logger = new Logger({ name: 'MeetupSyncAccount' });
 
 const SYNC_ACCOUNT_BUTTON_ID = 'sync_meetup_account_v2';
-
-const strings = {
-  invisibleCharacter: ' ',
-};
 
 @Discord()
 export class MeetupSyncAccountCommandsV2 {
@@ -62,10 +58,20 @@ export class MeetupSyncAccountCommandsV2 {
         logger.info(
           `Tokens are not present for ${interaction.user.username} at ${meetupTokenKey} or ${discordTokenKey}. Getting token through OAuth`,
         );
+        const state = await createOAuthState(interaction.user.id);
+        const oauthUrl = generateOAuthUrl('discord', { state });
+        const connectButton = new ButtonBuilder()
+          .setLabel('Connect Discord + Meetup')
+          .setEmoji('🧲')
+          .setStyle(ButtonStyle.Link)
+          .setURL(oauthUrl);
+        const row =
+          new ActionRowBuilder<MessageActionRowComponentBuilder>().addComponents(
+            connectButton,
+          );
         await interaction.editReply({
-          content: `Please click on this link to connect your Discord and Meetup account: <${discordBotUrl(
-            'discord-meetup-connect',
-          )}>`,
+          content: 'Please connect your Discord and Meetup accounts:',
+          components: [row],
         });
         rawDiscordTokens = await spinWait(() => cache.get(discordTokenKey), {
           timeoutMs: 60 * 1000,
@@ -125,44 +131,13 @@ export class MeetupSyncAccountCommandsV2 {
 
       const { user: cachedUser, guild, client } = interaction;
       const user = await client.users.fetch(cachedUser.id);
-      const fullUsername = user.tag;
 
-      logger.info(`User ${fullUsername} is getting onboarded`);
-
-      const guildMember = await guild.members.fetch(cachedUser.id);
-      if (!isAdmin(guildMember)) {
-        let targetNickName = cleanedName || guildMember.nickname;
-        if (!targetNickName) {
-          const { username } = user;
-          // Ugly hack because of this:
-          // https://github.com/discord/discord-api-docs/issues/667
-          targetNickName = Array.from(username).join(
-            strings.invisibleCharacter,
-          );
-        }
-        await guildMember.setNickname(targetNickName);
-        logger.info(
-          `Explicitly set ${fullUsername}'s nickname to ${targetNickName}`,
-        );
-      }
-
-      switch (userInfo.self.gender) {
-        case 'MALE': {
-          await addServerRole(guild, user.id, 'gents_lounge');
-          logger.info(`User ${fullUsername} added to GentsLounge`);
-          break;
-        }
-        case 'FEMALE': {
-          await addServerRole(guild, user.id, 'ladies_lounge');
-          logger.info(`User ${fullUsername} added to LadiesLounge`);
-          break;
-        }
-        default:
-          break;
-      }
-
-      await removeServerRole(guild, user.id, 'onboarding');
-      logger.info(`User ${fullUsername} onboarded!`);
+      await onboardUserCommon(
+        interaction,
+        cachedUser.id,
+        userInfo.self.gender,
+        cleanedName,
+      );
 
       logger.info(`Getting badges for ${interaction.user.username}`);
       await interaction.editReply({
