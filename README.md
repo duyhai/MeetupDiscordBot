@@ -72,3 +72,15 @@ yarn test:integration:docker
 (This leaves the containers running; use `yarn docker:down` afterwards.)
 
 The Postgres data volume survives `yarn docker:down`. If the schema ever changes shape or you want a clean slate, reset with `docker compose down -v`.
+
+## Command output
+
+Commands do not call `interaction.followUp` or `editReply` directly. Each
+interaction gets a stack manager; helpers append to it and the manager
+publishes one ephemeral message and, if used, one public message:
+
+    replyStack(interaction).ephemeral.append({ content: 'Done', status: 'success' });
+
+Entry text lands in the message content (so mentions still ping) and the
+status colours a small banner beneath it: green finished, yellow in progress,
+orange needs attention, red error. Flushes are debounced and never throw.

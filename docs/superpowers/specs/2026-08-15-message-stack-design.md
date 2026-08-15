@@ -184,11 +184,12 @@ Out of scope, for two different reasons:
 
 - **The `discordLogger` channels.** Those are audit posts to fixed channels,
   not replies to anyone, and are not fragmentation.
-- **Attachment-bearing replies** (`getEventStats.ts:174`, `:315`).
-  `withDiscordFileAttachment` deletes its temp file as soon as its callback
-  returns, so a debounced flush would try to upload a file that no longer
-  exists, and a later re-render would re-upload it. These stay direct
-  `followUp` calls; a file drop is a distinct artefact, not a progress line.
+- **Attachment-bearing replies** (`getEventStats.ts:174`, `:315`, and
+  `testGQL.ts`). `withDiscordFileAttachment` deletes its temp file as soon as
+  its callback returns, so a debounced flush would try to upload a file that
+  no longer exists, and a later re-render would re-upload it. These stay
+  direct `followUp` calls; a file drop is a distinct artefact, not a progress
+  line.
 
 `channel.ts:34` and `messageMods.ts:60,75` were initially assumed to be
 out-of-scope channel sends. They are in fact interaction-scoped ephemeral
