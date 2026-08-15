@@ -48,25 +48,28 @@ export async function discordCommandWrapper(
         interaction.user.username
       })`,
     });
-  } catch (error: unknown) {
-    if (error instanceof Error) {
-      logger.error(error);
-      stack.ephemeral.update(workingId, {
-        content: `${error.message} Please reach out to a moderator for help.`,
-        status: 'error',
+  } catch (thrown: unknown) {
+    // Non-Error throws (a bare string, a rejected promise carrying a plain
+    // object) must still clear the seeded pending entry and alert -- else
+    // the "Working on it…" banner would flush as the command's permanent
+    // output with nobody notified.
+    const error = thrown instanceof Error ? thrown : new Error(String(thrown));
+    logger.error(error);
+    stack.ephemeral.update(workingId, {
+      content: `${error.message} Please reach out to a moderator for help.`,
+      status: 'error',
+    });
+    // Errors marked alertHandled (e.g. DuplicateMeetupAccountError) posted
+    // their own, more specific alert at the throw site.
+    const alertHandled =
+      (error as { alertHandled?: boolean }).alertHandled === true;
+    if (!alertHandled) {
+      await logAlert(interaction.client, {
+        title: `${action} failed`,
+        description: `User: ${interaction.user.toString()} (${
+          interaction.user.username
+        })\nError: ${error.message}`,
       });
-      // Errors marked alertHandled (e.g. DuplicateMeetupAccountError) posted
-      // their own, more specific alert at the throw site.
-      const alertHandled =
-        (error as { alertHandled?: boolean }).alertHandled === true;
-      if (!alertHandled) {
-        await logAlert(interaction.client, {
-          title: `${action} failed`,
-          description: `User: ${interaction.user.toString()} (${
-            interaction.user.username
-          })\nError: ${error.message}`,
-        });
-      }
     }
   } finally {
     await stack.flushAll();

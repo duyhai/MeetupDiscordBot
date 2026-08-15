@@ -91,6 +91,21 @@ describe('discordCommandWrapper', () => {
     expect(payload.content).toContain('boom');
   });
 
+  it('renders a non-Error throw in the stack and alerts', async () => {
+    const interaction = makeInteraction();
+    await discordCommandWrapper(interaction, async () => {
+      // eslint-disable-next-line @typescript-eslint/only-throw-error
+      throw 'plain string failure';
+    });
+
+    expect(vi.mocked(discordLogger.logAlert)).toHaveBeenCalledTimes(1);
+    const [payload] = vi.mocked(interaction.editReply).mock.calls[0] as [
+      { content: string; embeds: { toJSON: () => { title?: string } }[] },
+    ];
+    expect(payload.content).toContain('plain string failure');
+    expect(payload.embeds.at(-1)?.toJSON().title).toBe('Error');
+  });
+
   it('skips the generic alert for duplicate-link blocks (already alerted)', async () => {
     const interaction = makeInteraction();
     await discordCommandWrapper(interaction, async () => {
