@@ -8,7 +8,10 @@ import {
   exchangeMeetupCode,
   fetchDiscordUserId,
 } from './lib/client/oauth/providers.js';
-import { resolveOAuthState } from './lib/client/oauth/state.js';
+import {
+  consumeOAuthState,
+  resolveOAuthState,
+} from './lib/client/oauth/state.js';
 import { getAuthLandingPage } from './templates/authLanding.js';
 import { ApplicationCache } from './util/cache.js';
 
@@ -64,7 +67,7 @@ export const discordConnectCallbackHandler: RequestHandler = (async (
     return errorPage(res, 400, strings.expiredState);
   }
   if (req.query.error || !req.query.code) {
-    logger.warn(`Discord authorize denied: ${JSON.stringify(req.query)}`);
+    logger.warn(`Discord authorize denied: ${String(req.query.error)}`);
     return res
       .status(200)
       .send(getAuthLandingPage('error', strings.providerDenied));
@@ -97,7 +100,7 @@ export const meetupConnectCallbackHandler: RequestHandler = (async (
     return errorPage(res, 400, strings.expiredState);
   }
   if (req.query.error || !req.query.code) {
-    logger.warn(`Meetup authorize denied: ${JSON.stringify(req.query)}`);
+    logger.warn(`Meetup authorize denied: ${String(req.query.error)}`);
     return res
       .status(200)
       .send(getAuthLandingPage('error', strings.providerDenied));
@@ -106,6 +109,7 @@ export const meetupConnectCallbackHandler: RequestHandler = (async (
     const tokens = await exchangeMeetupCode(String(req.query.code));
     const cache = await ApplicationCache();
     await cache.set(`${userId}-meetup-tokens`, JSON.stringify(tokens));
+    await consumeOAuthState(state);
     return res.send(getAuthLandingPage('success', strings.meetupSuccess));
   } catch (error) {
     logger.error(`Meetup token exchange failed: ${String(error)}`);
@@ -128,10 +132,18 @@ app.get('/redirect/:url', (req, res) => {
         redirectUrl.searchParams.append(key, value.toString());
       });
     }
-    logger.info(`Redirecting to ${redirectUrl.toString()}`);
+    logger.info(
+      `Redirecting to ${redirectUrl.origin}${redirectUrl.pathname} [query redacted]`,
+    );
     return res.redirect(307, redirectUrl.toString());
   }
   return res.send('Invalid url');
+});
+
+// Any stale or mistyped bot URL should still land the user on a page that
+// points back to Discord, never on Express's default 404.
+app.use((_req, res) => {
+  res.status(404).send(getAuthLandingPage('error', strings.expiredState));
 });
 
 // Express 5 forwards rejected async handler promises here. Anything that

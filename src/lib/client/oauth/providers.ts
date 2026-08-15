@@ -41,8 +41,13 @@ export function buildDiscordAuthUrl(state: string): string {
     OAuth2Scopes.Identify,
     OAuth2Scopes.RoleConnectionsWrite,
   ]);
-  // Returning users who already granted these scopes skip the consent screen.
-  url.searchParams.set('prompt', 'none');
+  // Deliberately NOT setting prompt=none (deviation from spec §1, Phase 1
+  // controller ruling). At launch essentially every user is a first-time
+  // authorizer, so silent auth buys nothing. Worse, it actively harms the
+  // iOS case this rework targets: when the OAuth round-trip lands in a
+  // browser signed into a *different* Discord account, prompt=none silently
+  // issues a token for that account instead of showing the account
+  // switcher, dumping the user on the account-mismatch page.
   return url.toString();
 }
 

@@ -1,6 +1,6 @@
 import nock from 'nock';
 import request from 'supertest';
-import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import app from '../../src/app.js';
 import { createOAuthState } from '../../src/lib/client/oauth/state.js';
@@ -10,13 +10,6 @@ import { ApplicationCache } from '../../src/util/cache.js';
 // chain must work when each hop arrives from a different browser context
 // (the iOS failure mode that killed the grant/session flow). Assertions on
 // set-cookie prove the app never even tries to establish a session.
-
-beforeAll(() => {
-  process.env.DISCORD_CLIENT_ID ??= 'discord-client-id';
-  process.env.DISCORD_SECRET ??= 'discord-secret';
-  process.env.MEETUP_KEY ??= 'meetup-key';
-  process.env.MEETUP_SECRET ??= 'meetup-secret';
-});
 
 afterEach(() => {
   nock.cleanAll();
@@ -51,7 +44,7 @@ describe('cookie-free OAuth chain', () => {
     expect(authorize.headers.location).toContain(
       'https://discord.com/oauth2/authorize',
     );
-    expect(authorize.headers.location).toContain('prompt=none');
+    expect(authorize.headers.location).not.toContain('prompt=');
     expect(authorize.headers['set-cookie']).toBeUndefined();
 
     nockDiscordExchange();
@@ -86,6 +79,28 @@ describe('cookie-free OAuth chain', () => {
     expect(JSON.parse(await cache.get('user-1-meetup-tokens'))).toMatchObject({
       accessToken: 'meetup-access',
     });
+  });
+
+  it('rejects a replayed state after the Meetup callback consumes it', async () => {
+    const state = await createOAuthState('user-1b');
+
+    nockDiscordExchange();
+    nockDiscordProfile('user-1b');
+    await request(app).get(
+      `/connect/discord/callback?state=${state}&code=dcode`,
+    );
+
+    nockMeetupExchange();
+    const first = await request(app).get(
+      `/connect/meetup/callback?state=${state}&code=mcode`,
+    );
+    expect(first.status).toBe(200);
+
+    const replay = await request(app).get(
+      `/connect/meetup/callback?state=${state}&code=another-code`,
+    );
+    expect(replay.status).toBe(400);
+    expect(replay.text).toContain('expired');
   });
 
   it('rejects an unknown state with the expired-link page', async () => {
@@ -157,5 +172,12 @@ describe('cookie-free OAuth chain', () => {
     const res = await request(app).get(`/redirect/${encoded}?a=1`);
     expect(res.status).toBe(307);
     expect(res.headers.location).toBe('http://localhost:5000/target?a=1');
+  });
+
+  it('never shows the default Express 404 for a stale or mistyped URL', async () => {
+    const res = await request(app).get('/');
+    expect(res.status).toBe(404);
+    expect(res.text).toContain('discord://-/channels/');
+    expect(res.text).not.toContain('<pre>');
   });
 });

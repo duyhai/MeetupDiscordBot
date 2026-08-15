@@ -28,7 +28,7 @@ export class DiscordBotClient {
         ...(input ? { 'Content-Type': 'application/json' } : {}),
       },
     };
-    logger.info(`makeRequest - ${url} - ${JSON.stringify(params)}`);
+    logger.info(`makeRequest - ${method} - ${url}`);
     const response = await fetch(url, params);
     if (!response.ok) {
       const errorMsg = `Error making request to ${url}: [${response.status}] ${response.statusText}`;

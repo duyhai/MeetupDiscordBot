@@ -26,3 +26,13 @@ export async function resolveOAuthState(
   const cache = await ApplicationCache();
   return cache.get(`${STATE_KEY_PREFIX}${state}`);
 }
+
+/**
+ * Invalidates a state so it can't be replayed. Called only after the
+ * terminal hop of the flow (the Meetup callback) succeeds — the Discord
+ * callback must leave the state alive so it can carry through to Meetup.
+ */
+export async function consumeOAuthState(state: string): Promise<void> {
+  const cache = await ApplicationCache();
+  await cache.remove(`${STATE_KEY_PREFIX}${state}`);
+}

@@ -1,5 +1,5 @@
 import nock from 'nock';
-import { afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 
 import {
   buildDiscordAuthUrl,
@@ -9,25 +9,18 @@ import {
   fetchDiscordUserId,
 } from '../../../../src/lib/client/oauth/providers.js';
 
-beforeAll(() => {
-  process.env.DISCORD_CLIENT_ID ??= 'discord-client-id';
-  process.env.DISCORD_SECRET ??= 'discord-secret';
-  process.env.MEETUP_KEY ??= 'meetup-key';
-  process.env.MEETUP_SECRET ??= 'meetup-secret';
-});
-
 afterEach(() => {
   nock.cleanAll();
 });
 
 describe('authorize URL construction', () => {
-  it('builds the Discord URL with state, scopes, and prompt=none', () => {
+  it('builds the Discord URL with state and scopes, without prompt=none', () => {
     const url = new URL(buildDiscordAuthUrl('state-abc'));
     expect(url.origin + url.pathname).toBe(
       'https://discord.com/oauth2/authorize',
     );
     expect(url.searchParams.get('state')).toBe('state-abc');
-    expect(url.searchParams.get('prompt')).toBe('none');
+    expect(url.searchParams.get('prompt')).toBe(null);
     expect(url.searchParams.get('scope')).toContain('identify');
     expect(url.searchParams.get('scope')).toContain('role_connections.write');
     expect(url.searchParams.get('redirect_uri')).toContain('/redirect/');
@@ -63,11 +56,19 @@ describe('exchangeMeetupCode', () => {
 
     expect(capturedBody).toContain('grant_type=authorization_code');
     expect(capturedBody).toContain('code=the-code');
-    expect(capturedBody).toContain('client_id=');
-    expect(capturedBody).toContain('client_secret=');
+    expect(capturedBody).toContain('client_id=meetup-key');
+    expect(capturedBody).toContain('client_secret=meetup-secret');
     expect(tokens.accessToken).toBe('meetup-access');
     expect(tokens.refreshToken).toBe('meetup-refresh');
     expect(tokens.expiresAt).toBeGreaterThan(Date.now());
+
+    // Classic OAuth mismatch bug: the redirect_uri sent in the token
+    // exchange must be byte-identical to the one in the authorize URL.
+    const authorizeUrl = new URL(buildMeetupAuthUrl('state-abc'));
+    const exchangeParams = new URLSearchParams(capturedBody);
+    expect(exchangeParams.get('redirect_uri')).toBe(
+      authorizeUrl.searchParams.get('redirect_uri'),
+    );
   });
 
   it('throws a descriptive error on a non-2xx response', async () => {

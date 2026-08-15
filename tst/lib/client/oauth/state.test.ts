@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  consumeOAuthState,
   createOAuthState,
   resolveOAuthState,
 } from '../../../../src/lib/client/oauth/state.js';
@@ -23,5 +24,12 @@ describe('oauth state', () => {
     const a = await createOAuthState('discord-123');
     const b = await createOAuthState('discord-123');
     expect(a).not.toBe(b);
+  });
+
+  it('consumeOAuthState makes the state unresolvable', async () => {
+    const state = await createOAuthState('discord-456');
+    expect(await resolveOAuthState(state)).toBe('discord-456');
+    await consumeOAuthState(state);
+    expect(await resolveOAuthState(state)).toBeUndefined();
   });
 });

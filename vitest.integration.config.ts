@@ -8,5 +8,11 @@ export default defineConfig({
     include: ['tst/integration/**/*.test.ts'],
     exclude: ['**/node_modules/**', '**/dist/**'],
     testTimeout: 20000,
+    env: {
+      DISCORD_CLIENT_ID: 'discord-client-id',
+      DISCORD_SECRET: 'discord-secret',
+      MEETUP_KEY: 'meetup-key',
+      MEETUP_SECRET: 'meetup-secret',
+    },
   },
 });
