@@ -12,23 +12,11 @@ import { Logger } from 'tslog';
 
 import { SERVER_ROLES, ServerRoles } from '../constants.js';
 import { logActivity, logAlert } from '../lib/helpers/discordLogger.js';
+import { describeInteraction } from './describeInteraction.js';
 
 const logger = new Logger({ name: 'DiscordUtil' });
 
-export function describeInteraction(
-  interaction: ButtonInteraction | CommandInteraction | ModalSubmitInteraction,
-): string {
-  if (interaction.isChatInputCommand?.()) {
-    return `/${interaction.commandName}`;
-  }
-  if ('commandName' in interaction) {
-    return `/${interaction.commandName}`;
-  }
-  if (interaction.isButton?.()) {
-    return `button:${interaction.customId}`;
-  }
-  return `modal:${interaction.customId}`;
-}
+export { describeInteraction } from './describeInteraction.js';
 
 /**
  * A wrapper for Discord commands to handle:
