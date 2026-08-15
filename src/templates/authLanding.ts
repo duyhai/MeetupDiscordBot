@@ -21,6 +21,36 @@ const escapeHtml = (input: string): string =>
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
 
+/**
+ * Client-side hand-off: send the browser to the Discord app, and only fall
+ * back to the web app if nothing took over. Without the cancellation the
+ * fallback fires unconditionally, so a desktop user who lands in the app also
+ * gets Discord opened in their browser a moment later.
+ *
+ * Backgrounding is the signal that the app claimed the link: the OS hands
+ * focus to Discord, so this tab is hidden/blurred before the timer fires.
+ */
+export const buildHandoffScript = (deepLink: string, webLink: string) => `
+var meetupBotHandoff = (function () {
+  var handedOff = false;
+  var fallbackTimer;
+  function handedOffToApp() {
+    handedOff = true;
+    if (fallbackTimer) { clearTimeout(fallbackTimer); }
+  }
+  window.addEventListener('blur', handedOffToApp);
+  window.addEventListener('pagehide', handedOffToApp);
+  document.addEventListener('visibilitychange', function () {
+    if (document.hidden) { handedOffToApp(); }
+  });
+  window.location.href = '${deepLink}';
+  fallbackTimer = setTimeout(function () {
+    if (!handedOff) { window.location.href = '${webLink}'; }
+  }, 2000);
+  return true;
+})();
+`;
+
 export const getAuthLandingPage = (
   status: 'success' | 'error',
   message: string,
@@ -87,6 +117,14 @@ export const getAuthLandingPage = (
         .btn:hover {
             background-color: #4752c4;
         }
+        .secondary {
+            margin: 20px 0 0;
+            font-size: 0.85em;
+            color: #a3a6aa;
+        }
+        .secondary a {
+            color: #a3a6aa;
+        }
     </style>
 </head>
 <body>
@@ -96,21 +134,14 @@ export const getAuthLandingPage = (
         </div>
         <h1>${title}</h1>
         <p>${escapeHtml(message)}</p>
-        <a href="${webLink}" class="btn" onclick="setTimeout(function(){ window.location = '${deepLink}'; }, 25);">Back to Discord</a>
+        <a href="${deepLink}" class="btn">Back to Discord</a>
+        <p class="secondary">or <a href="${webLink}">open Discord in your browser</a></p>
     </div>
-    <script>
-        window.onload = function() {
-            if ("${status}" === "success") {
-                // Try deep link immediately
-                window.location.href = "${deepLink}";
-                
-                // Fallback to web link if deep link fails (though browser handling varies)
-                setTimeout(function() {
-                     window.location.href = "${webLink}";
-                }, 1500);
-            }
-        }
-    </script>
+    ${
+      isSuccess
+        ? `<script>${buildHandoffScript(deepLink, webLink)}</script>`
+        : ''
+    }
 </body>
 </html>
   `;
