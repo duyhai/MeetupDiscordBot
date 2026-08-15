@@ -13,6 +13,7 @@ import { Logger } from 'tslog';
 
 import { DRAFT_EVENT_TEMPLATE_ID } from '../../constants.js';
 import { getPaginatedData } from '../../lib/client/meetup/paginationHelper.js';
+import { replyStack } from '../../lib/messageStack/registry.js';
 import { createEventTemplate } from '../../templates/createEventTemplate.js';
 import { ApplicationCache } from '../../util/cache.js';
 import { discordCommandWrapper } from '../../util/discord.js';
@@ -139,9 +140,9 @@ export class MeetupCreateEventCommands {
             });
             logger.info(`Event approved. Edited message: ${message.id}`);
 
-            await interaction.followUp({
+            replyStack(interaction).ephemeral.append({
               content: '✅ Event request approved!',
-              ephemeral: true,
+              status: 'success',
             });
             logger.info(
               `Event approved. Responded to user: ${interaction.user.username}`,
@@ -177,9 +178,9 @@ export class MeetupCreateEventCommands {
           components: [newButtons],
         });
 
-        await interaction.followUp({
+        replyStack(interaction).ephemeral.append({
           content: '❌ Event request denied!',
-          ephemeral: true,
+          status: 'success',
         });
       });
     });
@@ -263,9 +264,10 @@ export class MeetupCreateEventCommands {
           `Please reach out to us if you have any questions while setting up your event.`,
           `Organizers, please approve or deny below:`,
         ];
-        await interaction.followUp({
+        replyStack(interaction).publicSurface.append({
           content: replyContent.join('\n'),
           components: [this.getRequestEventButtons()],
+          status: 'success',
         });
       });
     });

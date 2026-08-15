@@ -6,6 +6,7 @@ import { GqlMeetupClient } from '../../lib/client/meetup/gqlClient.js';
 import { getPaginatedData } from '../../lib/client/meetup/paginationHelper.js';
 
 import { BaseUserInfo, Event } from '../../lib/client/meetup/types.js';
+import { replyStack } from '../../lib/messageStack/registry.js';
 import {
   discordCommandWrapper,
   linkStr,
@@ -84,8 +85,9 @@ export class MeetupGetEventStatsCommands {
     await discordCommandWrapper(interaction, async () => {
       await withMeetupClient(interaction, async (meetupClient) => {
         logger.info('Fetching data');
-        await interaction.editReply({
+        replyStack(interaction).ephemeral.append({
           content: 'Sit tight! Fetching data.',
+          status: 'pending',
         });
 
         const pastEvents = await getEventsYearMonth(meetupClient, year, month);
@@ -226,8 +228,9 @@ ${formattedResult}
     await discordCommandWrapper(interaction, async () => {
       await withMeetupClient(interaction, async (meetupClient) => {
         logger.info('Fetching data');
-        await interaction.editReply({
+        replyStack(interaction).ephemeral.append({
           content: 'Sit tight! Fetching data.',
+          status: 'pending',
         });
 
         const pastEvents = await getEventsYearMonth(meetupClient, year, month);

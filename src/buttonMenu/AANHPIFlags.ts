@@ -8,6 +8,7 @@ import {
 } from 'discord.js';
 import { ButtonComponent, Discord, Slash } from 'discordx';
 import { Logger } from 'tslog';
+import { replyStack } from '../lib/messageStack/registry.js';
 import { discordCommandWrapper } from '../util/discord.js';
 
 import Flags from './flags.json' with { type: 'json' };
@@ -238,8 +239,8 @@ Select (at most ${MAX_FLAGS}) flags here that best represents your background an
       logger.info(
         `Creating AANHPI Flags menu on behalf of ${interaction.user.username}`,
       );
-      await interaction.followUp({
-        ephemeral: true,
+      replyStack(interaction).ephemeral.append({
+        status: 'success',
         ...(await this.generateAANHPIFlagsNav()),
       });
       logger.info(`Created AANHPI Flags menu`);

@@ -6,6 +6,8 @@ import {
 } from 'discord.js';
 import { Logger } from 'tslog';
 
+import { replyStack } from '../messageStack/registry.js';
+
 const logger = new Logger({ name: 'channelHelper' });
 
 const strings = {
@@ -31,8 +33,8 @@ export async function addToChannel(
   });
 
   logger.info(`User ${user.username} is added to ${channel.name}`);
-  await interaction.followUp({
+  replyStack(interaction).ephemeral.append({
     content: strings.replyAddedToChannel(channel),
-    ephemeral: true,
+    status: 'success',
   });
 }

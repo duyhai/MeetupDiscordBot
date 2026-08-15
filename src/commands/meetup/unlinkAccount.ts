@@ -8,6 +8,7 @@ import { Discord, Slash, SlashOption } from 'discordx';
 import { Logger } from 'tslog';
 
 import { logActivity } from '../../lib/helpers/discordLogger.js';
+import { replyStack } from '../../lib/messageStack/registry.js';
 import {
   discordCommandWrapper,
   hasAnyServerRole,
@@ -56,9 +57,9 @@ export class UnlinkAccountCommands {
       const repo = await ApplicationMemberRepository();
       const row = await repo.findByDiscordId(user.id);
       if (!row) {
-        await interaction.followUp({
+        replyStack(interaction).ephemeral.append({
           content: strings.noRow(user),
-          ephemeral: true,
+          status: 'attention',
         });
         return;
       }
@@ -74,9 +75,9 @@ export class UnlinkAccountCommands {
           { name: 'Meetup ID', value: row.meetupId ?? 'none (manual row)' },
         ],
       });
-      await interaction.followUp({
+      replyStack(interaction).ephemeral.append({
         content: strings.done(user),
-        ephemeral: true,
+        status: 'success',
       });
     });
   }

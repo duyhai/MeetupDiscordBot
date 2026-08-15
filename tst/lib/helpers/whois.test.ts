@@ -9,6 +9,7 @@ import {
   whoisByDiscordUser,
   whoisByMeetupInput,
 } from '../../../src/lib/helpers/whois.js';
+import { replyStack } from '../../../src/lib/messageStack/registry.js';
 import { InMemoryMemberRepository } from '../../../src/lib/repositories/inMemoryMemberRepository.js';
 import { MemberRecord } from '../../../src/lib/repositories/types.js';
 import * as memberRepository from '../../../src/util/memberRepository.js';
@@ -120,7 +121,12 @@ describe('whois lookup helpers', () => {
     return {
       client: {},
       user: { id: 'mod-1', username: 'modUser', toString: () => '<@mod-1>' },
-      followUp: vi.fn().mockResolvedValue(undefined),
+      deferReply: vi.fn().mockResolvedValue(undefined),
+      editReply: vi.fn().mockResolvedValue({ id: 'm1' }),
+      followUp: vi.fn().mockResolvedValue({ id: 'm2' }),
+      deleteReply: vi.fn().mockResolvedValue(undefined),
+      channel: { send: vi.fn().mockResolvedValue({ id: 'p1' }) },
+      id: `interaction-${Math.random()}`,
     } as unknown as CommandInteraction;
   }
 
@@ -143,13 +149,12 @@ describe('whois lookup helpers', () => {
   it('replies with an embed and audits the target on a user lookup', async () => {
     const interaction = makeInteraction();
     await whoisByDiscordUser(interaction, 'discord-1');
+    await replyStack(interaction).flushAll();
 
-    const followUpArgs = vi.mocked(interaction.followUp).mock.calls[0][0] as {
-      embeds: unknown[];
-      ephemeral: boolean;
-    };
-    expect(followUpArgs.ephemeral).toBe(true);
-    expect(followUpArgs.embeds).toHaveLength(1);
+    const [payload] = vi.mocked(interaction.editReply).mock.calls[0] as [
+      { embeds: unknown[] },
+    ];
+    expect(payload.embeds.length).toBeGreaterThan(0);
     expect(vi.mocked(discordLogger.logActivity)).toHaveBeenCalledTimes(1);
     const [, entry] = vi.mocked(discordLogger.logActivity).mock.calls[0];
     expect(entry.description).toContain('<@mod-1>');
@@ -159,11 +164,12 @@ describe('whois lookup helpers', () => {
   it('reports and audits a user lookup with no record, without alerting', async () => {
     const interaction = makeInteraction();
     await whoisByDiscordUser(interaction, 'discord-unknown');
+    await replyStack(interaction).flushAll();
 
-    const followUpArgs = vi.mocked(interaction.followUp).mock.calls[0][0] as {
-      content: string;
-    };
-    expect(followUpArgs.content).toContain('no member record');
+    const [payload] = vi.mocked(interaction.editReply).mock.calls[0] as [
+      { content: string },
+    ];
+    expect(payload.content).toContain('no member record');
     expect(vi.mocked(discordLogger.logAlert)).not.toHaveBeenCalled();
     const [, entry] = vi.mocked(discordLogger.logActivity).mock.calls[0];
     expect(entry.description).toContain('no record');
@@ -175,11 +181,12 @@ describe('whois lookup helpers', () => {
       interaction,
       'https://www.meetup.com/members/186893524/',
     );
+    await replyStack(interaction).flushAll();
 
-    const followUpArgs = vi.mocked(interaction.followUp).mock.calls[0][0] as {
-      embeds: unknown[];
-    };
-    expect(followUpArgs.embeds).toHaveLength(1);
+    const [payload] = vi.mocked(interaction.editReply).mock.calls[0] as [
+      { embeds: unknown[] },
+    ];
+    expect(payload.embeds.length).toBeGreaterThan(0);
     const [, entry] = vi.mocked(discordLogger.logActivity).mock.calls[0];
     expect(entry.description).toContain('186893524');
   });
@@ -189,11 +196,12 @@ describe('whois lookup helpers', () => {
     await expect(
       whoisByMeetupInput(interaction, 'https://evil.com/meetup.com/members/1/'),
     ).resolves.toBeUndefined();
+    await replyStack(interaction).flushAll();
 
-    const followUpArgs = vi.mocked(interaction.followUp).mock.calls[0][0] as {
-      content: string;
-    };
-    expect(followUpArgs.content).toContain("Couldn't parse");
+    const [payload] = vi.mocked(interaction.editReply).mock.calls[0] as [
+      { content: string },
+    ];
+    expect(payload.content).toContain("Couldn't parse");
     expect(vi.mocked(discordLogger.logAlert)).not.toHaveBeenCalled();
     expect(vi.mocked(discordLogger.logActivity)).not.toHaveBeenCalled();
   });

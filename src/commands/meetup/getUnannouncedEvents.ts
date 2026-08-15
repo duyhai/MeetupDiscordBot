@@ -11,6 +11,7 @@ import { Discord, SelectMenuComponent, Slash, SlashOption } from 'discordx';
 import { Logger } from 'tslog';
 import Configuration from '../../configuration.js';
 import { getPaginatedData } from '../../lib/client/meetup/paginationHelper.js';
+import { replyStack } from '../../lib/messageStack/registry.js';
 
 import { discordCommandWrapper } from '../../util/discord.js';
 import { withMeetupClient } from '../../util/meetup.js';
@@ -51,8 +52,9 @@ export class MeetupGetUnannouncedEventsCommands {
   ) {
     await discordCommandWrapper(interaction, async () => {
       await withMeetupClient(interaction, async (meetupClient) => {
-        await interaction.editReply({
+        replyStack(interaction).ephemeral.append({
           content: 'Sit tight! Fetching data.',
+          status: 'pending',
         });
         logger.info(`Getting unannounced events for: ${interaction.user.id}`);
 
@@ -93,16 +95,16 @@ export class MeetupGetUnannouncedEventsCommands {
         );
 
         if (filteredEvents.length === 0) {
-          await interaction.followUp({
+          replyStack(interaction).ephemeral.append({
             content: 'You have no unannounced events.',
-            ephemeral: true,
+            status: 'attention',
           });
           return;
         }
-        await interaction.followUp({
+        replyStack(interaction).ephemeral.append({
           components: [buttonRow],
           content: 'Select the event you want to get announced:',
-          ephemeral: true,
+          status: 'success',
         });
       });
     });

@@ -1,6 +1,7 @@
 import { CommandInteraction } from 'discord.js';
 import { Discord, Slash } from 'discordx';
 import { Tokens } from '../../lib/client/discord/types.js';
+import { replyStack } from '../../lib/messageStack/registry.js';
 import { ApplicationCache } from '../../util/cache.js';
 import { discordCommandWrapper } from '../../util/discord.js';
 import { withMeetupClient } from '../../util/meetup.js';
@@ -30,8 +31,8 @@ export class MeetupGetTokenCommands {
           ? `\n⏰ Expires: <t:${Math.floor(tokens.expiresAt / 1000)}:R>`
           : '';
 
-        await interaction.followUp({
-          ephemeral: true,
+        replyStack(interaction).ephemeral.append({
+          status: 'success',
           content: [
             '🔑 **Your Meetup Access Token** (keep this private!)',
             '```',

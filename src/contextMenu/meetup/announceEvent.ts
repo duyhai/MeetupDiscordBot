@@ -5,6 +5,7 @@ import {
 import { ContextMenu, Discord } from 'discordx';
 import { Logger } from 'tslog';
 
+import { replyStack } from '../../lib/messageStack/registry.js';
 import { discordCommandWrapper } from '../../util/discord.js';
 import { withMeetupClient } from '../../util/meetup.js';
 
@@ -39,9 +40,9 @@ export class MeetupAnnounceEventContextCommands {
         await meetupClient.announceEvent({ eventId });
         logger.info(`Announced event ${eventId}`);
 
-        await interaction.followUp({
+        replyStack(interaction).ephemeral.append({
           content: `Announced event! ✅`,
-          ephemeral: true,
+          status: 'success',
         });
         await targetMessage.react('✅');
       });

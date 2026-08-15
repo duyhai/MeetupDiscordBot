@@ -15,6 +15,7 @@ import { ButtonComponent, Discord, Slash, SlashOption } from 'discordx';
 import { Logger } from 'tslog';
 
 import { SERVER_ROLES } from '../constants.js';
+import { replyStack } from '../lib/messageStack/registry.js';
 import { discordCommandWrapper } from '../util/discord.js';
 
 const logger = new Logger({ name: 'MessageModsCommands' });
@@ -55,11 +56,9 @@ export class MessageModsCommands {
     await channel.threads.fetchArchived({ fetchAll: true }, true);
     let thread = channel.threads.cache.find((t) => t.name === threadName);
     if (thread) {
-      // Cannot use follow up, because we cannot change ephemeral state for follow up messages
-      // https://github.com/discordjs/discord.js/issues/5702
-      await interaction.followUp({
+      replyStack(interaction).ephemeral.append({
         content: `Private message thread already exists at ${thread.toString()}`,
-        ephemeral: true,
+        status: 'success',
       });
       logger.info(
         `Private message thread already exists at ${thread.toString()}`,
@@ -72,9 +71,9 @@ export class MessageModsCommands {
         type: ChannelType.PrivateThread,
       });
 
-      await interaction.followUp({
+      replyStack(interaction).ephemeral.append({
         content: `Private message thread created at ${thread.toString()}`,
-        ephemeral: true,
+        status: 'success',
       });
       logger.info(`Private message thread created at ${thread.toString()}`);
     }

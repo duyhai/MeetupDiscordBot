@@ -2,6 +2,7 @@ import { CommandInteraction } from 'discord.js';
 import { Discord, Slash } from 'discordx';
 import { Logger } from 'tslog';
 
+import { replyStack } from '../../lib/messageStack/registry.js';
 import { discordCommandWrapper } from '../../util/discord.js';
 import { withMeetupClient } from '../../util/meetup.js';
 
@@ -19,9 +20,9 @@ export class MeetupNoShowCommands {
         logger.info(`Fetching no show count for ${interaction.user.username}`);
         const membershipInfo = await meetupClient.getUserMembershipInfo();
 
-        await interaction.followUp({
+        replyStack(interaction).ephemeral.append({
           content: `Your no show count is ${membershipInfo.groupByUrlname.membershipMetadata.rsvpStats.noShowCount}.`,
-          ephemeral: true,
+          status: 'success',
         });
       });
     });

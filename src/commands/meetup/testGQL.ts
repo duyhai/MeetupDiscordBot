@@ -7,6 +7,7 @@ import {
   TextInputStyle,
 } from 'discord.js';
 import { Discord, ModalComponent, Slash } from 'discordx';
+import { replyStack } from '../../lib/messageStack/registry.js';
 import {
   discordCommandWrapper,
   withDiscordFileAttachment,
@@ -53,10 +54,14 @@ export class MeetupTestGqlCommands {
 
     await discordCommandWrapper(interaction, async () => {
       await withMeetupClient(interaction, async (meetupClient) => {
-        await interaction.editReply({
+        replyStack(interaction).ephemeral.append({
           content: 'Sit tight! Fetching data.',
+          status: 'pending',
         });
         const result = await meetupClient.customRequest(query, args);
+        // Not converted to the stack: withDiscordFileAttachment deletes its
+        // temp file the moment this callback returns, but a stack flush is
+        // debounced and would try to upload the file after it's gone.
         await withDiscordFileAttachment(
           `result.txt`,
           result,

@@ -8,6 +8,7 @@ import {
 import { EMBED_COLORS } from '../../constants.js';
 import { linkStr } from '../../util/discord.js';
 import { ApplicationMemberRepository } from '../../util/memberRepository.js';
+import { replyStack } from '../messageStack/registry.js';
 import { MemberRecord } from '../repositories/types.js';
 import { logActivity } from './discordLogger.js';
 
@@ -24,16 +25,19 @@ export type WhoisLookupInteraction =
   | MessageContextMenuCommandInteraction
   | UserContextMenuCommandInteraction;
 
-async function replyWithLookup(
+function replyWithLookup(
   interaction: WhoisLookupInteraction,
   row: MemberRecord,
-): Promise<void> {
+): void {
   const embed = new EmbedBuilder()
     .setTitle('Member lookup')
     .setColor(EMBED_COLORS.info)
     .addFields(formatMemberFields(row))
     .setTimestamp(new Date());
-  await interaction.followUp({ embeds: [embed], ephemeral: true });
+  replyStack(interaction).ephemeral.append({
+    embeds: [embed],
+    status: 'success',
+  });
 }
 
 // Lookups inspect member records, so each resolved target is audited to the
@@ -59,14 +63,14 @@ export async function whoisByDiscordUser(
   const repo = await ApplicationMemberRepository();
   const row = await repo.findByDiscordId(targetUserId);
   if (!row) {
-    await interaction.followUp({
+    replyStack(interaction).ephemeral.append({
       content: strings.noRowForUser(targetUserId),
-      ephemeral: true,
+      status: 'attention',
     });
     await auditLookup(interaction, `<@${targetUserId}>`, false);
     return;
   }
-  await replyWithLookup(interaction, row);
+  replyWithLookup(interaction, row);
   await auditLookup(interaction, `<@${targetUserId}>`, true);
 }
 
@@ -79,23 +83,23 @@ export async function whoisByMeetupInput(
   if (!meetupId) {
     // An unparseable URL is an expected mod typo, not a failure: reply
     // ephemerally instead of throwing into the wrapper's alert path.
-    await interaction.followUp({
+    replyStack(interaction).ephemeral.append({
       content: strings.badMeetupInput,
-      ephemeral: true,
+      status: 'attention',
     });
     return;
   }
   const repo = await ApplicationMemberRepository();
   const row = await repo.findByMeetupId(meetupId);
   if (!row) {
-    await interaction.followUp({
+    replyStack(interaction).ephemeral.append({
       content: strings.noRowForMeetup,
-      ephemeral: true,
+      status: 'attention',
     });
     await auditLookup(interaction, `Meetup ID ${meetupId}`, false);
     return;
   }
-  await replyWithLookup(interaction, row);
+  replyWithLookup(interaction, row);
   await auditLookup(
     interaction,
     `Meetup ID ${meetupId} (<@${row.discordUserId}>)`,
