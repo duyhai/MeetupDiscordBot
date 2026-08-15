@@ -180,9 +180,19 @@ All **interaction-scoped** output moves to the stack:
 - `editReply` that revises an earlier line → `update(id)` on the entry that
   line created
 
-Out of scope: direct channel sends unrelated to an interaction (`channel.ts`,
-parts of `messageMods.ts`) and the `discordLogger` channels. Those are not
-fragmentation and keep their current behaviour.
+Out of scope, for two different reasons:
+
+- **The `discordLogger` channels.** Those are audit posts to fixed channels,
+  not replies to anyone, and are not fragmentation.
+- **Attachment-bearing replies** (`getEventStats.ts:174`, `:315`).
+  `withDiscordFileAttachment` deletes its temp file as soon as its callback
+  returns, so a debounced flush would try to upload a file that no longer
+  exists, and a later re-render would re-upload it. These stay direct
+  `followUp` calls; a file drop is a distinct artefact, not a progress line.
+
+`channel.ts:34` and `messageMods.ts:60,75` were initially assumed to be
+out-of-scope channel sends. They are in fact interaction-scoped ephemeral
+`followUp`s and are migrated like the rest.
 
 **Wrapper changes.** `discordCommandWrapper` stops its reply-then-delete
 dance. It seeds an "executing" entry with `pending` status, removes that entry
