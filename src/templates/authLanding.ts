@@ -1,9 +1,25 @@
+import {
+  GET_VERIFIED_CHANNEL_ID,
+  GUILD_ID,
+  WELCOME_CHANNEL_ID,
+} from '../constants.js';
+
 const successIcon =
   // eslint-disable-next-line @stylistic/max-len
   '<svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>';
 const failIcon =
   // eslint-disable-next-line @stylistic/max-len
   '<svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>';
+
+// All current callers pass constants, but escape defensively so a future
+// caller that threads through user-controlled text can't reintroduce XSS.
+const escapeHtml = (input: string): string =>
+  input
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 
 export const getAuthLandingPage = (
   status: 'success' | 'error',
@@ -13,8 +29,11 @@ export const getAuthLandingPage = (
   const title = isSuccess ? 'Success!' : 'Something went wrong';
   const color = isSuccess ? '#5865F2' : '#ED4245'; // Discord Blurple or Red
   const icon = isSuccess ? successIcon : failIcon;
-  const deepLink = 'discord://';
-  const webLink = 'https://discord.com/channels/@me';
+  const targetChannelId = isSuccess
+    ? WELCOME_CHANNEL_ID
+    : GET_VERIFIED_CHANNEL_ID;
+  const deepLink = `discord://-/channels/${GUILD_ID}/${targetChannelId}`;
+  const webLink = `https://discord.com/channels/${GUILD_ID}/${targetChannelId}`;
 
   return `
 <!DOCTYPE html>
@@ -76,7 +95,7 @@ export const getAuthLandingPage = (
             ${icon}
         </div>
         <h1>${title}</h1>
-        <p>${message}</p>
+        <p>${escapeHtml(message)}</p>
         <a href="${webLink}" class="btn" onclick="setTimeout(function(){ window.location = '${deepLink}'; }, 25);">Back to Discord</a>
     </div>
     <script>

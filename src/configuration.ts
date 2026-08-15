@@ -1,18 +1,9 @@
-import { OAuth2Scopes } from 'discord.js';
-import { GrantConfig } from 'grant';
-import {
-  BASIC_MEETUP_AUTH_SCOPES,
-  BASE_DISCORD_BOT_URL,
-  debugRedirect,
-} from './constants.js';
-
 interface ConfigurationSchema {
   discord: {
     apiKey: string;
     oauthClientId: string;
     oauthSecret: string;
   };
-  grant: GrantConfig;
   meetup: {
     apiKey: string;
     apiSecret: string;
@@ -35,34 +26,36 @@ const Configuration: ConfigurationSchema = {
     groupId: '7595882',
     groupUrlName: '1-5genasians',
   },
-  grant: {
-    defaults: {
-      state: true,
-      // Need to have tokens (not just raw) in order to get profile
-      response: ['raw', 'profile', 'tokens'],
-      transport: 'session',
-    },
-    // connect/discord => authorize => access => callback => connect/meetup
-    discord: {
-      key: process.env.DISCORD_CLIENT_ID,
-      secret: process.env.DISCORD_SECRET,
-      scope: [OAuth2Scopes.RoleConnectionsWrite, OAuth2Scopes.Identify],
-      redirect_uri: debugRedirect(
-        `${BASE_DISCORD_BOT_URL}/connect/discord/callback`,
-      ),
-    },
-    // connect/meetup => authorize => access => callback => persistToken
-    meetup: {
-      key: process.env.MEETUP_KEY,
-      secret: process.env.MEETUP_SECRET,
-      scope: BASIC_MEETUP_AUTH_SCOPES,
-      // We also use it as a key for the initiator's Discord id in our memory store.
-      dynamic: ['state'],
-      redirect_uri: debugRedirect(
-        `${BASE_DISCORD_BOT_URL}/connect/meetup/callback`,
-      ),
-    },
-  },
 };
+
+const REQUIRED_VARS = [
+  'DISCORD_API_KEY',
+  'DISCORD_CLIENT_ID',
+  'DISCORD_SECRET',
+  'MEETUP_KEY',
+  'MEETUP_SECRET',
+];
+
+/**
+ * Fails the boot instead of letting a missing credential surface later as a
+ * confusing provider error (arctic will happily build an authorize URL with
+ * `client_id=undefined`). REDISCLOUD_URL is required outside local dev
+ * because the in-memory cache fallback is per-process: OAuth state written
+ * on one dyno is invisible to the callback that lands on another, so every
+ * flow fails — silently.
+ */
+export function assertRequiredConfiguration(
+  env: Record<string, string | undefined> = process.env,
+): void {
+  const required = env.TS_NODE_DEBUG
+    ? REQUIRED_VARS
+    : [...REQUIRED_VARS, 'REDISCLOUD_URL'];
+  const missing = required.filter((name) => !env[name]);
+  if (missing.length > 0) {
+    throw new Error(
+      `Missing required environment variables: ${missing.join(', ')}`,
+    );
+  }
+}
 
 export default Configuration;

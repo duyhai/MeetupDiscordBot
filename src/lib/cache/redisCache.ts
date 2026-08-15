@@ -45,8 +45,8 @@ export class RedisCache implements KeyValueCache {
     return value ?? undefined;
   }
 
-  async set(key: string, value: string): Promise<void> {
-    await this.client.set(key, value, { EX: ITEM_TTL_SEC });
+  async set(key: string, value: string, ttlSec?: number): Promise<void> {
+    await this.client.set(key, value, { EX: ttlSec ?? ITEM_TTL_SEC });
   }
 
   async exclusive_set(key: string, value: string): Promise<boolean> {

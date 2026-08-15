@@ -10,29 +10,31 @@ import {
 import { ButtonComponent, Discord, Slash } from 'discordx';
 import { Logger } from 'tslog';
 
-import { discordBotUrl, RewardRoleLevels } from '../../constants.js';
+import { generateOAuthUrl, RewardRoleLevels } from '../../constants.js';
 import { Tokens } from '../../lib/client/discord/types.js';
 import { DiscordUserClient } from '../../lib/client/discord/userClient.js';
 import { GqlMeetupClient } from '../../lib/client/meetup/gqlClient.js';
 import { getPaginatedData } from '../../lib/client/meetup/paginationHelper.js';
+import { createOAuthState } from '../../lib/client/oauth/state.js';
+import {
+  countAttendedEvents,
+  countHostedEvents,
+} from '../../lib/helpers/eventStats.js';
 import { recordMeetupLink } from '../../lib/helpers/memberLink.js';
 import {
   addRewardRole,
-  addServerRole,
+  onboardUserCommon,
   removeRewardRole,
-  removeServerRole,
 } from '../../lib/helpers/onboardUser.js';
 import { ApplicationCache } from '../../util/cache.js';
-import { discordCommandWrapper, isAdmin } from '../../util/discord.js';
+import { discordCommandWrapper } from '../../util/discord.js';
 import { spinWait } from '../../util/spinWait.js';
 
 const logger = new Logger({ name: 'MeetupSyncAccount' });
 
 const SYNC_ACCOUNT_BUTTON_ID = 'sync_meetup_account_v2';
 
-const strings = {
-  invisibleCharacter: ' ',
-};
+const OAUTH_HOP_TIMEOUT_MS = 3 * 60 * 1000;
 
 @Discord()
 export class MeetupSyncAccountCommandsV2 {
@@ -62,19 +64,37 @@ export class MeetupSyncAccountCommandsV2 {
         logger.info(
           `Tokens are not present for ${interaction.user.username} at ${meetupTokenKey} or ${discordTokenKey}. Getting token through OAuth`,
         );
-        await interaction.editReply({
-          content: `Please click on this link to connect your Discord and Meetup account: <${discordBotUrl(
-            'discord-meetup-connect',
-          )}>`,
+        // Discord-first flow: the Meetup hop stays locked until the Discord
+        // callback proves this state's owner is the one walking the flow.
+        const state = await createOAuthState(interaction.user.id, {
+          requiresDiscordVerification: true,
         });
+        const oauthUrl = generateOAuthUrl('discord', { state });
+        const connectButton = new ButtonBuilder()
+          .setLabel('Connect Discord + Meetup')
+          .setEmoji('🧲')
+          .setStyle(ButtonStyle.Link)
+          .setURL(oauthUrl);
+        const row =
+          new ActionRowBuilder<MessageActionRowComponentBuilder>().addComponents(
+            connectButton,
+          );
+        await interaction.editReply({
+          content: 'Please connect your Discord and Meetup accounts:',
+          components: [row],
+        });
+        // Generous windows: on iOS the flow hands off from Discord's in-app
+        // browser to Safari, where the user may have to sign in to Discord,
+        // consent, then sign in to Meetup. The interaction token lasts ~15
+        // minutes, so these fit well inside the budget.
         rawDiscordTokens = await spinWait(() => cache.get(discordTokenKey), {
-          timeoutMs: 60 * 1000,
+          timeoutMs: OAUTH_HOP_TIMEOUT_MS,
           message:
             'Timeout waiting for Discord authentication. Please try again',
           intervalMs: 1000,
         });
         rawMeetupTokens = await spinWait(() => cache.get(meetupTokenKey), {
-          timeoutMs: 60 * 1000,
+          timeoutMs: OAUTH_HOP_TIMEOUT_MS,
           message:
             'Timeout waiting for Meetup authentication. Please try again',
           intervalMs: 1000,
@@ -123,46 +143,14 @@ export class MeetupSyncAccountCommandsV2 {
         })
         .join(' ');
 
-      const { user: cachedUser, guild, client } = interaction;
-      const user = await client.users.fetch(cachedUser.id);
-      const fullUsername = user.tag;
+      const { user: cachedUser, guild } = interaction;
 
-      logger.info(`User ${fullUsername} is getting onboarded`);
-
-      const guildMember = await guild.members.fetch(cachedUser.id);
-      if (!isAdmin(guildMember)) {
-        let targetNickName = cleanedName || guildMember.nickname;
-        if (!targetNickName) {
-          const { username } = user;
-          // Ugly hack because of this:
-          // https://github.com/discord/discord-api-docs/issues/667
-          targetNickName = Array.from(username).join(
-            strings.invisibleCharacter,
-          );
-        }
-        await guildMember.setNickname(targetNickName);
-        logger.info(
-          `Explicitly set ${fullUsername}'s nickname to ${targetNickName}`,
-        );
-      }
-
-      switch (userInfo.self.gender) {
-        case 'MALE': {
-          await addServerRole(guild, user.id, 'gents_lounge');
-          logger.info(`User ${fullUsername} added to GentsLounge`);
-          break;
-        }
-        case 'FEMALE': {
-          await addServerRole(guild, user.id, 'ladies_lounge');
-          logger.info(`User ${fullUsername} added to LadiesLounge`);
-          break;
-        }
-        default:
-          break;
-      }
-
-      await removeServerRole(guild, user.id, 'onboarding');
-      logger.info(`User ${fullUsername} onboarded!`);
+      await onboardUserCommon(
+        interaction,
+        cachedUser.id,
+        userInfo.self.gender,
+        cleanedName,
+      );
 
       logger.info(`Getting badges for ${interaction.user.username}`);
       await interaction.editReply({
@@ -176,10 +164,7 @@ export class MeetupSyncAccountCommandsV2 {
         return result.groupByUrlname.events;
       });
 
-      const getUserHostedEvents = pastEvents.filter(({ eventHosts }) =>
-        eventHosts.some(({ member: { id } }) => id === userInfo.self.id),
-      );
-      const getUserAttendedEvents = await Promise.all(
+      const rsvpsPerEvent = await Promise.all(
         pastEvents.map((event) =>
           getPaginatedData(async (paginationInput) => {
             const result = await meetupClient.getEventRsvps(
@@ -193,12 +178,12 @@ export class MeetupSyncAccountCommandsV2 {
           }),
         ),
       );
-      getUserAttendedEvents.filter((rsvp) =>
-        rsvp.some(({ member }) => member.id === userInfo.self.id),
-      );
 
-      const hostedCount = getUserHostedEvents.length;
-      const attendedCount = getUserAttendedEvents.length;
+      const hostedCount = countHostedEvents(pastEvents, userInfo.self.id);
+      const attendedCount = countAttendedEvents(
+        rsvpsPerEvent,
+        userInfo.self.id,
+      );
       logger.info(JSON.stringify({ hostedCount, attendedCount }));
 
       const levels: RewardRoleLevels[] = [500, 100, 50, 20, 5, 1];
@@ -206,11 +191,16 @@ export class MeetupSyncAccountCommandsV2 {
       const attendanceRewards = levels.find((num) => attendedCount >= num);
       logger.info(JSON.stringify({ hostingRewards, attendanceRewards }));
 
-      await removeRewardRole(guild, user.id, 'hosting');
-      await removeRewardRole(guild, user.id, 'attendance');
+      await removeRewardRole(guild, cachedUser.id, 'hosting');
+      await removeRewardRole(guild, cachedUser.id, 'attendance');
 
-      await addRewardRole(guild, user.id, 'hosting', hostingRewards);
-      await addRewardRole(guild, user.id, 'attendance', attendanceRewards);
+      await addRewardRole(guild, cachedUser.id, 'hosting', hostingRewards);
+      await addRewardRole(
+        guild,
+        cachedUser.id,
+        'attendance',
+        attendanceRewards,
+      );
 
       await discordClient.pushMetadata({
         platform_name: '1.5 Meetup Bot',

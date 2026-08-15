@@ -73,7 +73,7 @@ export async function removeRewardRole(
   );
 }
 
-async function onboardUserCommon(
+export async function onboardUserCommon(
   interaction: CommandInteraction | ButtonInteraction,
   userId: string,
   gender: MemberGender,
