@@ -103,6 +103,90 @@ describe('cookie-free OAuth chain', () => {
     expect(replay.text).toContain('expired');
   });
 
+  it('refuses the Meetup hop of a V2 flow until Discord is verified', async () => {
+    // The attack: attacker presses the V2 button, gets a state, and sends the
+    // victim /connect/meetup?state=…. Without the Discord hop the victim's
+    // Meetup token would bind to the attacker's Discord ID.
+    const state = await createOAuthState('attacker-1', {
+      requiresDiscordVerification: true,
+    });
+
+    const handedToVictim = await request(app).get(
+      `/connect/meetup?state=${state}`,
+    );
+    expect(handedToVictim.status).toBe(400);
+    expect(handedToVictim.headers.location).toBeUndefined();
+
+    // The callback is gated too, so a hand-crafted code can't skip the hop.
+    nockMeetupExchange();
+    const callback = await request(app).get(
+      `/connect/meetup/callback?state=${state}&code=mcode`,
+    );
+    expect(callback.status).toBe(400);
+
+    const cache = await ApplicationCache();
+    expect(await cache.get('attacker-1-meetup-tokens')).toBeUndefined();
+  });
+
+  it('allows the Meetup hop once the Discord callback verifies the state', async () => {
+    const state = await createOAuthState('user-1c', {
+      requiresDiscordVerification: true,
+    });
+    nockDiscordExchange();
+    nockDiscordProfile('user-1c');
+    await request(app).get(
+      `/connect/discord/callback?state=${state}&code=dcode`,
+    );
+
+    const meetupAuthorize = await request(app).get(
+      `/connect/meetup?state=${state}`,
+    );
+    expect(meetupAuthorize.status).toBe(302);
+    expect(meetupAuthorize.headers.location).toContain(
+      'https://secure.meetup.com/oauth2/authorize',
+    );
+  });
+
+  it('leaves the V1 direct-to-Meetup flow working (no Discord hop)', async () => {
+    const state = await createOAuthState('user-1d');
+
+    const meetupAuthorize = await request(app).get(
+      `/connect/meetup?state=${state}`,
+    );
+    expect(meetupAuthorize.status).toBe(302);
+    expect(meetupAuthorize.headers.location).toContain(
+      'https://secure.meetup.com/oauth2/authorize',
+    );
+
+    nockMeetupExchange();
+    const meetupCb = await request(app).get(
+      `/connect/meetup/callback?state=${state}&code=mcode`,
+    );
+    expect(meetupCb.status).toBe(200);
+
+    const cache = await ApplicationCache();
+    expect(JSON.parse(await cache.get('user-1d-meetup-tokens'))).toMatchObject({
+      accessToken: 'meetup-access',
+    });
+  });
+
+  it('consumes the state when the Discord account mismatches', async () => {
+    const state = await createOAuthState('user-2b', {
+      requiresDiscordVerification: true,
+    });
+    nockDiscordExchange();
+    nockDiscordProfile('someone-else');
+    await request(app).get(
+      `/connect/discord/callback?state=${state}&code=dcode`,
+    );
+
+    // The state must be dead, not merely unverified: a mismatched attempt
+    // shouldn't leave a live credential sitting in the cache.
+    const retry = await request(app).get(`/connect/discord?state=${state}`);
+    expect(retry.status).toBe(400);
+    expect(retry.text).toContain('expired');
+  });
+
   it('rejects an unknown state with the expired-link page', async () => {
     for (const path of [
       '/connect/discord?state=nope',
@@ -137,7 +221,7 @@ describe('cookie-free OAuth chain', () => {
     const res = await request(app).get(
       `/connect/discord/callback?state=${state}&error=access_denied`,
     );
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(400);
     expect(res.text).toContain('cancelled or denied');
   });
 

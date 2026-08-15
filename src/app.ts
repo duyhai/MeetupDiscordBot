@@ -10,6 +10,8 @@ import {
 } from './lib/client/oauth/providers.js';
 import {
   consumeOAuthState,
+  markOAuthStateDiscordVerified,
+  OAuthStateRecord,
   resolveOAuthState,
 } from './lib/client/oauth/state.js';
 import { getAuthLandingPage } from './templates/authLanding.js';
@@ -18,8 +20,6 @@ import { ApplicationCache } from './util/cache.js';
 const logger = new Logger({ name: 'MeetupBot' });
 
 const app = express();
-
-app.use(express.urlencoded({ extended: true }));
 
 const strings = {
   expiredState:
@@ -33,7 +33,20 @@ const strings = {
   meetupSuccess: 'Connected to Meetup. Heading back to Discord…',
   unexpected:
     'Something went wrong on our end. Please go back to Discord and try again in a moment.',
+  verificationRequired:
+    'Please start from the button in Discord so we can confirm your account first.',
+  notFound:
+    'There is nothing at this address. Head back to Discord and press the button again.',
 };
+
+/**
+ * A Discord-first (V2) state must not reach Meetup until the Discord callback
+ * has proven whoever is walking the flow owns the account the state is bound
+ * to. Otherwise a crafted `/connect/meetup?state=…` link sent to a victim
+ * binds their Meetup account to the link sender's Discord ID.
+ */
+const needsDiscordVerification = (record: OAuthStateRecord) =>
+  record.requiresDiscordVerification && !record.discordVerified;
 
 const errorPage = (
   res: Parameters<RequestHandler>[1],
@@ -51,8 +64,13 @@ export const discordConnectHandler: RequestHandler = (async (req, res) => {
 
 export const meetupConnectHandler: RequestHandler = (async (req, res) => {
   const state = String(req.query.state ?? '');
-  if (!(await resolveOAuthState(state))) {
+  const record = await resolveOAuthState(state);
+  if (!record) {
     return errorPage(res, 400, strings.expiredState);
+  }
+  if (needsDiscordVerification(record)) {
+    logger.warn('Blocked unverified Meetup hop for a Discord-first state');
+    return errorPage(res, 400, strings.verificationRequired);
   }
   return res.redirect(302, buildMeetupAuthUrl(state));
 }) as RequestHandler;
@@ -62,15 +80,15 @@ export const discordConnectCallbackHandler: RequestHandler = (async (
   res,
 ) => {
   const state = String(req.query.state ?? '');
-  const userId = await resolveOAuthState(state);
-  if (!userId) {
+  const record = await resolveOAuthState(state);
+  if (!record) {
     return errorPage(res, 400, strings.expiredState);
   }
+  const userId = record.discordUserId;
   if (req.query.error || !req.query.code) {
     logger.warn(`Discord authorize denied: ${String(req.query.error)}`);
-    return res
-      .status(200)
-      .send(getAuthLandingPage('error', strings.providerDenied));
+    await consumeOAuthState(state);
+    return errorPage(res, 400, strings.providerDenied);
   }
   try {
     const tokens = await exchangeDiscordCode(String(req.query.code));
@@ -79,13 +97,18 @@ export const discordConnectCallbackHandler: RequestHandler = (async (
       logger.warn(
         `OAuth state/account mismatch: state belongs to ${userId}, token belongs to ${profileId}`,
       );
+      // A mismatched attempt must not leave a live credential behind.
+      await consumeOAuthState(state);
       return errorPage(res, 400, strings.accountMismatch);
     }
     const cache = await ApplicationCache();
     await cache.set(`${userId}-discord-tokens`, JSON.stringify(tokens));
+    // Unlocks the Meetup hop for this state.
+    await markOAuthStateDiscordVerified(state);
     return res.redirect(307, `/connect/meetup?state=${state}`);
   } catch (error) {
     logger.error(`Discord token exchange failed: ${String(error)}`);
+    await consumeOAuthState(state);
     return errorPage(res, 502, strings.exchangeFailed);
   }
 }) as RequestHandler;
@@ -95,15 +118,19 @@ export const meetupConnectCallbackHandler: RequestHandler = (async (
   res,
 ) => {
   const state = String(req.query.state ?? '');
-  const userId = await resolveOAuthState(state);
-  if (!userId) {
+  const record = await resolveOAuthState(state);
+  if (!record) {
     return errorPage(res, 400, strings.expiredState);
   }
+  if (needsDiscordVerification(record)) {
+    logger.warn('Blocked unverified Meetup callback for a Discord-first state');
+    return errorPage(res, 400, strings.verificationRequired);
+  }
+  const userId = record.discordUserId;
   if (req.query.error || !req.query.code) {
     logger.warn(`Meetup authorize denied: ${String(req.query.error)}`);
-    return res
-      .status(200)
-      .send(getAuthLandingPage('error', strings.providerDenied));
+    await consumeOAuthState(state);
+    return errorPage(res, 400, strings.providerDenied);
   }
   try {
     const tokens = await exchangeMeetupCode(String(req.query.code));
@@ -143,7 +170,7 @@ app.get('/redirect/:url', (req, res) => {
 // Any stale or mistyped bot URL should still land the user on a page that
 // points back to Discord, never on Express's default 404.
 app.use((_req, res) => {
-  res.status(404).send(getAuthLandingPage('error', strings.expiredState));
+  res.status(404).send(getAuthLandingPage('error', strings.notFound));
 });
 
 // Express 5 forwards rejected async handler promises here. Anything that

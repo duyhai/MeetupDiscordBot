@@ -64,7 +64,11 @@ export class MeetupSyncAccountCommandsV2 {
         logger.info(
           `Tokens are not present for ${interaction.user.username} at ${meetupTokenKey} or ${discordTokenKey}. Getting token through OAuth`,
         );
-        const state = await createOAuthState(interaction.user.id);
+        // Discord-first flow: the Meetup hop stays locked until the Discord
+        // callback proves this state's owner is the one walking the flow.
+        const state = await createOAuthState(interaction.user.id, {
+          requiresDiscordVerification: true,
+        });
         const oauthUrl = generateOAuthUrl('discord', { state });
         const connectButton = new ButtonBuilder()
           .setLabel('Connect Discord + Meetup')
