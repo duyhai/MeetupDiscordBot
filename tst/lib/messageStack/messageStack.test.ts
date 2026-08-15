@@ -32,6 +32,17 @@ describe('MessageStack', () => {
     expect(stack.render()?.content).toBe('only');
   });
 
+  it('remove deletes a specific entry and ignores unknown ids', () => {
+    const stack = new MessageStack();
+    const first = stack.append({ content: 'first' });
+    stack.append({ content: 'second' });
+
+    stack.remove(first);
+    stack.remove('e99');
+
+    expect(stack.render()?.content).toBe('second');
+  });
+
   it('pop drops the newest entry and is a no-op when empty', () => {
     const stack = new MessageStack();
     stack.append({ content: 'first' });

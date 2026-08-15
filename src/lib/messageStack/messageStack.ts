@@ -43,6 +43,11 @@ export class MessageStack<TEmbed = unknown, TComponent = unknown> {
     this.entries.set(id, entry);
   }
 
+  /** Deletes one entry by id. Unknown id: no-op. */
+  remove(id: EntryId): void {
+    this.entries.delete(id);
+  }
+
   /** Drops the newest entry, whoever appended it. No-op when empty. */
   pop(): void {
     const newest = [...this.entries.keys()].pop();

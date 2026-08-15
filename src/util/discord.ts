@@ -12,6 +12,7 @@ import { Logger } from 'tslog';
 
 import { SERVER_ROLES, ServerRoles } from '../constants.js';
 import { logActivity, logAlert } from '../lib/helpers/discordLogger.js';
+import { disposeReplyStack, replyStack } from '../lib/messageStack/registry.js';
 import { describeInteraction } from './describeInteraction.js';
 
 const logger = new Logger({ name: 'DiscordUtil' });
@@ -29,23 +30,18 @@ export async function discordCommandWrapper(
   interaction: ButtonInteraction | CommandInteraction | ModalSubmitInteraction,
   commandFn: () => Promise<void>,
 ) {
-  const message = await interaction.reply({
-    content: 'Executing command',
-    ephemeral: true,
-  });
+  await interaction.deferReply({ ephemeral: true });
   const action = describeInteraction(interaction);
+  const stack = replyStack(interaction);
+  // Seeded so a slow command shows progress; removed before returning, so a
+  // command finishing inside the debounce window never renders it at all.
+  const workingId = stack.ephemeral.append({
+    content: 'Working on it…',
+    status: 'pending',
+  });
   try {
     await commandFn();
-    // Deleting the ephemeral progress reply is cleanup, not part of the
-    // command: its failure (e.g. interaction token expiry) must not turn a
-    // successful command into a false "failed" alert.
-    try {
-      await message.delete();
-    } catch (deleteError: unknown) {
-      logger.warn(
-        `Could not delete progress reply for ${action}: ${String(deleteError)}`,
-      );
-    }
+    stack.ephemeral.remove(workingId);
     await logActivity(interaction.client, {
       title: `${action} used`,
       description: `By ${interaction.user.toString()} (${
@@ -55,6 +51,10 @@ export async function discordCommandWrapper(
   } catch (error: unknown) {
     if (error instanceof Error) {
       logger.error(error);
+      stack.ephemeral.update(workingId, {
+        content: `${error.message} Please reach out to a moderator for help.`,
+        status: 'error',
+      });
       // Errors marked alertHandled (e.g. DuplicateMeetupAccountError) posted
       // their own, more specific alert at the throw site.
       const alertHandled =
@@ -67,12 +67,10 @@ export async function discordCommandWrapper(
           })\nError: ${error.message}`,
         });
       }
-      await interaction.editReply({
-        content: `${interaction.user.toString()} Error: ${
-          error?.message
-        } Please reach out to a moderator for help.`,
-      });
     }
+  } finally {
+    await stack.flushAll();
+    disposeReplyStack(interaction);
   }
 }
 

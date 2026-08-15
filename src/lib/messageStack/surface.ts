@@ -46,6 +46,11 @@ export class Surface<TEmbed = unknown, TComponent = unknown> {
     this.schedule();
   }
 
+  remove(id: EntryId): void {
+    this.stack.remove(id);
+    this.schedule();
+  }
+
   private schedule(): void {
     this.dirty = true;
     if (this.timer) {

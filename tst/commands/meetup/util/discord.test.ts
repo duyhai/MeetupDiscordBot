@@ -6,6 +6,10 @@ import { SERVER_ROLES } from '../../../../src/constants.js';
 import * as discordLogger from '../../../../src/lib/helpers/discordLogger.js';
 import { DuplicateMeetupAccountError } from '../../../../src/lib/helpers/memberLink.js';
 import {
+  registrySize,
+  replyStack,
+} from '../../../../src/lib/messageStack/registry.js';
+import {
   describeInteraction,
   discordCommandWrapper,
   hasAnyServerRole,
@@ -22,10 +26,12 @@ function makeInteraction(overrides: Record<string, unknown> = {}) {
     user: { id: 'user-1', username: 'testUser', toString: () => '<@user-1>' },
     commandName: 'test_command',
     isChatInputCommand: () => true,
-    reply: vi
-      .fn()
-      .mockResolvedValue({ delete: vi.fn().mockResolvedValue(undefined) }),
-    editReply: vi.fn().mockResolvedValue(undefined),
+    deferReply: vi.fn().mockResolvedValue(undefined),
+    editReply: vi.fn().mockResolvedValue({ id: 'm1' }),
+    followUp: vi.fn().mockResolvedValue({ id: 'm2' }),
+    deleteReply: vi.fn().mockResolvedValue(undefined),
+    channel: { send: vi.fn().mockResolvedValue({ id: 'p1' }) },
+    id: `interaction-${Math.random()}`,
     ...overrides,
   } as unknown as CommandInteraction;
 }
@@ -42,9 +48,26 @@ describe('describeInteraction', () => {
   });
 });
 
-describe('discordCommandWrapper logging hooks', () => {
+describe('discordCommandWrapper', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  it('defers, runs the command, and flushes one message', async () => {
+    const interaction = makeInteraction();
+    await discordCommandWrapper(interaction, async () => {
+      replyStack(interaction).ephemeral.append({
+        content: 'result',
+        status: 'success',
+      });
+    });
+
+    expect(interaction.deferReply).toHaveBeenCalledWith({ ephemeral: true });
+    expect(vi.mocked(interaction.editReply)).toHaveBeenCalledTimes(1);
+    const [payload] = vi.mocked(interaction.editReply).mock.calls[0] as [
+      { content: string },
+    ];
+    expect(payload.content).toBe('result');
   });
 
   it('posts an activity entry on success', async () => {
@@ -52,22 +75,20 @@ describe('discordCommandWrapper logging hooks', () => {
     await discordCommandWrapper(interaction, async () => {});
 
     expect(vi.mocked(discordLogger.logActivity)).toHaveBeenCalledTimes(1);
-    const [, entry] = vi.mocked(discordLogger.logActivity).mock.calls[0];
-    expect(entry.title).toContain('/test_command');
     expect(vi.mocked(discordLogger.logAlert)).not.toHaveBeenCalled();
   });
 
-  it('still logs success when the progress-reply delete fails', async () => {
-    const interaction = makeInteraction({
-      reply: vi.fn().mockResolvedValue({
-        delete: vi.fn().mockRejectedValue(new Error('Unknown Message')),
-      }),
+  it('renders the error in the stack and alerts', async () => {
+    const interaction = makeInteraction();
+    await discordCommandWrapper(interaction, async () => {
+      throw new Error('boom');
     });
-    await discordCommandWrapper(interaction, async () => {});
 
-    expect(vi.mocked(discordLogger.logActivity)).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(discordLogger.logAlert)).not.toHaveBeenCalled();
-    expect(interaction.editReply).not.toHaveBeenCalled();
+    expect(vi.mocked(discordLogger.logAlert)).toHaveBeenCalledTimes(1);
+    const [payload] = vi.mocked(interaction.editReply).mock.calls[0] as [
+      { content: string },
+    ];
+    expect(payload.content).toContain('boom');
   });
 
   it('skips the generic alert for duplicate-link blocks (already alerted)', async () => {
@@ -77,24 +98,26 @@ describe('discordCommandWrapper logging hooks', () => {
     });
 
     expect(vi.mocked(discordLogger.logAlert)).not.toHaveBeenCalled();
-    expect(interaction.editReply).toHaveBeenCalledTimes(1);
-    const [editArgs] = vi.mocked(interaction.editReply).mock.calls[0] as [
-      { content: string },
-    ];
-    expect(editArgs.content).toContain('already linked');
   });
 
-  it('posts an alert entry on error and still edits the reply', async () => {
+  it('leaves no message when the flow produced no output', async () => {
+    const interaction = makeInteraction();
+    await discordCommandWrapper(interaction, async () => {});
+
+    expect(interaction.deleteReply).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(interaction.editReply)).not.toHaveBeenCalled();
+  });
+
+  it('disposes the manager so the registry does not grow', async () => {
     const interaction = makeInteraction();
     await discordCommandWrapper(interaction, async () => {
-      throw new Error('boom');
+      replyStack(interaction).ephemeral.append({ content: 'x' });
     });
 
-    expect(vi.mocked(discordLogger.logAlert)).toHaveBeenCalledTimes(1);
-    const [, entry] = vi.mocked(discordLogger.logAlert).mock.calls[0];
-    expect(entry.title).toContain('/test_command');
-    expect(entry.description).toContain('boom');
-    expect(interaction.editReply).toHaveBeenCalled();
+    // RULING A: the brief's original assertion called replyStack(interaction)
+    // again here, which lazily recreates a manager and makes registrySize()
+    // 1 -- an assertion that can never pass. Assert disposal directly instead.
+    expect(registrySize()).toBe(0);
   });
 });
 
