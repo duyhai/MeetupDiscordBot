@@ -53,6 +53,7 @@
     "vitest": "^4.1.10"
   },
   "dependencies": {
+    "arctic": "^3.7.0",
     "dayjs": "^1.11.7",
     "decamelize": "^5.0.1",
     "discord.js": "^14.14.1",
