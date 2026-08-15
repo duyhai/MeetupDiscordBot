@@ -63,6 +63,8 @@ export const EMBED_COLORS = {
   activity: 0x2ecc71, // green
   alert: 0xe74c3c, // red
   info: 0x3498db, // blue
+  pending: 0xf1c40f, // yellow
+  attention: 0xe67e22, // orange
 };
 
 export const INTEREST_JOIN_MESSAGE_ID = '935078311351177256';
