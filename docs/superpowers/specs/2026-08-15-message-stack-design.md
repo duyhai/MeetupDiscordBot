@@ -61,8 +61,8 @@ and never inspects them — it only concatenates. Platform payload limits are
 
 ### Status and colour
 
-Output renders as an embed rather than plain text, so it reads as bot output
-and can carry state in its colour. Each entry declares a status:
+Output pairs plain text with a coloured status banner, so a reply reads as bot
+output and carries its state visually. Each entry declares a status:
 
 | Status      | Colour | Meaning                        |
 | ----------- | ------ | ------------------------------ |
