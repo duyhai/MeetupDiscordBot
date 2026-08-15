@@ -8,8 +8,8 @@ import {
   ModalSubmitInteraction,
 } from 'discord.js';
 import { Logger } from 'tslog';
-import { v4 as uuidv4 } from 'uuid';
 import { generateOAuthUrl } from '../constants.js';
+import { createOAuthState } from '../lib/client/oauth/state.js';
 import { Tokens } from '../lib/client/discord/types.js';
 import { GqlMeetupClient } from '../lib/client/meetup/gqlClient.js';
 import { ApplicationCache } from './cache.js';
@@ -20,12 +20,10 @@ const logger = new Logger({ name: 'MeetupUtil' });
 async function showMeetupTokenUrl(
   interaction: ButtonInteraction | CommandInteraction | ModalSubmitInteraction,
 ) {
-  const maskedUserId = uuidv4();
+  const maskedUserId = await createOAuthState(interaction.user.id);
   logger.info(
     `Setting maskedUserId=${maskedUserId} for ${interaction.user.username}`,
   );
-  const cache = await ApplicationCache();
-  await cache.set(`maskedUserId-${maskedUserId}`, interaction.user.id);
 
   const oauthUrl = generateOAuthUrl('meetup', { state: maskedUserId });
 
