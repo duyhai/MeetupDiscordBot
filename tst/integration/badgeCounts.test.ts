@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import nock from 'nock';
 import { afterEach, describe, expect, it } from 'vitest';
 
@@ -5,6 +6,11 @@ import { GqlMeetupClient } from '../../src/lib/client/meetup/gqlClient.js';
 import { getBadgeCounts } from '../../src/lib/helpers/badgeCounts.js';
 
 const OUR_GROUP = '7595882';
+
+// getGroupEvents is cached, and Redis retains entries between runs. A member
+// id unique per execution keeps the cache key fresh, so these assertions see
+// real network traffic rather than a hit left by a previous run.
+const MEMBER_ID = `m-${crypto.randomUUID()}`;
 
 /**
  * The counts come from server-side filters, so what these tests can prove is
@@ -49,13 +55,13 @@ describe('getBadgeCounts (integration)', () => {
       }
       if (body.includes('eventStatus: PAST')) {
         return {
-          data: { self: { id: 'member-1', rsvps: { totalCount: 327 } } },
+          data: { self: { id: MEMBER_ID, rsvps: { totalCount: 327 } } },
         };
       }
       if (body.includes('UserDetails')) {
         return {
           data: {
-            self: { id: 'member-1', name: 'M', gender: 'OTHER', memberUrl: '' },
+            self: { id: MEMBER_ID, name: 'M', gender: 'OTHER', memberUrl: '' },
           },
         };
       }
@@ -73,7 +79,7 @@ describe('getBadgeCounts (integration)', () => {
     expect(all).toContain('rsvpStatus: [YES, ATTENDED]');
     expect(all).toContain(OUR_GROUP);
     // Hosted must be server-filtered to this member, not scanned client-side.
-    expect(all).toContain('"hostId":"member-1"');
+    expect(all).toContain(`"hostId":"${MEMBER_ID}"`);
     expect(all).toContain('PAST');
   });
 
@@ -96,11 +102,11 @@ describe('getBadgeCounts (integration)', () => {
         };
       }
       if (body.includes('eventStatus: PAST')) {
-        return { data: { self: { id: 'member-1', rsvps: { totalCount: 5 } } } };
+        return { data: { self: { id: MEMBER_ID, rsvps: { totalCount: 5 } } } };
       }
       return {
         data: {
-          self: { id: 'member-1', name: 'M', gender: 'OTHER', memberUrl: '' },
+          self: { id: MEMBER_ID, name: 'M', gender: 'OTHER', memberUrl: '' },
         },
       };
     });

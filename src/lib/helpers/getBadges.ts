@@ -2,8 +2,7 @@ import { ButtonInteraction, CommandInteraction } from 'discord.js';
 import { Logger } from 'tslog';
 import { RewardRoleLevels } from '../../constants.js';
 import { GqlMeetupClient } from '../client/meetup/gqlClient.js';
-import { getPaginatedData } from '../client/meetup/paginationHelper.js';
-import { countAttendedEvents, countHostedEvents } from './eventStats.js';
+import { getBadgeCounts } from './badgeCounts.js';
 import { addRewardRole, removeRewardRole } from './onboardUser.js';
 
 const logger = new Logger({ name: 'getUserRoles' });
@@ -18,33 +17,7 @@ export async function getBadges(
   });
   const { guild, user } = interaction;
 
-  const userInfo = await meetupClient.getUserInfo();
-
-  const pastEvents = await getPaginatedData(async (paginationInput) => {
-    const result = await meetupClient.getGroupEvents(paginationInput, {
-      status: ['PAST'],
-    });
-    return result.groupByUrlname.events;
-  });
-
-  // TODO: Optimization opportunity. Filter to events that are after joinDate
-  const rsvpsPerEvent = await Promise.all(
-    pastEvents.map((event) =>
-      getPaginatedData(async (paginationInput) => {
-        const result = await meetupClient.getEventRsvps(
-          event.id,
-          paginationInput,
-          {
-            rsvpStatus: ['YES', 'ATTENDED'],
-          },
-        );
-        return result.event.rsvps;
-      }),
-    ),
-  );
-
-  const hostedCount = countHostedEvents(pastEvents, userInfo.self.id);
-  const attendedCount = countAttendedEvents(rsvpsPerEvent, userInfo.self.id);
+  const { hostedCount, attendedCount } = await getBadgeCounts(meetupClient);
   logger.info(JSON.stringify({ hostedCount, attendedCount }));
 
   const levels: RewardRoleLevels[] = [500, 100, 50, 20, 5, 1];
