@@ -42,7 +42,7 @@ const buttonInteraction = () =>
 const slashInteraction = () =>
   ({
     ...base(),
-    commandName: 'meetup_self_onboard',
+    commandName: 'meetup_get_token',
     isButton: () => false,
   }) as unknown as CommandInteraction;
 
