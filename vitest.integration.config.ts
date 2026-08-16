@@ -6,7 +6,9 @@ export default defineConfig({
   test: {
     environment: 'node',
     include: ['tst/integration/**/*.test.ts'],
-    exclude: ['**/node_modules/**', '**/dist/**'],
+    // Runs once per test file: gives each a cold cache (see setup.ts).
+    setupFiles: ['tst/integration/setup.ts'],
+    exclude: ['**/node_modules/**', '**/dist/**', '**/setup.ts'],
     testTimeout: 20000,
     env: {
       DISCORD_CLIENT_ID: 'discord-client-id',
