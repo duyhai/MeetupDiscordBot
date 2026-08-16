@@ -37,6 +37,21 @@ export function describeInteraction(
  * 2. Error handling: Retriable or fatal
  * @param commandFn Lambda for command implementation
  */
+/**
+ * Commands whose final act is showing the member something -- "you still need
+ * to authorize Discord, press the button again" -- call this so the wrapper's
+ * cleanup leaves that reply on screen. Without it a successful return deletes
+ * the ephemeral progress reply, taking the guidance with it and leaving the
+ * member staring at a message that simply vanished.
+ */
+const repliesToKeep = new WeakSet<object>();
+
+export function keepReplyVisible(
+  interaction: ButtonInteraction | CommandInteraction | ModalSubmitInteraction,
+) {
+  repliesToKeep.add(interaction);
+}
+
 export async function discordCommandWrapper(
   interaction: ButtonInteraction | CommandInteraction | ModalSubmitInteraction,
   commandFn: () => Promise<void>,
@@ -51,8 +66,11 @@ export async function discordCommandWrapper(
     // Deleting the ephemeral progress reply is cleanup, not part of the
     // command: its failure (e.g. interaction token expiry) must not turn a
     // successful command into a false "failed" alert.
+    const keepReply = repliesToKeep.delete(interaction);
     try {
-      await message.delete();
+      if (!keepReply) {
+        await message.delete();
+      }
     } catch (deleteError: unknown) {
       logger.warn(
         `Could not delete progress reply for ${action}: ${String(deleteError)}`,
