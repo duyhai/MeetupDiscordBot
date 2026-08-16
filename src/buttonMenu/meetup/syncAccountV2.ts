@@ -29,7 +29,7 @@ import {
 import { logActivity } from '../../lib/helpers/discordLogger.js';
 import { waitForOAuthTokens } from '../../lib/helpers/oauthWait.js';
 import { ApplicationCache } from '../../util/cache.js';
-import { discordCommandWrapper } from '../../util/discord.js';
+import { discordCommandWrapper, keepReplyVisible } from '../../util/discord.js';
 
 const logger = new Logger({ name: 'MeetupSyncAccount' });
 
@@ -116,6 +116,9 @@ export class MeetupSyncAccountCommandsV2 {
             content: strings.notFinished(waitResult.pendingHop),
             components: [],
           });
+          // Without this the wrapper deletes the reply we just wrote, and the
+          // member watches it disappear instead of reading how to finish.
+          keepReplyVisible(interaction);
           return;
         }
         rawDiscordTokens = waitResult.rawDiscordTokens;
