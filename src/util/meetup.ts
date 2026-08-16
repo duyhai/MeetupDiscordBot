@@ -23,8 +23,8 @@ const OAUTH_HOP_TIMEOUT_MS = 3 * 60 * 1000;
 const strings = {
   notFinishedButton:
     "You haven't finished connecting your Meetup account yet. Once you've " +
-    'authorized, press **Try again** below and it will pick up right where ' +
-    'you left off.',
+    'authorized, press **Link Meetup Account** again and it will pick up ' +
+    'right where you left off.',
   notFinishedCommand:
     "You haven't finished connecting your Meetup account yet. Once you've " +
     'authorized, run the command again and it will pick up right where you ' +
@@ -43,22 +43,15 @@ const strings = {
 async function showRetry(
   interaction: ButtonInteraction | CommandInteraction | ModalSubmitInteraction,
 ) {
-  const retryRow = interaction.isButton()
-    ? [
-        new ActionRowBuilder<MessageActionRowComponentBuilder>().addComponents(
-          new ButtonBuilder()
-            .setLabel('Try again')
-            .setEmoji('🔄')
-            .setStyle(ButtonStyle.Primary)
-            .setCustomId(interaction.customId),
-        ),
-      ]
-    : [];
   await interaction.editReply({
     content: interaction.isButton()
       ? strings.notFinishedButton
       : strings.notFinishedCommand,
-    components: retryRow,
+    // No retry button: Discord buttons either open a URL or notify the bot,
+    // never both, so a retry button could only regenerate this same message
+    // with the authorization link one extra click later. Pointing at the
+    // Link Meetup Account button they already know is fewer steps.
+    components: [],
   });
   // discordCommandWrapper deletes the progress reply on success; this reply
   // IS the outcome, so it has to survive that cleanup.
