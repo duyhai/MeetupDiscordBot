@@ -74,7 +74,7 @@ describe('getUserRoles', () => {
     });
 
     const addServerRoleMock = vi.mocked(onboardUser.addServerRole);
-    await getUserRoles(meetupClient, interaction);
+    const granted = await getUserRoles(meetupClient, interaction);
 
     expect(addServerRoleMock).toHaveBeenCalledWith(
       interaction.guild,
@@ -86,10 +86,10 @@ describe('getUserRoles', () => {
       interaction.user.id,
       'guest_host',
     );
-    expect(interaction.followUp).toHaveBeenCalledWith({
-      content: `Your Meetup roles are all set up based on your Meetup status!`,
-      ephemeral: true,
-    });
+    // The helper no longer announces itself; the caller folds this into one
+    // summary, so what matters is which roles it reports granting.
+    expect(granted).toEqual(['Organizer', 'Guest Host']);
+    expect(interaction.followUp).not.toHaveBeenCalled();
   });
 
   it('should handle non-member user', async () => {

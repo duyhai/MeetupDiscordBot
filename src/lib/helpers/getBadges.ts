@@ -2,19 +2,20 @@ import { ButtonInteraction, CommandInteraction } from 'discord.js';
 import { Logger } from 'tslog';
 import { RewardRoleLevels } from '../../constants.js';
 import { GqlMeetupClient } from '../client/meetup/gqlClient.js';
-import { getBadgeCounts } from './badgeCounts.js';
+import { BadgeCounts, getBadgeCounts } from './badgeCounts.js';
 import { addRewardRole, removeRewardRole } from './onboardUser.js';
 
 const logger = new Logger({ name: 'getUserRoles' });
 
+/**
+ * Applies the activity badges and reports the counts behind them, so the
+ * caller can fold them into one summary.
+ */
 export async function getBadges(
   meetupClient: GqlMeetupClient,
   interaction: CommandInteraction | ButtonInteraction,
-) {
+): Promise<BadgeCounts> {
   logger.info(`Getting badges for ${interaction.user.username}`);
-  await interaction.editReply({
-    content: 'Sit tight! Fetching data.',
-  });
   const { guild, user } = interaction;
 
   const { hostedCount, attendedCount } = await getBadgeCounts(meetupClient);
@@ -31,8 +32,5 @@ export async function getBadges(
   await addRewardRole(guild, user.id, 'hosting', hostingRewards);
   await addRewardRole(guild, user.id, 'attendance', attendanceRewards);
 
-  await interaction.followUp({
-    content: `Added Discord badges based on Meetup activity! Hosted: ${hostedCount} Attended: ${attendedCount}`,
-    ephemeral: true,
-  });
+  return { hostedCount, attendedCount };
 }

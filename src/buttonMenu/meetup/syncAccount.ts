@@ -14,6 +14,7 @@ import { addToChannel } from '../../lib/helpers/channel.js';
 import { getBadges } from '../../lib/helpers/getBadges.js';
 import { getUserRoles } from '../../lib/helpers/getUserRoles.js';
 import { selfOnboardUser } from '../../lib/helpers/onboardUser.js';
+import { buildVerificationSummary } from '../../lib/helpers/verificationSummary.js';
 import { discordCommandWrapper } from '../../util/discord.js';
 import { withMeetupClient } from '../../util/meetup.js';
 
@@ -42,9 +43,29 @@ export class MeetupSyncAccountCommands {
   async meetupSyncAccountEventHandler(interaction: ButtonInteraction) {
     await discordCommandWrapper(interaction, async () => {
       await withMeetupClient(interaction, async (meetupClient) => {
-        await selfOnboardUser(meetupClient, interaction);
-        await getUserRoles(meetupClient, interaction);
-        await getBadges(meetupClient, interaction);
+        await interaction.editReply({ content: 'Sit tight! Fetching data.' });
+        const { meetupName, meetupMemberUrl } = await selfOnboardUser(
+          meetupClient,
+          interaction,
+        );
+        const rolesGranted = await getUserRoles(meetupClient, interaction);
+        const { hostedCount, attendedCount } = await getBadges(
+          meetupClient,
+          interaction,
+        );
+        // One answer at the end, rather than a result message per step.
+        await interaction.followUp({
+          embeds: [
+            buildVerificationSummary({
+              meetupName,
+              meetupMemberUrl,
+              rolesGranted,
+              hostedCount,
+              attendedCount,
+            }),
+          ],
+          ephemeral: true,
+        });
       });
     });
   }
