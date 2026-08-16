@@ -14,12 +14,8 @@ import { generateOAuthUrl, RewardRoleLevels } from '../../constants.js';
 import { Tokens } from '../../lib/client/discord/types.js';
 import { DiscordUserClient } from '../../lib/client/discord/userClient.js';
 import { GqlMeetupClient } from '../../lib/client/meetup/gqlClient.js';
-import { getPaginatedData } from '../../lib/client/meetup/paginationHelper.js';
 import { createOAuthState } from '../../lib/client/oauth/state.js';
-import {
-  countAttendedEvents,
-  countHostedEvents,
-} from '../../lib/helpers/eventStats.js';
+import { getBadgeCounts } from '../../lib/helpers/badgeCounts.js';
 import { recordMeetupLink } from '../../lib/helpers/memberLink.js';
 import {
   addRewardRole,
@@ -178,33 +174,7 @@ export class MeetupSyncAccountCommandsV2 {
         content: 'Sit tight! Fetching data.',
       });
 
-      const pastEvents = await getPaginatedData(async (paginationInput) => {
-        const result = await meetupClient.getGroupEvents(paginationInput, {
-          status: ['PAST'],
-        });
-        return result.groupByUrlname.events;
-      });
-
-      const rsvpsPerEvent = await Promise.all(
-        pastEvents.map((event) =>
-          getPaginatedData(async (paginationInput) => {
-            const result = await meetupClient.getEventRsvps(
-              event.id,
-              paginationInput,
-              {
-                rsvpStatus: ['ATTENDED', 'YES'],
-              },
-            );
-            return result.event.rsvps;
-          }),
-        ),
-      );
-
-      const hostedCount = countHostedEvents(pastEvents, userInfo.self.id);
-      const attendedCount = countAttendedEvents(
-        rsvpsPerEvent,
-        userInfo.self.id,
-      );
+      const { hostedCount, attendedCount } = await getBadgeCounts(meetupClient);
       logger.info(JSON.stringify({ hostedCount, attendedCount }));
 
       const levels: RewardRoleLevels[] = [500, 100, 50, 20, 5, 1];
