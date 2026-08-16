@@ -37,14 +37,32 @@ export async function addServerRole(
   await user.roles.add(serverRole);
 }
 
+/**
+ * Grants the reward role for a level, if the member earned one.
+ *
+ * `level` is optional because callers derive it from `levels.find(...)`, which
+ * yields undefined for a member with no hosted/attended events. Bailing out
+ * here is load-bearing: `guild.roles.fetch(undefined)` resolves to a
+ * Collection of EVERY role in the guild, and `roles.add(collection)` then
+ * PATCHes the member with all of them -- @everyone and moderator included --
+ * which Discord rejects with DiscordAPIError[50013] Missing Permissions.
+ */
 export async function addRewardRole(
   guild: Guild,
   userId: string,
   role: RewardRoles,
-  level: RewardRoleLevels,
+  level?: RewardRoleLevels,
 ) {
+  const rewardRoleId =
+    level === undefined ? undefined : REWARD_ROLES[role][level];
+  if (!rewardRoleId) {
+    logger.info(
+      `No ${role} reward role to grant for level ${String(level)}; skipping`,
+    );
+    return;
+  }
   const user = await guild.members.fetch(userId);
-  const rewardRole = await guild.roles.fetch(REWARD_ROLES[role][level]);
+  const rewardRole = await guild.roles.fetch(rewardRoleId);
   await user.roles.add(rewardRole);
 }
 
