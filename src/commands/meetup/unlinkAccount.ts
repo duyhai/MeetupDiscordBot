@@ -10,8 +10,7 @@ import { Logger } from 'tslog';
 import { logActivity } from '../../lib/helpers/discordLogger.js';
 import {
   discordCommandWrapper,
-  hasAnyServerRole,
-  isAdmin,
+  requireModOrOrganizer,
 } from '../../util/discord.js';
 import { ApplicationMemberRepository } from '../../util/memberRepository.js';
 
@@ -45,13 +44,7 @@ export class UnlinkAccountCommands {
     interaction: CommandInteraction,
   ) {
     await discordCommandWrapper(interaction, async () => {
-      const member = await interaction.guild.members.fetch(interaction.user.id);
-      if (
-        !isAdmin(member) &&
-        !hasAnyServerRole(member, ['moderator', 'organizer'])
-      ) {
-        throw new Error(strings.notAllowed);
-      }
+      await requireModOrOrganizer(interaction, strings.notAllowed);
 
       const repo = await ApplicationMemberRepository();
       const row = await repo.findByDiscordId(user.id);
