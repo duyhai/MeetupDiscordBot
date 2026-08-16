@@ -1,4 +1,5 @@
 import { ButtonInteraction } from 'discord.js';
+import crypto from 'crypto';
 import nock from 'nock';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -12,6 +13,11 @@ vi.mock('../../src/lib/helpers/onboardUser.js', () => ({
 
 const OUR_GROUP = '7595882';
 
+// getGroupEvents is cached, and Redis retains entries between runs. A member
+// id unique per execution keeps the cache key fresh, so these assertions see
+// real network traffic rather than a hit left by a previous run.
+const MEMBER_ID = `m-${crypto.randomUUID()}`;
+
 /**
  * Guards the CALL SITE, not the helper.
  *
@@ -21,6 +27,11 @@ const OUR_GROUP = '7595882';
  * one run). Testing the helper in isolation cannot catch that -- only
  * asserting what getBadges actually puts on the wire can.
  */
+// getGroupEvents goes through cachedClientRequest, and CI runs against a real
+// Redis shared by every integration file. A member id unique to this file
+// keeps the cache key distinct, so the request actually reaches the wire
+// where these assertions can see it -- with a shared id, whichever file ran
+// first served the other from cache and the assertion failed only in CI.
 afterEach(() => {
   nock.cleanAll();
 });
@@ -59,12 +70,12 @@ describe('getBadges wiring', () => {
         }
         if (text.includes('eventStatus: PAST')) {
           return {
-            data: { self: { id: 'member-1', rsvps: { totalCount: 327 } } },
+            data: { self: { id: MEMBER_ID, rsvps: { totalCount: 327 } } },
           };
         }
         return {
           data: {
-            self: { id: 'member-1', name: 'M', gender: 'OTHER', memberUrl: '' },
+            self: { id: MEMBER_ID, name: 'M', gender: 'OTHER', memberUrl: '' },
           },
         };
       });
@@ -77,6 +88,6 @@ describe('getBadges wiring', () => {
     expect(all).not.toContain('rsvps(first: $first');
     // ...and the replacement must actually be in use.
     expect(all).toContain('eventStatus: PAST');
-    expect(all).toContain('"hostId":"member-1"');
+    expect(all).toContain(`"hostId":"${MEMBER_ID}"`);
   });
 });
