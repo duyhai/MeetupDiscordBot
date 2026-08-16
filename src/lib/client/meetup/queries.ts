@@ -66,6 +66,29 @@ export const getUserHostedEvents = gql`
   }
 `;
 
+// Attendance history in one request. Verified against the live API: with
+// this filter self.rsvps returns 327 for a member whose unfiltered total is
+// 413, and a different groupId returns 1 -- so eventStatus/groupId genuinely
+// discriminate. rsvpStatus [YES, ATTENDED] matches the per-event filter the
+// group scan used, so the counts keep their existing meaning.
+export const getSelfPastRsvpCount = gql`
+  query ($groupId: ID!) {
+    self {
+      id
+      rsvps(
+        first: 1
+        filter: {
+          groupId: $groupId
+          eventStatus: PAST
+          rsvpStatus: [YES, ATTENDED]
+        }
+      ) {
+        totalCount
+      }
+    }
+  }
+`;
+
 export const getEventRsvps = gql`
   query ($eventId: ID!, $first: Int!, $after: String, $filter: RsvpFilter) {
     event(id: $eventId) {
