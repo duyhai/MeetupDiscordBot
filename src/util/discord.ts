@@ -5,6 +5,7 @@ import {
   CommandInteraction,
   GuildMember,
   ModalSubmitInteraction,
+  MessageFlags,
   PermissionFlagsBits,
   WebhookMessageEditOptions,
 } from 'discord.js';
@@ -56,10 +57,26 @@ export async function discordCommandWrapper(
   interaction: ButtonInteraction | CommandInteraction | ModalSubmitInteraction,
   commandFn: () => Promise<void>,
 ) {
-  const message = await interaction.reply({
-    content: 'Executing command',
-    ephemeral: true,
-  });
+  // A button on one of our own ephemeral replies (the "Try again" retry)
+  // should refresh that message rather than stack another beneath it.
+  // Buttons on PUBLIC messages -- Get Verified, the LGBTQ opt-in -- must not
+  // take this path: update() rewrites the message the component belongs to,
+  // which would edit a channel-wide post for everyone who can see it.
+  const updatesInPlace =
+    interaction.isButton() &&
+    interaction.message.flags.has(MessageFlags.Ephemeral);
+  // reply() yields an InteractionResponse and fetchReply() a Message; the
+  // cleanup below only ever needs delete().
+  let message: { delete: () => Promise<unknown> };
+  if (updatesInPlace) {
+    await interaction.update({ content: 'Executing command', components: [] });
+    message = await interaction.fetchReply();
+  } else {
+    message = await interaction.reply({
+      content: 'Executing command',
+      ephemeral: true,
+    });
+  }
   const action = describeInteraction(interaction);
   try {
     await commandFn();

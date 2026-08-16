@@ -22,6 +22,7 @@ function makeInteraction(overrides: Record<string, unknown> = {}) {
     user: { id: 'user-1', username: 'testUser', toString: () => '<@user-1>' },
     commandName: 'test_command',
     isChatInputCommand: () => true,
+    isButton: () => false,
     reply: vi
       .fn()
       .mockResolvedValue({ delete: vi.fn().mockResolvedValue(undefined) }),

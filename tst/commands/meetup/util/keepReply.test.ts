@@ -22,6 +22,7 @@ function makeInteraction() {
     user: { id: 'u1', username: 'tester', toString: () => '<@u1>' },
     commandName: 'test_command',
     isChatInputCommand: () => true,
+    isButton: () => false,
     reply: vi.fn().mockResolvedValue({ delete: del }),
     editReply: vi.fn().mockResolvedValue(undefined),
   } as unknown as CommandInteraction;

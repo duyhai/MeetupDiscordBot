@@ -21,6 +21,10 @@ export interface OAuthStateRecord {
 
 const stateKey = (state: string) => `${STATE_KEY_PREFIX}${state}`;
 
+// Points at the member's in-flight state so a retry can re-show the same
+// authorization link instead of issuing a new one each press.
+const pendingKey = (discordUserId: string) => `pending-oauth-${discordUserId}`;
+
 async function writeState(
   state: string,
   record: OAuthStateRecord,
@@ -74,4 +78,35 @@ export async function resolveOAuthState(
 export async function consumeOAuthState(state: string): Promise<void> {
   const cache = await ApplicationCache();
   await cache.remove(stateKey(state));
+}
+
+/**
+ * The member's in-flight state, or a fresh one.
+ *
+ * Reusing it means pressing "Try again" hands back the same authorization
+ * link rather than minting another, so a link already open in the member's
+ * browser stays the one that completes the flow.
+ *
+ * A pending marker can outlive the state it names -- the Meetup callback
+ * consumes the state, and the two keys expire independently -- so a marker
+ * that no longer resolves is replaced rather than handed back dead.
+ */
+export async function getOrCreateOAuthState(
+  discordUserId: string,
+): Promise<string> {
+  const cache = await ApplicationCache();
+  const pending = await cache.get(pendingKey(discordUserId));
+  if (pending && (await resolveOAuthState(pending))) {
+    return pending;
+  }
+  const state = await createOAuthState(discordUserId);
+  await cache.set(pendingKey(discordUserId), state);
+  return state;
+}
+
+export async function clearPendingOAuthState(
+  discordUserId: string,
+): Promise<void> {
+  const cache = await ApplicationCache();
+  await cache.remove(pendingKey(discordUserId));
 }

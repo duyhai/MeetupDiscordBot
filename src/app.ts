@@ -8,6 +8,7 @@ import {
   exchangeMeetupCode,
 } from './lib/client/oauth/providers.js';
 import {
+  clearPendingOAuthState,
   consumeOAuthState,
   resolveOAuthState,
 } from './lib/client/oauth/state.js';
@@ -124,6 +125,8 @@ export const meetupConnectCallbackHandler: RequestHandler = (async (
     const cache = await ApplicationCache();
     await cache.set(`${userId}-meetup-tokens`, JSON.stringify(tokens));
     await consumeOAuthState(state);
+    // The flow is done; the next attempt should start a fresh authorization.
+    await clearPendingOAuthState(userId);
     return res.send(getAuthLandingPage('success', strings.meetupSuccess));
   } catch (error) {
     logger.error(`Meetup token exchange failed: ${String(error)}`);

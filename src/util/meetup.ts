@@ -9,7 +9,7 @@ import {
 } from 'discord.js';
 import { Logger } from 'tslog';
 import { generateOAuthUrl } from '../constants.js';
-import { createOAuthState } from '../lib/client/oauth/state.js';
+import { getOrCreateOAuthState } from '../lib/client/oauth/state.js';
 import { Tokens } from '../lib/client/discord/types.js';
 import { GqlMeetupClient } from '../lib/client/meetup/gqlClient.js';
 import { ApplicationCache } from './cache.js';
@@ -68,7 +68,9 @@ async function showRetry(
 async function showMeetupTokenUrl(
   interaction: ButtonInteraction | CommandInteraction | ModalSubmitInteraction,
 ) {
-  const maskedUserId = await createOAuthState(interaction.user.id);
+  // Reused across retries so "Try again" re-shows the same link rather than
+  // superseding one the member may already have open.
+  const maskedUserId = await getOrCreateOAuthState(interaction.user.id);
   // Never log the state itself: it is a bearer credential for this flow.
   logger.info(`Issued OAuth state for ${interaction.user.username}`);
 
