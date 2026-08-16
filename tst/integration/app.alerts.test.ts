@@ -33,28 +33,11 @@ afterEach(() => {
 });
 
 describe('OAuth callback visibility', () => {
-  it('alerts when the authorizing Discord account is not the one that pressed the button', async () => {
-    const state = await createOAuthState('user-mismatch');
-    nock('https://discord.com').post('/api/oauth2/token').reply(200, {
-      access_token: 'discord-access',
-      refresh_token: 'discord-refresh',
-      token_type: 'Bearer',
-      expires_in: 604800,
-    });
-    nock('https://discord.com')
-      .get('/api/v10/users/@me')
-      .reply(200, { id: 'somebody-else' });
-
-    await request(app).get(`/connect/discord/callback?state=${state}&code=c`);
-
-    expect(alertTitles().join()).toMatch(/mismatch/i);
-  });
-
   it('alerts when a token exchange fails', async () => {
     const state = await createOAuthState('user-exchange');
-    nock('https://discord.com').post('/api/oauth2/token').reply(500, {});
+    nock('https://secure.meetup.com').post('/oauth2/access').reply(500, {});
 
-    await request(app).get(`/connect/discord/callback?state=${state}&code=c`);
+    await request(app).get(`/connect/meetup/callback?state=${state}&code=c`);
 
     expect(alertTitles().join()).toMatch(/exchange/i);
   });
@@ -63,15 +46,15 @@ describe('OAuth callback visibility', () => {
     const state = await createOAuthState('user-denied');
 
     await request(app).get(
-      `/connect/discord/callback?state=${state}&error=access_denied`,
+      `/connect/meetup/callback?state=${state}&error=access_denied`,
     );
 
     expect(alertTitles().join()).toMatch(/denied/i);
   });
 
   it('does NOT alert on an expired or unknown state -- stale links and crawlers are not faults', async () => {
-    await request(app).get('/connect/discord/callback?state=nope&code=c');
-    await request(app).get('/connect/discord?state=nope');
+    await request(app).get('/connect/meetup/callback?state=nope&code=c');
+    await request(app).get('/connect/meetup?state=nope');
 
     expect(alertTitles()).toEqual([]);
     expect(activityTitles().join()).toMatch(/expired/i);
@@ -82,7 +65,7 @@ describe('OAuth callback visibility', () => {
     const state = await createOAuthState('user-noclient');
 
     await request(app).get(
-      `/connect/discord/callback?state=${state}&error=access_denied`,
+      `/connect/meetup/callback?state=${state}&error=access_denied`,
     );
 
     expect(vi.mocked(discordLogger.logAlert)).not.toHaveBeenCalled();

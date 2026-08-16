@@ -17,8 +17,6 @@ export interface OAuthStateRecord {
    * the Discord account the state is bound to. False for the V1 flow, which
    * links straight to Meetup and has no Discord hop to verify with.
    */
-  requiresDiscordVerification: boolean;
-  discordVerified: boolean;
 }
 
 const stateKey = (state: string) => `${STATE_KEY_PREFIX}${state}`;
@@ -37,16 +35,9 @@ async function writeState(
  * flow never depends on cookies (the old grant/express-session flow broke
  * whenever iOS finished the round-trip in a different browser context).
  */
-export async function createOAuthState(
-  discordUserId: string,
-  { requiresDiscordVerification = false } = {},
-): Promise<string> {
+export async function createOAuthState(discordUserId: string): Promise<string> {
   const state = uuidv4();
-  await writeState(state, {
-    discordUserId,
-    requiresDiscordVerification,
-    discordVerified: false,
-  });
+  await writeState(state, { discordUserId });
   return state;
 }
 
@@ -66,37 +57,12 @@ export async function resolveOAuthState(
     if (typeof parsed?.discordUserId !== 'string') {
       return undefined;
     }
-    return {
-      discordUserId: parsed.discordUserId,
-      requiresDiscordVerification: parsed.requiresDiscordVerification === true,
-      discordVerified: parsed.discordVerified === true,
-    };
+    return { discordUserId: parsed.discordUserId };
   } catch {
-    // States issued before this shape existed are the bare Discord ID. They
-    // belong to in-flight V1 flows during a deploy, which never required
-    // Discord verification.
-    return {
-      discordUserId: raw,
-      requiresDiscordVerification: false,
-      discordVerified: false,
-    };
+    // States issued before this shape existed are the bare Discord ID, from
+    // flows still in flight across a deploy.
+    return { discordUserId: raw };
   }
-}
-
-/**
- * Records that the Discord callback confirmed the OAuth'd account matches the
- * user this state was issued to. Without this the Meetup hop of a V2 flow
- * refuses to proceed, so a crafted `/connect/meetup?state=…` link cannot bind
- * someone else's Meetup account to the sender's Discord ID.
- */
-export async function markOAuthStateDiscordVerified(
-  state: string,
-): Promise<void> {
-  const record = await resolveOAuthState(state);
-  if (!record) {
-    return;
-  }
-  await writeState(state, { ...record, discordVerified: true });
 }
 
 /**

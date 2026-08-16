@@ -1,62 +1,42 @@
 import { describe, expect, it } from 'vitest';
 
-import { waitForOAuthTokens } from '../../../src/lib/helpers/oauthWait.js';
+import { waitForMeetupTokens } from '../../../src/lib/helpers/oauthWait.js';
 
-const KEY_DISCORD = 'user-1-discord-tokens';
-const KEY_MEETUP = 'user-1-meetup-tokens';
+const KEY = 'user-1-meetup-tokens';
 
-// A short timeout keeps the suite fast; production passes 3 minutes.
+// A short timeout keeps the suite fast; production waits 3 minutes.
 const opts = { intervalMs: 5, timeoutMs: 40 };
 
-describe('waitForOAuthTokens', () => {
-  it('returns both token blobs once they land', async () => {
+describe('waitForMeetupTokens', () => {
+  it('returns the tokens once they land', async () => {
     const store = new Map<string, string>();
-    // Both arrive shortly after the wait starts.
-    setTimeout(() => store.set(KEY_DISCORD, 'd-tok'), 5);
-    setTimeout(() => store.set(KEY_MEETUP, 'm-tok'), 10);
+    setTimeout(() => store.set(KEY, 'm-tok'), 5);
 
-    const result = await waitForOAuthTokens(
-      async (key) => store.get(key),
-      { discordKey: KEY_DISCORD, meetupKey: KEY_MEETUP },
-      { ...opts, timeoutMs: 500 },
-    );
-
-    expect(result).toEqual({
-      status: 'ready',
-      rawDiscordTokens: 'd-tok',
-      rawMeetupTokens: 'm-tok',
+    const result = await waitForMeetupTokens(async (k) => store.get(k), KEY, {
+      ...opts,
+      timeoutMs: 500,
     });
+
+    expect(result).toEqual({ status: 'ready', rawTokens: 'm-tok' });
   });
 
-  it('reports discord as the pending hop when nothing arrives', async () => {
-    const result = await waitForOAuthTokens(
-      async () => undefined,
-      { discordKey: KEY_DISCORD, meetupKey: KEY_MEETUP },
-      opts,
-    );
+  it('returns pending rather than throwing when the member has not finished', async () => {
+    // Not a fault: tokens outlive the interaction, so the next attempt picks
+    // up instantly. Throwing here used to post a red alert for ordinary
+    // human slowness.
+    const result = await waitForMeetupTokens(async () => undefined, KEY, opts);
 
-    expect(result).toEqual({ status: 'pending', pendingHop: 'Discord' });
+    expect(result).toEqual({ status: 'pending' });
   });
 
-  it('reports meetup as the pending hop when only discord finished', async () => {
-    const store = new Map([[KEY_DISCORD, 'd-tok']]);
+  it('returns immediately when tokens are already cached', async () => {
+    const started = Date.now();
+    const result = await waitForMeetupTokens(async () => 'cached', KEY, {
+      intervalMs: 1000,
+      timeoutMs: 5000,
+    });
 
-    const result = await waitForOAuthTokens(
-      async (key) => store.get(key),
-      { discordKey: KEY_DISCORD, meetupKey: KEY_MEETUP },
-      opts,
-    );
-
-    expect(result).toEqual({ status: 'pending', pendingHop: 'Meetup' });
-  });
-
-  it('never throws on timeout -- an unfinished authorization is not a fault', async () => {
-    await expect(
-      waitForOAuthTokens(
-        async () => undefined,
-        { discordKey: KEY_DISCORD, meetupKey: KEY_MEETUP },
-        opts,
-      ),
-    ).resolves.toMatchObject({ status: 'pending' });
+    expect(result).toEqual({ status: 'ready', rawTokens: 'cached' });
+    expect(Date.now() - started).toBeLessThan(500);
   });
 });
