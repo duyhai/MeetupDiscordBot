@@ -164,7 +164,7 @@ export async function onboardUser(
 export async function selfOnboardUser(
   meetupClient: GqlMeetupClient,
   interaction: CommandInteraction | ButtonInteraction,
-) {
+): Promise<{ meetupMemberUrl: string; meetupName: string }> {
   const { user: discordUser } = interaction;
 
   const userInfo = await meetupClient.getUserInfo();
@@ -218,8 +218,5 @@ export async function selfOnboardUser(
     userInfo.self.gender,
     cleanedName,
   );
-  await interaction.followUp({
-    content: strings.welcomeMsg(discordUser),
-    ephemeral: true,
-  });
+  return { meetupName: name, meetupMemberUrl: userInfo.self.memberUrl };
 }

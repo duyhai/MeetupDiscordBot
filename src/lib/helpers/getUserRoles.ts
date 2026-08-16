@@ -7,14 +7,17 @@ import { addServerRole } from './onboardUser.js';
 
 const logger = new Logger({ name: 'getUserRoles' });
 
+/**
+ * Grants the Meetup-derived server roles and reports which ones were added,
+ * so the caller can fold them into one summary rather than each step
+ * announcing itself.
+ */
 export async function getUserRoles(
   meetupClient: GqlMeetupClient,
   interaction: CommandInteraction | ButtonInteraction,
-) {
+): Promise<string[]> {
+  const rolesGranted: string[] = [];
   logger.info(`Getting user roles for ${interaction.user.username}`);
-  await interaction.editReply({
-    content: 'Sit tight! Fetching data.',
-  });
 
   const membershipInfo = await meetupClient.getUserMembershipInfo();
   if (!membershipInfo.groupByUrlname.isMember) {
@@ -34,8 +37,10 @@ export async function getUserRoles(
     membershipInfo.groupByUrlname.membershipMetadata.status === 'LEADER'
   ) {
     await addServerRole(interaction.guild, interaction.user.id, 'organizer');
+    rolesGranted.push('Organizer');
 
     await addServerRole(interaction.guild, interaction.user.id, 'guest_host');
+    rolesGranted.push('Guest Host');
     logger.info(
       `Organizer and guest host roles added to: ${interaction.user.username}`,
     );
@@ -56,11 +61,9 @@ export async function getUserRoles(
     );
     if (getUserHostedEvents.length > 0) {
       await addServerRole(interaction.guild, interaction.user.id, 'guest_host');
+      rolesGranted.push('Guest Host');
       logger.info(`Guest host role added to: ${interaction.user.username}`);
     }
   }
-  await interaction.followUp({
-    content: `Your Meetup roles are all set up based on your Meetup status!`,
-    ephemeral: true,
-  });
+  return rolesGranted;
 }
