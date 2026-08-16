@@ -5,7 +5,7 @@ import { Logger } from 'tslog';
 import './buttonMenu';
 import './contextMenu';
 import './commands';
-import app from './app.js';
+import app, { setOAuthAlertClient } from './app.js';
 import Configuration from './configuration.js';
 import { startUnlinkedDigestScheduler } from './lib/helpers/unlinkedDigest.js';
 
@@ -47,6 +47,9 @@ client.once('clientReady', async () => {
   await client.initApplicationCommands();
 
   startUnlinkedDigestScheduler(client);
+  // The express OAuth routes run outside discordCommandWrapper, so without a
+  // client their failures reach nobody. Hand it over now that we can post.
+  setOAuthAlertClient(client);
 
   logger.info('Bot started');
 });

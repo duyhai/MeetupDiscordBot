@@ -26,15 +26,24 @@ import {
   onboardUserCommon,
   removeRewardRole,
 } from '../../lib/helpers/onboardUser.js';
+import { logActivity } from '../../lib/helpers/discordLogger.js';
+import { waitForOAuthTokens } from '../../lib/helpers/oauthWait.js';
 import { ApplicationCache } from '../../util/cache.js';
 import { discordCommandWrapper } from '../../util/discord.js';
-import { spinWait } from '../../util/spinWait.js';
 
 const logger = new Logger({ name: 'MeetupSyncAccount' });
 
 const SYNC_ACCOUNT_BUTTON_ID = 'sync_meetup_account_v2';
 
 const OAUTH_HOP_TIMEOUT_MS = 3 * 60 * 1000;
+
+const strings = {
+  notFinished: (hop: string) =>
+    `You haven't finished connecting yet — you still need to authorize ` +
+    `**${hop}**. Once you've done both, press **Link Meetup Account** again ` +
+    `and it'll pick up right where you left off (your authorizations are ` +
+    `remembered for hours).`,
+};
 
 @Discord()
 export class MeetupSyncAccountCommandsV2 {
@@ -83,22 +92,34 @@ export class MeetupSyncAccountCommandsV2 {
           content: 'Please connect your Discord and Meetup accounts:',
           components: [row],
         });
-        // Generous windows: on iOS the flow hands off from Discord's in-app
+        // Generous window: on iOS the flow hands off from Discord's in-app
         // browser to Safari, where the user may have to sign in to Discord,
         // consent, then sign in to Meetup. The interaction token lasts ~15
-        // minutes, so these fit well inside the budget.
-        rawDiscordTokens = await spinWait(() => cache.get(discordTokenKey), {
-          timeoutMs: OAUTH_HOP_TIMEOUT_MS,
-          message:
-            'Timeout waiting for Discord authentication. Please try again',
-          intervalMs: 1000,
-        });
-        rawMeetupTokens = await spinWait(() => cache.get(meetupTokenKey), {
-          timeoutMs: OAUTH_HOP_TIMEOUT_MS,
-          message:
-            'Timeout waiting for Meetup authentication. Please try again',
-          intervalMs: 1000,
-        });
+        // minutes, so this fits well inside the budget.
+        const waitResult = await waitForOAuthTokens(
+          (key) => cache.get(key),
+          { discordKey: discordTokenKey, meetupKey: meetupTokenKey },
+          { timeoutMs: OAUTH_HOP_TIMEOUT_MS, intervalMs: 1000 },
+        );
+        if (waitResult.status === 'pending') {
+          // Not a failure: the tokens outlive this interaction, so pressing
+          // the button again after authorizing completes instantly. Reported
+          // as activity so the alerts channel stays reserved for faults.
+          logger.info(
+            `${interaction.user.username} has not finished the ${waitResult.pendingHop} hop yet`,
+          );
+          await logActivity(interaction.client, {
+            title: 'Onboarding not finished yet',
+            description: `${interaction.user.toString()} still needs to authorize **${waitResult.pendingHop}**.`,
+          });
+          await interaction.editReply({
+            content: strings.notFinished(waitResult.pendingHop),
+            components: [],
+          });
+          return;
+        }
+        rawDiscordTokens = waitResult.rawDiscordTokens;
+        rawMeetupTokens = waitResult.rawMeetupTokens;
       }
       const discordTokens = JSON.parse(rawDiscordTokens) as Tokens;
       const meetupTokens = JSON.parse(rawMeetupTokens) as Tokens;
