@@ -61,7 +61,7 @@ describe('withMeetupClient when the member has not finished authorizing', () => 
     vi.clearAllMocks();
   });
 
-  it('offers a retry button that re-runs the button they pressed', async () => {
+  it('points at the Link Meetup Account button, with no components of its own', async () => {
     const interaction = buttonInteraction();
     const commandFn = vi.fn();
 
@@ -70,11 +70,10 @@ describe('withMeetupClient when the member has not finished authorizing', () => 
     // The command body must not run without a token.
     expect(commandFn).not.toHaveBeenCalled();
     const reply = lastEditReply(interaction);
-    expect(reply.content).toMatch(/try again/i);
-    // Re-using the originating custom id means the retry re-enters the very
-    // same handler, with no registry of retry actions to keep in sync.
-    const button = reply.components?.[0].components[0].data;
-    expect(button?.custom_id).toBe('sync_meetup_account');
+    expect(reply.content).toMatch(/link meetup account/i);
+    // A retry button could only regenerate this same message with the
+    // authorization link one click later, so the reply carries none.
+    expect(reply.components ?? []).toHaveLength(0);
     // The wrapper deletes the reply on success unless told otherwise.
     expect(keepReplyVisible).toHaveBeenCalledWith(interaction);
   });
