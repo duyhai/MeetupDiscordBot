@@ -14,7 +14,6 @@ import {
   getEvent,
   getEventRsvps,
   getGroupEvents,
-  getUserAttendedEvents,
   getUserHostedEvents,
   getUserInfo,
   getUserMembershipInfo,
@@ -99,24 +98,6 @@ export class GqlMeetupClient {
         urlname: Configuration.meetup.groupUrlName,
       });
       logger.info(`getUserMembershipInfo result: ${JSON.stringify(result)}`);
-      return result;
-    } catch (error) {
-      logger.error(error);
-      throw error;
-    }
-  }
-
-  public async getUserAttendedEvents(input: PaginationInput) {
-    logger.info(
-      `Calling getUserAttendedEvents with input: ${JSON.stringify(input)}`,
-    );
-    try {
-      const result = await this.client.request<
-        GetUserHostedEventsResponse,
-        GetUserHostedEventsInput
-      >(getUserAttendedEvents, {
-        ...input,
-      });
       return result;
     } catch (error) {
       logger.error(error);
