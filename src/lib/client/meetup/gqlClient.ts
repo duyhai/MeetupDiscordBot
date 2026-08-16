@@ -14,6 +14,7 @@ import {
   getEvent,
   getEventRsvps,
   getGroupEvents,
+  getSelfPastRsvpCount,
   getUserHostedEvents,
   getUserInfo,
   getUserMembershipInfo,
@@ -99,6 +100,20 @@ export class GqlMeetupClient {
       });
       logger.info(`getUserMembershipInfo result: ${JSON.stringify(result)}`);
       return result;
+    } catch (error) {
+      logger.error(error);
+      throw error;
+    }
+  }
+
+  public async getSelfPastRsvpCount(groupId: string) {
+    logger.info(`Calling getSelfPastRsvpCount for group ${groupId}`);
+    try {
+      const result = await this.client.request<
+        { self: { id: string; rsvps: { totalCount: number } } },
+        { groupId: string }
+      >(getSelfPastRsvpCount, { groupId });
+      return result.self.rsvps.totalCount;
     } catch (error) {
       logger.error(error);
       throw error;
