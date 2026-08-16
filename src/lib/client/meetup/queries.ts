@@ -66,40 +66,6 @@ export const getUserHostedEvents = gql`
   }
 `;
 
-// Mirror of getUserHostedEvents for the events a member attended rather than
-// hosted. Member-scoped, so it spans every group they belong to -- callers
-// must filter on group id.
-export const getUserAttendedEvents = gql`
-  query ($first: Int!, $after: String) {
-    self {
-      id
-      memberEvents(first: $first, after: $after, isHosting: false) {
-        pageInfo {
-          hasNextPage
-          hasPreviousPage
-          startCursor
-          endCursor
-        }
-        totalCount
-        edges {
-          node {
-            id
-            dateTime
-            eventUrl
-            title
-            group {
-              id
-            }
-            networkEvent {
-              isAnnounced
-            }
-          }
-        }
-      }
-    }
-  }
-`;
-
 export const getEventRsvps = gql`
   query ($eventId: ID!, $first: Int!, $after: String, $filter: RsvpFilter) {
     event(id: $eventId) {
