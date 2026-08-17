@@ -48,6 +48,23 @@ describe('annotateReverts', () => {
     expect(out[0].revertedAt).toBeUndefined();
   });
 
+  it('annotates only the original, not the change that reverted it', () => {
+    const out = annotateReverts([
+      change({ id: '1', oldValue: 'aaa', newValue: 'bbb' }),
+      change({
+        id: '2',
+        oldValue: 'bbb',
+        newValue: 'aaa',
+        detectedAt: at('2026-08-16T18:31:00Z'),
+      }),
+    ]);
+
+    // Direction matters: without the ordering check the later change matches
+    // the earlier one and reports a revert timestamp that precedes it.
+    expect(out[0].revertedAt).toEqual(at('2026-08-16T18:31:00Z'));
+    expect(out[1].revertedAt).toBeUndefined();
+  });
+
   it("does not treat another member's change as a revert", () => {
     const out = annotateReverts([
       change({ id: '1', discordUserId: 'u1' }),
