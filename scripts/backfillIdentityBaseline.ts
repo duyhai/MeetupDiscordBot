@@ -21,10 +21,29 @@ const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers],
 });
 
+// Guards only the wait to reach `clientReady`, not the sweep itself: the
+// sweep walks ~2,008 members sequentially and can legitimately take minutes.
+// A stalled handshake (DNS blackhole, firewall silently dropping packets,
+// TLS hang) makes `client.login()` neither resolve nor reject, so without
+// this the script would sit forever with no output on a production dyno
+// where nobody is watching it interactively. 60s is generously more than a
+// healthy gateway connection ever takes, so it can't false-positive on a
+// slow-but-working handshake.
+const READY_TIMEOUT_MS = 60_000;
+const readyTimeout = setTimeout(() => {
+  logger.error(
+    `Timed out after ${READY_TIMEOUT_MS}ms waiting for clientReady — connection ` +
+      'likely stalled (not a login error, which would have already exited). Exiting.',
+  );
+  process.exit(1);
+}, READY_TIMEOUT_MS);
+readyTimeout.unref();
+
 // discord.js >=14.16 types listeners as returning `void` (not Awaitable<void>);
 // async handlers are still the standard discordx pattern, so suppress the rule.
 // eslint-disable-next-line @typescript-eslint/no-misused-promises
 client.once('clientReady', async () => {
+  clearTimeout(readyTimeout);
   try {
     const result = await runIdentitySweep(client, 'backfill');
     logger.info(
@@ -38,6 +57,7 @@ client.once('clientReady', async () => {
 });
 
 client.login(process.env.DISCORD_API_KEY).catch((error) => {
+  clearTimeout(readyTimeout);
   logger.error(`Login failed: ${String(error)}`);
   process.exit(1);
 });
