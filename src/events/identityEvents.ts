@@ -33,6 +33,15 @@ export function registerIdentityEvents(client: Client): void {
     const members = [...client.guilds.cache.values()]
       .map((guild) => guild.members.cache.get(after.id))
       .filter((member): member is GuildMember => Boolean(member));
+    if (members.length === 0) {
+      // The cache is warmed at boot (see index.ts), so this should be rare.
+      // Logging it keeps the failure mode observable: silently dropping the
+      // change would look identical to no change happening at all.
+      logger.warn(
+        `userUpdate for ${after.id}: no cached guild member, change not recorded until the next sweep`,
+      );
+      return;
+    }
     await Promise.all(members.map((member) => safeRecord(member)));
   });
 

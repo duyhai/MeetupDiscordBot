@@ -57,6 +57,35 @@ describe('registerIdentityEvents', () => {
     expect(handlers.has('userUpdate')).toBe(true);
   });
 
+  it('records the cached guild member on userUpdate', async () => {
+    const { client, handlers } = fakeClient();
+    const cached = member('u1');
+    (client.guilds.cache as unknown as Map<string, unknown>).set('g1', {
+      members: { cache: new Map([['u1', cached]]) },
+    });
+    registerIdentityEvents(client);
+
+    await handlers.get('userUpdate')?.({ id: 'u1' }, { id: 'u1' });
+
+    // Global avatar/username changes only ever arrive here, and only the
+    // per-guild member carries the baseline to diff against.
+    expect(recordIdentityFor).toHaveBeenCalledTimes(1);
+  });
+
+  it('records nothing when the member is not in the guild cache', async () => {
+    const { client, handlers } = fakeClient();
+    registerIdentityEvents(client);
+
+    await handlers.get('userUpdate')?.(
+      { id: 'u-uncached' },
+      {
+        id: 'u-uncached',
+      },
+    );
+
+    expect(recordIdentityFor).not.toHaveBeenCalled();
+  });
+
   it('survives a handler error without crashing the process', async () => {
     vi.mocked(recordIdentityFor).mockRejectedValueOnce(new Error('db down'));
     const { client, handlers } = fakeClient();
