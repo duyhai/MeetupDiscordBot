@@ -42,6 +42,10 @@ export async function recordIdentityFor(
   }
 
   const thumbs = await fetchChangeThumbs(changes, member.guild.id);
+  // Record before advancing the baseline, not after. Crash here and the
+  // next sweep just re-diffs and records a harmless duplicate row. Reversed,
+  // a crash would advance the baseline while losing the evidence for good --
+  // the old snapshot is gone, so the change can't be reconstructed.
   await repo.recordChanges(changes, source, thumbs);
   await repo.putSnapshot(after);
   logger.info(
