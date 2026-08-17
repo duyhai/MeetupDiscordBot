@@ -8,10 +8,20 @@ import {
   SERVER_ROLES,
 } from '../../constants.js';
 import { ApplicationCache } from '../../util/cache.js';
-import { isAdmin } from '../../util/discord.js';
+import { describeInteraction, isAdmin, linkStr } from '../../util/discord.js';
 import { GqlMeetupClient } from '../client/meetup/gqlClient.js';
 import { MemberGender } from '../client/meetup/types.js';
+import { logAlert } from './discordLogger.js';
 import { recordManualOnboard, recordMeetupLink } from './memberLink.js';
+
+/**
+ * A Meetup account that is not in the group. The alert naming the person is
+ * posted where this is thrown, so discordCommandWrapper must skip its generic
+ * failure alert rather than report the same event twice.
+ */
+export class NonMemberError extends Error {
+  readonly alertHandled = true;
+}
 
 const strings = {
   welcomeMsg: (user: User) =>
@@ -195,10 +205,34 @@ export async function selfOnboardUser(
     await cache.remove(`${interaction.user.id}-meetup-tokens`);
 
     logger.warn(
-      `Non-member user failed to onboard: ${interaction.user.username}. 
+      `Non-member user failed to onboard: ${interaction.user.username}.
             Membership info: ${JSON.stringify(membershipInfo)}`,
     );
-    throw new Error(
+
+    // These are real people who wanted in and bounced off, so the alert
+    // carries enough to reach them: the Meetup account they authorized with
+    // is theirs even though they never joined the group.
+    const { id: meetupId, name: meetupName, memberUrl } = userInfo.self;
+    const profile = memberUrl
+      ? linkStr(meetupName, memberUrl)
+      : `${meetupName} (no profile url)`;
+
+    await logAlert(interaction.client, {
+      title: 'Non-member tried to verify',
+      description: `${discordUser.toString()} (${
+        discordUser.username
+      }) authorized Meetup as ${profile} but is not in the group.`,
+      fields: [
+        { inline: true, name: 'Meetup ID', value: meetupId },
+        {
+          inline: true,
+          name: 'Attempt',
+          value: describeInteraction(interaction),
+        },
+      ],
+    });
+
+    throw new NonMemberError(
       `You're not a member on Meetup. Please join the group and try onboarding again`,
     );
   }
