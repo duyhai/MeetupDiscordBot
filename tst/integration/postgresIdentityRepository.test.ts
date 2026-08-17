@@ -190,6 +190,46 @@ describe.skipIf(!POSTGRES_AVAILABLE)('PostgresIdentityRepository', () => {
     );
   });
 
+  it('measures a range without transferring the thumbnails', async () => {
+    const snap = freshSnapshot();
+    const thumb = Buffer.alloc(1234, 7);
+    const start = new Date(Date.now() - 1000);
+
+    await repo.recordChanges(
+      [
+        {
+          discordUserId: snap.discordUserId,
+          field: 'user_avatar',
+          oldValue: 'aaa',
+          newValue: 'bbb',
+        },
+      ],
+      'event',
+      new Map([
+        [
+          `${snap.discordUserId}:user_avatar`,
+          { oldThumb: null, newThumb: thumb },
+        ],
+      ]),
+    );
+
+    const all = await repo.measureChangesBetween(
+      start,
+      new Date(Date.now() + 60_000),
+    );
+    const none = await repo.measureChangesBetween(
+      new Date(Date.now() + 60_000),
+      new Date(Date.now() + 120_000),
+    );
+
+    // octet_length over BYTEA must report the stored byte count, not the hex
+    // representation's length -- a 2x error here would refuse valid ranges.
+    expect(all.thumbBytes).toBeGreaterThanOrEqual(thumb.length);
+    expect(all.changeCount).toBeGreaterThan(0);
+    // coalesce, not NULL: an empty range must measure zero, not NaN.
+    expect(none).toEqual({ changeCount: 0, thumbBytes: 0 });
+  });
+
   it('reports storage stats', async () => {
     const stats = await repo.storageStats();
 
