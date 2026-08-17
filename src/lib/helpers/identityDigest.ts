@@ -178,9 +178,21 @@ export async function runIdentityDigestOnce(client: Client): Promise<void> {
     }
     logger.info(`Identity digest ran: ${changes.length} changes`);
   } catch (error) {
-    // Release the day so the next hourly tick, or a restart inside the digest
-    // hour, retries instead of silently skipping the day entirely.
-    await cache.remove(claimKey);
+    // Release the day so a restart inside the digest hour retries. That is
+    // the only retry path: `setInterval` is anchored to process boot, so the
+    // next hourly tick lands at the same minute of hour 19 and
+    // `shouldRunIdentityDigestNow` rejects it -- without a restart, the day
+    // is simply skipped, not retried. Guard the release itself: if the cache
+    // is unavailable, `remove` can throw too, and letting that escape would
+    // replace the original failure with a cache error while still leaving
+    // the claim consumed.
+    try {
+      await cache.remove(claimKey);
+    } catch (releaseError) {
+      logger.error(
+        `Failed to release identity digest claim: ${String(releaseError)}`,
+      );
+    }
     throw error;
   }
 }

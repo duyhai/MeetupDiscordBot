@@ -300,6 +300,15 @@ describe('runIdentityDigestOnce', () => {
     expect(cache.remove).toHaveBeenCalledWith('identity-digest-2026-08-16');
   });
 
+  it('surfaces the original error, not a claim-release failure', async () => {
+    vi.mocked(runIdentitySweep).mockRejectedValue(new Error('db down'));
+    cache.remove.mockRejectedValue(new Error('cache unavailable'));
+
+    // A cache outage during release must not mask the real cause, and the
+    // claim staying consumed either way should not turn into the wrong error.
+    await expect(runIdentityDigestOnce(client)).rejects.toThrow('db down');
+  });
+
   it('keeps the claim on a silent day, where nothing is posted', async () => {
     repo.listChangesMetadataBetween.mockResolvedValue([]);
 
