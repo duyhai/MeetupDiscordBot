@@ -55,6 +55,29 @@ describe('fetchChangeThumbs', () => {
     expect(thumbs.get('u1:user_avatar')?.oldThumb).toBeNull();
   });
 
+  it('records null when the fetch itself fails', async () => {
+    nock('https://cdn.discordapp.com')
+      .get('/avatars/u1/aaa.webp')
+      .query({ size: '64' })
+      .replyWithError('socket hang up');
+
+    const thumbs = await fetchChangeThumbs(
+      [
+        {
+          discordUserId: 'u1',
+          field: 'user_avatar',
+          oldValue: 'aaa',
+          newValue: null,
+        },
+      ],
+      'g1',
+    );
+
+    // A transport failure must not propagate: it would abandon the whole
+    // change record, and the record is the evidence this feature exists for.
+    expect(thumbs.get('u1:user_avatar')?.oldThumb).toBeNull();
+  });
+
   it('does not fetch anything for non-avatar fields', async () => {
     const thumbs = await fetchChangeThumbs(
       [
