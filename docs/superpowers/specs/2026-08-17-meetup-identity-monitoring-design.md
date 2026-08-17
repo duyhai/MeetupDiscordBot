@@ -72,9 +72,24 @@ requires an organizer's token, held indefinitely.
 `{ accessToken, refreshToken, expiresAt }` — the refresh token is captured but
 never used, because nothing currently outlives a single interaction.
 
-**Storage: Postgres, not Redis and not Heroku config.** The token is rewritten
-on every refresh, which rules out Heroku config without an API call per
-refresh. It must survive months and every restart, which rules out a cache.
+**Seeded from Heroku config, maintained in Postgres.**
+
+The obvious-looking approach — paste a token from `/meetup_get_token` into a
+config var — fails on its own, because that command shows the **access**
+token and Meetup expires those after `expires_in` (one hour). A daily sweep
+would break before its second run. The **refresh** token is the long-lived
+credential, and it is already captured at exchange
+(`providers.ts:59`); it has simply never been surfaced or used, because
+nothing in the bot previously outlived a single interaction.
+
+So the seed is a refresh token in `MEETUP_ORGANIZER_REFRESH_TOKEN`, and the
+bot mints access tokens from it automatically. Setting one config var is the
+entire manual step.
+
+The stored copy exists for one reason: some providers **rotate** refresh
+tokens, returning a new one on each refresh and invalidating the old. Whether
+Meetup does this cannot be determined without performing a refresh, so the
+design must survive either behaviour rather than betting on one:
 
 ```
 oauth_credentials
@@ -85,18 +100,36 @@ oauth_credentials
   updated_at     TIMESTAMPTZ NOT NULL DEFAULT now()
 ```
 
-**Bootstrap** is a one-time organizer-only slash command that runs the normal
-OAuth flow and writes the result to that row, rather than a script needing
-credentials pasted on a command line.
+Resolution order on each sweep:
+
+1. Use the stored pair if present and its refresh succeeds.
+2. Otherwise seed from `MEETUP_ORGANIZER_REFRESH_TOKEN` and store the result.
+3. Persist whatever refresh token comes back, so rotation is absorbed
+   silently and the config var stays the recovery path rather than the
+   live credential.
+
+Pasting a fresh value into the config var is therefore also how an organizer
+recovers from a revoked grant: clear the stored row, set the var, done.
 
 **Refresh** adds `refreshMeetupToken(refreshToken)` beside the existing
-exchange function. The sweep refreshes when `expires_at` is within a margin,
+exchange function. The sweep refreshes when `expires_at` is within a margin
 and persists the new pair.
 
+**Obtaining the refresh token** extends `/meetup_get_token` to show it
+alongside the access token, gated to organizers and sent ephemerally as the
+access token already is. It is a materially longer-lived secret than what
+that command shows today — an access token dies in an hour, this one lasts
+until revoked — so the reply labels it as such rather than presenting the two
+as equivalent.
+
 **When refresh fails** — revoked access, organizer role lost, Meetup expiring
-the grant — the sweep must post an alert naming the problem and asking an
-organizer to re-run the bootstrap. A silently dead sweep is the worst outcome:
-monitoring would appear healthy while watching nothing.
+the grant — the sweep posts an alert naming the problem and telling the
+organizer exactly how to recover: run `/meetup_get_token`, copy the refresh
+token, update `MEETUP_ORGANIZER_REFRESH_TOKEN`. A silently dead sweep is the
+worst outcome, because monitoring would appear healthy while watching nothing.
+
+This alert is the only reason the credential's expiry is observable at all, so
+it fires on the first failure rather than after a retry streak.
 
 ### Security posture
 
@@ -198,11 +231,16 @@ Because the Discord feature has not deployed, both ship together with one
 schema.
 
 1. Merge the Discord branch and this one to `main` together.
-2. Run the bootstrap command to capture the organizer token.
+2. Run `/meetup_get_token`, copy the refresh token, set
+   `MEETUP_ORGANIZER_REFRESH_TOKEN` in Heroku config.
 3. Run the Discord backfill; confirm 0 changes recorded.
 4. Run the Meetup backfill; confirm 0 changes recorded.
 5. Wait for the first 18:00 UTC digest and confirm a plausible handful of
    changes across both platforms, not thousands.
+
+Step 2 must precede step 4: the Meetup backfill is the first thing that needs
+the credential, and it is also the first real proof the refresh flow works
+against Meetup rather than against assumptions about it.
 
 ## Out of scope
 
