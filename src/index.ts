@@ -8,6 +8,7 @@ import './commands';
 import app, { setOAuthAlertClient } from './app.js';
 import Configuration from './configuration.js';
 import { registerIdentityEvents } from './events/identityEvents.js';
+import { startIdentityDigestScheduler } from './lib/helpers/identityDigest.js';
 import { startUnlinkedDigestScheduler } from './lib/helpers/unlinkedDigest.js';
 
 const logger = new Logger({ name: 'MeetupBot' });
@@ -49,6 +50,7 @@ client.once('clientReady', async () => {
 
   startUnlinkedDigestScheduler(client);
   registerIdentityEvents(client);
+  startIdentityDigestScheduler(client);
   // The express OAuth routes run outside discordCommandWrapper, so without a
   // client their failures reach nobody. Hand it over now that we can post.
   setOAuthAlertClient(client);
