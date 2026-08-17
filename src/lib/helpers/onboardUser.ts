@@ -12,6 +12,7 @@ import { describeInteraction, isAdmin, linkStr } from '../../util/discord.js';
 import { GqlMeetupClient } from '../client/meetup/gqlClient.js';
 import { MemberGender } from '../client/meetup/types.js';
 import { logAlert } from './discordLogger.js';
+import { updateBaselineSilently } from './identityMonitor.js';
 import { recordManualOnboard, recordMeetupLink } from './memberLink.js';
 
 /**
@@ -144,6 +145,9 @@ export async function onboardUserCommon(
     logger.info(
       `Explicitly set ${fullUsername}'s nickname to ${targetNickName}`,
     );
+    // The bot just wrote this nickname. Advance the baseline so its own write
+    // is not reported as a suspicious name change in the daily digest.
+    await updateBaselineSilently(guildMember);
   }
 
   switch (gender) {
