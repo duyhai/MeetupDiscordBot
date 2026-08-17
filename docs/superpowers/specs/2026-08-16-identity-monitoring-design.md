@@ -153,10 +153,21 @@ is still recorded. Evidence of the change matters more than the picture.
 ### Daily digest
 
 Posts to the existing alerts channel, reusing `unlinkedDigest`'s scheduling
-shape: an hourly tick that fires during `DIGEST_UTC_HOUR` (17:00 UTC, ~9-10am
-Pacific), with an `exclusive_set` claim keyed by date guarding against
-double-posts across dyno restarts. It runs as a separate digest under its own
-cache key, so a failure in one does not suppress the other.
+shape: an hourly tick that fires during `IDENTITY_DIGEST_UTC_HOUR` (18:00 UTC,
+~10-11am Pacific), with an `exclusive_set` claim keyed by date guarding
+against double-posts across dyno restarts. It runs as a separate digest under
+its own cache key, so a failure in one does not suppress the other.
+
+18:00 rather than the unlinked digest's 17:00: both make a full-guild member
+pass, and running them in the same hour put two concurrent 2,008-member
+fetches on a dyno with an R14 history.
+
+The claim is taken *before* the sweep and released if any of the work fails,
+so a restart mid-hour neither redoes a discarded full pass nor consumes the
+day on a digest that never posted. The 24h window is anchored to the digest
+hour rather than to the run time, so consecutive days are exactly contiguous
+-- a `now - 24h` window would drift against the date-keyed claim and leave
+changes in neither digest.
 
 Compact text, one line per change:
 
@@ -187,10 +198,16 @@ Thumbnails embed as base64 `data:` URIs, so the file has no external
 dependencies and renders identically in a year. The layout is a table, one row
 per change, before and after images side by side.
 
-At ~2-4 KB per thumbnail, base64 inflating by a third, the guild's tier-3
-100 MB upload limit accommodates roughly a year of changes in one file. The
-command refuses ranges that would exceed the limit and suggests a narrower
-window rather than producing a file Discord will reject.
+The binding limit is the dyno, not Discord. The guild's tier-3 upload limit is
+100 MB, but assembling such a file holds the rows, their base64 expansion, the
+document string and `writeFileSync`'s copy at once -- roughly 3-4x the raw
+bytes on a 512 MB dyno with an R14 history. The cap is therefore ~10 MB and
+`days` is capped at 90.
+
+The size check runs *before* the rows are fetched, as a `count(*)` /
+`sum(octet_length(...))` aggregate that transfers no thumbnails: a guard that
+measures what is already in memory fires after the damage. A refused range
+names a concrete narrower window rather than only saying no.
 
 ## Rollout
 

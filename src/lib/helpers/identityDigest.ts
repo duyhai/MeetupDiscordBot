@@ -12,7 +12,10 @@ import { runIdentitySweep } from './identitySweep.js';
 
 const logger = new Logger({ name: 'identityDigest' });
 
-export const IDENTITY_DIGEST_UTC_HOUR = 17; // ≈ 9-10am Pacific
+// One hour after the unlinked digest (DIGEST_UTC_HOUR = 17), deliberately.
+// Both digests make a full-guild member pass; sharing an hour meant two
+// concurrent 2,008-member fetches on a dyno with an R14 history.
+export const IDENTITY_DIGEST_UTC_HOUR = 18; // ≈ 10-11am Pacific
 const TICK_MS = 60 * 60 * 1000; // hourly
 const MAX_DESCRIPTION = 4096; // Discord's hard embed description limit
 

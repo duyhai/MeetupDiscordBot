@@ -61,15 +61,22 @@ describe('discordLogger', () => {
     ]);
   });
 
-  it('never throws when channel fetch fails', async () => {
+  it('never throws when channel fetch fails, and reports the failure', async () => {
     const client = makeClient(sendMock, { fetchFails: true });
-    await expect(logActivity(client, { title: 'x' })).resolves.toBeUndefined();
-    await expect(logAlert(client, { title: 'x' })).resolves.toBeUndefined();
+    // Swallowing the error protects the caller; returning false lets a caller
+    // that consumed a once-a-day claim (the identity digest) know to retry.
+    await expect(logActivity(client, { title: 'x' })).resolves.toBe(false);
+    await expect(logAlert(client, { title: 'x' })).resolves.toBe(false);
   });
 
-  it('never throws when send fails', async () => {
+  it('never throws when send fails, and reports the failure', async () => {
     sendMock.mockRejectedValue(new Error('rate limited'));
     const client = makeClient(sendMock);
-    await expect(logActivity(client, { title: 'x' })).resolves.toBeUndefined();
+    await expect(logActivity(client, { title: 'x' })).resolves.toBe(false);
+  });
+
+  it('reports success when the post lands', async () => {
+    const client = makeClient(sendMock);
+    await expect(logAlert(client, { title: 'x' })).resolves.toBe(true);
   });
 });
