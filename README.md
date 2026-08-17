@@ -22,6 +22,12 @@ https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/workin
 - Fill out the API keys in the `.env` file
 - If you are on Windows, turn off auto CRLF with this command: `git config core.autocrlf false`
 
+# Commands
+
+- `/meetup_identity_report [days]` — mods/organizers only. Downloads a
+  self-contained HTML report of member photo and name changes over the last
+  N days (default 7), with before/after thumbnails embedded.
+
 # Testing
 
 We have two tiers of automated tests: fast unit tests and slower integration tests that hit real services.
@@ -72,3 +78,14 @@ yarn test:integration:docker
 (This leaves the containers running; use `yarn docker:down` afterwards.)
 
 The Postgres data volume survives `yarn docker:down`. If the schema ever changes shape or you want a clean slate, reset with `docker compose down -v`.
+
+# Deployment
+
+### Identity monitoring
+
+Before the first digest, populate the baseline once so existing members are
+not reported as changed:
+
+    DISCORD_API_KEY=$(heroku config:get DISCORD_API_KEY -a meetup-discord-bot) \
+    DATABASE_URL=$(heroku config:get DATABASE_URL -a meetup-discord-bot) \
+    yarn tsx scripts/backfillIdentityBaseline.ts
