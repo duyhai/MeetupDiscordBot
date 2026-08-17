@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import pg from 'pg';
 import { beforeAll, describe, expect, it } from 'vitest';
 
 import { PostgresIdentityRepository } from '../../src/lib/repositories/postgresIdentityRepository.js';
@@ -51,7 +52,13 @@ describe.skipIf(!POSTGRES_AVAILABLE)('PostgresIdentityRepository', () => {
 
   it('stores and returns thumbnail bytes', async () => {
     const snap = freshSnapshot();
-    const thumb = Buffer.from([1, 2, 3, 4]);
+    // Deliberately not all-ASCII: bytes like 0xff/0xfe are invalid as UTF-8
+    // continuation bytes, so if the driver ever coerced this through a string
+    // (e.g. Buffer.from(String(buf))) the round-trip would corrupt them.
+    // Real thumbnails are binary WebP data (starting with a "RIFF" header),
+    // which this fixture stands in for -- an all-ASCII buffer like [1,2,3,4]
+    // would silently survive that coercion and the test would pass either way.
+    const thumb = Buffer.from([0x52, 0x49, 0x46, 0x46, 0xff, 0x00, 0x89, 0xfe]);
     const start = new Date(Date.now() - 1000);
 
     await repo.recordChanges(
@@ -106,6 +113,7 @@ describe.skipIf(!POSTGRES_AVAILABLE)('PostgresIdentityRepository', () => {
 
   it('returns changes within a range and excludes those outside it', async () => {
     const snap = freshSnapshot();
+    const start = new Date(Date.now() - 1000);
     await repo.recordChanges(
       [
         {
@@ -119,14 +127,39 @@ describe.skipIf(!POSTGRES_AVAILABLE)('PostgresIdentityRepository', () => {
       new Map(),
     );
 
+    // Read back the row's own detected_at at full precision so the boundary
+    // check below sits exactly on it, rather than tens of seconds away. A
+    // window that never approaches the actual timestamp can't tell `<` from
+    // `<=` apart -- it would pass identically whichever comparison was used.
+    //
+    // Postgres's now() carries microsecond precision, but a JS Date can only
+    // hold milliseconds -- round-tripping through listChangesSince()'s Date
+    // would silently floor the value below the row's real detected_at, so
+    // even a broken `<=` would still exclude it and the test would lie.
+    // Reading the raw text avoids that lossy round trip, letting us build an
+    // upper bound that is bit-for-bit the row's own timestamp.
+    const pool = (repo as unknown as { pool: pg.Pool }).pool;
+    const raw = await pool.query<{ raw: string }>(
+      'SELECT detected_at::text AS raw FROM member_identity_changes WHERE discord_user_id = $1',
+      [snap.discordUserId],
+    );
+    // listChangesBetween is typed to take a Date, but pg accepts a raw
+    // timestamptz-literal string identically -- passing the exact text keeps
+    // the microsecond precision a Date object cannot hold. The cast is
+    // deliberate: a Date could not carry this value without losing it.
+    const exactly = raw.rows[0].raw as unknown as Date;
+
     const now = Date.now();
     const inRange = await repo.listChangesBetween(
       new Date(now - 60_000),
       new Date(now + 60_000),
     );
+    // The upper bound here IS the change's own detected_at, read back at full
+    // precision: this only proves the exclusive `<` semantics if the window
+    // ends exactly where the row sits, not merely somewhere earlier.
     const outOfRange = await repo.listChangesBetween(
-      new Date(now - 120_000),
-      new Date(now - 60_000),
+      new Date(start.getTime()),
+      exactly,
     );
 
     // The report command slices by range; an off-by-one on the bounds would
