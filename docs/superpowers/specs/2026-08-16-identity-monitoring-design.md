@@ -33,10 +33,12 @@ it is restarting, which occurs on every deploy and on Heroku's daily dyno
 cycling. A daily reconciliation sweep re-reads every member and records any
 difference the events missed, marked `source = sweep`.
 
-The sweep reuses the full member fetch `unlinkedDigest` already performs each
-day rather than adding a second pass over 2,008 members. A change recorded by
-an event is not re-recorded by the sweep, because the sweep compares against
-the baseline the event already updated.
+The sweep performs its own member fetch rather than coupling to
+`unlinkedDigest`. Sharing one pass would tie the two digests together so a
+failure in either could suppress the other, and discord.js serves the second
+fetch from its member cache, so the duplicate costs little. A change recorded
+by an event is not re-recorded by the sweep, because the sweep compares
+against the baseline the event already updated.
 
 Bots are excluded throughout. Members who leave keep their baseline row, so a
 rejoin can be compared against who they were before; their change history is
