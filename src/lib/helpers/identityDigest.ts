@@ -4,7 +4,7 @@ import { Logger } from 'tslog';
 import { ApplicationCache } from '../../util/cache.js';
 import { ApplicationIdentityRepository } from '../../util/identityRepository.js';
 import {
-  IdentityChangeRecord,
+  IdentityChangeMetadata,
   IdentityField,
 } from '../repositories/identityTypes.js';
 import { LogEntry, logAlert } from './discordLogger.js';
@@ -24,7 +24,7 @@ const FIELD_LABELS: Record<IdentityField, string> = {
   global_name: 'display name',
 };
 
-export type AnnotatedChange = IdentityChangeRecord & { revertedAt?: Date };
+export type AnnotatedChange = IdentityChangeMetadata & { revertedAt?: Date };
 
 export function shouldRunIdentityDigestNow(now: Date): boolean {
   return now.getUTCHours() === IDENTITY_DIGEST_UTC_HOUR;
@@ -36,7 +36,7 @@ export function shouldRunIdentityDigestNow(now: Date): boolean {
  * is invisible to a snapshot diff -- both endpoints look identical.
  */
 export function annotateReverts(
-  changes: IdentityChangeRecord[],
+  changes: IdentityChangeMetadata[],
 ): AnnotatedChange[] {
   return changes.map((change) => {
     const revert = changes.find(

@@ -26,3 +26,15 @@ export interface IdentityChangeRecord extends IdentityChange {
   oldThumb: Buffer | null;
   newThumb: Buffer | null;
 }
+
+/**
+ * A change row without its thumbnails. The digest renders text only, and the
+ * BYTEA thumbs dominate row size (~2-4 KB each, two per avatar change), so
+ * fetching them for a text digest pulls megabytes into a 512 MB dyno for
+ * nothing. Distinct from IdentityChangeRecord on purpose: the absence of the
+ * fields is a fact about the query, not a null thumbnail.
+ */
+export type IdentityChangeMetadata = Omit<
+  IdentityChangeRecord,
+  'oldThumb' | 'newThumb'
+>;

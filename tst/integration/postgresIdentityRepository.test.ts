@@ -79,7 +79,12 @@ describe.skipIf(!POSTGRES_AVAILABLE)('PostgresIdentityRepository', () => {
       ]),
     );
 
-    const rows = await repo.listChangesSince(start);
+    // listChangesBetween, not listChangesSince: only the report path selects
+    // the thumbs. listChangesSince is metadata-only by design.
+    const rows = await repo.listChangesBetween(
+      start,
+      new Date(Date.now() + 60_000),
+    );
     const mine = rows.find((r) => r.discordUserId === snap.discordUserId);
     // BYTEA must survive the round-trip as bytes, not a hex string.
     expect(mine?.newThumb?.equals(thumb)).toBe(true);
@@ -104,11 +109,21 @@ describe.skipIf(!POSTGRES_AVAILABLE)('PostgresIdentityRepository', () => {
       new Map(),
     );
 
-    const rows = await repo.listChangesSince(start);
+    const rows = await repo.listChangesBetween(
+      start,
+      new Date(Date.now() + 60_000),
+    );
     const mine = rows.find((r) => r.discordUserId === snap.discordUserId);
     // Thumb fetches are best-effort; a missing thumb must not lose the change.
     expect(mine?.newThumb).toBeNull();
     expect(mine?.field).toBe('nickname');
+
+    // The digest path selects metadata only -- it must still see the change,
+    // and must not carry the thumb columns at all.
+    const metadata = await repo.listChangesSince(start);
+    const meta = metadata.find((r) => r.discordUserId === snap.discordUserId);
+    expect(meta?.field).toBe('nickname');
+    expect(Object.keys(meta ?? {})).not.toContain('newThumb');
   });
 
   it('returns changes within a range and excludes those outside it', async () => {

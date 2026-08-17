@@ -4,6 +4,7 @@ import { Logger } from 'tslog';
 import {
   ChangeSource,
   IdentityChange,
+  IdentityChangeMetadata,
   IdentityChangeRecord,
   IdentityField,
   IdentitySnapshot,
@@ -47,16 +48,19 @@ interface SnapshotRow {
   member_avatar_hash: string | null;
 }
 
-interface ChangeRow {
+interface MetadataRow {
   id: string;
   discord_user_id: string;
   field: IdentityField;
   old_value: string | null;
   new_value: string | null;
-  old_thumb: Buffer | null;
-  new_thumb: Buffer | null;
   detected_at: Date;
   source: ChangeSource;
+}
+
+interface ChangeRow extends MetadataRow {
+  old_thumb: Buffer | null;
+  new_thumb: Buffer | null;
 }
 
 function toSnapshot(row: SnapshotRow): IdentitySnapshot {
@@ -70,17 +74,23 @@ function toSnapshot(row: SnapshotRow): IdentitySnapshot {
   };
 }
 
-function toChangeRecord(row: ChangeRow): IdentityChangeRecord {
+function toChangeMetadata(row: MetadataRow): IdentityChangeMetadata {
   return {
     id: row.id,
     discordUserId: row.discord_user_id,
     field: row.field,
     oldValue: row.old_value,
     newValue: row.new_value,
-    oldThumb: row.old_thumb,
-    newThumb: row.new_thumb,
     detectedAt: row.detected_at,
     source: row.source,
+  };
+}
+
+function toChangeRecord(row: ChangeRow): IdentityChangeRecord {
+  return {
+    ...toChangeMetadata(row),
+    oldThumb: row.old_thumb,
+    newThumb: row.new_thumb,
   };
 }
 
@@ -104,7 +114,16 @@ export class PostgresIdentityRepository {
     this.pool = new pg.Pool({
       connectionString,
       max: 3,
+      // Heroku Postgres requires TLS but uses certs node rejects by default
       ssl: isLocal ? undefined : { rejectUnauthorized: false },
+      allowExitOnIdle: true, // lets test processes exit cleanly instead of waiting on idle clients
+    });
+    // Heroku recycles idle connections; pg.Pool is an EventEmitter, so without
+    // a listener the resulting 'error' event would crash the whole process --
+    // taking onboarding and OAuth down with identity monitoring. Learned in
+    // production on the member repository; the same pattern applies here.
+    this.pool.on('error', (error) => {
+      logger.error(`Postgres pool error: ${String(error)}`);
     });
   }
 
@@ -122,7 +141,15 @@ export class PostgresIdentityRepository {
         logger.info('member_identity schema ensured');
       });
     }
-    await this.schemaEnsured;
+    try {
+      await this.schemaEnsured;
+    } catch (error) {
+      // Never cache a rejection: a Postgres blip at boot would otherwise
+      // poison the singleton for the life of the dyno, so the sweep, the
+      // digest and the report all fail permanently until someone restarts.
+      this.schemaEnsured = undefined; // retry on next call
+      throw error;
+    }
   }
 
   async getSnapshot(
@@ -134,15 +161,6 @@ export class PostgresIdentityRepository {
     );
     const row = result.rows[0];
     return row ? toSnapshot(row) : undefined;
-  }
-
-  async listSnapshots(): Promise<Map<string, IdentitySnapshot>> {
-    const result = await this.pool.query<SnapshotRow>(
-      'SELECT * FROM member_identity',
-    );
-    return new Map(
-      result.rows.map((row) => [row.discord_user_id, toSnapshot(row)]),
-    );
   }
 
   async putSnapshot(snapshot: IdentitySnapshot): Promise<void> {
@@ -195,13 +213,20 @@ export class PostgresIdentityRepository {
     }
   }
 
-  async listChangesSince(since: Date): Promise<IdentityChangeRecord[]> {
-    const result = await this.pool.query<ChangeRow>(
-      `SELECT * FROM member_identity_changes
-       WHERE detected_at >= $1 ORDER BY detected_at ASC`,
+  /**
+   * Metadata only -- no thumbnails. This feeds the text digest, which never
+   * renders an image; `SELECT *` here would drag every BYTEA thumb from the
+   * last 24h into memory on a dyno with an R14 history.
+   */
+  async listChangesSince(since: Date): Promise<IdentityChangeMetadata[]> {
+    const result = await this.pool.query<MetadataRow>(
+      `SELECT id, discord_user_id, field, old_value, new_value,
+              detected_at, source
+         FROM member_identity_changes
+        WHERE detected_at >= $1 ORDER BY detected_at ASC`,
       [since],
     );
-    return result.rows.map(toChangeRecord);
+    return result.rows.map(toChangeMetadata);
   }
 
   async listChangesBetween(
