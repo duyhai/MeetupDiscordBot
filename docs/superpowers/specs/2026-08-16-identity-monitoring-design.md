@@ -65,6 +65,13 @@ Onboarding sets a member's nickname to their Meetup name
 suspicious name change. The onboarding path updates the baseline directly
 after setting the nickname, so its own writes never register as changes.
 
+Updating the baseline afterwards is not sufficient on its own: Discord
+dispatches `GUILD_MEMBER_UPDATE` concurrently with the HTTP response to
+`setNickname`, so the event handler can read the old baseline before the new
+one commits. Onboarding therefore marks the member in a short-TTL suppression
+set *before* the write, and lifts it a few seconds after. While a member is
+marked, the event path advances their baseline but records no change.
+
 ## Data model
 
 Two tables.

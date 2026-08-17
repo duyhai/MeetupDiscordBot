@@ -13,6 +13,10 @@ import { GqlMeetupClient } from '../client/meetup/gqlClient.js';
 import { MemberGender } from '../client/meetup/types.js';
 import { logAlert } from './discordLogger.js';
 import { updateBaselineSilently } from './identityMonitor.js';
+import {
+  releaseIdentityWriteSuppression,
+  suppressIdentityWrites,
+} from './identitySuppression.js';
 import { recordManualOnboard, recordMeetupLink } from './memberLink.js';
 
 /**
@@ -141,23 +145,36 @@ export async function onboardUserCommon(
       // https://github.com/discord/discord-api-docs/issues/667
       targetNickName = Array.from(username).join(strings.invisibleCharacter);
     }
-    await guildMember.setNickname(targetNickName);
-    logger.info(
-      `Explicitly set ${fullUsername}'s nickname to ${targetNickName}`,
-    );
-    // The bot just wrote this nickname. Advance the baseline so its own write
-    // is not reported as a suspicious name change in the daily digest.
-    // A failure here is deliberately swallowed: this is a background
-    // monitoring write, and onboarding (role assignment below) must complete
-    // even if the identity repository is down. Losing one baseline update is
-    // survivable -- the daily sweep re-derives it -- but aborting onboarding
-    // mid-flow is not.
+    // Suppress BEFORE the write, not after: Discord dispatches
+    // GUILD_MEMBER_UPDATE concurrently with setNickname's HTTP response, so
+    // the gateway handler can be diffing this member while we are still
+    // waiting here. Without the flag already set, the bot's own rename gets
+    // recorded as a suspicious change and lands in the organizers' digest.
+    suppressIdentityWrites(guildMember.id);
     try {
-      await updateBaselineSilently(guildMember);
-    } catch (error: unknown) {
-      logger.error(
-        `Failed to update identity baseline for ${fullUsername}: ${String(error)}`,
+      await guildMember.setNickname(targetNickName);
+      logger.info(
+        `Explicitly set ${fullUsername}'s nickname to ${targetNickName}`,
       );
+      // The bot just wrote this nickname. Advance the baseline so its own
+      // write is not reported as a suspicious name change in the daily digest.
+      // A failure here is deliberately swallowed: this is a background
+      // monitoring write, and onboarding (role assignment below) must complete
+      // even if the identity repository is down. Losing one baseline update is
+      // survivable -- the daily sweep re-derives it -- but aborting onboarding
+      // mid-flow is not.
+      try {
+        await updateBaselineSilently(guildMember);
+      } catch (error: unknown) {
+        logger.error(
+          `Failed to update identity baseline for ${fullUsername}: ${String(error)}`,
+        );
+      }
+    } finally {
+      // Lifts a few seconds from now, not instantly: the event this write
+      // triggered may still be in flight. `finally` so a failed setNickname
+      // cannot leave the member suppressed for the full hard TTL.
+      releaseIdentityWriteSuppression(guildMember.id);
     }
   }
 
