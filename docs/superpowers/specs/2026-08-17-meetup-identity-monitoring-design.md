@@ -153,32 +153,78 @@ so that column has to generalise. Both tables are being changed **before the
 Discord feature deploys**, so no migration of live evidence data is required —
 this is a text edit now and would be an `ALTER TABLE` later.
 
-`member_identity_changes` becomes:
+### Three columns, not two
+
+`platform` and `subject_id` are not sufficient. A Discord identity fact is
+scoped to a **guild** — `nickname` and `member_avatar_hash` are per-guild by
+definition — and a Meetup fact will be scoped to a **group**. `platform` says
+which namespace an id lives in, not which instance of that namespace the fact
+belongs to.
+
+The Discord side already has this bug latent. `member_identity` is keyed on
+`discord_user_id` alone while storing per-guild fields, and `identityEvents`
+records the member from *every* guild in cache while `identitySweep` takes
+`guilds.first()`. With one guild it is invisible. With two — a test server, a
+staging guild, or the community-fork direction in `IDEAS.md` — the two guilds'
+nicknames alternate into one row and emit a permanent stream of false
+"nickname changed" alerts. Precisely the noise this feature exists to remove.
+
+Generalising to `platform` + `subject_id` alone would rebuild that same bug on
+the Meetup side the moment a second group exists, which is what franchising
+means. So the key carries scope:
 
 ```
-id            BIGSERIAL PRIMARY KEY
-platform      TEXT NOT NULL        -- discord | meetup
-subject_id    TEXT NOT NULL        -- discord user id, or meetup member id
-field         TEXT NOT NULL
-old_value     TEXT
-new_value     TEXT
-old_thumb     BYTEA
-new_thumb     BYTEA
-detected_at   TIMESTAMPTZ NOT NULL DEFAULT now()
-source        TEXT NOT NULL        -- event | sweep | backfill
+member_identity_changes
+  id           BIGSERIAL PRIMARY KEY
+  platform     TEXT NOT NULL        -- discord | meetup
+  scope_id     TEXT NOT NULL        -- guild id | meetup group id
+  subject_id   TEXT NOT NULL        -- discord user id | meetup member id
+  field        TEXT NOT NULL
+  old_value    TEXT
+  new_value    TEXT
+  old_thumb    BYTEA
+  new_thumb    BYTEA
+  detected_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+  source       TEXT NOT NULL        -- event | sweep | backfill
 ```
 
-Baselines stay separate, because nothing reads them together and a composite
-primary key buys nothing:
+Baselines stay one table per platform, since nothing reads them together, but
+both carry scope in the primary key:
 
 ```
+member_identity
+  scope_id            TEXT NOT NULL      -- guild id
+  discord_user_id     TEXT NOT NULL
+  username            TEXT
+  global_name         TEXT
+  nickname            TEXT
+  user_avatar_hash    TEXT
+  member_avatar_hash  TEXT
+  updated_at          TIMESTAMPTZ NOT NULL DEFAULT now()
+  PRIMARY KEY (scope_id, discord_user_id)
+
 meetup_identity
-  meetup_member_id  TEXT PRIMARY KEY
+  scope_id          TEXT NOT NULL      -- meetup group id
+  meetup_member_id  TEXT NOT NULL
   name              TEXT
   username          TEXT
   photo_id          TEXT
   updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+  PRIMARY KEY (scope_id, meetup_member_id)
 ```
+
+Both sweeps and both event handlers must therefore pass an explicit scope
+rather than iterating whatever happens to be in cache. `GUILD_ID` already
+exists in `constants.ts` and is currently unused on this path.
+
+**Global facts under a scoped key.** Discord's `username`, `global_name` and
+`user_avatar_hash` are account-wide, not per-guild, so under a scoped primary
+key they duplicate across guilds. Accepted deliberately: it is what the code
+already does, one row per (guild, member) stays simple to reason about, and
+the duplication is invisible while there is one guild. The alternative —
+splitting global-subject facts from scoped-subject facts into separate tables
+— is correct but buys nothing until the bot is in several guilds, and can be
+done then.
 
 Unifying the change log is the point: one digest, one HTML report, one query
 path. Two parallel features would mean two digests to read daily and two
@@ -241,6 +287,50 @@ schema.
 Step 2 must precede step 4: the Meetup backfill is the first thing that needs
 the credential, and it is also the first real proof the refresh flow works
 against Meetup rather than against assumptions about it.
+
+## Discord-side fixes folded in
+
+An independent review of the Discord branch surfaced defects that are cheaper
+to fix in the same pass, since that branch is deliberately unmerged. They ship
+with this work:
+
+- **Unbounded CDN fetch.** `identityThumbs` calls `fetch(url)` with no
+  `AbortSignal`. Undici imposes no total-request deadline, and that call sits
+  inside the digest *after* the day-claim is taken — so a stalled connection
+  hangs the digest without throwing, the catch never releases the claim, and
+  the result is no digest, no error and no retry. An
+  `AbortSignal.timeout(5_000)` degrades it to the documented best-effort null
+  thumb.
+- **Write ordering is documented but untested.** Swapping `recordChanges` and
+  `putSnapshot` in `identityMonitor` leaves all 188 tests green — verified.
+  The invariant carrying the longest rationale comment in the branch is the
+  one a refactor could silently invert. Pin it with `invocationCallOrder`.
+- **`escapeHtml` guards `null` but not `undefined`**, and the project builds
+  without `strictNullChecks`. An unrecognised `field` on an older row throws
+  and destroys the whole report.
+- **The report command throws plain `Error`s**, so `discordCommandWrapper`
+  posts "command failed" to the alerts channel when a mod merely asks for too
+  wide a range. Set `alertHandled`, as `DuplicateMeetupAccountError` already
+  does.
+- **Digest copy says "in the last 24h"** while `until` extends past the
+  boundary when the sweep runs long. State the actual window.
+- **Connection budget.** This pool's `max: 3` plus the member repository's
+  `max: 5` is 8 per dyno, 16 across a deploy's dyno overlap, against
+  essential-0's 20 — and the backfill script opens its own pool of 3, reaching
+  19. Drop this pool to 2 (the sweep is sequential and needs one) and document
+  running the backfill outside a deploy window.
+
+## Per-member erasure
+
+`pruneChangesBefore` is time-based, and a departing member's history is kept
+deliberately so a rejoin can be compared. Neither provides a way to erase one
+member's record on request.
+
+A `deleteMemberIdentity(platform, scopeId, subjectId)` ships alongside it, in
+the same deliberately-unscheduled shape: it exists, nothing calls it
+automatically, and using it is a considered act. Whether members are told
+their identity history is recorded is a community-governance decision, not a
+code one, and is left to the organizers.
 
 ## Out of scope
 
