@@ -99,34 +99,78 @@ export function formatIdentityDigest(
   };
 }
 
+/**
+ * The 24h window this digest covers, anchored to the digest hour rather than
+ * to "now".
+ *
+ * The claim is keyed by calendar date, so the window has to line up with it.
+ * A `now - 24h` window drifts with the actual run time: yesterday's run at
+ * 18:03 and today's at 18:41 leave the 18:03-18:41 changes in neither digest,
+ * and a run that slips earlier reports the same changes twice. Anchoring both
+ * ends to the digest hour makes consecutive days exactly contiguous.
+ */
+export function identityDigestWindow(now: Date): { since: Date; until: Date } {
+  const until = new Date(
+    Date.UTC(
+      now.getUTCFullYear(),
+      now.getUTCMonth(),
+      now.getUTCDate(),
+      IDENTITY_DIGEST_UTC_HOUR,
+      0,
+      0,
+      0,
+    ),
+  );
+  return { since: new Date(until.getTime() - 24 * 60 * 60 * 1000), until };
+}
+
 export async function runIdentityDigestOnce(client: Client): Promise<void> {
   const repo = await ApplicationIdentityRepository();
   if (!repo) {
     return;
   }
 
-  // Reconcile first so the digest includes anything missed while the dyno was
-  // restarting, then report.
-  await runIdentitySweep(client, 'sweep');
-
-  const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
-  const changes = await repo.listChangesSince(since);
-  const stats = await repo.storageStats();
-
-  // Claim the day only after the fallible work succeeds, so a failed run
-  // leaves the claim unconsumed and a restart within the hour can retry.
+  // Claim the day BEFORE the sweep, not after. The sweep is a full
+  // 2,008-member pass; running it first means any dyno restart during the
+  // digest hour -- a mid-morning Pacific deploy being the likeliest -- pays
+  // for a second full pass whose work is then thrown away at the claim.
+  // exclusive_set guards against double-posts across restarts; the cache TTL
+  // is fine because the key encodes the date.
   const cache = await ApplicationCache();
-  const today = new Date().toISOString().slice(0, 10);
-  const claimed = await cache.exclusive_set(`identity-digest-${today}`, '1');
+  const claimKey = `identity-digest-${new Date().toISOString().slice(0, 10)}`;
+  const claimed = await cache.exclusive_set(claimKey, '1');
   if (!claimed) {
     return;
   }
 
-  const entry = formatIdentityDigest(annotateReverts(changes), stats);
-  if (entry) {
-    await logAlert(client, entry);
+  try {
+    // Reconcile first so the digest includes anything missed while the dyno
+    // was restarting, then report.
+    await runIdentitySweep(client, 'sweep');
+
+    const { since, until } = identityDigestWindow(new Date());
+    const changes = await repo.listChangesMetadataBetween(since, until);
+    const stats = await repo.storageStats();
+
+    const entry = formatIdentityDigest(annotateReverts(changes), stats);
+    if (entry) {
+      // logAlert swallows every error by design, so an outage or a permission
+      // change would otherwise leave the claim consumed, a success logged, no
+      // digest, and no retry. Verify the post landed.
+      const posted = await logAlert(client, entry);
+      if (!posted) {
+        throw new Error(
+          'identity digest could not be posted to the alerts channel',
+        );
+      }
+    }
+    logger.info(`Identity digest ran: ${changes.length} changes`);
+  } catch (error) {
+    // Release the day so the next hourly tick, or a restart inside the digest
+    // hour, retries instead of silently skipping the day entirely.
+    await cache.remove(claimKey);
+    throw error;
   }
-  logger.info(`Identity digest ran: ${changes.length} changes`);
 }
 
 export function startIdentityDigestScheduler(client: Client): void {

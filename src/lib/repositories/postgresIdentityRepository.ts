@@ -218,13 +218,17 @@ export class PostgresIdentityRepository {
    * renders an image; `SELECT *` here would drag every BYTEA thumb from the
    * last 24h into memory on a dyno with an R14 history.
    */
-  async listChangesSince(since: Date): Promise<IdentityChangeMetadata[]> {
+  async listChangesMetadataBetween(
+    from: Date,
+    to: Date,
+  ): Promise<IdentityChangeMetadata[]> {
     const result = await this.pool.query<MetadataRow>(
       `SELECT id, discord_user_id, field, old_value, new_value,
               detected_at, source
          FROM member_identity_changes
-        WHERE detected_at >= $1 ORDER BY detected_at ASC`,
-      [since],
+        WHERE detected_at >= $1 AND detected_at < $2
+        ORDER BY detected_at ASC`,
+      [from, to],
     );
     return result.rows.map(toChangeMetadata);
   }

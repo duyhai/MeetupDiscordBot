@@ -79,8 +79,8 @@ describe.skipIf(!POSTGRES_AVAILABLE)('PostgresIdentityRepository', () => {
       ]),
     );
 
-    // listChangesBetween, not listChangesSince: only the report path selects
-    // the thumbs. listChangesSince is metadata-only by design.
+    // listChangesBetween, not listChangesMetadataBetween: only the report path
+    // selects the thumbs; the digest query is metadata-only by design.
     const rows = await repo.listChangesBetween(
       start,
       new Date(Date.now() + 60_000),
@@ -120,7 +120,10 @@ describe.skipIf(!POSTGRES_AVAILABLE)('PostgresIdentityRepository', () => {
 
     // The digest path selects metadata only -- it must still see the change,
     // and must not carry the thumb columns at all.
-    const metadata = await repo.listChangesSince(start);
+    const metadata = await repo.listChangesMetadataBetween(
+      start,
+      new Date(Date.now() + 60_000),
+    );
     const meta = metadata.find((r) => r.discordUserId === snap.discordUserId);
     expect(meta?.field).toBe('nickname');
     expect(Object.keys(meta ?? {})).not.toContain('newThumb');
@@ -148,7 +151,7 @@ describe.skipIf(!POSTGRES_AVAILABLE)('PostgresIdentityRepository', () => {
     // `<=` apart -- it would pass identically whichever comparison was used.
     //
     // Postgres's now() carries microsecond precision, but a JS Date can only
-    // hold milliseconds -- round-tripping through listChangesSince()'s Date
+    // hold milliseconds -- round-tripping through a Date-typed argument
     // would silently floor the value below the row's real detected_at, so
     // even a broken `<=` would still exclude it and the test would lie.
     // Reading the raw text avoids that lossy round trip, letting us build an

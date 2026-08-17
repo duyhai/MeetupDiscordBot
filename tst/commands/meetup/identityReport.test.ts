@@ -120,7 +120,8 @@ describe('identityReportHandler delivery', () => {
   it('attaches the html file to that followUp, ephemerally', async () => {
     const interaction = await run(7);
 
-    const [payload] = vi.mocked(interaction.followUp).mock.calls[0] as [
+    const [payload] = vi.mocked(interaction.followUp).mock
+      .calls[0] as unknown as [
       { content: string; ephemeral: boolean; files: { name: string }[] },
     ];
     expect(payload.files).toHaveLength(1);
