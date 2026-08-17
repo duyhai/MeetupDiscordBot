@@ -43,3 +43,6 @@ dist/**/*
 package-lock.json
 # Private ideas scratch file (deliberately untracked)
 /IDEAS.md
+
+# Subagent-driven development scratch (ledger, briefs, review packages)
+.superpowers/
