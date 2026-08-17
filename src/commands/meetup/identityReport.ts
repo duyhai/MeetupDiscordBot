@@ -9,6 +9,7 @@ import { Logger } from 'tslog';
 import {
   MAX_REPORT_BYTES,
   estimateReportBytes,
+  estimateReportBytesFromCounts,
   renderIdentityReport,
 } from '../../lib/helpers/identityReport.js';
 import { IdentityChangeRecord } from '../../lib/repositories/identityTypes.js';
@@ -30,6 +31,26 @@ const strings = {
 export type ReportAttachment =
   { ok: true; fileName: string; html: string } | { ok: false; reason: string };
 
+/**
+ * Refusal text for a range too large to build. Names a concrete narrower
+ * window rather than just saying no: the organizer asked a question and
+ * should not have to bisect their way to an answer.
+ */
+export function tooLargeMessage(
+  estimatedBytes: number,
+  windowDays: number,
+): string {
+  const suggested = Math.max(
+    1,
+    Math.floor((windowDays * MAX_REPORT_BYTES) / estimatedBytes),
+  );
+  return `That range needs about ${Math.round(
+    estimatedBytes / 1_000_000,
+  )} MB, more than this bot can assemble at once. Try a narrower window -- about ${suggested} day${
+    suggested === 1 ? '' : 's'
+  } should fit.`;
+}
+
 export function buildReportAttachment(
   changes: IdentityChangeRecord[],
   days: number,
@@ -39,12 +60,7 @@ export function buildReportAttachment(
 
   const estimated = estimateReportBytes(changes);
   if (estimated > MAX_REPORT_BYTES) {
-    return {
-      ok: false,
-      reason: `That range needs about ${Math.round(
-        estimated / 1_000_000,
-      )} MB, over Discord's upload limit. Try a narrower window.`,
-    };
+    return { ok: false, reason: tooLargeMessage(estimated, days) };
   }
 
   return {
@@ -72,7 +88,11 @@ export class IdentityReportCommands {
       type: ApplicationCommandOptionType.Integer,
       required: false,
       minValue: 1,
-      maxValue: 365,
+      // Not 365: a year of avatar changes is far more than this dyno can hold
+      // in memory while assembling one self-contained document, and the guard
+      // below refuses those ranges anyway. Offering the option only invites a
+      // refusal.
+      maxValue: 90,
     })
     days: number | undefined,
     interaction: CommandInteraction,
@@ -88,8 +108,23 @@ export class IdentityReportCommands {
       const windowDays = days ?? 7;
       const to = new Date();
       const from = new Date(to.getTime() - windowDays * 24 * 60 * 60 * 1000);
+      // Measure BEFORE fetching. The rows carry both BYTEA thumbs, base64
+      // adds a third on top, then an intermediate array, then one mega-string,
+      // then writeFileSync copies it again -- roughly 3-4x the raw bytes live
+      // at once. Checking the size only after all of that is resident is a
+      // guard that fires after the damage. This costs one aggregate query.
+      const measured = await repo.measureChangesBetween(from, to);
+      const projected = estimateReportBytesFromCounts(
+        measured.changeCount,
+        measured.thumbBytes,
+      );
+      if (projected > MAX_REPORT_BYTES) {
+        throw new Error(tooLargeMessage(projected, windowDays));
+      }
+
       const changes = await repo.listChangesBetween(from, to);
 
+      // Backstop only: the pre-fetch measurement above is the real guard.
       const built = buildReportAttachment(changes, windowDays);
       // `=== false` (not `!built.ok`): this project builds without
       // strictNullChecks, and without it plain truthy/falsy checks don't

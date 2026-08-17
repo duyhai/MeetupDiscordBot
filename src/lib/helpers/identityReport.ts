@@ -4,11 +4,16 @@ import {
 } from '../repositories/identityTypes.js';
 
 /**
- * Guild is boost tier 3, so Discord accepts 100 MB uploads. Refuse a little
- * under that: base64 inflation is already counted, but the multipart envelope
- * is not.
+ * Sized to the DYNO, not to Discord's upload limit.
+ *
+ * The guild is boost tier 3, so Discord would accept 100 MB -- but producing
+ * such a file means the rows with both BYTEA thumbs, the base64 expansion, an
+ * intermediate array, one mega-string and then writeFileSync's copy all live
+ * at once, roughly 3-4x the raw bytes, on a 512 MB dyno with an R14 history.
+ * 10 MB of thumbnails is a report an organizer can actually open and a peak
+ * this process survives.
  */
-export const MAX_REPORT_BYTES = 90 * 1024 * 1024;
+export const MAX_REPORT_BYTES = 10 * 1024 * 1024;
 
 const FIELD_LABELS: Record<IdentityField, string> = {
   user_avatar: 'User avatar',
@@ -37,13 +42,28 @@ function img(thumb: Buffer | null): string {
   return `<img src="data:image/webp;base64,${thumb.toString('base64')}" alt="">`;
 }
 
-/** Base64 inflates by 4/3; the markup around each row is roughly 300 bytes. */
+/**
+ * Base64 inflates by 4/3; the markup around each row is roughly 300 bytes.
+ *
+ * Takes counts rather than rows so the command can ask Postgres for
+ * `count(*)` and `sum(octet_length(...))` and refuse an oversized range
+ * BEFORE loading a single thumbnail into the dyno.
+ */
+export function estimateReportBytesFromCounts(
+  changeCount: number,
+  thumbBytes: number,
+): number {
+  return Math.ceil((thumbBytes * 4) / 3) + changeCount * 300 + 2048;
+}
+
+/** In-memory equivalent, used as a backstop once rows are already loaded. */
 export function estimateReportBytes(changes: IdentityChangeRecord[]): number {
-  return changes.reduce((total, change) => {
-    const bytes =
-      (change.oldThumb?.length ?? 0) + (change.newThumb?.length ?? 0);
-    return total + Math.ceil((bytes * 4) / 3) + 300;
-  }, 2048);
+  const thumbBytes = changes.reduce(
+    (total, change) =>
+      total + (change.oldThumb?.length ?? 0) + (change.newThumb?.length ?? 0),
+    0,
+  );
+  return estimateReportBytesFromCounts(changes.length, thumbBytes);
 }
 
 export function renderIdentityReport(

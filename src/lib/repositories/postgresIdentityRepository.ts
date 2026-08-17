@@ -246,6 +246,31 @@ export class PostgresIdentityRepository {
     return result.rows.map(toChangeRecord);
   }
 
+  /**
+   * Row count and total thumbnail bytes for a range, without transferring a
+   * single thumbnail. The report command uses this to refuse an oversized
+   * window BEFORE the rows -- and their base64 expansion, and the assembled
+   * document, and writeFileSync's copy -- are all resident on a 512 MB dyno.
+   */
+  async measureChangesBetween(
+    from: Date,
+    to: Date,
+  ): Promise<{ changeCount: number; thumbBytes: number }> {
+    const result = await this.pool.query<{ bytes: string; count: string }>(
+      `SELECT count(*)::text AS count,
+              coalesce(sum(coalesce(octet_length(old_thumb), 0)
+                         + coalesce(octet_length(new_thumb), 0)), 0)::text
+                AS bytes
+         FROM member_identity_changes
+        WHERE detected_at >= $1 AND detected_at < $2`,
+      [from, to],
+    );
+    return {
+      changeCount: Number(result.rows[0].count),
+      thumbBytes: Number(result.rows[0].bytes),
+    };
+  }
+
   async storageStats(): Promise<{ changeCount: number; totalBytes: number }> {
     const result = await this.pool.query<{ count: string; bytes: string }>(
       `SELECT (SELECT count(*) FROM member_identity_changes)::text AS count,

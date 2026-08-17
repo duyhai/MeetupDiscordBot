@@ -5,11 +5,17 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   IdentityReportCommands,
   buildReportAttachment,
+  tooLargeMessage,
 } from '../../../src/commands/meetup/identityReport.js';
+import {
+  estimateReportBytes,
+  estimateReportBytesFromCounts,
+} from '../../../src/lib/helpers/identityReport.js';
 import { IdentityChangeRecord } from '../../../src/lib/repositories/identityTypes.js';
 
 const repo = vi.hoisted(() => ({
   listChangesBetween: vi.fn(),
+  measureChangesBetween: vi.fn(),
 }));
 
 vi.mock('../../../src/util/identityRepository.js', () => ({
@@ -94,6 +100,10 @@ describe('identityReportHandler delivery', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     repo.listChangesBetween.mockResolvedValue([change()]);
+    repo.measureChangesBetween.mockResolvedValue({
+      changeCount: 1,
+      thumbBytes: 6,
+    });
   });
 
   const fakeInteraction = () =>
@@ -129,5 +139,85 @@ describe('identityReportHandler delivery', () => {
     // The report names members; a non-ephemeral reply would publish it.
     expect(payload.ephemeral).toBe(true);
     expect(payload.content).toContain('1 change');
+  });
+});
+
+/**
+ * The old guard measured the rows AFTER loading them, so the range that would
+ * OOM the dyno was already resident by the time it fired. These pin the order.
+ */
+describe('identityReportHandler size guard', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    repo.listChangesBetween.mockResolvedValue([change()]);
+    repo.measureChangesBetween.mockResolvedValue({
+      changeCount: 1,
+      thumbBytes: 6,
+    });
+  });
+
+  const fakeInteraction = () =>
+    ({
+      user: { id: 'u-mod', username: 'mod' },
+      editReply: vi.fn().mockResolvedValue(undefined),
+      followUp: vi.fn().mockResolvedValue(undefined),
+    }) as unknown as CommandInteraction;
+
+  const run = (days?: number) =>
+    new IdentityReportCommands().identityReportHandler(days, fakeInteraction());
+
+  it('measures the range before fetching any rows', async () => {
+    await run(7);
+
+    expect(repo.measureChangesBetween.mock.invocationCallOrder[0]).toBeLessThan(
+      repo.listChangesBetween.mock.invocationCallOrder[0],
+    );
+  });
+
+  it('refuses an oversized range without ever loading the thumbnails', async () => {
+    repo.measureChangesBetween.mockResolvedValue({
+      changeCount: 20_000,
+      thumbBytes: 80 * 1024 * 1024,
+    });
+
+    await expect(run(90)).rejects.toThrow(/narrower window/);
+    // The whole point: nothing was pulled into the dyno before refusing.
+    expect(repo.listChangesBetween).not.toHaveBeenCalled();
+  });
+
+  it('names a concrete narrower window in the refusal', () => {
+    // ~107 MB projected over 90 days against a ~10 MB budget -> single digits.
+    const message = tooLargeMessage(107 * 1024 * 1024, 90);
+
+    expect(message).toMatch(/about 8 days should fit/);
+  });
+
+  it('builds the report when the range fits', async () => {
+    await expect(run(7)).resolves.not.toThrow();
+    expect(repo.listChangesBetween).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('estimateReportBytesFromCounts', () => {
+  it('matches the in-memory estimate for the same rows', () => {
+    const rows = [change(), change({ id: '2' })];
+    const thumbBytes = rows.reduce(
+      (total, row) =>
+        total + (row.oldThumb?.length ?? 0) + (row.newThumb?.length ?? 0),
+      0,
+    );
+
+    // The pre-fetch guard and the post-fetch backstop must agree, or a range
+    // could pass one and be refused by the other after all the work.
+    expect(estimateReportBytesFromCounts(rows.length, thumbBytes)).toBe(
+      estimateReportBytes(rows),
+    );
+  });
+
+  it('counts base64 inflation, not just the raw bytes', () => {
+    // 3 MB of thumbnails is ~4 MB once base64-encoded into the document.
+    expect(estimateReportBytesFromCounts(0, 3_000_000)).toBeGreaterThan(
+      3_900_000,
+    );
   });
 });
