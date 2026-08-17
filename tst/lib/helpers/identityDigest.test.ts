@@ -222,15 +222,59 @@ describe('runIdentityDigestOnce', () => {
     expect(logAlert).not.toHaveBeenCalled();
   });
 
-  it('queries the hour-anchored window, not the last 24h from now', async () => {
+  it('anchors since to the digest hour, not the last 24h from now', async () => {
     await runIdentityDigestOnce(client);
 
-    const [since, until] = repo.listChangesMetadataBetween.mock
-      .calls[0] as Date[];
+    const [since] = repo.listChangesMetadataBetween.mock.calls[0] as Date[];
     // System time is HH:05; a `now - 24h` window would carry those 5 minutes.
-    expect(until.getUTCMinutes()).toBe(0);
     expect(since.getUTCMinutes()).toBe(0);
-    expect(until.getTime() - since.getTime()).toBe(24 * 60 * 60 * 1000);
+  });
+
+  it('extends until past the sweep so its own rows are captured', async () => {
+    vi.mocked(runIdentitySweep).mockImplementation(async () => {
+      // The sweep is a full-guild pass that takes real wall-clock time; a
+      // change it detects gets `detected_at` stamped after the digest-hour
+      // boundary the sweep just ran past.
+      vi.setSystemTime(
+        new Date(Date.UTC(2026, 7, 16, IDENTITY_DIGEST_UTC_HOUR, 12)),
+      );
+      return { scanned: 1, changed: 1 };
+    });
+
+    await runIdentityDigestOnce(client);
+
+    const [, until] = repo.listChangesMetadataBetween.mock.calls[0] as Date[];
+    // The fixed 18:00 boundary the sweep blew past is not enough; `until`
+    // must reach at least as far as the moment the sweep actually finished.
+    expect(until.getTime()).toBeGreaterThanOrEqual(
+      Date.UTC(2026, 7, 16, IDENTITY_DIGEST_UTC_HOUR, 12),
+    );
+  });
+
+  it('includes a change written during the sweep in the same digest', async () => {
+    const sweepChange = change({
+      id: 'sweep-1',
+      detectedAt: at('2026-08-16T18:12:00Z'),
+    });
+    repo.listChangesMetadataBetween.mockImplementation(
+      async (since: Date, until: Date) =>
+        [sweepChange].filter(
+          (c) => c.detectedAt >= since && c.detectedAt < until,
+        ),
+    );
+    vi.mocked(runIdentitySweep).mockImplementation(async () => {
+      vi.setSystemTime(
+        new Date(Date.UTC(2026, 7, 16, IDENTITY_DIGEST_UTC_HOUR, 12, 5)),
+      );
+      return { scanned: 1, changed: 1 };
+    });
+
+    await runIdentityDigestOnce(client);
+
+    // The change the sweep itself wrote must reach the same digest it ran
+    // for, not disappear into tomorrow's window.
+    const [, entry] = vi.mocked(logAlert).mock.calls[0];
+    expect(entry.description).toContain('<@u1>');
   });
 
   it('keeps the claim when the digest posts successfully', async () => {

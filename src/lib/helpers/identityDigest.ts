@@ -148,10 +148,19 @@ export async function runIdentityDigestOnce(client: Client): Promise<void> {
 
   try {
     // Reconcile first so the digest includes anything missed while the dyno
-    // was restarting, then report.
+    // was restarting. `since` stays anchored to the digest hour (computed
+    // before the sweep runs) so consecutive days remain exactly contiguous.
+    // The sweep itself is a full 2,008-member pass that finishes some time
+    // after that boundary, and every row it writes is stamped with
+    // `detected_at` at or after that moment -- so `until` is extended to the
+    // time the sweep actually finished, not left at the fixed boundary it
+    // ran past. Without that, the sweep's own findings -- the changes least
+    // likely to have been caught any other way -- would miss today's digest
+    // and only surface in tomorrow's, 24 hours late.
+    const { since, until: boundary } = identityDigestWindow(new Date());
     await runIdentitySweep(client, 'sweep');
+    const until = new Date(Math.max(boundary.getTime(), Date.now()));
 
-    const { since, until } = identityDigestWindow(new Date());
     const changes = await repo.listChangesMetadataBetween(since, until);
     const stats = await repo.storageStats();
 
