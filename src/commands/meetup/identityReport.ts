@@ -102,11 +102,16 @@ export class IdentityReportCommands {
         built.fileName,
         built.html,
         async (attachmentArgs) => {
-          await interaction.editReply({
+          // followUp, not editReply: editReply targets the progress reply that
+          // discordCommandWrapper deletes on success, so the organizer would
+          // watch the file appear and then vanish. Every other attachment
+          // command in this project follows up for the same reason.
+          await interaction.followUp({
+            ...attachmentArgs,
             content: `Identity report: ${changes.length} change${
               changes.length === 1 ? '' : 's'
             } over the last ${windowDays} day${windowDays === 1 ? '' : 's'}.`,
-            ...attachmentArgs,
+            ephemeral: true,
           });
         },
       );

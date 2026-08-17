@@ -1,7 +1,36 @@
-import { describe, expect, it } from 'vitest';
+/* eslint-disable @typescript-eslint/unbound-method */
+import { CommandInteraction } from 'discord.js';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { buildReportAttachment } from '../../../src/commands/meetup/identityReport.js';
+import {
+  IdentityReportCommands,
+  buildReportAttachment,
+} from '../../../src/commands/meetup/identityReport.js';
 import { IdentityChangeRecord } from '../../../src/lib/repositories/identityTypes.js';
+
+const repo = vi.hoisted(() => ({
+  listChangesBetween: vi.fn(),
+}));
+
+vi.mock('../../../src/util/identityRepository.js', () => ({
+  ApplicationIdentityRepository: vi.fn(async () => repo),
+}));
+
+// The wrapper and the role gate are unit-tested elsewhere; run them straight
+// through so this test is only about how the handler delivers the file.
+// withDiscordFileAttachment stays REAL: its tmpfile shape is what the delivery
+// call receives, and faking it would hide a malformed payload.
+vi.mock('../../../src/util/discord.js', async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import('../../../src/util/discord.js')>();
+  return {
+    ...actual,
+    discordCommandWrapper: vi.fn(async (_interaction, fn: () => unknown) => {
+      await fn();
+    }),
+    requireModOrOrganizer: vi.fn().mockResolvedValue(undefined),
+  };
+});
 
 const change = (
   over: Partial<IdentityChangeRecord> = {},
@@ -51,5 +80,53 @@ describe('buildReportAttachment', () => {
     const result = buildReportAttachment([], 7);
 
     expect(result.ok).toBe(true);
+  });
+});
+
+/**
+ * Handler-level, not helper-level. buildReportAttachment was unit-tested from
+ * day one, yet the command still shipped delivering the attachment through
+ * editReply -- which edits the very progress reply discordCommandWrapper
+ * deletes on success, so the organizer watched the file appear and vanish.
+ * Only a test at the call site can see that.
+ */
+describe('identityReportHandler delivery', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    repo.listChangesBetween.mockResolvedValue([change()]);
+  });
+
+  const fakeInteraction = () =>
+    ({
+      user: { id: 'u-mod', username: 'mod' },
+      editReply: vi.fn().mockResolvedValue(undefined),
+      followUp: vi.fn().mockResolvedValue(undefined),
+    }) as unknown as CommandInteraction;
+
+  const run = async (days?: number) => {
+    const interaction = fakeInteraction();
+    await new IdentityReportCommands().identityReportHandler(days, interaction);
+    return interaction;
+  };
+
+  it('delivers the attachment with followUp, never editReply', async () => {
+    const interaction = await run(7);
+
+    expect(vi.mocked(interaction.followUp)).toHaveBeenCalledTimes(1);
+    // editReply would target the message the wrapper deletes on success.
+    expect(vi.mocked(interaction.editReply)).not.toHaveBeenCalled();
+  });
+
+  it('attaches the html file to that followUp, ephemerally', async () => {
+    const interaction = await run(7);
+
+    const [payload] = vi.mocked(interaction.followUp).mock.calls[0] as [
+      { content: string; ephemeral: boolean; files: { name: string }[] },
+    ];
+    expect(payload.files).toHaveLength(1);
+    expect(payload.files[0].name).toMatch(/\.html$/);
+    // The report names members; a non-ephemeral reply would publish it.
+    expect(payload.ephemeral).toBe(true);
+    expect(payload.content).toContain('1 change');
   });
 });
