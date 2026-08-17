@@ -37,35 +37,6 @@ export async function addServerRole(
   await user.roles.add(serverRole);
 }
 
-/**
- * Grants the reward role for a level, if the member earned one.
- *
- * `level` is optional because callers derive it from `levels.find(...)`, which
- * yields undefined for a member with no hosted/attended events. Bailing out
- * here is load-bearing: `guild.roles.fetch(undefined)` resolves to a
- * Collection of EVERY role in the guild, and `roles.add(collection)` then
- * PATCHes the member with all of them -- @everyone and moderator included --
- * which Discord rejects with DiscordAPIError[50013] Missing Permissions.
- */
-export async function addRewardRole(
-  guild: Guild,
-  userId: string,
-  role: RewardRoles,
-  level?: RewardRoleLevels,
-) {
-  const rewardRoleId =
-    level === undefined ? undefined : REWARD_ROLES[role][level];
-  if (!rewardRoleId) {
-    logger.info(
-      `No ${role} reward role to grant for level ${String(level)}; skipping`,
-    );
-    return;
-  }
-  const user = await guild.members.fetch(userId);
-  const rewardRole = await guild.roles.fetch(rewardRoleId);
-  await user.roles.add(rewardRole);
-}
-
 export async function removeServerRole(
   guild: Guild,
   userId: string,
@@ -76,19 +47,66 @@ export async function removeServerRole(
   await user.roles.remove(serverRole);
 }
 
-export async function removeRewardRole(
+/**
+ * Brings a member's reward roles in line with the levels they earned, using at
+ * most one request.
+ *
+ * The previous shape of this -- remove all six levels of a category, then add
+ * back the earned one -- cost 12 DELETEs plus up to 2 PUTs on every
+ * verification, even for a member whose badges had not changed. discord.js
+ * sends one REST call per role and they share a rate-limit bucket, so they
+ * queue serially: measured at 9s of a ~11s verification in production on
+ * 2026-08-16. Diffing first means an unchanged member costs nothing and a
+ * changed one costs a single PATCH.
+ *
+ * Only the categories present in `targets` are rewritten. Everything else the
+ * member holds -- organizer, moderator, the retired Discord-linked badge --
+ * is carried through untouched.
+ *
+ * A level of `undefined` means "earned nothing here" and strips the category.
+ * That case is load-bearing: it comes from `levels.find(...)` returning
+ * undefined, and the old code path fetched roles by id without guarding it,
+ * which resolved to EVERY role in the guild and produced
+ * DiscordAPIError[50013] Missing Permissions.
+ */
+export async function syncRewardRoles(
   guild: Guild,
   userId: string,
-  role: RewardRoles,
-  levels: RewardRoleLevels[] = [1, 5, 20, 50, 100, 500],
+  targets: Partial<Record<RewardRoles, RewardRoleLevels | undefined>>,
 ) {
-  const user = await guild.members.fetch(userId);
-  await Promise.all(
-    levels.map(async (lvl) => {
-      const rewardRole = await guild.roles.fetch(REWARD_ROLES[role][lvl]);
-      await user.roles.remove(rewardRole);
-    }),
+  const member = await guild.members.fetch(userId);
+
+  const categories = Object.keys(targets) as RewardRoles[];
+  // Every id we are responsible for, across the requested categories only.
+  const managed = new Set(
+    categories.flatMap((category) => Object.values(REWARD_ROLES[category])),
   );
+  const earned = categories
+    .map((category) => {
+      const level = targets[category];
+      return level === undefined ? undefined : REWARD_ROLES[category][level];
+    })
+    .filter((id): id is string => Boolean(id));
+
+  const current = [...member.roles.cache.keys()];
+  const desired = new Set([
+    ...current.filter((id) => !managed.has(id)),
+    ...earned,
+  ]);
+
+  const unchanged =
+    desired.size === current.length && current.every((id) => desired.has(id));
+  if (unchanged) {
+    logger.info(`Reward roles already correct for ${userId}; no change`);
+    return;
+  }
+
+  // Logged on both sides of the call: the old remove-then-add path emitted
+  // nothing once it succeeded, which is why its cost stayed invisible in
+  // production until someone timed the gap between surrounding log lines.
+  logger.info(`Updating reward roles for ${userId}`);
+  await member.roles.set([...desired]);
+  logger.info(`Reward roles updated for ${userId}`);
 }
 
 export async function onboardUserCommon(

@@ -7,8 +7,7 @@ import { GqlMeetupClient } from '../../src/lib/client/meetup/gqlClient.js';
 import { getBadges } from '../../src/lib/helpers/getBadges.js';
 
 vi.mock('../../src/lib/helpers/onboardUser.js', () => ({
-  addRewardRole: vi.fn().mockResolvedValue(undefined),
-  removeRewardRole: vi.fn().mockResolvedValue(undefined),
+  syncRewardRoles: vi.fn().mockResolvedValue(undefined),
 }));
 
 const OUR_GROUP = '7595882';

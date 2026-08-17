@@ -3,7 +3,7 @@ import { Logger } from 'tslog';
 import { RewardRoleLevels } from '../../constants.js';
 import { GqlMeetupClient } from '../client/meetup/gqlClient.js';
 import { BadgeCounts, getBadgeCounts } from './badgeCounts.js';
-import { addRewardRole, removeRewardRole } from './onboardUser.js';
+import { syncRewardRoles } from './onboardUser.js';
 
 const logger = new Logger({ name: 'getUserRoles' });
 
@@ -26,11 +26,10 @@ export async function getBadges(
   const attendanceRewards = levels.find((num) => attendedCount >= num);
   logger.info(JSON.stringify({ hostingRewards, attendanceRewards }));
 
-  await removeRewardRole(guild, user.id, 'hosting');
-  await removeRewardRole(guild, user.id, 'attendance');
-
-  await addRewardRole(guild, user.id, 'hosting', hostingRewards);
-  await addRewardRole(guild, user.id, 'attendance', attendanceRewards);
+  await syncRewardRoles(guild, user.id, {
+    hosting: hostingRewards,
+    attendance: attendanceRewards,
+  });
 
   return { hostedCount, attendedCount };
 }
