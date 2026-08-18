@@ -2,6 +2,11 @@ import dayjs from 'dayjs';
 import { GraphQLClient } from 'graphql-request';
 import { Logger } from 'tslog';
 import Configuration from '../../../configuration.js';
+import {
+  FetchInit,
+  FetchUrl,
+  boundedFetch,
+} from '../../../util/boundedFetch.js';
 import { cachedClientRequest } from '../cacheClientHelper.js';
 import {
   announceEvent,
@@ -50,6 +55,23 @@ import {
 
 const logger = new Logger({ name: 'GqlMeetupClient' });
 
+/**
+ * Applied client-wide rather than to the roster query alone.
+ *
+ * Undici sets no total-request deadline, so a stalled connection to Meetup
+ * never rejects. That is survivable on an interactive command -- the
+ * interaction times out and a human retries -- but the roster walk runs
+ * inside the daily digest after the day-claim is taken, where a hang means no
+ * digest, no error and no retry until someone notices.
+ *
+ * Deliberately generous. This is a guard against hanging forever, not a
+ * latency budget: the point is that every request terminates, and 30s is far
+ * beyond anything a healthy Meetup query takes, so no existing caller's
+ * behaviour changes. Tightening it toward real latencies would start failing
+ * slow-but-working queries, which is a different and worse bug.
+ */
+const GQL_REQUEST_TIMEOUT_MS = 30_000;
+
 export class GqlMeetupClient {
   private client: GraphQLClient;
 
@@ -58,6 +80,8 @@ export class GqlMeetupClient {
       headers: {
         authorization: `Bearer ${accessToken}`,
       },
+      fetch: (url: FetchUrl, init?: FetchInit) =>
+        boundedFetch(url, init, GQL_REQUEST_TIMEOUT_MS),
     });
   }
 

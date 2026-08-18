@@ -1,5 +1,6 @@
 import { Logger } from 'tslog';
 
+import { boundedFetch } from '../../../util/boundedFetch.js';
 import { IdentityChange } from '../../repositories/identityTypes.js';
 import { avatarThumbUrl } from './snapshot.js';
 
@@ -7,13 +8,15 @@ const logger = new Logger({ name: 'identityThumbs' });
 
 const AVATAR_FIELDS = new Set(['user_avatar', 'member_avatar']);
 
+const THUMB_FETCH_TIMEOUT_MS = 5_000;
+
 async function fetchOne(url: string): Promise<Buffer | null> {
   try {
     // Undici applies no total-request deadline, and this runs inside the
     // digest after the day-claim is taken: a stalled connection would hang
     // the digest with no error and no retry. The existing catch turns a
     // timeout into the documented best-effort null thumb.
-    const response = await fetch(url, { signal: AbortSignal.timeout(5_000) });
+    const response = await boundedFetch(url, undefined, THUMB_FETCH_TIMEOUT_MS);
     if (!response.ok) {
       return null;
     }

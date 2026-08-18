@@ -38,6 +38,34 @@ describe('refreshMeetupToken', () => {
     expect((await refreshMeetupToken('old')).refreshToken).toBe('ROTATED');
   });
 
+  it('defaults the expiry to an hour when expires_in is absent', async () => {
+    nock('https://secure.meetup.com').post('/oauth2/access').reply(200, {
+      access_token: 'new-access',
+      refresh_token: 'same-refresh',
+    });
+
+    const before = Date.now();
+    const tokens = await refreshMeetupToken('old-refresh');
+
+    // Without the guard this is `Date.now() + NaN` -- and NaN reaches the
+    // credential row as `new Date(NaN)`, which Postgres rejects, so the
+    // freshly-refreshed (and possibly sole-valid) pair is never stored.
+    expect(Number.isFinite(tokens.expiresAt)).toBe(true);
+    expect(tokens.expiresAt).toBeGreaterThanOrEqual(before + 3_600_000);
+  });
+
+  it('defaults the expiry when expires_in is not a number', async () => {
+    nock('https://secure.meetup.com').post('/oauth2/access').reply(200, {
+      access_token: 'new-access',
+      refresh_token: 'same-refresh',
+      expires_in: 'soon',
+    });
+
+    expect(
+      Number.isFinite((await refreshMeetupToken('old-refresh')).expiresAt),
+    ).toBe(true);
+  });
+
   it('throws with the status when Meetup rejects the refresh', async () => {
     nock('https://secure.meetup.com')
       .post('/oauth2/access')

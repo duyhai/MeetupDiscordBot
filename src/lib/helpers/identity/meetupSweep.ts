@@ -2,6 +2,7 @@ import { Client } from 'discord.js';
 import { Logger } from 'tslog';
 
 import Configuration from '../../../configuration.js';
+import { boundedFetch } from '../../../util/boundedFetch.js';
 import {
   ApplicationCredentialRepository,
   MEETUP_ORGANIZER_CREDENTIAL_KEY,
@@ -78,9 +79,7 @@ async function resolveOrganizerTokens(): Promise<Tokens | undefined> {
  */
 async function fetchThumbBytes(url: string): Promise<Buffer | null> {
   try {
-    const response = await fetch(url, {
-      signal: AbortSignal.timeout(THUMB_FETCH_TIMEOUT_MS),
-    });
+    const response = await boundedFetch(url, undefined, THUMB_FETCH_TIMEOUT_MS);
     if (!response.ok) {
       return null;
     }

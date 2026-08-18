@@ -6,10 +6,29 @@ import {
   BASIC_MEETUP_AUTH_SCOPES,
   debugRedirect,
 } from '../../../constants.js';
+import { boundedFetch } from '../../../util/boundedFetch.js';
 import { APIAccessTokenResponse, Tokens } from '../discord/types.js';
 
 const MEETUP_AUTHORIZE_ENDPOINT = 'https://secure.meetup.com/oauth2/authorize';
 const MEETUP_TOKEN_ENDPOINT = 'https://secure.meetup.com/oauth2/access';
+
+// The refresh runs inside the daily digest, after the day-claim is taken, so
+// an unbounded POST to a stalled endpoint hangs the digest holding the claim.
+// Longer than the 5s thumbnail budget because a failure here is not
+// best-effort: it takes the whole Meetup sweep down.
+const TOKEN_REQUEST_TIMEOUT_MS = 10_000;
+
+/**
+ * Meetup's `expires_in` is documented as seconds, but a malformed or absent
+ * value would otherwise produce `NaN` here -- and `new Date(NaN)` is what
+ * eventually reaches the credential row, so the stored pair becomes
+ * unreadable and every later sweep re-seeds from the config var. One hour is
+ * Meetup's own documented lifetime and the safe assumption.
+ */
+function expiresAtFrom(expiresIn: unknown): number {
+  const seconds = Number.isFinite(expiresIn) ? (expiresIn as number) : 3600;
+  return Date.now() + seconds * 1000;
+}
 
 // Registered with the providers; must be byte-identical in the authorize URL
 // and the token exchange. debugRedirect keeps local dev working through the
@@ -43,11 +62,15 @@ export async function exchangeMeetupCode(code: string): Promise<Tokens> {
     redirect_uri: meetupRedirectUri(),
     code,
   });
-  const response = await fetch(MEETUP_TOKEN_ENDPOINT, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body,
-  });
+  const response = await boundedFetch(
+    MEETUP_TOKEN_ENDPOINT,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body,
+    },
+    TOKEN_REQUEST_TIMEOUT_MS,
+  );
   if (!response.ok) {
     throw new Error(
       `Meetup token exchange failed: [${response.status}] ${await response.text()}`,
@@ -57,7 +80,7 @@ export async function exchangeMeetupCode(code: string): Promise<Tokens> {
   return {
     accessToken: raw.access_token,
     refreshToken: raw.refresh_token,
-    expiresAt: Date.now() + raw.expires_in * 1000,
+    expiresAt: expiresAtFrom(raw.expires_in),
   };
 }
 
@@ -75,11 +98,15 @@ export async function refreshMeetupToken(
     grant_type: 'refresh_token',
     refresh_token: refreshToken,
   });
-  const response = await fetch(MEETUP_TOKEN_ENDPOINT, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body,
-  });
+  const response = await boundedFetch(
+    MEETUP_TOKEN_ENDPOINT,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body,
+    },
+    TOKEN_REQUEST_TIMEOUT_MS,
+  );
   if (!response.ok) {
     throw new Error(
       `Meetup token refresh failed: [${response.status}] ${await response.text()}`,
@@ -91,6 +118,6 @@ export async function refreshMeetupToken(
     // Providers differ on whether refresh tokens rotate. Carry back whatever
     // arrived so the caller can persist it; fall back to the one we sent.
     refreshToken: raw.refresh_token ?? refreshToken,
-    expiresAt: Date.now() + raw.expires_in * 1000,
+    expiresAt: expiresAtFrom(raw.expires_in),
   };
 }
