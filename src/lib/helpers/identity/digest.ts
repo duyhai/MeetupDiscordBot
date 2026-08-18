@@ -3,11 +3,14 @@ import { Logger } from 'tslog';
 
 import { ApplicationCache } from '../../../util/cache.js';
 import { ApplicationIdentityRepository } from '../../../util/identityRepository.js';
+import { ApplicationMemberRepository } from '../../../util/memberRepository.js';
 import {
   IdentityChangeMetadata,
   IdentityField,
+  IdentityPlatform,
 } from '../../repositories/identityTypes.js';
 import { LogEntry, logAlert } from '../discordLogger.js';
+import { runMeetupSweep } from './meetupSweep.js';
 import { runIdentitySweep } from './sweep.js';
 
 const logger = new Logger({ name: 'identityDigest' });
@@ -19,13 +22,31 @@ export const IDENTITY_DIGEST_UTC_HOUR = 18; // ≈ 10-11am Pacific
 const TICK_MS = 60 * 60 * 1000; // hourly
 const MAX_DESCRIPTION = 4096; // Discord's hard embed description limit
 
+// Short on purpose: every line already carries a platform label (below), so
+// these do not need to repeat "Meetup" -- they only need to read as distinct
+// from Discord's "user avatar"/"server avatar"/"display name" at a glance.
 const FIELD_LABELS: Record<IdentityField, string> = {
   user_avatar: 'user avatar',
   member_avatar: 'server avatar',
   nickname: 'nickname',
   username: 'username',
   global_name: 'display name',
+  photo: 'profile photo',
+  name: 'name',
 };
+
+const PLATFORM_LABELS: Record<IdentityPlatform, string> = {
+  discord: 'Discord',
+  meetup: 'Meetup',
+};
+
+// Fields whose stored value is an opaque id/hash, not human-readable text --
+// rendering "old" -> "new" for these would show hashes, not information.
+const PHOTO_LIKE_FIELDS = new Set<IdentityField>([
+  'user_avatar',
+  'member_avatar',
+  'photo',
+]);
 
 export type AnnotatedChange = IdentityChangeMetadata & { revertedAt?: Date };
 
@@ -54,16 +75,38 @@ export function annotateReverts(
   });
 }
 
-function line(change: AnnotatedChange): string {
+/**
+ * A Discord change's subject IS a Discord user id -- `<@id>` always renders.
+ * A Meetup change's subject is a Meetup member id, which is meaningless as a
+ * Discord mention; resolve it through the link table when possible, and fall
+ * back to the raw id (never to a broken `<@undefined>`) when it is not.
+ */
+function mentionFor(
+  change: AnnotatedChange,
+  meetupToDiscord: Map<string, string>,
+): string {
+  if (change.platform === 'discord') {
+    return `<@${change.subjectId}>`;
+  }
+  const discordId = meetupToDiscord.get(change.subjectId);
+  return discordId ? `<@${discordId}>` : change.subjectId;
+}
+
+function line(
+  change: AnnotatedChange,
+  meetupToDiscord: Map<string, string>,
+): string {
   const time = change.detectedAt.toISOString().slice(11, 16);
   const label = FIELD_LABELS[change.field];
+  const platform = PLATFORM_LABELS[change.platform];
+  const who = mentionFor(change, meetupToDiscord);
   const reverted = change.revertedAt
     ? ` (reverted ${change.revertedAt.toISOString().slice(11, 16)})`
     : '';
-  if (change.field === 'user_avatar' || change.field === 'member_avatar') {
-    return `${time}  <@${change.subjectId}>  ${label} changed${reverted}`;
+  if (PHOTO_LIKE_FIELDS.has(change.field)) {
+    return `${time}  ${platform}  ${who}  ${label} changed${reverted}`;
   }
-  return `${time}  <@${change.subjectId}>  ${label} "${
+  return `${time}  ${platform}  ${who}  ${label} "${
     change.oldValue ?? '—'
   }" → "${change.newValue ?? '—'}"${reverted}`;
 }
@@ -72,6 +115,7 @@ export function formatIdentityDigest(
   changes: AnnotatedChange[],
   stats: { changeCount: number; totalBytes: number },
   since: Date,
+  meetupToDiscord: Map<string, string>,
 ): LogEntry | undefined {
   if (changes.length === 0) {
     return undefined;
@@ -84,7 +128,7 @@ export function formatIdentityDigest(
   let used = footer.length;
   let shown = 0;
   for (const change of changes) {
-    const next = `${line(change)}\n`;
+    const next = `${line(change, meetupToDiscord)}\n`;
     // Reserve room for the overflow note so a flood degrades to a truncated
     // digest rather than a rejected one.
     if (used + next.length > MAX_DESCRIPTION - 40) {
@@ -154,21 +198,38 @@ export async function runIdentityDigestOnce(client: Client): Promise<void> {
     // Reconcile first so the digest includes anything missed while the dyno
     // was restarting. `since` stays anchored to the digest hour (computed
     // before the sweep runs) so consecutive days remain exactly contiguous.
-    // The sweep itself is a full 2,008-member pass that finishes some time
-    // after that boundary, and every row it writes is stamped with
-    // `detected_at` at or after that moment -- so `until` is extended to the
-    // time the sweep actually finished, not left at the fixed boundary it
-    // ran past. Without that, the sweep's own findings -- the changes least
-    // likely to have been caught any other way -- would miss today's digest
-    // and only surface in tomorrow's, 24 hours late.
+    // Both sweeps are full passes (Discord: ~2,008 members; Meetup: ~6,000)
+    // that finish some time after that boundary, and every row either writes
+    // is stamped with `detected_at` at or after that moment -- so `until` is
+    // extended to the time the sweeps actually finished, not left at the
+    // fixed boundary they ran past. Without that, the sweeps' own findings --
+    // the changes least likely to have been caught any other way -- would
+    // miss today's digest and only surface in tomorrow's, 24 hours late.
     const { since, until: boundary } = identityDigestWindow(new Date());
     await runIdentitySweep(client, 'sweep');
+    await runMeetupSweep('sweep', client);
     const until = new Date(Math.max(boundary.getTime(), Date.now()));
 
     const changes = await repo.listChangesMetadataBetween(since, until);
     const stats = await repo.storageStats();
 
-    const entry = formatIdentityDigest(annotateReverts(changes), stats, since);
+    // Built fresh each run rather than cached: a link created between
+    // yesterday's digest and today's should resolve today, not tomorrow.
+    const memberRepo = await ApplicationMemberRepository();
+    const members = await memberRepo.listAll();
+    const meetupToDiscord = new Map<string, string>();
+    for (const member of members) {
+      if (member.meetupId) {
+        meetupToDiscord.set(member.meetupId, member.discordUserId);
+      }
+    }
+
+    const entry = formatIdentityDigest(
+      annotateReverts(changes),
+      stats,
+      since,
+      meetupToDiscord,
+    );
     if (entry) {
       // logAlert swallows every error by design, so an outage or a permission
       // change would otherwise leave the claim consumed, a success logged, no

@@ -1,6 +1,7 @@
 import {
   IdentityChangeRecord,
   IdentityField,
+  IdentityPlatform,
 } from '../../repositories/identityTypes.js';
 
 /**
@@ -21,6 +22,15 @@ const FIELD_LABELS: Record<IdentityField, string> = {
   nickname: 'Nickname',
   username: 'Username',
   global_name: 'Display name',
+  photo: 'Profile photo',
+  name: 'Name',
+};
+
+// The Platform column already says which service a row is from, so these
+// stay short rather than repeating "Meetup"/"Discord" inside the field name.
+const PLATFORM_LABELS: Record<IdentityPlatform, string> = {
+  discord: 'Discord',
+  meetup: 'Meetup',
 };
 
 function escapeHtml(value: string | null | undefined): string {
@@ -78,18 +88,22 @@ export function renderIdentityReport(
     changes.length === 0
       ? '<p class="none">No identity changes in this range.</p>'
       : `<table>
-<thead><tr><th>When (UTC)</th><th>Member</th><th>Field</th><th>Before</th><th>After</th><th>Source</th></tr></thead>
+<thead><tr><th>When (UTC)</th><th>Platform</th><th>Member</th><th>Field</th><th>Before</th><th>After</th><th>Source</th></tr></thead>
 <tbody>
 ${changes
   .map((change) => {
-    // Avatar fields always render as image cells, even when the thumb is
-    // null (CDN fetch failed): img() renders a "no image" placeholder for
-    // null. Non-avatar fields (nickname, username, ...) never have thumbs
-    // at all, so they render their text value.
+    // Avatar/photo fields always render as image cells, even when the thumb
+    // is null (CDN fetch failed, or Meetup's old-photo URL is unrecoverable):
+    // img() renders a "no image" placeholder for null. Non-photo fields
+    // (nickname, username, name, ...) never have thumbs at all, so they
+    // render their text value.
     const isAvatarField =
-      change.field === 'user_avatar' || change.field === 'member_avatar';
+      change.field === 'user_avatar' ||
+      change.field === 'member_avatar' ||
+      change.field === 'photo';
     return `<tr>
 <td class="when">${change.detectedAt.toISOString().replace('T', ' ').slice(0, 16)}</td>
+<td>${escapeHtml(PLATFORM_LABELS[change.platform])}</td>
 <td class="who">${escapeHtml(change.subjectId)}</td>
 <td>${escapeHtml(FIELD_LABELS[change.field])}</td>
 <td>${isAvatarField ? img(change.oldThumb) : escapeHtml(change.oldValue)}</td>

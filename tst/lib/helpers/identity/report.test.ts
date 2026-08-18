@@ -102,6 +102,30 @@ describe('renderIdentityReport', () => {
     expect(html).toContain('&lt;img src=x onerror=alert(1)&gt;');
   });
 
+  it('renders a Meetup row with its platform column and thumbnail', () => {
+    const html = renderIdentityReport(
+      [
+        change({
+          platform: 'meetup',
+          subjectId: 'm1',
+          field: 'photo',
+          oldThumb: null,
+          newThumb: Buffer.from([7, 8, 9]),
+        }),
+      ],
+      range,
+    );
+
+    expect(html).toContain('<th>Platform</th>');
+    expect(html).toContain('Meetup');
+    expect(html).toContain('Profile photo');
+    // The new photo's bytes render as an image; the old one -- unrecoverable
+    // for a Meetup photo change -- falls back to the same placeholder as a
+    // failed Discord CDN fetch.
+    expect(html).toContain('data:image/webp;base64,');
+    expect(html).toContain('no image');
+  });
+
   it('does not throw on an unrecognised field from an older row', () => {
     const html = renderIdentityReport(
       [
