@@ -20,7 +20,13 @@ function membershipsPage(_uri: string, _body: unknown) {
     data: {
       groupByUrlname: {
         memberships: {
-          pageInfo: { hasNextPage: false, endCursor: null },
+          pageInfo: {
+            hasNextPage: false,
+            hasPreviousPage: false,
+            startCursor: null,
+            endCursor: null,
+          },
+          totalCount: 1,
           edges: [
             {
               node: {

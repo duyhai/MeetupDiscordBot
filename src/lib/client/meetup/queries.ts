@@ -161,8 +161,11 @@ export const getGroupMemberships = gql`
       memberships(first: $first, after: $after) {
         pageInfo {
           hasNextPage
+          hasPreviousPage
+          startCursor
           endCursor
         }
+        totalCount
         edges {
           node {
             id

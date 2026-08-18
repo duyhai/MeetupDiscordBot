@@ -236,7 +236,14 @@ export class GqlMeetupClient {
         urlname: Configuration.meetup.groupUrlName,
         ...input,
       });
-      logger.info(`getGroupMemberships result: ${JSON.stringify(result)}`);
+      // Counts only, not the full page: this method returns ~60 full roster
+      // pages of member names and photo URLs daily, and this repo has a
+      // production log-flooding history (a previous feature emitted ~900
+      // lines per run before an incident surfaced it).
+      const { edges, pageInfo } = result.groupByUrlname.memberships;
+      logger.info(
+        `getGroupMemberships page: ${edges.length} members, hasNextPage=${pageInfo.hasNextPage}`,
+      );
       return result;
     } catch (error) {
       logger.error(error);
