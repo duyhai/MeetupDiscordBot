@@ -26,7 +26,12 @@ https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/workin
 
 - `/meetup_identity_report [days]` — mods/organizers only. Downloads a
   self-contained HTML report of member photo and name changes over the last
-  N days (default 7), with before/after thumbnails embedded.
+  N days (default 7), with before/after thumbnails embedded, covering both
+  Discord and Meetup.
+- `/meetup_get_token` — sends your Meetup access token privately. Mods and
+  organizers additionally see a long-lived refresh token, used to set
+  `MEETUP_ORGANIZER_REFRESH_TOKEN` and enable Meetup-side identity
+  monitoring.
 
 # Testing
 
@@ -83,9 +88,28 @@ The Postgres data volume survives `yarn docker:down`. If the schema ever changes
 
 ### Identity monitoring
 
-Before the first digest, populate the baseline once so existing members are
-not reported as changed:
+Before the first digest, populate the baseline for each platform once so
+existing members are not reported as changed. Both backfill scripts open
+their own Postgres connection pool on top of whatever the running dyno
+already holds, so run them outside a deploy window, not concurrently with
+one, and do the two platforms in order:
 
-    DISCORD_API_KEY=$(heroku config:get DISCORD_API_KEY -a meetup-discord-bot) \
-    DATABASE_URL=$(heroku config:get DATABASE_URL -a meetup-discord-bot) \
-    yarn tsx scripts/backfillIdentityBaseline.ts
+1. Run `/meetup_get_token` as an organizer, copy the refresh token from the
+   reply, and set it as `MEETUP_ORGANIZER_REFRESH_TOKEN` in Heroku config.
+2. Run the Discord backfill and confirm it reports 0 changes:
+
+       DISCORD_API_KEY=$(heroku config:get DISCORD_API_KEY -a meetup-discord-bot) \
+       DATABASE_URL=$(heroku config:get DATABASE_URL -a meetup-discord-bot) \
+       yarn tsx scripts/backfillIdentityBaseline.ts
+
+3. Run the Meetup backfill and confirm it reports 0 changes:
+
+       DATABASE_URL=$(heroku config:get DATABASE_URL -a meetup-discord-bot) \
+       MEETUP_KEY=$(heroku config:get MEETUP_KEY -a meetup-discord-bot) \
+       MEETUP_SECRET=$(heroku config:get MEETUP_SECRET -a meetup-discord-bot) \
+       MEETUP_ORGANIZER_REFRESH_TOKEN=$(heroku config:get MEETUP_ORGANIZER_REFRESH_TOKEN -a meetup-discord-bot) \
+       yarn tsx scripts/backfillMeetupIdentity.ts
+
+Either script exiting non-zero (including "0 scanned") means something is
+wrong with credentials or connectivity, not that the roster is empty --
+resolve it before the next digest runs.
