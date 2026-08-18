@@ -154,6 +154,31 @@ export const getGroupEvents = gql`
   ${UserFragment}
 `;
 
+export const getGroupMemberships = gql`
+  query ($urlname: String!, $first: Int, $after: String) {
+    groupByUrlname(urlname: $urlname) {
+      id
+      memberships(first: $first, after: $after) {
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
+        edges {
+          node {
+            id
+            name
+            username
+            memberPhoto {
+              id
+              thumbUrl
+            }
+          }
+        }
+      }
+    }
+  }
+`;
+
 export const getEvent = gql`
   query ($eventId: ID!) {
     event(id: $eventId) {

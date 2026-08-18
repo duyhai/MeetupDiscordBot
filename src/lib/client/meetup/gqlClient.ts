@@ -14,6 +14,7 @@ import {
   getEvent,
   getEventRsvps,
   getGroupEvents,
+  getGroupMemberships,
   getSelfPastRsvpCount,
   getUserHostedEvents,
   getUserInfo,
@@ -33,6 +34,8 @@ import {
   GetEventRsvpsResponse,
   GetGroupEventsInput,
   GetGroupEventsResponse,
+  GetGroupMembershipsInput,
+  GetGroupMembershipsResponse,
   GetUserHostedEventsInput,
   GetUserHostedEventsResponse,
   GetUserInfoResponse,
@@ -214,6 +217,31 @@ export class GqlMeetupClient {
         }
       },
     );
+  }
+
+  // Deliberately NOT wrapped in cachedClientRequest, unlike getGroupEvents
+  // above: the identity sweep diffs today's roster against yesterday's
+  // stored snapshot, so this call must always hit the live API. A cached
+  // roster would make the sweep compare today's baseline against yesterday's
+  // data, which defeats the point of the diff.
+  public async getGroupMemberships(input: PaginationInput) {
+    logger.info(
+      `Calling getGroupMemberships with input: ${JSON.stringify(input)}`,
+    );
+    try {
+      const result = await this.client.request<
+        GetGroupMembershipsResponse,
+        GetGroupMembershipsInput
+      >(getGroupMemberships, {
+        urlname: Configuration.meetup.groupUrlName,
+        ...input,
+      });
+      logger.info(`getGroupMemberships result: ${JSON.stringify(result)}`);
+      return result;
+    } catch (error) {
+      logger.error(error);
+      throw error;
+    }
   }
 
   public async getEventRsvps(

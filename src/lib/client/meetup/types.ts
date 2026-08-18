@@ -229,6 +229,26 @@ export interface EditEventResponse {
   editEvent: { event: { eventUrl: string; id: string } };
 }
 
+export interface MeetupGroupMember {
+  id: string;
+  memberPhoto: { id: string; thumbUrl: string } | null;
+  name: string | null;
+  username: string | null;
+}
+
+export interface GetGroupMembershipsResponse {
+  groupByUrlname: {
+    id: string;
+    memberships: PaginatedData<MeetupGroupMember>;
+  };
+}
+
+export type GetGroupMembershipsInput = {
+  after?: string;
+  first?: number;
+  urlname: string;
+};
+
 export interface GetEventResponse {
   event: { description: string; id: string; title: string };
 }
