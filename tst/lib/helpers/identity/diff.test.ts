@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
-import { diffIdentity } from '../../../src/lib/helpers/identityDiff.js';
-import { IdentitySnapshot } from '../../../src/lib/repositories/identityTypes.js';
+import { diffIdentity } from '../../../../src/lib/helpers/identity/diff.js';
+import { IdentitySnapshot } from '../../../../src/lib/repositories/identityTypes.js';
 
 const base: IdentitySnapshot = {
   discordUserId: 'u1',

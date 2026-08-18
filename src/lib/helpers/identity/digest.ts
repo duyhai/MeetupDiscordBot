@@ -1,14 +1,14 @@
 import { Client } from 'discord.js';
 import { Logger } from 'tslog';
 
-import { ApplicationCache } from '../../util/cache.js';
-import { ApplicationIdentityRepository } from '../../util/identityRepository.js';
+import { ApplicationCache } from '../../../util/cache.js';
+import { ApplicationIdentityRepository } from '../../../util/identityRepository.js';
 import {
   IdentityChangeMetadata,
   IdentityField,
-} from '../repositories/identityTypes.js';
-import { LogEntry, logAlert } from './discordLogger.js';
-import { runIdentitySweep } from './identitySweep.js';
+} from '../../repositories/identityTypes.js';
+import { LogEntry, logAlert } from '../discordLogger.js';
+import { runIdentitySweep } from './sweep.js';
 
 const logger = new Logger({ name: 'identityDigest' });
 

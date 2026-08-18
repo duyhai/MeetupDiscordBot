@@ -5,7 +5,7 @@ import {
   isIdentityWriteSuppressed,
   releaseIdentityWriteSuppression,
   suppressIdentityWrites,
-} from '../../../src/lib/helpers/identitySuppression.js';
+} from '../../../../src/lib/helpers/identity/suppression.js';
 
 describe('identity write suppression', () => {
   beforeEach(() => {

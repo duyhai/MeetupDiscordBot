@@ -2,7 +2,7 @@ import {
   IdentityChange,
   IdentityField,
   IdentitySnapshot,
-} from '../repositories/identityTypes.js';
+} from '../../repositories/identityTypes.js';
 
 const FIELDS: { field: IdentityField; key: keyof IdentitySnapshot }[] = [
   { field: 'user_avatar', key: 'userAvatarHash' },

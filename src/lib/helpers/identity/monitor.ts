@@ -1,12 +1,15 @@
 import { GuildMember } from 'discord.js';
 import { Logger } from 'tslog';
 
-import { ApplicationIdentityRepository } from '../../util/identityRepository.js';
-import { ChangeSource, IdentityChange } from '../repositories/identityTypes.js';
-import { diffIdentity } from './identityDiff.js';
-import { snapshotMember } from './identitySnapshot.js';
-import { isIdentityWriteSuppressed } from './identitySuppression.js';
-import { fetchChangeThumbs } from './identityThumbs.js';
+import { ApplicationIdentityRepository } from '../../../util/identityRepository.js';
+import {
+  ChangeSource,
+  IdentityChange,
+} from '../../repositories/identityTypes.js';
+import { diffIdentity } from './diff.js';
+import { snapshotMember } from './snapshot.js';
+import { isIdentityWriteSuppressed } from './suppression.js';
+import { fetchChangeThumbs } from './thumbs.js';
 
 const logger = new Logger({ name: 'identityMonitor' });
 

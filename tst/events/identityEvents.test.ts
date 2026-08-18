@@ -2,9 +2,9 @@ import { Client, GuildMember } from 'discord.js';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { registerIdentityEvents } from '../../src/events/identityEvents.js';
-import { recordIdentityFor } from '../../src/lib/helpers/identityMonitor.js';
+import { recordIdentityFor } from '../../src/lib/helpers/identity/monitor.js';
 
-vi.mock('../../src/lib/helpers/identityMonitor.js', () => ({
+vi.mock('../../src/lib/helpers/identity/monitor.js', () => ({
   recordIdentityFor: vi.fn().mockResolvedValue([]),
 }));
 

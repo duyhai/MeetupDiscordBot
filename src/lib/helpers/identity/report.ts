@@ -1,7 +1,7 @@
 import {
   IdentityChangeRecord,
   IdentityField,
-} from '../repositories/identityTypes.js';
+} from '../../repositories/identityTypes.js';
 
 /**
  * Sized to the DYNO, not to Discord's upload limit.

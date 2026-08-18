@@ -4,11 +4,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   recordIdentityFor,
   updateBaselineSilently,
-} from '../../../src/lib/helpers/identityMonitor.js';
+} from '../../../../src/lib/helpers/identity/monitor.js';
 import {
   clearIdentityWriteSuppression,
   suppressIdentityWrites,
-} from '../../../src/lib/helpers/identitySuppression.js';
+} from '../../../../src/lib/helpers/identity/suppression.js';
 
 const repo = {
   getSnapshot: vi.fn(),
@@ -16,11 +16,11 @@ const repo = {
   recordChanges: vi.fn().mockResolvedValue(undefined),
 };
 
-vi.mock('../../../src/util/identityRepository.js', () => ({
+vi.mock('../../../../src/util/identityRepository.js', () => ({
   ApplicationIdentityRepository: vi.fn(async () => repo),
 }));
 
-vi.mock('../../../src/lib/helpers/identityThumbs.js', () => ({
+vi.mock('../../../../src/lib/helpers/identity/thumbs.js', () => ({
   fetchChangeThumbs: vi.fn(async () => new Map()),
 }));
 

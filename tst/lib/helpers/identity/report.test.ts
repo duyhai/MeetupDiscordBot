@@ -3,8 +3,8 @@ import { describe, expect, it } from 'vitest';
 import {
   estimateReportBytes,
   renderIdentityReport,
-} from '../../../src/lib/helpers/identityReport.js';
-import { IdentityChangeRecord } from '../../../src/lib/repositories/identityTypes.js';
+} from '../../../../src/lib/helpers/identity/report.js';
+import { IdentityChangeRecord } from '../../../../src/lib/repositories/identityTypes.js';
 
 const range = {
   from: new Date('2026-08-10T00:00:00Z'),
