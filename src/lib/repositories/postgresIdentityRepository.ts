@@ -1,6 +1,7 @@
 import pg from 'pg';
 import { Logger } from 'tslog';
 
+import { MeetupSnapshot } from '../helpers/identity/meetupSnapshot.js';
 import {
   ChangeSource,
   IdentityChange,
@@ -42,6 +43,15 @@ CREATE INDEX IF NOT EXISTS member_identity_changes_detected_at_idx
   ON member_identity_changes (detected_at);
 CREATE INDEX IF NOT EXISTS member_identity_changes_subject_idx
   ON member_identity_changes (platform, scope_id, subject_id, detected_at DESC);
+CREATE TABLE IF NOT EXISTS meetup_identity (
+  scope_id          TEXT NOT NULL,
+  meetup_member_id  TEXT NOT NULL,
+  name              TEXT,
+  username          TEXT,
+  photo_id          TEXT,
+  updated_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (scope_id, meetup_member_id)
+);
 `;
 
 interface SnapshotRow {
@@ -71,6 +81,14 @@ interface ChangeRow extends MetadataRow {
   new_thumb: Buffer | null;
 }
 
+interface MeetupSnapshotRow {
+  scope_id: string;
+  meetup_member_id: string;
+  name: string | null;
+  username: string | null;
+  photo_id: string | null;
+}
+
 function toSnapshot(row: SnapshotRow): IdentitySnapshot {
   return {
     scopeId: row.scope_id,
@@ -80,6 +98,16 @@ function toSnapshot(row: SnapshotRow): IdentitySnapshot {
     nickname: row.nickname,
     userAvatarHash: row.user_avatar_hash,
     memberAvatarHash: row.member_avatar_hash,
+  };
+}
+
+function toMeetupSnapshot(row: MeetupSnapshotRow): MeetupSnapshot {
+  return {
+    scopeId: row.scope_id,
+    meetupMemberId: row.meetup_member_id,
+    name: row.name,
+    username: row.username,
+    photoId: row.photo_id,
   };
 }
 
@@ -199,6 +227,38 @@ export class PostgresIdentityRepository {
         snapshot.nickname,
         snapshot.userAvatarHash,
         snapshot.memberAvatarHash,
+      ],
+    );
+  }
+
+  async getMeetupSnapshot(
+    scopeId: string,
+    meetupMemberId: string,
+  ): Promise<MeetupSnapshot | undefined> {
+    const result = await this.pool.query<MeetupSnapshotRow>(
+      'SELECT * FROM meetup_identity WHERE scope_id = $1 AND meetup_member_id = $2',
+      [scopeId, meetupMemberId],
+    );
+    const row = result.rows[0];
+    return row ? toMeetupSnapshot(row) : undefined;
+  }
+
+  async putMeetupSnapshot(snapshot: MeetupSnapshot): Promise<void> {
+    await this.pool.query(
+      `INSERT INTO meetup_identity (scope_id, meetup_member_id, name,
+         username, photo_id, updated_at)
+       VALUES ($1, $2, $3, $4, $5, now())
+       ON CONFLICT (scope_id, meetup_member_id) DO UPDATE SET
+         name = EXCLUDED.name,
+         username = EXCLUDED.username,
+         photo_id = EXCLUDED.photo_id,
+         updated_at = now()`,
+      [
+        snapshot.scopeId,
+        snapshot.meetupMemberId,
+        snapshot.name,
+        snapshot.username,
+        snapshot.photoId,
       ],
     );
   }
@@ -332,9 +392,18 @@ export class PostgresIdentityRepository {
        WHERE platform = $1 AND scope_id = $2 AND subject_id = $3`,
       [platform, scopeId, subjectId],
     );
+    // The two platforms keep separate baseline tables (member_identity vs.
+    // meetup_identity), so erasing one platform's baseline must not touch the
+    // other's -- a Discord-only erasure that also cleared meetup_identity, or
+    // vice versa, would silently wipe evidence for an unrelated platform.
     if (platform === 'discord') {
       await this.pool.query(
         'DELETE FROM member_identity WHERE scope_id = $1 AND discord_user_id = $2',
+        [scopeId, subjectId],
+      );
+    } else if (platform === 'meetup') {
+      await this.pool.query(
+        'DELETE FROM meetup_identity WHERE scope_id = $1 AND meetup_member_id = $2',
         [scopeId, subjectId],
       );
     }
