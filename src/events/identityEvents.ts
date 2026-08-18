@@ -1,7 +1,7 @@
 import { Client, GuildMember, User } from 'discord.js';
 import { Logger } from 'tslog';
 
-import { recordIdentityFor } from '../lib/helpers/identityMonitor.js';
+import { recordIdentityFor } from '../lib/helpers/identity/monitor.js';
 
 const logger = new Logger({ name: 'identityEvents' });
 

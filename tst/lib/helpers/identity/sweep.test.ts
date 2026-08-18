@@ -1,10 +1,10 @@
 import { Client, Collection } from 'discord.js';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { runIdentitySweep } from '../../../src/lib/helpers/identitySweep.js';
-import { recordIdentityFor } from '../../../src/lib/helpers/identityMonitor.js';
+import { runIdentitySweep } from '../../../../src/lib/helpers/identity/sweep.js';
+import { recordIdentityFor } from '../../../../src/lib/helpers/identity/monitor.js';
 
-vi.mock('../../../src/lib/helpers/identityMonitor.js', () => ({
+vi.mock('../../../../src/lib/helpers/identity/monitor.js', () => ({
   recordIdentityFor: vi.fn().mockResolvedValue([]),
 }));
 

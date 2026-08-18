@@ -1,7 +1,7 @@
 import { Logger } from 'tslog';
 
-import { IdentityChange } from '../repositories/identityTypes.js';
-import { avatarThumbUrl } from './identitySnapshot.js';
+import { IdentityChange } from '../../repositories/identityTypes.js';
+import { avatarThumbUrl } from './snapshot.js';
 
 const logger = new Logger({ name: 'identityThumbs' });
 

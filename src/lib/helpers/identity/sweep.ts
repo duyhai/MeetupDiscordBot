@@ -1,8 +1,8 @@
 import { Client } from 'discord.js';
 import { Logger } from 'tslog';
 
-import { ChangeSource } from '../repositories/identityTypes.js';
-import { recordIdentityFor } from './identityMonitor.js';
+import { ChangeSource } from '../../repositories/identityTypes.js';
+import { recordIdentityFor } from './monitor.js';
 
 const logger = new Logger({ name: 'identitySweep' });
 

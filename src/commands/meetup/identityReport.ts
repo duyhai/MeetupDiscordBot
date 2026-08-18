@@ -11,7 +11,7 @@ import {
   estimateReportBytes,
   estimateReportBytesFromCounts,
   renderIdentityReport,
-} from '../../lib/helpers/identityReport.js';
+} from '../../lib/helpers/identity/report.js';
 import { IdentityChangeRecord } from '../../lib/repositories/identityTypes.js';
 import {
   discordCommandWrapper,

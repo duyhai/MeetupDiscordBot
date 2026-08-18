@@ -7,16 +7,16 @@ import {
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { onboardUserCommon } from '../../../src/lib/helpers/onboardUser.js';
-import { updateBaselineSilently } from '../../../src/lib/helpers/identityMonitor.js';
+import { updateBaselineSilently } from '../../../src/lib/helpers/identity/monitor.js';
 import {
   releaseIdentityWriteSuppression,
   suppressIdentityWrites,
-} from '../../../src/lib/helpers/identitySuppression.js';
+} from '../../../src/lib/helpers/identity/suppression.js';
 
-vi.mock('../../../src/lib/helpers/identityMonitor.js', () => ({
+vi.mock('../../../src/lib/helpers/identity/monitor.js', () => ({
   updateBaselineSilently: vi.fn().mockResolvedValue(undefined),
 }));
-vi.mock('../../../src/lib/helpers/identitySuppression.js', () => ({
+vi.mock('../../../src/lib/helpers/identity/suppression.js', () => ({
   suppressIdentityWrites: vi.fn(),
   releaseIdentityWriteSuppression: vi.fn(),
 }));

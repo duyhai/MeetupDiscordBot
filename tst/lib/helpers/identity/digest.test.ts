@@ -7,10 +7,10 @@ import {
   formatIdentityDigest,
   identityDigestWindow,
   runIdentityDigestOnce,
-} from '../../../src/lib/helpers/identityDigest.js';
-import { logAlert } from '../../../src/lib/helpers/discordLogger.js';
-import { runIdentitySweep } from '../../../src/lib/helpers/identitySweep.js';
-import { IdentityChangeRecord } from '../../../src/lib/repositories/identityTypes.js';
+} from '../../../../src/lib/helpers/identity/digest.js';
+import { logAlert } from '../../../../src/lib/helpers/discordLogger.js';
+import { runIdentitySweep } from '../../../../src/lib/helpers/identity/sweep.js';
+import { IdentityChangeRecord } from '../../../../src/lib/repositories/identityTypes.js';
 
 const repo = vi.hoisted(() => ({
   listChangesMetadataBetween: vi.fn(),
@@ -21,16 +21,16 @@ const cache = vi.hoisted(() => ({
   remove: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock('../../../src/util/identityRepository.js', () => ({
+vi.mock('../../../../src/util/identityRepository.js', () => ({
   ApplicationIdentityRepository: vi.fn(async () => repo),
 }));
-vi.mock('../../../src/util/cache.js', () => ({
+vi.mock('../../../../src/util/cache.js', () => ({
   ApplicationCache: vi.fn(async () => cache),
 }));
-vi.mock('../../../src/lib/helpers/discordLogger.js', () => ({
+vi.mock('../../../../src/lib/helpers/discordLogger.js', () => ({
   logAlert: vi.fn().mockResolvedValue(true),
 }));
-vi.mock('../../../src/lib/helpers/identitySweep.js', () => ({
+vi.mock('../../../../src/lib/helpers/identity/sweep.js', () => ({
   runIdentitySweep: vi.fn().mockResolvedValue({ scanned: 0, changed: 0 }),
 }));
 

@@ -1,6 +1,6 @@
 import { GuildMember } from 'discord.js';
 
-import { IdentitySnapshot } from '../repositories/identityTypes.js';
+import { IdentitySnapshot } from '../../repositories/identityTypes.js';
 
 export function snapshotMember(member: GuildMember): IdentitySnapshot {
   return {

@@ -8,7 +8,7 @@ import './commands';
 import app, { setOAuthAlertClient } from './app.js';
 import Configuration from './configuration.js';
 import { registerIdentityEvents } from './events/identityEvents.js';
-import { startIdentityDigestScheduler } from './lib/helpers/identityDigest.js';
+import { startIdentityDigestScheduler } from './lib/helpers/identity/digest.js';
 import { startUnlinkedDigestScheduler } from './lib/helpers/unlinkedDigest.js';
 
 const logger = new Logger({ name: 'MeetupBot' });

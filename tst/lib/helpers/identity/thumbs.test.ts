@@ -1,7 +1,7 @@
 import nock from 'nock';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { fetchChangeThumbs } from '../../../src/lib/helpers/identityThumbs.js';
+import { fetchChangeThumbs } from '../../../../src/lib/helpers/identity/thumbs.js';
 
 afterEach(() => nock.cleanAll());
 

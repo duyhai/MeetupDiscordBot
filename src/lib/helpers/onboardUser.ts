@@ -12,11 +12,11 @@ import { describeInteraction, isAdmin, linkStr } from '../../util/discord.js';
 import { GqlMeetupClient } from '../client/meetup/gqlClient.js';
 import { MemberGender } from '../client/meetup/types.js';
 import { logAlert } from './discordLogger.js';
-import { updateBaselineSilently } from './identityMonitor.js';
+import { updateBaselineSilently } from './identity/monitor.js';
 import {
   releaseIdentityWriteSuppression,
   suppressIdentityWrites,
-} from './identitySuppression.js';
+} from './identity/suppression.js';
 import { recordManualOnboard, recordMeetupLink } from './memberLink.js';
 
 /**
