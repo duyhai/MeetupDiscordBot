@@ -40,7 +40,9 @@ const change = (
   over: Partial<IdentityChangeRecord> = {},
 ): IdentityChangeRecord => ({
   id: '1',
-  discordUserId: 'u1',
+  platform: 'discord',
+  scopeId: 'g1',
+  subjectId: 'u1',
   field: 'user_avatar',
   oldValue: 'aaa',
   newValue: 'bbb',
@@ -95,10 +97,10 @@ describe('annotateReverts', () => {
 
   it("does not treat another member's change as a revert", () => {
     const out = annotateReverts([
-      change({ id: '1', discordUserId: 'u1' }),
+      change({ id: '1', subjectId: 'u1' }),
       change({
         id: '2',
-        discordUserId: 'u2',
+        subjectId: 'u2',
         oldValue: 'bbb',
         newValue: 'aaa',
         detectedAt: at('2026-08-16T18:31:00Z'),
@@ -143,7 +145,7 @@ describe('formatIdentityDigest', () => {
 
   it('truncates a flood rather than exceeding the embed limit', () => {
     const many = Array.from({ length: 200 }, (_, i) =>
-      change({ id: String(i), discordUserId: `u${i}` }),
+      change({ id: String(i), subjectId: `u${i}` }),
     );
 
     const entry = formatIdentityDigest(many, stats);

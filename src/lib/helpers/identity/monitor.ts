@@ -46,7 +46,7 @@ export async function recordIdentityFor(
     return [];
   }
 
-  const before = await repo.getSnapshot(member.id);
+  const before = await repo.getSnapshot(after.scopeId, member.id);
   const changes = diffIdentity(before, after);
 
   if (!before) {

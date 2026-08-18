@@ -45,7 +45,7 @@ export function annotateReverts(
     const revert = changes.find(
       (other) =>
         other.id !== change.id &&
-        other.discordUserId === change.discordUserId &&
+        other.subjectId === change.subjectId &&
         other.field === change.field &&
         other.detectedAt > change.detectedAt &&
         other.newValue === change.oldValue,
@@ -61,9 +61,9 @@ function line(change: AnnotatedChange): string {
     ? ` (reverted ${change.revertedAt.toISOString().slice(11, 16)})`
     : '';
   if (change.field === 'user_avatar' || change.field === 'member_avatar') {
-    return `${time}  <@${change.discordUserId}>  ${label} changed${reverted}`;
+    return `${time}  <@${change.subjectId}>  ${label} changed${reverted}`;
   }
-  return `${time}  <@${change.discordUserId}>  ${label} "${
+  return `${time}  <@${change.subjectId}>  ${label} "${
     change.oldValue ?? '—'
   }" → "${change.newValue ?? '—'}"${reverted}`;
 }

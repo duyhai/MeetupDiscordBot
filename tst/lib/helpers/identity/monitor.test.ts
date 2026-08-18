@@ -82,6 +82,27 @@ describe('recordIdentityFor', () => {
     expect(repo.putSnapshot).toHaveBeenCalledTimes(1);
   });
 
+  it('records the change before advancing the baseline', async () => {
+    const member = fakeMember({
+      user: {
+        username: 'someone',
+        globalName: 'Someone',
+        avatar: 'bbb',
+        bot: false,
+      },
+    });
+
+    await recordIdentityFor(member, 'event');
+
+    // Load-bearing and previously untested: swapping these two writes left
+    // every test in the branch green. Crash between them in this order and
+    // the next sweep re-records a harmless duplicate; reversed, the baseline
+    // advances while the evidence is lost for good.
+    expect(repo.recordChanges.mock.invocationCallOrder[0]).toBeLessThan(
+      repo.putSnapshot.mock.invocationCallOrder[0],
+    );
+  });
+
   it('writes a baseline but no change for a first sighting', async () => {
     repo.getSnapshot.mockResolvedValue(undefined);
 
