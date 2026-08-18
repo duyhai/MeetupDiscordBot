@@ -2,7 +2,7 @@ import { CommandInteraction } from 'discord.js';
 import { Discord, Slash } from 'discordx';
 import { Tokens } from '../../lib/client/discord/types.js';
 import { ApplicationCache } from '../../util/cache.js';
-import { discordCommandWrapper } from '../../util/discord.js';
+import { discordCommandWrapper, hasAnyServerRole } from '../../util/discord.js';
 import { withMeetupClient } from '../../util/meetup.js';
 
 @Discord()
@@ -31,6 +31,28 @@ export class MeetupGetTokenCommands {
           ? `\n⏰ Expires: <t:${Math.floor(tokens.expiresAt / 1000)}:R>`
           : '';
 
+        const isOrganizer = hasAnyServerRole(
+          await interaction.guild.members.fetch(interaction.user.id),
+          ['moderator', 'organizer'],
+        );
+        // Only an organizer sees the refresh token: it is the long-lived
+        // credential behind the whole Meetup-side sweep, so surfacing it to
+        // every member who runs this command would hand out a standing
+        // password with no way to tell who holds a copy.
+        const refreshSection =
+          isOrganizer && tokens.refreshToken
+            ? [
+                '',
+                '🔁 **Refresh token** — long-lived, unlike the access token above.',
+                'Set this as `MEETUP_ORGANIZER_REFRESH_TOKEN` in Heroku config to',
+                'enable Meetup-side identity monitoring. Treat it as a password:',
+                'it does not expire until revoked.',
+                '```',
+                tokens.refreshToken,
+                '```',
+              ]
+            : [];
+
         await interaction.followUp({
           ephemeral: true,
           content: [
@@ -41,6 +63,7 @@ export class MeetupGetTokenCommands {
             expiresInfo,
             '',
             '💡 Paste this into the `ACCESS_TOKEN` field in the analysis notebook.',
+            ...refreshSection,
           ].join('\n'),
         });
       });
