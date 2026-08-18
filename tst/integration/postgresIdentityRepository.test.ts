@@ -18,7 +18,10 @@ if (!POSTGRES_AVAILABLE) {
   );
 }
 
+const DEFAULT_SCOPE = 'guild-default';
+
 const freshSnapshot = (): IdentitySnapshot => ({
+  scopeId: DEFAULT_SCOPE,
   discordUserId: `discord-${crypto.randomUUID()}`,
   username: 'someone',
   globalName: 'Someone',
@@ -38,7 +41,9 @@ describe.skipIf(!POSTGRES_AVAILABLE)('PostgresIdentityRepository', () => {
     const snap = freshSnapshot();
     await repo.putSnapshot(snap);
 
-    expect(await repo.getSnapshot(snap.discordUserId)).toEqual(snap);
+    expect(await repo.getSnapshot(snap.scopeId, snap.discordUserId)).toEqual(
+      snap,
+    );
   });
 
   it('overwrites an existing snapshot rather than duplicating it', async () => {
@@ -46,8 +51,101 @@ describe.skipIf(!POSTGRES_AVAILABLE)('PostgresIdentityRepository', () => {
     await repo.putSnapshot(snap);
     await repo.putSnapshot({ ...snap, userAvatarHash: 'bbb' });
 
-    const stored = await repo.getSnapshot(snap.discordUserId);
+    const stored = await repo.getSnapshot(snap.scopeId, snap.discordUserId);
     expect(stored?.userAvatarHash).toBe('bbb');
+  });
+
+  it("keeps two guilds' baselines for the same member apart", async () => {
+    const userId = `discord-${crypto.randomUUID()}`;
+    await repo.putSnapshot({
+      scopeId: 'guild-a',
+      discordUserId: userId,
+      username: 'someone',
+      globalName: 'Someone',
+      nickname: 'In Guild A',
+      userAvatarHash: 'aaa',
+      memberAvatarHash: null,
+    });
+    await repo.putSnapshot({
+      scopeId: 'guild-b',
+      discordUserId: userId,
+      username: 'someone',
+      globalName: 'Someone',
+      nickname: 'In Guild B',
+      userAvatarHash: 'aaa',
+      memberAvatarHash: null,
+    });
+
+    // Nickname and per-guild avatar are guild-scoped facts. A single global
+    // key would make these two rows overwrite each other, and every sweep
+    // would then report a nickname change that never happened.
+    expect((await repo.getSnapshot('guild-a', userId))?.nickname).toBe(
+      'In Guild A',
+    );
+    expect((await repo.getSnapshot('guild-b', userId))?.nickname).toBe(
+      'In Guild B',
+    );
+  });
+
+  it('erases one member without touching another', async () => {
+    const mine = `discord-${crypto.randomUUID()}`;
+    const theirs = `discord-${crypto.randomUUID()}`;
+    for (const id of [mine, theirs]) {
+      // eslint-disable-next-line no-await-in-loop
+      await repo.recordChanges(
+        [
+          {
+            platform: 'discord',
+            scopeId: 'guild-a',
+            subjectId: id,
+            field: 'nickname',
+            oldValue: 'A',
+            newValue: 'B',
+          },
+        ],
+        'event',
+        new Map(),
+      );
+    }
+
+    const removed = await repo.deleteMemberIdentity('discord', 'guild-a', mine);
+
+    expect(removed).toBeGreaterThan(0);
+    const remaining = await repo.listChangesBetween(
+      new Date(Date.now() - 60_000),
+      new Date(Date.now() + 60_000),
+    );
+    expect(remaining.some((r) => r.subjectId === mine)).toBe(false);
+    expect(remaining.some((r) => r.subjectId === theirs)).toBe(true);
+  });
+
+  it('records platform and scope on every change', async () => {
+    const id = `meetup-${crypto.randomUUID()}`;
+    const start = new Date(Date.now() - 1000);
+    await repo.recordChanges(
+      [
+        {
+          platform: 'meetup',
+          scopeId: '7595882',
+          subjectId: id,
+          field: 'photo',
+          oldValue: 'p1',
+          newValue: 'p2',
+        },
+      ],
+      'sweep',
+      new Map(),
+    );
+
+    const rows = await repo.listChangesBetween(
+      start,
+      new Date(Date.now() + 1000),
+    );
+    const mine = rows.find((r) => r.subjectId === id);
+    // The digest and report both filter on these; a NULL here silently drops
+    // Meetup rows out of every surface.
+    expect(mine?.platform).toBe('meetup');
+    expect(mine?.scopeId).toBe('7595882');
   });
 
   it('stores and returns thumbnail bytes', async () => {
@@ -64,7 +162,9 @@ describe.skipIf(!POSTGRES_AVAILABLE)('PostgresIdentityRepository', () => {
     await repo.recordChanges(
       [
         {
-          discordUserId: snap.discordUserId,
+          platform: 'discord',
+          scopeId: snap.scopeId,
+          subjectId: snap.discordUserId,
           field: 'user_avatar',
           oldValue: 'aaa',
           newValue: 'bbb',
@@ -73,7 +173,7 @@ describe.skipIf(!POSTGRES_AVAILABLE)('PostgresIdentityRepository', () => {
       'event',
       new Map([
         [
-          `${snap.discordUserId}:user_avatar`,
+          `discord:${snap.scopeId}:${snap.discordUserId}:user_avatar`,
           { oldThumb: null, newThumb: thumb },
         ],
       ]),
@@ -85,7 +185,7 @@ describe.skipIf(!POSTGRES_AVAILABLE)('PostgresIdentityRepository', () => {
       start,
       new Date(Date.now() + 60_000),
     );
-    const mine = rows.find((r) => r.discordUserId === snap.discordUserId);
+    const mine = rows.find((r) => r.subjectId === snap.discordUserId);
     // BYTEA must survive the round-trip as bytes, not a hex string.
     expect(mine?.newThumb?.equals(thumb)).toBe(true);
     expect(mine?.oldThumb).toBeNull();
@@ -99,7 +199,9 @@ describe.skipIf(!POSTGRES_AVAILABLE)('PostgresIdentityRepository', () => {
     await repo.recordChanges(
       [
         {
-          discordUserId: snap.discordUserId,
+          platform: 'discord',
+          scopeId: snap.scopeId,
+          subjectId: snap.discordUserId,
           field: 'nickname',
           oldValue: 'A',
           newValue: 'B',
@@ -113,7 +215,7 @@ describe.skipIf(!POSTGRES_AVAILABLE)('PostgresIdentityRepository', () => {
       start,
       new Date(Date.now() + 60_000),
     );
-    const mine = rows.find((r) => r.discordUserId === snap.discordUserId);
+    const mine = rows.find((r) => r.subjectId === snap.discordUserId);
     // Thumb fetches are best-effort; a missing thumb must not lose the change.
     expect(mine?.newThumb).toBeNull();
     expect(mine?.field).toBe('nickname');
@@ -124,7 +226,7 @@ describe.skipIf(!POSTGRES_AVAILABLE)('PostgresIdentityRepository', () => {
       start,
       new Date(Date.now() + 60_000),
     );
-    const meta = metadata.find((r) => r.discordUserId === snap.discordUserId);
+    const meta = metadata.find((r) => r.subjectId === snap.discordUserId);
     expect(meta?.field).toBe('nickname');
     expect(Object.keys(meta ?? {})).not.toContain('newThumb');
   });
@@ -135,7 +237,9 @@ describe.skipIf(!POSTGRES_AVAILABLE)('PostgresIdentityRepository', () => {
     await repo.recordChanges(
       [
         {
-          discordUserId: snap.discordUserId,
+          platform: 'discord',
+          scopeId: snap.scopeId,
+          subjectId: snap.discordUserId,
           field: 'nickname',
           oldValue: 'A',
           newValue: 'B',
@@ -158,7 +262,7 @@ describe.skipIf(!POSTGRES_AVAILABLE)('PostgresIdentityRepository', () => {
     // upper bound that is bit-for-bit the row's own timestamp.
     const pool = (repo as unknown as { pool: pg.Pool }).pool;
     const raw = await pool.query<{ raw: string }>(
-      'SELECT detected_at::text AS raw FROM member_identity_changes WHERE discord_user_id = $1',
+      'SELECT detected_at::text AS raw FROM member_identity_changes WHERE subject_id = $1',
       [snap.discordUserId],
     );
     // listChangesBetween is typed to take a Date, but pg accepts a raw
@@ -182,10 +286,8 @@ describe.skipIf(!POSTGRES_AVAILABLE)('PostgresIdentityRepository', () => {
 
     // The report command slices by range; an off-by-one on the bounds would
     // silently hand organizers the wrong window.
-    expect(inRange.some((r) => r.discordUserId === snap.discordUserId)).toBe(
-      true,
-    );
-    expect(outOfRange.some((r) => r.discordUserId === snap.discordUserId)).toBe(
+    expect(inRange.some((r) => r.subjectId === snap.discordUserId)).toBe(true);
+    expect(outOfRange.some((r) => r.subjectId === snap.discordUserId)).toBe(
       false,
     );
   });
@@ -198,7 +300,9 @@ describe.skipIf(!POSTGRES_AVAILABLE)('PostgresIdentityRepository', () => {
     await repo.recordChanges(
       [
         {
-          discordUserId: snap.discordUserId,
+          platform: 'discord',
+          scopeId: snap.scopeId,
+          subjectId: snap.discordUserId,
           field: 'user_avatar',
           oldValue: 'aaa',
           newValue: 'bbb',
@@ -207,7 +311,7 @@ describe.skipIf(!POSTGRES_AVAILABLE)('PostgresIdentityRepository', () => {
       'event',
       new Map([
         [
-          `${snap.discordUserId}:user_avatar`,
+          `discord:${snap.scopeId}:${snap.discordUserId}:user_avatar`,
           { oldThumb: null, newThumb: thumb },
         ],
       ]),

@@ -18,7 +18,9 @@ describe('fetchChangeThumbs', () => {
     const thumbs = await fetchChangeThumbs(
       [
         {
-          discordUserId: 'u1',
+          platform: 'discord',
+          scopeId: 'g1',
+          subjectId: 'u1',
           field: 'user_avatar',
           oldValue: 'aaa',
           newValue: 'bbb',
@@ -42,7 +44,9 @@ describe('fetchChangeThumbs', () => {
     const thumbs = await fetchChangeThumbs(
       [
         {
-          discordUserId: 'u1',
+          platform: 'discord',
+          scopeId: 'g1',
+          subjectId: 'u1',
           field: 'user_avatar',
           oldValue: 'gone',
           newValue: null,
@@ -64,7 +68,9 @@ describe('fetchChangeThumbs', () => {
     const thumbs = await fetchChangeThumbs(
       [
         {
-          discordUserId: 'u1',
+          platform: 'discord',
+          scopeId: 'g1',
+          subjectId: 'u1',
           field: 'user_avatar',
           oldValue: 'aaa',
           newValue: null,
@@ -82,7 +88,9 @@ describe('fetchChangeThumbs', () => {
     const thumbs = await fetchChangeThumbs(
       [
         {
-          discordUserId: 'u1',
+          platform: 'discord',
+          scopeId: 'g1',
+          subjectId: 'u1',
           field: 'nickname',
           oldValue: 'A',
           newValue: 'B',

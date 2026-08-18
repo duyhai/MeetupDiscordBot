@@ -40,16 +40,16 @@ export async function fetchChangeThumbs(
     /* eslint-disable no-await-in-loop */
     const oldThumb = change.oldValue
       ? await fetchOne(
-          avatarThumbUrl(change.discordUserId, field, change.oldValue, guildId),
+          avatarThumbUrl(change.subjectId, field, change.oldValue, guildId),
         )
       : null;
     const newThumb = change.newValue
       ? await fetchOne(
-          avatarThumbUrl(change.discordUserId, field, change.newValue, guildId),
+          avatarThumbUrl(change.subjectId, field, change.newValue, guildId),
         )
       : null;
     /* eslint-enable no-await-in-loop */
-    thumbs.set(`${change.discordUserId}:${change.field}`, {
+    thumbs.set(`${change.subjectId}:${change.field}`, {
       oldThumb,
       newThumb,
     });

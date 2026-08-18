@@ -42,7 +42,9 @@ const change = (
   over: Partial<IdentityChangeRecord> = {},
 ): IdentityChangeRecord => ({
   id: '1',
-  discordUserId: 'u1',
+  platform: 'discord',
+  scopeId: 'g1',
+  subjectId: 'u1',
   field: 'user_avatar',
   oldValue: 'aaa',
   newValue: 'bbb',

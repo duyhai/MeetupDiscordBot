@@ -15,7 +15,9 @@ const change = (
   over: Partial<IdentityChangeRecord> = {},
 ): IdentityChangeRecord => ({
   id: '1',
-  discordUserId: 'u1',
+  platform: 'discord',
+  scopeId: 'g1',
+  subjectId: 'u1',
   field: 'user_avatar',
   oldValue: 'aaa',
   newValue: 'bbb',
@@ -92,7 +94,7 @@ describe('renderIdentityReport', () => {
 
   it('escapes html in the discord user id shown in the member column', () => {
     const html = renderIdentityReport(
-      [change({ discordUserId: '<img src=x onerror=alert(1)>' })],
+      [change({ subjectId: '<img src=x onerror=alert(1)>' })],
       range,
     );
 

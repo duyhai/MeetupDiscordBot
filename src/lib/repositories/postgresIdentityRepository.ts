@@ -7,6 +7,7 @@ import {
   IdentityChangeMetadata,
   IdentityChangeRecord,
   IdentityField,
+  IdentityPlatform,
   IdentitySnapshot,
 } from './identityTypes.js';
 
@@ -14,32 +15,37 @@ const logger = new Logger({ name: 'PostgresIdentityRepository' });
 
 const CREATE_TABLE_SQL = `
 CREATE TABLE IF NOT EXISTS member_identity (
-  discord_user_id    TEXT PRIMARY KEY,
+  scope_id           TEXT NOT NULL,
+  discord_user_id    TEXT NOT NULL,
   username           TEXT,
   global_name        TEXT,
   nickname           TEXT,
   user_avatar_hash   TEXT,
   member_avatar_hash TEXT,
-  updated_at         TIMESTAMPTZ NOT NULL DEFAULT now()
+  updated_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (scope_id, discord_user_id)
 );
 CREATE TABLE IF NOT EXISTS member_identity_changes (
-  id              BIGSERIAL PRIMARY KEY,
-  discord_user_id TEXT NOT NULL,
-  field           TEXT NOT NULL,
-  old_value       TEXT,
-  new_value       TEXT,
-  old_thumb       BYTEA,
-  new_thumb       BYTEA,
-  detected_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
-  source          TEXT NOT NULL
+  id           BIGSERIAL PRIMARY KEY,
+  platform     TEXT NOT NULL,
+  scope_id     TEXT NOT NULL,
+  subject_id   TEXT NOT NULL,
+  field        TEXT NOT NULL,
+  old_value    TEXT,
+  new_value    TEXT,
+  old_thumb    BYTEA,
+  new_thumb    BYTEA,
+  detected_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  source       TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS member_identity_changes_detected_at_idx
   ON member_identity_changes (detected_at);
-CREATE INDEX IF NOT EXISTS member_identity_changes_user_field_idx
-  ON member_identity_changes (discord_user_id, field, detected_at DESC);
+CREATE INDEX IF NOT EXISTS member_identity_changes_subject_idx
+  ON member_identity_changes (platform, scope_id, subject_id, detected_at DESC);
 `;
 
 interface SnapshotRow {
+  scope_id: string;
   discord_user_id: string;
   username: string | null;
   global_name: string | null;
@@ -50,7 +56,9 @@ interface SnapshotRow {
 
 interface MetadataRow {
   id: string;
-  discord_user_id: string;
+  platform: IdentityPlatform;
+  scope_id: string;
+  subject_id: string;
   field: IdentityField;
   old_value: string | null;
   new_value: string | null;
@@ -65,6 +73,7 @@ interface ChangeRow extends MetadataRow {
 
 function toSnapshot(row: SnapshotRow): IdentitySnapshot {
   return {
+    scopeId: row.scope_id,
     discordUserId: row.discord_user_id,
     username: row.username,
     globalName: row.global_name,
@@ -77,7 +86,9 @@ function toSnapshot(row: SnapshotRow): IdentitySnapshot {
 function toChangeMetadata(row: MetadataRow): IdentityChangeMetadata {
   return {
     id: row.id,
-    discordUserId: row.discord_user_id,
+    platform: row.platform,
+    scopeId: row.scope_id,
+    subjectId: row.subject_id,
     field: row.field,
     oldValue: row.old_value,
     newValue: row.new_value,
@@ -113,7 +124,11 @@ export class PostgresIdentityRepository {
       connectionString.includes('127.0.0.1');
     this.pool = new pg.Pool({
       connectionString,
-      max: 3,
+      // The member repository already takes 5 of essential-0's 20
+      // connections, and a deploy briefly doubles both across overlapping
+      // dynos; the backfill script also opens its own pool on top of
+      // whatever's running. 2 leaves enough headroom for all of that at once.
+      max: 2,
       // Heroku Postgres requires TLS but uses certs node rejects by default
       ssl: isLocal ? undefined : { rejectUnauthorized: false },
       allowExitOnIdle: true, // lets test processes exit cleanly instead of waiting on idle clients
@@ -153,11 +168,12 @@ export class PostgresIdentityRepository {
   }
 
   async getSnapshot(
+    scopeId: string,
     discordUserId: string,
   ): Promise<IdentitySnapshot | undefined> {
     const result = await this.pool.query<SnapshotRow>(
-      'SELECT * FROM member_identity WHERE discord_user_id = $1',
-      [discordUserId],
+      'SELECT * FROM member_identity WHERE scope_id = $1 AND discord_user_id = $2',
+      [scopeId, discordUserId],
     );
     const row = result.rows[0];
     return row ? toSnapshot(row) : undefined;
@@ -165,10 +181,10 @@ export class PostgresIdentityRepository {
 
   async putSnapshot(snapshot: IdentitySnapshot): Promise<void> {
     await this.pool.query(
-      `INSERT INTO member_identity (discord_user_id, username, global_name,
-         nickname, user_avatar_hash, member_avatar_hash, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, now())
-       ON CONFLICT (discord_user_id) DO UPDATE SET
+      `INSERT INTO member_identity (scope_id, discord_user_id, username,
+         global_name, nickname, user_avatar_hash, member_avatar_hash, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, now())
+       ON CONFLICT (scope_id, discord_user_id) DO UPDATE SET
          username = EXCLUDED.username,
          global_name = EXCLUDED.global_name,
          nickname = EXCLUDED.nickname,
@@ -176,6 +192,7 @@ export class PostgresIdentityRepository {
          member_avatar_hash = EXCLUDED.member_avatar_hash,
          updated_at = now()`,
       [
+        snapshot.scopeId,
         snapshot.discordUserId,
         snapshot.username,
         snapshot.globalName,
@@ -192,16 +209,20 @@ export class PostgresIdentityRepository {
     thumbs: Map<string, { oldThumb: Buffer | null; newThumb: Buffer | null }>,
   ): Promise<void> {
     for (const change of changes) {
-      const thumb = thumbs.get(`${change.discordUserId}:${change.field}`);
+      const thumb = thumbs.get(
+        `${change.platform}:${change.scopeId}:${change.subjectId}:${change.field}`,
+      );
       // Sequential rather than Promise.all: these share one small pool and a
       // burst from the sweep would otherwise exhaust it.
       // eslint-disable-next-line no-await-in-loop
       await this.pool.query(
-        `INSERT INTO member_identity_changes (discord_user_id, field,
-           old_value, new_value, old_thumb, new_thumb, source)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        `INSERT INTO member_identity_changes (platform, scope_id, subject_id,
+           field, old_value, new_value, old_thumb, new_thumb, source)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
         [
-          change.discordUserId,
+          change.platform,
+          change.scopeId,
+          change.subjectId,
           change.field,
           change.oldValue,
           change.newValue,
@@ -223,7 +244,7 @@ export class PostgresIdentityRepository {
     to: Date,
   ): Promise<IdentityChangeMetadata[]> {
     const result = await this.pool.query<MetadataRow>(
-      `SELECT id, discord_user_id, field, old_value, new_value,
+      `SELECT id, platform, scope_id, subject_id, field, old_value, new_value,
               detected_at, source
          FROM member_identity_changes
         WHERE detected_at >= $1 AND detected_at < $2
@@ -294,5 +315,29 @@ export class PostgresIdentityRepository {
       [cutoff],
     );
     return result.rowCount ?? 0;
+  }
+
+  /**
+   * Erases one member's identity history and baseline. Deliberately never
+   * called automatically -- like pruneChangesBefore, using it is a considered
+   * act, because this data is impersonation evidence.
+   */
+  async deleteMemberIdentity(
+    platform: IdentityPlatform,
+    scopeId: string,
+    subjectId: string,
+  ): Promise<number> {
+    const changes = await this.pool.query(
+      `DELETE FROM member_identity_changes
+       WHERE platform = $1 AND scope_id = $2 AND subject_id = $3`,
+      [platform, scopeId, subjectId],
+    );
+    if (platform === 'discord') {
+      await this.pool.query(
+        'DELETE FROM member_identity WHERE scope_id = $1 AND discord_user_id = $2',
+        [scopeId, subjectId],
+      );
+    }
+    return changes.rowCount ?? 0;
   }
 }

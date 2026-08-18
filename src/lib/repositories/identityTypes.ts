@@ -1,7 +1,16 @@
+export type IdentityPlatform = 'discord' | 'meetup';
+
 export type IdentityField =
-  'user_avatar' | 'member_avatar' | 'nickname' | 'username' | 'global_name';
+  | 'user_avatar'
+  | 'member_avatar'
+  | 'nickname'
+  | 'username'
+  | 'global_name'
+  | 'photo'
+  | 'name';
 
 export interface IdentitySnapshot {
+  scopeId: string;
   discordUserId: string;
   username: string | null;
   globalName: string | null;
@@ -11,7 +20,9 @@ export interface IdentitySnapshot {
 }
 
 export interface IdentityChange {
-  discordUserId: string;
+  platform: IdentityPlatform;
+  scopeId: string;
+  subjectId: string;
   field: IdentityField;
   oldValue: string | null;
   newValue: string | null;
