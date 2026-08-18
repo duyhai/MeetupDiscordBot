@@ -9,7 +9,11 @@ const AVATAR_FIELDS = new Set(['user_avatar', 'member_avatar']);
 
 async function fetchOne(url: string): Promise<Buffer | null> {
   try {
-    const response = await fetch(url);
+    // Undici applies no total-request deadline, and this runs inside the
+    // digest after the day-claim is taken: a stalled connection would hang
+    // the digest with no error and no retry. The existing catch turns a
+    // timeout into the documented best-effort null thumb.
+    const response = await fetch(url, { signal: AbortSignal.timeout(5_000) });
     if (!response.ok) {
       return null;
     }
@@ -49,10 +53,12 @@ export async function fetchChangeThumbs(
         )
       : null;
     /* eslint-enable no-await-in-loop */
-    thumbs.set(`${change.subjectId}:${change.field}`, {
-      oldThumb,
-      newThumb,
-    });
+    // recordChanges reads back with the same four-part key: platform and
+    // scopeId scope the identity, subjectId and field pick the row within it.
+    thumbs.set(
+      `${change.platform}:${change.scopeId}:${change.subjectId}:${change.field}`,
+      { oldThumb, newThumb },
+    );
   }
   return thumbs;
 }

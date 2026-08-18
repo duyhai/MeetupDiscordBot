@@ -54,6 +54,7 @@ const change = (
 });
 
 const stats = { changeCount: 1204, totalBytes: 64_000_000 };
+const since = at('2026-08-15T18:00:00Z');
 
 describe('annotateReverts', () => {
   it('marks a change that was undone later the same day', () => {
@@ -114,11 +115,11 @@ describe('annotateReverts', () => {
 describe('formatIdentityDigest', () => {
   it('returns undefined when there were no changes', () => {
     // A silent day must post nothing rather than an empty embed.
-    expect(formatIdentityDigest([], stats)).toBeUndefined();
+    expect(formatIdentityDigest([], stats, since)).toBeUndefined();
   });
 
   it('lists each change and reports storage', () => {
-    const entry = formatIdentityDigest([change()], stats);
+    const entry = formatIdentityDigest([change()], stats, since);
 
     expect(entry?.title).toContain('1');
     expect(entry?.description).toContain('<@u1>');
@@ -138,6 +139,7 @@ describe('formatIdentityDigest', () => {
         }),
       ]),
       stats,
+      since,
     );
 
     expect(entry?.description).toContain('reverted');
@@ -148,7 +150,7 @@ describe('formatIdentityDigest', () => {
       change({ id: String(i), subjectId: `u${i}` }),
     );
 
-    const entry = formatIdentityDigest(many, stats);
+    const entry = formatIdentityDigest(many, stats, since);
 
     // Discord rejects descriptions over 4096 characters outright, which would
     // turn a busy day into no digest at all.

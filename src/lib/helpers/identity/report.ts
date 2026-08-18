@@ -23,8 +23,8 @@ const FIELD_LABELS: Record<IdentityField, string> = {
   global_name: 'Display name',
 };
 
-function escapeHtml(value: string | null): string {
-  if (value === null) {
+function escapeHtml(value: string | null | undefined): string {
+  if (value === null || value === undefined) {
     return '—';
   }
   return value

@@ -71,6 +71,7 @@ function line(change: AnnotatedChange): string {
 export function formatIdentityDigest(
   changes: AnnotatedChange[],
   stats: { changeCount: number; totalBytes: number },
+  since: Date,
 ): LogEntry | undefined {
   if (changes.length === 0) {
     return undefined;
@@ -97,7 +98,10 @@ export function formatIdentityDigest(
   const overflowNote = overflow > 0 ? `…and ${overflow} more\n` : '';
 
   return {
-    title: `Identity changes: ${changes.length} in the last 24h`,
+    title: `Identity changes: ${changes.length} since ${since
+      .toISOString()
+      .slice(0, 16)
+      .replace('T', ' ')} UTC`,
     description: `${lines.join('')}${overflowNote}${footer}`,
   };
 }
@@ -164,7 +168,7 @@ export async function runIdentityDigestOnce(client: Client): Promise<void> {
     const changes = await repo.listChangesMetadataBetween(since, until);
     const stats = await repo.storageStats();
 
-    const entry = formatIdentityDigest(annotateReverts(changes), stats);
+    const entry = formatIdentityDigest(annotateReverts(changes), stats, since);
     if (entry) {
       // logAlert swallows every error by design, so an outage or a permission
       // change would otherwise leave the claim consumed, a success logged, no

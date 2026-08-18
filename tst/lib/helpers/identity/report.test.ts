@@ -101,6 +101,24 @@ describe('renderIdentityReport', () => {
     expect(html).not.toContain('<img src=x onerror=alert(1)>');
     expect(html).toContain('&lt;img src=x onerror=alert(1)&gt;');
   });
+
+  it('does not throw on an unrecognised field from an older row', () => {
+    const html = renderIdentityReport(
+      [
+        change({
+          field: 'legacy_field' as never,
+          oldThumb: null,
+          newThumb: null,
+        }),
+      ],
+      range,
+    );
+
+    // FIELD_LABELS lookup yields undefined, and this project builds without
+    // strictNullChecks -- escapeHtml guarding only null would throw on
+    // .replace and destroy the entire report.
+    expect(html).toContain('<!doctype html>');
+  });
 });
 
 describe('estimateReportBytes', () => {
