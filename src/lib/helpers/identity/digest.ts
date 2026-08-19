@@ -19,7 +19,47 @@ const logger = new Logger({ name: 'identityDigest' });
 // Both digests make a full-guild member pass; sharing an hour meant two
 // concurrent 2,008-member fetches on a dyno with an R14 history.
 export const IDENTITY_DIGEST_UTC_HOUR = 18; // ≈ 10-11am Pacific
-const TICK_MS = 60 * 60 * 1000; // hourly
+
+/**
+ * Ticks are quarter-hourly, not hourly, and the difference is the whole point
+ * of the claim/done split below.
+ *
+ * `setInterval` is anchored to process boot, so with an hourly tick there is
+ * exactly ONE opportunity per process inside the digest hour. A run killed
+ * mid-flight therefore had no "next tick" to retry it -- the following tick
+ * lands in hour 19 and `shouldRunIdentityDigestNow` rejects it. An expiring
+ * lease only helps if something is still checking after it expires.
+ *
+ * Four opportunities per hour, each a no-op outside hour 18 and each stopped
+ * immediately by the done-marker or the live claim inside it, is enough for a
+ * lapsed lease to be picked up while costing nothing on a normal day.
+ */
+const TICK_MS = 15 * 60 * 1000;
+
+/**
+ * How long a run may hold the day before another tick may take it over.
+ *
+ * Sized above a plausible worst-case run (two sequential roster passes over
+ * ~8,000 members, ~60 paginated API requests, plus thumbnail fetches: minutes,
+ * not tens of minutes) and below the digest hour, so a killed run's lease
+ * lapses while ticks are still checking.
+ *
+ * The residual risk is a run that genuinely exceeds this, where a second tick
+ * could start a concurrent pass and post a second digest. That is the right
+ * way round: this feature's own failure doctrine already prefers a duplicate
+ * row to lost evidence, and a duplicate digest is noise while a skipped day
+ * is a change that is never reported at all.
+ */
+const CLAIM_TTL_SEC = 30 * 60;
+
+/**
+ * Long enough to outlast the digest hour comfortably, and set explicitly
+ * because neither cache default is safe here: InMemoryCache expires items
+ * after 50 minutes, which is shorter than the hour this marker has to cover.
+ * The key encodes the date, so a generous value cannot block tomorrow.
+ */
+const DONE_TTL_SEC = 12 * 60 * 60;
+
 const MAX_DESCRIPTION = 4096; // Discord's hard embed description limit
 
 // Short on purpose: every line already carries a platform label (below), so
@@ -241,15 +281,36 @@ export async function runIdentityDigestOnce(client: Client): Promise<void> {
     return;
   }
 
+  // Two keys, because "someone is running this" and "this day is finished"
+  // are different facts and were previously conflated into one.
+  //
+  // A single long-lived claim meant a run killed mid-flight consumed the day
+  // silently: the claim is only released on a thrown error, and SIGTERM does
+  // not throw. Heroku sends SIGTERM on every deploy, and deploys land in the
+  // 17:00-19:00 UTC window (mid-morning Pacific) routinely -- so the digest
+  // hour is exactly when the process is most likely to be killed.
+  //
+  // Now: the DONE marker records completion and is checked first, so a
+  // finished day never re-runs. The CLAIM is only a lease held while the work
+  // is in progress, with a TTL sized to how long the work plausibly takes, so
+  // a killed run's claim lapses and a later tick in the same hour picks the
+  // day back up.
+  const cache = await ApplicationCache();
+  const today = new Date().toISOString().slice(0, 10);
+  const doneKey = `identity-digest-done-${today}`;
+  const claimKey = `identity-digest-${today}`;
+
+  // Completion first. Without this the more frequent ticks below would
+  // re-sweep and re-post all afternoon once the lease expired.
+  if (await cache.get(doneKey)) {
+    return;
+  }
+
   // Claim the day BEFORE the sweep, not after. The sweep is a full
   // 2,008-member pass; running it first means any dyno restart during the
-  // digest hour -- a mid-morning Pacific deploy being the likeliest -- pays
-  // for a second full pass whose work is then thrown away at the claim.
-  // exclusive_set guards against double-posts across restarts; the cache TTL
-  // is fine because the key encodes the date.
-  const cache = await ApplicationCache();
-  const claimKey = `identity-digest-${new Date().toISOString().slice(0, 10)}`;
-  const claimed = await cache.exclusive_set(claimKey, '1');
+  // digest hour pays for a second full pass whose work is then thrown away
+  // at the claim.
+  const claimed = await cache.exclusive_set(claimKey, '1', CLAIM_TTL_SEC);
   if (!claimed) {
     return;
   }
@@ -307,16 +368,19 @@ export async function runIdentityDigestOnce(client: Client): Promise<void> {
         );
       }
     }
+    // The day is finished. Written on a silent day too: nothing was posted,
+    // but the work was done and redoing two full roster passes to re-discover
+    // that nothing changed is pure waste.
+    //
+    // Written only here, after the post is confirmed landed, so every path
+    // that throws above leaves the day unfinished and retryable.
+    await cache.set(doneKey, '1', DONE_TTL_SEC);
     logger.info(`Identity digest ran: ${changes.length} changes`);
   } catch (error) {
-    // Release the day so a restart inside the digest hour retries. That is
-    // the only retry path: `setInterval` is anchored to process boot, so the
-    // next hourly tick lands at the same minute of hour 19 and
-    // `shouldRunIdentityDigestNow` rejects it -- without a restart, the day
-    // is simply skipped, not retried. Guard the release itself: if the cache
-    // is unavailable, `remove` can throw too, and letting that escape would
-    // replace the original failure with a cache error while still leaving
-    // the claim consumed.
+    // Release the lease so a later tick inside the digest hour retries.
+    // Guard the release itself: if the cache is unavailable, `remove` can
+    // throw too, and letting that escape would replace the original failure
+    // with a cache error while still leaving the claim consumed.
     try {
       await cache.remove(claimKey);
     } catch (releaseError) {

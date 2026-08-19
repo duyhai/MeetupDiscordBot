@@ -19,6 +19,8 @@ const repo = vi.hoisted(() => ({
 }));
 const cache = vi.hoisted(() => ({
   exclusive_set: vi.fn(),
+  get: vi.fn(),
+  set: vi.fn(),
   remove: vi.fn().mockResolvedValue(undefined),
 }));
 const memberRepo = vi.hoisted(() => ({
@@ -250,6 +252,8 @@ describe('runIdentityDigestOnce', () => {
       new Date(Date.UTC(2026, 7, 16, IDENTITY_DIGEST_UTC_HOUR, 5)),
     );
     cache.exclusive_set.mockResolvedValue(true);
+    cache.get.mockResolvedValue(undefined);
+    cache.set.mockResolvedValue(undefined);
     cache.remove.mockResolvedValue(undefined);
     repo.listChangesMetadataBetween.mockResolvedValue([change()]);
     repo.storageStats.mockResolvedValue(stats);
@@ -461,6 +465,74 @@ describe('runIdentityDigestOnce', () => {
     expect(cache.remove).not.toHaveBeenCalled();
   });
 
+  it('marks the day done once the digest has posted', async () => {
+    await runIdentityDigestOnce(client);
+
+    // Completion is a separate fact from "someone is working on this". Only
+    // this marker makes a finished day un-repeatable; the claim is a lease.
+    expect(cache.set).toHaveBeenCalledWith(
+      'identity-digest-done-2026-08-16',
+      '1',
+      expect.any(Number),
+    );
+  });
+
+  it('does no work at all when the day is already done', async () => {
+    cache.get.mockResolvedValue('1');
+
+    await runIdentityDigestOnce(client);
+
+    // Checked BEFORE the claim: with ticks now arriving four times an hour, a
+    // finished day would otherwise be re-swept and re-posted the moment the
+    // lease expired.
+    expect(cache.exclusive_set).not.toHaveBeenCalled();
+    expect(runIdentitySweep).not.toHaveBeenCalled();
+    expect(runMeetupSweep).not.toHaveBeenCalled();
+    expect(logAlert).not.toHaveBeenCalled();
+  });
+
+  it('checks the done marker before attempting the claim', async () => {
+    await runIdentityDigestOnce(client);
+
+    expect(cache.get.mock.invocationCallOrder[0]).toBeLessThan(
+      cache.exclusive_set.mock.invocationCallOrder[0],
+    );
+  });
+
+  it('takes the claim as a short lease, not for the rest of the day', async () => {
+    await runIdentityDigestOnce(client);
+
+    // SIGTERM does not throw, so a killed run releases nothing. The lease
+    // expiring is the only thing that lets a later tick pick the day back up;
+    // a day-long claim means a deploy at 18:05 silently costs the whole day.
+    const [, , ttl] = cache.exclusive_set.mock.calls[0] as [
+      string,
+      string,
+      number,
+    ];
+    expect(ttl).toBeLessThanOrEqual(30 * 60);
+    expect(ttl).toBeGreaterThan(0);
+  });
+
+  it('does not mark the day done when the post did not land', async () => {
+    vi.mocked(logAlert).mockResolvedValue(false);
+
+    await expect(runIdentityDigestOnce(client)).rejects.toThrow();
+
+    // The done marker is what makes a day un-retryable. Writing it on a run
+    // that failed to post would consume the day exactly as the old
+    // never-released claim did.
+    expect(cache.set).not.toHaveBeenCalled();
+  });
+
+  it('does not mark the day done when the digest query failed', async () => {
+    repo.listChangesMetadataBetween.mockRejectedValue(new Error('db down'));
+
+    await expect(runIdentityDigestOnce(client)).rejects.toThrow('db down');
+
+    expect(cache.set).not.toHaveBeenCalled();
+  });
+
   it('releases the claim when the post did not land', async () => {
     vi.mocked(logAlert).mockResolvedValue(false);
 
@@ -495,5 +567,44 @@ describe('runIdentityDigestOnce', () => {
 
     expect(logAlert).not.toHaveBeenCalled();
     expect(cache.remove).not.toHaveBeenCalled();
+  });
+
+  it('marks a silent day done so its sweeps are not repeated', async () => {
+    repo.listChangesMetadataBetween.mockResolvedValue([]);
+
+    await runIdentityDigestOnce(client);
+
+    // Nothing was posted, but the work was done. Re-running two full roster
+    // passes to rediscover that nothing changed is pure waste.
+    expect(cache.set).toHaveBeenCalledWith(
+      'identity-digest-done-2026-08-16',
+      '1',
+      expect.any(Number),
+    );
+  });
+
+  it('lets a later tick retry after a failed run released the lease', async () => {
+    repo.listChangesMetadataBetween.mockRejectedValueOnce(
+      new Error('transient db blip'),
+    );
+
+    await expect(runIdentityDigestOnce(client)).rejects.toThrow();
+    expect(cache.remove).toHaveBeenCalledWith('identity-digest-2026-08-16');
+
+    // Second tick, same hour: the lease is gone and the day is not marked
+    // done, so the run happens again and this time posts.
+    vi.clearAllMocks();
+    cache.exclusive_set.mockResolvedValue(true);
+    cache.get.mockResolvedValue(undefined);
+    repo.listChangesMetadataBetween.mockResolvedValue([change()]);
+    repo.storageStats.mockResolvedValue(stats);
+    memberRepo.listAll.mockResolvedValue([]);
+    vi.mocked(logAlert).mockResolvedValue(true);
+    vi.mocked(runIdentitySweep).mockResolvedValue({ scanned: 0, changed: 0 });
+    vi.mocked(runMeetupSweep).mockResolvedValue({ scanned: 0, changed: 0 });
+
+    await runIdentityDigestOnce(client);
+
+    expect(logAlert).toHaveBeenCalledTimes(1);
   });
 });
