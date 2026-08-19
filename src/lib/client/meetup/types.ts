@@ -237,10 +237,15 @@ export interface MeetupGroupMember {
 }
 
 export interface GetGroupMembershipsResponse {
+  // Nullable for real, not defensively: Meetup returns `groupByUrlname: null`
+  // -- with no GraphQL error -- when the token cannot read the group, which
+  // is precisely what an expired or under-scoped organizer grant looks like.
+  // Typing it non-null let `result.groupByUrlname.memberships` compile into a
+  // TypeError at the top of the roster walk.
   groupByUrlname: {
     id: string;
     memberships: PaginatedData<MeetupGroupMember>;
-  };
+  } | null;
 }
 
 export type GetGroupMembershipsInput = {

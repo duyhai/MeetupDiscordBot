@@ -1,5 +1,5 @@
 import { Client } from 'discord.js';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import Configuration from '../../../../src/configuration.js';
 import { MeetupGroupMember } from '../../../../src/lib/client/meetup/types.js';
@@ -74,8 +74,17 @@ function fakeClient() {
 }
 
 describe('runMeetupSweep', () => {
+  // Configuration is a module-level singleton shared by every test file in
+  // the run. A test that sets the seed and returns early -- or throws --
+  // leaks it into unrelated tests, so restore it unconditionally rather than
+  // on the happy path of whichever test set it.
+  afterEach(() => {
+    Configuration.meetup.organizerRefreshToken = undefined;
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
+    credentials.put.mockResolvedValue(undefined);
     credentials.get.mockResolvedValue({
       accessToken: 'old-access',
       refreshToken: 'stored-refresh',
@@ -214,7 +223,50 @@ describe('runMeetupSweep', () => {
       'meetup_organizer',
       expect.objectContaining({ refreshToken: 'seed-refresh' }),
     );
+  });
 
-    Configuration.meetup.organizerRefreshToken = undefined;
+  it('proceeds with the refreshed tokens when storing them fails', async () => {
+    credentials.put.mockRejectedValue(new Error('postgres unavailable'));
+    vi.mocked(getPaginatedData).mockResolvedValue([member('a')]);
+
+    const result = await runMeetupSweep('sweep', fakeClient());
+
+    // The credential refresh SUCCEEDED. Only the write to Postgres failed, and
+    // under rotation the refreshed token is now the only valid one -- so
+    // discarding it and falling through to the (just-invalidated) seed would
+    // kill the credential permanently and alert the wrong remedy.
+    expect(result.scanned).toBe(1);
+    expect(logAlert).not.toHaveBeenCalled();
+  });
+
+  it('does not fall through to the seed when only the store failed', async () => {
+    Configuration.meetup.organizerRefreshToken = 'seed-refresh';
+    credentials.put.mockRejectedValue(new Error('postgres unavailable'));
+    vi.mocked(getPaginatedData).mockResolvedValue([member('a')]);
+
+    await runMeetupSweep('sweep');
+
+    // One refresh, of the stored token. Retrying with the seed here would
+    // burn a second credential against a fault that has nothing to do with
+    // either of them.
+    expect(refreshMeetupToken).toHaveBeenCalledTimes(1);
+    expect(refreshMeetupToken).toHaveBeenCalledWith('stored-refresh');
+  });
+
+  it('tries a shared stored/seed token only once', async () => {
+    // Steady state: the seed was pasted into Heroku and then stored verbatim,
+    // so both candidates are the same string. Trying it twice means two
+    // identical failed refreshes and two identical warnings for one problem.
+    Configuration.meetup.organizerRefreshToken = 'same-token';
+    credentials.get.mockResolvedValue({
+      accessToken: 'x',
+      refreshToken: 'same-token',
+      expiresAt: Date.now() - 1000,
+    });
+    vi.mocked(refreshMeetupToken).mockRejectedValue(new Error('invalid_grant'));
+
+    await runMeetupSweep('sweep');
+
+    expect(refreshMeetupToken).toHaveBeenCalledTimes(1);
   });
 });

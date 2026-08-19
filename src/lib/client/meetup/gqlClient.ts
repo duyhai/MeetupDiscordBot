@@ -72,6 +72,22 @@ const logger = new Logger({ name: 'GqlMeetupClient' });
  */
 const GQL_REQUEST_TIMEOUT_MS = 30_000;
 
+/**
+ * The group came back null. Named and self-describing because this is the
+ * one error on the roster path an organizer can actually act on, and it
+ * reaches them through the digest's degraded-sweep alert.
+ */
+export class MeetupGroupUnreadableError extends Error {
+  constructor(urlname: string) {
+    super(
+      `Meetup returned no group for "${urlname}": the organizer token cannot ` +
+        'read this group -- check that the grant is still valid and was made ' +
+        'by an organizer of it.',
+    );
+    this.name = 'MeetupGroupUnreadableError';
+  }
+}
+
 export class GqlMeetupClient {
   private client: GraphQLClient;
 
@@ -260,6 +276,14 @@ export class GqlMeetupClient {
         urlname: Configuration.meetup.groupUrlName,
         ...input,
       });
+      // Meetup answers an unreadable group with a null node and no GraphQL
+      // error, so this is the shape an expired or under-scoped organizer
+      // grant actually arrives in. Without the check it becomes "cannot read
+      // properties of null" from inside the pagination loop, which says
+      // nothing about the credential that is the real cause.
+      if (!result.groupByUrlname) {
+        throw new MeetupGroupUnreadableError(Configuration.meetup.groupUrlName);
+      }
       // Counts only, not the full page: this method returns ~60 full roster
       // pages of member names and photo URLs daily, and this repo has a
       // production log-flooding history (a previous feature emitted ~900

@@ -41,31 +41,64 @@ async function resolveOrganizerTokens(): Promise<Tokens | undefined> {
   const stored = await credentials.get(MEETUP_ORGANIZER_CREDENTIAL_KEY);
   const seed = Configuration.meetup.organizerRefreshToken;
 
-  const candidates = [stored?.refreshToken, seed].filter(
-    (token): token is string => Boolean(token),
-  );
+  // Deduplicated: on the common steady-state path the stored refresh token
+  // and the config seed are the same string, and trying it twice means two
+  // identical failed refreshes and two identical warnings for one problem.
+  const candidates = [
+    ...new Set(
+      [stored?.refreshToken, seed].filter((token): token is string =>
+        Boolean(token),
+      ),
+    ),
+  ];
   if (candidates.length === 0) {
     return undefined;
   }
 
   let lastError: unknown;
   for (const candidate of candidates) {
+    let refreshed: Tokens;
     try {
       // Sequential by intent: try the stored pair, and only fall back to the
       // config seed if it fails. Falling back is also how an organizer
       // recovers -- paste a fresh token into Heroku and the next sweep uses it.
       // eslint-disable-next-line no-await-in-loop
-      const refreshed = await refreshMeetupToken(candidate);
-      // eslint-disable-next-line no-await-in-loop
-      await credentials.put(MEETUP_ORGANIZER_CREDENTIAL_KEY, refreshed);
-      return refreshed;
+      refreshed = await refreshMeetupToken(candidate);
     } catch (error: unknown) {
       lastError = error;
       // refreshMeetupToken's thrown error embeds Meetup's raw response body.
       // Treat it as untrusted even here, where it only reaches the process
       // log via String(): never let it flow into the Discord alert below.
       logger.warn(`Meetup credential refresh failed: ${String(error)}`);
+      continue;
     }
+
+    // Persisting is a SEPARATE failure from refreshing, and conflating the
+    // two is how a working credential dies permanently.
+    //
+    // If Meetup rotates refresh tokens, `refreshed.refreshToken` is now the
+    // only valid one and the token we just sent has been invalidated. A
+    // Postgres blip on the way to storing it used to be caught by the same
+    // handler as a refresh failure: the fresh token was discarded, the loop
+    // fell through to the seed -- which Meetup had just invalidated -- and
+    // the organizer was alerted to re-paste a config var that would not help.
+    // The credential was dead with no way back.
+    //
+    // So: a put failure is loud in the process log and otherwise ignored.
+    // This run proceeds on the tokens it holds, and the next run re-refreshes
+    // from whatever is stored or seeded, which is exactly the recovery the
+    // rotation design already relies on.
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      await credentials.put(MEETUP_ORGANIZER_CREDENTIAL_KEY, refreshed);
+    } catch (error: unknown) {
+      logger.error(
+        'Meetup credential refreshed but could NOT be stored; this sweep ' +
+          'continues on the fresh token, but if Meetup rotates refresh ' +
+          `tokens the stored pair is now stale: ${String(error)}`,
+      );
+    }
+    return refreshed;
   }
   logger.error(`No usable Meetup credential: ${String(lastError)}`);
   return undefined;

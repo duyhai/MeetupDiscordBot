@@ -1,7 +1,10 @@
 import nock from 'nock';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { GqlMeetupClient } from '../../src/lib/client/meetup/gqlClient.js';
+import {
+  GqlMeetupClient,
+  MeetupGroupUnreadableError,
+} from '../../src/lib/client/meetup/gqlClient.js';
 
 /**
  * Guards what actually goes on the wire for the membership roster query.
@@ -81,5 +84,33 @@ describe('getGroupMemberships wiring', () => {
     // cached roster would satisfy one interceptor and leave the other
     // pending -- and would make every sweep diff against stale data.
     expect(scope.isDone()).toBe(true);
+  });
+
+  it('names the credential when Meetup returns a null group', async () => {
+    // This is the wire shape of an expired or under-scoped organizer grant:
+    // HTTP 200, no GraphQL error, `groupByUrlname: null`. Left unchecked it
+    // surfaces as "cannot read properties of null" from inside the pagination
+    // loop, which points at the code rather than at the credential.
+    nock('https://api.meetup.com')
+      .post('/gql-ext')
+      .reply(200, { data: { groupByUrlname: null } });
+
+    const client = new GqlMeetupClient('token');
+
+    await expect(client.getGroupMemberships({ first: 100 })).rejects.toThrow(
+      /organizer token cannot read this group/,
+    );
+  });
+
+  it('throws MeetupGroupUnreadableError by name for a null group', async () => {
+    nock('https://api.meetup.com')
+      .post('/gql-ext')
+      .reply(200, { data: { groupByUrlname: null } });
+
+    // Named so the digest's degraded-sweep alert can distinguish "your
+    // credential lost access" from any other roster failure.
+    await expect(
+      new GqlMeetupClient('token').getGroupMemberships({ first: 100 }),
+    ).rejects.toBeInstanceOf(MeetupGroupUnreadableError);
   });
 });
