@@ -78,6 +78,9 @@ const GQL_REQUEST_TIMEOUT_MS = 30_000;
  * reaches them through the digest's degraded-sweep alert.
  */
 export class MeetupGroupUnreadableError extends Error {
+  /** Composed here rather than lifted from a response body; see below. */
+  readonly organizerSafeMessage = true;
+
   constructor(urlname: string) {
     super(
       `Meetup returned no group for "${urlname}": the organizer token cannot ` +

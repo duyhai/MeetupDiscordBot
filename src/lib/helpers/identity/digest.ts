@@ -55,6 +55,66 @@ export function shouldRunIdentityDigestNow(now: Date): boolean {
 }
 
 /**
+ * What an organizer may be told about a failure.
+ *
+ * Errors this codebase composes itself (PaginationCapError,
+ * MeetupGroupUnreadableError) mark themselves `organizerSafeMessage` and
+ * their text is the actionable part. Everything else -- a graphql-request
+ * ClientError above all -- embeds the raw upstream response body, which must
+ * never reach Discord, so only the class name is surfaced and the full error
+ * goes to the process log.
+ */
+function safeErrorSummary(error: unknown): string {
+  if (
+    error instanceof Error &&
+    (error as { organizerSafeMessage?: boolean }).organizerSafeMessage === true
+  ) {
+    return error.message;
+  }
+  if (error instanceof Error) {
+    return `${error.name} (details in the process log)`;
+  }
+  return 'unknown error (details in the process log)';
+}
+
+/**
+ * Runs one reconciliation sweep so that its failure DEGRADES the digest
+ * instead of cancelling it.
+ *
+ * Both sweeps used to run bare inside the claim's try. A single 502 or 429 on
+ * one Meetup roster page propagated out, released the claim, and was swallowed
+ * by the scheduler's catch -- producing no digest for EITHER platform, no
+ * alert, and (because the reporting window only ever moves forward) no later
+ * report of the changes that were already recorded. A Meetup outage silently
+ * erased a day of Discord monitoring too.
+ *
+ * Reconciliation is an enhancement to the digest, not a precondition for it:
+ * the change log already holds everything the event listeners caught, and the
+ * next sweep re-detects whatever this one missed. So a failure here is
+ * announced and stepped over.
+ */
+async function runSweepOrDegrade(
+  platform: string,
+  client: Client,
+  sweep: () => Promise<unknown>,
+): Promise<void> {
+  try {
+    await sweep();
+  } catch (error: unknown) {
+    logger.error(`${platform} identity sweep failed: ${String(error)}`);
+    await logAlert(client, {
+      title: `${platform} identity sweep failed`,
+      description:
+        `Today's ${platform} reconciliation pass did not complete: ` +
+        `${safeErrorSummary(error)}\n\n` +
+        `The rest of the digest is unaffected -- changes already recorded ` +
+        `are still reported below, and the next sweep re-checks whatever ` +
+        `this pass missed.`,
+    });
+  }
+}
+
+/**
  * Marks a change that was later undone by the same member on the same field.
  * A transient change is the signature of impersonation-then-cleanup, and it
  * is invisible to a snapshot diff -- both endpoints look identical.
@@ -206,8 +266,14 @@ export async function runIdentityDigestOnce(client: Client): Promise<void> {
     // the changes least likely to have been caught any other way -- would
     // miss today's digest and only surface in tomorrow's, 24 hours late.
     const { since, until: boundary } = identityDigestWindow(new Date());
-    await runIdentitySweep(client, 'sweep');
-    await runMeetupSweep('sweep', client);
+    // Each sweep is guarded independently: one platform's API being down
+    // must not cost the other platform its digest. See runSweepOrDegrade.
+    await runSweepOrDegrade('Discord', client, () =>
+      runIdentitySweep(client, 'sweep'),
+    );
+    await runSweepOrDegrade('Meetup', client, () =>
+      runMeetupSweep('sweep', client),
+    );
     const until = new Date(Math.max(boundary.getTime(), Date.now()));
 
     const changes = await repo.listChangesMetadataBetween(since, until);

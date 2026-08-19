@@ -20,6 +20,14 @@ const MAX_PAGES = 200;
  * degraded sweep instead of a mystery failure.
  */
 export class PaginationCapError extends Error {
+  /**
+   * This message is composed here, not lifted from an API response, so it is
+   * safe to show organizers. The digest's degraded-sweep alert surfaces the
+   * message of errors carrying this marker and only the class name of the
+   * rest, because a raw Meetup response body must never reach Discord.
+   */
+  readonly organizerSafeMessage = true;
+
   constructor(pages: number, collected: number) {
     super(
       `Pagination exceeded ${pages} pages (${collected} records collected) -- ` +

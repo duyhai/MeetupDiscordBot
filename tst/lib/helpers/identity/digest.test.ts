@@ -294,13 +294,95 @@ describe('runIdentityDigestOnce', () => {
     expect(runMeetupSweep).toHaveBeenCalledWith('sweep', client);
   });
 
-  it('releases the claim when the Meetup sweep throws', async () => {
+  it('still posts the digest when the Meetup sweep throws', async () => {
     vi.mocked(runMeetupSweep).mockRejectedValue(new Error('meetup api down'));
 
-    await expect(runIdentityDigestOnce(client)).rejects.toThrow(
-      'meetup api down',
+    await runIdentityDigestOnce(client);
+
+    // A reconciliation failure must DEGRADE the digest, not cancel it. The
+    // old behaviour let one 502 on one roster page propagate out, release the
+    // claim, and get swallowed by the scheduler -- no digest for either
+    // platform, no alert, and no later report, because the reporting window
+    // only moves forward.
+    const titles = vi
+      .mocked(logAlert)
+      .mock.calls.map(([, entry]) => entry.title);
+    expect(titles).toContain('Meetup identity sweep failed');
+    expect(titles.some((title) => title.startsWith('Identity changes'))).toBe(
+      true,
     );
-    expect(cache.remove).toHaveBeenCalledWith('identity-digest-2026-08-16');
+  });
+
+  it('still posts the digest when the Discord sweep throws', async () => {
+    vi.mocked(runIdentitySweep).mockRejectedValue(new Error('discord down'));
+
+    await runIdentityDigestOnce(client);
+
+    const titles = vi
+      .mocked(logAlert)
+      .mock.calls.map(([, entry]) => entry.title);
+    expect(titles).toContain('Discord identity sweep failed');
+    expect(titles.some((title) => title.startsWith('Identity changes'))).toBe(
+      true,
+    );
+  });
+
+  it('runs the Meetup sweep even after the Discord sweep threw', async () => {
+    vi.mocked(runIdentitySweep).mockRejectedValue(new Error('discord down'));
+
+    await runIdentityDigestOnce(client);
+
+    // Independently guarded, not one shared try: the first platform failing
+    // must not skip the second platform's reconciliation.
+    expect(runMeetupSweep).toHaveBeenCalledTimes(1);
+  });
+
+  it('names which sweep failed and says the rest is unaffected', async () => {
+    vi.mocked(runMeetupSweep).mockRejectedValue(new Error('meetup api down'));
+
+    await runIdentityDigestOnce(client);
+
+    const failure = vi
+      .mocked(logAlert)
+      .mock.calls.map(([, entry]) => entry)
+      .find((entry) => entry.title === 'Meetup identity sweep failed');
+    expect(failure?.description).toContain('unaffected');
+  });
+
+  it('keeps a raw upstream error body out of the sweep-failure alert', async () => {
+    vi.mocked(runMeetupSweep).mockRejectedValue(
+      new Error('502: {"token":"do-not-leak"}'),
+    );
+
+    await runIdentityDigestOnce(client);
+
+    // graphql-request's ClientError embeds the whole upstream response. Only
+    // errors this codebase composes itself are quoted verbatim; everything
+    // else is reduced to its class name.
+    const failure = vi
+      .mocked(logAlert)
+      .mock.calls.map(([, entry]) => entry)
+      .find((entry) => entry.title === 'Meetup identity sweep failed');
+    expect(failure?.description).not.toContain('do-not-leak');
+    expect(failure?.description).toContain('Error');
+  });
+
+  it('quotes the message of an error it composed itself', async () => {
+    const actionable = Object.assign(
+      new Error('the organizer token cannot read this group'),
+      { organizerSafeMessage: true },
+    );
+    vi.mocked(runMeetupSweep).mockRejectedValue(actionable);
+
+    await runIdentityDigestOnce(client);
+
+    // The whole value of the named errors is that they name the remedy;
+    // reducing them to "Error" too would throw that away.
+    const failure = vi
+      .mocked(logAlert)
+      .mock.calls.map(([, entry]) => entry)
+      .find((entry) => entry.title === 'Meetup identity sweep failed');
+    expect(failure?.description).toContain('cannot read this group');
   });
 
   it('resolves a Meetup change to its linked Discord member in the digest', async () => {
@@ -388,15 +470,17 @@ describe('runIdentityDigestOnce', () => {
     expect(cache.remove).toHaveBeenCalledWith('identity-digest-2026-08-16');
   });
 
-  it('releases the claim when the sweep throws', async () => {
-    vi.mocked(runIdentitySweep).mockRejectedValue(new Error('db down'));
+  it('releases the claim when the digest query itself fails', async () => {
+    // Not a sweep failure -- those degrade now. This is the digest proper
+    // failing, which still has to release the day so a restart retries.
+    repo.listChangesMetadataBetween.mockRejectedValue(new Error('db down'));
 
     await expect(runIdentityDigestOnce(client)).rejects.toThrow('db down');
     expect(cache.remove).toHaveBeenCalledWith('identity-digest-2026-08-16');
   });
 
   it('surfaces the original error, not a claim-release failure', async () => {
-    vi.mocked(runIdentitySweep).mockRejectedValue(new Error('db down'));
+    repo.listChangesMetadataBetween.mockRejectedValue(new Error('db down'));
     cache.remove.mockRejectedValue(new Error('cache unavailable'));
 
     // A cache outage during release must not mask the real cause, and the
