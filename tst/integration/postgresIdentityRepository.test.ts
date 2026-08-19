@@ -25,6 +25,10 @@ if (!POSTGRES_AVAILABLE) {
 // any other scope is correctly invisible to them.
 const DEFAULT_SCOPE = GUILD_ID;
 
+// Well above anything these fixtures write, so ordinary tests never hit the
+// page cap by accident -- the cap itself is exercised separately, below.
+const AMPLE_LIMIT = 1000;
+
 const freshSnapshot = (): IdentitySnapshot => ({
   scopeId: DEFAULT_SCOPE,
   discordUserId: `discord-${crypto.randomUUID()}`,
@@ -376,7 +380,11 @@ describe.skipIf(!POSTGRES_AVAILABLE)('PostgresIdentityRepository', () => {
     }
     const after = await repo.maxChangeId();
 
-    const rows = await repo.listChangesMetadataAfterId(before, after);
+    const rows = await repo.listChangesMetadataAfterId(
+      before,
+      after,
+      AMPLE_LIMIT,
+    );
     const subjects = rows.map((r) => r.subjectId);
 
     expect(subjects).toContain(a);
@@ -408,7 +416,7 @@ describe.skipIf(!POSTGRES_AVAILABLE)('PostgresIdentityRepository', () => {
     // Yesterday's digest stored `mark` after reporting that row. Today's must
     // start strictly above it -- `>=` would re-report the boundary row every
     // single day.
-    const rows = await repo.listChangesMetadataAfterId(mark, mark);
+    const rows = await repo.listChangesMetadataAfterId(mark, mark, AMPLE_LIMIT);
 
     expect(rows).toHaveLength(0);
   });
@@ -447,23 +455,81 @@ describe.skipIf(!POSTGRES_AVAILABLE)('PostgresIdentityRepository', () => {
       new Map(),
     );
 
-    const rows = await repo.listChangesMetadataAfterId(before, ceiling);
+    const rows = await repo.listChangesMetadataAfterId(
+      before,
+      ceiling,
+      AMPLE_LIMIT,
+    );
     const subjects = rows.map((r) => r.subjectId);
 
     // The ceiling models a gateway event arriving mid-digest: it must not be
-    // reported now, and (because the mark advances only to the ceiling) it
-    // must still be reportable tomorrow.
+    // reported now, and (because the mark advances only to the last row
+    // actually read) it must still be reportable tomorrow.
     expect(subjects).toContain(early);
     expect(subjects).not.toContain(late);
   });
 
+  it('caps the number of rows returned at the given limit', async () => {
+    const before = (await repo.maxChangeId()) ?? '0';
+    for (let i = 0; i < 5; i += 1) {
+      // eslint-disable-next-line no-await-in-loop
+      await repo.recordChanges(
+        [
+          {
+            platform: 'discord',
+            scopeId: DEFAULT_SCOPE,
+            subjectId: `discord-${crypto.randomUUID()}`,
+            field: 'nickname',
+            oldValue: 'A',
+            newValue: 'B',
+          },
+        ],
+        'event',
+        new Map(),
+      );
+    }
+    const after = await repo.maxChangeId();
+
+    const rows = await repo.listChangesMetadataAfterId(before, after, 3);
+
+    // An outage-length backlog must not be read in a single unbounded pass;
+    // the caller advances the mark to the last row returned here, not to
+    // `after`, so the remainder is picked up by a later run.
+    expect(rows).toHaveLength(3);
+  });
+
   it('round-trips the digest high-water mark', async () => {
-    await repo.setDigestCursor('4242');
-    expect(await repo.getDigestCursor()).toBe('4242');
+    // Values derived from the clock, not fixed literals: the mark is
+    // monotonic (see the next test), this suite runs against a persistent
+    // database, and a fixed literal could be silently rejected by a value an
+    // earlier run already left behind.
+    const base = Date.now();
+    const first = String(base + 100);
+    await repo.setDigestCursor(first);
+    expect(await repo.getDigestCursor()).toBe(first);
 
     // Upsert, not insert: the mark advances every day for the life of the app.
-    await repo.setDigestCursor('4243');
-    expect(await repo.getDigestCursor()).toBe('4243');
+    const second = String(base + 200);
+    await repo.setDigestCursor(second);
+    expect(await repo.getDigestCursor()).toBe(second);
+  });
+
+  it('keeps the high-water mark monotonic when writes race out of order', async () => {
+    // Two overlapping digest runs (the accepted >30-minute-lease case) can
+    // finish out of order: a faster run posts through a higher id and writes
+    // it, then a slower run writes a lower one. `base` is derived from the
+    // clock so this value is guaranteed larger than any fixed id another test
+    // in this file writes to the same key.
+    const base = Date.now();
+    const high = String(base + 500);
+    const low = String(base + 400);
+
+    await repo.setDigestCursor(high);
+    await repo.setDigestCursor(low);
+
+    // A blind overwrite would move the mark backwards and re-report every
+    // row between `low` and `high` on the next run.
+    expect(await repo.getDigestCursor()).toBe(high);
   });
 
   it('finds the last id before a cutoff for the first run', async () => {
@@ -492,6 +558,7 @@ describe.skipIf(!POSTGRES_AVAILABLE)('PostgresIdentityRepository', () => {
     const rows = await repo.listChangesMetadataAfterId(
       boundary,
       await repo.maxChangeId(),
+      AMPLE_LIMIT,
     );
     expect(rows.some((r) => r.subjectId === id)).toBe(false);
   });
@@ -529,6 +596,7 @@ describe.skipIf(!POSTGRES_AVAILABLE)('PostgresIdentityRepository', () => {
     const afterId = await repo.listChangesMetadataAfterId(
       before,
       (await repo.maxChangeId()) ?? before,
+      AMPLE_LIMIT,
     );
     const between = await repo.listChangesBetween(window.from, window.to);
     const metadata = await repo.listChangesMetadataBetween(

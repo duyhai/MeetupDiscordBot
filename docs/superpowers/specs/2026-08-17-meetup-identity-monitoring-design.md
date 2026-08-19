@@ -270,7 +270,7 @@ already reports row count and table size, so growth stays observable.
 
 Request volume: `memberships` paginated at 100 per page is ~60 requests per
 sweep, once a day. Sequential, matching the Discord sweep's reasoning about
-the 3-connection pool.
+the 2-connection pool.
 
 ## Failure behaviour
 
@@ -346,7 +346,10 @@ with this work:
     event arriving mid-digest is not skipped — it waits for tomorrow).
   - The digest reports `id > mark AND id <= ceiling`, ordered by id, then
     advances the mark to that ceiling — and only after the post is confirmed
-    landed, so an undelivered digest is retried rather than lost.
+    landed, so an undelivered digest is retried rather than lost. Rows that
+    don't fit inside the embed's character limit are truncated with a count,
+    and since the mark still advances past them, `/meetup_identity_report` is
+    the only place they are ever shown.
   - The first run has no mark, so it translates the hour-anchored boundary
     into a starting id once. Without that the first digest after deploy would
     report the entire backfill as today's news.

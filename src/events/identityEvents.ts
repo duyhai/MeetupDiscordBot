@@ -25,7 +25,15 @@ export function registerIdentityEvents(client: Client): void {
   // discord.js types this listener as returning `void`, but the handler is
   // async so tests (and safeRecord's internal error handling) can await it.
   // eslint-disable-next-line @typescript-eslint/no-misused-promises
-  client.on('guildMemberUpdate', (_before, after) => safeRecord(after));
+  client.on('guildMemberUpdate', (_before, after) => {
+    // guildMemberUpdate fires for every guild the bot is in, not just the
+    // configured one; recording a foreign guild's member would write rows
+    // under a scope the digest and report never intended to cover.
+    if (after.guild.id !== GUILD_ID) {
+      return undefined;
+    }
+    return safeRecord(after);
+  });
 
   // eslint-disable-next-line @typescript-eslint/no-misused-promises
   client.on('userUpdate', async (_before, after: User) => {

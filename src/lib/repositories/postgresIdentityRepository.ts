@@ -379,10 +379,19 @@ export class PostgresIdentityRepository {
    * The caller passes an explicit ceiling rather than letting this read
    * "everything so far": a gateway event landing between the read and the
    * mark being stored would otherwise be skipped forever.
+   *
+   * `limit` bounds a single run's row count. Without it, a stretch where
+   * `logAlert` keeps failing (so the mark never advances) leaves the next
+   * successful run to process everything recorded since -- unbounded, and
+   * cheap in-memory passes over that result (min/max, O(n^2) revert
+   * annotation) stop being cheap. The caller is responsible for advancing the
+   * mark only to the last row actually returned, not to `throughId`, since a
+   * capped page may not reach it.
    */
   async listChangesMetadataAfterId(
     afterId: string,
     throughId: string,
+    limit: number,
   ): Promise<IdentityChangeMetadata[]> {
     const scope = scopeClause(3);
     const result = await this.pool.query<MetadataRow>(
@@ -390,8 +399,9 @@ export class PostgresIdentityRepository {
               detected_at, source
          FROM member_identity_changes
         WHERE id > $1 AND id <= $2 AND ${scope.sql}
-        ORDER BY id ASC`,
-      [afterId, throughId, ...scope.params],
+        ORDER BY id ASC
+        LIMIT $5`,
+      [afterId, throughId, ...scope.params, limit],
     );
     return result.rows.map(toChangeMetadata);
   }
@@ -432,12 +442,21 @@ export class PostgresIdentityRepository {
     return result.rows[0]?.value;
   }
 
+  /**
+   * Monotonic on purpose: two overlapping digest runs (the accepted
+   * >30-minute-lease case) can finish out of order, and a blind overwrite
+   * from the slower run would move the mark backwards -- re-reporting every
+   * row the faster run already covered. GREATEST keeps the mark at whichever
+   * value is higher regardless of write order.
+   */
   async setDigestCursor(id: string): Promise<void> {
     await this.pool.query(
       `INSERT INTO identity_digest_state (key, value, updated_at)
        VALUES ($1, $2, now())
-       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value,
-                                       updated_at = now()`,
+       ON CONFLICT (key) DO UPDATE SET
+         value = GREATEST(identity_digest_state.value::bigint,
+                           EXCLUDED.value::bigint)::text,
+         updated_at = now()`,
       [DIGEST_CURSOR_KEY, id],
     );
   }

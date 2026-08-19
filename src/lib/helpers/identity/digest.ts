@@ -62,6 +62,19 @@ const DONE_TTL_SEC = 12 * 60 * 60;
 
 const MAX_DESCRIPTION = 4096; // Discord's hard embed description limit
 
+/**
+ * Caps how many rows a single digest run will read.
+ *
+ * The high-water mark removed the old ~24h time window, so if `logAlert`
+ * fails for a stretch (an outage, a permission change) the mark never
+ * advances and the next successful run would otherwise process everything
+ * recorded since -- unbounded. Without this cap that both blows up the min/
+ * max pass below at large sizes and makes `annotateReverts`'s O(n^2) scan
+ * expensive. 5000 is comfortably above a busy day's volume and comfortably
+ * below where either of those costs matters.
+ */
+export const DIGEST_PAGE_LIMIT = 5000;
+
 // Short on purpose: every line already carries a platform label (below), so
 // these do not need to repeat "Meetup" -- they only need to read as distinct
 // from Discord's "user avatar"/"server avatar"/"display name" at a glance.
@@ -237,9 +250,11 @@ export function formatIdentityDigest(
   let shown = 0;
   for (const change of changes) {
     const next = `${line(change, meetupToDiscord)}\n`;
-    // Reserve room for the overflow note so a flood degrades to a truncated
+    // Reserve room for the overflow note (comfortably above its longest
+    // realistic length -- "…and 5000 more — run /meetup_identity_report for
+    // the full list\n" is 63 characters) so a flood degrades to a truncated
     // digest rather than a rejected one.
-    if (used + next.length > MAX_DESCRIPTION - 40) {
+    if (used + next.length > MAX_DESCRIPTION - 80) {
       break;
     }
     lines.push(next);
@@ -247,15 +262,31 @@ export function formatIdentityDigest(
     shown += 1;
   }
   const overflow = changes.length - shown;
-  const overflowNote = overflow > 0 ? `…and ${overflow} more\n` : '';
+  // The high-water mark still advances past these rows -- they are never
+  // shown by a later digest -- so the note points at the one place they are
+  // still visible.
+  const overflowNote =
+    overflow > 0
+      ? `…and ${overflow} more — run /meetup_identity_report for the full list\n`
+      : '';
 
   // The actual span of the rows included, not a nominal window. The digest no
   // longer selects by time at all -- it selects by change id -- so quoting a
   // notional 24h window would describe something that is not what was
   // queried. The rows are ordered by id, which is chronological.
-  const times = changes.map((change) => change.detectedAt.getTime());
-  const from = new Date(Math.min(...times));
-  const to = new Date(Math.max(...times));
+  //
+  // A single-pass reduce, not Math.min(...times)/Math.max(...times): spread
+  // arguments blow the call stack around ~1e5 elements, and DIGEST_PAGE_LIMIT
+  // still allows thousands of rows through here in one run.
+  const { min: minTime, max: maxTime } = changes.reduce(
+    (acc, change) => {
+      const t = change.detectedAt.getTime();
+      return { min: Math.min(acc.min, t), max: Math.max(acc.max, t) };
+    },
+    { min: Infinity, max: -Infinity },
+  );
+  const from = new Date(minTime);
+  const to = new Date(maxTime);
   const range =
     from.getTime() === to.getTime()
       ? `at ${stamp(from)} UTC`
@@ -363,15 +394,19 @@ export async function runIdentityDigestOnce(client: Client): Promise<void> {
       runMeetupSweep('sweep', client),
     );
 
-    // Fix the ceiling BEFORE reading the rows, and advance the mark to
-    // exactly this value afterwards. Advancing to "the highest id that exists
-    // when the digest finishes" instead would silently skip any gateway event
-    // recorded between the read and the write -- a change that is then never
-    // reported by any digest, which is the one outcome this feature cannot
-    // tolerate. Anything above the ceiling simply waits for tomorrow.
+    // Fix the ceiling BEFORE reading the rows. Advancing to "the highest id
+    // that exists when the digest finishes" instead would silently skip any
+    // gateway event recorded between the read and the write -- a change that
+    // is then never reported by any digest, which is the one outcome this
+    // feature cannot tolerate. Anything above the ceiling simply waits for
+    // tomorrow.
     const ceiling = await repo.maxChangeId();
     const changes = ceiling
-      ? await repo.listChangesMetadataAfterId(afterId, ceiling)
+      ? await repo.listChangesMetadataAfterId(
+          afterId,
+          ceiling,
+          DIGEST_PAGE_LIMIT,
+        )
       : [];
     const stats = await repo.storageStats();
 
@@ -402,13 +437,22 @@ export async function runIdentityDigestOnce(client: Client): Promise<void> {
         );
       }
     }
+    // Advance to the id of the LAST ROW ACTUALLY RETURNED, not the
+    // pre-computed ceiling: DIGEST_PAGE_LIMIT can cap the read below the
+    // ceiling, and advancing past rows that were never read would skip them
+    // forever, since the mark only moves forward. When nothing was returned
+    // (a quiet stretch, or the range above the mark is empty) the ceiling is
+    // exactly what was covered, so it is the correct value to fall back to.
+    //
     // Advance the mark only once the digest has demonstrably been delivered.
     // Ordered before the done-marker on purpose: if this write fails, the run
     // throws, the day stays unfinished, and a retry reports the same rows
     // again. Duplicating a digest is recoverable by reading it twice; losing
     // the rows is not recoverable at all.
-    if (ceiling) {
-      await repo.setDigestCursor(ceiling);
+    const advanceTo =
+      changes.length > 0 ? changes[changes.length - 1].id : ceiling;
+    if (advanceTo) {
+      await repo.setDigestCursor(advanceTo);
     }
 
     // The day is finished. Written on a silent day too: nothing was posted,

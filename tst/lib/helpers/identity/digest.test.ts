@@ -2,6 +2,7 @@ import { Client } from 'discord.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  DIGEST_PAGE_LIMIT,
   IDENTITY_DIGEST_UTC_HOUR,
   annotateReverts,
   formatIdentityDigest,
@@ -196,7 +197,12 @@ describe('formatIdentityDigest', () => {
     // Discord rejects descriptions over 4096 characters outright, which would
     // turn a busy day into no digest at all.
     expect((entry?.description ?? '').length).toBeLessThanOrEqual(4096);
-    expect(entry?.description).toContain('more');
+    // The mark still advances past truncated rows, so they are never shown by
+    // a later digest -- the note must point at the one place they remain
+    // visible.
+    expect(entry?.description).toContain(
+      'run /meetup_identity_report for the full list',
+    );
   });
 
   it('labels which platform each change came from', () => {
@@ -467,10 +473,14 @@ describe('runIdentityDigestOnce', () => {
   });
 
   it('leaves no gap: the next run starts exactly where this one stopped', async () => {
+    // Not truncated (fewer rows than DIGEST_PAGE_LIMIT), so the last row
+    // returned and the ceiling that was actually read coincide.
+    repo.listChangesMetadataAfterId.mockResolvedValue([change({ id: '140' })]);
+
     await runIdentityDigestOnce(client);
 
     // Consecutive coverage is (mark, ceiling] then (ceiling, next-ceiling].
-    // Storing anything other than the ceiling that was actually read opens
+    // Storing anything other than the id of the last row actually read opens
     // either a gap or an overlap.
     const stored = repo.setDigestCursor.mock.calls[0][0] as string;
     const [, through] = repo.listChangesMetadataAfterId.mock
@@ -478,11 +488,30 @@ describe('runIdentityDigestOnce', () => {
     expect(stored).toBe(through);
   });
 
+  it('advances the mark only to the last row returned, not the full ceiling, when the page is capped', async () => {
+    // A full page (exactly DIGEST_PAGE_LIMIT rows) means the query stopped
+    // short of the ceiling; the ceiling itself is far above what was read.
+    const rows = Array.from({ length: DIGEST_PAGE_LIMIT }, (_, i) =>
+      change({ id: String(i + 1) }),
+    );
+    repo.listChangesMetadataAfterId.mockResolvedValue(rows);
+    repo.maxChangeId.mockResolvedValue('999999');
+
+    await runIdentityDigestOnce(client);
+
+    // Advancing to the pre-computed ceiling instead of the last row actually
+    // read would skip every row between them forever, since the mark only
+    // moves forward.
+    expect(repo.setDigestCursor).toHaveBeenCalledWith(
+      String(DIGEST_PAGE_LIMIT),
+    );
+    expect(repo.setDigestCursor).not.toHaveBeenCalledWith('999999');
+  });
+
   it('captures rows the sweeps themselves wrote', async () => {
     // The ceiling has to be read AFTER the sweeps, or the sweeps' own
     // findings -- the changes least likely to have been caught any other way
     // -- would sit above it and wait a full day.
-    expect(true).toBe(true);
     await runIdentityDigestOnce(client);
 
     expect(repo.maxChangeId.mock.invocationCallOrder[0]).toBeGreaterThan(
@@ -493,16 +522,19 @@ describe('runIdentityDigestOnce', () => {
   it('does not skip a change recorded while the digest was being built', async () => {
     // A gateway event landing between the read and the mark being stored must
     // not be swallowed. Advancing to a ceiling fixed before the read means
-    // anything later simply waits for tomorrow.
+    // anything later simply waits for tomorrow -- and the mark advances only
+    // to the last row actually read (id 140), never to the post-read max
+    // (999) that the mid-digest event bumped maxChangeId to.
     repo.maxChangeId.mockResolvedValue('140');
     repo.listChangesMetadataAfterId.mockImplementation(async () => {
       repo.maxChangeId.mockResolvedValue('999'); // an event lands mid-digest
-      return [change()];
+      return [change({ id: '140' })];
     });
 
     await runIdentityDigestOnce(client);
 
     expect(repo.setDigestCursor).toHaveBeenCalledWith('140');
+    expect(repo.setDigestCursor).not.toHaveBeenCalledWith('999');
   });
 
   it('falls back to the hour boundary on the very first run', async () => {

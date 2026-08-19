@@ -55,13 +55,30 @@ describe('registerIdentityEvents', () => {
     const { client, handlers } = fakeClient();
     registerIdentityEvents(client);
 
-    await handlers.get('guildMemberUpdate')?.(member('old'), member('u1'));
+    await handlers.get('guildMemberUpdate')?.(
+      member('old', GUILD_ID),
+      member('u1', GUILD_ID),
+    );
 
     expect(recordIdentityFor).toHaveBeenCalledTimes(1);
     const [passed, source] = vi.mocked(recordIdentityFor).mock.calls[0];
     // Must record the AFTER member; recording the before re-saves the old state.
     expect(passed.id).toBe('u1');
     expect(source).toBe('event');
+  });
+
+  it('does not record a guildMemberUpdate from a different guild', async () => {
+    const { client, handlers } = fakeClient();
+    registerIdentityEvents(client);
+
+    await handlers.get('guildMemberUpdate')?.(
+      member('old', 'other-guild'),
+      member('u1', 'other-guild'),
+    );
+
+    // A row written under a scope the bot doesn't monitor would be reported
+    // to these organizers as if it were theirs.
+    expect(recordIdentityFor).not.toHaveBeenCalled();
   });
 
   it('subscribes to userUpdate', () => {
@@ -119,7 +136,10 @@ describe('registerIdentityEvents', () => {
 
     // An unhandled rejection in a gateway listener takes down the dyno.
     await expect(
-      handlers.get('guildMemberUpdate')?.(member('old'), member('u1')),
+      handlers.get('guildMemberUpdate')?.(
+        member('old', GUILD_ID),
+        member('u1', GUILD_ID),
+      ),
     ).resolves.not.toThrow();
   });
 });
