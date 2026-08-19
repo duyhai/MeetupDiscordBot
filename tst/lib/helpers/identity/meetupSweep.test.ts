@@ -253,6 +253,62 @@ describe('runMeetupSweep', () => {
     expect(refreshMeetupToken).toHaveBeenCalledWith('stored-refresh');
   });
 
+  it('skips thumbnails once a systemic share of the roster has changed', async () => {
+    // 20 members, all changed: far past the 10% ceiling. Thumb fetches are
+    // sequential with a 5s ceiling each, so a real 6,000-member systemic
+    // change -- Meetup re-issuing photo ids -- is an eight-hour marathon
+    // inside the digest, holding the day.
+    const roster = Array.from({ length: 20 }, (_, i) =>
+      member(`m${i}`, { memberPhoto: { id: 'new-photo', thumbUrl: 'u' } }),
+    );
+    vi.mocked(getPaginatedData).mockResolvedValue(roster);
+    repo.getMeetupSnapshot.mockImplementation(async (_scope, id: string) =>
+      snapshotFor(id, { photoId: 'old-photo' }),
+    );
+
+    const result = await runMeetupSweep('sweep', fakeClient());
+
+    // Every change is still recorded -- the changes are the evidence; the
+    // thumbnails only help read them.
+    expect(result.changed).toBe(20);
+    const thumbMaps = repo.recordChanges.mock.calls.map(
+      (call) => call[2] as Map<string, unknown>,
+    );
+    expect(thumbMaps.at(-1)?.size).toBe(0);
+  });
+
+  it('alerts once when it skips thumbnails for a systemic change', async () => {
+    const roster = Array.from({ length: 20 }, (_, i) =>
+      member(`m${i}`, { memberPhoto: { id: 'new-photo', thumbUrl: 'u' } }),
+    );
+    vi.mocked(getPaginatedData).mockResolvedValue(roster);
+    repo.getMeetupSnapshot.mockImplementation(async (_scope, id: string) =>
+      snapshotFor(id, { photoId: 'old-photo' }),
+    );
+
+    await runMeetupSweep('sweep', fakeClient());
+
+    expect(logAlert).toHaveBeenCalledTimes(1);
+    const [, entry] = vi.mocked(logAlert).mock.calls[0];
+    expect(entry.description).toContain('Systemic photo-id change');
+  });
+
+  it('still fetches thumbnails for an ordinary handful of changes', async () => {
+    const roster = Array.from({ length: 20 }, (_, i) => member(`m${i}`));
+    vi.mocked(getPaginatedData).mockResolvedValue(roster);
+    repo.getMeetupSnapshot.mockImplementation(async (_scope, id: string) => {
+      return id === 'm0'
+        ? snapshotFor(id, { name: 'Old Name' })
+        : snapshotFor(id);
+    });
+
+    await runMeetupSweep('sweep', fakeClient());
+
+    // The guard must not fire on a normal day; one change in twenty is well
+    // under the ceiling, and no alert should reach the organizers.
+    expect(logAlert).not.toHaveBeenCalled();
+  });
+
   it('tries a shared stored/seed token only once', async () => {
     // Steady state: the seed was pasted into Heroku and then stored verbatim,
     // so both candidates are the same string. Trying it twice means two

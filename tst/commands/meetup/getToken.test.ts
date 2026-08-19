@@ -36,21 +36,34 @@ vi.mock('../../../src/util/discord.js', async (importOriginal) => {
   };
 });
 
-function fakeInteraction(roleIds: string[]) {
+function fakeInteraction(
+  roleIds: string[],
+  {
+    admin = false,
+    inGuild = true,
+  }: { admin?: boolean; inGuild?: boolean } = {},
+) {
   const member = {
     roles: { cache: { has: (id: string) => roleIds.includes(id) } },
+    permissions: { has: () => admin },
   };
   return {
-    guild: { members: { fetch: vi.fn().mockResolvedValue(member) } },
+    // Null in a DM -- discord.js types this as nullable and it genuinely is.
+    guild: inGuild
+      ? { members: { fetch: vi.fn().mockResolvedValue(member) } }
+      : null,
     user: { id: 'discord-1', username: 'tester' },
     editReply: vi.fn().mockResolvedValue(undefined),
     followUp: vi.fn().mockResolvedValue(undefined),
   } as unknown as CommandInteraction;
 }
 
-async function runCommand(roleIds: string[]) {
+async function runCommand(
+  roleIds: string[],
+  options: { admin?: boolean; inGuild?: boolean } = {},
+) {
   cache.get.mockResolvedValue(JSON.stringify(TOKENS));
-  const interaction = fakeInteraction(roleIds);
+  const interaction = fakeInteraction(roleIds, options);
   await new MeetupGetTokenCommands().meetupGetTokenHandler(interaction);
 
   const [payload] = vi.mocked(interaction.followUp).mock.calls[0] as [
@@ -87,5 +100,36 @@ describe('meetup_get_token refresh token gate', () => {
     expect(content).not.toContain(TOKENS.refreshToken);
     // The access token itself must still be delivered.
     expect(content).toContain(TOKENS.accessToken);
+  });
+
+  it('includes the refresh token for an admin without the organizer role', async () => {
+    const content = await runCommand([], { admin: true });
+
+    // The server owner holds Administrator without necessarily holding the
+    // organizer role, and is the person most likely to be setting
+    // MEETUP_ORGANIZER_REFRESH_TOKEN in Heroku. requireModOrOrganizer already
+    // treats admin as sufficient; this gate was the odd one out.
+    expect(content).toContain(TOKENS.refreshToken);
+  });
+
+  it('still delivers the access token when invoked from a DM', async () => {
+    const content = await runCommand([SERVER_ROLES.organizer], {
+      inGuild: false,
+    });
+
+    // interaction.guild is null in a DM -- a natural place to run a command
+    // that hands back a secret. Dereferencing it threw a TypeError that
+    // surfaced as a generic "command failed".
+    expect(content).toContain(TOKENS.accessToken);
+  });
+
+  it('withholds the refresh token in a DM, where roles cannot be checked', async () => {
+    const content = await runCommand([SERVER_ROLES.organizer], {
+      inGuild: false,
+    });
+
+    // No guild means no role information. An unverifiable caller is not an
+    // organizer, so the long-lived credential stays behind the gate.
+    expect(content).not.toContain(TOKENS.refreshToken);
   });
 });

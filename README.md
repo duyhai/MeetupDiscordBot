@@ -92,7 +92,12 @@ Before the first digest, populate the baseline for each platform once so
 existing members are not reported as changed. Both backfill scripts open
 their own Postgres connection pool on top of whatever the running dyno
 already holds, so run them outside a deploy window, not concurrently with
-one, and do the two platforms in order:
+one, and do the two platforms in order.
+
+**Never run a backfill during hour 18 UTC.** The scheduled sweep makes the
+same full roster pass at that hour. Two passes racing each other can each
+diff a member before the other advances the baseline, so the same change is
+recorded twice.
 
 1. Run `/meetup_get_token` as an organizer, copy the refresh token from the
    reply, and set it as `MEETUP_ORGANIZER_REFRESH_TOKEN` in Heroku config.
@@ -113,3 +118,27 @@ one, and do the two platforms in order:
 Either script exiting non-zero (including "0 scanned") means something is
 wrong with credentials or connectivity, not that the roster is empty --
 resolve it before the next digest runs.
+
+#### Replacing the Meetup organizer credential
+
+Which steps you need depends on whether the *stored* credential still works.
+The sweep resolves the stored pair first and only falls back to the config
+var, so the two cases are genuinely different:
+
+- **The grant was revoked or expired** (the sweep is alerting). The stored
+  refresh token now fails, so the fallback already fires. Run
+  `/meetup_get_token`, copy the refresh token, set
+  `MEETUP_ORGANIZER_REFRESH_TOKEN`. Nothing else is needed.
+- **The stored pair is still valid but you want a different grant** -- a new
+  organizer, or rotating away from someone leaving. Setting the config var
+  alone changes nothing, because the still-working stored pair keeps winning.
+  Clear the stored row first, then set the var:
+
+      DATABASE_URL=$(heroku config:get DATABASE_URL -a meetup-discord-bot) \
+      yarn tsx scripts/backfillMeetupIdentity.ts --clear-credential
+
+  Then set `MEETUP_ORGANIZER_REFRESH_TOKEN` to the new refresh token. The
+  next sweep seeds from it and stores the result.
+
+Revoking the old grant itself is done from Meetup's application settings;
+clearing the row only stops this bot from using it.

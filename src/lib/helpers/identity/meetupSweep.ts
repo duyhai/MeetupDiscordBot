@@ -26,6 +26,13 @@ const logger = new Logger({ name: 'meetupIdentitySweep' });
 const THUMB_FETCH_TIMEOUT_MS = 5_000;
 
 /**
+ * Fraction of the roster that may change in one sweep before the sweep stops
+ * fetching thumbnails. Above this the cause is systemic (Meetup re-issuing
+ * photo ids), not 600 people independently changing their photo overnight.
+ */
+const SYSTEMIC_CHANGE_RATIO = 0.1;
+
+/**
  * Resolution order: the stored pair first, the Heroku config var as seed and
  * as the recovery path. Whatever refresh token comes back is persisted, so
  * rotation is absorbed whether or not Meetup rotates -- which cannot be
@@ -168,6 +175,7 @@ async function recordMeetupMember(
   member: MeetupGroupMember,
   scopeId: string,
   source: ChangeSource,
+  withThumbs: boolean,
 ): Promise<number> {
   const after = snapshotMeetupMember(member, scopeId);
   const before = await repo.getMeetupSnapshot(scopeId, member.id);
@@ -181,7 +189,9 @@ async function recordMeetupMember(
     return 0;
   }
 
-  const thumbs = await fetchMeetupChangeThumbs(changes, member);
+  const thumbs = withThumbs
+    ? await fetchMeetupChangeThumbs(changes, member)
+    : new Map<string, { oldThumb: Buffer | null; newThumb: Buffer | null }>();
   // Record before advancing the baseline, not after -- same crash-ordering
   // rationale as the Discord monitor. Crash here and the next sweep just
   // re-diffs and records a harmless duplicate row. Reversed, a crash would
@@ -246,8 +256,22 @@ export async function runMeetupSweep(
       .then((result) => result.groupByUrlname.memberships),
   );
 
+  // Thumbnails are fetched one at a time, each with a 5s ceiling. That is
+  // fine for the handful of photo changes a normal day produces, and
+  // catastrophic if Meetup ever re-issues photo ids en masse: 6,000 members
+  // x 5s is an eight-hour fetch marathon inside the digest, holding the day
+  // and finishing long after anyone would notice.
+  //
+  // Past this many changed members the sweep stops fetching thumbnails and
+  // keeps recording changes. The changes are the evidence; the thumbnails are
+  // an aid to reading them, and the pipeline already treats a null thumb as
+  // normal. A systemic id change is also the case where thumbnails are least
+  // informative -- every member's photo would look unchanged to a human.
+  const thumbBudget = Math.ceil(members.length * SYSTEMIC_CHANGE_RATIO);
+
   let scanned = 0;
   let changed = 0;
+  let thumbsSkipped = false;
   for (const member of members) {
     scanned += 1;
     try {
@@ -259,15 +283,42 @@ export async function runMeetupSweep(
         member,
         scopeId,
         source,
+        !thumbsSkipped,
       );
       if (changeCount > 0) {
         changed += 1;
+      }
+      if (!thumbsSkipped && changed > thumbBudget) {
+        thumbsSkipped = true;
+        logger.warn(
+          `Meetup sweep: ${changed} changed members exceeds ${thumbBudget} ` +
+            '(10% of the roster); recording the rest without thumbnails.',
+        );
       }
     } catch (error: unknown) {
       // One bad member must not abandon the rest of the roster.
       logger.warn(`Meetup sweep failed for ${member.id}: ${String(error)}`);
     }
   }
+
+  if (thumbsSkipped) {
+    const notice =
+      `Systemic photo-id change detected: more than ${thumbBudget} of ` +
+      `${members.length} Meetup members changed in one sweep, which is far ` +
+      'beyond normal. Thumbnails were skipped for the remainder to avoid a ' +
+      'multi-hour fetch; the changes themselves are all recorded. This most ' +
+      'likely means Meetup re-issued photo ids rather than that members ' +
+      'changed their photos.';
+    if (client) {
+      await logAlert(client, {
+        title: 'Meetup identity sweep: thumbnails skipped',
+        description: notice,
+      });
+    } else {
+      logger.error(notice);
+    }
+  }
+
   logger.info(
     `Meetup identity sweep (${source}): ${scanned} scanned, ${changed} changed`,
   );

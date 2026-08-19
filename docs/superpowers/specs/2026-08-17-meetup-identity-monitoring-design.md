@@ -112,8 +112,24 @@ Pasting a fresh value into the config var is therefore also how an organizer
 recovers from a revoked grant: clear the stored row, set the var, done.
 
 **Refresh** adds `refreshMeetupToken(refreshToken)` beside the existing
-exchange function. The sweep refreshes when `expires_at` is within a margin
-and persists the new pair.
+exchange function. The sweep refreshes **unconditionally, once per sweep**,
+and persists whatever pair comes back — it does not check `expires_at` first.
+
+Recorded ruling: absorbing rotation is the design centre of this credential,
+not an optimisation on top of it. A margin check makes the refresh
+conditional on a stored timestamp, so the one path that discovers and stores
+a rotated refresh token stops running exactly when the stored pair looks
+healthy. It also makes a corrupt or absent `expires_at` — the value Meetup
+supplies and may omit — decide whether the credential is maintained at all.
+One extra token request per day is not a cost worth reasoning about; a
+silently stale refresh token is a dead sweep.
+
+Persisting is a **separate failure** from refreshing. If the store write
+fails, the sweep proceeds on the tokens it just obtained and logs the
+discrepancy: discarding a freshly-refreshed (and, under rotation, now
+sole-valid) token because Postgres blipped would fall through to a seed
+Meetup has already invalidated, and alert an organizer to a remedy that
+cannot work.
 
 **Obtaining the refresh token** extends `/meetup_get_token` to show it
 alongside the access token, gated to organizers and sent ephemerally as the
@@ -312,8 +328,39 @@ with this work:
   posts "command failed" to the alerts channel when a mod merely asks for too
   wide a range. Set `alertHandled`, as `DuplicateMeetupAccountError` already
   does.
-- **Digest copy says "in the last 24h"** while `until` extends past the
-  boundary when the sweep runs long. State the actual window.
+- **The digest covers a range of change ids, not a time window.** The
+  original design anchored `since` to the fixed digest hour and extended
+  `until` to whenever the sweeps finished. That is not a window at all: the
+  span `[boundary, sweep-finish]` falls inside two consecutive digests, and
+  since Meetup rows are 100% sweep-detected they land squarely in it, so
+  every Meetup change is reported twice. Pulling `until` back to the boundary
+  only trades the duplication for a permanent gap — the sweeps' own findings,
+  the changes least likely to be caught any other way, would fall out of both.
+
+  Coverage is therefore tracked as a **high-water mark on
+  `member_identity_changes.id`**, the table's existing `BIGSERIAL`:
+
+  - The mark is the id of the last change already reported.
+  - Each run fixes a ceiling with `max(id)` **after** the sweeps (so their
+    findings are included) and **before** reading the rows (so a gateway
+    event arriving mid-digest is not skipped — it waits for tomorrow).
+  - The digest reports `id > mark AND id <= ceiling`, ordered by id, then
+    advances the mark to that ceiling — and only after the post is confirmed
+    landed, so an undelivered digest is retried rather than lost.
+  - The first run has no mark, so it translates the hour-anchored boundary
+    into a starting id once. Without that the first digest after deploy would
+    report the entire backfill as today's news.
+
+  Consecutive runs are then exactly contiguous by construction, with no
+  reliance on the dyno and Postgres clocks agreeing — which also disposes of
+  the clock-skew question separately.
+
+  The mark lives in Postgres (`identity_digest_state`), not the cache: both
+  cache backends expire entries well inside the 24 hours between digests, so
+  a cached mark would be missing every time it was needed.
+
+  The digest title states the actual span of the rows it contains, since
+  there is no longer a nominal window to quote.
 - **Connection budget.** This pool's `max: 3` plus the member repository's
   `max: 5` is 8 per dyno, 16 across a deploy's dyno overlap, against
   essential-0's 20 — and the backfill script opens its own pool of 3, reaching
