@@ -14,7 +14,11 @@ import { runIdentitySweep } from '../../../../src/lib/helpers/identity/sweep.js'
 import { IdentityChangeRecord } from '../../../../src/lib/repositories/identityTypes.js';
 
 const repo = vi.hoisted(() => ({
-  listChangesMetadataBetween: vi.fn(),
+  listChangesMetadataAfterId: vi.fn(),
+  maxChangeId: vi.fn(),
+  changeIdBefore: vi.fn(),
+  getDigestCursor: vi.fn(),
+  setDigestCursor: vi.fn(),
   storageStats: vi.fn(),
 }));
 const cache = vi.hoisted(() => ({
@@ -66,7 +70,6 @@ const change = (
 });
 
 const stats = { changeCount: 1204, totalBytes: 64_000_000 };
-const since = at('2026-08-15T18:00:00Z');
 
 describe('annotateReverts', () => {
   it('marks a change that was undone later the same day', () => {
@@ -127,11 +130,11 @@ describe('annotateReverts', () => {
 describe('formatIdentityDigest', () => {
   it('returns undefined when there were no changes', () => {
     // A silent day must post nothing rather than an empty embed.
-    expect(formatIdentityDigest([], stats, since, new Map())).toBeUndefined();
+    expect(formatIdentityDigest([], stats, new Map())).toBeUndefined();
   });
 
   it('lists each change and reports storage', () => {
-    const entry = formatIdentityDigest([change()], stats, since, new Map());
+    const entry = formatIdentityDigest([change()], stats, new Map());
 
     expect(entry?.title).toContain('1');
     expect(entry?.description).toContain('<@u1>');
@@ -151,7 +154,6 @@ describe('formatIdentityDigest', () => {
         }),
       ]),
       stats,
-      since,
       new Map(),
     );
 
@@ -163,7 +165,7 @@ describe('formatIdentityDigest', () => {
       change({ id: String(i), subjectId: `u${i}` }),
     );
 
-    const entry = formatIdentityDigest(many, stats, since, new Map());
+    const entry = formatIdentityDigest(many, stats, new Map());
 
     // Discord rejects descriptions over 4096 characters outright, which would
     // turn a busy day into no digest at all.
@@ -178,7 +180,6 @@ describe('formatIdentityDigest', () => {
         change({ platform: 'meetup', subjectId: 'm1', field: 'photo' }),
       ],
       stats,
-      since,
       new Map(),
     );
 
@@ -191,7 +192,6 @@ describe('formatIdentityDigest', () => {
     const entry = formatIdentityDigest(
       [change({ platform: 'meetup', subjectId: 'm1', field: 'photo' })],
       stats,
-      since,
       new Map([['m1', 'u1']]),
     );
 
@@ -203,7 +203,6 @@ describe('formatIdentityDigest', () => {
     const entry = formatIdentityDigest(
       [change({ platform: 'meetup', subjectId: 'm1', field: 'photo' })],
       stats,
-      since,
       new Map(),
     );
 
@@ -255,7 +254,11 @@ describe('runIdentityDigestOnce', () => {
     cache.get.mockResolvedValue(undefined);
     cache.set.mockResolvedValue(undefined);
     cache.remove.mockResolvedValue(undefined);
-    repo.listChangesMetadataBetween.mockResolvedValue([change()]);
+    repo.getDigestCursor.mockResolvedValue('100');
+    repo.changeIdBefore.mockResolvedValue('0');
+    repo.maxChangeId.mockResolvedValue('140');
+    repo.setDigestCursor.mockResolvedValue(undefined);
+    repo.listChangesMetadataAfterId.mockResolvedValue([change()]);
     repo.storageStats.mockResolvedValue(stats);
     memberRepo.listAll.mockResolvedValue([]);
     vi.mocked(logAlert).mockResolvedValue(true);
@@ -390,7 +393,7 @@ describe('runIdentityDigestOnce', () => {
   });
 
   it('resolves a Meetup change to its linked Discord member in the digest', async () => {
-    repo.listChangesMetadataBetween.mockResolvedValue([
+    repo.listChangesMetadataAfterId.mockResolvedValue([
       change({ platform: 'meetup', subjectId: 'm1', field: 'photo' }),
     ]);
     memberRepo.listAll.mockResolvedValue([
@@ -403,59 +406,126 @@ describe('runIdentityDigestOnce', () => {
     expect(entry.description).toContain('<@u1>');
   });
 
-  it('anchors since to the digest hour, not the last 24h from now', async () => {
+  it('reads from the stored high-water mark, not from a time window', async () => {
     await runIdentityDigestOnce(client);
 
-    const [since] = repo.listChangesMetadataBetween.mock.calls[0] as Date[];
-    // System time is HH:05; a `now - 24h` window would carry those 5 minutes.
-    expect(since.getUTCMinutes()).toBe(0);
+    const [afterId] = repo.listChangesMetadataAfterId.mock.calls[0] as string[];
+    expect(afterId).toBe('100');
   });
 
-  it('extends until past the sweep so its own rows are captured', async () => {
-    vi.mocked(runIdentitySweep).mockImplementation(async () => {
-      // The sweep is a full-guild pass that takes real wall-clock time; a
-      // change it detects gets `detected_at` stamped after the digest-hour
-      // boundary the sweep just ran past.
-      vi.setSystemTime(
-        new Date(Date.UTC(2026, 7, 16, IDENTITY_DIGEST_UTC_HOUR, 12)),
-      );
-      return { scanned: 1, changed: 1 };
-    });
-
-    await runIdentityDigestOnce(client);
-
-    const [, until] = repo.listChangesMetadataBetween.mock.calls[0] as Date[];
-    // The fixed 18:00 boundary the sweep blew past is not enough; `until`
-    // must reach at least as far as the moment the sweep actually finished.
-    expect(until.getTime()).toBeGreaterThanOrEqual(
-      Date.UTC(2026, 7, 16, IDENTITY_DIGEST_UTC_HOUR, 12),
-    );
-  });
-
-  it('includes a change written during the sweep in the same digest', async () => {
-    const sweepChange = change({
-      id: 'sweep-1',
-      detectedAt: at('2026-08-16T18:12:00Z'),
-    });
-    repo.listChangesMetadataBetween.mockImplementation(
-      async (since: Date, until: Date) =>
-        [sweepChange].filter(
-          (c) => c.detectedAt >= since && c.detectedAt < until,
+  it('does not report a change that a previous digest already reported', async () => {
+    // The bug this replaces: `since` was pinned to the fixed digest hour while
+    // `until` ran on to whenever the sweeps finished, so the span
+    // [boundary, sweep-finish] belonged to two consecutive digests. Meetup
+    // rows are 100% sweep-detected and land exactly there, so every Meetup
+    // change was reported twice. An id mark has no such overlap.
+    const log = [
+      change({ id: '100', subjectId: 'yesterday' }),
+      change({ id: '101', subjectId: 'today' }),
+    ];
+    repo.listChangesMetadataAfterId.mockImplementation(
+      async (afterId: string, throughId: string) =>
+        log.filter(
+          (row) =>
+            Number(row.id) > Number(afterId) &&
+            Number(row.id) <= Number(throughId),
         ),
     );
-    vi.mocked(runIdentitySweep).mockImplementation(async () => {
-      vi.setSystemTime(
-        new Date(Date.UTC(2026, 7, 16, IDENTITY_DIGEST_UTC_HOUR, 12, 5)),
-      );
-      return { scanned: 1, changed: 1 };
+    repo.maxChangeId.mockResolvedValue('101');
+
+    await runIdentityDigestOnce(client);
+
+    const [, entry] = vi.mocked(logAlert).mock.calls[0];
+    expect(entry.description).toContain('today');
+    expect(entry.description).not.toContain('yesterday');
+  });
+
+  it('leaves no gap: the next run starts exactly where this one stopped', async () => {
+    await runIdentityDigestOnce(client);
+
+    // Consecutive coverage is (mark, ceiling] then (ceiling, next-ceiling].
+    // Storing anything other than the ceiling that was actually read opens
+    // either a gap or an overlap.
+    const stored = repo.setDigestCursor.mock.calls[0][0] as string;
+    const [, through] = repo.listChangesMetadataAfterId.mock
+      .calls[0] as string[];
+    expect(stored).toBe(through);
+  });
+
+  it('captures rows the sweeps themselves wrote', async () => {
+    // The ceiling has to be read AFTER the sweeps, or the sweeps' own
+    // findings -- the changes least likely to have been caught any other way
+    // -- would sit above it and wait a full day.
+    expect(true).toBe(true);
+    await runIdentityDigestOnce(client);
+
+    expect(repo.maxChangeId.mock.invocationCallOrder[0]).toBeGreaterThan(
+      vi.mocked(runMeetupSweep).mock.invocationCallOrder[0],
+    );
+  });
+
+  it('does not skip a change recorded while the digest was being built', async () => {
+    // A gateway event landing between the read and the mark being stored must
+    // not be swallowed. Advancing to a ceiling fixed before the read means
+    // anything later simply waits for tomorrow.
+    repo.maxChangeId.mockResolvedValue('140');
+    repo.listChangesMetadataAfterId.mockImplementation(async () => {
+      repo.maxChangeId.mockResolvedValue('999'); // an event lands mid-digest
+      return [change()];
     });
 
     await runIdentityDigestOnce(client);
 
-    // The change the sweep itself wrote must reach the same digest it ran
-    // for, not disappear into tomorrow's window.
+    expect(repo.setDigestCursor).toHaveBeenCalledWith('140');
+  });
+
+  it('falls back to the hour boundary on the very first run', async () => {
+    repo.getDigestCursor.mockResolvedValue(undefined);
+    repo.changeIdBefore.mockResolvedValue('57');
+
+    await runIdentityDigestOnce(client);
+
+    // With no mark and no fallback the first digest after deploy would report
+    // the entire backfill -- thousands of rows -- as today's news.
+    const [boundary] = repo.changeIdBefore.mock.calls[0] as Date[];
+    expect(boundary.getUTCMinutes()).toBe(0);
+    expect(boundary.getUTCHours()).toBe(IDENTITY_DIGEST_UTC_HOUR);
+    const [afterId] = repo.listChangesMetadataAfterId.mock.calls[0] as string[];
+    expect(afterId).toBe('57');
+  });
+
+  it('does not advance the mark when the post did not land', async () => {
+    vi.mocked(logAlert).mockResolvedValue(false);
+
+    await expect(runIdentityDigestOnce(client)).rejects.toThrow();
+
+    // Advancing on an undelivered digest loses those rows permanently: the
+    // next run starts above them and no later digest ever looks back.
+    expect(repo.setDigestCursor).not.toHaveBeenCalled();
+  });
+
+  it('titles the digest with the range of the rows it actually contains', async () => {
+    repo.listChangesMetadataAfterId.mockResolvedValue([
+      change({ id: '101', detectedAt: at('2026-08-16T02:15:00Z') }),
+      change({ id: '102', detectedAt: at('2026-08-16T17:45:00Z') }),
+    ]);
+
+    await runIdentityDigestOnce(client);
+
+    // The digest no longer selects by time, so quoting a notional 24h window
+    // would describe something other than what was queried.
     const [, entry] = vi.mocked(logAlert).mock.calls[0];
-    expect(entry.description).toContain('<@u1>');
+    expect(entry.title).toContain('2026-08-16 02:15');
+    expect(entry.title).toContain('2026-08-16 17:45');
+  });
+
+  it('posts nothing and stores nothing when the change log is empty', async () => {
+    repo.maxChangeId.mockResolvedValue(undefined);
+
+    await runIdentityDigestOnce(client);
+
+    expect(logAlert).not.toHaveBeenCalled();
+    expect(repo.setDigestCursor).not.toHaveBeenCalled();
   });
 
   it('keeps the claim when the digest posts successfully', async () => {
@@ -526,7 +596,7 @@ describe('runIdentityDigestOnce', () => {
   });
 
   it('does not mark the day done when the digest query failed', async () => {
-    repo.listChangesMetadataBetween.mockRejectedValue(new Error('db down'));
+    repo.listChangesMetadataAfterId.mockRejectedValue(new Error('db down'));
 
     await expect(runIdentityDigestOnce(client)).rejects.toThrow('db down');
 
@@ -545,14 +615,14 @@ describe('runIdentityDigestOnce', () => {
   it('releases the claim when the digest query itself fails', async () => {
     // Not a sweep failure -- those degrade now. This is the digest proper
     // failing, which still has to release the day so a restart retries.
-    repo.listChangesMetadataBetween.mockRejectedValue(new Error('db down'));
+    repo.listChangesMetadataAfterId.mockRejectedValue(new Error('db down'));
 
     await expect(runIdentityDigestOnce(client)).rejects.toThrow('db down');
     expect(cache.remove).toHaveBeenCalledWith('identity-digest-2026-08-16');
   });
 
   it('surfaces the original error, not a claim-release failure', async () => {
-    repo.listChangesMetadataBetween.mockRejectedValue(new Error('db down'));
+    repo.listChangesMetadataAfterId.mockRejectedValue(new Error('db down'));
     cache.remove.mockRejectedValue(new Error('cache unavailable'));
 
     // A cache outage during release must not mask the real cause, and the
@@ -561,7 +631,7 @@ describe('runIdentityDigestOnce', () => {
   });
 
   it('keeps the claim on a silent day, where nothing is posted', async () => {
-    repo.listChangesMetadataBetween.mockResolvedValue([]);
+    repo.listChangesMetadataAfterId.mockResolvedValue([]);
 
     await runIdentityDigestOnce(client);
 
@@ -570,7 +640,7 @@ describe('runIdentityDigestOnce', () => {
   });
 
   it('marks a silent day done so its sweeps are not repeated', async () => {
-    repo.listChangesMetadataBetween.mockResolvedValue([]);
+    repo.listChangesMetadataAfterId.mockResolvedValue([]);
 
     await runIdentityDigestOnce(client);
 
@@ -584,7 +654,7 @@ describe('runIdentityDigestOnce', () => {
   });
 
   it('lets a later tick retry after a failed run released the lease', async () => {
-    repo.listChangesMetadataBetween.mockRejectedValueOnce(
+    repo.listChangesMetadataAfterId.mockRejectedValueOnce(
       new Error('transient db blip'),
     );
 
@@ -596,7 +666,7 @@ describe('runIdentityDigestOnce', () => {
     vi.clearAllMocks();
     cache.exclusive_set.mockResolvedValue(true);
     cache.get.mockResolvedValue(undefined);
-    repo.listChangesMetadataBetween.mockResolvedValue([change()]);
+    repo.listChangesMetadataAfterId.mockResolvedValue([change()]);
     repo.storageStats.mockResolvedValue(stats);
     memberRepo.listAll.mockResolvedValue([]);
     vi.mocked(logAlert).mockResolvedValue(true);

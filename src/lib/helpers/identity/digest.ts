@@ -211,10 +211,11 @@ function line(
   }" → "${change.newValue ?? '—'}"${reverted}`;
 }
 
+const stamp = (date: Date) => date.toISOString().slice(0, 16).replace('T', ' ');
+
 export function formatIdentityDigest(
   changes: AnnotatedChange[],
   stats: { changeCount: number; totalBytes: number },
-  since: Date,
   meetupToDiscord: Map<string, string>,
 ): LogEntry | undefined {
   if (changes.length === 0) {
@@ -241,24 +242,34 @@ export function formatIdentityDigest(
   const overflow = changes.length - shown;
   const overflowNote = overflow > 0 ? `…and ${overflow} more\n` : '';
 
+  // The actual span of the rows included, not a nominal window. The digest no
+  // longer selects by time at all -- it selects by change id -- so quoting a
+  // notional 24h window would describe something that is not what was
+  // queried. The rows are ordered by id, which is chronological.
+  const times = changes.map((change) => change.detectedAt.getTime());
+  const from = new Date(Math.min(...times));
+  const to = new Date(Math.max(...times));
+  const range =
+    from.getTime() === to.getTime()
+      ? `at ${stamp(from)} UTC`
+      : `${stamp(from)} to ${stamp(to)} UTC`;
+
   return {
-    title: `Identity changes: ${changes.length} since ${since
-      .toISOString()
-      .slice(0, 16)
-      .replace('T', ' ')} UTC`,
+    title: `Identity changes: ${changes.length} ${range}`,
     description: `${lines.join('')}${overflowNote}${footer}`,
   };
 }
 
 /**
- * The 24h window this digest covers, anchored to the digest hour rather than
- * to "now".
+ * The hour-anchored boundary used ONLY on the very first run, before a
+ * high-water mark exists.
  *
- * The claim is keyed by calendar date, so the window has to line up with it.
- * A `now - 24h` window drifts with the actual run time: yesterday's run at
- * 18:03 and today's at 18:41 leave the 18:03-18:41 changes in neither digest,
- * and a run that slips earlier reports the same changes twice. Anchoring both
- * ends to the digest hour makes consecutive days exactly contiguous.
+ * Coverage is otherwise tracked by change id, not by time (see
+ * listChangesMetadataAfterId). But the first digest after deploy has no mark
+ * to start from, and starting from nothing would report the entire backfill --
+ * thousands of rows -- as today's news. So the first run translates this
+ * boundary into a starting id once, and every run after it is pure id
+ * arithmetic.
  */
 export function identityDigestWindow(now: Date): { since: Date; until: Date } {
   const until = new Date(
@@ -316,28 +327,45 @@ export async function runIdentityDigestOnce(client: Client): Promise<void> {
   }
 
   try {
-    // Reconcile first so the digest includes anything missed while the dyno
-    // was restarting. `since` stays anchored to the digest hour (computed
-    // before the sweep runs) so consecutive days remain exactly contiguous.
-    // Both sweeps are full passes (Discord: ~2,008 members; Meetup: ~6,000)
-    // that finish some time after that boundary, and every row either writes
-    // is stamped with `detected_at` at or after that moment -- so `until` is
-    // extended to the time the sweeps actually finished, not left at the
-    // fixed boundary they ran past. Without that, the sweeps' own findings --
-    // the changes least likely to have been caught any other way -- would
-    // miss today's digest and only surface in tomorrow's, 24 hours late.
-    const { since, until: boundary } = identityDigestWindow(new Date());
-    // Each sweep is guarded independently: one platform's API being down
-    // must not cost the other platform its digest. See runSweepOrDegrade.
+    // Coverage is a high-water mark on the change log's BIGSERIAL id, not a
+    // time window.
+    //
+    // The old window anchored `since` to the fixed digest hour but extended
+    // `until` to whenever the sweeps finished, so the span
+    // [boundary, sweep-finish] belonged to two consecutive digests at once.
+    // Meetup rows are 100% sweep-detected and land squarely in that span, so
+    // every Meetup change was reported exactly twice. Narrowing `until` back
+    // to the boundary would have swapped double-reporting for a permanent
+    // gap. An id mark has no seam to get wrong, and it also removes any
+    // dependence on the dyno and Postgres clocks agreeing.
+    const stored = await repo.getDigestCursor();
+    // First run only: translate the hour boundary into an id, so the first
+    // digest after deploy is bounded instead of replaying the whole backfill.
+    const afterId =
+      stored ??
+      (await repo.changeIdBefore(identityDigestWindow(new Date()).since));
+
+    // Reconcile before reading, so the digest includes what the sweeps find
+    // as well as anything the event listeners caught. Each sweep is guarded
+    // independently: one platform's API being down must not cost the other
+    // platform its digest. See runSweepOrDegrade.
     await runSweepOrDegrade('Discord', client, () =>
       runIdentitySweep(client, 'sweep'),
     );
     await runSweepOrDegrade('Meetup', client, () =>
       runMeetupSweep('sweep', client),
     );
-    const until = new Date(Math.max(boundary.getTime(), Date.now()));
 
-    const changes = await repo.listChangesMetadataBetween(since, until);
+    // Fix the ceiling BEFORE reading the rows, and advance the mark to
+    // exactly this value afterwards. Advancing to "the highest id that exists
+    // when the digest finishes" instead would silently skip any gateway event
+    // recorded between the read and the write -- a change that is then never
+    // reported by any digest, which is the one outcome this feature cannot
+    // tolerate. Anything above the ceiling simply waits for tomorrow.
+    const ceiling = await repo.maxChangeId();
+    const changes = ceiling
+      ? await repo.listChangesMetadataAfterId(afterId, ceiling)
+      : [];
     const stats = await repo.storageStats();
 
     // Built fresh each run rather than cached: a link created between
@@ -354,7 +382,6 @@ export async function runIdentityDigestOnce(client: Client): Promise<void> {
     const entry = formatIdentityDigest(
       annotateReverts(changes),
       stats,
-      since,
       meetupToDiscord,
     );
     if (entry) {
@@ -368,6 +395,15 @@ export async function runIdentityDigestOnce(client: Client): Promise<void> {
         );
       }
     }
+    // Advance the mark only once the digest has demonstrably been delivered.
+    // Ordered before the done-marker on purpose: if this write fails, the run
+    // throws, the day stays unfinished, and a retry reports the same rows
+    // again. Duplicating a digest is recoverable by reading it twice; losing
+    // the rows is not recoverable at all.
+    if (ceiling) {
+      await repo.setDigestCursor(ceiling);
+    }
+
     // The day is finished. Written on a silent day too: nothing was posted,
     // but the work was done and redoing two full roster passes to re-discover
     // that nothing changed is pure waste.

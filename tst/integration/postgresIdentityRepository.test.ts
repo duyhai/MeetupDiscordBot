@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import pg from 'pg';
 import { beforeAll, describe, expect, it } from 'vitest';
 
+import { GUILD_ID } from '../../src/constants.js';
 import { MeetupSnapshot } from '../../src/lib/helpers/identity/meetupSnapshot.js';
 import { PostgresIdentityRepository } from '../../src/lib/repositories/postgresIdentityRepository.js';
 import { IdentitySnapshot } from '../../src/lib/repositories/identityTypes.js';
@@ -19,7 +20,10 @@ if (!POSTGRES_AVAILABLE) {
   );
 }
 
-const DEFAULT_SCOPE = 'guild-default';
+// The monitored guild, not an arbitrary string: every digest/report query is
+// now scoped to (discord, GUILD_ID) and (meetup, groupId), so a fixture under
+// any other scope is correctly invisible to them.
+const DEFAULT_SCOPE = GUILD_ID;
 
 const freshSnapshot = (): IdentitySnapshot => ({
   scopeId: DEFAULT_SCOPE,
@@ -107,7 +111,7 @@ describe.skipIf(!POSTGRES_AVAILABLE)('PostgresIdentityRepository', () => {
         [
           {
             platform: 'discord',
-            scopeId: 'guild-a',
+            scopeId: DEFAULT_SCOPE,
             subjectId: id,
             field: 'nickname',
             oldValue: 'A',
@@ -119,7 +123,11 @@ describe.skipIf(!POSTGRES_AVAILABLE)('PostgresIdentityRepository', () => {
       );
     }
 
-    const removed = await repo.deleteMemberIdentity('discord', 'guild-a', mine);
+    const removed = await repo.deleteMemberIdentity(
+      'discord',
+      DEFAULT_SCOPE,
+      mine,
+    );
 
     expect(removed).toBeGreaterThan(0);
     const remaining = await repo.listChangesBetween(
@@ -343,6 +351,233 @@ describe.skipIf(!POSTGRES_AVAILABLE)('PostgresIdentityRepository', () => {
     expect(all.changeCount).toBeGreaterThan(0);
     // coalesce, not NULL: an empty range must measure zero, not NaN.
     expect(none).toEqual({ changeCount: 0, thumbBytes: 0 });
+  });
+
+  it('returns only changes above the given id, in id order', async () => {
+    const a = `discord-${crypto.randomUUID()}`;
+    const b = `discord-${crypto.randomUUID()}`;
+    const before = (await repo.maxChangeId()) ?? '0';
+    for (const id of [a, b]) {
+      // eslint-disable-next-line no-await-in-loop
+      await repo.recordChanges(
+        [
+          {
+            platform: 'discord',
+            scopeId: DEFAULT_SCOPE,
+            subjectId: id,
+            field: 'nickname',
+            oldValue: 'A',
+            newValue: 'B',
+          },
+        ],
+        'event',
+        new Map(),
+      );
+    }
+    const after = await repo.maxChangeId();
+
+    const rows = await repo.listChangesMetadataAfterId(before, after);
+    const subjects = rows.map((r) => r.subjectId);
+
+    expect(subjects).toContain(a);
+    expect(subjects).toContain(b);
+    // Ordering is what makes the mark meaningful: the digest advances to the
+    // last id it reported, so the rows must arrive in that order.
+    expect(subjects.indexOf(a)).toBeLessThan(subjects.indexOf(b));
+    expect(rows.every((r) => Number(r.id) > Number(before))).toBe(true);
+  });
+
+  it('excludes the row at the mark itself, so nothing is reported twice', async () => {
+    const id = `discord-${crypto.randomUUID()}`;
+    await repo.recordChanges(
+      [
+        {
+          platform: 'discord',
+          scopeId: DEFAULT_SCOPE,
+          subjectId: id,
+          field: 'nickname',
+          oldValue: 'A',
+          newValue: 'B',
+        },
+      ],
+      'event',
+      new Map(),
+    );
+    const mark = await repo.maxChangeId();
+
+    // Yesterday's digest stored `mark` after reporting that row. Today's must
+    // start strictly above it -- `>=` would re-report the boundary row every
+    // single day.
+    const rows = await repo.listChangesMetadataAfterId(mark, mark);
+
+    expect(rows).toHaveLength(0);
+  });
+
+  it('respects the ceiling, leaving newer rows for the next run', async () => {
+    const early = `discord-${crypto.randomUUID()}`;
+    const late = `discord-${crypto.randomUUID()}`;
+    const before = (await repo.maxChangeId()) ?? '0';
+    await repo.recordChanges(
+      [
+        {
+          platform: 'discord',
+          scopeId: DEFAULT_SCOPE,
+          subjectId: early,
+          field: 'nickname',
+          oldValue: 'A',
+          newValue: 'B',
+        },
+      ],
+      'event',
+      new Map(),
+    );
+    const ceiling = await repo.maxChangeId();
+    await repo.recordChanges(
+      [
+        {
+          platform: 'discord',
+          scopeId: DEFAULT_SCOPE,
+          subjectId: late,
+          field: 'nickname',
+          oldValue: 'A',
+          newValue: 'B',
+        },
+      ],
+      'event',
+      new Map(),
+    );
+
+    const rows = await repo.listChangesMetadataAfterId(before, ceiling);
+    const subjects = rows.map((r) => r.subjectId);
+
+    // The ceiling models a gateway event arriving mid-digest: it must not be
+    // reported now, and (because the mark advances only to the ceiling) it
+    // must still be reportable tomorrow.
+    expect(subjects).toContain(early);
+    expect(subjects).not.toContain(late);
+  });
+
+  it('round-trips the digest high-water mark', async () => {
+    await repo.setDigestCursor('4242');
+    expect(await repo.getDigestCursor()).toBe('4242');
+
+    // Upsert, not insert: the mark advances every day for the life of the app.
+    await repo.setDigestCursor('4243');
+    expect(await repo.getDigestCursor()).toBe('4243');
+  });
+
+  it('finds the last id before a cutoff for the first run', async () => {
+    const id = `discord-${crypto.randomUUID()}`;
+    await repo.recordChanges(
+      [
+        {
+          platform: 'discord',
+          scopeId: DEFAULT_SCOPE,
+          subjectId: id,
+          field: 'nickname',
+          oldValue: 'A',
+          newValue: 'B',
+        },
+      ],
+      'event',
+      new Map(),
+    );
+
+    const cutoff = new Date(Date.now() + 60_000);
+    const boundary = await repo.changeIdBefore(cutoff);
+
+    expect(Number(boundary)).toBeGreaterThan(0);
+    // Everything already recorded is below the boundary, so the first digest
+    // reports nothing older than its window rather than the whole backfill.
+    const rows = await repo.listChangesMetadataAfterId(
+      boundary,
+      await repo.maxChangeId(),
+    );
+    expect(rows.some((r) => r.subjectId === id)).toBe(false);
+  });
+
+  it('returns 0 from changeIdBefore when nothing precedes the cutoff', async () => {
+    expect(await repo.changeIdBefore(new Date(0))).toBe('0');
+  });
+
+  it('hides changes recorded under an unmonitored scope', async () => {
+    const stranger = `discord-${crypto.randomUUID()}`;
+    const before = (await repo.maxChangeId()) ?? '0';
+    await repo.recordChanges(
+      [
+        {
+          platform: 'discord',
+          scopeId: 'some-other-guild',
+          subjectId: stranger,
+          field: 'nickname',
+          oldValue: 'A',
+          newValue: 'B',
+        },
+      ],
+      'event',
+      new Map(),
+    );
+
+    // M2: guildMemberUpdate already refuses foreign guilds on the write path,
+    // but nothing enforced the same boundary on the read path -- a row from a
+    // test server or a stale configuration would be reported to these
+    // organizers as if it were theirs.
+    const window = {
+      from: new Date(Date.now() - 60_000),
+      to: new Date(Date.now() + 60_000),
+    };
+    const afterId = await repo.listChangesMetadataAfterId(
+      before,
+      (await repo.maxChangeId()) ?? before,
+    );
+    const between = await repo.listChangesBetween(window.from, window.to);
+    const metadata = await repo.listChangesMetadataBetween(
+      window.from,
+      window.to,
+    );
+
+    expect(afterId.some((r) => r.subjectId === stranger)).toBe(false);
+    expect(between.some((r) => r.subjectId === stranger)).toBe(false);
+    expect(metadata.some((r) => r.subjectId === stranger)).toBe(false);
+  });
+
+  it('excludes an unmonitored scope from the size measurement too', async () => {
+    const stranger = `discord-${crypto.randomUUID()}`;
+    const thumb = Buffer.alloc(5000, 3);
+    const from = new Date(Date.now() - 1000);
+
+    const baseline = await repo.measureChangesBetween(
+      from,
+      new Date(Date.now() + 60_000),
+    );
+    await repo.recordChanges(
+      [
+        {
+          platform: 'discord',
+          scopeId: 'some-other-guild',
+          subjectId: stranger,
+          field: 'user_avatar',
+          oldValue: 'aaa',
+          newValue: 'bbb',
+        },
+      ],
+      'event',
+      new Map([
+        [
+          `discord:some-other-guild:${stranger}:user_avatar`,
+          { oldThumb: null, newThumb: thumb },
+        ],
+      ]),
+    );
+    const after = await repo.measureChangesBetween(
+      from,
+      new Date(Date.now() + 60_000),
+    );
+
+    // The report refuses oversized ranges on this measurement, so counting
+    // rows it will never render would refuse ranges that actually fit.
+    expect(after.changeCount).toBe(baseline.changeCount);
+    expect(after.thumbBytes).toBe(baseline.thumbBytes);
   });
 
   it('reports storage stats', async () => {
