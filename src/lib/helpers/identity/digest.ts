@@ -166,6 +166,13 @@ export function annotateReverts(
     const revert = changes.find(
       (other) =>
         other.id !== change.id &&
+        // M3: platform is part of the identity of a subject, not decoration.
+        // Meetup member ids and Discord user ids are both opaque numeric
+        // strings drawn from separate namespaces, so without this a collision
+        // between the two lets one platform's change be reported as a revert
+        // of the other's -- and `username` and `name` exist on both sides,
+        // so the field check does not rule it out either.
+        other.platform === change.platform &&
         other.subjectId === change.subjectId &&
         other.field === change.field &&
         other.detectedAt > change.detectedAt &&

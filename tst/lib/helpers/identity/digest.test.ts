@@ -111,6 +111,32 @@ describe('annotateReverts', () => {
     expect(out[1].revertedAt).toBeUndefined();
   });
 
+  it("does not treat another platform's change as a revert", () => {
+    const out = annotateReverts([
+      change({
+        id: '1',
+        platform: 'discord',
+        subjectId: '12345',
+        field: 'username',
+      }),
+      change({
+        id: '2',
+        platform: 'meetup',
+        subjectId: '12345',
+        field: 'username',
+        oldValue: 'bbb',
+        newValue: 'aaa',
+        detectedAt: at('2026-08-16T18:31:00Z'),
+      }),
+    ]);
+
+    // Meetup member ids and Discord user ids are both opaque numeric strings
+    // from separate namespaces, and `username` exists on both sides -- so
+    // without the platform check a collision reports one platform's change as
+    // a revert of the other's.
+    expect(out[0].revertedAt).toBeUndefined();
+  });
+
   it("does not treat another member's change as a revert", () => {
     const out = annotateReverts([
       change({ id: '1', subjectId: 'u1' }),
