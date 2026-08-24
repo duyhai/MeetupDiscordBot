@@ -12,6 +12,26 @@ export interface MeetupSnapshot {
   photoId: string | null;
 }
 
+/**
+ * A Meetup baseline row as stored: the pure snapshot plus the thumbnail kept
+ * alongside it. Meetup's stored baseline keeps a photo *id*, not the URL that
+ * produced it, so once a photo changes the superseded URL is unrecoverable --
+ * storing the bytes at first sighting is the only way a change can ever show
+ * a real before-image.
+ */
+export interface StoredMeetupSnapshot extends MeetupSnapshot {
+  photoThumb: Buffer | null;
+}
+
+/**
+ * Thumbnail to write alongside a Meetup baseline. Absent leaves the stored
+ * column untouched; present-with-null clears it. Same rule as the Discord
+ * side's IdentityBaselineThumbs, for the same reason.
+ */
+export interface MeetupBaselineThumbs {
+  photoThumb?: Buffer | null;
+}
+
 export function snapshotMeetupMember(
   member: MeetupGroupMember,
   scopeId: string,

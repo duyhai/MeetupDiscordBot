@@ -1,12 +1,32 @@
 import { Logger } from 'tslog';
 
 import { boundedFetch } from '../../../util/boundedFetch.js';
-import { IdentityChange } from '../../repositories/identityTypes.js';
+import {
+  ChangeThumbMap,
+  IdentityBaselineThumbs,
+  IdentityChange,
+  IdentitySnapshot,
+  StoredIdentitySnapshot,
+} from '../../repositories/identityTypes.js';
 import { avatarThumbUrl } from './snapshot.js';
 
 const logger = new Logger({ name: 'identityThumbs' });
 
-const AVATAR_FIELDS = new Set(['user_avatar', 'member_avatar']);
+/**
+ * The two avatar fields, mapped to the baseline column that holds each one's
+ * stored image. Anything not listed here (nickname, username, global name)
+ * has no picture and is skipped entirely.
+ */
+const AVATAR_THUMB_COLUMN = {
+  user_avatar: 'userAvatarThumb',
+  member_avatar: 'memberAvatarThumb',
+} as const;
+
+type AvatarField = keyof typeof AVATAR_THUMB_COLUMN;
+
+function isAvatarField(field: string): field is AvatarField {
+  return field in AVATAR_THUMB_COLUMN;
+}
 
 const THUMB_FETCH_TIMEOUT_MS = 5_000;
 
@@ -28,28 +48,33 @@ async function fetchOne(url: string): Promise<Buffer | null> {
 }
 
 /**
- * Retrieves before/after thumbnails for avatar changes. Best-effort by
- * design: a failed fetch yields null so the change is still recorded.
+ * Before/after images for a member's avatar changes, plus the thumbs the
+ * advanced baseline should carry.
+ *
+ * The OLD side is never fetched. Discord purges a superseded avatar sometime
+ * after it is replaced, so by the time a sweep notices the hash changed the
+ * old URL may already 404 -- and this is precisely the image an organizer
+ * needs. It is read out of the baseline row instead, which is the reason the
+ * baseline stores thumbs at all. Only the new image costs a request, once.
+ *
+ * Best-effort by design: a failed fetch yields null so the change is still
+ * recorded.
  */
-export async function fetchChangeThumbs(
+export async function resolveChangeThumbs(
   changes: IdentityChange[],
   guildId: string,
-): Promise<Map<string, { oldThumb: Buffer | null; newThumb: Buffer | null }>> {
-  const thumbs = new Map<
-    string,
-    { oldThumb: Buffer | null; newThumb: Buffer | null }
-  >();
+  baseline: StoredIdentitySnapshot,
+): Promise<{ thumbs: ChangeThumbMap; baselineThumbs: IdentityBaselineThumbs }> {
+  const thumbs: ChangeThumbMap = new Map();
+  const baselineThumbs: IdentityBaselineThumbs = {};
   for (const change of changes) {
-    if (!AVATAR_FIELDS.has(change.field)) {
+    if (!isAvatarField(change.field)) {
       continue;
     }
-    const field = change.field as 'user_avatar' | 'member_avatar';
+    const field = change.field;
     /* eslint-disable no-await-in-loop */
-    const oldThumb = change.oldValue
-      ? await fetchOne(
-          avatarThumbUrl(change.subjectId, field, change.oldValue, guildId),
-        )
-      : null;
+    // Sequential: a member changing both avatars at once is two requests, not
+    // a fan-out, and the sweep already runs one member at a time.
     const newThumb = change.newValue
       ? await fetchOne(
           avatarThumbUrl(change.subjectId, field, change.newValue, guildId),
@@ -60,8 +85,50 @@ export async function fetchChangeThumbs(
     // scopeId scope the identity, subjectId and field pick the row within it.
     thumbs.set(
       `${change.platform}:${change.scopeId}:${change.subjectId}:${change.field}`,
-      { oldThumb, newThumb },
+      { oldThumb: baseline[AVATAR_THUMB_COLUMN[field]], newThumb },
     );
+    // Set unconditionally, including when the fetch failed: the baseline's
+    // thumb describes the hash stored beside it, so keeping the superseded
+    // image under the new hash would make tomorrow's before-image a lie.
+    baselineThumbs[AVATAR_THUMB_COLUMN[field]] = newThumb;
   }
-  return thumbs;
+  return { thumbs, baselineThumbs };
+}
+
+/**
+ * The member's current avatar images, for a first sighting.
+ *
+ * A first sighting records no change -- it IS the baseline -- but it is the
+ * only chance to capture these bytes while their URLs still resolve. Without
+ * this the member's first real avatar change would have no before-image, the
+ * exact gap the baseline thumbs exist to close.
+ *
+ * Sequential, and skipped outright for a member with no avatar, which keeps
+ * the backfill's request count to what it actually needs.
+ */
+export async function fetchBaselineThumbs(
+  snapshot: IdentitySnapshot,
+  guildId: string,
+): Promise<IdentityBaselineThumbs> {
+  const userAvatarThumb = snapshot.userAvatarHash
+    ? await fetchOne(
+        avatarThumbUrl(
+          snapshot.discordUserId,
+          'user_avatar',
+          snapshot.userAvatarHash,
+          guildId,
+        ),
+      )
+    : null;
+  const memberAvatarThumb = snapshot.memberAvatarHash
+    ? await fetchOne(
+        avatarThumbUrl(
+          snapshot.discordUserId,
+          'member_avatar',
+          snapshot.memberAvatarHash,
+          guildId,
+        ),
+      )
+    : null;
+  return { userAvatarThumb, memberAvatarThumb };
 }

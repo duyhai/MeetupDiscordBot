@@ -8,7 +8,7 @@ import {
 } from '../../repositories/identityTypes.js';
 import { diffIdentity } from './diff.js';
 import { snapshotMember } from './snapshot.js';
-import { fetchChangeThumbs } from './thumbs.js';
+import { fetchBaselineThumbs, resolveChangeThumbs } from './thumbs.js';
 
 const logger = new Logger({ name: 'identityMonitor' });
 
@@ -38,20 +38,32 @@ export async function recordIdentityFor(
   const changes = diffIdentity(before, after);
 
   if (!before) {
-    await repo.putSnapshot(after);
+    // No change to record -- the first sighting IS the baseline -- but this
+    // is the only moment the member's current avatars are still fetchable at
+    // a URL we can construct. Capture them now so their eventual replacement
+    // has a real before-image.
+    const baselineThumbs = await fetchBaselineThumbs(after, member.guild.id);
+    await repo.putSnapshot(after, baselineThumbs);
     return [];
   }
   if (changes.length === 0) {
     return [];
   }
 
-  const thumbs = await fetchChangeThumbs(changes, member.guild.id);
+  // `before` is the pre-advance baseline read above, so the old thumbs it
+  // carries are the images being superseded. Reading it again after
+  // putSnapshot would return the new ones instead.
+  const { thumbs, baselineThumbs } = await resolveChangeThumbs(
+    changes,
+    member.guild.id,
+    before,
+  );
   // Record before advancing the baseline, not after. Crash here and the
   // next sweep just re-diffs and records a harmless duplicate row. Reversed,
   // a crash would advance the baseline while losing the evidence for good --
   // the old snapshot is gone, so the change can't be reconstructed.
   await repo.recordChanges(changes, source, thumbs);
-  await repo.putSnapshot(after);
+  await repo.putSnapshot(after, baselineThumbs);
   logger.info(
     `Recorded ${changes.length} identity change(s) for ${member.id} via ${source}`,
   );
@@ -62,6 +74,10 @@ export async function recordIdentityFor(
  * Advances the baseline without recording anything. Used after the bot writes
  * a member's nickname during onboarding, so its own writes never appear in
  * the digest as suspicious name changes.
+ *
+ * Passes no thumbs: this runs inline in an onboarding interaction, where two
+ * CDN fetches would be latency a user waits on for an avatar that did not
+ * change. Whatever the baseline already holds is left untouched.
  */
 export async function updateBaselineSilently(
   member: GuildMember,

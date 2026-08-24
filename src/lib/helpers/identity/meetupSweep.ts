@@ -16,10 +16,16 @@ import { refreshMeetupToken } from '../../client/oauth/providers.js';
 import { PostgresIdentityRepository } from '../../repositories/postgresIdentityRepository.js';
 import {
   ChangeSource,
+  ChangeThumbMap,
   IdentityChange,
 } from '../../repositories/identityTypes.js';
 import { logAlert } from '../discordLogger.js';
-import { diffMeetupIdentity, snapshotMeetupMember } from './meetupSnapshot.js';
+import {
+  MeetupBaselineThumbs,
+  StoredMeetupSnapshot,
+  diffMeetupIdentity,
+  snapshotMeetupMember,
+} from './meetupSnapshot.js';
 
 const logger = new Logger({ name: 'meetupIdentitySweep' });
 
@@ -112,10 +118,10 @@ async function resolveOrganizerTokens(): Promise<Tokens | undefined> {
 }
 
 /**
- * Fetches one photo's bytes with a bounded timeout, mirroring
- * fetchChangeThumbs's fetchOne. Not reused directly: fetchChangeThumbs builds
- * its URL from a Discord CDN path template (avatarThumbUrl), which has
- * nothing in common with Meetup's opaque, API-provided thumbUrl.
+ * Fetches one photo's bytes with a bounded timeout, mirroring identityThumbs'
+ * fetchOne. Not reused directly: that one builds its URL from a Discord CDN
+ * path template (avatarThumbUrl), which has nothing in common with Meetup's
+ * opaque, API-provided thumbUrl.
  */
 async function fetchThumbBytes(url: string): Promise<Buffer | null> {
   try {
@@ -130,39 +136,51 @@ async function fetchThumbBytes(url: string): Promise<Buffer | null> {
   }
 }
 
+/** The member's current photo bytes, or null when they have no photo. */
+async function fetchCurrentPhoto(
+  member: MeetupGroupMember,
+): Promise<Buffer | null> {
+  const url = member.memberPhoto?.thumbUrl;
+  return url ? fetchThumbBytes(url) : null;
+}
+
 /**
- * Thumbnails for one member's changes. Only the *new* photo's bytes are ever
- * reachable here: the stored baseline keeps a photoId, not the URL that
- * produced it, so by the time a change is detected the superseded photo's
- * URL is already gone. oldThumb is therefore always null for Meetup photo
- * changes -- the same best-effort outcome the rest of the pipeline already
- * tolerates for a failed fetch.
+ * Thumbnails for one member's changes, plus the thumb the advanced baseline
+ * should carry.
+ *
+ * The old side is never fetched, and here it never could be: the stored
+ * baseline keeps a photoId, not the URL that served it, so the superseded
+ * photo is unreachable the moment it changes. It comes from the baseline's
+ * own stored bytes instead -- captured at first sighting, which is what makes
+ * a Meetup before-image possible at all.
  */
-async function fetchMeetupChangeThumbs(
+async function resolveMeetupChangeThumbs(
   changes: IdentityChange[],
   member: MeetupGroupMember,
-): Promise<Map<string, { oldThumb: Buffer | null; newThumb: Buffer | null }>> {
-  const thumbs = new Map<
-    string,
-    { oldThumb: Buffer | null; newThumb: Buffer | null }
-  >();
+  baseline: StoredMeetupSnapshot,
+): Promise<{ thumbs: ChangeThumbMap; baselineThumbs: MeetupBaselineThumbs }> {
+  const thumbs: ChangeThumbMap = new Map();
+  const baselineThumbs: MeetupBaselineThumbs = {};
   for (const change of changes) {
     if (change.field !== 'photo') {
       continue;
     }
-    const url = member.memberPhoto?.thumbUrl;
     // One photo per change, sequential: batching would fan out unbounded
     // concurrent fetches within a single member's change set.
     // eslint-disable-next-line no-await-in-loop
-    const newThumb = url ? await fetchThumbBytes(url) : null;
+    const newThumb = await fetchCurrentPhoto(member);
     // recordChanges reads back with the same four-part key: platform and
     // scopeId scope the identity, subjectId and field pick the row within it.
     thumbs.set(
       `${change.platform}:${change.scopeId}:${change.subjectId}:${change.field}`,
-      { oldThumb: null, newThumb },
+      { oldThumb: baseline.photoThumb, newThumb },
     );
+    // Set even when the fetch failed: the baseline thumb describes the
+    // photo_id stored beside it, and a stale image under a new id would make
+    // the next change's before-image wrong rather than merely missing.
+    baselineThumbs.photoThumb = newThumb;
   }
-  return thumbs;
+  return { thumbs, baselineThumbs };
 }
 
 /**
@@ -182,23 +200,38 @@ async function recordMeetupMember(
   const changes = diffMeetupIdentity(before, after);
 
   if (!before) {
-    await repo.putMeetupSnapshot(after);
+    // No change to record -- the first sighting IS the baseline -- but this
+    // is the only moment this photo's URL is in hand, so capture the bytes
+    // now or the member's eventual photo change has no before-image.
+    //
+    // Deliberately NOT gated on `withThumbs`: that budget guards against a
+    // systemic photo-id re-issue, which is counted from members that
+    // *changed*, and a first sighting changes nothing. Gating it here would
+    // have the effect of skipping the backfill's fetches, which are the
+    // entire point -- a backfill is 100% first sightings.
+    const photoThumb = await fetchCurrentPhoto(member);
+    await repo.putMeetupSnapshot(after, { photoThumb });
     return 0;
   }
   if (changes.length === 0) {
     return 0;
   }
 
-  const thumbs = withThumbs
-    ? await fetchMeetupChangeThumbs(changes, member)
-    : new Map<string, { oldThumb: Buffer | null; newThumb: Buffer | null }>();
+  const { thumbs, baselineThumbs } = withThumbs
+    ? await resolveMeetupChangeThumbs(changes, member, before)
+    : // Over the systemic-change budget: record the changes without images.
+      // The baseline keeps whatever thumb it already has rather than being
+      // cleared -- a mass photo-id re-issue leaves the actual pictures
+      // unchanged, so 6,000 good before-images are worth more than strict
+      // agreement with the new ids.
+      { thumbs: new Map() as ChangeThumbMap, baselineThumbs: {} };
   // Record before advancing the baseline, not after -- same crash-ordering
   // rationale as the Discord monitor. Crash here and the next sweep just
   // re-diffs and records a harmless duplicate row. Reversed, a crash would
   // advance the baseline while losing the evidence for good -- the old
   // snapshot is gone, so the change can't be reconstructed.
   await repo.recordChanges(changes, source, thumbs);
-  await repo.putMeetupSnapshot(after);
+  await repo.putMeetupSnapshot(after, baselineThumbs);
   return changes.length;
 }
 
@@ -207,7 +240,10 @@ async function recordMeetupMember(
  * Also performs the initial backfill when called with source 'backfill':
  * members with no baseline are stored silently, via diffMeetupIdentity's
  * absent-baseline rule, so enabling the feature does not report every member
- * of the group as having changed.
+ * of the group as having changed. Each of those first sightings does fetch
+ * the member's current photo, so a backfill is roughly one HTTP request per
+ * photo-having member and takes correspondingly longer than a steady-state
+ * sweep -- see the README's deployment notes.
  *
  * The client is optional because the two callers differ: the digest has one
  * and wants a credential failure alerted to the organizers' channel, while
@@ -267,6 +303,11 @@ export async function runMeetupSweep(
   // an aid to reading them, and the pipeline already treats a null thumb as
   // normal. A systemic id change is also the case where thumbnails are least
   // informative -- every member's photo would look unchanged to a human.
+  //
+  // The budget counts CHANGED members only, so it can never fire on the
+  // backfill: a first sighting records no change and does not increment
+  // `changed`. That is deliberate -- the backfill is 100% first sightings and
+  // its fetches are the whole reason later changes have a before-image.
   const thumbBudget = Math.ceil(members.length * SYSTEMIC_CHANGE_RATIO);
 
   let scanned = 0;

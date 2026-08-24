@@ -3,29 +3,42 @@ import { Logger } from 'tslog';
 
 import Configuration from '../../configuration.js';
 import { GUILD_ID } from '../../constants.js';
-import { MeetupSnapshot } from '../helpers/identity/meetupSnapshot.js';
+import {
+  MeetupBaselineThumbs,
+  MeetupSnapshot,
+  StoredMeetupSnapshot,
+} from '../helpers/identity/meetupSnapshot.js';
 import {
   ChangeSource,
+  ChangeThumbMap,
+  IdentityBaselineThumbs,
   IdentityChange,
   IdentityChangeMetadata,
   IdentityChangeRecord,
   IdentityField,
   IdentityPlatform,
   IdentitySnapshot,
+  StoredIdentitySnapshot,
 } from './identityTypes.js';
 
 const logger = new Logger({ name: 'PostgresIdentityRepository' });
 
 const CREATE_TABLE_SQL = `
 CREATE TABLE IF NOT EXISTS member_identity (
-  scope_id           TEXT NOT NULL,
-  discord_user_id    TEXT NOT NULL,
-  username           TEXT,
-  global_name        TEXT,
-  nickname           TEXT,
-  user_avatar_hash   TEXT,
-  member_avatar_hash TEXT,
-  updated_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  scope_id            TEXT NOT NULL,
+  discord_user_id     TEXT NOT NULL,
+  username            TEXT,
+  global_name         TEXT,
+  nickname            TEXT,
+  user_avatar_hash    TEXT,
+  member_avatar_hash  TEXT,
+  -- The 64px image behind each hash above, fetched once and kept. This is
+  -- where a change's *before* picture comes from: Discord purges superseded
+  -- avatars, so re-fetching the old hash at change time 404s. Nullable --
+  -- thumbnails stay best-effort and a change is recorded without them.
+  user_avatar_thumb   BYTEA,
+  member_avatar_thumb BYTEA,
+  updated_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
   PRIMARY KEY (scope_id, discord_user_id)
 );
 CREATE TABLE IF NOT EXISTS member_identity_changes (
@@ -51,6 +64,10 @@ CREATE TABLE IF NOT EXISTS meetup_identity (
   name              TEXT,
   username          TEXT,
   photo_id          TEXT,
+  -- The image behind photo_id. Meetup's baseline keeps an id, never the URL
+  -- that served it, so a superseded photo is unreachable the moment it
+  -- changes; storing the bytes here is the only source of a before-image.
+  photo_thumb       BYTEA,
   updated_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
   PRIMARY KEY (scope_id, meetup_member_id)
 );
@@ -111,6 +128,8 @@ interface SnapshotRow {
   nickname: string | null;
   user_avatar_hash: string | null;
   member_avatar_hash: string | null;
+  user_avatar_thumb: Buffer | null;
+  member_avatar_thumb: Buffer | null;
 }
 
 interface MetadataRow {
@@ -136,9 +155,10 @@ interface MeetupSnapshotRow {
   name: string | null;
   username: string | null;
   photo_id: string | null;
+  photo_thumb: Buffer | null;
 }
 
-function toSnapshot(row: SnapshotRow): IdentitySnapshot {
+function toSnapshot(row: SnapshotRow): StoredIdentitySnapshot {
   return {
     scopeId: row.scope_id,
     discordUserId: row.discord_user_id,
@@ -147,16 +167,19 @@ function toSnapshot(row: SnapshotRow): IdentitySnapshot {
     nickname: row.nickname,
     userAvatarHash: row.user_avatar_hash,
     memberAvatarHash: row.member_avatar_hash,
+    userAvatarThumb: row.user_avatar_thumb,
+    memberAvatarThumb: row.member_avatar_thumb,
   };
 }
 
-function toMeetupSnapshot(row: MeetupSnapshotRow): MeetupSnapshot {
+function toMeetupSnapshot(row: MeetupSnapshotRow): StoredMeetupSnapshot {
   return {
     scopeId: row.scope_id,
     meetupMemberId: row.meetup_member_id,
     name: row.name,
     username: row.username,
     photoId: row.photo_id,
+    photoThumb: row.photo_thumb,
   };
 }
 
@@ -247,7 +270,7 @@ export class PostgresIdentityRepository {
   async getSnapshot(
     scopeId: string,
     discordUserId: string,
-  ): Promise<IdentitySnapshot | undefined> {
+  ): Promise<StoredIdentitySnapshot | undefined> {
     const result = await this.pool.query<SnapshotRow>(
       'SELECT * FROM member_identity WHERE scope_id = $1 AND discord_user_id = $2',
       [scopeId, discordUserId],
@@ -256,17 +279,39 @@ export class PostgresIdentityRepository {
     return row ? toSnapshot(row) : undefined;
   }
 
-  async putSnapshot(snapshot: IdentitySnapshot): Promise<void> {
+  /**
+   * Upserts a baseline. `thumbs` is separate from the snapshot because a
+   * snapshot is derived purely from Discord's own data, while the thumbs are
+   * bytes we fetched and keep.
+   *
+   * A thumb column is written ONLY when its key is present in `thumbs`; the
+   * CASE guards, not COALESCE, so an explicit `null` can still clear one. The
+   * distinction is load-bearing in both directions: every nickname-only
+   * update passes no thumbs at all and must leave the stored images alone,
+   * while an avatar change whose fetch failed must not leave the superseded
+   * image sitting under the new hash.
+   */
+  async putSnapshot(
+    snapshot: IdentitySnapshot,
+    thumbs: IdentityBaselineThumbs = {},
+  ): Promise<void> {
     await this.pool.query(
       `INSERT INTO member_identity (scope_id, discord_user_id, username,
-         global_name, nickname, user_avatar_hash, member_avatar_hash, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, now())
+         global_name, nickname, user_avatar_hash, member_avatar_hash,
+         user_avatar_thumb, member_avatar_thumb, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, now())
        ON CONFLICT (scope_id, discord_user_id) DO UPDATE SET
          username = EXCLUDED.username,
          global_name = EXCLUDED.global_name,
          nickname = EXCLUDED.nickname,
          user_avatar_hash = EXCLUDED.user_avatar_hash,
          member_avatar_hash = EXCLUDED.member_avatar_hash,
+         user_avatar_thumb = CASE WHEN $10::boolean
+           THEN EXCLUDED.user_avatar_thumb
+           ELSE member_identity.user_avatar_thumb END,
+         member_avatar_thumb = CASE WHEN $11::boolean
+           THEN EXCLUDED.member_avatar_thumb
+           ELSE member_identity.member_avatar_thumb END,
          updated_at = now()`,
       [
         snapshot.scopeId,
@@ -276,6 +321,10 @@ export class PostgresIdentityRepository {
         snapshot.nickname,
         snapshot.userAvatarHash,
         snapshot.memberAvatarHash,
+        thumbs.userAvatarThumb ?? null,
+        thumbs.memberAvatarThumb ?? null,
+        'userAvatarThumb' in thumbs,
+        'memberAvatarThumb' in thumbs,
       ],
     );
   }
@@ -283,7 +332,7 @@ export class PostgresIdentityRepository {
   async getMeetupSnapshot(
     scopeId: string,
     meetupMemberId: string,
-  ): Promise<MeetupSnapshot | undefined> {
+  ): Promise<StoredMeetupSnapshot | undefined> {
     const result = await this.pool.query<MeetupSnapshotRow>(
       'SELECT * FROM meetup_identity WHERE scope_id = $1 AND meetup_member_id = $2',
       [scopeId, meetupMemberId],
@@ -292,15 +341,22 @@ export class PostgresIdentityRepository {
     return row ? toMeetupSnapshot(row) : undefined;
   }
 
-  async putMeetupSnapshot(snapshot: MeetupSnapshot): Promise<void> {
+  /** Same presence-versus-value rule for `thumbs` as putSnapshot. */
+  async putMeetupSnapshot(
+    snapshot: MeetupSnapshot,
+    thumbs: MeetupBaselineThumbs = {},
+  ): Promise<void> {
     await this.pool.query(
       `INSERT INTO meetup_identity (scope_id, meetup_member_id, name,
-         username, photo_id, updated_at)
-       VALUES ($1, $2, $3, $4, $5, now())
+         username, photo_id, photo_thumb, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, now())
        ON CONFLICT (scope_id, meetup_member_id) DO UPDATE SET
          name = EXCLUDED.name,
          username = EXCLUDED.username,
          photo_id = EXCLUDED.photo_id,
+         photo_thumb = CASE WHEN $7::boolean
+           THEN EXCLUDED.photo_thumb
+           ELSE meetup_identity.photo_thumb END,
          updated_at = now()`,
       [
         snapshot.scopeId,
@@ -308,6 +364,8 @@ export class PostgresIdentityRepository {
         snapshot.name,
         snapshot.username,
         snapshot.photoId,
+        thumbs.photoThumb ?? null,
+        'photoThumb' in thumbs,
       ],
     );
   }
@@ -315,7 +373,7 @@ export class PostgresIdentityRepository {
   async recordChanges(
     changes: IdentityChange[],
     source: ChangeSource,
-    thumbs: Map<string, { oldThumb: Buffer | null; newThumb: Buffer | null }>,
+    thumbs: ChangeThumbMap,
   ): Promise<void> {
     for (const change of changes) {
       const thumb = thumbs.get(

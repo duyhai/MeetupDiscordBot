@@ -1,5 +1,15 @@
 import { Client } from 'discord.js';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import nock from 'nock';
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from 'vitest';
 
 import Configuration from '../../../../src/configuration.js';
 import { MeetupGroupMember } from '../../../../src/lib/client/meetup/types.js';
@@ -42,6 +52,19 @@ vi.mock('../../../../src/util/identityRepository.js', () => ({
 
 const SCOPE_ID = Configuration.meetup.groupId;
 
+// Photo fetches are real HTTP through boundedFetch. Disabling net connect
+// makes any request a test has not explicitly intercepted fail immediately --
+// degrading to the documented null thumb -- instead of reaching Meetup's CDN.
+beforeAll(() => nock.disableNetConnect());
+afterAll(() => nock.enableNetConnect());
+
+const PHOTO_HOST = 'https://secure.meetupstatic.com';
+const PHOTO_PATH = '/photos/member/1/2/3/thumb.jpeg';
+const PHOTO_URL = `${PHOTO_HOST}${PHOTO_PATH}`;
+
+/** Not all-ASCII: JPEG bytes, so a coerced round trip could not slip by. */
+const STORED_OLD = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0xfe]);
+
 function member(
   id: string,
   overrides: Partial<MeetupGroupMember> = {},
@@ -80,6 +103,7 @@ describe('runMeetupSweep', () => {
   // on the happy path of whichever test set it.
   afterEach(() => {
     Configuration.meetup.organizerRefreshToken = undefined;
+    nock.cleanAll();
   });
 
   beforeEach(() => {
@@ -161,6 +185,165 @@ describe('runMeetupSweep', () => {
     expect(repo.recordChanges.mock.invocationCallOrder[0]).toBeLessThan(
       repo.putMeetupSnapshot.mock.invocationCallOrder[0],
     );
+  });
+
+  it("uses the baseline's stored photo as the before image", async () => {
+    const scope = nock(PHOTO_HOST)
+      .get(PHOTO_PATH)
+      .reply(200, Buffer.from([3, 4]));
+    vi.mocked(getPaginatedData).mockResolvedValue([
+      member('a', { memberPhoto: { id: 'new-photo', thumbUrl: PHOTO_URL } }),
+    ]);
+    repo.getMeetupSnapshot.mockResolvedValue(
+      snapshotFor('a', { photoId: 'old-photo', photoThumb: STORED_OLD }),
+    );
+
+    await runMeetupSweep('sweep');
+
+    const thumbs = repo.recordChanges.mock.calls[0][2] as Map<
+      string,
+      { oldThumb: Buffer | null; newThumb: Buffer | null }
+    >;
+    const entry = thumbs.get(`meetup:${SCOPE_ID}:a:photo`);
+    // Meetup's baseline keeps a photo id, never the URL that served it, so
+    // the superseded photo is unreachable the instant it changes. Before the
+    // baseline stored bytes, oldThumb here was unconditionally null.
+    expect(entry?.oldThumb?.equals(STORED_OLD)).toBe(true);
+    expect(entry?.newThumb?.equals(Buffer.from([3, 4]))).toBe(true);
+    // Exactly one fetch: the new photo. There is no old URL to fetch.
+    expect(scope.isDone()).toBe(true);
+  });
+
+  it('stores the new photo as the advanced baseline thumb', async () => {
+    nock(PHOTO_HOST)
+      .get(PHOTO_PATH)
+      .reply(200, Buffer.from([3, 4]));
+    vi.mocked(getPaginatedData).mockResolvedValue([
+      member('a', { memberPhoto: { id: 'new-photo', thumbUrl: PHOTO_URL } }),
+    ]);
+    repo.getMeetupSnapshot.mockResolvedValue(
+      snapshotFor('a', { photoId: 'old-photo', photoThumb: STORED_OLD }),
+    );
+
+    await runMeetupSweep('sweep');
+
+    const stored = repo.putMeetupSnapshot.mock.calls[0][1] as {
+      photoThumb?: Buffer | null;
+    };
+    // Today's after-image is tomorrow's before-image; drop it and the chain
+    // breaks after one change.
+    expect(stored.photoThumb?.equals(Buffer.from([3, 4]))).toBe(true);
+  });
+
+  it('leaves the stored photo alone when only the name changed', async () => {
+    vi.mocked(getPaginatedData).mockResolvedValue([
+      member('a', { memberPhoto: { id: 'p1', thumbUrl: PHOTO_URL } }),
+    ]);
+    repo.getMeetupSnapshot.mockResolvedValue(
+      snapshotFor('a', {
+        name: 'Old Name',
+        photoId: 'p1',
+        photoThumb: STORED_OLD,
+      }),
+    );
+
+    await runMeetupSweep('sweep');
+
+    // No photo change, so no key -- the repository's conditional SET then
+    // leaves the stored image where it is. Nothing was fetched either.
+    expect(repo.putMeetupSnapshot.mock.calls[0][1]).toEqual({});
+    expect(nock.pendingMocks()).toEqual([]);
+  });
+
+  it("captures a first sighting's current photo into the baseline", async () => {
+    const scope = nock(PHOTO_HOST)
+      .get(PHOTO_PATH)
+      .reply(200, Buffer.from([1, 2]));
+    vi.mocked(getPaginatedData).mockResolvedValue([
+      member('a', { memberPhoto: { id: 'p1', thumbUrl: PHOTO_URL } }),
+    ]);
+    repo.getMeetupSnapshot.mockResolvedValue(undefined);
+
+    const result = await runMeetupSweep('backfill');
+
+    // Still records nothing -- the first sighting IS the baseline -- but the
+    // bytes are captured now, because the moment the photo changes its URL is
+    // gone and no before-image can ever be recovered.
+    expect(repo.recordChanges).not.toHaveBeenCalled();
+    expect(result.changed).toBe(0);
+    expect(scope.isDone()).toBe(true);
+    const stored = repo.putMeetupSnapshot.mock.calls[0][1] as {
+      photoThumb?: Buffer | null;
+    };
+    expect(stored.photoThumb?.equals(Buffer.from([1, 2]))).toBe(true);
+  });
+
+  it('keeps fetching first-sighting photos across a whole backfill', async () => {
+    // 20 first sightings: comfortably past the 10%-of-roster thumb budget if
+    // that budget counted them. It must not -- a backfill is 100% first
+    // sightings, and gating them would leave every member without the
+    // before-image the whole feature depends on.
+    const roster = Array.from({ length: 20 }, (_, i) =>
+      member(`m${i}`, { memberPhoto: { id: 'p1', thumbUrl: PHOTO_URL } }),
+    );
+    const scope = nock(PHOTO_HOST)
+      .get(PHOTO_PATH)
+      .times(20)
+      .reply(200, Buffer.from([1, 2]));
+    vi.mocked(getPaginatedData).mockResolvedValue(roster);
+    repo.getMeetupSnapshot.mockResolvedValue(undefined);
+
+    await runMeetupSweep('backfill', fakeClient());
+
+    expect(scope.isDone()).toBe(true);
+    expect(
+      repo.putMeetupSnapshot.mock.calls.every((call) =>
+        (call[1] as { photoThumb?: Buffer | null }).photoThumb?.equals(
+          Buffer.from([1, 2]),
+        ),
+      ),
+    ).toBe(true);
+    // And no systemic-change alert: nothing changed, so nothing tripped.
+    expect(logAlert).not.toHaveBeenCalled();
+  });
+
+  it('still captures a new joiner after the systemic cap has fired', async () => {
+    // A roster where a systemic photo-id re-issue has already exhausted the
+    // thumb budget (ceil(20 * 0.1) = 2) before a genuinely new member is
+    // reached. The cap governs CHANGE-time fetches; a first sighting is
+    // exempt, or the one member whose before-image is still capturable would
+    // be the one member who never gets one.
+    const roster = [
+      ...Array.from({ length: 19 }, (_, i) =>
+        member(`m${i}`, {
+          memberPhoto: { id: 'new-photo', thumbUrl: PHOTO_URL },
+        }),
+      ),
+      member('joiner', { memberPhoto: { id: 'p1', thumbUrl: PHOTO_URL } }),
+    ];
+    const joinerPhoto = nock(PHOTO_HOST)
+      .get(PHOTO_PATH)
+      .times(20)
+      .reply(200, Buffer.from([1, 2]));
+    vi.mocked(getPaginatedData).mockResolvedValue(roster);
+    repo.getMeetupSnapshot.mockImplementation(async (_scope, id: string) => {
+      return id === 'joiner'
+        ? undefined
+        : snapshotFor(id, { photoId: 'old-photo', photoThumb: STORED_OLD });
+    });
+
+    await runMeetupSweep('sweep', fakeClient());
+
+    expect(joinerPhoto.isDone()).toBe(false); // the cap did skip most of them
+    const joinerPut = repo.putMeetupSnapshot.mock.calls.find(
+      (call) =>
+        (call[0] as { meetupMemberId: string }).meetupMemberId === 'joiner',
+    );
+    expect(
+      (joinerPut?.[1] as { photoThumb?: Buffer | null }).photoThumb?.equals(
+        Buffer.from([1, 2]),
+      ),
+    ).toBe(true);
   });
 
   it('alerts and stops when the credential cannot be refreshed', async () => {
@@ -275,6 +458,26 @@ describe('runMeetupSweep', () => {
       (call) => call[2] as Map<string, unknown>,
     );
     expect(thumbMaps.at(-1)?.size).toBe(0);
+  });
+
+  it('keeps the stored photo when a systemic change skips thumbnails', async () => {
+    const roster = Array.from({ length: 20 }, (_, i) =>
+      member(`m${i}`, {
+        memberPhoto: { id: 'new-photo', thumbUrl: PHOTO_URL },
+      }),
+    );
+    vi.mocked(getPaginatedData).mockResolvedValue(roster);
+    repo.getMeetupSnapshot.mockImplementation(async (_scope, id: string) =>
+      snapshotFor(id, { photoId: 'old-photo', photoThumb: STORED_OLD }),
+    );
+
+    await runMeetupSweep('sweep', fakeClient());
+
+    // Skipping the fetch leaves no new image, and clearing the column would
+    // destroy thousands of good before-images. A mass id re-issue does not
+    // change the pictures themselves, so the stored one is still the right
+    // one: pass no key and let the baseline keep it.
+    expect(repo.putMeetupSnapshot.mock.calls.at(-1)?.[1]).toEqual({});
   });
 
   it('alerts once when it skips thumbnails for a systemic change', async () => {
