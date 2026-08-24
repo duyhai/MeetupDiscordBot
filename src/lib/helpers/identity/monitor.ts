@@ -8,7 +8,6 @@ import {
 } from '../../repositories/identityTypes.js';
 import { diffIdentity } from './diff.js';
 import { snapshotMember } from './snapshot.js';
-import { isIdentityWriteSuppressed } from './suppression.js';
 import { fetchChangeThumbs } from './thumbs.js';
 
 const logger = new Logger({ name: 'identityMonitor' });
@@ -34,17 +33,6 @@ export async function recordIdentityFor(
   }
 
   const after = snapshotMember(member);
-
-  if (isIdentityWriteSuppressed(member.id)) {
-    // The bot itself is mid-write on this member (onboarding sets nicknames).
-    // Discord dispatches the gateway event concurrently with the REST
-    // response, so without this the bot's own rename can be recorded as a
-    // suspicious change before the onboarding baseline commits. Advance the
-    // baseline anyway so the next real change still diffs against the truth.
-    await repo.putSnapshot(after);
-    logger.info(`Skipped identity change for ${member.id}: bot's own write`);
-    return [];
-  }
 
   const before = await repo.getSnapshot(after.scopeId, member.id);
   const changes = diffIdentity(before, after);

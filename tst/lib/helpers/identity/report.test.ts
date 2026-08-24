@@ -24,7 +24,7 @@ const change = (
   oldThumb: Buffer.from([1, 2, 3]),
   newThumb: Buffer.from([4, 5, 6]),
   detectedAt: new Date('2026-08-16T14:02:00Z'),
-  source: 'event',
+  source: 'sweep',
   ...over,
 });
 

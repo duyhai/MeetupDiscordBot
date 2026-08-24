@@ -28,13 +28,10 @@ A daily sweep of the Meetup group's membership, diffed against a stored
 baseline, feeding the change log the Discord side already writes to.
 
 There is no event mechanism available: Meetup has no webhooks for profile
-edits, so polling is the only option. That is acceptable here because the
-concern is durable state — a daily snapshot answers "is this person's photo
-still the one we know them by".
-
-Note the asymmetry with the Discord side, which is event-driven precisely
-because it also catches transient swap-and-revert. Meetup cannot offer that,
-and does not need to.
+edits, so polling is the only option. That is no longer a gap relative to the
+Discord side, either — both platforms are sweep-only. A daily snapshot
+answers "is this person's photo still the one we know them by", which is the
+question that matters: the concern is durable state, not momentary swaps.
 
 ### What the API provides
 
@@ -201,7 +198,7 @@ member_identity_changes
   old_thumb    BYTEA
   new_thumb    BYTEA
   detected_at  TIMESTAMPTZ NOT NULL DEFAULT now()
-  source       TEXT NOT NULL        -- event | sweep | backfill
+  source       TEXT NOT NULL        -- sweep | backfill
 ```
 
 Baselines stay one table per platform, since nothing reads them together, but
@@ -229,9 +226,9 @@ meetup_identity
   PRIMARY KEY (scope_id, meetup_member_id)
 ```
 
-Both sweeps and both event handlers must therefore pass an explicit scope
-rather than iterating whatever happens to be in cache. `GUILD_ID` already
-exists in `constants.ts` and is currently unused on this path.
+Both sweeps must therefore pass an explicit scope rather than iterating
+whatever happens to be in cache. `GUILD_ID` already exists in `constants.ts`
+and is currently unused on this path.
 
 **Global facts under a scoped key.** Discord's `username`, `global_name` and
 `user_avatar_hash` are account-wide, not per-guild, so under a scoped primary
@@ -342,8 +339,8 @@ with this work:
 
   - The mark is the id of the last change already reported.
   - Each run fixes a ceiling with `max(id)` **after** the sweeps (so their
-    findings are included) and **before** reading the rows (so a gateway
-    event arriving mid-digest is not skipped — it waits for tomorrow).
+    findings are included) and **before** reading the rows (so a change
+    recorded mid-digest is not skipped — it waits for tomorrow).
   - The digest reports `id > mark AND id <= ceiling`, ordered by id, then
     advances the mark to that ceiling — and only after the post is confirmed
     landed, so an undelivered digest is retried rather than lost. Rows that

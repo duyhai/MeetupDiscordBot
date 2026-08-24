@@ -122,7 +122,7 @@ describe.skipIf(!POSTGRES_AVAILABLE)('PostgresIdentityRepository', () => {
             newValue: 'B',
           },
         ],
-        'event',
+        'sweep',
         new Map(),
       );
     }
@@ -193,7 +193,7 @@ describe.skipIf(!POSTGRES_AVAILABLE)('PostgresIdentityRepository', () => {
           newValue: 'bbb',
         },
       ],
-      'event',
+      'sweep',
       new Map([
         [
           `discord:${snap.scopeId}:${snap.discordUserId}:user_avatar`,
@@ -212,7 +212,7 @@ describe.skipIf(!POSTGRES_AVAILABLE)('PostgresIdentityRepository', () => {
     // BYTEA must survive the round-trip as bytes, not a hex string.
     expect(mine?.newThumb?.equals(thumb)).toBe(true);
     expect(mine?.oldThumb).toBeNull();
-    expect(mine?.source).toBe('event');
+    expect(mine?.source).toBe('sweep');
   });
 
   it('records a change with no thumbnails at all', async () => {
@@ -268,7 +268,7 @@ describe.skipIf(!POSTGRES_AVAILABLE)('PostgresIdentityRepository', () => {
           newValue: 'B',
         },
       ],
-      'event',
+      'sweep',
       new Map(),
     );
 
@@ -331,7 +331,7 @@ describe.skipIf(!POSTGRES_AVAILABLE)('PostgresIdentityRepository', () => {
           newValue: 'bbb',
         },
       ],
-      'event',
+      'sweep',
       new Map([
         [
           `discord:${snap.scopeId}:${snap.discordUserId}:user_avatar`,
@@ -374,7 +374,7 @@ describe.skipIf(!POSTGRES_AVAILABLE)('PostgresIdentityRepository', () => {
             newValue: 'B',
           },
         ],
-        'event',
+        'sweep',
         new Map(),
       );
     }
@@ -408,7 +408,7 @@ describe.skipIf(!POSTGRES_AVAILABLE)('PostgresIdentityRepository', () => {
           newValue: 'B',
         },
       ],
-      'event',
+      'sweep',
       new Map(),
     );
     const mark = await repo.maxChangeId();
@@ -436,7 +436,7 @@ describe.skipIf(!POSTGRES_AVAILABLE)('PostgresIdentityRepository', () => {
           newValue: 'B',
         },
       ],
-      'event',
+      'sweep',
       new Map(),
     );
     const ceiling = await repo.maxChangeId();
@@ -451,7 +451,7 @@ describe.skipIf(!POSTGRES_AVAILABLE)('PostgresIdentityRepository', () => {
           newValue: 'B',
         },
       ],
-      'event',
+      'sweep',
       new Map(),
     );
 
@@ -484,7 +484,7 @@ describe.skipIf(!POSTGRES_AVAILABLE)('PostgresIdentityRepository', () => {
             newValue: 'B',
           },
         ],
-        'event',
+        'sweep',
         new Map(),
       );
     }
@@ -545,7 +545,7 @@ describe.skipIf(!POSTGRES_AVAILABLE)('PostgresIdentityRepository', () => {
           newValue: 'B',
         },
       ],
-      'event',
+      'sweep',
       new Map(),
     );
 
@@ -581,7 +581,7 @@ describe.skipIf(!POSTGRES_AVAILABLE)('PostgresIdentityRepository', () => {
           newValue: 'B',
         },
       ],
-      'event',
+      'sweep',
       new Map(),
     );
 
@@ -629,7 +629,7 @@ describe.skipIf(!POSTGRES_AVAILABLE)('PostgresIdentityRepository', () => {
           newValue: 'bbb',
         },
       ],
-      'event',
+      'sweep',
       new Map([
         [
           `discord:some-other-guild:${stranger}:user_avatar`,

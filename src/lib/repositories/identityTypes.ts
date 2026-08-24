@@ -28,7 +28,7 @@ export interface IdentityChange {
   newValue: string | null;
 }
 
-export type ChangeSource = 'event' | 'sweep' | 'backfill';
+export type ChangeSource = 'sweep' | 'backfill';
 
 export interface IdentityChangeRecord extends IdentityChange {
   id: string;

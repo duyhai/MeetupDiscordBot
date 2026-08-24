@@ -68,10 +68,9 @@ const MAX_DESCRIPTION = 4096; // Discord's hard embed description limit
  * The high-water mark removed the old ~24h time window, so if `logAlert`
  * fails for a stretch (an outage, a permission change) the mark never
  * advances and the next successful run would otherwise process everything
- * recorded since -- unbounded. Without this cap that both blows up the min/
- * max pass below at large sizes and makes `annotateReverts`'s O(n^2) scan
- * expensive. 5000 is comfortably above a busy day's volume and comfortably
- * below where either of those costs matters.
+ * recorded since -- unbounded. Without this cap that blows up the min/max
+ * pass below at large sizes. 5000 is comfortably above a busy day's volume
+ * and comfortably below where that cost matters.
  */
 export const DIGEST_PAGE_LIMIT = 5000;
 
@@ -100,8 +99,6 @@ const PHOTO_LIKE_FIELDS = new Set<IdentityField>([
   'member_avatar',
   'photo',
 ]);
-
-export type AnnotatedChange = IdentityChangeMetadata & { revertedAt?: Date };
 
 export function shouldRunIdentityDigestNow(now: Date): boolean {
   return now.getUTCHours() === IDENTITY_DIGEST_UTC_HOUR;
@@ -168,41 +165,13 @@ async function runSweepOrDegrade(
 }
 
 /**
- * Marks a change that was later undone by the same member on the same field.
- * A transient change is the signature of impersonation-then-cleanup, and it
- * is invisible to a snapshot diff -- both endpoints look identical.
- */
-export function annotateReverts(
-  changes: IdentityChangeMetadata[],
-): AnnotatedChange[] {
-  return changes.map((change) => {
-    const revert = changes.find(
-      (other) =>
-        other.id !== change.id &&
-        // M3: platform is part of the identity of a subject, not decoration.
-        // Meetup member ids and Discord user ids are both opaque numeric
-        // strings drawn from separate namespaces, so without this a collision
-        // between the two lets one platform's change be reported as a revert
-        // of the other's -- and `username` and `name` exist on both sides,
-        // so the field check does not rule it out either.
-        other.platform === change.platform &&
-        other.subjectId === change.subjectId &&
-        other.field === change.field &&
-        other.detectedAt > change.detectedAt &&
-        other.newValue === change.oldValue,
-    );
-    return revert ? { ...change, revertedAt: revert.detectedAt } : change;
-  });
-}
-
-/**
  * A Discord change's subject IS a Discord user id -- `<@id>` always renders.
  * A Meetup change's subject is a Meetup member id, which is meaningless as a
  * Discord mention; resolve it through the link table when possible, and fall
  * back to the raw id (never to a broken `<@undefined>`) when it is not.
  */
 function mentionFor(
-  change: AnnotatedChange,
+  change: IdentityChangeMetadata,
   meetupToDiscord: Map<string, string>,
 ): string {
   if (change.platform === 'discord') {
@@ -213,28 +182,25 @@ function mentionFor(
 }
 
 function line(
-  change: AnnotatedChange,
+  change: IdentityChangeMetadata,
   meetupToDiscord: Map<string, string>,
 ): string {
   const time = change.detectedAt.toISOString().slice(11, 16);
   const label = FIELD_LABELS[change.field];
   const platform = PLATFORM_LABELS[change.platform];
   const who = mentionFor(change, meetupToDiscord);
-  const reverted = change.revertedAt
-    ? ` (reverted ${change.revertedAt.toISOString().slice(11, 16)})`
-    : '';
   if (PHOTO_LIKE_FIELDS.has(change.field)) {
-    return `${time}  ${platform}  ${who}  ${label} changed${reverted}`;
+    return `${time}  ${platform}  ${who}  ${label} changed`;
   }
   return `${time}  ${platform}  ${who}  ${label} "${
     change.oldValue ?? '—'
-  }" → "${change.newValue ?? '—'}"${reverted}`;
+  }" → "${change.newValue ?? '—'}"`;
 }
 
 const stamp = (date: Date) => date.toISOString().slice(0, 16).replace('T', ' ');
 
 export function formatIdentityDigest(
-  changes: AnnotatedChange[],
+  changes: IdentityChangeMetadata[],
   stats: { changeCount: number; totalBytes: number },
   meetupToDiscord: Map<string, string>,
 ): LogEntry | undefined {
@@ -421,11 +387,7 @@ export async function runIdentityDigestOnce(client: Client): Promise<void> {
       }
     }
 
-    const entry = formatIdentityDigest(
-      annotateReverts(changes),
-      stats,
-      meetupToDiscord,
-    );
+    const entry = formatIdentityDigest(changes, stats, meetupToDiscord);
     if (entry) {
       // logAlert swallows every error by design, so an outage or a permission
       // change would otherwise leave the claim consumed, a success logged, no

@@ -4,7 +4,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   DIGEST_PAGE_LIMIT,
   IDENTITY_DIGEST_UTC_HOUR,
-  annotateReverts,
   formatIdentityDigest,
   identityDigestWindow,
   runIdentityDigestOnce,
@@ -66,93 +65,11 @@ const change = (
   oldThumb: null,
   newThumb: null,
   detectedAt: at('2026-08-16T14:02:00Z'),
-  source: 'event',
+  source: 'sweep',
   ...over,
 });
 
 const stats = { changeCount: 1204, totalBytes: 64_000_000 };
-
-describe('annotateReverts', () => {
-  it('marks a change that was undone later the same day', () => {
-    const out = annotateReverts([
-      change({ id: '1', oldValue: 'aaa', newValue: 'bbb' }),
-      change({
-        id: '2',
-        oldValue: 'bbb',
-        newValue: 'aaa',
-        detectedAt: at('2026-08-16T18:31:00Z'),
-      }),
-    ]);
-
-    // A change reverted hours later is far more suspicious than one that
-    // stuck, and a daily snapshot diff would miss the pair entirely.
-    expect(out[0].revertedAt).toEqual(at('2026-08-16T18:31:00Z'));
-  });
-
-  it('leaves a change that stuck unannotated', () => {
-    const out = annotateReverts([change()]);
-
-    expect(out[0].revertedAt).toBeUndefined();
-  });
-
-  it('annotates only the original, not the change that reverted it', () => {
-    const out = annotateReverts([
-      change({ id: '1', oldValue: 'aaa', newValue: 'bbb' }),
-      change({
-        id: '2',
-        oldValue: 'bbb',
-        newValue: 'aaa',
-        detectedAt: at('2026-08-16T18:31:00Z'),
-      }),
-    ]);
-
-    // Direction matters: without the ordering check the later change matches
-    // the earlier one and reports a revert timestamp that precedes it.
-    expect(out[0].revertedAt).toEqual(at('2026-08-16T18:31:00Z'));
-    expect(out[1].revertedAt).toBeUndefined();
-  });
-
-  it("does not treat another platform's change as a revert", () => {
-    const out = annotateReverts([
-      change({
-        id: '1',
-        platform: 'discord',
-        subjectId: '12345',
-        field: 'username',
-      }),
-      change({
-        id: '2',
-        platform: 'meetup',
-        subjectId: '12345',
-        field: 'username',
-        oldValue: 'bbb',
-        newValue: 'aaa',
-        detectedAt: at('2026-08-16T18:31:00Z'),
-      }),
-    ]);
-
-    // Meetup member ids and Discord user ids are both opaque numeric strings
-    // from separate namespaces, and `username` exists on both sides -- so
-    // without the platform check a collision reports one platform's change as
-    // a revert of the other's.
-    expect(out[0].revertedAt).toBeUndefined();
-  });
-
-  it("does not treat another member's change as a revert", () => {
-    const out = annotateReverts([
-      change({ id: '1', subjectId: 'u1' }),
-      change({
-        id: '2',
-        subjectId: 'u2',
-        oldValue: 'bbb',
-        newValue: 'aaa',
-        detectedAt: at('2026-08-16T18:31:00Z'),
-      }),
-    ]);
-
-    expect(out[0].revertedAt).toBeUndefined();
-  });
-});
 
 describe('formatIdentityDigest', () => {
   it('returns undefined when there were no changes', () => {
@@ -167,24 +84,6 @@ describe('formatIdentityDigest', () => {
     expect(entry?.description).toContain('<@u1>');
     expect(entry?.description).toContain('user avatar');
     expect(entry?.description).toContain('1,204 changes on record');
-  });
-
-  it('notes the revert inline', () => {
-    const entry = formatIdentityDigest(
-      annotateReverts([
-        change({ id: '1' }),
-        change({
-          id: '2',
-          oldValue: 'bbb',
-          newValue: 'aaa',
-          detectedAt: at('2026-08-16T18:31:00Z'),
-        }),
-      ]),
-      stats,
-      new Map(),
-    );
-
-    expect(entry?.description).toContain('reverted');
   });
 
   it('truncates a flood rather than exceeding the embed limit', () => {
