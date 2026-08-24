@@ -5,6 +5,12 @@
  * this makes the first digest report the entire ~6,000-member roster as having
  * changed identity, which is both useless and alarming.
  *
+ * Each of those baselines also captures the member's current photo bytes, so
+ * a later photo change has a real before-image -- the only chance to get one,
+ * since Meetup's baseline keeps a photo id and not the URL behind it. That is
+ * one bounded HTTP request per photo, sequential, across ~6,000 members:
+ * expect this run to take considerably longer than a steady-state sweep.
+ *
  * Unlike backfillIdentityBaseline.ts, this needs no Discord client or token --
  * only Postgres and the Meetup organizer credential. Run against production
  * explicitly:

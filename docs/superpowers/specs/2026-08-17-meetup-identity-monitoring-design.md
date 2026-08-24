@@ -206,14 +206,16 @@ both carry scope in the primary key:
 
 ```
 member_identity
-  scope_id            TEXT NOT NULL      -- guild id
-  discord_user_id     TEXT NOT NULL
-  username            TEXT
-  global_name         TEXT
-  nickname            TEXT
-  user_avatar_hash    TEXT
-  member_avatar_hash  TEXT
-  updated_at          TIMESTAMPTZ NOT NULL DEFAULT now()
+  scope_id             TEXT NOT NULL      -- guild id
+  discord_user_id      TEXT NOT NULL
+  username             TEXT
+  global_name          TEXT
+  nickname             TEXT
+  user_avatar_hash     TEXT
+  member_avatar_hash   TEXT
+  user_avatar_thumb    BYTEA              -- image behind user_avatar_hash
+  member_avatar_thumb  BYTEA              -- image behind member_avatar_hash
+  updated_at           TIMESTAMPTZ NOT NULL DEFAULT now()
   PRIMARY KEY (scope_id, discord_user_id)
 
 meetup_identity
@@ -222,9 +224,25 @@ meetup_identity
   name              TEXT
   username          TEXT
   photo_id          TEXT
+  photo_thumb       BYTEA              -- image behind photo_id
   updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
   PRIMARY KEY (scope_id, meetup_member_id)
 ```
+
+**Why the baselines carry images.** A change's *before* picture cannot be
+fetched at change time. Discord purges a superseded avatar, and Meetup's
+baseline stores a photo id rather than the URL that served it, so on the
+Meetup side the old photo is unreachable the instant it changes — `old_thumb`
+would be unconditionally NULL. Each baseline therefore keeps the bytes behind
+the identifier beside it: captured at first sighting, handed to the change row
+as its before-image, and replaced by the new image as the baseline advances.
+Change time then costs exactly one fetch, for the new picture only.
+
+The thumb columns stay nullable and best-effort. A column is only written when
+the caller supplies a value for it, so a name-only change leaves the stored
+image alone; an explicit NULL still clears it, because a thumb describes the
+identifier stored next to it and a stale image under a new id is worse than no
+image at all.
 
 Both sweeps must therefore pass an explicit scope rather than iterating
 whatever happens to be in cache. `GUILD_ID` already exists in `constants.ts`
@@ -259,15 +277,25 @@ quadruples the monitored population.
 | | |
 | --- | --- |
 | Baseline | 6,000 rows x ~250 B = **~1.5 MB**, static |
+| Baseline thumbnails | ~2-4 KB each, one per Meetup member and up to two per Discord member: across both platforms' ~8,000 baseline rows, **~25-35 MB**, static |
 | Change log | ~200 B/row, shared table |
 | Thumbnails | ~2-4 KB each, avatar changes only |
 
-Against essential-0's 1 GB with 8 MB used, comfortable. The daily digest
-already reports row count and table size, so growth stays observable.
+Against essential-0's 1 GB with 8 MB used, comfortable. Baseline thumbnails are
+a one-time static cost that does not grow with time — the row is overwritten,
+not appended to — so they shift the floor once rather than the slope. The daily
+digest already reports row count and table size, so growth stays observable.
 
 Request volume: `memberships` paginated at 100 per page is ~60 requests per
 sweep, once a day. Sequential, matching the Discord sweep's reasoning about
 the 2-connection pool.
+
+Thumbnail requests are the new cost. A steady-state sweep fetches one image per
+*changed* photo, a handful a day. A backfill fetches one per member with a
+photo — ~6,000 on Meetup and up to two each for the Discord members who have an
+avatar — sequential and bounded at 5s apiece, so it runs for tens of minutes
+rather than seconds. That is a one-time price for every later change having a
+real before-image.
 
 ## Failure behaviour
 
@@ -279,7 +307,12 @@ Consistent with the Discord side:
 - Changes are written before the baseline advances, so a crash yields a
   duplicate row rather than lost evidence.
 - A first sighting stores a baseline silently and records no change, so
-  enabling the feature does not report 6,000 members as changed.
+  enabling the feature does not report 6,000 members as changed. It does
+  fetch the member's current photo into that baseline — the one moment the
+  photo's URL is in hand — and a failure there stores NULL like any other.
+- The systemic-change thumb cap governs change-time fetches only. It counts
+  members that changed, and a first sighting changes nothing, so it cannot
+  fire during a backfill — whose fetches are the entire point.
 
 New to this side: an expired or revoked credential alerts rather than failing
 quietly, per above.

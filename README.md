@@ -94,6 +94,12 @@ their own Postgres connection pool on top of whatever the running dyno
 already holds, so run them outside a deploy window, not concurrently with
 one, and do the two platforms in order.
 
+Each first sighting also fetches that member's current avatar or photo into
+the baseline -- the bytes a future change is shown against -- so the first
+run of each script makes one bounded HTTP request per image and takes
+substantially longer than a later sweep: budget roughly 20-40 minutes across
+the two.
+
 **Never run a backfill during hour 18 UTC.** The scheduled sweep makes the
 same full roster pass at that hour. Two passes racing each other can each
 diff a member before the other advances the baseline, so the same change is
