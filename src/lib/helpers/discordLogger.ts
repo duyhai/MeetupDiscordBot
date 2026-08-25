@@ -18,18 +18,22 @@ export interface LogEntry {
 /**
  * Posts an embed to a log channel. Deliberately swallows every error:
  * Discord logging must never break the command that triggered it.
+ *
+ * Returns whether the post actually landed. Most callers ignore it -- but a
+ * caller that consumed a once-a-day claim to get here needs to know, or an
+ * outage silently costs the whole day's digest with no retry.
  */
 async function postToChannel(
   client: Client,
   channelId: string,
   color: number,
   entry: LogEntry,
-): Promise<void> {
+): Promise<boolean> {
   try {
     const channel = await client.channels.fetch(channelId);
     if (!(channel instanceof TextChannel)) {
       logger.warn(`Log channel ${channelId} is missing or not a text channel`);
-      return;
+      return false;
     }
     const embed = new EmbedBuilder()
       .setTitle(entry.title)
@@ -46,16 +50,18 @@ async function postToChannel(
       // Log entries mention users for readability; never ping them.
       allowedMentions: { parse: [] },
     });
+    return true;
   } catch (error) {
     logger.warn(`Failed to post log entry "${entry.title}": ${String(error)}`);
+    return false;
   }
 }
 
 export async function logActivity(
   client: Client,
   entry: LogEntry,
-): Promise<void> {
-  await postToChannel(
+): Promise<boolean> {
+  return postToChannel(
     client,
     BOT_ACTIVITY_LOG_CHANNEL_ID,
     EMBED_COLORS.activity,
@@ -63,6 +69,14 @@ export async function logActivity(
   );
 }
 
-export async function logAlert(client: Client, entry: LogEntry): Promise<void> {
-  await postToChannel(client, BOT_ALERTS_CHANNEL_ID, EMBED_COLORS.alert, entry);
+export async function logAlert(
+  client: Client,
+  entry: LogEntry,
+): Promise<boolean> {
+  return postToChannel(
+    client,
+    BOT_ALERTS_CHANNEL_ID,
+    EMBED_COLORS.alert,
+    entry,
+  );
 }
