@@ -71,6 +71,13 @@ No stored host list. During the same command run:
 Self-correcting and backfill-free; the cost is one extra full-history query
 per monthly run.
 
+**Why a full-group scan rather than per-host history:** Meetup's GraphQL only
+exposes hosted-event history on `self` (`memberEvents(isHosting: true)`), so
+the bot cannot query an arbitrary member's hosting history. The group scan is
+also cheap: `eventHosts` is returned on each event page (no per-event
+sub-requests, unlike RSVP fetches), so the whole history costs
+ceil(events / 100) sequential requests once a month.
+
 ## Phase 3 — No Show report command and suspension history
 
 ### New command: `/meetup_run_noshow_report year month`
@@ -104,11 +111,20 @@ New Postgres table alongside the existing repositories
 - `member_id` (Meetup member ID), `member_name`, `suspended_at`,
   `duration_days`, `notes`, `created_at`.
 
-**Recording:** new command `/meetup_record_suspension <member_id> <duration_days> [notes]`
-inserts a row when Melissa acts. This replaces the spreadsheet going forward.
+**Recording:** new command `/meetup_record_suspension` with two input modes,
+replacing the spreadsheet going forward:
 
-**Backfill:** one-time import of the existing spreadsheet via CSV — a small
-admin script (or dev-run script) that maps sheet rows to `suspension_records`.
+- **Bulk IDs (common case):** a comma-separated `members` option plus an
+  optional date (default today). Duration is auto-deduced per member as
+  30 days × 2^(prior suspension count). The reply echoes each member's
+  computed duration and prior count so mistakes are caught immediately.
+- **CSV attachment (exceptions, notes, and backfill):** rows of
+  `member_id, duration_days, suspended_at, notes` for cases with non-standard
+  durations or annotations.
+
+**Backfill:** the CSV mode doubles as the one-time import — export the
+existing spreadsheet to the same column format and upload it. No separate
+backfill script.
 
 ## Error handling
 
