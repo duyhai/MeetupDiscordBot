@@ -21,7 +21,7 @@ import { tz } from '../../util/timezone.js';
 
 const logger = new Logger({ name: 'MeetupGetStatsCommands' });
 
-async function getEventsYearMonth(
+export async function getEventsYearMonth(
   meetupClient: GqlMeetupClient,
   year: number,
   month: number,
