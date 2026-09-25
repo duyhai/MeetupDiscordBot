@@ -75,7 +75,7 @@ type MembershipStatus =
   | 'REMOVED'
   | 'UNAPPROVED';
 
-type EventStatus =
+export type EventStatus =
   | 'ACTIVE'
   | 'AUTOSCHED'
   | 'AUTOSCHED_CANCELLED'
