@@ -3,6 +3,7 @@ import { MeetupGetEventStatsCommands } from './meetup/getEventStats.js';
 import { MeetupNoShowCommands } from './meetup/getNoShow.js';
 import { MeetupGetTokenCommands } from './meetup/getToken.js';
 import { MeetupGetUnannouncedEventsCommands } from './meetup/getUnannouncedEvents.js';
+import { MeetupRecordSuspensionCommands } from './meetup/recordSuspension.js';
 import { MeetupTestGqlCommands } from './meetup/testGQL.js';
 import { UnlinkAccountCommands } from './meetup/unlinkAccount.js';
 import { MeetupWhoisCommands } from './meetup/whoisAccount.js';
@@ -14,6 +15,7 @@ const Commands = [
   MeetupGetTokenCommands,
   MeetupGetUnannouncedEventsCommands,
   MeetupNoShowCommands,
+  MeetupRecordSuspensionCommands,
   SendMessageCommands,
   MeetupTestGqlCommands,
   UnlinkAccountCommands,
