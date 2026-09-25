@@ -48,4 +48,10 @@ describe('parseSuspensionCsv', () => {
       /row 2/i,
     );
   });
+
+  it('rejects a calendar-invalid date with the row number', () => {
+    expect(() => parseSuspensionCsv(`${HEADER}\n123,30,2026-02-30,`)).toThrow(
+      /row 2/i,
+    );
+  });
 });

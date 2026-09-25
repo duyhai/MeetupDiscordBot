@@ -37,11 +37,23 @@ export function parseSuspensionCsv(text: string): SuspensionInsert[] {
           `Row ${rowNumber}: suspended_at must be YYYY-MM-DD in "${line}"`,
         );
       }
+      // Validate the date is calendar-valid by constructing it and comparing back.
+      const date = new Date(`${dateStr}T00:00:00Z`);
+      const reconstructed = [
+        date.getUTCFullYear().toString().padStart(4, '0'),
+        (date.getUTCMonth() + 1).toString().padStart(2, '0'),
+        date.getUTCDate().toString().padStart(2, '0'),
+      ].join('-');
+      if (reconstructed !== dateStr) {
+        throw new Error(
+          `Row ${rowNumber}: suspended_at must be YYYY-MM-DD in "${line}"`,
+        );
+      }
       return {
         memberId,
         memberName: null,
         durationDays,
-        suspendedAt: new Date(`${dateStr}T00:00:00Z`),
+        suspendedAt: date,
         notes: notes.length > 0 ? notes : null,
       };
     });
