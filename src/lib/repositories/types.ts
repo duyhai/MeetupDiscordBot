@@ -30,3 +30,23 @@ export interface MemberRepository {
   listAll(): Promise<MemberRecord[]>;
   remove(discordUserId: string): Promise<void>;
 }
+
+export interface SuspensionRecord {
+  id: number;
+  memberId: string;
+  memberName: string | null;
+  suspendedAt: Date;
+  durationDays: number;
+  notes: string | null;
+  createdAt: Date;
+}
+
+export type SuspensionInsert = Omit<SuspensionRecord, 'id' | 'createdAt'>;
+
+export interface SuspensionRepository {
+  insert(record: SuspensionInsert): Promise<SuspensionRecord>;
+  insertMany(records: SuspensionInsert[]): Promise<SuspensionRecord[]>;
+  countByMemberId(memberId: string): Promise<number>;
+  listByMemberId(memberId: string): Promise<SuspensionRecord[]>;
+  deleteAllForTest(): Promise<void>;
+}
