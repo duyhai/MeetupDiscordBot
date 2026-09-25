@@ -3,7 +3,10 @@ import { ApplicationCommandOptionType, CommandInteraction } from 'discord.js';
 import { Discord, Slash, SlashOption } from 'discordx';
 import { Logger } from 'tslog';
 import { GqlMeetupClient } from '../../lib/client/meetup/gqlClient.js';
-import { getPaginatedData } from '../../lib/client/meetup/paginationHelper.js';
+import {
+  getPaginatedData,
+  mapWithConcurrency,
+} from '../../lib/client/meetup/paginationHelper.js';
 
 import { BaseUserInfo, Event } from '../../lib/client/meetup/types.js';
 import {
@@ -20,6 +23,10 @@ import { withMeetupClient } from '../../util/meetup.js';
 import { tz } from '../../util/timezone.js';
 
 const logger = new Logger({ name: 'MeetupGetStatsCommands' });
+
+// Bounds parallel RSVP-fetch fan-outs so a month with many events doesn't
+// fire dozens of paginated requests at Meetup simultaneously.
+const RSVP_FETCH_CONCURRENCY = 5;
 
 export async function getEventsYearMonth(
   meetupClient: GqlMeetupClient,
@@ -55,14 +62,17 @@ export async function findNewHostIds(
   hostIds: string[],
   beforeIso: string,
 ): Promise<Set<string>> {
-  const checks = await Promise.all(
-    hostIds.map(async (hostId) => {
-      const result = await meetupClient.getGroupEvents(
-        { first: 1 },
-        { hostId, beforeDateTime: beforeIso, status: ['PAST'] },
-      );
-      return { hostId, priorCount: result.groupByUrlname.events.totalCount };
-    }),
+  const checks = await mapWithConcurrency(
+    hostIds,
+    RSVP_FETCH_CONCURRENCY,
+    async (hostId) => {
+      const priorCount = await meetupClient.getGroupEventsCount({
+        hostId,
+        beforeDateTime: beforeIso,
+        status: ['PAST'],
+      });
+      return { hostId, priorCount };
+    },
   );
   return new Set(
     checks.filter((check) => check.priorCount === 0).map((c) => c.hostId),
@@ -125,20 +135,23 @@ export class MeetupGetEventStatsCommands {
         // Attendance counts for the detailed attachment (unchanged data, but only
         // for countable events).
         const rsvpCounts = new Map<string, number>();
-        await Promise.all(
-          countableEvents
-            .filter((event) => !event.title.includes('[Open House]'))
-            .map(async (event) => {
-              const rsvps = await getPaginatedData(async (paginationInput) => {
-                const result = await meetupClient.getEventRsvps(
-                  event.id,
-                  paginationInput,
-                  { rsvpStatus: ['ATTENDED', 'YES'] },
-                );
-                return result.event.rsvps;
-              });
-              rsvpCounts.set(event.id, rsvps.length);
-            }),
+        const rsvpCountableEvents = countableEvents.filter(
+          (event) => !event.title.includes('[Open House]'),
+        );
+        await mapWithConcurrency(
+          rsvpCountableEvents,
+          RSVP_FETCH_CONCURRENCY,
+          async (event) => {
+            const rsvps = await getPaginatedData(async (paginationInput) => {
+              const result = await meetupClient.getEventRsvps(
+                event.id,
+                paginationInput,
+                { rsvpStatus: ['ATTENDED', 'YES'] },
+              );
+              return result.event.rsvps;
+            });
+            rsvpCounts.set(event.id, rsvps.length);
+          },
         );
 
         const { hostStats, totalEvents } = collectHostStats(pastEvents);
@@ -270,24 +283,26 @@ ${readyToPost}`;
         const noShowMembers = new Map<string, BaseUserInfo>();
         const noShowEventsPerMember = new Map<string, Event[]>();
 
-        // Create an array of promises, one for each event's RSVP fetch
-        const rsvpPromises = pastEvents.map(async (event) => {
-          const rsvps = await getPaginatedData(async (paginationInput) => {
-            const result = await meetupClient.getEventRsvps(
-              event.id,
-              paginationInput,
-              {
-                rsvpStatus: ['NO_SHOW'],
-              },
-            );
-            return result.event.rsvps;
-          });
-          // Return an object containing the event and its no-show rsvps
-          return { event, rsvps };
-        });
-
-        // Await all promises to resolve in parallel
-        const results = await Promise.all(rsvpPromises);
+        // Fetch each event's no-show RSVPs, bounded to a small number of
+        // concurrent requests.
+        const results = await mapWithConcurrency(
+          pastEvents,
+          RSVP_FETCH_CONCURRENCY,
+          async (event) => {
+            const rsvps = await getPaginatedData(async (paginationInput) => {
+              const result = await meetupClient.getEventRsvps(
+                event.id,
+                paginationInput,
+                {
+                  rsvpStatus: ['NO_SHOW'],
+                },
+              );
+              return result.event.rsvps;
+            });
+            // Return an object containing the event and its no-show rsvps
+            return { event, rsvps };
+          },
+        );
 
         // Now iterate over the results and process the data
         results.forEach(({ event, rsvps }) => {

@@ -191,6 +191,18 @@ export type GetGroupEventsInput = {
   urlname: string;
 };
 
+export interface GetGroupEventsCountResponse {
+  groupByUrlname: {
+    events: { totalCount: number };
+    id: string;
+  };
+}
+
+export type GetGroupEventsCountInput = {
+  filter?: GroupEventFilter;
+  urlname: string;
+};
+
 export interface CreateEventInput {
   communicationSettings: {
     chat: boolean;
