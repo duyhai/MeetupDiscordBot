@@ -21,6 +21,8 @@ CREATE TABLE IF NOT EXISTS suspension_records (
 );
 CREATE INDEX IF NOT EXISTS suspension_records_member_id_idx
   ON suspension_records (member_id);
+CREATE UNIQUE INDEX IF NOT EXISTS suspension_records_member_suspended_at_idx
+  ON suspension_records (member_id, suspended_at);
 `;
 
 interface SuspensionRow {
@@ -96,11 +98,14 @@ export class PostgresSuspensionRepository implements SuspensionRepository {
     return repo;
   }
 
-  async insert(record: SuspensionInsert): Promise<SuspensionRecord> {
+  async insert(
+    record: SuspensionInsert,
+  ): Promise<SuspensionRecord | undefined> {
     const result = await this.pool.query<SuspensionRow>(
       `INSERT INTO suspension_records
          (member_id, member_name, suspended_at, duration_days, notes)
        VALUES ($1, $2, $3, $4, $5)
+       ON CONFLICT (member_id, suspended_at) DO NOTHING
        RETURNING *`,
       [
         record.memberId,
@@ -110,7 +115,7 @@ export class PostgresSuspensionRepository implements SuspensionRepository {
         record.notes,
       ],
     );
-    return toRecord(result.rows[0]);
+    return result.rows[0] ? toRecord(result.rows[0]) : undefined;
   }
 
   async insertMany(records: SuspensionInsert[]): Promise<SuspensionRecord[]> {
@@ -124,6 +129,7 @@ export class PostgresSuspensionRepository implements SuspensionRepository {
           `INSERT INTO suspension_records
              (member_id, member_name, suspended_at, duration_days, notes)
            VALUES ($1, $2, $3, $4, $5)
+           ON CONFLICT (member_id, suspended_at) DO NOTHING
            RETURNING *`,
           [
             record.memberId,
@@ -133,7 +139,9 @@ export class PostgresSuspensionRepository implements SuspensionRepository {
             record.notes,
           ],
         );
-        inserted.push(toRecord(result.rows[0]));
+        if (result.rows[0]) {
+          inserted.push(toRecord(result.rows[0]));
+        }
       }
       await client.query('COMMIT');
       return inserted;

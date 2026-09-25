@@ -8,7 +8,38 @@ import { SuspensionInsert } from '../repositories/types.js';
 const EXPECTED_HEADER = 'member_id,duration_days,suspended_at,notes';
 const DATE_FORMAT = /^\d{4}-\d{2}-\d{2}$/;
 
-export function parseSuspensionCsv(text: string): SuspensionInsert[] {
+/**
+ * Parses a strict YYYY-MM-DD date string as UTC midnight, rejecting
+ * calendar-invalid dates (e.g. 2026-02-30, which `Date` would silently roll
+ * to 2026-03-02) by reconstructing the string from the parsed date and
+ * comparing it back. Returns undefined rather than throwing so callers can
+ * shape their own error message.
+ */
+export function parseUtcDateStrict(dateStr: string): Date | undefined {
+  if (!DATE_FORMAT.test(dateStr)) {
+    return undefined;
+  }
+  const date = new Date(`${dateStr}T00:00:00Z`);
+  const reconstructed = [
+    date.getUTCFullYear().toString().padStart(4, '0'),
+    (date.getUTCMonth() + 1).toString().padStart(2, '0'),
+    date.getUTCDate().toString().padStart(2, '0'),
+  ].join('-');
+  if (reconstructed !== dateStr) {
+    return undefined;
+  }
+  return date;
+}
+
+// Strip a UTF-8 BOM, which some spreadsheet exports (e.g. Excel "CSV UTF-8")
+// prepend to the file; left in place it would corrupt the header comparison
+// below by attaching itself to "member_id".
+function stripBom(text: string): string {
+  return text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
+}
+
+export function parseSuspensionCsv(rawText: string): SuspensionInsert[] {
+  const text = stripBom(rawText);
   const lines = text.split(/\r?\n/);
   const header = (lines[0] ?? '').replaceAll(' ', '').toLowerCase();
   if (header !== EXPECTED_HEADER) {
@@ -32,19 +63,8 @@ export function parseSuspensionCsv(text: string): SuspensionInsert[] {
           `Row ${rowNumber}: invalid member_id or duration_days in "${line}"`,
         );
       }
-      if (!DATE_FORMAT.test(dateStr)) {
-        throw new Error(
-          `Row ${rowNumber}: suspended_at must be YYYY-MM-DD in "${line}"`,
-        );
-      }
-      // Validate the date is calendar-valid by constructing it and comparing back.
-      const date = new Date(`${dateStr}T00:00:00Z`);
-      const reconstructed = [
-        date.getUTCFullYear().toString().padStart(4, '0'),
-        (date.getUTCMonth() + 1).toString().padStart(2, '0'),
-        date.getUTCDate().toString().padStart(2, '0'),
-      ].join('-');
-      if (reconstructed !== dateStr) {
+      const date = parseUtcDateStrict(dateStr);
+      if (date === undefined) {
         throw new Error(
           `Row ${rowNumber}: suspended_at must be YYYY-MM-DD in "${line}"`,
         );

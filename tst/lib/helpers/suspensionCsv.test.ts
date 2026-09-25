@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
-import { parseSuspensionCsv } from '../../../src/lib/helpers/suspensionCsv.js';
+import {
+  parseSuspensionCsv,
+  parseUtcDateStrict,
+} from '../../../src/lib/helpers/suspensionCsv.js';
 
 const HEADER = 'member_id,duration_days,suspended_at,notes';
 
@@ -53,5 +56,30 @@ describe('parseSuspensionCsv', () => {
     expect(() => parseSuspensionCsv(`${HEADER}\n123,30,2026-02-30,`)).toThrow(
       /row 2/i,
     );
+  });
+
+  it('strips a UTF-8 BOM before validating the header', () => {
+    const bom = '﻿';
+    const rows = parseSuspensionCsv(`${bom}${HEADER}\n123,30,2026-01-15,`);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].memberId).toBe('123');
+  });
+});
+
+describe('parseUtcDateStrict', () => {
+  it('parses a valid calendar date as UTC midnight', () => {
+    expect(parseUtcDateStrict('2026-01-15')).toEqual(
+      new Date('2026-01-15T00:00:00Z'),
+    );
+  });
+
+  it('rejects a calendar-invalid date instead of rolling it forward', () => {
+    // Plain `new Date('2026-02-30')` silently rolls to March 2nd.
+    expect(parseUtcDateStrict('2026-02-30')).toBeUndefined();
+  });
+
+  it('rejects a malformed date string', () => {
+    expect(parseUtcDateStrict('Jan 15 2026')).toBeUndefined();
+    expect(parseUtcDateStrict('2026/01/15')).toBeUndefined();
   });
 });

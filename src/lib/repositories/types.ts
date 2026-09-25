@@ -44,7 +44,15 @@ export interface SuspensionRecord {
 export type SuspensionInsert = Omit<SuspensionRecord, 'id' | 'createdAt'>;
 
 export interface SuspensionRepository {
-  insert(record: SuspensionInsert): Promise<SuspensionRecord>;
+  /**
+   * Inserts a suspension record. Returns undefined instead of inserting when
+   * an identical (memberId, suspendedAt) pair already exists -- callers
+   * retrying a partially-failed batch must not double a member's penalty.
+   * A different suspendedAt for the same member always inserts: repeat
+   * suspensions on different dates are expected.
+   */
+  insert(record: SuspensionInsert): Promise<SuspensionRecord | undefined>;
+  /** Returns only the rows actually inserted; duplicates are silently skipped. */
   insertMany(records: SuspensionInsert[]): Promise<SuspensionRecord[]>;
   countByMemberId(memberId: string): Promise<number>;
   listByMemberId(memberId: string): Promise<SuspensionRecord[]>;
