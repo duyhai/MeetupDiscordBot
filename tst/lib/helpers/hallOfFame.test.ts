@@ -4,6 +4,7 @@ import { Event } from '../../../src/lib/client/meetup/types.js';
 import {
   collectHostStats,
   isCancelledEvent,
+  formatHallOfFamePost,
 } from '../../../src/lib/helpers/hallOfFame.js';
 
 let nextId = 0;
@@ -94,5 +95,62 @@ describe('collectHostStats', () => {
     const events = [makeEvent({ eventHosts: [host('a'), host('a')] })];
     const { hostStats } = collectHostStats(events);
     expect(hostStats[0].events).toHaveLength(1);
+  });
+});
+
+describe('formatHallOfFamePost', () => {
+  const events = [
+    makeEvent({
+      title: 'Trivia Night',
+      dateTime: '2026-09-03T18:00:00Z',
+      eventHosts: [host('a', 'Alice')],
+    }),
+    makeEvent({
+      title: 'Trivia Night',
+      dateTime: '2026-09-10T18:00:00Z',
+      eventHosts: [host('a', 'Alice')],
+    }),
+    makeEvent({
+      title: 'Hike',
+      dateTime: '2026-09-06T09:00:00Z',
+      eventHosts: [host('a', 'Alice'), host('b', 'Bob')],
+    }),
+  ];
+
+  function post(newHostIds = new Set<string>()) {
+    const { hostStats, totalEvents } = collectHostStats(events);
+    return formatHallOfFamePost({
+      periodLabel: 'September 2026',
+      hostStats,
+      totalEvents,
+      newHostIds,
+    });
+  }
+
+  it('collapses recurring titles with a count while still counting every occurrence', () => {
+    const result = post();
+    expect(result).toContain('Trivia Night ×2');
+    expect(result).not.toMatch(/Trivia Night ×2[\s\S]*Trivia Night/);
+    expect(result).toContain('#1: Alice — 3 events');
+  });
+
+  it('does not add ×1 to one-off events', () => {
+    expect(post()).toContain('Hike (');
+    expect(post()).not.toContain('Hike ×1');
+  });
+
+  it('flags new hosts and lists their co-hosts', () => {
+    const result = post(new Set(['b']));
+    expect(result).toContain('🆕');
+    expect(result).toContain('New hosts: Bob (co-hosts: Alice)');
+  });
+
+  it('omits the new host section when there are none', () => {
+    expect(post()).not.toContain('New hosts');
+  });
+
+  it('quotes totals computed from the data', () => {
+    expect(post()).toContain('Hosts: 2');
+    expect(post()).toContain('Events: 3');
   });
 });

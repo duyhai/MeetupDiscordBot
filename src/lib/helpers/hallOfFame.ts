@@ -3,7 +3,10 @@
  * Discord command so the counting and formatting that moderators quote
  * publicly is unit-testable.
  */
+import dayjs from 'dayjs';
+
 import { BaseUserInfo, Event, EventStatus } from '../client/meetup/types.js';
+import { tz } from '../../util/timezone.js';
 
 const CANCELLED_TITLE = /cancell?ed/i;
 const CANCELLED_STATUSES: EventStatus[] = [
@@ -61,4 +64,75 @@ export function collectHostStats(events: Event[]): {
     (a, b) => b.events.length - a.events.length,
   );
   return { hostStats, totalEvents: countable.length };
+}
+
+function collapseByTitle(events: Event[]): string[] {
+  const byTitle = new Map<string, Event[]>();
+  for (const event of events) {
+    const group = byTitle.get(event.title) ?? [];
+    group.push(event);
+    byTitle.set(event.title, group);
+  }
+  return Array.from(byTitle.entries()).map(([title, group]) => {
+    const dates = group
+      .map((event) => tz(dayjs(event.dateTime)).format('MMM D'))
+      .join(', ');
+    const suffix = group.length > 1 ? ` ×${group.length}` : '';
+    return `${title}${suffix} (${dates})`;
+  });
+}
+
+/** Co-hosts of a member across their events this period, deduped. */
+function coHostsOf(hostId: string, events: Event[]): BaseUserInfo[] {
+  const coHosts = new Map<string, BaseUserInfo>();
+  for (const event of events) {
+    for (const { member } of event.eventHosts) {
+      if (member.id !== hostId) {
+        coHosts.set(member.id, member);
+      }
+    }
+  }
+  return Array.from(coHosts.values());
+}
+
+export function formatHallOfFamePost(input: {
+  periodLabel: string;
+  hostStats: HostStats[];
+  totalEvents: number;
+  newHostIds: Set<string>;
+}): string {
+  const { periodLabel, hostStats, totalEvents, newHostIds } = input;
+  const rankings = hostStats
+    .map((stats, index) => {
+      const flag = newHostIds.has(stats.host.id) ? ' 🆕' : '';
+      const header = `**#${index + 1}: ${stats.host.name} — ${
+        stats.events.length
+      } event${stats.events.length === 1 ? '' : 's'}**${flag}`;
+      const body = collapseByTitle(stats.events)
+        .map((line) => `    ${line}`)
+        .join('\n');
+      return `${header}\n${body}`;
+    })
+    .join('\n');
+
+  const newHosts = hostStats.filter((stats) => newHostIds.has(stats.host.id));
+  const newHostSection =
+    newHosts.length === 0
+      ? ''
+      : `\n\nNew hosts: ${newHosts
+          .map((stats) => {
+            const coHosts = coHostsOf(stats.host.id, stats.events);
+            const coHostStr =
+              coHosts.length === 0
+                ? 'no co-hosts'
+                : `co-hosts: ${coHosts.map((m) => m.name).join(', ')}`;
+            return `${stats.host.name} (${coHostStr})`;
+          })
+          .join('; ')}`;
+
+  return `**Hall of Fame — ${periodLabel}**
+
+${rankings}${newHostSection}
+
+**Hosts: ${hostStats.length} · Events: ${totalEvents}**`;
 }
