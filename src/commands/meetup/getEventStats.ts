@@ -7,6 +7,11 @@ import { getPaginatedData } from '../../lib/client/meetup/paginationHelper.js';
 
 import { BaseUserInfo, Event } from '../../lib/client/meetup/types.js';
 import {
+  collectHostStats,
+  formatHallOfFamePost,
+  isCancelledEvent,
+} from '../../lib/helpers/hallOfFame.js';
+import {
   discordCommandWrapper,
   linkStr,
   withDiscordFileAttachment,
@@ -36,6 +41,32 @@ async function getEventsYearMonth(
     });
     return result.groupByUrlname.events;
   });
+}
+
+/**
+ * A host is "new" when the group has no PAST event of theirs before the
+ * report window. One first:1 totalCount query per host, run in parallel.
+ * Live-schema introspection (2026-09-25) confirmed GroupEventFilter accepts
+ * hostId + beforeDateTime + status; see the design spec for the fallback if
+ * the resolver ignores the combination.
+ */
+export async function findNewHostIds(
+  meetupClient: GqlMeetupClient,
+  hostIds: string[],
+  beforeIso: string,
+): Promise<Set<string>> {
+  const checks = await Promise.all(
+    hostIds.map(async (hostId) => {
+      const result = await meetupClient.getGroupEvents(
+        { first: 1 },
+        { hostId, beforeDateTime: beforeIso, status: ['PAST'] },
+      );
+      return { hostId, priorCount: result.groupByUrlname.events.totalCount };
+    }),
+  );
+  return new Set(
+    checks.filter((check) => check.priorCount === 0).map((c) => c.hostId),
+  );
 }
 
 @Discord()
@@ -84,89 +115,92 @@ export class MeetupGetEventStatsCommands {
     await discordCommandWrapper(interaction, async () => {
       await withMeetupClient(interaction, async (meetupClient) => {
         logger.info('Fetching data');
-        await interaction.editReply({
-          content: 'Sit tight! Fetching data.',
-        });
+        await interaction.editReply({ content: 'Sit tight! Fetching data.' });
 
         const pastEvents = await getEventsYearMonth(meetupClient, year, month);
+        const countableEvents = pastEvents.filter(
+          (event) => !isCancelledEvent(event),
+        );
 
-        let total = 0;
-        const hostEvents = new Map<string, Array<string>>();
-        const hosts = new Map<string, BaseUserInfo>();
+        // Attendance counts for the detailed attachment (unchanged data, but only
+        // for countable events).
+        const rsvpCounts = new Map<string, number>();
+        await Promise.all(
+          countableEvents
+            .filter((event) => !event.title.includes('[Open House]'))
+            .map(async (event) => {
+              const rsvps = await getPaginatedData(async (paginationInput) => {
+                const result = await meetupClient.getEventRsvps(
+                  event.id,
+                  paginationInput,
+                  { rsvpStatus: ['ATTENDED', 'YES'] },
+                );
+                return result.event.rsvps;
+              });
+              rsvpCounts.set(event.id, rsvps.length);
+            }),
+        );
 
-        for (const event of pastEvents) {
-          const { id, eventHosts, title, maxTickets, eventUrl, dateTime } =
-            event;
+        const { hostStats, totalEvents } = collectHostStats(pastEvents);
 
-          if (title.includes('[Open House]')) {
-            logger.info(`Skipping ${title}. Open House`);
+        const monthStart = tz(dayjs())
+          .set('year', year)
+          .set('month', month === 0 ? 0 : month - 1)
+          .startOf(month === 0 ? 'year' : 'month');
+        const newHostIds = await findNewHostIds(
+          meetupClient,
+          hostStats.map((stats) => stats.host.id),
+          monthStart.toISOString(),
+        );
 
-            continue;
-          }
-
-          // eslint-disable-next-line no-await-in-loop
-          const rsvps = await getPaginatedData(async (paginationInput) => {
-            const result = await meetupClient.getEventRsvps(
-              id,
-              paginationInput,
-              {
-                rsvpStatus: ['ATTENDED', 'YES'],
-              },
-            );
-            return result.event.rsvps;
-          });
-
-          total += 1;
-          eventHosts.forEach((host) => {
-            const key = host.member.id;
-            if (!hostEvents.has(key)) {
-              hostEvents.set(key, []);
-            }
-
-            hosts.set(key, host.member);
-            const titleStr = `${title} (${rsvps.length}/${maxTickets})`;
-            hostEvents
-              .get(key)
-              .push(
-                `${
-                  shouldIncludeLinks ? linkStr(titleStr, eventUrl) : titleStr
-                } ${shouldShowDates ? tz(dayjs(dateTime)).format('LLL') : ''}`,
-              );
-          });
-        }
-
-        const formattedResult = Array.from(hostEvents.entries())
-          .sort(
-            (entry1: [string, string[]], entry2: [string, string[]]) =>
-              entry1[1].length - entry2[1].length,
-          )
-          .reverse()
-          .map((entry: [string, string[]], index: number) => {
-            const [id, events] = entry;
-            const hostInfo = hosts.get(id);
+        const detailedResult = hostStats
+          .map((stats, index) => {
+            const { host, events } = stats;
             const header = `**#${index + 1}: ${events.length} ${
               shouldIncludeLinks
-                ? linkStr(hostInfo.name, hostInfo.memberUrl)
-                : hostInfo.name
-            } ID: ${id}**\n`;
-            const body = events.map((event) => `    ${event}`).join('\n');
+                ? linkStr(host.name, host.memberUrl)
+                : host.name
+            } ID: ${host.id}**${newHostIds.has(host.id) ? ' 🆕' : ''}\n`;
+            const body = events
+              .map((event) => {
+                const titleStr = `${event.title} (${
+                  rsvpCounts.get(event.id) ?? 0
+                }/${event.maxTickets})`;
+                return `    ${
+                  shouldIncludeLinks
+                    ? linkStr(titleStr, event.eventUrl)
+                    : titleStr
+                } ${shouldShowDates ? tz(dayjs(event.dateTime)).format('LLL') : ''}`;
+              })
+              .join('\n');
             return header + body;
           })
           .join('\n');
 
-        const header = `**Hosting stats for ${year} ${
+        const periodLabel = `${year}${
           month > 0
-            ? dayjs()
+            ? ` ${dayjs()
                 .month(month - 1)
-                .format('MMMM')
+                .format('MMMM')}`
             : ''
-        }**`;
+        }`;
+        const header = `**Hosting stats for ${periodLabel}**`;
+        const readyToPost = formatHallOfFamePost({
+          periodLabel,
+          hostStats,
+          totalEvents,
+          newHostIds,
+        });
         const result = `
 ${header}
-          
-${formattedResult}
 
-**Total: ${total}**`;
+${detailedResult}
+
+**Total: ${totalEvents}**
+
+----- READY TO POST -----
+
+${readyToPost}`;
         await withDiscordFileAttachment(
           `${header}.txt`,
           result,
