@@ -37,10 +37,15 @@ and outreach steps (Melissa still sends warnings and executes suspensions).
 Changes to `meetup_get_host_event_stats` in
 `src/commands/meetup/getEventStats.ts`:
 
-1. **Cancelled-event filtering.** Skip events whose `status` is a cancelled
-   state or whose title matches `/cancell?ed/i` (case-insensitive), in the same
-   way `[Open House]` events are skipped today. `status` is already fetched by
-   `getGroupEvents`. The reported totals then need no manual correction.
+1. **Cancelled-event filtering.** The existing query already excludes
+   platform-cancelled events (it filters to `PAST`/`ACTIVE`/`AUTOSCHED`, and
+   the live schema has distinct `CANCELLED`/`CANCELLED_PERM`/
+   `AUTOSCHED_CANCELLED` statuses), so the inflated counts come from events
+   that were *renamed* "cancelled" instead of being cancelled on the platform.
+   Fix: skip events whose title matches `/cancell?ed/i` (case-insensitive), in
+   the same way `[Open House]` events are skipped today, and defensively skip
+   any cancelled `status` that slips through. The reported totals then need no
+   manual correction.
 2. **Recurring-event grouping.** In the formatted output, group each host's
    events by title: a title occurring N times renders as one line —
    `Title ×N` followed by the dates. Every occurrence still counts toward the
@@ -58,25 +63,29 @@ Changes to `meetup_get_host_event_stats` in
 
 No stored host list. During the same command run:
 
-1. Run one additional paginated `getGroupEvents` scan of the group's past
-   events **before** the report month and collect every `eventHosts` member ID
-   into a "has hosted before" set. Cancelled events are excluded here too, so
-   someone whose only prior "event" was cancelled still counts as new.
-2. Any host in the report month absent from that set is flagged 🆕 in the
-   ready-to-post output.
+1. For each distinct host in the report month, issue one lightweight
+   "has hosted before" check:
+   `groupByUrlname.events(first: 1, filter: { hostId, beforeDateTime: <month start>, status: [PAST] })`
+   and read `totalCount`. Introspection of the live schema (2026-09-25)
+   confirms `GroupEventFilter` accepts `hostId`, `beforeDateTime`, and
+   `status`. These checks run in parallel; ~20–40 tiny requests per monthly
+   run. Restricting to `PAST` means someone whose only prior event was
+   cancelled still counts as new.
+2. Any host whose prior count is 0 is flagged 🆕 in the ready-to-post output.
 3. Each new host's co-hosts (from the events they hosted this month) are
    listed next to the flag, so the "ask the co-host whether they can host
    solo" step is a one-line read.
 
-Self-correcting and backfill-free; the cost is one extra full-history query
-per monthly run.
+Self-correcting and backfill-free.
 
-**Why a full-group scan rather than per-host history:** Meetup's GraphQL only
-exposes hosted-event history on `self` (`memberEvents(isHosting: true)`), so
-the bot cannot query an arbitrary member's hosting history. The group scan is
-also cheap: `eventHosts` is returned on each event page (no per-event
-sub-requests, unlike RSVP fetches), so the whole history costs
-ceil(events / 100) sequential requests once a month.
+**Fallback:** introspection proves the filter fields exist, not that the
+resolver honors the combination. The implementation verifies the `hostId` +
+`beforeDateTime` combination against the live API first; if it does not
+filter correctly, fall back to one paginated full-history `getGroupEvents`
+scan collecting `eventHosts` into a "has hosted before" set (host data rides
+along on event pages, so this costs ceil(events / 100) requests with no
+per-event sub-queries). Querying another member's hosting history directly is
+not an option: there is no `member(id)` root query.
 
 ## Phase 3 — No Show report command and suspension history
 
@@ -120,7 +129,9 @@ replacing the spreadsheet going forward:
   computed duration and prior count so mistakes are caught immediately.
 - **CSV attachment (exceptions, notes, and backfill):** rows of
   `member_id, duration_days, suspended_at, notes` for cases with non-standard
-  durations or annotations.
+  durations or annotations. Discord slash commands support file parameters
+  natively (`ApplicationCommandOptionType.Attachment`); the bot fetches the
+  attachment URL and parses the CSV.
 
 **Backfill:** the CSV mode doubles as the one-time import — export the
 existing spreadsheet to the same column format and upload it. No separate
