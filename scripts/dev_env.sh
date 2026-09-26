@@ -15,4 +15,9 @@ fi
 
 source .env
 
+# Local-dev switch: OAuth connect links point at localhost (through the prod
+# /redirect trampoline) and REDISCLOUD_URL becomes optional. The name is a
+# relic of the ts-node runner; constants.ts and configuration.ts key off it.
+export TS_NODE_DEBUG=1
+
 tsx src/index.ts
