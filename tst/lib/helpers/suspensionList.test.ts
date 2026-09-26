@@ -63,3 +63,24 @@ describe('formatSuspensionList', () => {
     expect(formatSuspensionList([], now)).toContain('No suspensions recorded');
   });
 });
+
+describe('formatSuspensionList name fallback', () => {
+  it('uses the fallback name map when the record has none', () => {
+    const result = formatSuspensionList(
+      [record({ memberId: '55', memberName: null })],
+      now,
+      new Map([['55', 'Linked Larry']]),
+    );
+    expect(result).toContain('55 (Linked Larry)');
+  });
+
+  it('prefers the recorded name over the fallback', () => {
+    const result = formatSuspensionList(
+      [record({ memberId: '55', memberName: 'Snapshot Sam' })],
+      now,
+      new Map([['55', 'Linked Larry']]),
+    );
+    expect(result).toContain('55 (Snapshot Sam)');
+    expect(result).not.toContain('Linked Larry');
+  });
+});

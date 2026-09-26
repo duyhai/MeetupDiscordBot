@@ -10,6 +10,7 @@ import {
   requireModOrOrganizer,
   withDiscordFileAttachment,
 } from '../../util/discord.js';
+import { ApplicationMemberRepository } from '../../util/memberRepository.js';
 
 const logger = new Logger({ name: 'MeetupListSuspensionsCommands' });
 
@@ -30,7 +31,17 @@ export class MeetupListSuspensionsCommands {
       const records = await repo.listAll();
       logger.info(`Listing ${records.length} suspension record(s)`);
 
-      const list = formatSuspensionList(records, dayjs());
+      // Display-time fallback for rows recorded without a name: show the
+      // linked member's current Meetup name where we know it.
+      const memberRepo = await ApplicationMemberRepository();
+      const linkedMembers = await memberRepo.listAll();
+      const fallbackNames = new Map(
+        linkedMembers
+          .filter((m) => m.meetupId !== null && m.meetupName !== null)
+          .map((m) => [m.meetupId, m.meetupName]),
+      );
+
+      const list = formatSuspensionList(records, dayjs(), fallbackNames);
       await withDiscordFileAttachment(
         'Suspensions.txt',
         list,
