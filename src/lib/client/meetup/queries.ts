@@ -154,6 +154,21 @@ export const getGroupEvents = gql`
   ${UserFragment}
 `;
 
+// Sends the filter exactly as given, with no +1-month expansion, so
+// totalCount reflects the caller's actual window. Used where only a count is
+// needed (e.g. new-host detection), unlike getGroupEvents which pads
+// beforeDateTime to catch multi-day events straddling the boundary.
+export const getGroupEventsCount = gql`
+  query ($urlname: String!, $filter: GroupEventFilter) {
+    groupByUrlname(urlname: $urlname) {
+      id
+      events(first: 1, filter: $filter) {
+        totalCount
+      }
+    }
+  }
+`;
+
 export const getEvent = gql`
   query ($eventId: ID!) {
     event(id: $eventId) {

@@ -14,6 +14,7 @@ import {
   getEvent,
   getEventRsvps,
   getGroupEvents,
+  getGroupEventsCount,
   getSelfPastRsvpCount,
   getUserHostedEvents,
   getUserInfo,
@@ -31,6 +32,8 @@ import {
   GetEventResponse,
   GetEventRsvpsInput,
   GetEventRsvpsResponse,
+  GetGroupEventsCountInput,
+  GetGroupEventsCountResponse,
   GetGroupEventsInput,
   GetGroupEventsResponse,
   GetUserHostedEventsInput,
@@ -208,6 +211,40 @@ export class GqlMeetupClient {
 
           logger.info(`getGroupEvents result: ${JSON.stringify(result)}`);
           return result;
+        } catch (error) {
+          logger.error(error);
+          throw error;
+        }
+      },
+    );
+  }
+
+  /**
+   * Like getGroupEvents, but sends the given filter unmodified (no
+   * +1-month beforeDateTime expansion) and returns only totalCount. Use
+   * this whenever a caller needs a count for an exact window -- the
+   * expansion in getGroupEvents exists to catch multi-day events straddling
+   * the boundary and would otherwise inflate the count.
+   */
+  public async getGroupEventsCount(filter?: GroupEventFilter): Promise<number> {
+    logger.info(
+      `Calling getGroupEventsCount with input: ${JSON.stringify({ filter })}`,
+    );
+    // Can be cached because it doesn't retrieve user specific data
+    return cachedClientRequest(
+      'getGroupEventsCount',
+      {
+        urlname: Configuration.meetup.groupUrlName,
+        filter,
+      },
+      async (callbackInput: GetGroupEventsCountInput) => {
+        try {
+          const result = await this.client.request<
+            GetGroupEventsCountResponse,
+            GetGroupEventsCountInput
+          >(getGroupEventsCount, callbackInput);
+          logger.info(`getGroupEventsCount result: ${JSON.stringify(result)}`);
+          return result.groupByUrlname.events.totalCount;
         } catch (error) {
           logger.error(error);
           throw error;

@@ -75,7 +75,7 @@ type MembershipStatus =
   | 'REMOVED'
   | 'UNAPPROVED';
 
-type EventStatus =
+export type EventStatus =
   | 'ACTIVE'
   | 'AUTOSCHED'
   | 'AUTOSCHED_CANCELLED'
@@ -188,6 +188,18 @@ export type GetGroupEventsInput = {
   after?: string;
   filter?: GroupEventFilter;
   first: number;
+  urlname: string;
+};
+
+export interface GetGroupEventsCountResponse {
+  groupByUrlname: {
+    events: { totalCount: number };
+    id: string;
+  };
+}
+
+export type GetGroupEventsCountInput = {
+  filter?: GroupEventFilter;
   urlname: string;
 };
 
