@@ -68,3 +68,50 @@ describe('GqlMeetupClient.getGroupEventsCount', () => {
     expect(count).toBe(0);
   });
 });
+
+describe('GqlMeetupClient.getGroupMembersByIds', () => {
+  afterEach(() => {
+    nock.cleanAll();
+  });
+
+  it('sends numeric member IDs and returns the resolved members', async () => {
+    const scope = graphqlScope().reply(
+      200,
+      (_uri, body: { variables: { memberIds?: number[]; first?: number } }) => {
+        expect(body.variables.memberIds).toEqual([186415647, 123]);
+        expect(body.variables.first).toBe(2);
+        return {
+          data: {
+            groupByUrlname: {
+              id: '1',
+              memberships: {
+                edges: [
+                  {
+                    node: {
+                      id: '186415647',
+                      name: 'Alice',
+                      gender: 'NONE',
+                      memberUrl: 'https://www.meetup.com/members/186415647',
+                    },
+                  },
+                ],
+              },
+            },
+          },
+        };
+      },
+    );
+
+    const client = new GqlMeetupClient('test-access-token');
+    const members = await client.getGroupMembersByIds(['186415647', '123']);
+
+    expect(members).toHaveLength(1);
+    expect(members[0].name).toBe('Alice');
+    expect(scope.isDone()).toBe(true);
+  });
+
+  it('returns an empty list without a request for no IDs', async () => {
+    const client = new GqlMeetupClient('test-access-token');
+    expect(await client.getGroupMembersByIds([])).toEqual([]);
+  });
+});

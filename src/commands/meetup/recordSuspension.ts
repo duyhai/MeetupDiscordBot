@@ -20,6 +20,7 @@ import {
   withDiscordFileAttachment,
 } from '../../util/discord.js';
 import { ApplicationMemberRepository } from '../../util/memberRepository.js';
+import { withMeetupClient } from '../../util/meetup.js';
 import { tz } from '../../util/timezone.js';
 
 const logger = new Logger({ name: 'MeetupRecordSuspensionCommands' });
@@ -137,8 +138,22 @@ export class MeetupRecordSuspensionCommands {
         const suspendedAt =
           parsedDate ??
           new Date(`${tz(dayjs()).format('YYYY-MM-DD')}T00:00:00Z`);
-        // Names come from the bot's linked-members table when the member has
-        // linked their Discord; unlinked members are recorded name-less.
+        // Names come from a live group-membership lookup on Meetup (works
+        // for any current member), falling back to the bot's linked-members
+        // table; members resolvable by neither are recorded name-less.
+        const liveNames = new Map<string, string>();
+        try {
+          await withMeetupClient(interaction, async (meetupClient) => {
+            const liveMembers =
+              await meetupClient.getGroupMembersByIds(memberIds);
+            liveMembers.forEach((liveMember) =>
+              liveNames.set(liveMember.id, liveMember.name),
+            );
+          });
+        } catch (error) {
+          // Name lookup is a nice-to-have: never fail the recording over it.
+          logger.warn(`Live member-name lookup failed: ${String(error)}`);
+        }
         const memberRepo = await ApplicationMemberRepository();
         // Sequential on purpose: each member's duration depends on their
         // prior count.
@@ -148,7 +163,8 @@ export class MeetupRecordSuspensionCommands {
           const durationDays = recommendedSuspensionDays(priorCount);
           // eslint-disable-next-line no-await-in-loop
           const linkedMember = await memberRepo.findByMeetupId(memberId);
-          const memberName = linkedMember?.meetupName ?? null;
+          const memberName =
+            liveNames.get(memberId) ?? linkedMember?.meetupName ?? null;
           const nameStr = memberName ? ` (${memberName})` : '';
           // eslint-disable-next-line no-await-in-loop
           const inserted = await repo.insert({

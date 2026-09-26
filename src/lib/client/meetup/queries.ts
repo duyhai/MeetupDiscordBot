@@ -169,6 +169,22 @@ export const getGroupEventsCount = gql`
   }
 `;
 
+export const getGroupMembersByIds = gql`
+  query ($urlname: String!, $memberIds: [Int!], $first: Int!) {
+    groupByUrlname(urlname: $urlname) {
+      id
+      memberships(first: $first, filter: { memberIds: $memberIds }) {
+        edges {
+          node {
+            ...UserDetails
+          }
+        }
+      }
+    }
+  }
+  ${UserFragment}
+`;
+
 export const getEvent = gql`
   query ($eventId: ID!) {
     event(id: $eventId) {

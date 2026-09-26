@@ -11,6 +11,7 @@ import {
   withDiscordFileAttachment,
 } from '../../util/discord.js';
 import { ApplicationMemberRepository } from '../../util/memberRepository.js';
+import { withMeetupClient } from '../../util/meetup.js';
 
 const logger = new Logger({ name: 'MeetupListSuspensionsCommands' });
 
@@ -31,8 +32,10 @@ export class MeetupListSuspensionsCommands {
       const records = await repo.listAll();
       logger.info(`Listing ${records.length} suspension record(s)`);
 
-      // Display-time fallback for rows recorded without a name: show the
-      // linked member's current Meetup name where we know it.
+      // Display-time fallback for rows recorded without a name: linked
+      // members' stored names first, overwritten by a live group-membership
+      // lookup (current names, works for unlinked members too). Both are
+      // nice-to-haves — the list renders without them.
       const memberRepo = await ApplicationMemberRepository();
       const linkedMembers = await memberRepo.listAll();
       const fallbackNames = new Map(
@@ -40,6 +43,26 @@ export class MeetupListSuspensionsCommands {
           .filter((m) => m.meetupId !== null && m.meetupName !== null)
           .map((m) => [m.meetupId, m.meetupName]),
       );
+      const namelessIds = [
+        ...new Set(
+          records
+            .filter((record) => record.memberName === null)
+            .map((record) => record.memberId),
+        ),
+      ];
+      if (namelessIds.length > 0) {
+        try {
+          await withMeetupClient(interaction, async (meetupClient) => {
+            const liveMembers =
+              await meetupClient.getGroupMembersByIds(namelessIds);
+            liveMembers.forEach((liveMember) =>
+              fallbackNames.set(liveMember.id, liveMember.name),
+            );
+          });
+        } catch (error) {
+          logger.warn(`Live member-name lookup failed: ${String(error)}`);
+        }
+      }
 
       const list = formatSuspensionList(records, dayjs(), fallbackNames);
       await withDiscordFileAttachment(
