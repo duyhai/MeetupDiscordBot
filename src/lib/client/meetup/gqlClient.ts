@@ -15,6 +15,7 @@ import {
   getEventRsvps,
   getGroupEvents,
   getGroupEventsCount,
+  getGroupMembersByIds,
   getSelfPastRsvpCount,
   getUserHostedEvents,
   getUserInfo,
@@ -23,6 +24,7 @@ import {
 import {
   AnnounceEventInput,
   AnnounceEventResponse,
+  BaseUserInfo,
   CloseEventRsvpsInput,
   CloseEventRsvpsResponse,
   CreateEventInput,
@@ -36,6 +38,8 @@ import {
   GetGroupEventsCountResponse,
   GetGroupEventsInput,
   GetGroupEventsResponse,
+  GetGroupMembersByIdsInput,
+  GetGroupMembersByIdsResponse,
   GetUserHostedEventsInput,
   GetUserHostedEventsResponse,
   GetUserInfoResponse,
@@ -245,6 +249,48 @@ export class GqlMeetupClient {
           >(getGroupEventsCount, callbackInput);
           logger.info(`getGroupEventsCount result: ${JSON.stringify(result)}`);
           return result.groupByUrlname.events.totalCount;
+        } catch (error) {
+          logger.error(error);
+          throw error;
+        }
+      },
+    );
+  }
+
+  /**
+   * Looks up current group members by their Meetup IDs. Only people who are
+   * still members of the group resolve; anyone who left is simply absent
+   * from the result, so callers must treat misses as "name unknown".
+   */
+  public async getGroupMembersByIds(
+    memberIds: string[],
+  ): Promise<BaseUserInfo[]> {
+    if (memberIds.length === 0) {
+      return [];
+    }
+    logger.info(
+      `Calling getGroupMembersByIds with input: ${JSON.stringify({
+        memberIds,
+      })}`,
+    );
+    // Can be cached because it doesn't retrieve user specific data
+    return cachedClientRequest(
+      'getGroupMembersByIds',
+      {
+        urlname: Configuration.meetup.groupUrlName,
+        memberIds: memberIds.map(Number),
+        first: memberIds.length,
+      },
+      async (callbackInput: GetGroupMembersByIdsInput) => {
+        try {
+          const result = await this.client.request<
+            GetGroupMembersByIdsResponse,
+            GetGroupMembersByIdsInput
+          >(getGroupMembersByIds, callbackInput);
+          logger.info(`getGroupMembersByIds result: ${JSON.stringify(result)}`);
+          return result.groupByUrlname.memberships.edges.map(
+            ({ node }) => node,
+          );
         } catch (error) {
           logger.error(error);
           throw error;
