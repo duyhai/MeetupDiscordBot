@@ -5,7 +5,11 @@
  */
 import { SuspensionInsert } from '../repositories/types.js';
 
-const EXPECTED_HEADER = 'member_id,duration_days,suspended_at,notes';
+// Both header shapes are accepted: the named variant is what the report's
+// suggested-suspensions CSV emits; the legacy one keeps old sheet exports
+// importable (names default to null there).
+const NAMED_HEADER = 'member_id,member_name,duration_days,suspended_at,notes';
+const LEGACY_HEADER = 'member_id,duration_days,suspended_at,notes';
 const DATE_FORMAT = /^\d{4}-\d{2}-\d{2}$/;
 
 /**
@@ -42,20 +46,22 @@ export function parseSuspensionCsv(rawText: string): SuspensionInsert[] {
   const text = stripBom(rawText);
   const lines = text.split(/\r?\n/);
   const header = (lines[0] ?? '').replaceAll(' ', '').toLowerCase();
-  if (header !== EXPECTED_HEADER) {
-    throw new Error(
-      `Unexpected CSV header. Expected exactly: ${EXPECTED_HEADER}`,
-    );
+  if (header !== NAMED_HEADER && header !== LEGACY_HEADER) {
+    throw new Error(`Unexpected CSV header. Expected exactly: ${NAMED_HEADER}`);
   }
+  const hasNameColumn = header === NAMED_HEADER;
   return lines
     .map((line, index) => ({ line: line.trim(), rowNumber: index + 1 }))
     .slice(1)
     .filter(({ line }) => line.length > 0)
     .map(({ line, rowNumber }) => {
-      // notes may contain commas: split only the first three fields.
-      const [memberId, durationStr, dateStr, ...notesParts] = line
-        .split(',')
-        .map((part) => part.trim());
+      // notes may contain commas: split only the leading fixed fields.
+      const parts = line.split(',').map((part) => part.trim());
+      const memberId = parts[0];
+      const memberName = hasNameColumn ? parts[1] : '';
+      const [durationStr, dateStr, ...notesParts] = parts.slice(
+        hasNameColumn ? 2 : 1,
+      );
       const notes = notesParts.join(',').trim();
       const durationDays = Number(durationStr);
       if (!memberId || !Number.isInteger(durationDays) || durationDays <= 0) {
@@ -71,7 +77,7 @@ export function parseSuspensionCsv(rawText: string): SuspensionInsert[] {
       }
       return {
         memberId,
-        memberName: null,
+        memberName: memberName.length > 0 ? memberName : null,
         durationDays,
         suspendedAt: date,
         notes: notes.length > 0 ? notes : null,

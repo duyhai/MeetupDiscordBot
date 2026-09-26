@@ -54,6 +54,11 @@ describe('formatSuspensionList', () => {
     expect(result).toContain('backfill');
   });
 
+  it('includes a plain Meetup profile URL per record', () => {
+    const result = formatSuspensionList([record({ memberId: '987' })], now);
+    expect(result).toContain('https://www.meetup.com/members/987/');
+  });
+
   it('reports an empty table plainly', () => {
     expect(formatSuspensionList([], now)).toContain('No suspensions recorded');
   });

@@ -19,6 +19,7 @@ import {
   requireModOrOrganizer,
   withDiscordFileAttachment,
 } from '../../util/discord.js';
+import { ApplicationMemberRepository } from '../../util/memberRepository.js';
 import { tz } from '../../util/timezone.js';
 
 const logger = new Logger({ name: 'MeetupRecordSuspensionCommands' });
@@ -136,6 +137,9 @@ export class MeetupRecordSuspensionCommands {
         const suspendedAt =
           parsedDate ??
           new Date(`${tz(dayjs()).format('YYYY-MM-DD')}T00:00:00Z`);
+        // Names come from the bot's linked-members table when the member has
+        // linked their Discord; unlinked members are recorded name-less.
+        const memberRepo = await ApplicationMemberRepository();
         // Sequential on purpose: each member's duration depends on their
         // prior count.
         for (const memberId of memberIds) {
@@ -143,9 +147,13 @@ export class MeetupRecordSuspensionCommands {
           const priorCount = await repo.countByMemberId(memberId);
           const durationDays = recommendedSuspensionDays(priorCount);
           // eslint-disable-next-line no-await-in-loop
+          const linkedMember = await memberRepo.findByMeetupId(memberId);
+          const memberName = linkedMember?.meetupName ?? null;
+          const nameStr = memberName ? ` (${memberName})` : '';
+          // eslint-disable-next-line no-await-in-loop
           const inserted = await repo.insert({
             memberId,
-            memberName: null,
+            memberName,
             suspendedAt,
             durationDays,
             notes: null,
@@ -153,14 +161,14 @@ export class MeetupRecordSuspensionCommands {
           if (inserted === undefined) {
             duplicateCount += 1;
             summaryLines.push(
-              `- ${memberId}: already recorded for ${dayjs(suspendedAt).format(
-                'YYYY-MM-DD',
-              )} — skipped as a duplicate`,
+              `- ${memberId}${nameStr}: already recorded for ${dayjs(
+                suspendedAt,
+              ).format('YYYY-MM-DD')} — skipped as a duplicate`,
             );
           } else {
             insertedCount += 1;
             summaryLines.push(
-              `- ${memberId}: prior suspensions ${priorCount} → **${durationDays} days**`,
+              `- ${memberId}${nameStr}: prior suspensions ${priorCount} → **${durationDays} days**`,
             );
           }
         }

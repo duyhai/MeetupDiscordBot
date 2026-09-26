@@ -6,8 +6,31 @@ import {
 } from '../../../src/lib/helpers/suspensionCsv.js';
 
 const HEADER = 'member_id,duration_days,suspended_at,notes';
+const NAMED_HEADER = 'member_id,member_name,duration_days,suspended_at,notes';
 
 describe('parseSuspensionCsv', () => {
+  it('parses named-format rows, blank names becoming null', () => {
+    const rows = parseSuspensionCsv(
+      `${NAMED_HEADER}\n123,Alice,30,2026-01-15,\n456,,60,2026-02-01,was warned twice`,
+    );
+    expect(rows).toEqual([
+      {
+        memberId: '123',
+        memberName: 'Alice',
+        durationDays: 30,
+        suspendedAt: new Date('2026-01-15T00:00:00Z'),
+        notes: null,
+      },
+      {
+        memberId: '456',
+        memberName: null,
+        durationDays: 60,
+        suspendedAt: new Date('2026-02-01T00:00:00Z'),
+        notes: 'was warned twice',
+      },
+    ]);
+  });
+
   it('parses rows into inserts', () => {
     const rows = parseSuspensionCsv(
       `${HEADER}\n123,30,2026-01-15,\n456,60,2026-02-01,was warned twice`,

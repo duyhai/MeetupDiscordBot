@@ -159,9 +159,17 @@ describe('formatSuspensionCsv', () => {
       '2026-09-26',
     );
     expect(csv).toBe(
-      'member_id,duration_days,suspended_at,notes\n' +
-        'b,60,2026-09-26,3 no-shows in 12 months; prior suspensions: 1',
+      'member_id,member_name,duration_days,suspended_at,notes\n' +
+        'b,Bob,60,2026-09-26,3 no-shows in 12 months; prior suspensions: 1',
     );
+  });
+
+  it('strips commas out of member names so columns stay aligned', () => {
+    const csv = formatSuspensionCsv(
+      [{ ...suspensionCase, member: member('c', 'Kim, MD') }],
+      '2026-09-26',
+    );
+    expect(csv).toContain('c,Kim  MD,60');
   });
 
   it('returns undefined when there are no suspension candidates', () => {
@@ -176,7 +184,7 @@ describe('formatSuspensionCsv', () => {
     expect(rows).toEqual([
       {
         memberId: 'b',
-        memberName: null,
+        memberName: 'Bob',
         durationDays: 60,
         suspendedAt: new Date('2026-09-26T00:00:00Z'),
         notes: '3 no-shows in 12 months; prior suspensions: 1',

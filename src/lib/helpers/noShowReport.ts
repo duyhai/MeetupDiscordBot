@@ -126,7 +126,13 @@ export function formatSuspensionCsv(
   }
   const rows = suspensions.map((noShowCase) => {
     const notes = `${noShowCase.twelveMonthCount} no-shows in 12 months; prior suspensions: ${noShowCase.priorSuspensions}`;
-    return `${noShowCase.member.id},${noShowCase.recommendedDays},${suspendedAt},${notes}`;
+    // The name column is positional, so commas inside a name would shift
+    // every field after it; spaces keep the row parseable.
+    const name = noShowCase.member.name.replaceAll(',', ' ');
+    return `${noShowCase.member.id},${name},${noShowCase.recommendedDays},${suspendedAt},${notes}`;
   });
-  return ['member_id,duration_days,suspended_at,notes', ...rows].join('\n');
+  return [
+    'member_id,member_name,duration_days,suspended_at,notes',
+    ...rows,
+  ].join('\n');
 }

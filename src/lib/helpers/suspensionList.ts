@@ -19,9 +19,11 @@ function utcDateOnly(date: Date | dayjs.Dayjs): string {
 function formatRecord(record: SuspensionRecord): string {
   const name = record.memberName ? ` (${record.memberName})` : '';
   const notes = record.notes ? ` — ${record.notes}` : '';
+  // Plain URL, not a markdown link: this renders inside a .txt attachment.
+  const profileUrl = `https://www.meetup.com/members/${record.memberId}/`;
   return `- ${record.memberId}${name}: ${record.durationDays} days from ${utcDateOnly(
     record.suspendedAt,
-  )} until ${utcDateOnly(endDate(record))}${notes}`;
+  )} until ${utcDateOnly(endDate(record))}${notes}\n  ${profileUrl}`;
 }
 
 export function formatSuspensionList(
