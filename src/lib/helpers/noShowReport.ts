@@ -108,3 +108,25 @@ export function formatNoShowReport(
   );
   return sections.join('\n\n');
 }
+
+/**
+ * A ready-to-edit CSV of the report's suspension candidates, in exactly the
+ * format /meetup_record_suspension's csv option accepts. Moderators delete
+ * or amend rows before uploading, so the report and the recording command
+ * stay one copy-free loop. Returns undefined when nothing classifies as a
+ * suspension.
+ */
+export function formatSuspensionCsv(
+  cases: NoShowCase[],
+  suspendedAt: string,
+): string | undefined {
+  const suspensions = cases.filter((c) => c.classification === 'suspension');
+  if (suspensions.length === 0) {
+    return undefined;
+  }
+  const rows = suspensions.map((noShowCase) => {
+    const notes = `${noShowCase.twelveMonthCount} no-shows in 12 months; prior suspensions: ${noShowCase.priorSuspensions}`;
+    return `${noShowCase.member.id},${noShowCase.recommendedDays},${suspendedAt},${notes}`;
+  });
+  return ['member_id,duration_days,suspended_at,notes', ...rows].join('\n');
+}

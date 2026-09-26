@@ -100,5 +100,17 @@ if (!POSTGRES_AVAILABLE) {
       expect(await repo.countByMemberId('m1')).toBe(1);
       expect(await repo.countByMemberId('m2')).toBe(1);
     });
+
+    it('listAll returns every record, newest suspension first', async () => {
+      await repo.insert(record);
+      await repo.insert({
+        ...record,
+        memberId: 'm2',
+        suspendedAt: new Date('2026-10-01T00:00:00Z'),
+      });
+      const rows = await repo.listAll();
+      expect(rows).toHaveLength(2);
+      expect(rows.map((row) => row.memberId)).toEqual(['m2', 'm1']);
+    });
   },
 );

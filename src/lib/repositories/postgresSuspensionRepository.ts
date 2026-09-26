@@ -171,6 +171,13 @@ export class PostgresSuspensionRepository implements SuspensionRepository {
     return result.rows.map(toRecord);
   }
 
+  async listAll(): Promise<SuspensionRecord[]> {
+    const result = await this.pool.query<SuspensionRow>(
+      'SELECT * FROM suspension_records ORDER BY suspended_at DESC',
+    );
+    return result.rows.map(toRecord);
+  }
+
   /** Test-only cleanup, mirroring the member repository's test hooks. */
   async deleteAllForTest(): Promise<void> {
     await this.pool.query('DELETE FROM suspension_records');

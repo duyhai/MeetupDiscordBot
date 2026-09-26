@@ -7,6 +7,7 @@ import {
   actByDate,
   classifyNoShowCount,
   formatNoShowReport,
+  formatSuspensionCsv,
   recommendedSuspensionDays,
   tallyNoShows,
 } from '../../../src/lib/helpers/noShowReport.js';
@@ -133,5 +134,53 @@ describe('formatNoShowReport', () => {
       },
     ]);
     expect(report).toContain('no upcoming RSVPs');
+  });
+});
+
+describe('formatSuspensionCsv', () => {
+  const warningCase: NoShowCase = {
+    member: member('a', 'Alice'),
+    monthEvents: [event('Trivia')],
+    twelveMonthCount: 1,
+    classification: 'warning',
+  };
+  const suspensionCase: NoShowCase = {
+    member: member('b', 'Bob'),
+    monthEvents: [event('Hike')],
+    twelveMonthCount: 3,
+    classification: 'suspension',
+    priorSuspensions: 1,
+    recommendedDays: 60,
+  };
+
+  it('emits only suspension candidates in the record_suspension format', () => {
+    const csv = formatSuspensionCsv(
+      [warningCase, suspensionCase],
+      '2026-09-26',
+    );
+    expect(csv).toBe(
+      'member_id,duration_days,suspended_at,notes\n' +
+        'b,60,2026-09-26,3 no-shows in 12 months; prior suspensions: 1',
+    );
+  });
+
+  it('returns undefined when there are no suspension candidates', () => {
+    expect(formatSuspensionCsv([warningCase], '2026-09-26')).toBeUndefined();
+  });
+
+  it('round-trips through parseSuspensionCsv', async () => {
+    const { parseSuspensionCsv } =
+      await import('../../../src/lib/helpers/suspensionCsv.js');
+    const csv = formatSuspensionCsv([suspensionCase], '2026-09-26');
+    const rows = parseSuspensionCsv(csv);
+    expect(rows).toEqual([
+      {
+        memberId: 'b',
+        memberName: null,
+        durationDays: 60,
+        suspendedAt: new Date('2026-09-26T00:00:00Z'),
+        notes: '3 no-shows in 12 months; prior suspensions: 1',
+      },
+    ]);
   });
 });

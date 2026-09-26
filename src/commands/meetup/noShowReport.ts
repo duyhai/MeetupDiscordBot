@@ -14,6 +14,7 @@ import {
   actByDate,
   classifyNoShowCount,
   formatNoShowReport,
+  formatSuspensionCsv,
   recommendedSuspensionDays,
   tallyNoShows,
 } from '../../lib/helpers/noShowReport.js';
@@ -236,6 +237,28 @@ export class MeetupNoShowReportCommands {
             });
           },
         );
+
+        // Pre-filled, editable input for /meetup_record_suspension's csv
+        // option, so acting on the report never means retyping it.
+        const suspensionCsv = formatSuspensionCsv(
+          cases,
+          tz(dayjs()).format('YYYY-MM-DD'),
+        );
+        if (suspensionCsv !== undefined) {
+          await withDiscordFileAttachment(
+            `suggested_suspensions_${year}-${month}.csv`,
+            suspensionCsv,
+            async (attachmentArgs) => {
+              await interaction.followUp({
+                ...attachmentArgs,
+                content:
+                  'Suggested suspensions as an editable CSV — adjust rows, ' +
+                  'then upload it via /meetup_record_suspension csv:.',
+                ephemeral: true,
+              });
+            },
+          );
+        }
       });
     });
   }

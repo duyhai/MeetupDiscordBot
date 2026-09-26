@@ -56,5 +56,6 @@ export interface SuspensionRepository {
   insertMany(records: SuspensionInsert[]): Promise<SuspensionRecord[]>;
   countByMemberId(memberId: string): Promise<number>;
   listByMemberId(memberId: string): Promise<SuspensionRecord[]>;
+  listAll(): Promise<SuspensionRecord[]>;
   deleteAllForTest(): Promise<void>;
 }
