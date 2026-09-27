@@ -66,6 +66,22 @@ export function collectHostStats(events: Event[]): {
   return { hostStats, totalEvents: countable.length };
 }
 
+/**
+ * The distinct events a Hall of Fame displays. Callers fetch attendance for
+ * exactly these, so the fetch set is derived from the display set rather than
+ * re-applying collectHostStats' filter -- a second copy of that rule could
+ * drift, and an event shown but never fetched renders as (0/N) attendance.
+ */
+export function displayedEvents(hostStats: HostStats[]): Event[] {
+  const byId = new Map<string, Event>();
+  for (const { events } of hostStats) {
+    for (const event of events) {
+      byId.set(event.id, event);
+    }
+  }
+  return Array.from(byId.values());
+}
+
 function collapseByTitle(events: Event[]): string[] {
   const byTitle = new Map<string, Event[]>();
   for (const event of events) {

@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
-import { Event } from '../../../src/lib/client/meetup/types.js';
+import { BaseUserInfo, Event } from '../../../src/lib/client/meetup/types.js';
 import {
   collectHostStats,
+  displayedEvents,
   isCancelledEvent,
   formatHallOfFamePost,
 } from '../../../src/lib/helpers/hallOfFame.js';
@@ -22,7 +23,12 @@ export function makeEvent(overrides: Partial<Event> = {}): Event {
   };
 }
 
-export function host(id: string, name = `Host ${id}`) {
+// Annotated so 'NONE' stays a MemberGender literal instead of widening to
+// string, which made every eventHosts fixture a type error.
+export function host(
+  id: string,
+  name = `Host ${id}`,
+): { member: BaseUserInfo } {
   return {
     member: {
       id,
@@ -95,6 +101,42 @@ describe('collectHostStats', () => {
     const events = [makeEvent({ eventHosts: [host('a'), host('a')] })];
     const { hostStats } = collectHostStats(events);
     expect(hostStats[0].events).toHaveLength(1);
+  });
+});
+
+describe('displayedEvents', () => {
+  // Attendance is fetched for exactly this set, and the attachment reads it
+  // back with `?? 0` -- so any event shown but not fetched would silently
+  // render as (0/N) attendance.
+  it('is exactly the events the Hall of Fame shows, each listed once', () => {
+    const solo = makeEvent({ eventHosts: [host('x')] });
+    const coHosted = makeEvent({ eventHosts: [host('x'), host('y')] });
+    const cancelled = makeEvent({
+      title: 'CANCELLED: Hike',
+      eventHosts: [host('y')],
+    });
+    const openHouse = makeEvent({
+      title: '[Open House] Mixer',
+      eventHosts: [host('x')],
+    });
+    const hostless = makeEvent({ eventHosts: [] });
+
+    const { hostStats } = collectHostStats([
+      solo,
+      coHosted,
+      cancelled,
+      openHouse,
+      hostless,
+    ]);
+
+    // coHosted sits in both x's and y's lists but must be fetched once;
+    // cancelled and Open House are excluded by the same rule that hides them;
+    // hostless is never displayed, so fetching it would be wasted.
+    expect(
+      displayedEvents(hostStats)
+        .map((event) => event.id)
+        .sort(),
+    ).toEqual([solo.id, coHosted.id].sort());
   });
 });
 
