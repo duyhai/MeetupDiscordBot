@@ -1,6 +1,10 @@
+import pg from 'pg';
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 
-import { PostgresSuspensionRepository } from '../../src/lib/repositories/postgresSuspensionRepository.js';
+import {
+  PostgresSuspensionRepository,
+  SCHEMA_SQL,
+} from '../../src/lib/repositories/postgresSuspensionRepository.js';
 
 // Mirrors tst/integration/postgresMemberRepository.test.ts conventions:
 // requires DATABASE_URL against a real Postgres, skipped otherwise. Locally:
@@ -136,6 +140,125 @@ if (!POSTGRES_AVAILABLE) {
       const rows = await repo.listAll();
       expect(rows).toHaveLength(2);
       expect(rows.map((row) => row.memberId)).toEqual(['m2', 'm1']);
+    });
+    describe('void', () => {
+      it('returns the voided record with who voided it and why', async () => {
+        const inserted = await repo.insert(record);
+        const voided = await repo.void(inserted.id, 'mod-1', 'wrong member');
+        expect(voided).toEqual(
+          expect.objectContaining({
+            id: inserted.id,
+            memberId: 'm1',
+            durationDays: 30,
+            voidedBy: 'mod-1',
+            voidReason: 'wrong member',
+          }),
+        );
+        expect(voided?.voidedAt).toBeInstanceOf(Date);
+      });
+
+      it('stops a voided row counting as a prior suspension', async () => {
+        const inserted = await repo.insert(record);
+        const later = new Date('2026-10-01T00:00:00Z');
+        expect(await repo.countSuspensionsBefore('m1', later)).toBe(1);
+        await repo.void(inserted.id, 'mod-1', 'wrong member');
+        expect(await repo.countSuspensionsBefore('m1', later)).toBe(0);
+      });
+
+      it('drops a voided row out of both lists', async () => {
+        const inserted = await repo.insert(record);
+        await repo.insert({ ...record, memberId: 'm2' });
+        await repo.void(inserted.id, 'mod-1', 'wrong member');
+        expect(await repo.listByMemberId('m1')).toEqual([]);
+        expect((await repo.listAll()).map((row) => row.memberId)).toEqual([
+          'm2',
+        ]);
+      });
+
+      it('lets the same member and date be recorded again after voiding', async () => {
+        const inserted = await repo.insert(record);
+        await repo.void(inserted.id, 'mod-1', 'wrong duration');
+        const corrected = await repo.insert({ ...record, durationDays: 60 });
+        expect(corrected).toBeDefined();
+        expect(corrected?.id).not.toBe(inserted.id);
+        const [again] = await repo.insertMany([{ ...record, memberId: 'm1' }]);
+        // The corrected row is live again, so the pair is a duplicate once more.
+        expect(again).toBeUndefined();
+        expect(await repo.listByMemberId('m1')).toEqual([
+          expect.objectContaining({ durationDays: 60 }),
+        ]);
+      });
+
+      it('insertMany also records over a voided row', async () => {
+        const inserted = await repo.insert(record);
+        await repo.void(inserted.id, 'mod-1', 'wrong duration');
+        const rows = await repo.insertMany([{ ...record, durationDays: 60 }]);
+        expect(rows).toHaveLength(1);
+      });
+
+      it('returns undefined when voiding twice, or an unknown id', async () => {
+        const inserted = await repo.insert(record);
+        expect(await repo.void(inserted.id, 'mod-1', 'first')).toBeDefined();
+        expect(await repo.void(inserted.id, 'mod-2', 'second')).toBeUndefined();
+        expect(await repo.void(999999, 'mod-1', 'nope')).toBeUndefined();
+      });
+    });
+
+    describe('schema upgrade of a table created before voiding existed', () => {
+      it('adds the void columns and makes the unique index partial, idempotently', async () => {
+        const client = new pg.Client({
+          connectionString: process.env.DATABASE_URL,
+        });
+        await client.connect();
+        try {
+          await client.query(
+            'DROP SCHEMA IF EXISTS suspension_upgrade CASCADE',
+          );
+          await client.query('CREATE SCHEMA suspension_upgrade');
+          await client.query('SET search_path TO suspension_upgrade');
+          // The part-3 schema as first deployed to dev databases.
+          await client.query(`
+            CREATE TABLE suspension_records (
+              id            SERIAL PRIMARY KEY,
+              member_id     TEXT NOT NULL,
+              member_name   TEXT,
+              suspended_at  TIMESTAMPTZ NOT NULL,
+              duration_days INTEGER NOT NULL,
+              notes         TEXT,
+              created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+            );
+            CREATE UNIQUE INDEX suspension_records_member_suspended_at_idx
+              ON suspension_records (member_id, suspended_at);
+            INSERT INTO suspension_records (member_id, suspended_at, duration_days)
+              VALUES ('m1', '2026-09-01', 30);
+          `);
+
+          await client.query(SCHEMA_SQL);
+          await client.query(SCHEMA_SQL); // a second boot changes nothing
+
+          await client.query(
+            `UPDATE suspension_records
+               SET voided_at = now(), voided_by = 'mod-1', void_reason = 'test'
+             WHERE member_id = 'm1'`,
+          );
+          // Only succeeds if no full unique index remains on the pair.
+          await client.query(
+            `INSERT INTO suspension_records (member_id, suspended_at, duration_days)
+               VALUES ('m1', '2026-09-01', 60)`,
+          );
+          await expect(
+            client.query(
+              `INSERT INTO suspension_records (member_id, suspended_at, duration_days)
+                 VALUES ('m1', '2026-09-01', 90)`,
+            ),
+          ).rejects.toThrow(/duplicate key/);
+        } finally {
+          await client.query(
+            'DROP SCHEMA IF EXISTS suspension_upgrade CASCADE',
+          );
+          await client.end();
+        }
+      });
     });
   },
 );
