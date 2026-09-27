@@ -11,8 +11,9 @@ import {
 import { BaseUserInfo, Event } from '../../lib/client/meetup/types.js';
 import {
   collectHostStats,
+  displayedEvents,
   formatHallOfFamePost,
-  isCancelledEvent,
+  isCountableEvent,
 } from '../../lib/helpers/hallOfFame.js';
 import {
   discordCommandWrapper,
@@ -128,18 +129,14 @@ export class MeetupGetEventStatsCommands {
         await interaction.editReply({ content: 'Sit tight! Fetching data.' });
 
         const pastEvents = await getEventsYearMonth(meetupClient, year, month);
-        const countableEvents = pastEvents.filter(
-          (event) => !isCancelledEvent(event),
-        );
+        const countableEvents = pastEvents.filter(isCountableEvent);
+        const { hostStats, totalEvents } = collectHostStats(countableEvents);
 
-        // Attendance counts for the detailed attachment (unchanged data, but only
-        // for countable events).
+        // Attendance for the detailed attachment, fetched for exactly the
+        // events it displays (see displayedEvents).
         const rsvpCounts = new Map<string, number>();
-        const rsvpCountableEvents = countableEvents.filter(
-          (event) => !event.title.includes('[Open House]'),
-        );
         await mapWithConcurrency(
-          rsvpCountableEvents,
+          displayedEvents(hostStats),
           RSVP_FETCH_CONCURRENCY,
           async (event) => {
             const rsvps = await getPaginatedData(async (paginationInput) => {
@@ -153,8 +150,6 @@ export class MeetupGetEventStatsCommands {
             rsvpCounts.set(event.id, rsvps.length);
           },
         );
-
-        const { hostStats, totalEvents } = collectHostStats(pastEvents);
 
         const monthStart = tz(dayjs())
           .set('year', year)
