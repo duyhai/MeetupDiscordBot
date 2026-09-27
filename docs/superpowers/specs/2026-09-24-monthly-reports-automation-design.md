@@ -43,7 +43,7 @@ and outreach steps (Melissa still sends warnings and executes suspensions).
   report prints the next event date and a recommended act-by date.
 
 _Policy decisions confirmed 2026-09-27: window from today, reset after a
-suspension, prior suspensions never expire, unknown member IDs skipped._
+suspension, prior suspensions never expire, unknown member IDs skipped (revised 2026-09-26: recorded and flagged; CSV is the only input)._
 
 ## Phase 1 — Hall of Fame accuracy and ready-to-post output
 
@@ -153,22 +153,27 @@ match it. The schema ensure is idempotent and upgrades tables created before
 voiding existed: `ADD COLUMN IF NOT EXISTS` for the void columns, then the old
 full index is dropped and the partial one created under a new name.
 
-**Recording:** new command `/meetup_record_suspension` with two input modes,
-replacing the spreadsheet going forward:
+**Recording:** new command `/meetup_record_suspension`, replacing the
+spreadsheet going forward. Its one input is a CSV attachment
+(`ApplicationCommandOptionType.Attachment`; the bot fetches the attachment
+URL and parses it) with rows of
+`member_id, member_name, duration_days, suspended_at, notes`.
 
-- **Bulk IDs (common case):** a comma-separated `members` option plus an
-  optional date (default today). Duration is auto-deduced per member as
-  30 days × 2^(prior suspension count). The reply echoes each member's
-  computed duration and prior count so mistakes are caught immediately.
-  A member already serving a suspension on the recording date is
-  **skipped**, not recorded, and listed as "already suspended until
-  <last day> (#ID)", so retrying a bulk record the next day can't stack a
-  doubled penalty on the first.
-- **CSV attachment (exceptions, notes, and backfill):** rows of
-  `member_id, duration_days, suspended_at, notes` for cases with non-standard
-  durations or annotations. Discord slash commands support file parameters
-  natively (`ApplicationCommandOptionType.Attachment`); the bot fetches the
-  attachment URL and parses the CSV.
+- **Monthly:** the No Show report emits a suggested-suspensions CSV in this
+  format with recommended durations pre-filled. The moderator deletes the
+  rows Melissa didn't act on, sets each `suspended_at` to the date she
+  actually suspended, and uploads it.
+- **Rows are recorded as written.** A row whose duration isn't
+  30 days × 2^(prior suspensions dated before it) is still recorded, but
+  flagged in the summary so a mistake — or a stale suggestion, if records
+  changed since the report ran — is caught immediately. Exceptions stay
+  possible.
+- **Re-uploading is safe.** The dates are in the file, so a retried upload
+  reports its rows as already on file rather than recording (and doubling)
+  them again.
+
+_An earlier design also had a bulk-IDs mode with auto-computed durations;
+it was dropped (2026-09-26) because the report's CSV covers that case._
 
 **Backfill:** the CSV mode doubles as the one-time import — export the
 existing spreadsheet to the same column format and upload it. No separate
@@ -180,18 +185,18 @@ backfill script.
   error path; partial results are not posted.
 - A member with upcoming RSVPs already inside the 3–5 day window is flagged
   "act now" rather than given a past act-by date.
-- A member ID that is not a current member of the group is **skipped**, not
-  recorded, and listed in the command's summary; the other IDs in the same
-  run are still recorded. This applies to members who have left the group
-  too — including backfill rows for them. The membership check must not
-  degrade silently: if the lookup fails or Meetup authorization isn't
-  completed, nothing is recorded (otherwise every ID would look unknown).
-- Bulk mode skips a member whose live suspension covers the recording date
-  (from its start day through its last day, as calendar dates). CSV mode does
-  not: backfill legitimately contains overlapping history.
+- A member ID that is not a current member of the group is **still
+  recorded**, and listed in the summary as "not a current member". Backfill
+  legitimately contains members who have since left, and their suspensions
+  must keep counting if they rejoin; the flag is how a mistyped ID gets
+  caught. The membership lookup must not degrade silently: if it fails or
+  Meetup authorization isn't completed, nothing is recorded (otherwise every
+  row would be flagged).
 - A CSV row matching a live record's member and date is skipped as already
   on file. If the stored duration differs from the row's, the summary shows
-  both values and the record ID: "void #ID and re-import to correct".
+  both values and the record ID: "void #ID and re-import to correct". This
+  is distinct from the policy flag above, which checks recorded rows against
+  30 days × 2^(prior suspensions).
 - Voiding an ID that doesn't exist or is already void changes nothing and
   says so; a blank reason is refused.
 

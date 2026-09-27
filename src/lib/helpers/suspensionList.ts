@@ -19,7 +19,7 @@ export function utcDateOnly(date: Date | dayjs.Dayjs): string {
  * calendar arithmetic -- adding days in local time can drift across a
  * daylight-saving change.
  */
-export function lastSuspendedDay(record: SuspensionRecord): string {
+function lastSuspendedDay(record: SuspensionRecord): string {
   return dayjs
     .utc(record.suspendedAt)
     .add(record.durationDays - 1, 'day')
@@ -33,20 +33,6 @@ export function lastSuspendedDay(record: SuspensionRecord): string {
 function isActive(record: SuspensionRecord, now: dayjs.Dayjs): boolean {
   const today = tz(now).format('YYYY-MM-DD');
   return today <= lastSuspendedDay(record);
-}
-
-/**
- * Whether the suspension is in effect on a recording date. Unlike isActive,
- * this takes the calendar day as given: recording dates are already UTC
- * midnights naming the day, and reading one in the group's timezone would
- * shift it to the day before. The start bound matters when back-dating: a
- * later suspension doesn't cover an earlier date.
- */
-export function coversDay(record: SuspensionRecord, day: Date): boolean {
-  const date = utcDateOnly(day);
-  return (
-    utcDateOnly(record.suspendedAt) <= date && date <= lastSuspendedDay(record)
-  );
 }
 
 function formatRecord(

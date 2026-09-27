@@ -1290,6 +1290,12 @@ git commit -m "Add suspension CSV parser for recording and backfill"
 
 - [ ] **Step 1: Write the command**
 
+> **Amendment (2026-09-26):** bulk mode (`members`/`date` options,
+> `recordBulk`) was removed; the command takes only the `csv` attachment
+> (required). Rows are recorded as written, including IDs that aren't current
+> group members (flagged), and durations that don't match 30 × 2^(prior) are
+> flagged, not rejected. See `src/lib/helpers/recordSuspensions.ts`.
+
 ```typescript
 // src/commands/meetup/recordSuspension.ts
 import dayjs from 'dayjs';
@@ -1717,9 +1723,9 @@ Expected: all pass.
 
 1. `yarn dev`, then in the test server run `/meetup_get_host_event_stats` for last month. Compare the READY TO POST block against the moderator's last hand-built Hall of Fame: totals match their corrected numbers, renamed-cancelled events absent, recurring events collapsed, new hosts flagged.
 2. Run `/meetup_run_noshow_report` for last month. Compare classifications against the moderator's last report.
-3. **Test recording against a dev database only** (`yarn dev` with the Docker stack), never production. Records are voided, never deleted, so a production test row stays in the audit trail even after `/meetup_void_suspension`. Run `/meetup_record_suspension members:<test id>` and verify 30 days. Re-run it with `date:` one day later and verify it is skipped as "already suspended until <last day> (#ID)"; re-run on the same date and verify "already on file". Then re-run with a `date:` **after the first suspension's last day** and verify 60 days.
-4. **Correcting a record.** `/meetup_list_suspensions` prints each record's `#ID`. Run `/meetup_void_suspension id:<ID> reason:<why>`: the reply echoes the member, date, and duration, and the bot activity-log channel gets an entry. Verify the record is gone from the list and no longer counts toward the member's next penalty, then re-record the corrected entry (the same date is allowed once the old one is void). For a CSV row whose duration differs from what's on file, the summary names the record: void it and re-import.
-5. **Backfill production before recording any live suspension.** Until the sheet's history is imported, every repeat offender has a prior count of 0 and is recorded at 30 days instead of doubled — permanently. Export the real suspension sheet as CSV with header `member_id,duration_days,suspended_at,notes`, upload it via the `csv` option, check the summary's "not in the group" list (those rows are skipped by policy), and spot-check prior counts through a re-run of the report.
+3. **Test recording against a dev database only** (`yarn dev` with the Docker stack), never production. Records are voided, never deleted, so a production test row stays in the audit trail even after `/meetup_void_suspension`. Upload a one-row CSV for a test ID with 30 days and verify it records with no duration flag; upload a second row for the same ID with a later date and 30 days and verify it's flagged "60 expected". Re-upload the first file and verify it's reported as already on file.
+4. **Correcting a record.** `/meetup_list_suspensions` prints each record's `#ID`. Run `/meetup_void_suspension id:<ID> reason:<why>`: the reply echoes the member, date, and duration, and the bot activity-log channel gets an entry. Verify the record is gone from the list and no longer counts toward the member's next penalty, then re-upload the corrected row (the same date is allowed once the old one is void). A re-uploaded row whose duration differs from what's on file is skipped as already on file, and the summary names the record: "void #ID and re-import to correct".
+5. **Backfill production before recording any live suspension.** Until the sheet's history is imported, every repeat offender's suggested duration assumes no prior suspensions. Export the real suspension sheet as CSV with header `member_id,member_name,duration_days,suspended_at,notes` (or the legacy header without `member_name`) and upload it via the `csv` option. Review the summary: "not a current member" rows are recorded (departed members' history is kept) but check none is a typo; "duration to check" rows are expected wherever past practice didn't follow the doubling rule.
 
 - [ ] **Step 3: Commit any doc updates and hand off**
 
