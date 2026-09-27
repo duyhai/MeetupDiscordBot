@@ -1262,6 +1262,11 @@ cross-spawn@^7.0.6:
     shebang-command "^2.0.0"
     which "^2.0.1"
 
+csv-parse@^7.0.3:
+  version "7.0.3"
+  resolved "https://registry.yarnpkg.com/csv-parse/-/csv-parse-7.0.3.tgz#eece4221023f8f67029518af928a225a1ea3ccad"
+  integrity sha512-YFd3QM/yo17vH91L1IOZuvl09zM0zEEtdfTcOCKWcMdM++MNaQSyp09slXyFCLaPXvHstQFx/xC8myiFHSMUvw==
+
 dayjs@^1.11.7:
   version "1.11.21"
   resolved "https://registry.yarnpkg.com/dayjs/-/dayjs-1.11.21.tgz#57f87562e62de76f3c704bd2b8d522fc33068eb2"

@@ -3,6 +3,8 @@
  * serves the one-time spreadsheet backfill and ongoing exception entries,
  * so errors must name the offending row — moderators fix the sheet, not us.
  */
+import { parse } from 'csv-parse/sync';
+
 import { SuspensionInsert } from '../repositories/types.js';
 
 // Both header shapes are accepted: the named variant is what the report's
@@ -35,52 +37,95 @@ export function parseUtcDateStrict(dateStr: string): Date | undefined {
   return date;
 }
 
-// Strip a UTF-8 BOM, which some spreadsheet exports (e.g. Excel "CSV UTF-8")
-// prepend to the file; left in place it would corrupt the header comparison
-// below by attaching itself to "member_id".
-function stripBom(text: string): string {
-  return text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
+const WHOLE_NUMBER = /^\d+$/;
+
+/** A parsed row, with the line it starts on so errors and skips can cite it. */
+export type ParsedSuspensionRow = SuspensionInsert & { rowNumber: number };
+
+interface ParsedRecord {
+  record: string[];
+  info: { lines: number };
 }
 
-export function parseSuspensionCsv(rawText: string): SuspensionInsert[] {
-  const text = stripBom(rawText);
-  const lines = text.split(/\r?\n/);
-  const header = (lines[0] ?? '').replaceAll(' ', '').toLowerCase();
+/**
+ * csv-parse reports the line a record *ends* on. A note containing a line
+ * break spans several lines, so step back over the breaks inside its fields
+ * to reach the line a moderator would look for.
+ */
+function startingLine({ record, info }: ParsedRecord): number {
+  const breaksInside = record.reduce(
+    (total, field) => total + (field.match(/\n/g) ?? []).length,
+    0,
+  );
+  return info.lines - breaksInside;
+}
+
+export function parseSuspensionCsv(rawText: string): ParsedSuspensionRow[] {
+  // A real RFC 4180 parser: quoted fields may contain commas, escaped quotes
+  // and line breaks. Splitting on newlines first turned the second line of a
+  // multi-line note into a phantom suspension for whichever member it named.
+  const parsed = parse(rawText, {
+    // Excel "CSV UTF-8" prepends a byte-order mark to the header.
+    bom: true,
+    skip_empty_lines: true,
+    // A blank spreadsheet row exports as ",,,": not a data row.
+    skip_records_with_empty_values: true,
+    // Hand-typed files may leave commas unquoted in the trailing notes
+    // column; they arrive as extra fields and are rejoined below.
+    relax_column_count: true,
+    info: true,
+    // csv-parse's typings declare string[][] regardless of options; with
+    // `info: true` each record is actually { record, info }.
+  }) as unknown as ParsedRecord[];
+
+  const header = (parsed[0]?.record ?? [])
+    .map((field) => field.trim().toLowerCase())
+    .join(',');
   if (header !== NAMED_HEADER && header !== LEGACY_HEADER) {
     throw new Error(`Unexpected CSV header. Expected exactly: ${NAMED_HEADER}`);
   }
-  const hasNameColumn = header === NAMED_HEADER;
-  return lines
-    .map((line, index) => ({ line: line.trim(), rowNumber: index + 1 }))
-    .slice(1)
-    .filter(({ line }) => line.length > 0)
-    .map(({ line, rowNumber }) => {
-      // notes may contain commas: split only the leading fixed fields.
-      const parts = line.split(',').map((part) => part.trim());
-      const memberId = parts[0];
-      const memberName = hasNameColumn ? parts[1] : '';
-      const [durationStr, dateStr, ...notesParts] = parts.slice(
-        hasNameColumn ? 2 : 1,
+  const offset = header === NAMED_HEADER ? 1 : 0;
+
+  return parsed.slice(1).map((parsedRecord) => {
+    const { record } = parsedRecord;
+    const rowNumber = startingLine(parsedRecord);
+    const field = (index: number) => (record[index] ?? '').trim();
+
+    const memberId = field(0);
+    const memberName = offset ? field(1) : '';
+    const durationStr = field(1 + offset);
+    const dateStr = field(2 + offset);
+    // Untrimmed join, so an unquoted "late, again" keeps its space.
+    const notes = record
+      .slice(3 + offset)
+      .join(',')
+      .trim();
+
+    if (!WHOLE_NUMBER.test(memberId)) {
+      throw new Error(
+        `Row ${rowNumber}: member_id must be a numeric Meetup member ID, got "${memberId}"`,
       );
-      const notes = notesParts.join(',').trim();
-      const durationDays = Number(durationStr);
-      if (!memberId || !Number.isInteger(durationDays) || durationDays <= 0) {
-        throw new Error(
-          `Row ${rowNumber}: invalid member_id or duration_days in "${line}"`,
-        );
-      }
-      const date = parseUtcDateStrict(dateStr);
-      if (date === undefined) {
-        throw new Error(
-          `Row ${rowNumber}: suspended_at must be YYYY-MM-DD in "${line}"`,
-        );
-      }
-      return {
-        memberId,
-        memberName: memberName.length > 0 ? memberName : null,
-        durationDays,
-        suspendedAt: date,
-        notes: notes.length > 0 ? notes : null,
-      };
-    });
+    }
+    // Not Number() alone: it accepts "1e1" as 10 and "0x1e" as 30.
+    const durationDays = Number(durationStr);
+    if (!WHOLE_NUMBER.test(durationStr) || durationDays <= 0) {
+      throw new Error(
+        `Row ${rowNumber}: duration_days must be a positive whole number, got "${durationStr}"`,
+      );
+    }
+    const suspendedAt = parseUtcDateStrict(dateStr);
+    if (suspendedAt === undefined) {
+      throw new Error(
+        `Row ${rowNumber}: suspended_at must be a real calendar date as YYYY-MM-DD, got "${dateStr}"`,
+      );
+    }
+    return {
+      memberId,
+      memberName: memberName.length > 0 ? memberName : null,
+      durationDays,
+      suspendedAt,
+      notes: notes.length > 0 ? notes : null,
+      rowNumber,
+    };
+  });
 }

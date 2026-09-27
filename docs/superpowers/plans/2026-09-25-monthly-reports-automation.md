@@ -872,7 +872,7 @@ export type SuspensionInsert = Omit<SuspensionRecord, 'id' | 'createdAt'>;
 export interface SuspensionRepository {
   insert(record: SuspensionInsert): Promise<SuspensionRecord>;
   insertMany(records: SuspensionInsert[]): Promise<SuspensionRecord[]>;
-  countByMemberId(memberId: string): Promise<number>;
+  countSuspensionsBefore(memberId: string, before: Date): Promise<number>;
   listByMemberId(memberId: string): Promise<SuspensionRecord[]>;
 }
 ```
@@ -912,8 +912,8 @@ describe('PostgresSuspensionRepository', () => {
   it('inserts and counts by member', async () => {
     await repo.insert(record);
     await repo.insert({ ...record, durationDays: 60 });
-    expect(await repo.countByMemberId('m1')).toBe(2);
-    expect(await repo.countByMemberId('other')).toBe(0);
+    expect((await repo.listByMemberId('m1')).length).toBe(2);
+    expect((await repo.listByMemberId('other')).length).toBe(0);
   });
 
   it('lists records for a member, newest first', async () => {
@@ -934,7 +934,7 @@ describe('PostgresSuspensionRepository', () => {
       { ...record, memberId: 'm2', memberName: 'Bob' },
     ]);
     expect(rows).toHaveLength(2);
-    expect(await repo.countByMemberId('m2')).toBe(1);
+    expect((await repo.listByMemberId('m2')).length).toBe(1);
   });
 });
 ```
@@ -1095,10 +1095,14 @@ export class PostgresSuspensionRepository implements SuspensionRepository {
     }
   }
 
-  async countByMemberId(memberId: string): Promise<number> {
+  async countSuspensionsBefore(
+    memberId: string,
+    before: Date,
+  ): Promise<number> {
     const result = await this.pool.query<{ count: string }>(
-      'SELECT COUNT(*) AS count FROM suspension_records WHERE member_id = $1',
-      [memberId],
+      `SELECT COUNT(*) AS count FROM suspension_records
+       WHERE member_id = $1 AND suspended_at < $2`,
+      [memberId, before],
     );
     return Number(result.rows[0].count);
   }
@@ -1389,7 +1393,7 @@ export class MeetupRecordSuspensionCommands {
         // prior count, and a moderator may list the same member twice.
         for (const memberId of memberIds) {
           // eslint-disable-next-line no-await-in-loop
-          const priorCount = await repo.countByMemberId(memberId);
+          const priorCount = await repo.countSuspensionsBefore(memberId, suspendedAt);
           const durationDays = recommendedSuspensionDays(priorCount);
           // eslint-disable-next-line no-await-in-loop
           await repo.insert({
@@ -1446,6 +1450,13 @@ git commit -m "Add /meetup_record_suspension with bulk-ID and CSV modes"
 ---
 
 ### Task 8: `/meetup_run_noshow_report` command
+
+> **Amended 2026-09-27 — read the spec's Policy section before implementing.**
+> The snippets below predate two confirmed rules: the 12-month window is measured
+> back from *today*, not from the report month, and only no-shows after the member's
+> most recent suspension count. Without the reset, the no-shows behind a suspension
+> stay in the window and suspend the member again, doubled, for the same no-shows.
+> Prior suspensions use `countSuspensionsBefore(memberId, date)`.
 
 **Files:**
 - Create: `src/commands/meetup/noShowReport.ts`
@@ -1631,7 +1642,7 @@ export class MeetupNoShowReportCommands {
           };
           if (classification === 'suspension') {
             // eslint-disable-next-line no-await-in-loop
-            const priorSuspensions = await repo.countByMemberId(memberId);
+            const priorSuspensions = await repo.countSuspensionsBefore(memberId, today);
             noShowCase.priorSuspensions = priorSuspensions;
             noShowCase.recommendedDays =
               recommendedSuspensionDays(priorSuspensions);
@@ -1706,8 +1717,8 @@ Expected: all pass.
 
 1. `yarn dev`, then in the test server run `/meetup_get_host_event_stats` for last month. Compare the READY TO POST block against the moderator's last hand-built Hall of Fame: totals match their corrected numbers, renamed-cancelled events absent, recurring events collapsed, new hosts flagged.
 2. Run `/meetup_run_noshow_report` for last month. Compare classifications against the moderator's last report.
-3. Record a test suspension via `/meetup_record_suspension members:<test id>`, verify the echo shows 30 days, run it again and verify 60 days, then delete the test rows.
-4. Backfill: export the real suspension sheet as CSV with header `member_id,duration_days,suspended_at,notes`, upload via the `csv` option, and spot-check `countByMemberId` results through a re-run of the report.
+3. **Test recording against a dev database only** (`yarn dev` with the Docker stack), never production: there is no delete command yet, and a test row left in production permanently counts as a real prior suspension for that member ID, doubling their next penalty. Run `/meetup_record_suspension members:<test id>` and verify 30 days; then run it again **with a later `date:`** and verify 60 days. (A same-day re-run is correctly skipped as already on file.)
+4. **Backfill production before recording any live suspension.** Until the sheet's history is imported, every repeat offender has a prior count of 0 and is recorded at 30 days instead of doubled — permanently. Export the real suspension sheet as CSV with header `member_id,duration_days,suspended_at,notes`, upload it via the `csv` option, check the summary's "not in the group" list (those rows are skipped by policy), and spot-check prior counts through a re-run of the report.
 
 - [ ] **Step 3: Commit any doc updates and hand off**
 

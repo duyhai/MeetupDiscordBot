@@ -3,12 +3,19 @@ import {
   ApplicationCommandOptionType,
   Attachment,
   CommandInteraction,
+  PermissionFlagsBits,
 } from 'discord.js';
 import { Discord, Slash, SlashOption } from 'discordx';
 import { Logger } from 'tslog';
 
-import { recommendedSuspensionDays } from '../../lib/helpers/noShowReport.js';
 import {
+  RecordOutcome,
+  formatRecordSummary,
+  recordBulk,
+  recordCsvRows,
+} from '../../lib/helpers/recordSuspensions.js';
+import {
+  ParsedSuspensionRow,
   parseSuspensionCsv,
   parseUtcDateStrict,
 } from '../../lib/helpers/suspensionCsv.js';
@@ -19,7 +26,6 @@ import {
   requireModOrOrganizer,
   withDiscordFileAttachment,
 } from '../../util/discord.js';
-import { ApplicationMemberRepository } from '../../util/memberRepository.js';
 import { withMeetupClient } from '../../util/meetup.js';
 import { tz } from '../../util/timezone.js';
 
@@ -63,6 +69,9 @@ export class MeetupRecordSuspensionCommands {
     name: 'meetup_record_suspension',
     description:
       'Record no-show suspensions. Pass member IDs (auto duration) OR a CSV. Output is private.',
+    // Hides the command from members without mod permissions; the role check
+    // inside the handler stays authoritative.
+    defaultMemberPermissions: PermissionFlagsBits.ModerateMembers,
   })
   async recordSuspensionHandler(
     @SlashOption({
@@ -105,127 +114,76 @@ export class MeetupRecordSuspensionCommands {
           throw new Error('`date` must be a valid calendar date, YYYY-MM-DD.');
         }
       }
-      const repo = await PostgresSuspensionRepository.instance();
-
-      const summaryLines: string[] = [];
-      let insertedCount = 0;
-      let duplicateCount = 0;
-      let dedupedCount = 0;
+      // Parse the input before asking for Meetup authorization, so a
+      // malformed file or ID list fails straight away.
+      let csvRows: ParsedSuspensionRow[] | undefined;
+      let bulk: ReturnType<typeof parseAndDedupeMemberIds> | undefined;
       if (csv !== undefined) {
         const response = await fetch(csv.url);
         if (!response.ok) {
           throw new Error(`Could not download attachment: ${response.status}`);
         }
-        const rows = parseSuspensionCsv(await response.text());
-        if (rows.length === 0) {
+        csvRows = parseSuspensionCsv(await response.text());
+        if (csvRows.length === 0) {
           throw new Error('The CSV contained no data rows.');
         }
-        const inserted = await repo.insertMany(rows);
-        insertedCount = inserted.length;
-        duplicateCount = rows.length - inserted.length;
-        summaryLines.push(
-          ...inserted.map(
-            (row) =>
-              `- ${row.memberId}: ${row.durationDays} days from ${dayjs(
-                row.suspendedAt,
-              ).format('YYYY-MM-DD')}${row.notes ? ` (${row.notes})` : ''}`,
-          ),
-        );
       } else {
-        const parsed = parseAndDedupeMemberIds(members);
-        const memberIds = parsed.memberIds;
-        dedupedCount = parsed.dedupedCount;
-        const suspendedAt =
-          parsedDate ??
-          new Date(`${tz(dayjs()).format('YYYY-MM-DD')}T00:00:00Z`);
-        // Names come from a live group-membership lookup on Meetup (works
-        // for any current member), falling back to the bot's linked-members
-        // table; members resolvable by neither are recorded name-less.
-        const liveNames = new Map<string, string>();
-        try {
-          await withMeetupClient(interaction, async (meetupClient) => {
-            const liveMembers =
-              await meetupClient.getGroupMembersByIds(memberIds);
-            liveMembers.forEach((liveMember) =>
-              liveNames.set(liveMember.id, liveMember.name),
-            );
-          });
-        } catch (error) {
-          // Name lookup is a nice-to-have: never fail the recording over it.
-          logger.warn(`Live member-name lookup failed: ${String(error)}`);
-        }
-        const memberRepo = await ApplicationMemberRepository();
-        // Sequential on purpose: each member's duration depends on their
-        // prior count.
-        for (const memberId of memberIds) {
-          // eslint-disable-next-line no-await-in-loop
-          const priorCount = await repo.countByMemberId(memberId);
-          const durationDays = recommendedSuspensionDays(priorCount);
-          // eslint-disable-next-line no-await-in-loop
-          const linkedMember = await memberRepo.findByMeetupId(memberId);
-          const memberName =
-            liveNames.get(memberId) ?? linkedMember?.meetupName ?? null;
-          const nameStr = memberName ? ` (${memberName})` : '';
-          // eslint-disable-next-line no-await-in-loop
-          const inserted = await repo.insert({
-            memberId,
-            memberName,
-            suspendedAt,
-            durationDays,
-            notes: null,
-          });
-          if (inserted === undefined) {
-            duplicateCount += 1;
-            summaryLines.push(
-              `- ${memberId}${nameStr}: already recorded for ${dayjs(
-                suspendedAt,
-              ).format('YYYY-MM-DD')} — skipped as a duplicate`,
-            );
-          } else {
-            insertedCount += 1;
-            summaryLines.push(
-              `- ${memberId}${nameStr}: prior suspensions ${priorCount} → **${durationDays} days**`,
-            );
-          }
-        }
+        bulk = parseAndDedupeMemberIds(members);
       }
+      const repo = await PostgresSuspensionRepository.instance();
 
-      logger.info(
-        `Recorded ${insertedCount} suspension(s) via ${
-          csv ? 'csv' : 'members'
-        } mode (${duplicateCount} duplicate(s), ${dedupedCount} deduped input ID(s))`,
-      );
-      keepReplyVisible(interaction);
-      const noteLines: string[] = [];
-      if (dedupedCount > 0) {
-        noteLines.push(
-          `_Removed ${dedupedCount} duplicate member ID(s) from the input list._`,
+      // Everything that writes happens inside the client callback. If the
+      // moderator doesn't finish Meetup authorization, withMeetupClient
+      // returns without calling it and nothing is recorded -- rather than
+      // every ID looking unknown and being skipped. A failed lookup throws
+      // out of here too, so a Meetup outage can't be mistaken for "nobody
+      // is a member".
+      await withMeetupClient(interaction, async (meetupClient) => {
+        const memberIds = csvRows
+          ? [...new Set(csvRows.map((row) => row.memberId))]
+          : bulk.memberIds;
+        const knownMembers = new Map(
+          (await meetupClient.getGroupMembersByIds(memberIds)).map((member) => [
+            member.id,
+            member.name,
+          ]),
         );
-      }
-      const contentSuffix = [
-        duplicateCount > 0 ? `${duplicateCount} duplicate(s) skipped` : '',
-        dedupedCount > 0 ? `${dedupedCount} input ID(s) deduped` : '',
-      ]
-        .filter((part) => part.length > 0)
-        .join(', ');
-      // Discord caps message content at 2000 chars; a large backfill CSV can
-      // easily exceed that if the summary is posted inline, and that would
-      // throw *after* the rows already committed. Deliver the summary via
-      // attachment instead, so the reply itself always stays well under the
-      // limit regardless of row count.
-      const body = [...noteLines, ...summaryLines].join('\n');
-      await withDiscordFileAttachment(
-        `Suspensions recorded ${dayjs().format('YYYY-MM-DD')}.txt`,
-        body,
-        async (attachmentArgs) => {
-          await interaction.editReply({
-            ...attachmentArgs,
-            content: `Recorded ${insertedCount} suspension(s)${
-              contentSuffix ? ` (${contentSuffix})` : ''
-            }. Details in the attachment.`,
-          });
-        },
-      );
+
+        let outcome: RecordOutcome;
+        if (csvRows) {
+          outcome = await recordCsvRows(repo, csvRows, knownMembers);
+        } else {
+          const suspendedAt =
+            parsedDate ??
+            new Date(`${tz(dayjs()).format('YYYY-MM-DD')}T00:00:00Z`);
+          outcome = await recordBulk(
+            repo,
+            bulk.memberIds,
+            knownMembers,
+            suspendedAt,
+          );
+        }
+
+        logger.info(
+          `Recorded ${outcome.recorded.length} suspension(s) via ${
+            csvRows ? 'csv' : 'members'
+          } mode (${outcome.duplicates.length} already on file, ${
+            outcome.unknown.length
+          } not in the group)`,
+        );
+        const summary = formatRecordSummary(outcome, bulk?.dedupedCount ?? 0);
+        keepReplyVisible(interaction);
+        await withDiscordFileAttachment(
+          `Suspensions recorded ${tz(dayjs()).format('YYYY-MM-DD')}.txt`,
+          summary.body,
+          async (attachmentArgs) => {
+            await interaction.editReply({
+              ...attachmentArgs,
+              content: summary.content,
+            });
+          },
+        );
+      });
     });
   }
 }

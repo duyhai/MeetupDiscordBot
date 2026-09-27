@@ -44,8 +44,33 @@ if (!POSTGRES_AVAILABLE) {
         suspendedAt: new Date('2026-10-01T00:00:00Z'),
         durationDays: 60,
       });
-      expect(await repo.countByMemberId('m1')).toBe(2);
-      expect(await repo.countByMemberId('other')).toBe(0);
+      expect((await repo.listByMemberId('m1')).length).toBe(2);
+      expect((await repo.listByMemberId('other')).length).toBe(0);
+    });
+
+    it('counts only suspensions dated before the given date', async () => {
+      // A moderator back-records a September suspension for a member who
+      // already has one in October. The October one is later, not prior, so
+      // September must be computed as a first suspension: 30 days, not 60.
+      await repo.insert({
+        ...record,
+        suspendedAt: new Date('2026-10-01T00:00:00Z'),
+      });
+      const september = new Date('2026-09-01T00:00:00Z');
+      expect(await repo.countSuspensionsBefore('m1', september)).toBe(0);
+      expect(
+        await repo.countSuspensionsBefore(
+          'm1',
+          new Date('2026-11-01T00:00:00Z'),
+        ),
+      ).toBe(1);
+      // Strictly before: a record on the date itself is not prior to itself.
+      expect(
+        await repo.countSuspensionsBefore(
+          'm1',
+          new Date('2026-10-01T00:00:00Z'),
+        ),
+      ).toBe(0);
     });
 
     it('insert skips an exact (member_id, suspended_at) duplicate', async () => {
@@ -53,7 +78,7 @@ if (!POSTGRES_AVAILABLE) {
       const second = await repo.insert({ ...record, durationDays: 60 });
       expect(first).toBeDefined();
       expect(second).toBeUndefined();
-      expect(await repo.countByMemberId('m1')).toBe(1);
+      expect((await repo.listByMemberId('m1')).length).toBe(1);
     });
 
     it('insert allows the same member on a different date (repeat suspension)', async () => {
@@ -64,7 +89,7 @@ if (!POSTGRES_AVAILABLE) {
         durationDays: 60,
       });
       expect(second).toBeDefined();
-      expect(await repo.countByMemberId('m1')).toBe(2);
+      expect((await repo.listByMemberId('m1')).length).toBe(2);
     });
 
     it('lists records for a member, newest first', async () => {
@@ -85,7 +110,7 @@ if (!POSTGRES_AVAILABLE) {
         { ...record, memberId: 'm2', memberName: 'Bob' },
       ]);
       expect(rows).toHaveLength(2);
-      expect(await repo.countByMemberId('m2')).toBe(1);
+      expect((await repo.listByMemberId('m2')).length).toBe(1);
     });
 
     it('insertMany skips exact duplicates and returns only the inserted rows', async () => {
@@ -97,8 +122,8 @@ if (!POSTGRES_AVAILABLE) {
       ]);
       expect(rows).toHaveLength(1);
       expect(rows[0].memberId).toBe('m2');
-      expect(await repo.countByMemberId('m1')).toBe(1);
-      expect(await repo.countByMemberId('m2')).toBe(1);
+      expect((await repo.listByMemberId('m1')).length).toBe(1);
+      expect((await repo.listByMemberId('m2')).length).toBe(1);
     });
 
     it('listAll returns every record, newest suspension first', async () => {

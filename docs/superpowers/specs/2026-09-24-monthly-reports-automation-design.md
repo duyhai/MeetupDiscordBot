@@ -27,10 +27,23 @@ and outreach steps (Melissa still sends warnings and executes suspensions).
 
 - 1 no-show in the trailing 12 months → warning.
 - 2+ no-shows in the trailing 12 months → suspension candidate.
+- **The 12 months are measured back from today** — the day the report runs —
+  not from the report month.
+- **Only no-shows after the member's most recent suspension count.** The
+  no-shows that led to a suspension never count toward the next one; without
+  this, they stay inside the 12-month window and suspend the member again,
+  at double the length, for the same no-shows. So the counting window starts
+  at whichever is later: 12 months ago, or the member's last suspension date.
 - Suspension length: 30 days × 2^(prior suspension count). Prior suspensions
   are not derivable from Meetup, so they are stored (see `suspension_records`).
+- **Prior suspensions count forever** — they never stop doubling the next
+  penalty. "Prior" means dated before the suspension being recorded, so a
+  back-dated entry is not doubled by a later suspension already on file.
 - Suspensions should land 3–5 days before the member's next RSVP'd event; the
   report prints the next event date and a recommended act-by date.
+
+_Policy decisions confirmed 2026-09-27: window from today, reset after a
+suspension, prior suspensions never expire, unknown member IDs skipped._
 
 ## Phase 1 — Hall of Fame accuracy and ready-to-post output
 
@@ -143,8 +156,12 @@ backfill script.
   error path; partial results are not posted.
 - A member with upcoming RSVPs already inside the 3–5 day window is flagged
   "act now" rather than given a past act-by date.
-- Unknown member ID passed to `/meetup_record_suspension` is rejected with a
-  clear message before inserting.
+- A member ID that is not a current member of the group is **skipped**, not
+  recorded, and listed in the command's summary; the other IDs in the same
+  run are still recorded. This applies to members who have left the group
+  too — including backfill rows for them. The membership check must not
+  degrade silently: if the lookup fails or Meetup authorization isn't
+  completed, nothing is recorded (otherwise every ID would look unknown).
 
 ## Testing
 
