@@ -19,7 +19,7 @@ export function utcDateOnly(date: Date | dayjs.Dayjs): string {
  * calendar arithmetic -- adding days in local time can drift across a
  * daylight-saving change.
  */
-function lastSuspendedDay(record: SuspensionRecord): string {
+export function lastSuspendedDay(record: SuspensionRecord): string {
   return dayjs
     .utc(record.suspendedAt)
     .add(record.durationDays - 1, 'day')
@@ -35,6 +35,20 @@ function isActive(record: SuspensionRecord, now: dayjs.Dayjs): boolean {
   return today <= lastSuspendedDay(record);
 }
 
+/**
+ * Whether the suspension is in effect on a recording date. Unlike isActive,
+ * this takes the calendar day as given: recording dates are already UTC
+ * midnights naming the day, and reading one in the group's timezone would
+ * shift it to the day before. The start bound matters when back-dating: a
+ * later suspension doesn't cover an earlier date.
+ */
+export function coversDay(record: SuspensionRecord, day: Date): boolean {
+  const date = utcDateOnly(day);
+  return (
+    utcDateOnly(record.suspendedAt) <= date && date <= lastSuspendedDay(record)
+  );
+}
+
 function formatRecord(
   record: SuspensionRecord,
   fallbackNames: Map<string, string>,
@@ -47,7 +61,7 @@ function formatRecord(
   const notes = record.notes ? ` — ${record.notes}` : '';
   // Plain URL, not a markdown link: this renders inside a .txt attachment.
   const profileUrl = `https://www.meetup.com/members/${record.memberId}/`;
-  return `- ${record.memberId}${name}: ${record.durationDays} days from ${utcDateOnly(
+  return `- #${record.id} ${record.memberId}${name}: ${record.durationDays} days from ${utcDateOnly(
     record.suspendedAt,
   )} through ${lastSuspendedDay(record)}${notes}\n  ${profileUrl}`;
 }
