@@ -50,6 +50,10 @@ class FakeSuspensionRepository implements RecorderRepository {
     return inserted;
   }
 
+  async listByMemberId(memberId: string) {
+    return this.records.filter((record) => record.memberId === memberId);
+  }
+
   async countSuspensionsBefore(memberId: string, before: Date) {
     return this.records.filter(
       (record) =>
@@ -144,6 +148,69 @@ describe('recordBulk', () => {
   });
 });
 
+describe('recordBulk skipping members already suspended', () => {
+  let repo: FakeSuspensionRepository;
+
+  beforeEach(() => {
+    repo = new FakeSuspensionRepository();
+  });
+
+  const alice = new Map([['100', 'Alice']]);
+
+  it('skips a member whose suspension is still active on the recording date', async () => {
+    // Recorded yesterday, and a retry today must not double the penalty.
+    const existing = await repo.insert(
+      row({ memberId: '100', suspendedAt: sept1, durationDays: 30 }),
+    );
+
+    const outcome = await recordBulk(
+      repo,
+      ['100'],
+      alice,
+      new Date('2026-09-02T00:00:00Z'),
+    );
+
+    expect(outcome.recorded).toEqual([]);
+    expect(outcome.alreadySuspended).toEqual([
+      expect.objectContaining({
+        memberId: '100',
+        recordId: existing?.id,
+        lastDay: '2026-09-30',
+      }),
+    ]);
+    expect(repo.records).toHaveLength(1);
+  });
+
+  it('still skips on the last suspended day', async () => {
+    await repo.insert(row({ memberId: '100', suspendedAt: sept1 }));
+
+    const outcome = await recordBulk(
+      repo,
+      ['100'],
+      alice,
+      new Date('2026-09-30T00:00:00Z'),
+    );
+
+    expect(outcome.alreadySuspended.map((r) => r.memberId)).toEqual(['100']);
+  });
+
+  it('records a member whose suspension ended the day before', async () => {
+    // Recording dates are UTC midnights. Read in Pacific time, Oct 1 would be
+    // Sept 30, the last suspended day, and the member would wrongly be skipped.
+    await repo.insert(row({ memberId: '100', suspendedAt: sept1 }));
+
+    const outcome = await recordBulk(
+      repo,
+      ['100'],
+      alice,
+      new Date('2026-10-01T00:00:00Z'),
+    );
+
+    expect(outcome.alreadySuspended).toEqual([]);
+    expect(outcome.recorded[0].durationDays).toBe(60);
+  });
+});
+
 describe('recordCsvRows', () => {
   let repo: FakeSuspensionRepository;
 
@@ -188,6 +255,60 @@ describe('recordCsvRows', () => {
     expect(outcome.duplicates.map((r) => r.rowNumber)).toEqual([2, 4]);
   });
 
+  it('flags a row on file with a different duration, naming the record to void', async () => {
+    const existing = await repo.insert(
+      row({ memberId: '100', suspendedAt: sept1, durationDays: 30 }),
+    );
+
+    const outcome = await recordCsvRows(
+      repo,
+      [row({ memberId: '100', suspendedAt: sept1, durationDays: 60 })],
+      new Map([['100', 'Alice']]),
+    );
+
+    expect(outcome.duplicates).toEqual([
+      expect.objectContaining({
+        memberId: '100',
+        durationDays: 60,
+        existing: { id: existing?.id, durationDays: 30 },
+      }),
+    ]);
+    const summary = formatRecordSummary(outcome, 0);
+    expect(summary.body).toContain(
+      `on file #${existing?.id} has 30 days, this row has 60`,
+    );
+    expect(summary.body).toContain(
+      `void #${existing?.id} and re-import to correct`,
+    );
+    expect(summary.content).toContain('1 differ from the record on file');
+  });
+
+  it('leaves a matching duplicate unflagged', async () => {
+    await repo.insert(row({ memberId: '100', suspendedAt: sept1 }));
+
+    const outcome = await recordCsvRows(
+      repo,
+      [row({ memberId: '100', suspendedAt: sept1 })],
+      new Map([['100', 'Alice']]),
+    );
+
+    const summary = formatRecordSummary(outcome, 0);
+    expect(summary.body).not.toContain('void #');
+    expect(summary.content).not.toContain('differ');
+  });
+
+  it('still records overlapping history, since backfill legitimately has it', async () => {
+    await repo.insert(row({ memberId: '100', suspendedAt: sept1 }));
+
+    const outcome = await recordCsvRows(
+      repo,
+      [row({ memberId: '100', suspendedAt: new Date('2026-09-10T00:00:00Z') })],
+      new Map([['100', 'Alice']]),
+    );
+
+    expect(outcome.recorded.map((r) => r.memberId)).toEqual(['100']);
+  });
+
   it('fills a missing name from the group lookup', async () => {
     const outcome = await recordCsvRows(
       repo,
@@ -222,12 +343,25 @@ describe('formatRecordSummary', () => {
           },
         ],
         unknown: [{ memberId: '999', rowNumber: 7 }],
+        alreadySuspended: [
+          {
+            memberId: '300',
+            memberName: 'Cara',
+            suspendedAt: sept1,
+            recordId: 41,
+            lastDay: '2026-09-30',
+          },
+        ],
       },
       2,
     );
 
     expect(summary.content).toBe(
-      'Recorded 1 suspension(s) (1 already on file, 1 not in the group, 2 repeated ID(s) ignored). Details in the attachment.',
+      'Recorded 1 suspension(s) (1 already on file, 1 already suspended, ' +
+        '1 not in the group, 2 repeated ID(s) ignored). Details in the attachment.',
+    );
+    expect(summary.body).toContain(
+      '- 300 (Cara): already suspended until 2026-09-30 (#41)',
     );
     expect(summary.body).toContain('100 (Alice): 60 days from 2026-09-01');
     expect(summary.body).toContain('prior suspensions 1');
@@ -251,6 +385,7 @@ describe('formatRecordSummary', () => {
         ],
         duplicates: [],
         unknown: [],
+        alreadySuspended: [],
       },
       0,
     );
