@@ -5,6 +5,7 @@ import {
   collectHostStats,
   displayedEvents,
   isCancelledEvent,
+  isCountableEvent,
   formatHallOfFamePost,
 } from '../../../src/lib/helpers/hallOfFame.js';
 
@@ -66,6 +67,25 @@ describe('isCancelledEvent', () => {
   });
 });
 
+describe('isCountableEvent', () => {
+  it('counts an ordinary event', () => {
+    expect(isCountableEvent(makeEvent({ title: 'Trivia Night' }))).toBe(true);
+  });
+
+  it('excludes events cancelled by title or by status', () => {
+    expect(isCountableEvent(makeEvent({ title: 'Canceled: Hike' }))).toBe(
+      false,
+    );
+    expect(isCountableEvent(makeEvent({ status: 'CANCELLED' }))).toBe(false);
+  });
+
+  it('excludes [Open House] events', () => {
+    expect(isCountableEvent(makeEvent({ title: '[Open House] Social' }))).toBe(
+      false,
+    );
+  });
+});
+
 describe('collectHostStats', () => {
   it('groups events by host, sorted by count descending', () => {
     const events = [
@@ -79,15 +99,16 @@ describe('collectHostStats', () => {
     expect(hostStats[0].events).toHaveLength(2);
   });
 
-  it('excludes cancelled and [Open House] events from stats and totals', () => {
+  it('groups every event it is given -- filtering is the caller’s job', () => {
+    // Pins the contract: collectHostStats does no hidden filtering. Callers
+    // filter with isCountableEvent first, where the rule is visible.
     const events = [
       makeEvent({ eventHosts: [host('a')] }),
       makeEvent({ title: 'Canceled: Hike', eventHosts: [host('a')] }),
-      makeEvent({ title: '[Open House] Social', eventHosts: [host('a')] }),
     ];
     const { hostStats, totalEvents } = collectHostStats(events);
-    expect(totalEvents).toBe(1);
-    expect(hostStats[0].events).toHaveLength(1);
+    expect(totalEvents).toBe(2);
+    expect(hostStats[0].events).toHaveLength(2);
   });
 
   it('counts a co-hosted event once in the total but once per host', () => {
@@ -121,16 +142,13 @@ describe('displayedEvents', () => {
     });
     const hostless = makeEvent({ eventHosts: [] });
 
-    const { hostStats } = collectHostStats([
-      solo,
-      coHosted,
-      cancelled,
-      openHouse,
-      hostless,
-    ]);
+    // The handler's pipeline: filter to countable events, then group.
+    const { hostStats } = collectHostStats(
+      [solo, coHosted, cancelled, openHouse, hostless].filter(isCountableEvent),
+    );
 
     // coHosted sits in both x's and y's lists but must be fetched once;
-    // cancelled and Open House are excluded by the same rule that hides them;
+    // cancelled and Open House never reach grouping, so they're never shown;
     // hostless is never displayed, so fetching it would be wasted.
     expect(
       displayedEvents(hostStats)

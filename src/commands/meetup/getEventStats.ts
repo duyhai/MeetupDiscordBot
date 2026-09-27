@@ -13,6 +13,7 @@ import {
   collectHostStats,
   displayedEvents,
   formatHallOfFamePost,
+  isCountableEvent,
 } from '../../lib/helpers/hallOfFame.js';
 import {
   discordCommandWrapper,
@@ -128,7 +129,8 @@ export class MeetupGetEventStatsCommands {
         await interaction.editReply({ content: 'Sit tight! Fetching data.' });
 
         const pastEvents = await getEventsYearMonth(meetupClient, year, month);
-        const { hostStats, totalEvents } = collectHostStats(pastEvents);
+        const countableEvents = pastEvents.filter(isCountableEvent);
+        const { hostStats, totalEvents } = collectHostStats(countableEvents);
 
         // Attendance for the detailed attachment, fetched for exactly the
         // events it displays (see displayedEvents).
