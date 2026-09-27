@@ -130,8 +130,28 @@ recomputed from Meetup each run.
 New Postgres table alongside the existing repositories
 (`src/lib/repositories/`), following the current repository pattern:
 
-- `member_id` (Meetup member ID), `member_name`, `suspended_at`,
+- `id`, `member_id` (Meetup member ID), `member_name`, `suspended_at`,
   `duration_days`, `notes`, `created_at`.
+- `voided_at`, `voided_by` (Discord user ID), `void_reason`: all null on a
+  live record.
+
+**Correcting records: void, never delete.** Disciplinary history keeps its
+audit trail, so a wrong record is voided with
+`/meetup_void_suspension id:<integer> reason:<text>` (mod-only, private
+reply, logged to the bot activity-log channel). The `id` is the `#ID` that
+`/meetup_list_suspensions` prints before each record. A voided row stays in
+the table but is invisible everywhere else: it no longer counts as a prior
+suspension, drops out of the list, and must be treated as absent by any
+future reader (the No Show report included). To fix a wrong duration or
+date, void the record and re-record the corrected entry.
+
+**Uniqueness:** a unique index on `(member_id, suspended_at)` is **partial**,
+`WHERE voided_at IS NULL`, so a corrected record can reuse the date of the
+voided one. Inserts use
+`ON CONFLICT (member_id, suspended_at) WHERE voided_at IS NULL DO NOTHING` to
+match it. The schema ensure is idempotent and upgrades tables created before
+voiding existed: `ADD COLUMN IF NOT EXISTS` for the void columns, then the old
+full index is dropped and the partial one created under a new name.
 
 **Recording:** new command `/meetup_record_suspension` with two input modes,
 replacing the spreadsheet going forward:
@@ -140,6 +160,10 @@ replacing the spreadsheet going forward:
   optional date (default today). Duration is auto-deduced per member as
   30 days × 2^(prior suspension count). The reply echoes each member's
   computed duration and prior count so mistakes are caught immediately.
+  A member already serving a suspension on the recording date is
+  **skipped**, not recorded, and listed as "already suspended until
+  <last day> (#ID)", so retrying a bulk record the next day can't stack a
+  doubled penalty on the first.
 - **CSV attachment (exceptions, notes, and backfill):** rows of
   `member_id, duration_days, suspended_at, notes` for cases with non-standard
   durations or annotations. Discord slash commands support file parameters
@@ -162,6 +186,14 @@ backfill script.
   too — including backfill rows for them. The membership check must not
   degrade silently: if the lookup fails or Meetup authorization isn't
   completed, nothing is recorded (otherwise every ID would look unknown).
+- Bulk mode skips a member whose live suspension covers the recording date
+  (from its start day through its last day, as calendar dates). CSV mode does
+  not: backfill legitimately contains overlapping history.
+- A CSV row matching a live record's member and date is skipped as already
+  on file. If the stored duration differs from the row's, the summary shows
+  both values and the record ID: "void #ID and re-import to correct".
+- Voiding an ID that doesn't exist or is already void changes nothing and
+  says so; a blank reason is refused.
 
 ## Testing
 
