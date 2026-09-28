@@ -205,6 +205,50 @@ describe('recordCsvRows', () => {
     expect(outcome.durationMismatches).toEqual([]);
   });
 
+  it('points a repeat within the file at the row it repeats, not at a record to void and re-import', async () => {
+    // Re-importing the same file would record row 2 again, so "void and
+    // re-import" would send the moderator in a circle.
+    const outcome = await recordCsvRows(
+      repo,
+      [
+        row({ memberId: '100', durationDays: 30, rowNumber: 2 }),
+        row({ memberId: '100', durationDays: 60, rowNumber: 5 }),
+      ],
+      new Map([['100', 'Alice']]),
+    );
+
+    const recordedId = repo.records[0].id;
+    expect(outcome.duplicates).toEqual([
+      expect.objectContaining({
+        rowNumber: 5,
+        repeatsRow: { rowNumber: 2, id: recordedId, durationDays: 30 },
+      }),
+    ]);
+    expect(outcome.duplicates[0].existing).toBeUndefined();
+
+    const summary = formatRecordSummary(outcome);
+    expect(summary.body).toContain(
+      `same member and date as row 2, recorded as #${recordedId} with 30 days; this row has 60`,
+    );
+    expect(summary.body).toContain(
+      `if this row is right, void #${recordedId} and upload a CSV with just this row`,
+    );
+    expect(summary.content).not.toContain('differ from the record on file');
+    expect(summary.content).toContain('1 repeat another row in the file');
+  });
+
+  it('notes a matching repeat within the file without asking for a fix', async () => {
+    const outcome = await recordCsvRows(
+      repo,
+      [row({ rowNumber: 2 }), row({ rowNumber: 3 })],
+      new Map([['100', 'Alice']]),
+    );
+
+    const summary = formatRecordSummary(outcome);
+    expect(summary.body).toContain('same member and date as row 2');
+    expect(summary.body).not.toContain('void #');
+  });
+
   it('leaves a matching duplicate unflagged', async () => {
     await repo.insert(row({ memberId: '100', suspendedAt: sept1 }));
 

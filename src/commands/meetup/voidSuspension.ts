@@ -12,6 +12,7 @@ import { voidSuspension } from '../../lib/helpers/voidSuspension.js';
 import { PostgresSuspensionRepository } from '../../lib/repositories/postgresSuspensionRepository.js';
 import {
   discordCommandWrapper,
+  markActivityLogged,
   requireModOrOrganizer,
 } from '../../util/discord.js';
 
@@ -81,6 +82,7 @@ export class MeetupVoidSuspensionCommands {
           { name: 'Reason', value: record.voidReason },
         ],
       });
+      markActivityLogged(interaction);
       await interaction.followUp({ content: reply, ephemeral: true });
     });
   }

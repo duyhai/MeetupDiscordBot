@@ -24,6 +24,12 @@ export interface SkippedSuspension {
   durationDays: number;
   /** The live record the row collided with, when it's on file. */
   existing?: { id: number; durationDays: number };
+  /**
+   * The earlier row in this same file that was recorded with the same
+   * member and date. Set instead of `existing`: re-importing the file would
+   * record that earlier row again, so it needs different advice.
+   */
+  repeatsRow?: { rowNumber: number; id: number; durationDays: number };
 }
 
 export interface FlaggedMember {
@@ -81,20 +87,36 @@ export async function recordCsvRows(
   const inserted = await repo.insertMany(withNames);
   // Each inserted key accounts for exactly one row, so a row repeated within
   // the file is reported as a duplicate rather than recorded twice.
-  const unclaimed = new Set(
-    inserted.map((record) => rowKey(record.memberId, record.suspendedAt)),
+  const unclaimed = new Map(
+    inserted.map((record) => [
+      rowKey(record.memberId, record.suspendedAt),
+      record.id,
+    ]),
   );
+  const claimedBy = new Map<
+    string,
+    { rowNumber: number; id: number; durationDays: number }
+  >();
   for (const row of withNames) {
-    if (!unclaimed.delete(rowKey(row.memberId, row.suspendedAt))) {
+    const key = rowKey(row.memberId, row.suspendedAt);
+    const insertedId = unclaimed.get(key);
+    if (insertedId === undefined) {
       outcome.duplicates.push({
         memberId: row.memberId,
         memberName: row.memberName,
         suspendedAt: row.suspendedAt,
         rowNumber: row.rowNumber,
         durationDays: row.durationDays,
+        repeatsRow: claimedBy.get(key),
       });
       continue;
     }
+    unclaimed.delete(key);
+    claimedBy.set(key, {
+      rowNumber: row.rowNumber,
+      id: insertedId,
+      durationDays: row.durationDays,
+    });
     outcome.recorded.push(row);
     if (!knownMembers.has(row.memberId)) {
       outcome.notInGroup.push({
@@ -117,7 +139,10 @@ export async function recordCsvRows(
   // differs from the stored one -- a correction, not a re-import -- isn't
   // dropped silently.
   const onFile = new Map<string, { id: number; durationDays: number }>();
-  const duplicateIds = new Set(outcome.duplicates.map((d) => d.memberId));
+  const onFileDuplicates = outcome.duplicates.filter(
+    (d) => d.repeatsRow === undefined,
+  );
+  const duplicateIds = new Set(onFileDuplicates.map((d) => d.memberId));
   for (const memberId of duplicateIds) {
     // eslint-disable-next-line no-await-in-loop
     for (const record of await repo.listByMemberId(memberId)) {
@@ -127,7 +152,7 @@ export async function recordCsvRows(
       });
     }
   }
-  for (const duplicate of outcome.duplicates) {
+  for (const duplicate of onFileDuplicates) {
     duplicate.existing = onFile.get(
       rowKey(duplicate.memberId, duplicate.suspendedAt),
     );
@@ -152,6 +177,18 @@ function differsFromFile(skipped: SkippedSuspension): boolean {
 }
 
 function differenceSuffix(skipped: SkippedSuspension): string {
+  const earlier = skipped.repeatsRow;
+  if (earlier) {
+    const base = ` — same member and date as row ${earlier.rowNumber}`;
+    if (earlier.durationDays === skipped.durationDays) {
+      return base;
+    }
+    return (
+      `${base}, recorded as #${earlier.id} with ${earlier.durationDays} days;` +
+      ` this row has ${skipped.durationDays} — if this row is right,` +
+      ` void #${earlier.id} and upload a CSV with just this row`
+    );
+  }
   if (!differsFromFile(skipped)) {
     return '';
   }
@@ -170,9 +207,11 @@ export function formatRecordSummary(outcome: RecordOutcome): {
 } {
   const { recorded, duplicates, notInGroup, durationMismatches } = outcome;
   const differing = duplicates.filter(differsFromFile).length;
+  const repeats = duplicates.filter((d) => d.repeatsRow !== undefined).length;
   const counts = [
     duplicates.length ? `${duplicates.length} already on file` : '',
     differing ? `${differing} differ from the record on file` : '',
+    repeats ? `${repeats} repeat another row in the file` : '',
     notInGroup.length ? `${notInGroup.length} not a current member` : '',
     durationMismatches.length
       ? `${durationMismatches.length} duration${
@@ -222,7 +261,7 @@ export function formatRecordSummary(outcome: RecordOutcome): {
   if (duplicates.length) {
     sections.push(
       '',
-      `Already on file for that date, skipped (${duplicates.length}):`,
+      `Skipped — already on file for that date, or repeated in this file (${duplicates.length}):`,
       ...duplicates.map(
         (d) =>
           `- ${d.memberId}${nameSuffix(d.memberName)}: ${utcDateOnly(

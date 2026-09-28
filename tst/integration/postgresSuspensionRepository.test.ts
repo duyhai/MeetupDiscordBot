@@ -1,6 +1,7 @@
 import pg from 'pg';
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 
+import { suspensionHistory } from '../../src/lib/helpers/noShowReport.js';
 import {
   PostgresSuspensionRepository,
   SCHEMA_SQL,
@@ -173,6 +174,23 @@ if (!POSTGRES_AVAILABLE) {
         expect((await repo.listAll()).map((row) => row.memberId)).toEqual([
           'm2',
         ]);
+      });
+
+      it("leaves a voided row out of the No Show report's suspension history", async () => {
+        // The report reads history only through listByMemberId: a voided
+        // record must neither double the next penalty nor restart the
+        // member's no-show count.
+        await repo.insert({
+          ...record,
+          suspendedAt: new Date('2026-03-01T00:00:00Z'),
+        });
+        const wrong = await repo.insert(record);
+        await repo.void(wrong.id, 'mod-1', 'recorded by mistake');
+
+        expect(suspensionHistory(await repo.listByMemberId('m1'))).toEqual({
+          priorCount: 1,
+          lastSuspendedDay: '2026-03-01',
+        });
       });
 
       it('lets the same member and date be recorded again after voiding', async () => {

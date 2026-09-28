@@ -52,6 +52,19 @@ export function keepReplyVisible(
   repliesToKeep.add(interaction);
 }
 
+/**
+ * Commands that post their own, more specific activity-log entry (who did
+ * what to which record, and why) mark themselves here so the wrapper doesn't
+ * add a second, generic "used" entry for the same action.
+ */
+const activityAlreadyLogged = new WeakSet<object>();
+
+export function markActivityLogged(
+  interaction: ButtonInteraction | CommandInteraction | ModalSubmitInteraction,
+) {
+  activityAlreadyLogged.add(interaction);
+}
+
 export async function discordCommandWrapper(
   interaction: ButtonInteraction | CommandInteraction | ModalSubmitInteraction,
   commandFn: () => Promise<void>,
@@ -75,6 +88,9 @@ export async function discordCommandWrapper(
       logger.warn(
         `Could not delete progress reply for ${action}: ${String(deleteError)}`,
       );
+    }
+    if (activityAlreadyLogged.delete(interaction)) {
+      return;
     }
     await logActivity(interaction.client, {
       title: `${action} used`,
