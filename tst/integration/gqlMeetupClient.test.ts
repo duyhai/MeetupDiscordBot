@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import nock from 'nock';
 import { afterEach, describe, expect, it } from 'vitest';
 
@@ -13,6 +14,11 @@ import { GroupEventFilter } from '../../src/lib/client/meetup/types.js';
 // boundary to Meetup's API stubbed out.
 
 const ENDPOINT = new URL(Configuration.meetup.endpoint);
+
+// getGroupEvents is cached, and Redis retains entries between runs. A host id
+// unique per execution keeps the cache key fresh, so these tests see real
+// network traffic rather than a hit left by a previous run.
+const RUN_ID = crypto.randomUUID();
 
 function graphqlScope() {
   return nock(ENDPOINT.origin).post(ENDPOINT.pathname);
@@ -104,7 +110,7 @@ describe('GqlMeetupClient (integration)', () => {
     const events = await getPaginatedData(async (paginationInput) => {
       const result = await client.getGroupEvents(paginationInput, {
         status: ['PAST'],
-        hostId: 'host-1',
+        hostId: `host-${RUN_ID}`,
       });
       return result.groupByUrlname.events;
     });
@@ -135,7 +141,7 @@ describe('GqlMeetupClient (integration)', () => {
     const input = { first: 100 };
     const filter: GroupEventFilter = {
       status: ['PAST'],
-      hostId: 'cache-test-host',
+      hostId: `cache-test-host-${RUN_ID}`,
     };
 
     const first = await client.getGroupEvents(input, filter);
