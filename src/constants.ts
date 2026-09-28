@@ -52,6 +52,9 @@ export const LGBTQ_CHANNEL_ID = '935434313183404062';
 // Meetup bot log channels (created by scripts/createLogChannels.ts)
 export const BOT_ACTIVITY_LOG_CHANNEL_ID = '1537755629849149442';
 export const BOT_ALERTS_CHANNEL_ID = '1537755631602237473';
+// Staff-only channel for no-show reports, suspension records, and voids:
+// member names and disciplinary details stay out of the general bot log.
+export const MODERATION_LOG_CHANNEL_ID = '932897527940931594';
 
 // OAuth landing page destinations
 export const GUILD_ID = '912461362289061939';

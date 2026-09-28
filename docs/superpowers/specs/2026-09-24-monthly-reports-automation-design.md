@@ -145,8 +145,28 @@ recomputed from Meetup each run.
 New Postgres table alongside the existing repositories
 (`src/lib/repositories/`), following the current repository pattern:
 
-- `member_id` (Meetup member ID), `member_name`, `suspended_at`,
+- `id`, `member_id` (Meetup member ID), `member_name`, `suspended_at`,
   `duration_days`, `notes`, `created_at`.
+- `voided_at`, `voided_by` (Discord user ID), `void_reason`: all null on a
+  live record.
+
+**Correcting records: void, never delete.** Disciplinary history keeps its
+audit trail, so a wrong record is voided with
+`/meetup_void_suspension id:<integer> reason:<text>` (mod-only, private
+reply, logged to the staff moderation channel). The `id` is the `#ID` that
+`/meetup_list_suspensions` prints before each record. A voided row stays in
+the table but is invisible everywhere else: it no longer counts as a prior
+suspension, drops out of the list, and must be treated as absent by any
+future reader (the No Show report included). To fix a wrong duration or
+date, void the record and re-record the corrected entry.
+
+**Uniqueness:** a unique index on `(member_id, suspended_at)` is **partial**,
+`WHERE voided_at IS NULL`, so a corrected record can reuse the date of the
+voided one. Inserts use
+`ON CONFLICT (member_id, suspended_at) WHERE voided_at IS NULL DO NOTHING` to
+match it. The schema ensure is idempotent and upgrades tables created before
+voiding existed: `ADD COLUMN IF NOT EXISTS` for the void columns, then the old
+full index is dropped and the partial one created under a new name.
 
 **Recording:** new command `/meetup_record_suspension`, replacing the
 spreadsheet going forward. Its one input is a CSV attachment
@@ -187,6 +207,21 @@ backfill script.
   caught. The membership lookup must not degrade silently: if it fails or
   Meetup authorization isn't completed, nothing is recorded (otherwise every
   row would be flagged).
+- A CSV row matching a live record's member and date is skipped as already
+  on file. If the stored duration differs from the row's, the summary shows
+  both values and the record ID: "void #ID and re-import to correct". This
+  is distinct from the policy flag above, which checks recorded rows against
+  30 days × 2^(prior suspensions).
+- Voiding an ID that doesn't exist or is already void changes nothing and
+  says so; a blank reason is refused.
+
+## Logging
+
+The No Show report, recording, listing, and voiding each post one entry to
+the staff-only moderation channel (`MODERATION_LOG_CHANNEL_ID`) instead of
+the general bot activity log, since the entries carry member names and
+disciplinary detail. Failures still raise an alert in the bot alerts
+channel.
 
 ## Testing
 

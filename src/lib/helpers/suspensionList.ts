@@ -47,7 +47,7 @@ function formatRecord(
   const notes = record.notes ? ` — ${record.notes}` : '';
   // Plain URL, not a markdown link: this renders inside a .txt attachment.
   const profileUrl = `https://www.meetup.com/members/${record.memberId}/`;
-  return `- ${record.memberId}${name}: ${record.durationDays} days from ${utcDateOnly(
+  return `- #${record.id} ${record.memberId}${name}: ${record.durationDays} days from ${utcDateOnly(
     record.suspendedAt,
   )} through ${lastSuspendedDay(record)}${notes}\n  ${profileUrl}`;
 }

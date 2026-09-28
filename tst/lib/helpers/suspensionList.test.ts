@@ -83,6 +83,14 @@ describe('formatSuspensionList', () => {
     expect(result).toContain('https://www.meetup.com/members/987/');
   });
 
+  it('prefixes each record with its ID so moderators can reference it', () => {
+    const result = formatSuspensionList(
+      [record({ id: 12, memberId: '987', memberName: 'Alice' })],
+      now,
+    );
+    expect(result).toContain('- #12 987 (Alice): 30 days from 2026-09-01');
+  });
+
   it('reports an empty table plainly', () => {
     expect(formatSuspensionList([], now)).toContain('No suspensions recorded');
   });

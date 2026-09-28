@@ -8,6 +8,7 @@ import { MeetupNoShowReportCommands } from './meetup/noShowReport.js';
 import { MeetupRecordSuspensionCommands } from './meetup/recordSuspension.js';
 import { MeetupTestGqlCommands } from './meetup/testGQL.js';
 import { UnlinkAccountCommands } from './meetup/unlinkAccount.js';
+import { MeetupVoidSuspensionCommands } from './meetup/voidSuspension.js';
 import { MeetupWhoisCommands } from './meetup/whoisAccount.js';
 import { SendMessageCommands } from './sendMessage.js';
 
@@ -23,6 +24,7 @@ const Commands = [
   SendMessageCommands,
   MeetupTestGqlCommands,
   UnlinkAccountCommands,
+  MeetupVoidSuspensionCommands,
   MeetupWhoisCommands,
 ];
 

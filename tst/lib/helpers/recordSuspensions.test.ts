@@ -49,6 +49,10 @@ class FakeSuspensionRepository implements RecorderRepository {
     return inserted;
   }
 
+  async listByMemberId(memberId: string) {
+    return this.records.filter((record) => record.memberId === memberId);
+  }
+
   async countSuspensionsBefore(memberId: string, before: Date) {
     return this.records.filter(
       (record) =>
@@ -171,6 +175,94 @@ describe('recordCsvRows', () => {
     expect(outcome.duplicates.map((r) => r.rowNumber)).toEqual([2, 4]);
   });
 
+  it('flags a row on file with a different duration, naming the record to void', async () => {
+    const existing = await repo.insert(
+      row({ memberId: '100', suspendedAt: sept1, durationDays: 30 }),
+    );
+
+    const outcome = await recordCsvRows(
+      repo,
+      [row({ memberId: '100', suspendedAt: sept1, durationDays: 60 })],
+      new Map([['100', 'Alice']]),
+    );
+
+    expect(outcome.duplicates).toEqual([
+      expect.objectContaining({
+        memberId: '100',
+        durationDays: 60,
+        existing: { id: existing?.id, durationDays: 30 },
+      }),
+    ]);
+    const summary = formatRecordSummary(outcome);
+    expect(summary.body).toContain(
+      `on file #${existing?.id} has 30 days, this row has 60`,
+    );
+    expect(summary.body).toContain(
+      `void #${existing?.id} and re-import to correct`,
+    );
+    expect(summary.content).toContain('1 differ from the record on file');
+    // Not the policy check: that one is only for rows actually recorded.
+    expect(outcome.durationMismatches).toEqual([]);
+  });
+
+  it('points a repeat within the file at the row it repeats, not at a record to void and re-import', async () => {
+    // Re-importing the same file would record row 2 again, so "void and
+    // re-import" would send the moderator in a circle.
+    const outcome = await recordCsvRows(
+      repo,
+      [
+        row({ memberId: '100', durationDays: 30, rowNumber: 2 }),
+        row({ memberId: '100', durationDays: 60, rowNumber: 5 }),
+      ],
+      new Map([['100', 'Alice']]),
+    );
+
+    const recordedId = repo.records[0].id;
+    expect(outcome.duplicates).toEqual([
+      expect.objectContaining({
+        rowNumber: 5,
+        repeatsRow: { rowNumber: 2, id: recordedId, durationDays: 30 },
+      }),
+    ]);
+    expect(outcome.duplicates[0].existing).toBeUndefined();
+
+    const summary = formatRecordSummary(outcome);
+    expect(summary.body).toContain(
+      `same member and date as row 2, recorded as #${recordedId} with 30 days; this row has 60`,
+    );
+    expect(summary.body).toContain(
+      `if this row is right, void #${recordedId} and upload a CSV with just this row`,
+    );
+    expect(summary.content).not.toContain('differ from the record on file');
+    expect(summary.content).toContain('1 repeat another row in the file');
+  });
+
+  it('notes a matching repeat within the file without asking for a fix', async () => {
+    const outcome = await recordCsvRows(
+      repo,
+      [row({ rowNumber: 2 }), row({ rowNumber: 3 })],
+      new Map([['100', 'Alice']]),
+    );
+
+    const summary = formatRecordSummary(outcome);
+    expect(summary.body).toContain('same member and date as row 2');
+    expect(summary.body).not.toContain('void #');
+  });
+
+  it('leaves a matching duplicate unflagged', async () => {
+    await repo.insert(row({ memberId: '100', suspendedAt: sept1 }));
+
+    const outcome = await recordCsvRows(
+      repo,
+      [row({ memberId: '100', suspendedAt: sept1 })],
+      new Map([['100', 'Alice']]),
+    );
+
+    const summary = formatRecordSummary(outcome);
+    expect(summary.body).not.toContain('void #');
+    expect(summary.content).not.toContain('differ');
+  });
+
   it('fills a missing name from the group lookup', async () => {
     const outcome = await recordCsvRows(
       repo,
@@ -204,6 +296,7 @@ describe('formatRecordSummary', () => {
           memberName: 'Bob',
           suspendedAt: sept1,
           rowNumber: 4,
+          durationDays: 30,
         },
       ],
       notInGroup: [{ memberId: '999', memberName: null, rowNumber: 7 }],

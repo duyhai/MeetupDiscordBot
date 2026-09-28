@@ -43,10 +43,21 @@ export interface SuspensionRecord {
 
 export type SuspensionInsert = Omit<SuspensionRecord, 'id' | 'createdAt'>;
 
+/**
+ * A record taken out of effect by a moderator. Voided rows stay in the table
+ * as the audit trail but are invisible to every read below.
+ */
+export interface VoidedSuspensionRecord extends SuspensionRecord {
+  voidedAt: Date;
+  /** Discord user ID of the moderator who voided it. */
+  voidedBy: string;
+  voidReason: string;
+}
+
 export interface SuspensionRepository {
   /**
    * Inserts a suspension record. Returns undefined instead of inserting when
-   * an identical (memberId, suspendedAt) pair already exists -- callers
+   * a non-voided record for the same (memberId, suspendedAt) exists -- callers
    * retrying a partially-failed batch must not double a member's penalty.
    * A different suspendedAt for the same member always inserts: repeat
    * suspensions on different dates are expected.
@@ -61,7 +72,17 @@ export interface SuspensionRepository {
    * a moderator back-dates one, doubling a first offence.
    */
   countSuspensionsBefore(memberId: string, before: Date): Promise<number>;
+  /** Newest first. Voided records are excluded, as they are from the count. */
   listByMemberId(memberId: string): Promise<SuspensionRecord[]>;
   listAll(): Promise<SuspensionRecord[]>;
+  /**
+   * Marks a record void rather than deleting it: disciplinary history keeps
+   * its audit trail. Returns undefined if the ID is unknown or already void.
+   */
+  void(
+    id: number,
+    voidedBy: string,
+    reason: string,
+  ): Promise<VoidedSuspensionRecord | undefined>;
   deleteAllForTest(): Promise<void>;
 }

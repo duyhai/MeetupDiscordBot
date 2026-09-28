@@ -11,7 +11,12 @@ import {
 import { Logger } from 'tslog';
 
 import { SERVER_ROLES, ServerRoles } from '../constants.js';
-import { logActivity, logAlert } from '../lib/helpers/discordLogger.js';
+import {
+  LogEntry,
+  logActivity,
+  logAlert,
+  logModeration,
+} from '../lib/helpers/discordLogger.js';
 
 const logger = new Logger({ name: 'DiscordUtil' });
 
@@ -52,6 +57,32 @@ export function keepReplyVisible(
   repliesToKeep.add(interaction);
 }
 
+/**
+ * Commands that post their own, more specific activity-log entry (who did
+ * what to which record, and why) mark themselves here so the wrapper doesn't
+ * add a second, generic "used" entry for the same action.
+ */
+const activityAlreadyLogged = new WeakSet<object>();
+
+export function markActivityLogged(
+  interaction: ButtonInteraction | CommandInteraction | ModalSubmitInteraction,
+) {
+  activityAlreadyLogged.add(interaction);
+}
+
+/**
+ * Logs a moderation action (no-show report, suspension record, void) to
+ * the staff moderation channel, in place of the wrapper's generic entry in
+ * the bot activity log.
+ */
+export async function logModerationAction(
+  interaction: ButtonInteraction | CommandInteraction | ModalSubmitInteraction,
+  entry: LogEntry,
+) {
+  await logModeration(interaction.client, entry);
+  markActivityLogged(interaction);
+}
+
 export async function discordCommandWrapper(
   interaction: ButtonInteraction | CommandInteraction | ModalSubmitInteraction,
   commandFn: () => Promise<void>,
@@ -75,6 +106,9 @@ export async function discordCommandWrapper(
       logger.warn(
         `Could not delete progress reply for ${action}: ${String(deleteError)}`,
       );
+    }
+    if (activityAlreadyLogged.delete(interaction)) {
+      return;
     }
     await logActivity(interaction.client, {
       title: `${action} used`,
