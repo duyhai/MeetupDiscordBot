@@ -17,6 +17,7 @@ import {
 } from '../../lib/helpers/hallOfFame.js';
 import {
   discordCommandWrapper,
+  logModerationAction,
   linkStr,
   withDiscordFileAttachment,
 } from '../../util/discord.js';
@@ -363,6 +364,22 @@ ${formattedResult}
             });
           },
         );
+        // Lists members' no-shows, so it's logged with the other moderation
+        // commands in the staff channel rather than the general activity log.
+        await logModerationAction(interaction, {
+          title: 'No-show stats run',
+          description: `${interaction.user.toString()} ran /meetup_get_noshow_event_stats for ${year}${
+            month > 0 ? `-${month}` : ' (whole year)'
+          }.`,
+          fields: [
+            { name: 'No-shows', value: String(total), inline: true },
+            {
+              name: 'Members',
+              value: String(noShowMembers.size),
+              inline: true,
+            },
+          ],
+        });
       });
     });
   }
