@@ -1463,6 +1463,14 @@ git commit -m "Add /meetup_record_suspension with bulk-ID and CSV modes"
 > most recent suspension count. Without the reset, the no-shows behind a suspension
 > stay in the window and suspend the member again, doubled, for the same no-shows.
 > Prior suspensions use `countSuspensionsBefore(memberId, date)`.
+>
+> **Amended 2026-09-28 — as built.** The trailing-12-month event scan and the
+> 90-day upcoming-event scan below were replaced with per-member RSVP queries
+> (`GqlMeetupClient.getMemberRsvpEvents`), after a live check showed they return
+> other members' NO_SHOW and upcoming YES RSVPs. The counting rules live in the
+> pure `countableNoShows` / `buildNoShowCases` helpers; the prior count and last
+> suspension day come from `listByMemberId`. The suggested CSV quotes every field
+> and leaves `suspended_at` blank. See the spec's Phase 3 section.
 
 **Files:**
 - Create: `src/commands/meetup/noShowReport.ts`

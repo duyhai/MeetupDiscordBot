@@ -155,3 +155,99 @@ describe('GqlMeetupClient.getGroupMembersByIds', () => {
     expect(members.map((member) => member.id)).toEqual(ids);
   });
 });
+
+describe('GqlMeetupClient.getMemberRsvpEvents', () => {
+  afterEach(() => {
+    nock.cleanAll();
+  });
+
+  function rsvpPage(
+    events: { id: string; dateTime: string }[],
+    hasNextPage = false,
+  ) {
+    return {
+      data: {
+        groupByUrlname: {
+          id: '7595882',
+          memberships: {
+            edges: [
+              {
+                node: {
+                  id: '100',
+                  rsvps: {
+                    pageInfo: {
+                      hasNextPage,
+                      hasPreviousPage: false,
+                      startCursor: 's',
+                      endCursor: `after-${events.at(-1)?.id}`,
+                    },
+                    totalCount: events.length,
+                    edges: events.map((e) => ({
+                      node: {
+                        event: {
+                          ...e,
+                          title: `Event ${e.id}`,
+                          eventUrl: `https://meetup.com/e/${e.id}`,
+                        },
+                      },
+                    })),
+                  },
+                },
+              },
+            ],
+          },
+        },
+      },
+    };
+  }
+
+  it("queries one member's RSVPs in this group and pages through them", async () => {
+    type Vars = {
+      memberIds: number[];
+      after?: string;
+      filter: { groupId: string; rsvpStatus: string[]; eventStatus: string[] };
+    };
+    const sent: Vars[] = [];
+    graphqlScope()
+      .times(2)
+      .reply(200, (_uri, body: { variables: Vars }) => {
+        sent.push(body.variables);
+        return body.variables.after
+          ? rsvpPage([{ id: 'e2', dateTime: '2026-09-12T18:00:00-07:00' }])
+          : rsvpPage(
+              [{ id: 'e1', dateTime: '2026-09-05T18:00:00-07:00' }],
+              true,
+            );
+      });
+
+    const client = new GqlMeetupClient('test-access-token');
+    const events = await client.getMemberRsvpEvents('100', '7595882', {
+      rsvpStatus: ['NO_SHOW'],
+      eventStatus: ['PAST'],
+    });
+
+    expect(events?.map((e) => e.id)).toEqual(['e1', 'e2']);
+    expect(events?.[0].title).toBe('Event e1');
+    expect(sent[0].memberIds).toEqual([100]);
+    expect(sent[0].filter).toEqual({
+      groupId: '7595882',
+      rsvpStatus: ['NO_SHOW'],
+      eventStatus: ['PAST'],
+    });
+    expect(sent[1].after).toBe('after-e1');
+  });
+
+  it('returns undefined for someone who is no longer a group member', async () => {
+    graphqlScope().reply(200, {
+      data: { groupByUrlname: { id: '7595882', memberships: { edges: [] } } },
+    });
+
+    const client = new GqlMeetupClient('test-access-token');
+    expect(
+      await client.getMemberRsvpEvents('999', '7595882', {
+        rsvpStatus: ['NO_SHOW'],
+        eventStatus: ['PAST'],
+      }),
+    ).toBeUndefined();
+  });
+});

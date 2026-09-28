@@ -104,23 +104,38 @@ not an option: there is no `member(id)` root query.
 
 ### New command: `/meetup_run_noshow_report year month`
 
-1. Pull the report month's NO_SHOW RSVPs (existing logic from
-   `meetup_get_noshow_event_stats`).
-2. Scan the trailing 12 months of events once, fetch NO_SHOW RSVPs per event
-   (reusing the existing parallel fetch pattern), and tally per flagged
-   member. This replaces the per-member profile checks.
-3. Classify each flagged member per the policy above.
-4. For suspension candidates: look up prior suspensions in
-   `suspension_records`, compute the recommended penalty
-   (30 days × 2^(prior count)), fetch the member's upcoming YES RSVPs, and
-   compute the act-by date: next event date minus 3 days (the latest date the
-   suspension should be applied; the 3–5 day window guidance is printed
+1. Pull the report month's NO_SHOW RSVPs, event by event (Meetup has no
+   group-wide no-show query). This decides who is in the report.
+2. For each of those members, read their own group RSVP history with one
+   per-member query: the group's member list filtered by ID exposes each
+   member's `rsvps(filter: { groupId, rsvpStatus, eventStatus })`. Verified
+   live on 2026-09-28: it returns other members' NO_SHOW and upcoming YES
+   RSVPs, matching the event scan and the member's Meetup profile page.
+   Meetup's `startDate`/`endDate` filter is not reliably applied to the
+   returned list, so dates are filtered in code. The month's no-shows are
+   merged in, so an event missing from the per-member list still counts.
+3. Load each member's suspension records (prior count, most recent
+   suspension day) and classify per the policy above, counting only
+   no-shows after the later of 12 months ago and the last suspension, by
+   Seattle calendar day. Members left with no countable no-shows are listed
+   as "no action needed"; members who have left the group are listed but
+   not classified (their history can't be read).
+4. For suspension candidates: compute the recommended penalty
+   (30 days × 2^(prior count)), fetch the member's upcoming YES RSVPs in
+   the group with another per-member query (no look-ahead cap), and compute
+   the act-by day: the next event's day minus 3 (the latest day the
+   suspension should be applied; the 3–5 day guidance is printed
    alongside it).
 5. Output one report grouped **Warnings** / **Suspension candidates**. Each
-   row: member link + ID, 12-month no-show count with the events, prior
-   suspension count, recommended penalty, next RSVP'd event, act-by date.
-   Delivered as a private attachment like the existing commands; the moderator
-   hands it to Melissa.
+   row: member link + ID, countable no-show count and since when, the
+   counted events, prior suspension count, recommended penalty, next RSVP'd
+   event, act-by day. Delivered as a private attachment; the moderator hands
+   it to Melissa. A suggested-suspensions CSV comes with it, with
+   `suspended_at` left blank so the recorder refuses it until the moderator
+   enters the day each suspension was actually applied.
+
+About 100 requests for the month's events plus two per flagged member,
+instead of re-reading every event of the past year.
 
 Warnings are not logged: the classification is purely count-based and
 recomputed from Meetup each run.
