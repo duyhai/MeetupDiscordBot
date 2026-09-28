@@ -1,5 +1,9 @@
 import dayjs from 'dayjs';
-import { ApplicationCommandOptionType, CommandInteraction } from 'discord.js';
+import {
+  ApplicationCommandOptionType,
+  CommandInteraction,
+  PermissionFlagsBits,
+} from 'discord.js';
 import { Discord, Slash, SlashOption } from 'discordx';
 import { Logger } from 'tslog';
 import { GqlMeetupClient } from '../../lib/client/meetup/gqlClient.js';
@@ -18,6 +22,7 @@ import {
 import {
   discordCommandWrapper,
   logModerationAction,
+  requireModOrOrganizer,
   linkStr,
   withDiscordFileAttachment,
 } from '../../util/discord.js';
@@ -228,6 +233,9 @@ ${readyToPost}`;
   @Slash({
     name: 'meetup_get_noshow_event_stats',
     description: `Getting no show event stats from Meetup`,
+    // Lists members' no-shows: mods only. Hides the command from everyone
+    // else; the role check inside the handler stays authoritative.
+    defaultMemberPermissions: PermissionFlagsBits.ModerateMembers,
   })
   async meetupGetNoShowEventStatsHandler(
     @SlashOption({
@@ -267,6 +275,10 @@ ${readyToPost}`;
     const shouldShowDates = showDates ?? true;
     const shouldIncludeLinks = includeLinks ?? true;
     await discordCommandWrapper(interaction, async () => {
+      await requireModOrOrganizer(
+        interaction,
+        'Only moderators and organizers can view no-show stats.',
+      );
       await withMeetupClient(interaction, async (meetupClient) => {
         logger.info('Fetching data');
         await interaction.editReply({
