@@ -7,10 +7,14 @@
 import { Client, TextChannel } from 'discord.js';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { BOT_ACTIVITY_LOG_CHANNEL_ID } from '../../../src/constants.js';
+import {
+  BOT_ACTIVITY_LOG_CHANNEL_ID,
+  MODERATION_LOG_CHANNEL_ID,
+} from '../../../src/constants.js';
 import {
   logActivity,
   logAlert,
+  logModeration,
 } from '../../../src/lib/helpers/discordLogger.js';
 
 function makeClient(
@@ -45,6 +49,16 @@ describe('discordLogger', () => {
     const payload = sendMock.mock.calls[0][0];
     expect(payload.embeds).toHaveLength(1);
     expect(payload.allowedMentions).toEqual({ parse: [] });
+  });
+
+  it('logModeration sends to the staff moderation channel, not the activity log', async () => {
+    const client = makeClient(sendMock);
+    const fetchMock = client.channels.fetch as ReturnType<typeof vi.fn>;
+    await logModeration(client, { title: 'Suspension record voided' });
+
+    expect(fetchMock).toHaveBeenCalledWith(MODERATION_LOG_CHANNEL_ID);
+    expect(fetchMock).not.toHaveBeenCalledWith(BOT_ACTIVITY_LOG_CHANNEL_ID);
+    expect(sendMock.mock.calls[0][0].allowedMentions).toEqual({ parse: [] });
   });
 
   it('logAlert includes fields in the embed', async () => {

@@ -154,6 +154,80 @@ export const getGroupEvents = gql`
   ${UserFragment}
 `;
 
+// Sends the filter exactly as given, with no +1-month expansion, so
+// totalCount reflects the caller's actual window. Used where only a count is
+// needed (e.g. new-host detection), unlike getGroupEvents which pads
+// beforeDateTime to catch multi-day events straddling the boundary.
+export const getGroupEventsCount = gql`
+  query ($urlname: String!, $filter: GroupEventFilter) {
+    groupByUrlname(urlname: $urlname) {
+      id
+      events(first: 1, filter: $filter) {
+        totalCount
+      }
+    }
+  }
+`;
+
+export const getGroupMembersByIds = gql`
+  query ($urlname: String!, $memberIds: [Int!], $first: Int!) {
+    groupByUrlname(urlname: $urlname) {
+      id
+      memberships(first: $first, filter: { memberIds: $memberIds }) {
+        edges {
+          node {
+            ...UserDetails
+          }
+        }
+      }
+    }
+  }
+  ${UserFragment}
+`;
+
+// One member's RSVPs in this group, reached through the group's member list
+// (there is no root query by member ID). Meetup honours groupId and the
+// statuses, but not reliably startDate/endDate, so callers filter by date.
+export const getMemberRsvps = gql`
+  query (
+    $urlname: String!
+    $memberIds: [Int!]
+    $first: Int!
+    $after: String
+    $filter: RsvpFilter
+  ) {
+    groupByUrlname(urlname: $urlname) {
+      id
+      memberships(first: 1, filter: { memberIds: $memberIds }) {
+        edges {
+          node {
+            id
+            rsvps(first: $first, after: $after, filter: $filter) {
+              pageInfo {
+                hasNextPage
+                hasPreviousPage
+                startCursor
+                endCursor
+              }
+              totalCount
+              edges {
+                node {
+                  event {
+                    id
+                    title
+                    dateTime
+                    eventUrl
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+`;
+
 export const getEvent = gql`
   query ($eventId: ID!) {
     event(id: $eventId) {

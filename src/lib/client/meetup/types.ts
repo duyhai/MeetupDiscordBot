@@ -75,7 +75,7 @@ type MembershipStatus =
   | 'REMOVED'
   | 'UNAPPROVED';
 
-type EventStatus =
+export type EventStatus =
   | 'ACTIVE'
   | 'AUTOSCHED'
   | 'AUTOSCHED_CANCELLED'
@@ -188,6 +188,66 @@ export type GetGroupEventsInput = {
   after?: string;
   filter?: GroupEventFilter;
   first: number;
+  urlname: string;
+};
+
+export interface GetGroupEventsCountResponse {
+  groupByUrlname: {
+    events: { totalCount: number };
+    id: string;
+  };
+}
+
+export type GetGroupEventsCountInput = {
+  filter?: GroupEventFilter;
+  urlname: string;
+};
+
+export interface GetGroupMembersByIdsResponse {
+  groupByUrlname: {
+    id: string;
+    memberships: {
+      edges: { node: BaseUserInfo }[];
+    };
+  };
+}
+
+/** The event fields a member's RSVP list carries. */
+export type EventSummary = Pick<
+  Event,
+  'dateTime' | 'eventUrl' | 'id' | 'title'
+>;
+
+export interface MemberRsvpFilter {
+  eventStatus: ('PAST' | 'UPCOMING')[];
+  rsvpStatus: RsvpStatus[];
+}
+
+export interface GetMemberRsvpsResponse {
+  groupByUrlname: {
+    id: string;
+    memberships: {
+      edges: {
+        node: {
+          id: string;
+          rsvps: PaginatedData<{ event: EventSummary }>;
+        };
+      }[];
+    };
+  };
+}
+
+export type GetMemberRsvpsInput = {
+  after?: string;
+  filter: MemberRsvpFilter & { groupId: string };
+  first: number;
+  memberIds: number[];
+  urlname: string;
+};
+
+export type GetGroupMembersByIdsInput = {
+  first: number;
+  memberIds: number[];
   urlname: string;
 };
 

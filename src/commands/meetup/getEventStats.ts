@@ -1,13 +1,28 @@
 import dayjs from 'dayjs';
-import { ApplicationCommandOptionType, CommandInteraction } from 'discord.js';
+import {
+  ApplicationCommandOptionType,
+  CommandInteraction,
+  PermissionFlagsBits,
+} from 'discord.js';
 import { Discord, Slash, SlashOption } from 'discordx';
 import { Logger } from 'tslog';
 import { GqlMeetupClient } from '../../lib/client/meetup/gqlClient.js';
-import { getPaginatedData } from '../../lib/client/meetup/paginationHelper.js';
+import {
+  getPaginatedData,
+  mapWithConcurrency,
+} from '../../lib/client/meetup/paginationHelper.js';
 
 import { BaseUserInfo, Event } from '../../lib/client/meetup/types.js';
 import {
+  collectHostStats,
+  displayedEvents,
+  formatHallOfFamePost,
+  isCountableEvent,
+} from '../../lib/helpers/hallOfFame.js';
+import {
   discordCommandWrapper,
+  logModerationAction,
+  requireModOrOrganizer,
   linkStr,
   withDiscordFileAttachment,
 } from '../../util/discord.js';
@@ -16,7 +31,11 @@ import { tz } from '../../util/timezone.js';
 
 const logger = new Logger({ name: 'MeetupGetStatsCommands' });
 
-async function getEventsYearMonth(
+// Bounds parallel RSVP-fetch fan-outs so a month with many events doesn't
+// fire dozens of paginated requests at Meetup simultaneously.
+const RSVP_FETCH_CONCURRENCY = 5;
+
+export async function getEventsYearMonth(
   meetupClient: GqlMeetupClient,
   year: number,
   month: number,
@@ -36,6 +55,35 @@ async function getEventsYearMonth(
     });
     return result.groupByUrlname.events;
   });
+}
+
+/**
+ * A host is "new" when the group has no PAST event of theirs before the
+ * report window. One first:1 totalCount query per host, run in parallel.
+ * Live-schema introspection (2026-09-25) confirmed GroupEventFilter accepts
+ * hostId + beforeDateTime + status; see the design spec for the fallback if
+ * the resolver ignores the combination.
+ */
+export async function findNewHostIds(
+  meetupClient: GqlMeetupClient,
+  hostIds: string[],
+  beforeIso: string,
+): Promise<Set<string>> {
+  const checks = await mapWithConcurrency(
+    hostIds,
+    RSVP_FETCH_CONCURRENCY,
+    async (hostId) => {
+      const priorCount = await meetupClient.getGroupEventsCount({
+        hostId,
+        beforeDateTime: beforeIso,
+        status: ['PAST'],
+      });
+      return { hostId, priorCount };
+    },
+  );
+  return new Set(
+    checks.filter((check) => check.priorCount === 0).map((c) => c.hostId),
+  );
 }
 
 @Discord()
@@ -84,89 +132,89 @@ export class MeetupGetEventStatsCommands {
     await discordCommandWrapper(interaction, async () => {
       await withMeetupClient(interaction, async (meetupClient) => {
         logger.info('Fetching data');
-        await interaction.editReply({
-          content: 'Sit tight! Fetching data.',
-        });
+        await interaction.editReply({ content: 'Sit tight! Fetching data.' });
 
         const pastEvents = await getEventsYearMonth(meetupClient, year, month);
+        const countableEvents = pastEvents.filter(isCountableEvent);
+        const { hostStats, totalEvents } = collectHostStats(countableEvents);
 
-        let total = 0;
-        const hostEvents = new Map<string, Array<string>>();
-        const hosts = new Map<string, BaseUserInfo>();
-
-        for (const event of pastEvents) {
-          const { id, eventHosts, title, maxTickets, eventUrl, dateTime } =
-            event;
-
-          if (title.includes('[Open House]')) {
-            logger.info(`Skipping ${title}. Open House`);
-
-            continue;
-          }
-
-          // eslint-disable-next-line no-await-in-loop
-          const rsvps = await getPaginatedData(async (paginationInput) => {
-            const result = await meetupClient.getEventRsvps(
-              id,
-              paginationInput,
-              {
-                rsvpStatus: ['ATTENDED', 'YES'],
-              },
-            );
-            return result.event.rsvps;
-          });
-
-          total += 1;
-          eventHosts.forEach((host) => {
-            const key = host.member.id;
-            if (!hostEvents.has(key)) {
-              hostEvents.set(key, []);
-            }
-
-            hosts.set(key, host.member);
-            const titleStr = `${title} (${rsvps.length}/${maxTickets})`;
-            hostEvents
-              .get(key)
-              .push(
-                `${
-                  shouldIncludeLinks ? linkStr(titleStr, eventUrl) : titleStr
-                } ${shouldShowDates ? tz(dayjs(dateTime)).format('LLL') : ''}`,
+        // Attendance for the detailed attachment, fetched for exactly the
+        // events it displays (see displayedEvents).
+        const rsvpCounts = new Map<string, number>();
+        await mapWithConcurrency(
+          displayedEvents(hostStats),
+          RSVP_FETCH_CONCURRENCY,
+          async (event) => {
+            const rsvps = await getPaginatedData(async (paginationInput) => {
+              const result = await meetupClient.getEventRsvps(
+                event.id,
+                paginationInput,
+                { rsvpStatus: ['ATTENDED', 'YES'] },
               );
-          });
-        }
+              return result.event.rsvps;
+            });
+            rsvpCounts.set(event.id, rsvps.length);
+          },
+        );
 
-        const formattedResult = Array.from(hostEvents.entries())
-          .sort(
-            (entry1: [string, string[]], entry2: [string, string[]]) =>
-              entry1[1].length - entry2[1].length,
-          )
-          .reverse()
-          .map((entry: [string, string[]], index: number) => {
-            const [id, events] = entry;
-            const hostInfo = hosts.get(id);
+        const monthStart = tz(dayjs())
+          .set('year', year)
+          .set('month', month === 0 ? 0 : month - 1)
+          .startOf(month === 0 ? 'year' : 'month');
+        const newHostIds = await findNewHostIds(
+          meetupClient,
+          hostStats.map((stats) => stats.host.id),
+          monthStart.toISOString(),
+        );
+
+        const detailedResult = hostStats
+          .map((stats, index) => {
+            const { host, events } = stats;
             const header = `**#${index + 1}: ${events.length} ${
               shouldIncludeLinks
-                ? linkStr(hostInfo.name, hostInfo.memberUrl)
-                : hostInfo.name
-            } ID: ${id}**\n`;
-            const body = events.map((event) => `    ${event}`).join('\n');
+                ? linkStr(host.name, host.memberUrl)
+                : host.name
+            } ID: ${host.id}**${newHostIds.has(host.id) ? ' 🆕' : ''}\n`;
+            const body = events
+              .map((event) => {
+                const titleStr = `${event.title} (${
+                  rsvpCounts.get(event.id) ?? 0
+                }/${event.maxTickets})`;
+                return `    ${
+                  shouldIncludeLinks
+                    ? linkStr(titleStr, event.eventUrl)
+                    : titleStr
+                } ${shouldShowDates ? tz(dayjs(event.dateTime)).format('LLL') : ''}`;
+              })
+              .join('\n');
             return header + body;
           })
           .join('\n');
 
-        const header = `**Hosting stats for ${year} ${
+        const periodLabel = `${year}${
           month > 0
-            ? dayjs()
+            ? ` ${dayjs()
                 .month(month - 1)
-                .format('MMMM')
+                .format('MMMM')}`
             : ''
-        }**`;
+        }`;
+        const header = `**Hosting stats for ${periodLabel}**`;
+        const readyToPost = formatHallOfFamePost({
+          periodLabel,
+          hostStats,
+          totalEvents,
+          newHostIds,
+        });
         const result = `
 ${header}
-          
-${formattedResult}
 
-**Total: ${total}**`;
+${detailedResult}
+
+**Total: ${totalEvents}**
+
+----- READY TO POST -----
+
+${readyToPost}`;
         await withDiscordFileAttachment(
           `${header}.txt`,
           result,
@@ -185,6 +233,9 @@ ${formattedResult}
   @Slash({
     name: 'meetup_get_noshow_event_stats',
     description: `Getting no show event stats from Meetup`,
+    // Lists members' no-shows: mods only. Hides the command from everyone
+    // else; the role check inside the handler stays authoritative.
+    defaultMemberPermissions: PermissionFlagsBits.ModerateMembers,
   })
   async meetupGetNoShowEventStatsHandler(
     @SlashOption({
@@ -224,6 +275,10 @@ ${formattedResult}
     const shouldShowDates = showDates ?? true;
     const shouldIncludeLinks = includeLinks ?? true;
     await discordCommandWrapper(interaction, async () => {
+      await requireModOrOrganizer(
+        interaction,
+        'Only moderators and organizers can view no-show stats.',
+      );
       await withMeetupClient(interaction, async (meetupClient) => {
         logger.info('Fetching data');
         await interaction.editReply({
@@ -236,24 +291,26 @@ ${formattedResult}
         const noShowMembers = new Map<string, BaseUserInfo>();
         const noShowEventsPerMember = new Map<string, Event[]>();
 
-        // Create an array of promises, one for each event's RSVP fetch
-        const rsvpPromises = pastEvents.map(async (event) => {
-          const rsvps = await getPaginatedData(async (paginationInput) => {
-            const result = await meetupClient.getEventRsvps(
-              event.id,
-              paginationInput,
-              {
-                rsvpStatus: ['NO_SHOW'],
-              },
-            );
-            return result.event.rsvps;
-          });
-          // Return an object containing the event and its no-show rsvps
-          return { event, rsvps };
-        });
-
-        // Await all promises to resolve in parallel
-        const results = await Promise.all(rsvpPromises);
+        // Fetch each event's no-show RSVPs, bounded to a small number of
+        // concurrent requests.
+        const results = await mapWithConcurrency(
+          pastEvents,
+          RSVP_FETCH_CONCURRENCY,
+          async (event) => {
+            const rsvps = await getPaginatedData(async (paginationInput) => {
+              const result = await meetupClient.getEventRsvps(
+                event.id,
+                paginationInput,
+                {
+                  rsvpStatus: ['NO_SHOW'],
+                },
+              );
+              return result.event.rsvps;
+            });
+            // Return an object containing the event and its no-show rsvps
+            return { event, rsvps };
+          },
+        );
 
         // Now iterate over the results and process the data
         results.forEach(({ event, rsvps }) => {
@@ -319,6 +376,22 @@ ${formattedResult}
             });
           },
         );
+        // Lists members' no-shows, so it's logged with the other moderation
+        // commands in the staff channel rather than the general activity log.
+        await logModerationAction(interaction, {
+          title: 'No-show stats run',
+          description: `${interaction.user.toString()} ran /meetup_get_noshow_event_stats for ${year}${
+            month > 0 ? `-${month}` : ' (whole year)'
+          }.`,
+          fields: [
+            { name: 'No-shows', value: String(total), inline: true },
+            {
+              name: 'Members',
+              value: String(noShowMembers.size),
+              inline: true,
+            },
+          ],
+        });
       });
     });
   }
