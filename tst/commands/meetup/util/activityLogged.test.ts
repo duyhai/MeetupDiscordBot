@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   discordCommandWrapper,
+  logModerationAction,
   markActivityLogged,
 } from '../../../../src/util/discord.js';
 import * as discordLogger from '../../../../src/lib/helpers/discordLogger.js';
@@ -10,6 +11,7 @@ import * as discordLogger from '../../../../src/lib/helpers/discordLogger.js';
 vi.mock('../../../../src/lib/helpers/discordLogger.js', () => ({
   logActivity: vi.fn().mockResolvedValue(undefined),
   logAlert: vi.fn().mockResolvedValue(undefined),
+  logModeration: vi.fn().mockResolvedValue(undefined),
 }));
 
 function makeInteraction() {
@@ -58,5 +60,19 @@ describe('discordCommandWrapper activity log', () => {
     await discordCommandWrapper(makeInteraction(), async () => {});
 
     expect(vi.mocked(discordLogger.logActivity)).toHaveBeenCalledTimes(1);
+  });
+
+  it('logs moderation actions to the moderation channel only', async () => {
+    const interaction = makeInteraction();
+
+    await discordCommandWrapper(interaction, async () => {
+      await logModerationAction(interaction, { title: 'Suspensions recorded' });
+    });
+
+    expect(vi.mocked(discordLogger.logModeration)).toHaveBeenCalledWith(
+      interaction.client,
+      { title: 'Suspensions recorded' },
+    );
+    expect(vi.mocked(discordLogger.logActivity)).not.toHaveBeenCalled();
   });
 });

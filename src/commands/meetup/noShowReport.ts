@@ -29,6 +29,7 @@ import {
 import { PostgresSuspensionRepository } from '../../lib/repositories/postgresSuspensionRepository.js';
 import {
   discordCommandWrapper,
+  logModerationAction,
   requireModOrOrganizer,
   withDiscordFileAttachment,
 } from '../../util/discord.js';
@@ -211,6 +212,10 @@ export class MeetupNoShowReportCommands {
             content: `No no-shows recorded for ${year}-${month}. 🎉`,
             ephemeral: true,
           });
+          await logModerationAction(interaction, {
+            title: 'No Show report run',
+            description: `${interaction.user.toString()} ran the ${year}-${month} report: no no-shows.`,
+          });
           return;
         }
 
@@ -239,6 +244,33 @@ export class MeetupNoShowReportCommands {
         );
 
         await sendReport(interaction, year, month, result);
+        const count = (classification: 'warning' | 'suspension') =>
+          String(
+            result.cases.filter((c) => c.classification === classification)
+              .length,
+          );
+        await logModerationAction(interaction, {
+          title: 'No Show report run',
+          description: `${interaction.user.toString()} ran the ${year}-${month} report.`,
+          fields: [
+            { name: 'Warnings', value: count('warning'), inline: true },
+            {
+              name: 'Suspension candidates',
+              value: count('suspension'),
+              inline: true,
+            },
+            {
+              name: 'No action needed',
+              value: String(result.cleared.length),
+              inline: true,
+            },
+            {
+              name: 'No longer in the group',
+              value: String(result.departed.length),
+              inline: true,
+            },
+          ],
+        });
       });
     });
   }

@@ -202,6 +202,8 @@ function differenceSuffix(skipped: SkippedSuspension): string {
  * the rows are already committed.
  */
 export function formatRecordSummary(outcome: RecordOutcome): {
+  /** One line of counts, e.g. for the moderation log. */
+  result: string;
   content: string;
   body: string;
 } {
@@ -219,9 +221,10 @@ export function formatRecordSummary(outcome: RecordOutcome): {
         } to check`
       : '',
   ].filter(Boolean);
-  const content = `Recorded ${recorded.length} suspension(s)${
+  const result = `Recorded ${recorded.length} suspension(s)${
     counts.length ? ` (${counts.join(', ')})` : ''
-  }. Details in the attachment.`;
+  }.`;
+  const content = `${result} Details in the attachment.`;
 
   const sections = [
     `Recorded (${recorded.length}):`,
@@ -270,5 +273,5 @@ export function formatRecordSummary(outcome: RecordOutcome): {
       ),
     );
   }
-  return { content, body: sections.join('\n') };
+  return { result, content, body: sections.join('\n') };
 }

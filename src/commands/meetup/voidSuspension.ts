@@ -6,13 +6,12 @@ import {
 import { Discord, Slash, SlashOption } from 'discordx';
 import { Logger } from 'tslog';
 
-import { logActivity } from '../../lib/helpers/discordLogger.js';
 import { utcDateOnly } from '../../lib/helpers/suspensionList.js';
 import { voidSuspension } from '../../lib/helpers/voidSuspension.js';
 import { PostgresSuspensionRepository } from '../../lib/repositories/postgresSuspensionRepository.js';
 import {
   discordCommandWrapper,
-  markActivityLogged,
+  logModerationAction,
   requireModOrOrganizer,
 } from '../../util/discord.js';
 
@@ -63,7 +62,7 @@ export class MeetupVoidSuspensionCommands {
       logger.info(
         `${interaction.user.username} voided suspension #${record.id} (member ${record.memberId}): ${record.voidReason}`,
       );
-      await logActivity(interaction.client, {
+      await logModerationAction(interaction, {
         title: 'Suspension record voided',
         description: `${interaction.user.toString()} voided suspension #${record.id}.`,
         fields: [
@@ -82,7 +81,6 @@ export class MeetupVoidSuspensionCommands {
           { name: 'Reason', value: record.voidReason },
         ],
       });
-      markActivityLogged(interaction);
       await interaction.followUp({ content: reply, ephemeral: true });
     });
   }

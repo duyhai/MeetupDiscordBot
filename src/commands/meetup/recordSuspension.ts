@@ -17,6 +17,7 @@ import { PostgresSuspensionRepository } from '../../lib/repositories/postgresSus
 import {
   discordCommandWrapper,
   keepReplyVisible,
+  logModerationAction,
   requireModOrOrganizer,
   withDiscordFileAttachment,
 } from '../../util/discord.js';
@@ -97,6 +98,11 @@ export class MeetupRecordSuspensionCommands {
             });
           },
         );
+        await logModerationAction(interaction, {
+          title: 'Suspensions recorded',
+          description: `${interaction.user.toString()} uploaded ${csv.name}.`,
+          fields: [{ name: 'Result', value: summary.result }],
+        });
       });
     });
   }

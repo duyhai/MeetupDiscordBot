@@ -153,7 +153,7 @@ New Postgres table alongside the existing repositories
 **Correcting records: void, never delete.** Disciplinary history keeps its
 audit trail, so a wrong record is voided with
 `/meetup_void_suspension id:<integer> reason:<text>` (mod-only, private
-reply, logged to the bot activity-log channel). The `id` is the `#ID` that
+reply, logged to the staff moderation channel). The `id` is the `#ID` that
 `/meetup_list_suspensions` prints before each record. A voided row stays in
 the table but is invisible everywhere else: it no longer counts as a prior
 suspension, drops out of the list, and must be treated as absent by any
@@ -214,6 +214,14 @@ backfill script.
   30 days × 2^(prior suspensions).
 - Voiding an ID that doesn't exist or is already void changes nothing and
   says so; a blank reason is refused.
+
+## Logging
+
+The No Show report, recording, listing, and voiding each post one entry to
+the staff-only moderation channel (`MODERATION_LOG_CHANNEL_ID`) instead of
+the general bot activity log, since the entries carry member names and
+disciplinary detail. Failures still raise an alert in the bot alerts
+channel.
 
 ## Testing
 

@@ -11,7 +11,12 @@ import {
 import { Logger } from 'tslog';
 
 import { SERVER_ROLES, ServerRoles } from '../constants.js';
-import { logActivity, logAlert } from '../lib/helpers/discordLogger.js';
+import {
+  LogEntry,
+  logActivity,
+  logAlert,
+  logModeration,
+} from '../lib/helpers/discordLogger.js';
 
 const logger = new Logger({ name: 'DiscordUtil' });
 
@@ -63,6 +68,19 @@ export function markActivityLogged(
   interaction: ButtonInteraction | CommandInteraction | ModalSubmitInteraction,
 ) {
   activityAlreadyLogged.add(interaction);
+}
+
+/**
+ * Logs a moderation action (no-show report, suspension record, void) to
+ * the staff moderation channel, in place of the wrapper's generic entry in
+ * the bot activity log.
+ */
+export async function logModerationAction(
+  interaction: ButtonInteraction | CommandInteraction | ModalSubmitInteraction,
+  entry: LogEntry,
+) {
+  await logModeration(interaction.client, entry);
+  markActivityLogged(interaction);
 }
 
 export async function discordCommandWrapper(

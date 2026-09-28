@@ -7,6 +7,7 @@ import { formatSuspensionList } from '../../lib/helpers/suspensionList.js';
 import { PostgresSuspensionRepository } from '../../lib/repositories/postgresSuspensionRepository.js';
 import {
   discordCommandWrapper,
+  logModerationAction,
   requireModOrOrganizer,
   withDiscordFileAttachment,
 } from '../../util/discord.js';
@@ -79,6 +80,12 @@ export class MeetupListSuspensionsCommands {
           });
         },
       );
+      await logModerationAction(interaction, {
+        title: 'Suspension list viewed',
+        description: `${interaction.user.toString()} listed ${
+          records.length
+        } suspension record(s).`,
+      });
     });
   }
 }

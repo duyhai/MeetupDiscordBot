@@ -5,6 +5,7 @@ import {
   BOT_ACTIVITY_LOG_CHANNEL_ID,
   BOT_ALERTS_CHANNEL_ID,
   EMBED_COLORS,
+  MODERATION_LOG_CHANNEL_ID,
 } from '../../constants.js';
 
 const logger = new Logger({ name: 'discordLogger' });
@@ -58,6 +59,19 @@ export async function logActivity(
   await postToChannel(
     client,
     BOT_ACTIVITY_LOG_CHANNEL_ID,
+    EMBED_COLORS.activity,
+    entry,
+  );
+}
+
+/** No-show reports, suspension records, and voids, for staff only. */
+export async function logModeration(
+  client: Client,
+  entry: LogEntry,
+): Promise<void> {
+  await postToChannel(
+    client,
+    MODERATION_LOG_CHANNEL_ID,
     EMBED_COLORS.activity,
     entry,
   );
