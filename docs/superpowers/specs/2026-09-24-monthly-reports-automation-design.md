@@ -217,7 +217,8 @@ backfill script.
 
 ## Logging
 
-The No Show report, recording, listing, and voiding each post one entry to
+The No Show report, the older `/meetup_get_noshow_event_stats`, recording,
+listing, and voiding each post one entry to
 the staff-only moderation channel (`MODERATION_LOG_CHANNEL_ID`) instead of
 the general bot activity log, since the entries carry member names and
 disciplinary detail. Failures still raise an alert in the bot alerts
