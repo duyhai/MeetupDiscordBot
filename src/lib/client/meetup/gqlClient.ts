@@ -16,6 +16,7 @@ import {
   getGroupEvents,
   getGroupEventsCount,
   getGroupMembersByIds,
+  getMemberRsvps,
   getSelfPastRsvpCount,
   getUserHostedEvents,
   getUserInfo,
@@ -31,6 +32,7 @@ import {
   CreateEventResponse,
   EditEventInput,
   EditEventResponse,
+  EventSummary,
   GetEventResponse,
   GetEventRsvpsInput,
   GetEventRsvpsResponse,
@@ -40,12 +42,15 @@ import {
   GetGroupEventsResponse,
   GetGroupMembersByIdsInput,
   GetGroupMembersByIdsResponse,
+  GetMemberRsvpsInput,
+  GetMemberRsvpsResponse,
   GetUserHostedEventsInput,
   GetUserHostedEventsResponse,
   GetUserInfoResponse,
   GetUserMembershipInfoInput,
   GetUserMembershipInfoResponse,
   GroupEventFilter,
+  MemberRsvpFilter,
   PaginationInput,
   PublishEventDraftInput,
   PublishEventDraftResponse,
@@ -57,6 +62,7 @@ const logger = new Logger({ name: 'GqlMeetupClient' });
 // Matches the page size getPaginatedData already uses successfully against
 // Meetup's API.
 const MEMBER_LOOKUP_PAGE_SIZE = 100;
+const MEMBER_RSVP_PAGE_SIZE = 100;
 
 export class GqlMeetupClient {
   private client: GraphQLClient;
@@ -321,6 +327,58 @@ export class GqlMeetupClient {
         }
       },
     );
+  }
+
+  /**
+   * The events one member RSVP'd to in this group with the given statuses,
+   * all pages. Returns undefined when the member isn't in the group any
+   * more, so callers can tell "no RSVPs" from "can't see their history".
+   *
+   * Not cached: no-shows are marked after events and upcoming RSVPs change,
+   * so a 12-hour-old answer would mislead the no-show report.
+   */
+  public async getMemberRsvpEvents(
+    memberId: string,
+    groupId: string,
+    filter: MemberRsvpFilter,
+  ): Promise<EventSummary[] | undefined> {
+    logger.info(
+      `Calling getMemberRsvpEvents with input: ${JSON.stringify({
+        memberId,
+        filter,
+      })}`,
+    );
+    const events: EventSummary[] = [];
+    let after: string | undefined;
+    for (;;) {
+      let result: GetMemberRsvpsResponse;
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        result = await this.client.request<
+          GetMemberRsvpsResponse,
+          GetMemberRsvpsInput
+        >(getMemberRsvps, {
+          urlname: Configuration.meetup.groupUrlName,
+          memberIds: [Number(memberId)],
+          first: MEMBER_RSVP_PAGE_SIZE,
+          after,
+          filter: { groupId, ...filter },
+        });
+      } catch (error) {
+        logger.error(error);
+        throw error;
+      }
+      const membership = result.groupByUrlname.memberships.edges[0];
+      if (!membership) {
+        return undefined;
+      }
+      const { rsvps } = membership.node;
+      events.push(...rsvps.edges.map(({ node }) => node.event));
+      if (!rsvps.pageInfo.hasNextPage) {
+        return events;
+      }
+      after = rsvps.pageInfo.endCursor;
+    }
   }
 
   public async getEventRsvps(

@@ -185,6 +185,49 @@ export const getGroupMembersByIds = gql`
   ${UserFragment}
 `;
 
+// One member's RSVPs in this group, reached through the group's member list
+// (there is no root query by member ID). Meetup honours groupId and the
+// statuses, but not reliably startDate/endDate, so callers filter by date.
+export const getMemberRsvps = gql`
+  query (
+    $urlname: String!
+    $memberIds: [Int!]
+    $first: Int!
+    $after: String
+    $filter: RsvpFilter
+  ) {
+    groupByUrlname(urlname: $urlname) {
+      id
+      memberships(first: 1, filter: { memberIds: $memberIds }) {
+        edges {
+          node {
+            id
+            rsvps(first: $first, after: $after, filter: $filter) {
+              pageInfo {
+                hasNextPage
+                hasPreviousPage
+                startCursor
+                endCursor
+              }
+              totalCount
+              edges {
+                node {
+                  event {
+                    id
+                    title
+                    dateTime
+                    eventUrl
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+`;
+
 export const getEvent = gql`
   query ($eventId: ID!) {
     event(id: $eventId) {
