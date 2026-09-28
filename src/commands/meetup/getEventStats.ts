@@ -49,7 +49,12 @@ export async function getEventsYearMonth(
 
   return getPaginatedData(async (paginationInput) => {
     const result = await meetupClient.getGroupEvents(paginationInput, {
-      status: ['PAST', 'ACTIVE', 'AUTOSCHED'],
+      // No AUTOSCHED: a recurring series can generate a copy of an event
+      // that already exists (same title, time, and hosts), and the copy stays
+      // AUTOSCHED instead of becoming PAST. Checked 2026-09-28: all 11
+      // past-dated AUTOSCHED events in 2026 were such copies, and no real
+      // event was left AUTOSCHED.
+      status: ['PAST', 'ACTIVE'],
       afterDateTime: startDate.toISOString(),
       beforeDateTime: endDate.toISOString(),
     });

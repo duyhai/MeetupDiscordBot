@@ -51,7 +51,7 @@ Changes to `meetup_get_host_event_stats` in
 `src/commands/meetup/getEventStats.ts`:
 
 1. **Cancelled-event filtering.** The existing query already excludes
-   platform-cancelled events (it filters to `PAST`/`ACTIVE`/`AUTOSCHED`, and
+   platform-cancelled events (it filters to `PAST`/`ACTIVE`, plus `AUTOSCHED` until 2026-09-28, and
    the live schema has distinct `CANCELLED`/`CANCELLED_PERM`/
    `AUTOSCHED_CANCELLED` statuses), so the inflated counts come from events
    that were *renamed* "cancelled" instead of being cancelled on the platform.
@@ -64,7 +64,9 @@ Changes to `meetup_get_host_event_stats` in
    and hosts, status `AUTOSCHED`, never becoming `PAST`. Counting it credits
    the hosts twice (Howard's two Sept 5 Eastside Saturday Strolls), or
    credits a host who didn't run the event. All 11 past-dated `AUTOSCHED`
-   events in 2026 were such copies, so `AUTOSCHED` events don't count. This
+   events in 2026 were such copies, so the shared month-events query
+   (`getEventsYearMonth`, also used by both no-show commands) no longer
+   requests `AUTOSCHED`. This
    is likely the "duplicates" moderators removed by hand. Deduping by host
    and start time instead would be wrong: the same host runs two Tennis
    Socials at once for different skill levels.

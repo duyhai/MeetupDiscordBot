@@ -79,15 +79,6 @@ describe('isCountableEvent', () => {
     expect(isCountableEvent(makeEvent({ status: 'CANCELLED' }))).toBe(false);
   });
 
-  // A recurring series can generate a copy of an event that already exists.
-  // The copy stays AUTOSCHED and never becomes PAST, but it has the same
-  // title, time, and hosts, so counting it credits the hosts twice (or, when
-  // its hosts differ, credits someone who didn't run the event).
-  it('excludes auto-scheduled copies that never became real events', () => {
-    expect(isCountableEvent(makeEvent({ status: 'AUTOSCHED' }))).toBe(false);
-    expect(isCountableEvent(makeEvent({ status: 'PAST' }))).toBe(true);
-  });
-
   it('excludes [Open House] events', () => {
     expect(isCountableEvent(makeEvent({ title: '[Open House] Social' }))).toBe(
       false,

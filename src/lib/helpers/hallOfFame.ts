@@ -38,21 +38,11 @@ export interface HostStats {
  * Whether an event counts toward the Hall of Fame. Cancelled events never
  * happened, and an [Open House] is not a hosted event in the stats' sense --
  * it isn't invalid, it just doesn't count.
- *
- * AUTOSCHED events don't count either: a recurring series can generate a
- * copy of an event that already exists, and the copy stays AUTOSCHED
- * instead of becoming PAST. Checked 2026-09-28 against every 2026 event:
- * all 11 past-dated AUTOSCHED events were such copies (same title and start
- * time as a PAST event, 1-2 RSVPs), and no real event was left AUTOSCHED.
  */
 export function isCountableEvent(
   event: Pick<Event, 'title' | 'status'>,
 ): boolean {
-  return (
-    !isCancelledEvent(event) &&
-    event.status !== 'AUTOSCHED' &&
-    !event.title.includes('[Open House]')
-  );
+  return !isCancelledEvent(event) && !event.title.includes('[Open House]');
 }
 
 /**
