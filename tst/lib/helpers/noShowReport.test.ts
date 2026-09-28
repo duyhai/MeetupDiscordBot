@@ -41,6 +41,11 @@ describe('classifyNoShowCount', () => {
     expect(classifyNoShowCount(2)).toBe('suspension');
     expect(classifyNoShowCount(5)).toBe('suspension');
   });
+
+  it('refuses a count below one rather than warning someone with no no-shows', () => {
+    expect(() => classifyNoShowCount(0)).toThrow(RangeError);
+    expect(() => classifyNoShowCount(-1)).toThrow(RangeError);
+  });
 });
 
 describe('recommendedSuspensionDays', () => {

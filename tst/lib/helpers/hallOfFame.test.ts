@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
-import { Event } from '../../../src/lib/client/meetup/types.js';
+import { BaseUserInfo, Event } from '../../../src/lib/client/meetup/types.js';
 import {
   collectHostStats,
+  displayedEvents,
   isCancelledEvent,
+  isCountableEvent,
   formatHallOfFamePost,
 } from '../../../src/lib/helpers/hallOfFame.js';
 
@@ -22,7 +24,12 @@ export function makeEvent(overrides: Partial<Event> = {}): Event {
   };
 }
 
-export function host(id: string, name = `Host ${id}`) {
+// Annotated so 'NONE' stays a MemberGender literal instead of widening to
+// string, which made every eventHosts fixture a type error.
+export function host(
+  id: string,
+  name = `Host ${id}`,
+): { member: BaseUserInfo } {
   return {
     member: {
       id,
@@ -60,6 +67,25 @@ describe('isCancelledEvent', () => {
   });
 });
 
+describe('isCountableEvent', () => {
+  it('counts an ordinary event', () => {
+    expect(isCountableEvent(makeEvent({ title: 'Trivia Night' }))).toBe(true);
+  });
+
+  it('excludes events cancelled by title or by status', () => {
+    expect(isCountableEvent(makeEvent({ title: 'Canceled: Hike' }))).toBe(
+      false,
+    );
+    expect(isCountableEvent(makeEvent({ status: 'CANCELLED' }))).toBe(false);
+  });
+
+  it('excludes [Open House] events', () => {
+    expect(isCountableEvent(makeEvent({ title: '[Open House] Social' }))).toBe(
+      false,
+    );
+  });
+});
+
 describe('collectHostStats', () => {
   it('groups events by host, sorted by count descending', () => {
     const events = [
@@ -73,15 +99,16 @@ describe('collectHostStats', () => {
     expect(hostStats[0].events).toHaveLength(2);
   });
 
-  it('excludes cancelled and [Open House] events from stats and totals', () => {
+  it('groups every event it is given -- filtering is the caller’s job', () => {
+    // Pins the contract: collectHostStats does no hidden filtering. Callers
+    // filter with isCountableEvent first, where the rule is visible.
     const events = [
       makeEvent({ eventHosts: [host('a')] }),
       makeEvent({ title: 'Canceled: Hike', eventHosts: [host('a')] }),
-      makeEvent({ title: '[Open House] Social', eventHosts: [host('a')] }),
     ];
     const { hostStats, totalEvents } = collectHostStats(events);
-    expect(totalEvents).toBe(1);
-    expect(hostStats[0].events).toHaveLength(1);
+    expect(totalEvents).toBe(2);
+    expect(hostStats[0].events).toHaveLength(2);
   });
 
   it('counts a co-hosted event once in the total but once per host', () => {
@@ -95,6 +122,39 @@ describe('collectHostStats', () => {
     const events = [makeEvent({ eventHosts: [host('a'), host('a')] })];
     const { hostStats } = collectHostStats(events);
     expect(hostStats[0].events).toHaveLength(1);
+  });
+});
+
+describe('displayedEvents', () => {
+  // Attendance is fetched for exactly this set, and the attachment reads it
+  // back with `?? 0` -- so any event shown but not fetched would silently
+  // render as (0/N) attendance.
+  it('is exactly the events the Hall of Fame shows, each listed once', () => {
+    const solo = makeEvent({ eventHosts: [host('x')] });
+    const coHosted = makeEvent({ eventHosts: [host('x'), host('y')] });
+    const cancelled = makeEvent({
+      title: 'CANCELLED: Hike',
+      eventHosts: [host('y')],
+    });
+    const openHouse = makeEvent({
+      title: '[Open House] Mixer',
+      eventHosts: [host('x')],
+    });
+    const hostless = makeEvent({ eventHosts: [] });
+
+    // The handler's pipeline: filter to countable events, then group.
+    const { hostStats } = collectHostStats(
+      [solo, coHosted, cancelled, openHouse, hostless].filter(isCountableEvent),
+    );
+
+    // coHosted sits in both x's and y's lists but must be fetched once;
+    // cancelled and Open House never reach grouping, so they're never shown;
+    // hostless is never displayed, so fetching it would be wasted.
+    expect(
+      displayedEvents(hostStats)
+        .map((event) => event.id)
+        .sort(),
+    ).toEqual([solo.id, coHosted.id].sort());
   });
 });
 

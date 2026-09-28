@@ -5,15 +5,34 @@
 import dayjs from 'dayjs';
 
 import { SuspensionRecord } from '../repositories/types.js';
-
-function endDate(record: SuspensionRecord): dayjs.Dayjs {
-  return dayjs(record.suspendedAt).add(record.durationDays, 'day');
-}
+import { tz } from '../../util/timezone.js';
 
 // Suspension dates are stored as UTC midnights, so format them from the ISO
 // string: local-time formatting would show the previous day in US timezones.
-function utcDateOnly(date: Date | dayjs.Dayjs): string {
+export function utcDateOnly(date: Date | dayjs.Dayjs): string {
   return dayjs(date).toISOString().slice(0, 10);
+}
+
+/**
+ * The last calendar day the member is suspended, inclusive: 30 days from
+ * Sept 1 covers Sept 1 - Sept 30. Computed in UTC so day arithmetic is pure
+ * calendar arithmetic -- adding days in local time can drift across a
+ * daylight-saving change.
+ */
+function lastSuspendedDay(record: SuspensionRecord): string {
+  return dayjs
+    .utc(record.suspendedAt)
+    .add(record.durationDays - 1, 'day')
+    .format('YYYY-MM-DD');
+}
+
+/**
+ * Active through the whole of its last day in the group's timezone, not
+ * until UTC midnight -- which is 5pm Pacific the evening before.
+ */
+function isActive(record: SuspensionRecord, now: dayjs.Dayjs): boolean {
+  const today = tz(now).format('YYYY-MM-DD');
+  return today <= lastSuspendedDay(record);
 }
 
 function formatRecord(
@@ -30,7 +49,7 @@ function formatRecord(
   const profileUrl = `https://www.meetup.com/members/${record.memberId}/`;
   return `- ${record.memberId}${name}: ${record.durationDays} days from ${utcDateOnly(
     record.suspendedAt,
-  )} until ${utcDateOnly(endDate(record))}${notes}\n  ${profileUrl}`;
+  )} through ${lastSuspendedDay(record)}${notes}\n  ${profileUrl}`;
 }
 
 export function formatSuspensionList(
@@ -41,8 +60,8 @@ export function formatSuspensionList(
   if (records.length === 0) {
     return 'No suspensions recorded.';
   }
-  const active = records.filter((record) => endDate(record).isAfter(now));
-  const past = records.filter((record) => !endDate(record).isAfter(now));
+  const active = records.filter((record) => isActive(record, now));
+  const past = records.filter((record) => !isActive(record, now));
   const format = (record: SuspensionRecord) =>
     formatRecord(record, fallbackNames);
   const sections = [

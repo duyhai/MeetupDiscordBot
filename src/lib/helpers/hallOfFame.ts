@@ -35,20 +35,30 @@ export interface HostStats {
 }
 
 /**
- * Groups countable events (not cancelled, not [Open House]) by host,
- * deduping hosts within a single event. totalEvents counts each event once
- * regardless of how many hosts it has.
+ * Whether an event counts toward the Hall of Fame. Cancelled events never
+ * happened, and an [Open House] is not a hosted event in the stats' sense --
+ * it isn't invalid, it just doesn't count.
+ */
+export function isCountableEvent(
+  event: Pick<Event, 'title' | 'status'>,
+): boolean {
+  return !isCancelledEvent(event) && !event.title.includes('[Open House]');
+}
+
+/**
+ * Groups events by host, deduping hosts within a single event. totalEvents
+ * counts each event once regardless of how many hosts it has.
+ *
+ * Does no filtering: it counts every event it is given. Callers filter with
+ * isCountableEvent first, so the rule for what counts stays visible at the
+ * call site rather than hidden inside a function named for grouping.
  */
 export function collectHostStats(events: Event[]): {
   hostStats: HostStats[];
   totalEvents: number;
 } {
-  const countable = events.filter(
-    (event) =>
-      !isCancelledEvent(event) && !event.title.includes('[Open House]'),
-  );
   const byHost = new Map<string, HostStats>();
-  for (const event of countable) {
+  for (const event of events) {
     const seen = new Set<string>();
     for (const { member } of event.eventHosts) {
       if (seen.has(member.id)) {
@@ -63,7 +73,23 @@ export function collectHostStats(events: Event[]): {
   const hostStats = Array.from(byHost.values()).sort(
     (a, b) => b.events.length - a.events.length,
   );
-  return { hostStats, totalEvents: countable.length };
+  return { hostStats, totalEvents: events.length };
+}
+
+/**
+ * The distinct events a Hall of Fame displays. Callers fetch attendance for
+ * exactly these, so the fetch set is derived from the display set rather than
+ * re-deriving it from the raw events -- a second derivation could drift, and
+ * an event shown but never fetched renders as (0/N) attendance.
+ */
+export function displayedEvents(hostStats: HostStats[]): Event[] {
+  const byId = new Map<string, Event>();
+  for (const { events } of hostStats) {
+    for (const event of events) {
+      byId.set(event.id, event);
+    }
+  }
+  return Array.from(byId.values());
 }
 
 function collapseByTitle(events: Event[]): string[] {

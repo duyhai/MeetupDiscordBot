@@ -114,4 +114,44 @@ describe('GqlMeetupClient.getGroupMembersByIds', () => {
     const client = new GqlMeetupClient('test-access-token');
     expect(await client.getGroupMembersByIds([])).toEqual([]);
   });
+
+  it('looks up large lists in pages, so no real member is dropped', async () => {
+    // This lookup decides which suspension rows are recorded. A single
+    // oversized request that Meetup truncated would make every member past
+    // the cap look unknown, and their suspensions would be skipped.
+    const ids = Array.from({ length: 150 }, (_unused, i) => String(1000 + i));
+    const sent: { memberIds: number[]; first: number }[] = [];
+    graphqlScope()
+      .times(2)
+      .reply(
+        200,
+        (_uri, body: { variables: { memberIds: number[]; first: number } }) => {
+          sent.push(body.variables);
+          return {
+            data: {
+              groupByUrlname: {
+                id: '1',
+                memberships: {
+                  edges: body.variables.memberIds.map((id) => ({
+                    node: {
+                      id: String(id),
+                      name: `Member ${id}`,
+                      gender: 'NONE',
+                      memberUrl: `https://www.meetup.com/members/${id}`,
+                    },
+                  })),
+                },
+              },
+            },
+          };
+        },
+      );
+
+    const client = new GqlMeetupClient('test-access-token');
+    const members = await client.getGroupMembersByIds(ids);
+
+    expect(sent.map((vars) => vars.memberIds.length)).toEqual([100, 50]);
+    expect(sent.map((vars) => vars.first)).toEqual([100, 50]);
+    expect(members.map((member) => member.id)).toEqual(ids);
+  });
 });

@@ -1,5 +1,5 @@
 import dayjs from 'dayjs';
-import { CommandInteraction } from 'discord.js';
+import { CommandInteraction, PermissionFlagsBits } from 'discord.js';
 import { Discord, Slash } from 'discordx';
 import { Logger } from 'tslog';
 
@@ -21,6 +21,9 @@ export class MeetupListSuspensionsCommands {
     name: 'meetup_list_suspensions',
     description:
       'List all recorded no-show suspensions, split into active and past. Output is private.',
+    // Hides the command from members without mod permissions; the role check
+    // inside the handler stays authoritative.
+    defaultMemberPermissions: PermissionFlagsBits.ModerateMembers,
   })
   async listSuspensionsHandler(interaction: CommandInteraction) {
     await discordCommandWrapper(interaction, async () => {
@@ -35,14 +38,9 @@ export class MeetupListSuspensionsCommands {
       // Display-time fallback for rows recorded without a name: linked
       // members' stored names first, overwritten by a live group-membership
       // lookup (current names, works for unlinked members too). Both are
-      // nice-to-haves — the list renders without them.
-      const memberRepo = await ApplicationMemberRepository();
-      const linkedMembers = await memberRepo.listAll();
-      const fallbackNames = new Map(
-        linkedMembers
-          .filter((m) => m.meetupId !== null && m.meetupName !== null)
-          .map((m) => [m.meetupId, m.meetupName]),
-      );
+      // nice-to-haves — the list renders without them — and both are skipped
+      // entirely when every record already carries a name.
+      const fallbackNames = new Map<string, string>();
       const namelessIds = [
         ...new Set(
           records
@@ -51,6 +49,11 @@ export class MeetupListSuspensionsCommands {
         ),
       ];
       if (namelessIds.length > 0) {
+        const memberRepo = await ApplicationMemberRepository();
+        const linkedMembers = await memberRepo.listAll();
+        linkedMembers
+          .filter((m) => m.meetupId !== null && m.meetupName !== null)
+          .forEach((m) => fallbackNames.set(m.meetupId, m.meetupName));
         try {
           await withMeetupClient(interaction, async (meetupClient) => {
             const liveMembers =

@@ -54,7 +54,13 @@ export interface SuspensionRepository {
   insert(record: SuspensionInsert): Promise<SuspensionRecord | undefined>;
   /** Returns only the rows actually inserted; duplicates are silently skipped. */
   insertMany(records: SuspensionInsert[]): Promise<SuspensionRecord[]>;
-  countByMemberId(memberId: string): Promise<number>;
+  /**
+   * How many suspensions the member had strictly before `before` -- the
+   * "prior suspensions" that double the next penalty. Deliberately takes a
+   * date: counting all records would treat a later suspension as prior when
+   * a moderator back-dates one, doubling a first offence.
+   */
+  countSuspensionsBefore(memberId: string, before: Date): Promise<number>;
   listByMemberId(memberId: string): Promise<SuspensionRecord[]>;
   listAll(): Promise<SuspensionRecord[]>;
   deleteAllForTest(): Promise<void>;

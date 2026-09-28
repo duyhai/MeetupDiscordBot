@@ -50,8 +50,32 @@ describe('formatSuspensionList', () => {
     expect(result).toContain('123');
     expect(result).toContain('60 days');
     expect(result).toContain('2026-09-01');
-    expect(result).toContain('2026-10-31');
+    // 60 days from Sept 1 covers Sept 1 - Oct 30 inclusive; "through" names
+    // the last suspended day so nobody has to guess whether "until" is
+    // inclusive.
+    expect(result).toContain('through 2026-10-30');
     expect(result).toContain('backfill');
+  });
+
+  describe('active/past boundary, in Pacific calendar days', () => {
+    // 30 days from Sept 1: the last suspended day is Sept 30.
+    const lastDaySuspension = record({ memberId: 'edge', durationDays: 30 });
+
+    it('is still active on the evening of its last day, though UTC has rolled over', () => {
+      // 11:30pm PDT on Sept 30 is already 06:30 on Oct 1 in UTC.
+      const lateLastDay = dayjs('2026-10-01T06:30:00Z');
+      expect(formatSuspensionList([lastDaySuspension], lateLastDay)).toMatch(
+        /Currently active \(1\)/,
+      );
+    });
+
+    it('is past from the first minute of the next Pacific day', () => {
+      // 12:30am PDT on Oct 1.
+      const nextDay = dayjs('2026-10-01T07:30:00Z');
+      expect(formatSuspensionList([lastDaySuspension], nextDay)).toMatch(
+        /Past \(1\)/,
+      );
+    });
   });
 
   it('includes a plain Meetup profile URL per record', () => {

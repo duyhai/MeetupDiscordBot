@@ -153,10 +153,14 @@ export class PostgresSuspensionRepository implements SuspensionRepository {
     }
   }
 
-  async countByMemberId(memberId: string): Promise<number> {
+  async countSuspensionsBefore(
+    memberId: string,
+    before: Date,
+  ): Promise<number> {
     const result = await this.pool.query<{ count: string }>(
-      'SELECT COUNT(*) AS count FROM suspension_records WHERE member_id = $1',
-      [memberId],
+      `SELECT COUNT(*) AS count FROM suspension_records
+       WHERE member_id = $1 AND suspended_at < $2`,
+      [memberId, before],
     );
     return Number(result.rows[0].count);
   }
