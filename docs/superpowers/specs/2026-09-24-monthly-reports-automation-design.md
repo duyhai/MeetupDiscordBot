@@ -27,10 +27,23 @@ and outreach steps (Melissa still sends warnings and executes suspensions).
 
 - 1 no-show in the trailing 12 months → warning.
 - 2+ no-shows in the trailing 12 months → suspension candidate.
+- **The 12 months are measured back from today** — the day the report runs —
+  not from the report month.
+- **Only no-shows after the member's most recent suspension count.** The
+  no-shows that led to a suspension never count toward the next one; without
+  this, they stay inside the 12-month window and suspend the member again,
+  at double the length, for the same no-shows. So the counting window starts
+  at whichever is later: 12 months ago, or the member's last suspension date.
 - Suspension length: 30 days × 2^(prior suspension count). Prior suspensions
   are not derivable from Meetup, so they are stored (see `suspension_records`).
+- **Prior suspensions count forever** — they never stop doubling the next
+  penalty. "Prior" means dated before the suspension being recorded, so a
+  back-dated entry is not doubled by a later suspension already on file.
 - Suspensions should land 3–5 days before the member's next RSVP'd event; the
   report prints the next event date and a recommended act-by date.
+
+_Policy decisions confirmed 2026-09-27: window from today, reset after a
+suspension, prior suspensions never expire, unknown member IDs skipped (revised 2026-09-26: recorded and flagged; CSV is the only input)._
 
 ## Phase 1 — Hall of Fame accuracy and ready-to-post output
 
@@ -120,18 +133,27 @@ New Postgres table alongside the existing repositories
 - `member_id` (Meetup member ID), `member_name`, `suspended_at`,
   `duration_days`, `notes`, `created_at`.
 
-**Recording:** new command `/meetup_record_suspension` with two input modes,
-replacing the spreadsheet going forward:
+**Recording:** new command `/meetup_record_suspension`, replacing the
+spreadsheet going forward. Its one input is a CSV attachment
+(`ApplicationCommandOptionType.Attachment`; the bot fetches the attachment
+URL and parses it) with rows of
+`member_id, member_name, duration_days, suspended_at, notes`.
 
-- **Bulk IDs (common case):** a comma-separated `members` option plus an
-  optional date (default today). Duration is auto-deduced per member as
-  30 days × 2^(prior suspension count). The reply echoes each member's
-  computed duration and prior count so mistakes are caught immediately.
-- **CSV attachment (exceptions, notes, and backfill):** rows of
-  `member_id, duration_days, suspended_at, notes` for cases with non-standard
-  durations or annotations. Discord slash commands support file parameters
-  natively (`ApplicationCommandOptionType.Attachment`); the bot fetches the
-  attachment URL and parses the CSV.
+- **Monthly:** the No Show report emits a suggested-suspensions CSV in this
+  format with recommended durations pre-filled. The moderator deletes the
+  rows Melissa didn't act on, sets each `suspended_at` to the date she
+  actually suspended, and uploads it.
+- **Rows are recorded as written.** A row whose duration isn't
+  30 days × 2^(prior suspensions dated before it) is still recorded, but
+  flagged in the summary so a mistake — or a stale suggestion, if records
+  changed since the report ran — is caught immediately. Exceptions stay
+  possible.
+- **Re-uploading is safe.** The dates are in the file, so a retried upload
+  reports its rows as already on file rather than recording (and doubling)
+  them again.
+
+_An earlier design also had a bulk-IDs mode with auto-computed durations;
+it was dropped (2026-09-26) because the report's CSV covers that case._
 
 **Backfill:** the CSV mode doubles as the one-time import — export the
 existing spreadsheet to the same column format and upload it. No separate
@@ -143,8 +165,13 @@ backfill script.
   error path; partial results are not posted.
 - A member with upcoming RSVPs already inside the 3–5 day window is flagged
   "act now" rather than given a past act-by date.
-- Unknown member ID passed to `/meetup_record_suspension` is rejected with a
-  clear message before inserting.
+- A member ID that is not a current member of the group is **still
+  recorded**, and listed in the summary as "not a current member". Backfill
+  legitimately contains members who have since left, and their suspensions
+  must keep counting if they rejoin; the flag is how a mistyped ID gets
+  caught. The membership lookup must not degrade silently: if it fails or
+  Meetup authorization isn't completed, nothing is recorded (otherwise every
+  row would be flagged).
 
 ## Testing
 

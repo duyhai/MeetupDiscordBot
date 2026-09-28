@@ -15,6 +15,7 @@ import {
   getEventRsvps,
   getGroupEvents,
   getGroupEventsCount,
+  getGroupMembersByIds,
   getSelfPastRsvpCount,
   getUserHostedEvents,
   getUserInfo,
@@ -23,6 +24,7 @@ import {
 import {
   AnnounceEventInput,
   AnnounceEventResponse,
+  BaseUserInfo,
   CloseEventRsvpsInput,
   CloseEventRsvpsResponse,
   CreateEventInput,
@@ -36,6 +38,8 @@ import {
   GetGroupEventsCountResponse,
   GetGroupEventsInput,
   GetGroupEventsResponse,
+  GetGroupMembersByIdsInput,
+  GetGroupMembersByIdsResponse,
   GetUserHostedEventsInput,
   GetUserHostedEventsResponse,
   GetUserInfoResponse,
@@ -49,6 +53,10 @@ import {
 } from './types.js';
 
 const logger = new Logger({ name: 'GqlMeetupClient' });
+
+// Matches the page size getPaginatedData already uses successfully against
+// Meetup's API.
+const MEMBER_LOOKUP_PAGE_SIZE = 100;
 
 export class GqlMeetupClient {
   private client: GraphQLClient;
@@ -245,6 +253,68 @@ export class GqlMeetupClient {
           >(getGroupEventsCount, callbackInput);
           logger.info(`getGroupEventsCount result: ${JSON.stringify(result)}`);
           return result.groupByUrlname.events.totalCount;
+        } catch (error) {
+          logger.error(error);
+          throw error;
+        }
+      },
+    );
+  }
+
+  /**
+   * Looks up current group members by their Meetup IDs. Only people who are
+   * still members of the group resolve; anyone who left is simply absent
+   * from the result, so callers must treat misses as "name unknown".
+   */
+  public async getGroupMembersByIds(
+    memberIds: string[],
+  ): Promise<BaseUserInfo[]> {
+    // Paged rather than one request of `first: memberIds.length`: this
+    // lookup decides which suspension rows get recorded, and a response
+    // truncated at Meetup's page cap would make every member past it look
+    // unknown and have their suspension silently skipped.
+    const members: BaseUserInfo[] = [];
+    for (
+      let start = 0;
+      start < memberIds.length;
+      start += MEMBER_LOOKUP_PAGE_SIZE
+    ) {
+      members.push(
+        // eslint-disable-next-line no-await-in-loop
+        ...(await this.getGroupMembersPage(
+          memberIds.slice(start, start + MEMBER_LOOKUP_PAGE_SIZE),
+        )),
+      );
+    }
+    return members;
+  }
+
+  private async getGroupMembersPage(
+    memberIds: string[],
+  ): Promise<BaseUserInfo[]> {
+    logger.info(
+      `Calling getGroupMembersByIds with input: ${JSON.stringify({
+        memberIds,
+      })}`,
+    );
+    // Can be cached because it doesn't retrieve user specific data
+    return cachedClientRequest(
+      'getGroupMembersByIds',
+      {
+        urlname: Configuration.meetup.groupUrlName,
+        memberIds: memberIds.map(Number),
+        first: memberIds.length,
+      },
+      async (callbackInput: GetGroupMembersByIdsInput) => {
+        try {
+          const result = await this.client.request<
+            GetGroupMembersByIdsResponse,
+            GetGroupMembersByIdsInput
+          >(getGroupMembersByIds, callbackInput);
+          logger.info(`getGroupMembersByIds result: ${JSON.stringify(result)}`);
+          return result.groupByUrlname.memberships.edges.map(
+            ({ node }) => node,
+          );
         } catch (error) {
           logger.error(error);
           throw error;

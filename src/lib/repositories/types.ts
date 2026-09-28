@@ -30,3 +30,38 @@ export interface MemberRepository {
   listAll(): Promise<MemberRecord[]>;
   remove(discordUserId: string): Promise<void>;
 }
+
+export interface SuspensionRecord {
+  id: number;
+  memberId: string;
+  memberName: string | null;
+  suspendedAt: Date;
+  durationDays: number;
+  notes: string | null;
+  createdAt: Date;
+}
+
+export type SuspensionInsert = Omit<SuspensionRecord, 'id' | 'createdAt'>;
+
+export interface SuspensionRepository {
+  /**
+   * Inserts a suspension record. Returns undefined instead of inserting when
+   * an identical (memberId, suspendedAt) pair already exists -- callers
+   * retrying a partially-failed batch must not double a member's penalty.
+   * A different suspendedAt for the same member always inserts: repeat
+   * suspensions on different dates are expected.
+   */
+  insert(record: SuspensionInsert): Promise<SuspensionRecord | undefined>;
+  /** Returns only the rows actually inserted; duplicates are silently skipped. */
+  insertMany(records: SuspensionInsert[]): Promise<SuspensionRecord[]>;
+  /**
+   * How many suspensions the member had strictly before `before` -- the
+   * "prior suspensions" that double the next penalty. Deliberately takes a
+   * date: counting all records would treat a later suspension as prior when
+   * a moderator back-dates one, doubling a first offence.
+   */
+  countSuspensionsBefore(memberId: string, before: Date): Promise<number>;
+  listByMemberId(memberId: string): Promise<SuspensionRecord[]>;
+  listAll(): Promise<SuspensionRecord[]>;
+  deleteAllForTest(): Promise<void>;
+}

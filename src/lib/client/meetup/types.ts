@@ -203,6 +203,21 @@ export type GetGroupEventsCountInput = {
   urlname: string;
 };
 
+export interface GetGroupMembersByIdsResponse {
+  groupByUrlname: {
+    id: string;
+    memberships: {
+      edges: { node: BaseUserInfo }[];
+    };
+  };
+}
+
+export type GetGroupMembersByIdsInput = {
+  first: number;
+  memberIds: number[];
+  urlname: string;
+};
+
 export interface CreateEventInput {
   communicationSettings: {
     chat: boolean;
