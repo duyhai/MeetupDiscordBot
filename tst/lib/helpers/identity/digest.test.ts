@@ -9,6 +9,7 @@ import {
   runIdentityDigestOnce,
 } from '../../../../src/lib/helpers/identity/digest.js';
 import { logAlert } from '../../../../src/lib/helpers/discordLogger.js';
+import { runMeetupSweep } from '../../../../src/lib/helpers/identity/meetupSweep.js';
 import { runIdentitySweep } from '../../../../src/lib/helpers/identity/sweep.js';
 import { IdentityChangeRecord } from '../../../../src/lib/repositories/identityTypes.js';
 
@@ -26,6 +27,9 @@ const cache = vi.hoisted(() => ({
   set: vi.fn(),
   remove: vi.fn().mockResolvedValue(undefined),
 }));
+const memberRepo = vi.hoisted(() => ({
+  listAll: vi.fn(),
+}));
 
 vi.mock('../../../../src/util/identityRepository.js', () => ({
   ApplicationIdentityRepository: vi.fn(async () => repo),
@@ -33,11 +37,17 @@ vi.mock('../../../../src/util/identityRepository.js', () => ({
 vi.mock('../../../../src/util/cache.js', () => ({
   ApplicationCache: vi.fn(async () => cache),
 }));
+vi.mock('../../../../src/util/memberRepository.js', () => ({
+  ApplicationMemberRepository: vi.fn(async () => memberRepo),
+}));
 vi.mock('../../../../src/lib/helpers/discordLogger.js', () => ({
   logAlert: vi.fn().mockResolvedValue(true),
 }));
 vi.mock('../../../../src/lib/helpers/identity/sweep.js', () => ({
   runIdentitySweep: vi.fn().mockResolvedValue({ scanned: 0, changed: 0 }),
+}));
+vi.mock('../../../../src/lib/helpers/identity/meetupSweep.js', () => ({
+  runMeetupSweep: vi.fn().mockResolvedValue({ scanned: 0, changed: 0 }),
 }));
 
 const at = (iso: string) => new Date(iso);
@@ -64,11 +74,11 @@ const stats = { changeCount: 1204, totalBytes: 64_000_000 };
 describe('formatIdentityDigest', () => {
   it('returns undefined when there were no changes', () => {
     // A silent day must post nothing rather than an empty embed.
-    expect(formatIdentityDigest([], stats)).toBeUndefined();
+    expect(formatIdentityDigest([], stats, new Map())).toBeUndefined();
   });
 
   it('lists each change and reports storage', () => {
-    const entry = formatIdentityDigest([change()], stats);
+    const entry = formatIdentityDigest([change()], stats, new Map());
 
     expect(entry?.title).toContain('1');
     expect(entry?.description).toContain('<@u1>');
@@ -81,7 +91,7 @@ describe('formatIdentityDigest', () => {
       change({ id: String(i), subjectId: `u${i}` }),
     );
 
-    const entry = formatIdentityDigest(many, stats);
+    const entry = formatIdentityDigest(many, stats, new Map());
 
     // Discord rejects descriptions over 4096 characters outright, which would
     // turn a busy day into no digest at all.
@@ -92,6 +102,45 @@ describe('formatIdentityDigest', () => {
     expect(entry?.description).toContain(
       'run /meetup_identity_report for the full list',
     );
+  });
+
+  it('labels which platform each change came from', () => {
+    const entry = formatIdentityDigest(
+      [
+        change({ platform: 'discord', subjectId: 'u1' }),
+        change({ platform: 'meetup', subjectId: 'm1', field: 'photo' }),
+      ],
+      stats,
+      new Map(),
+    );
+
+    // Without the label an organizer cannot tell which profile to go look at.
+    expect(entry?.description).toContain('Discord');
+    expect(entry?.description).toContain('Meetup');
+  });
+
+  it('names the linked Discord member for a Meetup change', () => {
+    const entry = formatIdentityDigest(
+      [change({ platform: 'meetup', subjectId: 'm1', field: 'photo' })],
+      stats,
+      new Map([['m1', 'u1']]),
+    );
+
+    // 'member m1 changed their photo' is unactionable; '@someone' is not.
+    expect(entry?.description).toContain('<@u1>');
+  });
+
+  it('falls back to the raw Meetup id when no link exists', () => {
+    const entry = formatIdentityDigest(
+      [change({ platform: 'meetup', subjectId: 'm1', field: 'photo' })],
+      stats,
+      new Map(),
+    );
+
+    // Only 9 members are linked today, so this is the common case for now.
+    expect(entry?.description).toContain('m1');
+    // A missing link must never render as a broken mention.
+    expect(entry?.description).not.toContain('<@undefined>');
   });
 });
 
@@ -142,8 +191,10 @@ describe('runIdentityDigestOnce', () => {
     repo.setDigestCursor.mockResolvedValue(undefined);
     repo.listChangesMetadataAfterId.mockResolvedValue([change()]);
     repo.storageStats.mockResolvedValue(stats);
+    memberRepo.listAll.mockResolvedValue([]);
     vi.mocked(logAlert).mockResolvedValue(true);
     vi.mocked(runIdentitySweep).mockResolvedValue({ scanned: 0, changed: 0 });
+    vi.mocked(runMeetupSweep).mockResolvedValue({ scanned: 0, changed: 0 });
   });
   afterEach(() => vi.useRealTimers());
 
@@ -165,7 +216,39 @@ describe('runIdentityDigestOnce', () => {
     await runIdentityDigestOnce(client);
 
     expect(runIdentitySweep).not.toHaveBeenCalled();
+    expect(runMeetupSweep).not.toHaveBeenCalled();
     expect(logAlert).not.toHaveBeenCalled();
+  });
+
+  it('runs the Meetup sweep after the Discord sweep, in the same claim', async () => {
+    await runIdentityDigestOnce(client);
+
+    // Both sweeps must land inside the try, after the Discord sweep, before
+    // `until` is computed -- so a failure in either releases the claim, and
+    // both sweeps' findings can reach today's digest.
+    expect(
+      vi.mocked(runIdentitySweep).mock.invocationCallOrder[0],
+    ).toBeLessThan(vi.mocked(runMeetupSweep).mock.invocationCallOrder[0]);
+    expect(runMeetupSweep).toHaveBeenCalledWith('sweep', client);
+  });
+
+  it('still posts the digest when the Meetup sweep throws', async () => {
+    vi.mocked(runMeetupSweep).mockRejectedValue(new Error('meetup api down'));
+
+    await runIdentityDigestOnce(client);
+
+    // A reconciliation failure must DEGRADE the digest, not cancel it. The
+    // old behaviour let one 502 on one roster page propagate out, release the
+    // claim, and get swallowed by the scheduler -- no digest for either
+    // platform, no alert, and no later report, because the reporting window
+    // only moves forward.
+    const titles = vi
+      .mocked(logAlert)
+      .mock.calls.map(([, entry]) => entry.title);
+    expect(titles).toContain('Meetup identity sweep failed');
+    expect(titles.some((title) => title.startsWith('Identity changes'))).toBe(
+      true,
+    );
   });
 
   it('still posts the digest when the Discord sweep throws', async () => {
@@ -182,20 +265,30 @@ describe('runIdentityDigestOnce', () => {
     );
   });
 
-  it('names which sweep failed and says the rest is unaffected', async () => {
+  it('runs the Meetup sweep even after the Discord sweep threw', async () => {
     vi.mocked(runIdentitySweep).mockRejectedValue(new Error('discord down'));
+
+    await runIdentityDigestOnce(client);
+
+    // Independently guarded, not one shared try: the first platform failing
+    // must not skip the second platform's reconciliation.
+    expect(runMeetupSweep).toHaveBeenCalledTimes(1);
+  });
+
+  it('names which sweep failed and says the rest is unaffected', async () => {
+    vi.mocked(runMeetupSweep).mockRejectedValue(new Error('meetup api down'));
 
     await runIdentityDigestOnce(client);
 
     const failure = vi
       .mocked(logAlert)
       .mock.calls.map(([, entry]) => entry)
-      .find((entry) => entry.title === 'Discord identity sweep failed');
+      .find((entry) => entry.title === 'Meetup identity sweep failed');
     expect(failure?.description).toContain('unaffected');
   });
 
   it('keeps a raw upstream error body out of the sweep-failure alert', async () => {
-    vi.mocked(runIdentitySweep).mockRejectedValue(
+    vi.mocked(runMeetupSweep).mockRejectedValue(
       new Error('502: {"token":"do-not-leak"}'),
     );
 
@@ -207,7 +300,7 @@ describe('runIdentityDigestOnce', () => {
     const failure = vi
       .mocked(logAlert)
       .mock.calls.map(([, entry]) => entry)
-      .find((entry) => entry.title === 'Discord identity sweep failed');
+      .find((entry) => entry.title === 'Meetup identity sweep failed');
     expect(failure?.description).not.toContain('do-not-leak');
     expect(failure?.description).toContain('Error');
   });
@@ -217,7 +310,7 @@ describe('runIdentityDigestOnce', () => {
       new Error('the organizer token cannot read this group'),
       { organizerSafeMessage: true },
     );
-    vi.mocked(runIdentitySweep).mockRejectedValue(actionable);
+    vi.mocked(runMeetupSweep).mockRejectedValue(actionable);
 
     await runIdentityDigestOnce(client);
 
@@ -226,8 +319,22 @@ describe('runIdentityDigestOnce', () => {
     const failure = vi
       .mocked(logAlert)
       .mock.calls.map(([, entry]) => entry)
-      .find((entry) => entry.title === 'Discord identity sweep failed');
+      .find((entry) => entry.title === 'Meetup identity sweep failed');
     expect(failure?.description).toContain('cannot read this group');
+  });
+
+  it('resolves a Meetup change to its linked Discord member in the digest', async () => {
+    repo.listChangesMetadataAfterId.mockResolvedValue([
+      change({ platform: 'meetup', subjectId: 'm1', field: 'photo' }),
+    ]);
+    memberRepo.listAll.mockResolvedValue([
+      { discordUserId: 'u1', meetupId: 'm1' },
+    ]);
+
+    await runIdentityDigestOnce(client);
+
+    const [, entry] = vi.mocked(logAlert).mock.calls[0];
+    expect(entry.description).toContain('<@u1>');
   });
 
   it('reads from the stored high-water mark, not from a time window', async () => {
@@ -307,7 +414,7 @@ describe('runIdentityDigestOnce', () => {
     await runIdentityDigestOnce(client);
 
     expect(repo.maxChangeId.mock.invocationCallOrder[0]).toBeGreaterThan(
-      vi.mocked(runIdentitySweep).mock.invocationCallOrder[0],
+      vi.mocked(runMeetupSweep).mock.invocationCallOrder[0],
     );
   });
 
@@ -407,6 +514,7 @@ describe('runIdentityDigestOnce', () => {
     // lease expired.
     expect(cache.exclusive_set).not.toHaveBeenCalled();
     expect(runIdentitySweep).not.toHaveBeenCalled();
+    expect(runMeetupSweep).not.toHaveBeenCalled();
     expect(logAlert).not.toHaveBeenCalled();
   });
 
@@ -517,8 +625,10 @@ describe('runIdentityDigestOnce', () => {
     cache.get.mockResolvedValue(undefined);
     repo.listChangesMetadataAfterId.mockResolvedValue([change()]);
     repo.storageStats.mockResolvedValue(stats);
+    memberRepo.listAll.mockResolvedValue([]);
     vi.mocked(logAlert).mockResolvedValue(true);
     vi.mocked(runIdentitySweep).mockResolvedValue({ scanned: 0, changed: 0 });
+    vi.mocked(runMeetupSweep).mockResolvedValue({ scanned: 0, changed: 0 });
 
     await runIdentityDigestOnce(client);
 
