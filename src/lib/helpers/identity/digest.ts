@@ -35,9 +35,9 @@ function line(change: IdentityChangeMetadata): string {
   const time = change.detectedAt.toISOString().slice(11, 16);
   const label = FIELD_LABELS[change.field];
   if (change.field === 'user_avatar' || change.field === 'member_avatar') {
-    return `${time}  <@${change.discordUserId}>  ${label} changed`;
+    return `${time}  <@${change.subjectId}>  ${label} changed`;
   }
-  return `${time}  <@${change.discordUserId}>  ${label} "${
+  return `${time}  <@${change.subjectId}>  ${label} "${
     change.oldValue ?? '—'
   }" → "${change.newValue ?? '—'}"`;
 }

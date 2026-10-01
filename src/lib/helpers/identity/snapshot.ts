@@ -4,6 +4,7 @@ import { IdentitySnapshot } from '../../repositories/identityTypes.js';
 
 export function snapshotMember(member: GuildMember): IdentitySnapshot {
   return {
+    scopeId: member.guild.id,
     discordUserId: member.id,
     username: member.user.username ?? null,
     globalName: member.user.globalName ?? null,

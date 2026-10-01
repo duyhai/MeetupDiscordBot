@@ -28,7 +28,9 @@ export function diffIdentity(
   }
   return FIELDS.filter(({ key }) => before[key] !== after[key]).map(
     ({ field, key }) => ({
-      discordUserId: after.discordUserId,
+      platform: 'discord',
+      scopeId: after.scopeId,
+      subjectId: after.discordUserId,
       field,
       oldValue: before[key] ?? null,
       newValue: after[key] ?? null,

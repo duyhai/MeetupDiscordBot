@@ -1,15 +1,25 @@
 import { Logger } from 'tslog';
 
-import { IdentityChange } from '../../repositories/identityTypes.js';
+import { boundedFetch } from '../../../util/boundedFetch.js';
+import {
+  ChangeThumbMap,
+  IdentityChange,
+} from '../../repositories/identityTypes.js';
 import { avatarThumbUrl } from './snapshot.js';
 
 const logger = new Logger({ name: 'identityThumbs' });
 
 const AVATAR_FIELDS = new Set(['user_avatar', 'member_avatar']);
 
+const THUMB_FETCH_TIMEOUT_MS = 5_000;
+
 async function fetchOne(url: string): Promise<Buffer | null> {
   try {
-    const response = await fetch(url);
+    // Undici applies no total-request deadline, and this runs inside the
+    // digest after the day-claim is taken: a stalled connection would hang
+    // the digest with no error and no retry. The existing catch turns a
+    // timeout into the documented best-effort null thumb.
+    const response = await boundedFetch(url, undefined, THUMB_FETCH_TIMEOUT_MS);
     if (!response.ok) {
       return null;
     }
@@ -27,11 +37,8 @@ async function fetchOne(url: string): Promise<Buffer | null> {
 export async function fetchChangeThumbs(
   changes: IdentityChange[],
   guildId: string,
-): Promise<Map<string, { oldThumb: Buffer | null; newThumb: Buffer | null }>> {
-  const thumbs = new Map<
-    string,
-    { oldThumb: Buffer | null; newThumb: Buffer | null }
-  >();
+): Promise<ChangeThumbMap> {
+  const thumbs: ChangeThumbMap = new Map();
   for (const change of changes) {
     if (!AVATAR_FIELDS.has(change.field)) {
       continue;
@@ -40,19 +47,21 @@ export async function fetchChangeThumbs(
     /* eslint-disable no-await-in-loop */
     const oldThumb = change.oldValue
       ? await fetchOne(
-          avatarThumbUrl(change.discordUserId, field, change.oldValue, guildId),
+          avatarThumbUrl(change.subjectId, field, change.oldValue, guildId),
         )
       : null;
     const newThumb = change.newValue
       ? await fetchOne(
-          avatarThumbUrl(change.discordUserId, field, change.newValue, guildId),
+          avatarThumbUrl(change.subjectId, field, change.newValue, guildId),
         )
       : null;
     /* eslint-enable no-await-in-loop */
-    thumbs.set(`${change.discordUserId}:${change.field}`, {
-      oldThumb,
-      newThumb,
-    });
+    // recordChanges reads back with the same four-part key: platform and
+    // scopeId scope the identity, subjectId and field pick the row within it.
+    thumbs.set(
+      `${change.platform}:${change.scopeId}:${change.subjectId}:${change.field}`,
+      { oldThumb, newThumb },
+    );
   }
   return thumbs;
 }
