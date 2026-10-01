@@ -17,6 +17,7 @@ export interface IdentityChange {
   newValue: string | null;
 }
 
+// 'event' is historical: nothing writes it any more, but existing rows keep it.
 export type ChangeSource = 'event' | 'sweep' | 'backfill';
 
 export interface IdentityChangeRecord extends IdentityChange {
