@@ -2,6 +2,7 @@ import { Client } from 'discord.js';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { GUILD_ID } from '../../../../src/constants.js';
+import { HealBudget } from '../../../../src/lib/helpers/identity/healBudget.js';
 import { runIdentitySweep } from '../../../../src/lib/helpers/identity/sweep.js';
 import { recordIdentityFor } from '../../../../src/lib/helpers/identity/monitor.js';
 
@@ -77,6 +78,18 @@ describe('runIdentitySweep', () => {
 
     // Backfill must be distinguishable from sweep in the change log.
     expect(vi.mocked(recordIdentityFor).mock.calls[0][1]).toBe('backfill');
+  });
+
+  it('shares one heal budget across the run, fresh for each run', async () => {
+    await runIdentitySweep(fakeClient(['a', 'b']), 'sweep');
+    await runIdentitySweep(fakeClient(['c']), 'sweep');
+
+    const budgets = vi.mocked(recordIdentityFor).mock.calls.map((c) => c[2]);
+    expect(budgets[0]).toBeInstanceOf(HealBudget);
+    // Per run: every member of a sweep draws on the same allowance...
+    expect(budgets[1]).toBe(budgets[0]);
+    // ...and the next day's sweep starts with a full one.
+    expect(budgets[2]).not.toBe(budgets[0]);
   });
 
   it('counts only members that actually changed', async () => {

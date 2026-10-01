@@ -5,6 +5,11 @@
  * this makes the first digest report all 2,008 members as having changed
  * identity, which is both useless and alarming.
  *
+ * Each of those baselines also captures the member's current avatar bytes, so
+ * a later change has a real before-image. That is one bounded HTTP request
+ * per avatar, sequential: expect this run to take considerably longer than a
+ * steady-state sweep.
+ *
  * Run against production explicitly:
  *   DISCORD_API_KEY=$(heroku config:get DISCORD_API_KEY -a meetup-discord-bot) \
  *   DATABASE_URL=$(heroku config:get DATABASE_URL -a meetup-discord-bot) \
@@ -22,7 +27,8 @@ const client = new Client({
 });
 
 // Guards only the wait to reach `clientReady`, not the sweep itself: the
-// sweep walks ~2,008 members sequentially and can legitimately take minutes.
+// sweep walks ~2,008 members sequentially, fetching a thumbnail for each
+// avatar it sees, so it can legitimately run for tens of minutes.
 // A stalled handshake (DNS blackhole, firewall silently dropping packets,
 // TLS hang) makes `client.login()` neither resolve nor reject, so without
 // this the script would sit forever with no output on a production dyno

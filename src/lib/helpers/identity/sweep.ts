@@ -3,6 +3,7 @@ import { Logger } from 'tslog';
 
 import { GUILD_ID } from '../../../constants.js';
 import { WritableChangeSource } from '../../repositories/identityTypes.js';
+import { HealBudget } from './healBudget.js';
 import { recordIdentityFor } from './monitor.js';
 
 const logger = new Logger({ name: 'identitySweep' });
@@ -26,6 +27,10 @@ export async function runIdentitySweep(
   const guild = await client.guilds.fetch(GUILD_ID);
   const members = await guild.members.fetch();
 
+  // One budget for the whole run: baseline-thumb healing stops once it has
+  // used HEAL_BUDGET_MS, and whoever is left heals on a later day.
+  const healBudget = new HealBudget();
+
   let scanned = 0;
   let changed = 0;
   for (const member of members.values()) {
@@ -34,7 +39,7 @@ export async function runIdentitySweep(
       // Sequential on purpose: 2,008 concurrent diffs would each want a
       // Postgres connection from a pool of three.
       // eslint-disable-next-line no-await-in-loop
-      const changes = await recordIdentityFor(member, source);
+      const changes = await recordIdentityFor(member, source, healBudget);
       if (changes.length > 0) {
         changed += 1;
       }
@@ -42,6 +47,11 @@ export async function runIdentitySweep(
       // One bad member must not abandon the rest of the guild.
       logger.warn(`Sweep failed for ${member.id}: ${String(error)}`);
     }
+  }
+  if (healBudget.exhausted) {
+    logger.info(
+      'Identity sweep: thumbnail-heal budget used up; remaining baselines heal on a later sweep',
+    );
   }
   logger.info(
     `Identity sweep (${source}): ${scanned} scanned, ${changed} changed`,
