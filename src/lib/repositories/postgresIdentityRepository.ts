@@ -4,6 +4,11 @@ import { Logger } from 'tslog';
 import Configuration from '../../configuration.js';
 import { GUILD_ID } from '../../constants.js';
 import {
+  MeetupBaselineThumbs,
+  MeetupSnapshot,
+  StoredMeetupSnapshot,
+} from '../helpers/identity/meetupSnapshot.js';
+import {
   ChangeSource,
   ChangeThumbMap,
   IdentityBaselineThumbs,
@@ -91,6 +96,15 @@ interface ChangeRow extends MetadataRow {
   new_thumb: Buffer | null;
 }
 
+interface MeetupSnapshotRow {
+  scope_id: string;
+  meetup_member_id: string;
+  name: string | null;
+  username: string | null;
+  photo_id: string | null;
+  photo_thumb: Buffer | null;
+}
+
 function toSnapshot(row: SnapshotRow): StoredIdentitySnapshot {
   return {
     scopeId: row.scope_id,
@@ -102,6 +116,17 @@ function toSnapshot(row: SnapshotRow): StoredIdentitySnapshot {
     memberAvatarHash: row.member_avatar_hash,
     userAvatarThumb: row.user_avatar_thumb,
     memberAvatarThumb: row.member_avatar_thumb,
+  };
+}
+
+function toMeetupSnapshot(row: MeetupSnapshotRow): StoredMeetupSnapshot {
+  return {
+    scopeId: row.scope_id,
+    meetupMemberId: row.meetup_member_id,
+    name: row.name,
+    username: row.username,
+    photoId: row.photo_id,
+    photoThumb: row.photo_thumb,
   };
 }
 
@@ -269,6 +294,47 @@ export class PostgresIdentityRepository {
         thumbs.memberAvatarThumb ?? null,
         'userAvatarThumb' in thumbs,
         'memberAvatarThumb' in thumbs,
+      ],
+    );
+  }
+
+  async getMeetupSnapshot(
+    scopeId: string,
+    meetupMemberId: string,
+  ): Promise<StoredMeetupSnapshot | undefined> {
+    const result = await this.pool.query<MeetupSnapshotRow>(
+      'SELECT * FROM meetup_identity WHERE scope_id = $1 AND meetup_member_id = $2',
+      [scopeId, meetupMemberId],
+    );
+    const row = result.rows[0];
+    return row ? toMeetupSnapshot(row) : undefined;
+  }
+
+  /** Same presence-versus-value rule for `thumbs` as putSnapshot. */
+  async putMeetupSnapshot(
+    snapshot: MeetupSnapshot,
+    thumbs: MeetupBaselineThumbs = {},
+  ): Promise<void> {
+    await this.pool.query(
+      `INSERT INTO meetup_identity (scope_id, meetup_member_id, name,
+         username, photo_id, photo_thumb, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, now())
+       ON CONFLICT (scope_id, meetup_member_id) DO UPDATE SET
+         name = EXCLUDED.name,
+         username = EXCLUDED.username,
+         photo_id = EXCLUDED.photo_id,
+         photo_thumb = CASE WHEN $7::boolean
+           THEN EXCLUDED.photo_thumb
+           ELSE meetup_identity.photo_thumb END,
+         updated_at = now()`,
+      [
+        snapshot.scopeId,
+        snapshot.meetupMemberId,
+        snapshot.name,
+        snapshot.username,
+        snapshot.photoId,
+        thumbs.photoThumb ?? null,
+        'photoThumb' in thumbs,
       ],
     );
   }
@@ -509,6 +575,11 @@ export class PostgresIdentityRepository {
     if (platform === 'discord') {
       await this.pool.query(
         'DELETE FROM member_identity WHERE scope_id = $1 AND discord_user_id = $2',
+        [scopeId, subjectId],
+      );
+    } else if (platform === 'meetup') {
+      await this.pool.query(
+        'DELETE FROM meetup_identity WHERE scope_id = $1 AND meetup_member_id = $2',
         [scopeId, subjectId],
       );
     }

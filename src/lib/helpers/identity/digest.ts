@@ -3,11 +3,14 @@ import { Logger } from 'tslog';
 
 import { ApplicationCache } from '../../../util/cache.js';
 import { ApplicationIdentityRepository } from '../../../util/identityRepository.js';
+import { ApplicationMemberRepository } from '../../../util/memberRepository.js';
 import {
   IdentityChangeMetadata,
   IdentityField,
+  IdentityPlatform,
 } from '../../repositories/identityTypes.js';
 import { LogEntry, logAlert } from '../discordLogger.js';
+import { runMeetupSweep } from './meetupSweep.js';
 import { runIdentitySweep } from './sweep.js';
 
 const logger = new Logger({ name: 'identityDigest' });
@@ -71,12 +74,22 @@ const MAX_DESCRIPTION = 4096; // Discord's hard embed description limit
  */
 export const DIGEST_PAGE_LIMIT = 5000;
 
+// Short on purpose: every line already carries a platform label (below), so
+// these do not need to repeat "Meetup" -- they only need to read as distinct
+// from Discord's "user avatar"/"server avatar"/"display name" at a glance.
 const FIELD_LABELS: Record<IdentityField, string> = {
   user_avatar: 'user avatar',
   member_avatar: 'server avatar',
   nickname: 'nickname',
   username: 'username',
   global_name: 'display name',
+  photo: 'profile photo',
+  name: 'name',
+};
+
+const PLATFORM_LABELS: Record<IdentityPlatform, string> = {
+  discord: 'Discord',
+  meetup: 'Meetup',
 };
 
 // Fields whose stored value is an opaque id/hash, not human-readable text --
@@ -84,6 +97,7 @@ const FIELD_LABELS: Record<IdentityField, string> = {
 const PHOTO_LIKE_FIELDS = new Set<IdentityField>([
   'user_avatar',
   'member_avatar',
+  'photo',
 ]);
 
 export function shouldRunIdentityDigestNow(now: Date): boolean {
@@ -150,13 +164,35 @@ async function runSweepOrDegrade(
   }
 }
 
-function line(change: IdentityChangeMetadata): string {
+/**
+ * A Discord change's subject IS a Discord user id -- `<@id>` always renders.
+ * A Meetup change's subject is a Meetup member id, which is meaningless as a
+ * Discord mention; resolve it through the link table when possible, and fall
+ * back to the raw id (never to a broken `<@undefined>`) when it is not.
+ */
+function mentionFor(
+  change: IdentityChangeMetadata,
+  meetupToDiscord: Map<string, string>,
+): string {
+  if (change.platform === 'discord') {
+    return `<@${change.subjectId}>`;
+  }
+  const discordId = meetupToDiscord.get(change.subjectId);
+  return discordId ? `<@${discordId}>` : change.subjectId;
+}
+
+function line(
+  change: IdentityChangeMetadata,
+  meetupToDiscord: Map<string, string>,
+): string {
   const time = change.detectedAt.toISOString().slice(11, 16);
   const label = FIELD_LABELS[change.field];
+  const platform = PLATFORM_LABELS[change.platform];
+  const who = mentionFor(change, meetupToDiscord);
   if (PHOTO_LIKE_FIELDS.has(change.field)) {
-    return `${time}  <@${change.subjectId}>  ${label} changed`;
+    return `${time}  ${platform}  ${who}  ${label} changed`;
   }
-  return `${time}  <@${change.subjectId}>  ${label} "${
+  return `${time}  ${platform}  ${who}  ${label} "${
     change.oldValue ?? '—'
   }" → "${change.newValue ?? '—'}"`;
 }
@@ -166,6 +202,7 @@ const stamp = (date: Date) => date.toISOString().slice(0, 16).replace('T', ' ');
 export function formatIdentityDigest(
   changes: IdentityChangeMetadata[],
   stats: { changeCount: number; totalBytes: number },
+  meetupToDiscord: Map<string, string>,
 ): LogEntry | undefined {
   if (changes.length === 0) {
     return undefined;
@@ -178,7 +215,7 @@ export function formatIdentityDigest(
   let used = footer.length;
   let shown = 0;
   for (const change of changes) {
-    const next = `${line(change)}\n`;
+    const next = `${line(change, meetupToDiscord)}\n`;
     // Reserve room for the overflow note (comfortably above its longest
     // realistic length -- "…and 5000 more — run /meetup_identity_report for
     // the full list\n" is 63 characters) so a flood degrades to a truncated
@@ -319,6 +356,9 @@ export async function runIdentityDigestOnce(client: Client): Promise<void> {
     await runSweepOrDegrade('Discord', client, () =>
       runIdentitySweep(client, 'sweep'),
     );
+    await runSweepOrDegrade('Meetup', client, () =>
+      runMeetupSweep('sweep', client),
+    );
 
     // Fix the ceiling BEFORE reading the rows. Advancing to "the highest id
     // that exists when the digest finishes" instead would silently skip any
@@ -336,7 +376,18 @@ export async function runIdentityDigestOnce(client: Client): Promise<void> {
       : [];
     const stats = await repo.storageStats();
 
-    const entry = formatIdentityDigest(changes, stats);
+    // Built fresh each run rather than cached: a link created between
+    // yesterday's digest and today's should resolve today, not tomorrow.
+    const memberRepo = await ApplicationMemberRepository();
+    const members = await memberRepo.listAll();
+    const meetupToDiscord = new Map<string, string>();
+    for (const member of members) {
+      if (member.meetupId) {
+        meetupToDiscord.set(member.meetupId, member.discordUserId);
+      }
+    }
+
+    const entry = formatIdentityDigest(changes, stats, meetupToDiscord);
     if (entry) {
       // logAlert swallows every error by design, so an outage or a permission
       // change would otherwise leave the claim consumed, a success logged, no

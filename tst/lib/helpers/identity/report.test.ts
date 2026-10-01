@@ -102,6 +102,30 @@ describe('renderIdentityReport', () => {
     expect(html).toContain('&lt;img src=x onerror=alert(1)&gt;');
   });
 
+  it('renders a Meetup row with its platform column and thumbnail', () => {
+    const html = renderIdentityReport(
+      [
+        change({
+          platform: 'meetup',
+          subjectId: 'm1',
+          field: 'photo',
+          oldThumb: null,
+          newThumb: Buffer.from([7, 8, 9]),
+        }),
+      ],
+      range,
+    );
+
+    expect(html).toContain('<th>Platform</th>');
+    expect(html).toContain('Meetup');
+    expect(html).toContain('Profile photo');
+    // The new photo's bytes render as an image; the old one -- unrecoverable
+    // for a Meetup photo change -- falls back to the same placeholder as a
+    // failed Discord CDN fetch.
+    expect(html).toContain('data:image/webp;base64,');
+    expect(html).toContain('no image');
+  });
+
   it('labels JPEG thumbnails as JPEG', () => {
     // Meetup serves JPEG, not WebP. The hardcoded image/webp made every
     // Meetup photo change render as a broken image in a document whose whole
@@ -133,6 +157,61 @@ describe('renderIdentityReport', () => {
     const html = renderIdentityReport([change({ newThumb: webp })], range);
 
     expect(html).toContain('data:image/webp;base64,');
+  });
+
+  it('resolves a Meetup id to its linked Discord account', () => {
+    const html = renderIdentityReport(
+      [change({ platform: 'meetup', subjectId: '404060606', field: 'photo' })],
+      range,
+      new Map([['404060606', 'discord-1']]),
+    );
+
+    // The spec promises this mapping on BOTH surfaces. Only the digest had
+    // it; the report showed a bare 9-digit id, which is exactly the
+    // "member 404060606 changed their photo" the mapping exists to avoid.
+    expect(html).toContain('discord-1');
+    // The raw id must survive alongside it -- it is what an organizer needs
+    // to search Meetup with, so resolving has to add, not replace.
+    expect(html).toContain('404060606');
+    // Mention markup is inert in a static HTML file.
+    expect(html).not.toContain('<@');
+  });
+
+  it('falls back to the raw Meetup id when the member is not linked', () => {
+    const html = renderIdentityReport(
+      [change({ platform: 'meetup', subjectId: '404060606', field: 'photo' })],
+      range,
+      new Map(),
+    );
+
+    expect(html).toContain('404060606');
+    expect(html).not.toContain('undefined');
+  });
+
+  it('leaves a Discord row showing its own user id', () => {
+    const html = renderIdentityReport(
+      [change({ platform: 'discord', subjectId: 'u1' })],
+      range,
+      new Map([['u1', 'someone-else']]),
+    );
+
+    // The map is keyed by MEETUP id. A Discord subject id that happens to
+    // collide with one must not be rewritten into another member's name.
+    expect(html).toContain('u1');
+    expect(html).not.toContain('someone-else');
+  });
+
+  it('escapes a hostile linked Discord id', () => {
+    const html = renderIdentityReport(
+      [change({ platform: 'meetup', subjectId: 'm1', field: 'photo' })],
+      range,
+      new Map([['m1', '<img src=x onerror=alert(1)>']]),
+    );
+
+    // The mapped value comes from the members table, which is populated from
+    // user-controlled linking -- it is no more trusted than a nickname.
+    expect(html).not.toContain('<img src=x onerror=alert(1)>');
+    expect(html).toContain('&lt;img src=x onerror=alert(1)&gt;');
   });
 
   it('does not throw on an unrecognised field from an older row', () => {
