@@ -18,6 +18,7 @@ import {
   suppressIdentityWrites,
 } from './identitySuppression.js';
 import { recordManualOnboard, recordMeetupLink } from './memberLink.js';
+import { removeReverifyRole } from './reverify.js';
 
 /**
  * A Meetup account that is not in the group. The alert naming the person is
@@ -296,6 +297,8 @@ export async function selfOnboardUser(
     },
     'self_onboard',
   );
+  // Linked now, so they're done with the Reverify migration.
+  await removeReverifyRole(interaction.guild, discordUser.id);
   await onboardUserCommon(
     interaction,
     discordUser.id,
