@@ -145,13 +145,12 @@ export async function onboardUserCommon(
     logger.info(
       `Explicitly set ${fullUsername}'s nickname to ${targetNickName}`,
     );
-    // The bot just wrote this nickname. Advance the baseline so the daily
-    // sweep does not report the bot's own write as a suspicious name change.
-    // Failure is swallowed: this is a background monitoring write, and
-    // onboarding (role assignment below) outranks it -- it must complete even
-    // if the identity repository is down. Losing one baseline update is
-    // survivable, since the next sweep re-derives it from the member's actual
-    // current state.
+    // Advance the baseline so the daily sweep does not report the bot's own
+    // write as a suspicious name change. Failure is swallowed: this is a
+    // background monitoring write, and onboarding (role assignment below)
+    // outranks it -- it must complete even if the identity repository is
+    // down. Losing one baseline update is survivable, since the next sweep
+    // re-derives it from the member's actual current state.
     try {
       await updateBaselineSilently(guildMember);
     } catch (error: unknown) {

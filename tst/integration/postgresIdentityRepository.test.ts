@@ -45,9 +45,89 @@ describe.skipIf(!POSTGRES_AVAILABLE)('PostgresIdentityRepository', () => {
     const snap = freshSnapshot();
     await repo.putSnapshot(snap);
 
-    expect(await repo.getSnapshot(snap.scopeId, snap.discordUserId)).toEqual(
-      snap,
-    );
+    expect(await repo.getSnapshot(snap.scopeId, snap.discordUserId)).toEqual({
+      ...snap,
+      // A baseline written without thumbs reads back with none, rather than
+      // with the columns missing: the monitor indexes them by field name.
+      userAvatarThumb: null,
+      memberAvatarThumb: null,
+    });
+  });
+
+  it('round-trips baseline thumbnails as bytes', async () => {
+    const snap = freshSnapshot();
+    // Deliberately not all-ASCII, matching the change-thumb fixture below:
+    // 0xff/0xfe are invalid UTF-8 continuation bytes, so a driver that ever
+    // coerced these through a string would corrupt them here and the test
+    // would catch it. An all-ASCII buffer would survive that coercion.
+    const userThumb = Buffer.from([0x52, 0x49, 0x46, 0x46, 0xff, 0x00, 0xfe]);
+    const memberThumb = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0xfd, 0xfc]);
+
+    await repo.putSnapshot(snap, {
+      userAvatarThumb: userThumb,
+      memberAvatarThumb: memberThumb,
+    });
+
+    const stored = await repo.getSnapshot(snap.scopeId, snap.discordUserId);
+    // These bytes ARE the before-image of every future change for this
+    // member: Discord purges the old avatar, so nothing else can supply it.
+    expect(stored?.userAvatarThumb?.equals(userThumb)).toBe(true);
+    expect(stored?.memberAvatarThumb?.equals(memberThumb)).toBe(true);
+  });
+
+  it('leaves a stored baseline thumb alone when a put supplies none', async () => {
+    const snap = freshSnapshot();
+    const userThumb = Buffer.from([0x52, 0x49, 0x46, 0x46, 0xff, 0xfe]);
+    await repo.putSnapshot(snap, {
+      userAvatarThumb: userThumb,
+      memberAvatarThumb: null,
+    });
+
+    // A nickname-only change: the caller knows nothing about avatars and
+    // passes no thumbs at all.
+    await repo.putSnapshot({ ...snap, nickname: 'Someone Else' });
+
+    const stored = await repo.getSnapshot(snap.scopeId, snap.discordUserId);
+    expect(stored?.nickname).toBe('Someone Else');
+    // A blind `= EXCLUDED.user_avatar_thumb` would null this on every
+    // non-avatar update, and the loss is permanent -- the CDN no longer has
+    // the image, which is the entire reason it was stored here.
+    expect(stored?.userAvatarThumb?.equals(userThumb)).toBe(true);
+  });
+
+  it('updates one baseline thumb without disturbing the other', async () => {
+    const snap = freshSnapshot();
+    const userThumb = Buffer.from([0x01, 0xff, 0xfe]);
+    const memberThumb = Buffer.from([0x02, 0xfd, 0xfc]);
+    await repo.putSnapshot(snap, {
+      userAvatarThumb: userThumb,
+      memberAvatarThumb: memberThumb,
+    });
+
+    const replacement = Buffer.from([0x03, 0xfb, 0xfa]);
+    await repo.putSnapshot(snap, { userAvatarThumb: replacement });
+
+    const stored = await repo.getSnapshot(snap.scopeId, snap.discordUserId);
+    expect(stored?.userAvatarThumb?.equals(replacement)).toBe(true);
+    // The two avatar fields change independently; a guild-avatar image must
+    // survive a global-avatar change and vice versa.
+    expect(stored?.memberAvatarThumb?.equals(memberThumb)).toBe(true);
+  });
+
+  it('clears a baseline thumb when null is passed explicitly', async () => {
+    const snap = freshSnapshot();
+    await repo.putSnapshot(snap, {
+      userAvatarThumb: Buffer.from([0x01, 0xff, 0xfe]),
+    });
+
+    await repo.putSnapshot(snap, { userAvatarThumb: null });
+
+    const stored = await repo.getSnapshot(snap.scopeId, snap.discordUserId);
+    // Presence is the switch, not the value. An avatar change whose fetch
+    // failed passes an explicit null, and it has to land: leaving the
+    // superseded image under the new hash would make the NEXT change's
+    // before-image wrong rather than merely absent.
+    expect(stored?.userAvatarThumb).toBeNull();
   });
 
   it('overwrites an existing snapshot rather than duplicating it', async () => {

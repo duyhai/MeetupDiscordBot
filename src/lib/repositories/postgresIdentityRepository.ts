@@ -6,12 +6,14 @@ import { GUILD_ID } from '../../constants.js';
 import {
   ChangeSource,
   ChangeThumbMap,
+  IdentityBaselineThumbs,
   IdentityChange,
   IdentityChangeMetadata,
   IdentityChangeRecord,
   IdentityField,
   IdentityPlatform,
   IdentitySnapshot,
+  StoredIdentitySnapshot,
   WritableChangeSource,
 } from './identityTypes.js';
 import { migrateIdentitySchema } from './identitySchema.js';
@@ -56,6 +58,8 @@ interface SnapshotRow {
   nickname: string | null;
   user_avatar_hash: string | null;
   member_avatar_hash: string | null;
+  user_avatar_thumb: Buffer | null;
+  member_avatar_thumb: Buffer | null;
 }
 
 interface MetadataRow {
@@ -75,7 +79,7 @@ interface ChangeRow extends MetadataRow {
   new_thumb: Buffer | null;
 }
 
-function toSnapshot(row: SnapshotRow): IdentitySnapshot {
+function toSnapshot(row: SnapshotRow): StoredIdentitySnapshot {
   return {
     scopeId: row.scope_id,
     discordUserId: row.discord_user_id,
@@ -84,6 +88,8 @@ function toSnapshot(row: SnapshotRow): IdentitySnapshot {
     nickname: row.nickname,
     userAvatarHash: row.user_avatar_hash,
     memberAvatarHash: row.member_avatar_hash,
+    userAvatarThumb: row.user_avatar_thumb,
+    memberAvatarThumb: row.member_avatar_thumb,
   };
 }
 
@@ -196,7 +202,7 @@ export class PostgresIdentityRepository {
   async getSnapshot(
     scopeId: string,
     discordUserId: string,
-  ): Promise<IdentitySnapshot | undefined> {
+  ): Promise<StoredIdentitySnapshot | undefined> {
     const result = await this.pool.query<SnapshotRow>(
       'SELECT * FROM member_identity WHERE scope_id = $1 AND discord_user_id = $2',
       [scopeId, discordUserId],
@@ -205,18 +211,39 @@ export class PostgresIdentityRepository {
     return row ? toSnapshot(row) : undefined;
   }
 
-  async putSnapshot(snapshot: IdentitySnapshot): Promise<void> {
+  /**
+   * Upserts a baseline. `thumbs` is separate from the snapshot because a
+   * snapshot is derived purely from Discord's own data, while the thumbs are
+   * bytes we fetched and keep.
+   *
+   * A thumb column is written ONLY when its key is present in `thumbs`; the
+   * CASE guards, not COALESCE, so an explicit `null` can still clear one. The
+   * distinction is load-bearing in both directions: every nickname-only
+   * update passes no thumbs at all and must leave the stored images alone,
+   * while an avatar change whose fetch failed must not leave the superseded
+   * image sitting under the new hash.
+   */
+  async putSnapshot(
+    snapshot: IdentitySnapshot,
+    thumbs: IdentityBaselineThumbs = {},
+  ): Promise<void> {
     await this.pool.query(
       `INSERT INTO member_identity (scope_id, discord_user_id, username,
          global_name, nickname, user_avatar_hash, member_avatar_hash,
-         updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, now())
+         user_avatar_thumb, member_avatar_thumb, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, now())
        ON CONFLICT (scope_id, discord_user_id) DO UPDATE SET
          username = EXCLUDED.username,
          global_name = EXCLUDED.global_name,
          nickname = EXCLUDED.nickname,
          user_avatar_hash = EXCLUDED.user_avatar_hash,
          member_avatar_hash = EXCLUDED.member_avatar_hash,
+         user_avatar_thumb = CASE WHEN $10::boolean
+           THEN EXCLUDED.user_avatar_thumb
+           ELSE member_identity.user_avatar_thumb END,
+         member_avatar_thumb = CASE WHEN $11::boolean
+           THEN EXCLUDED.member_avatar_thumb
+           ELSE member_identity.member_avatar_thumb END,
          updated_at = now()`,
       [
         snapshot.scopeId,
@@ -226,6 +253,10 @@ export class PostgresIdentityRepository {
         snapshot.nickname,
         snapshot.userAvatarHash,
         snapshot.memberAvatarHash,
+        thumbs.userAvatarThumb ?? null,
+        thumbs.memberAvatarThumb ?? null,
+        'userAvatarThumb' in thumbs,
+        'memberAvatarThumb' in thumbs,
       ],
     );
   }
