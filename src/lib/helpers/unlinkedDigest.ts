@@ -61,14 +61,30 @@ export async function runDigestOnce(client: Client): Promise<void> {
   const rows = await repo.listAll();
   const reverifyRole = await findReverifyRole(guild);
 
-  const unlinked = collectUnlinkedMemberIds(
-    guildMembers.map((member) => ({
-      id: member.id,
-      isBot: member.user.bot,
-      hasOnboardingRole: member.roles.cache.has(SERVER_ROLES.onboarding),
-    })),
-    rows,
-  );
+  // During the Reverify migration the full unlinked list is ~1,450 names;
+  // staff need the progress number instead, so the list isn't built.
+  let progress: LogEntry | undefined;
+  let unlinked: string[] = [];
+  if (reverifyRole) {
+    const memberIds = new Set(guildMembers.keys());
+    progress = formatReverifyProgress({
+      stillTagged: guildMembers.filter((member) =>
+        member.roles.cache.has(reverifyRole.id),
+      ).size,
+      linked: rows.filter(
+        (row) => row.meetupId !== null && memberIds.has(row.discordUserId),
+      ).length,
+    });
+  } else {
+    unlinked = collectUnlinkedMemberIds(
+      guildMembers.map((member) => ({
+        id: member.id,
+        isBot: member.user.bot,
+        hasOnboardingRole: member.roles.cache.has(SERVER_ROLES.onboarding),
+      })),
+      rows,
+    );
+  }
 
   // Claim the day only after the fallible collection succeeds, so a failed
   // run leaves the claim unconsumed and a restart within the hour can retry.
@@ -81,22 +97,8 @@ export async function runDigestOnce(client: Client): Promise<void> {
     return;
   }
 
-  // During the Reverify migration the full unlinked list is ~1,450 names;
-  // staff need the progress number instead.
-  if (reverifyRole) {
-    const members = [...guildMembers.values()];
-    const memberIds = new Set(members.map((member) => member.id));
-    await logModeration(
-      client,
-      formatReverifyProgress({
-        stillTagged: members.filter((member) =>
-          member.roles.cache.has(reverifyRole.id),
-        ).length,
-        linked: rows.filter(
-          (row) => row.meetupId !== null && memberIds.has(row.discordUserId),
-        ).length,
-      }),
-    );
+  if (progress) {
+    await logModeration(client, progress);
     logger.info('Unlinked digest ran in Reverify progress mode');
     return;
   }

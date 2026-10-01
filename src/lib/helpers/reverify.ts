@@ -14,7 +14,7 @@ import { Logger } from 'tslog';
 
 import { SERVER_ROLES } from '../../constants.js';
 import { isAdmin } from '../../util/discord.js';
-import { MemberRecord } from '../repositories/types.js';
+import { MemberRecord, MemberRepository } from '../repositories/types.js';
 import { LogEntry, logModeration } from './discordLogger.js';
 
 const logger = new Logger({ name: 'reverify' });
@@ -38,14 +38,19 @@ export function toCandidate(member: GuildMember): ReverifyCandidate {
   };
 }
 
-/** Bots, staff, and people who never finished verifying are never touched. */
-function isOutOfScope(member: ReverifyCandidate): boolean {
+function isStaffOrBot(member: ReverifyCandidate): boolean {
   return (
     member.isBot ||
     member.isAdmin ||
     member.roleIds.includes(SERVER_ROLES.moderator) ||
-    member.roleIds.includes(SERVER_ROLES.organizer) ||
-    member.roleIds.includes(SERVER_ROLES.onboarding)
+    member.roleIds.includes(SERVER_ROLES.organizer)
+  );
+}
+
+/** Bots, staff, and people who never finished verifying are never tagged. */
+function isOutOfScope(member: ReverifyCandidate): boolean {
+  return (
+    isStaffOrBot(member) || member.roleIds.includes(SERVER_ROLES.onboarding)
   );
 }
 
@@ -67,7 +72,8 @@ export function selectReverifyTargets(
 /**
  * Members still holding Reverify, re-checked against the same rules: a
  * linked member whose role removal failed must not lose access, and staff
- * must never be locked out even if someone tagged them by hand.
+ * must never be locked out even if someone tagged them by hand. Members
+ * already in Onboarding are included so they lose the tag too.
  */
 export function selectEnforceTargets(
   members: ReverifyCandidate[],
@@ -81,23 +87,71 @@ export function selectEnforceTargets(
     .filter(
       (member) =>
         member.roleIds.includes(reverifyRoleId) &&
-        !isOutOfScope(member) &&
+        !isStaffOrBot(member) &&
         !linked.has(member.id),
     )
     .map((member) => member.id);
 }
 
 /**
- * Narrows a run to one member, so the flow can be tried on a test account
- * before it touches everyone. The member still has to pass the same rules.
+ * The jobs take minutes, and people link while they run. So each member is
+ * re-checked against fresh data right before their roles change; a member
+ * who no longer qualifies is skipped (returns false).
  */
-export function limitToMember(
-  targets: string[],
-  memberId: string | undefined,
-): string[] {
-  return memberId === undefined
-    ? targets
-    : targets.filter((id) => id === memberId);
+async function fetchFresh(guild: Guild, repo: MemberRepository, id: string) {
+  const [member, record] = await Promise.all([
+    guild.members.fetch({ user: id, force: true }),
+    repo.findByDiscordId(id),
+  ]);
+  return { member, candidate: toCandidate(member), record };
+}
+
+export async function tagIfStillUnlinked(
+  guild: Guild,
+  repo: MemberRepository,
+  reverifyRole: Role,
+  memberId: string,
+): Promise<boolean> {
+  const { member, candidate, record } = await fetchFresh(guild, repo, memberId);
+  if (
+    record ||
+    isOutOfScope(candidate) ||
+    candidate.roleIds.includes(reverifyRole.id)
+  ) {
+    return false;
+  }
+  await member.roles.add(
+    reverifyRole,
+    'Meetup linking migration: no Meetup link on record',
+  );
+  return true;
+}
+
+export async function moveToOnboardingIfStillUnlinked(
+  guild: Guild,
+  repo: MemberRepository,
+  reverifyRoleId: string,
+  memberId: string,
+): Promise<boolean> {
+  const { member, candidate, record } = await fetchFresh(guild, repo, memberId);
+  if (
+    record?.meetupId ||
+    isStaffOrBot(candidate) ||
+    !candidate.roleIds.includes(reverifyRoleId)
+  ) {
+    return false;
+  }
+  // One call swaps Reverify for Onboarding, so a failure can't leave a
+  // member holding both (or neither).
+  const roles = new Set(candidate.roleIds);
+  roles.delete(reverifyRoleId);
+  roles.delete(guild.id); // @everyone
+  roles.add(SERVER_ROLES.onboarding);
+  await member.roles.set(
+    [...roles],
+    'Meetup linking deadline passed without a link',
+  );
+  return true;
 }
 
 export function formatReverifyProgress({
@@ -164,13 +218,13 @@ let runningJob: string | undefined;
  * Runs a role change over many members one at a time in the background (a
  * few minutes for ~1,500 people: discord.js queues the calls under Discord's
  * rate limits), then posts the outcome to the staff moderation channel. Only
- * one job runs at a time.
+ * one job runs at a time. `change` returns false when it skipped a member.
  */
 export function startRoleJob(
   client: Client,
   name: string,
   memberIds: string[],
-  change: (memberId: string) => Promise<void>,
+  change: (memberId: string) => Promise<boolean>,
 ): boolean {
   if (runningJob) {
     return false;
@@ -178,25 +232,34 @@ export function startRoleJob(
   runningJob = name;
   (async () => {
     let done = 0;
+    let skipped = 0;
     const failed: string[] = [];
     for (const memberId of memberIds) {
       try {
         // eslint-disable-next-line no-await-in-loop
-        await change(memberId);
-        done += 1;
+        if (await change(memberId)) {
+          done += 1;
+        } else {
+          skipped += 1;
+        }
       } catch (error) {
         failed.push(memberId);
         logger.warn(`${name} failed for ${memberId}: ${String(error)}`);
       }
     }
+    const skippedNote = skipped
+      ? `Skipped ${skipped} who linked or changed since the job started.\n`
+      : '';
     await logModeration(client, {
       title: `${name} finished: ${done} of ${memberIds.length} members`,
-      description: failed.length
-        ? `Failed for ${failed.length}: ${failed
-            .slice(0, 30)
-            .map((id) => `<@${id}>`)
-            .join(' ')}${failed.length > 30 ? ' …' : ''}`
-        : 'No failures.',
+      description:
+        skippedNote +
+        (failed.length
+          ? `Failed for ${failed.length}: ${failed
+              .slice(0, 30)
+              .map((id) => `<@${id}>`)
+              .join(' ')}${failed.length > 30 ? ' …' : ''}`
+          : 'No failures.'),
     });
   })()
     .catch((error) => logger.error(`${name} crashed: ${String(error)}`))

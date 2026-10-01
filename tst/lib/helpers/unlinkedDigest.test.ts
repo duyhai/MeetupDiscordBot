@@ -1,4 +1,4 @@
-import { Client } from 'discord.js';
+import { Client, Collection } from 'discord.js';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import * as discordLogger from '../../../src/lib/helpers/discordLogger.js';
@@ -78,7 +78,17 @@ describe('runDigestOnce', () => {
     reverifyRole?: { id: string; name: string },
   ) {
     const guild = {
-      members: { fetch: vi.fn().mockImplementation(membersFetch) },
+      // guild.members.fetch() resolves to a Collection keyed by member ID.
+      members: {
+        fetch: vi
+          .fn()
+          .mockImplementation(() =>
+            membersFetch().then(
+              (list) =>
+                new Collection(list.map((member) => [member.id, member])),
+            ),
+          ),
+      },
       roles: {
         fetch: vi.fn().mockResolvedValue(reverifyRole ? [reverifyRole] : []),
       },

@@ -12,10 +12,11 @@ import {
   REVERIFY_ROLE_NAME,
   ensureReverifyRole,
   findReverifyRole,
-  limitToMember,
+  moveToOnboardingIfStillUnlinked,
   selectEnforceTargets,
   selectReverifyTargets,
   startRoleJob,
+  tagIfStillUnlinked,
   toCandidate,
 } from '../../lib/helpers/reverify.js';
 import {
@@ -48,11 +49,17 @@ const busyMessage =
 
 /** Every server member plus the members table, read fresh for each run. */
 async function loadMembersAndRecords(interaction: CommandInteraction) {
+  const repo = await ApplicationMemberRepository();
   const [guildMembers, rows] = await Promise.all([
     interaction.guild.members.fetch(),
-    (await ApplicationMemberRepository()).listAll(),
+    repo.listAll(),
   ]);
-  return { candidates: guildMembers.map(toCandidate), rows };
+  return { candidates: guildMembers.map(toCandidate), rows, repo };
+}
+
+/** A one-account test run: the named member still has to pass the rules. */
+function onlyMember(targets: string[], member: User | undefined): string[] {
+  return member ? targets.filter((id) => id === member.id) : targets;
 }
 
 @Discord()
@@ -74,23 +81,24 @@ export class ReverifyCommands {
         'Only moderators and organizers can run the Reverify migration.',
       );
       const { guild, client, user } = interaction;
-      const { candidates, rows } = await loadMembersAndRecords(interaction);
-      const existingRole = await findReverifyRole(guild);
+      const { candidates, rows, repo } =
+        await loadMembersAndRecords(interaction);
+      const existingReverifyRole = await findReverifyRole(guild);
       // Re-running after a partial or interrupted job only tags the rest.
       const alreadyTagged = new Set(
-        existingRole
+        existingReverifyRole
           ? candidates
               .filter((candidate) =>
-                candidate.roleIds.includes(existingRole.id),
+                candidate.roleIds.includes(existingReverifyRole.id),
               )
               .map((candidate) => candidate.id)
           : [],
       );
-      const targets = limitToMember(
+      const targets = onlyMember(
         selectReverifyTargets(candidates, rows).filter(
           (id) => !alreadyTagged.has(id),
         ),
-        member?.id,
+        member,
       );
 
       if (!confirm) {
@@ -112,15 +120,8 @@ export class ReverifyCommands {
         client,
         'Reverify tagging',
         targets,
-        async (memberId) => {
-          await guild.members.addRole({
-            user: memberId,
-            role,
-            reason: 'Meetup linking migration: no Meetup link on record',
-          });
-        },
+        (memberId) => tagIfStillUnlinked(guild, repo, role, memberId),
       );
-      logger.info(`Reverify tagging started for ${targets.length} member(s)`);
       await interaction.followUp({
         content: started
           ? `Tagging ${targets.length} member(s) with ${role.toString()} in the background. ` +
@@ -129,6 +130,7 @@ export class ReverifyCommands {
         ephemeral: true,
       });
       if (started) {
+        logger.info(`Reverify tagging started for ${targets.length} member(s)`);
         await logModerationAction(interaction, {
           title: 'Reverify tagging started',
           description: `${user.toString()} started tagging ${
@@ -162,17 +164,28 @@ export class ReverifyCommands {
           `There's no ${REVERIFY_ROLE_NAME} role, so there's nobody to enforce on. Run /meetup_reverify_tag first.`,
         );
       }
-      const { candidates, rows } = await loadMembersAndRecords(interaction);
-      const targets = limitToMember(
+      const { candidates, rows, repo } =
+        await loadMembersAndRecords(interaction);
+      const targets = onlyMember(
         selectEnforceTargets(candidates, rows, role.id),
-        member?.id,
+        member,
       );
 
       if (!confirm) {
+        const targetIds = new Set(targets);
+        const alreadyInOnboarding = candidates.filter(
+          (candidate) =>
+            targetIds.has(candidate.id) &&
+            candidate.roleIds.includes(SERVER_ROLES.onboarding),
+        ).length;
         await interaction.followUp({
           content:
-            `Preview: ${targets.length} member(s) still holding ${REVERIFY_ROLE_NAME} would lose channel access ` +
-            '(moved back to Onboarding). Nothing changed. Run again with confirm:true on deadline day.',
+            `Preview: ${targets.length} member(s) still holding ${REVERIFY_ROLE_NAME} ` +
+            'would be moved to Onboarding and lose channel access' +
+            (alreadyInOnboarding
+              ? ` (${alreadyInOnboarding} already in Onboarding would just lose the tag)`
+              : '') +
+            '. Nothing changed. Run again with confirm:true on deadline day.',
           ephemeral: true,
         });
         await logModerationAction(interaction, {
@@ -186,21 +199,8 @@ export class ReverifyCommands {
         client,
         'Reverify enforcement',
         targets,
-        async (memberId) => {
-          await guild.members.addRole({
-            user: memberId,
-            role: SERVER_ROLES.onboarding,
-            reason: 'Meetup linking deadline passed without a link',
-          });
-          await guild.members.removeRole({
-            user: memberId,
-            role,
-            reason: 'Moved to Onboarding at the linking deadline',
-          });
-        },
-      );
-      logger.info(
-        `Reverify enforcement started for ${targets.length} member(s)`,
+        (memberId) =>
+          moveToOnboardingIfStillUnlinked(guild, repo, role.id, memberId),
       );
       await interaction.followUp({
         content: started
@@ -209,6 +209,9 @@ export class ReverifyCommands {
         ephemeral: true,
       });
       if (started) {
+        logger.info(
+          `Reverify enforcement started for ${targets.length} member(s)`,
+        );
         await logModerationAction(interaction, {
           title: 'Reverify enforcement started',
           description: `${user.toString()} started moving ${targets.length} member(s) to Onboarding.`,

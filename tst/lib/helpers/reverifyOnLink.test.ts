@@ -13,7 +13,7 @@ vi.mock('../../../src/lib/helpers/memberLink.js', async (importOriginal) => ({
   ...(await importOriginal<
     typeof import('../../../src/lib/helpers/memberLink.js')
   >()),
-  recordMeetupLink: vi.fn().mockResolvedValue(undefined),
+  recordMeetupLink: vi.fn().mockResolvedValue(true),
 }));
 vi.mock('../../../src/lib/helpers/reverify.js', () => ({
   removeReverifyRole: vi.fn().mockResolvedValue(undefined),
@@ -83,6 +83,14 @@ describe('linking during the Reverify migration', () => {
     await selfOnboardUser(meetupClient, interaction);
 
     expect(removeReverifyRole).toHaveBeenCalledWith(interaction.guild, USER_ID);
+  });
+
+  it('keeps the role when the link could not be saved', async () => {
+    vi.mocked(recordMeetupLink).mockResolvedValueOnce(false);
+
+    await selfOnboardUser(meetupClient, fakeInteraction());
+
+    expect(removeReverifyRole).not.toHaveBeenCalled();
   });
 
   it('keeps the role when the link is refused as a duplicate', async () => {

@@ -288,7 +288,7 @@ export async function selfOnboardUser(
   logger.info(
     `Updating ${discordUser.username}'s display name to ${cleanedName} (Meetup name: ${name}).`,
   );
-  await recordMeetupLink(
+  const linkSaved = await recordMeetupLink(
     interaction,
     {
       meetupId: userInfo.self.id,
@@ -297,8 +297,11 @@ export async function selfOnboardUser(
     },
     'self_onboard',
   );
-  // Linked now, so they're done with the Reverify migration.
-  await removeReverifyRole(interaction.guild, discordUser.id);
+  // Linked now, so they're done with the Reverify migration. If the link
+  // didn't save, they keep the role so enforcement still covers them.
+  if (linkSaved) {
+    await removeReverifyRole(interaction.guild, discordUser.id);
+  }
   await onboardUserCommon(
     interaction,
     discordUser.id,

@@ -1,4 +1,4 @@
-import { Client } from 'discord.js';
+import { Client, Guild, Role } from 'discord.js';
 import { describe, expect, it, vi } from 'vitest';
 
 import { SERVER_ROLES } from '../../../src/constants.js';
@@ -6,11 +6,13 @@ import { logModeration } from '../../../src/lib/helpers/discordLogger.js';
 import {
   ReverifyCandidate,
   formatReverifyProgress,
-  limitToMember,
+  moveToOnboardingIfStillUnlinked,
   selectEnforceTargets,
   selectReverifyTargets,
   startRoleJob,
+  tagIfStillUnlinked,
 } from '../../../src/lib/helpers/reverify.js';
+import { InMemoryMemberRepository } from '../../../src/lib/repositories/inMemoryMemberRepository.js';
 import { MemberRecord } from '../../../src/lib/repositories/types.js';
 
 vi.mock('../../../src/lib/helpers/discordLogger.js', () => ({
@@ -100,11 +102,13 @@ describe('selectEnforceTargets', () => {
     expect(selectEnforceTargets(members, [], REVERIFY_ROLE_ID)).toEqual([]);
   });
 
-  it('skips members already back in Onboarding', () => {
+  it('includes members already in Onboarding, so they lose the tag too', () => {
     const members = [
-      member('done', { roleIds: [REVERIFY_ROLE_ID, SERVER_ROLES.onboarding] }),
+      member('both', { roleIds: [REVERIFY_ROLE_ID, SERVER_ROLES.onboarding] }),
     ];
-    expect(selectEnforceTargets(members, [], REVERIFY_ROLE_ID)).toEqual([]);
+    expect(selectEnforceTargets(members, [], REVERIFY_ROLE_ID)).toEqual([
+      'both',
+    ]);
   });
 });
 
@@ -136,6 +140,7 @@ describe('startRoleJob', () => {
           throw new Error('missing permissions');
         }
         changed.push(id);
+        return true;
       },
     );
     await settle();
@@ -147,6 +152,19 @@ describe('startRoleJob', () => {
     expect(entry.description).toContain('<@b>');
   });
 
+  it('reports members skipped by the re-check', async () => {
+    vi.mocked(logModeration).mockClear();
+
+    startRoleJob(client, 'Reverify enforcement', ['a', 'b'], async (id) => {
+      return id === 'a';
+    });
+    await settle();
+
+    const [, entry] = vi.mocked(logModeration).mock.calls[0];
+    expect(entry.title).toBe('Reverify enforcement finished: 1 of 2 members');
+    expect(entry.description).toContain('Skipped 1');
+  });
+
   it('runs one job at a time, then frees up', async () => {
     vi.mocked(logModeration).mockClear();
     let release: () => void = () => {};
@@ -154,28 +172,156 @@ describe('startRoleJob', () => {
       release = resolve;
     });
 
-    expect(startRoleJob(client, 'first', ['a'], () => blocked)).toBe(true);
-    expect(startRoleJob(client, 'second', ['b'], async () => {})).toBe(false);
+    expect(
+      startRoleJob(client, 'first', ['a'], () => blocked.then(() => true)),
+    ).toBe(true);
+    expect(startRoleJob(client, 'second', ['b'], async () => true)).toBe(false);
 
     release();
     await settle();
     await vi.waitFor(() =>
-      expect(startRoleJob(client, 'third', [], async () => {})).toBe(true),
+      expect(startRoleJob(client, 'third', [], async () => true)).toBe(true),
     );
   });
 });
 
-describe('limitToMember', () => {
-  it('keeps every target when no member is named', () => {
-    expect(limitToMember(['a', 'b'], undefined)).toEqual(['a', 'b']);
+/** A guild whose member fetch returns the member as it is right now. */
+function fakeGuild(roleIds: string[], overrides: { bot?: boolean } = {}) {
+  const roles = {
+    cache: new Map(roleIds.map((id) => [id, {}])),
+    add: vi.fn().mockResolvedValue(undefined),
+    set: vi.fn<(roles: string[], reason: string) => Promise<void>>(),
+  };
+  const guildMember = {
+    id: 'm1',
+    user: { bot: overrides.bot ?? false },
+    permissions: { has: () => false },
+    roles,
+  };
+  const fetchMember = vi.fn().mockResolvedValue(guildMember);
+  const guild = {
+    id: 'guild-1',
+    members: { fetch: fetchMember },
+  } as unknown as Guild;
+  return { guild, roles, fetchMember };
+}
+
+async function repoWith(...rows: MemberRecord[]) {
+  const repo = new InMemoryMemberRepository();
+  await Promise.all(rows.map((r) => repo.upsert(r)));
+  return repo;
+}
+
+describe('tagIfStillUnlinked', () => {
+  const reverifyRole = { id: REVERIFY_ROLE_ID } as Role;
+
+  it('tags a member who is still unlinked', async () => {
+    const { guild, roles, fetchMember } = fakeGuild(['guild-1']);
+
+    expect(
+      await tagIfStillUnlinked(guild, await repoWith(), reverifyRole, 'm1'),
+    ).toBe(true);
+    expect(roles.add).toHaveBeenCalledWith(reverifyRole, expect.any(String));
+    expect(fetchMember).toHaveBeenCalledWith({
+      user: 'm1',
+      force: true,
+    });
   });
 
-  it('narrows to the named member, for a one-account test run', () => {
-    expect(limitToMember(['a', 'b'], 'b')).toEqual(['b']);
+  it('skips a member who linked after the job started', async () => {
+    const { guild, roles } = fakeGuild(['guild-1']);
+
+    expect(
+      await tagIfStillUnlinked(
+        guild,
+        await repoWith(row('m1')),
+        reverifyRole,
+        'm1',
+      ),
+    ).toBe(false);
+    expect(roles.add).not.toHaveBeenCalled();
+  });
+});
+
+describe('moveToOnboardingIfStillUnlinked', () => {
+  it('swaps Reverify for Onboarding in one call, keeping other roles', async () => {
+    const { guild, roles } = fakeGuild(['guild-1', REVERIFY_ROLE_ID, 'lounge']);
+
+    expect(
+      await moveToOnboardingIfStillUnlinked(
+        guild,
+        await repoWith(),
+        REVERIFY_ROLE_ID,
+        'm1',
+      ),
+    ).toBe(true);
+    expect(roles.set).toHaveBeenCalledTimes(1);
+    const [newRoles] = roles.set.mock.calls[0];
+    expect(newRoles.sort()).toEqual(['lounge', SERVER_ROLES.onboarding].sort());
   });
 
-  it('acts on nobody when the named member is not eligible', () => {
-    // Naming a mod or a linked member must not bypass the rules.
-    expect(limitToMember(['a', 'b'], 'mod')).toEqual([]);
+  it('drops the tag from someone already in Onboarding', async () => {
+    const { guild, roles } = fakeGuild([
+      REVERIFY_ROLE_ID,
+      SERVER_ROLES.onboarding,
+    ]);
+
+    await moveToOnboardingIfStillUnlinked(
+      guild,
+      await repoWith(),
+      REVERIFY_ROLE_ID,
+      'm1',
+    );
+    expect(roles.set).toHaveBeenCalledWith(
+      [SERVER_ROLES.onboarding],
+      expect.any(String),
+    );
+  });
+
+  it('skips a member who linked after the job started', async () => {
+    // Linking removes Reverify, but the record is checked too in case that
+    // removal failed.
+    const { guild, roles } = fakeGuild([REVERIFY_ROLE_ID]);
+
+    expect(
+      await moveToOnboardingIfStillUnlinked(
+        guild,
+        await repoWith(row('m1')),
+        REVERIFY_ROLE_ID,
+        'm1',
+      ),
+    ).toBe(false);
+    expect(roles.set).not.toHaveBeenCalled();
+  });
+
+  it('skips a member who no longer holds Reverify', async () => {
+    const { guild, roles } = fakeGuild(['lounge']);
+
+    expect(
+      await moveToOnboardingIfStillUnlinked(
+        guild,
+        await repoWith(),
+        REVERIFY_ROLE_ID,
+        'm1',
+      ),
+    ).toBe(false);
+    expect(roles.set).not.toHaveBeenCalled();
+  });
+
+  it('never moves staff', async () => {
+    const { guild, roles } = fakeGuild([
+      REVERIFY_ROLE_ID,
+      SERVER_ROLES.moderator,
+    ]);
+
+    expect(
+      await moveToOnboardingIfStillUnlinked(
+        guild,
+        await repoWith(),
+        REVERIFY_ROLE_ID,
+        'm1',
+      ),
+    ).toBe(false);
+    expect(roles.set).not.toHaveBeenCalled();
   });
 });
