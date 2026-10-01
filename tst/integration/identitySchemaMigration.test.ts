@@ -284,10 +284,7 @@ describe.skipIf(!POSTGRES_AVAILABLE)('identity schema migration', () => {
       'sweep',
       new Map(),
     );
-    const maxId = await scoped.query<{ max: string }>(
-      'SELECT max(id)::text AS max FROM member_identity_changes',
-    );
-    expect(BigInt(maxId.rows[0].max)).toBeGreaterThan(
+    expect(BigInt(await repo.maxChangeId())).toBeGreaterThan(
       BigInt(oldIds[oldIds.length - 1]),
     );
   });

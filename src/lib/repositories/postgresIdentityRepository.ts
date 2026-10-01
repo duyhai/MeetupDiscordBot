@@ -21,6 +21,18 @@ import { migrateIdentitySchema } from './identitySchema.js';
 const logger = new Logger({ name: 'PostgresIdentityRepository' });
 
 /**
+ * The digest's high-water mark: the id of the last change already reported.
+ *
+ * In Postgres rather than the cache, deliberately. Both cache backends expire
+ * entries -- Redis after 12 hours, the in-memory one after 50 minutes -- and
+ * the digest runs 24 hours apart, so a cached mark would be gone every single
+ * time it was needed. A long explicit TTL would still be subject to eviction
+ * on a small Redis plan. Keeping the mark in the same store as the rows it
+ * refers to also means the two can never disagree about what exists.
+ */
+const DIGEST_CURSOR_KEY = 'identity-digest-last-id';
+
+/**
  * Every read that feeds the digest or the report is restricted to the scopes
  * this bot actually monitors.
  *
@@ -311,6 +323,103 @@ export class PostgresIdentityRepository {
       [from, to, ...scope.params],
     );
     return result.rows.map(toChangeMetadata);
+  }
+
+  /**
+   * The digest's real query: everything recorded after the last reported id,
+   * up to and including a ceiling captured before this read.
+   *
+   * Ordered and bounded by `id`, not by `detected_at`, because a time window
+   * cannot be both contiguous and non-overlapping here. The old window
+   * anchored `since` to the fixed digest hour but extended `until` to
+   * whenever the sweeps finished, so `[boundary, finish]` fell inside two
+   * consecutive digests -- and since Meetup rows are 100% sweep-detected,
+   * every Meetup change was reported exactly twice. A monotonic BIGSERIAL has
+   * no such seam, and it is immune to the dyno and Postgres clocks disagreeing.
+   *
+   * The caller passes an explicit ceiling rather than letting this read
+   * "everything so far": a gateway event landing between the read and the
+   * mark being stored would otherwise be skipped forever.
+   *
+   * `limit` bounds a single run's row count. Without it, a stretch where
+   * `logAlert` keeps failing (so the mark never advances) leaves the next
+   * successful run to process everything recorded since -- unbounded, and
+   * cheap in-memory passes over that result (min/max, O(n^2) revert
+   * annotation) stop being cheap. The caller is responsible for advancing the
+   * mark only to the last row actually returned, not to `throughId`, since a
+   * capped page may not reach it.
+   */
+  async listChangesMetadataAfterId(
+    afterId: string,
+    throughId: string,
+    limit: number,
+  ): Promise<IdentityChangeMetadata[]> {
+    const scope = scopeClause(3);
+    const result = await this.pool.query<MetadataRow>(
+      `SELECT id, platform, scope_id, subject_id, field, old_value, new_value,
+              detected_at, source
+         FROM member_identity_changes
+        WHERE id > $1 AND id <= $2 AND ${scope.sql}
+        ORDER BY id ASC
+        LIMIT $5`,
+      [afterId, throughId, ...scope.params, limit],
+    );
+    return result.rows.map(toChangeMetadata);
+  }
+
+  /** Highest change id currently in scope, or undefined when there are none. */
+  async maxChangeId(): Promise<string | undefined> {
+    const scope = scopeClause(1);
+    const result = await this.pool.query<{ max: string | null }>(
+      `SELECT max(id)::text AS max FROM member_identity_changes
+        WHERE ${scope.sql}`,
+      scope.params,
+    );
+    return result.rows[0].max ?? undefined;
+  }
+
+  /**
+   * Highest change id recorded strictly before `cutoff`, or '0' when there is
+   * none. Used once: to translate the very first digest's hour-anchored
+   * `since` into a starting id, so the first run after deploy reports a
+   * bounded window instead of the entire backfill.
+   */
+  async changeIdBefore(cutoff: Date): Promise<string> {
+    const scope = scopeClause(2);
+    const result = await this.pool.query<{ max: string | null }>(
+      `SELECT max(id)::text AS max FROM member_identity_changes
+        WHERE detected_at < $1 AND ${scope.sql}`,
+      [cutoff, ...scope.params],
+    );
+    return result.rows[0].max ?? '0';
+  }
+
+  /** The id of the last change the digest reported, if a digest has run. */
+  async getDigestCursor(): Promise<string | undefined> {
+    const result = await this.pool.query<{ value: string }>(
+      'SELECT value FROM identity_digest_state WHERE key = $1',
+      [DIGEST_CURSOR_KEY],
+    );
+    return result.rows[0]?.value;
+  }
+
+  /**
+   * Monotonic on purpose: two overlapping digest runs (the accepted
+   * >30-minute-lease case) can finish out of order, and a blind overwrite
+   * from the slower run would move the mark backwards -- re-reporting every
+   * row the faster run already covered. GREATEST keeps the mark at whichever
+   * value is higher regardless of write order.
+   */
+  async setDigestCursor(id: string): Promise<void> {
+    await this.pool.query(
+      `INSERT INTO identity_digest_state (key, value, updated_at)
+       VALUES ($1, $2, now())
+       ON CONFLICT (key) DO UPDATE SET
+         value = GREATEST(identity_digest_state.value::bigint,
+                           EXCLUDED.value::bigint)::text,
+         updated_at = now()`,
+      [DIGEST_CURSOR_KEY, id],
+    );
   }
 
   async listChangesBetween(

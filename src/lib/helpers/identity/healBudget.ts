@@ -1,14 +1,14 @@
 /**
  * How long one sweep run may spend healing baselines that have no thumbnail.
  *
- * The sweep runs inside the daily digest, after the day's claim is taken.
+ * Both sweeps run inside the daily digest while it holds a 30-minute lease.
  * The first run after the schema migration finds ~2,079 Discord baselines
  * with no stored image; a heal fetch is typically ~100ms but bounded at 5s,
- * so a count cap alone could still stretch the digest by hours (2,079 x 5s
- * is ~3 hours). Two minutes per sweep keeps the worst case small next to
- * the sweep's own work, and well inside a 30-minute digest lease. Members
- * not reached heal on later days -- nothing is lost by waiting, since an
- * unhealed baseline only means a future change might lack its before-image.
+ * so a count cap alone could still push the digest past its lease (2,079 x 5s
+ * is ~3 hours). Two minutes per sweep keeps the worst case well inside the
+ * lease alongside the sweeps' own work. Members not reached heal on later
+ * days -- nothing is lost by waiting, since an unhealed baseline only means a
+ * future change might lack its before-image.
  */
 export const HEAL_BUDGET_MS = 120_000;
 
