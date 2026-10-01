@@ -23,8 +23,8 @@ const FIELD_LABELS: Record<IdentityField, string> = {
   global_name: 'Display name',
 };
 
-function escapeHtml(value: string | null): string {
-  if (value === null) {
+function escapeHtml(value: string | null | undefined): string {
+  if (value === null || value === undefined) {
     return '—';
   }
   return value
@@ -35,11 +35,39 @@ function escapeHtml(value: string | null): string {
     .replace(/'/g, '&#39;');
 }
 
+/**
+ * Determines the media type from the bytes rather than assuming one.
+ *
+ * The report hardcoded `image/webp`, which was true only of Discord's CDN.
+ * Meetup's thumbnails are JPEG, so every Meetup photo change rendered as a
+ * broken image in a document whose entire purpose is showing organizers the
+ * before and after. Sniffing keeps the report correct for whatever a future
+ * source returns instead of encoding one CDN's current behaviour.
+ */
+function mimeOf(thumb: Buffer): string {
+  if (thumb.length >= 2 && thumb[0] === 0xff && thumb[1] === 0xd8) {
+    return 'image/jpeg';
+  }
+  if (thumb.length >= 2 && thumb[0] === 0x89 && thumb[1] === 0x50) {
+    return 'image/png';
+  }
+  if (
+    thumb.length >= 12 &&
+    thumb.toString('ascii', 0, 4) === 'RIFF' &&
+    thumb.toString('ascii', 8, 12) === 'WEBP'
+  ) {
+    return 'image/webp';
+  }
+  return 'image/webp';
+}
+
 function img(thumb: Buffer | null): string {
   if (!thumb) {
     return '<span class="none">no image</span>';
   }
-  return `<img src="data:image/webp;base64,${thumb.toString('base64')}" alt="">`;
+  return `<img src="data:${mimeOf(thumb)};base64,${thumb.toString(
+    'base64',
+  )}" alt="">`;
 }
 
 /**

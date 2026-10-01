@@ -101,6 +101,57 @@ describe('renderIdentityReport', () => {
     expect(html).not.toContain('<img src=x onerror=alert(1)>');
     expect(html).toContain('&lt;img src=x onerror=alert(1)&gt;');
   });
+
+  it('labels JPEG thumbnails as JPEG', () => {
+    // Meetup serves JPEG, not WebP. The hardcoded image/webp made every
+    // Meetup photo change render as a broken image in a document whose whole
+    // purpose is showing organizers the before and after.
+    const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10]);
+    const html = renderIdentityReport(
+      [change({ platform: 'meetup', oldThumb: null, newThumb: jpeg })],
+      range,
+    );
+
+    expect(html).toContain('data:image/jpeg;base64,');
+    expect(html).not.toContain('data:image/webp;base64,/9j');
+  });
+
+  it('labels PNG thumbnails as PNG', () => {
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    const html = renderIdentityReport([change({ newThumb: png })], range);
+
+    expect(html).toContain('data:image/png;base64,');
+  });
+
+  it('labels a RIFF/WEBP thumbnail as WebP', () => {
+    const webp = Buffer.concat([
+      Buffer.from('RIFF', 'ascii'),
+      Buffer.from([0, 0, 0, 0]),
+      Buffer.from('WEBP', 'ascii'),
+      Buffer.from([1, 2, 3]),
+    ]);
+    const html = renderIdentityReport([change({ newThumb: webp })], range);
+
+    expect(html).toContain('data:image/webp;base64,');
+  });
+
+  it('does not throw on an unrecognised field from an older row', () => {
+    const html = renderIdentityReport(
+      [
+        change({
+          field: 'legacy_field' as never,
+          oldThumb: null,
+          newThumb: null,
+        }),
+      ],
+      range,
+    );
+
+    // FIELD_LABELS lookup yields undefined, and this project builds without
+    // strictNullChecks -- escapeHtml guarding only null would throw on
+    // .replace and destroy the entire report.
+    expect(html).toContain('<!doctype html>');
+  });
 });
 
 describe('estimateReportBytes', () => {

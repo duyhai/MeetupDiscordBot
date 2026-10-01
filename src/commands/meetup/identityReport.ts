@@ -28,6 +28,16 @@ const strings = {
     'Identity monitoring is not configured (no database on this instance).',
 };
 
+/**
+ * A user-facing refusal (no database configured, range too wide). Marked
+ * alertHandled so discordCommandWrapper does not post "command failed" to the
+ * organizers' alerts channel: a mod asking for 90 days and being told to
+ * narrow it is normal operation, not a fault.
+ */
+export class IdentityReportError extends Error {
+  readonly alertHandled = true;
+}
+
 export type ReportAttachment =
   { ok: true; fileName: string; html: string } | { ok: false; reason: string };
 
@@ -102,7 +112,7 @@ export class IdentityReportCommands {
 
       const repo = await ApplicationIdentityRepository();
       if (!repo) {
-        throw new Error(strings.unavailable);
+        throw new IdentityReportError(strings.unavailable);
       }
 
       const windowDays = days ?? 7;
@@ -119,7 +129,7 @@ export class IdentityReportCommands {
         measured.thumbBytes,
       );
       if (projected > MAX_REPORT_BYTES) {
-        throw new Error(tooLargeMessage(projected, windowDays));
+        throw new IdentityReportError(tooLargeMessage(projected, windowDays));
       }
 
       const changes = await repo.listChangesBetween(from, to);
@@ -130,7 +140,7 @@ export class IdentityReportCommands {
       // strictNullChecks, and without it plain truthy/falsy checks don't
       // reliably narrow a discriminated union — only literal equality does.
       if (built.ok === false) {
-        throw new Error(built.reason);
+        throw new IdentityReportError(built.reason);
       }
 
       await withDiscordFileAttachment(
