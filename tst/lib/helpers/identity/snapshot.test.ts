@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import {
   avatarThumbUrl,
   snapshotMember,
-} from '../../../src/lib/helpers/identitySnapshot.js';
+} from '../../../../src/lib/helpers/identity/snapshot.js';
 
 function fakeMember(overrides: Record<string, unknown> = {}) {
   return {

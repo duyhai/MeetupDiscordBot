@@ -13,7 +13,7 @@
 import { Client, GatewayIntentBits } from 'discord.js';
 import { Logger } from 'tslog';
 
-import { runIdentitySweep } from '../src/lib/helpers/identitySweep.js';
+import { runIdentitySweep } from '../src/lib/helpers/identity/sweep.js';
 
 const logger = new Logger({ name: 'backfillIdentityBaseline' });
 

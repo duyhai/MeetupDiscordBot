@@ -1,14 +1,14 @@
 import { Client } from 'discord.js';
 import { Logger } from 'tslog';
 
-import { ApplicationCache } from '../../util/cache.js';
-import { ApplicationIdentityRepository } from '../../util/identityRepository.js';
+import { ApplicationCache } from '../../../util/cache.js';
+import { ApplicationIdentityRepository } from '../../../util/identityRepository.js';
 import {
   IdentityChangeMetadata,
   IdentityField,
-} from '../repositories/identityTypes.js';
-import { LogEntry, logAlert } from './discordLogger.js';
-import { runIdentitySweep } from './identitySweep.js';
+} from '../../repositories/identityTypes.js';
+import { LogEntry, logAlert } from '../discordLogger.js';
+import { runIdentitySweep } from './sweep.js';
 
 const logger = new Logger({ name: 'identityDigest' });
 
@@ -27,49 +27,23 @@ const FIELD_LABELS: Record<IdentityField, string> = {
   global_name: 'display name',
 };
 
-export type AnnotatedChange = IdentityChangeMetadata & { revertedAt?: Date };
-
 export function shouldRunIdentityDigestNow(now: Date): boolean {
   return now.getUTCHours() === IDENTITY_DIGEST_UTC_HOUR;
 }
 
-/**
- * Marks a change that was later undone by the same member on the same field.
- * A transient change is the signature of impersonation-then-cleanup, and it
- * is invisible to a snapshot diff -- both endpoints look identical.
- */
-export function annotateReverts(
-  changes: IdentityChangeMetadata[],
-): AnnotatedChange[] {
-  return changes.map((change) => {
-    const revert = changes.find(
-      (other) =>
-        other.id !== change.id &&
-        other.discordUserId === change.discordUserId &&
-        other.field === change.field &&
-        other.detectedAt > change.detectedAt &&
-        other.newValue === change.oldValue,
-    );
-    return revert ? { ...change, revertedAt: revert.detectedAt } : change;
-  });
-}
-
-function line(change: AnnotatedChange): string {
+function line(change: IdentityChangeMetadata): string {
   const time = change.detectedAt.toISOString().slice(11, 16);
   const label = FIELD_LABELS[change.field];
-  const reverted = change.revertedAt
-    ? ` (reverted ${change.revertedAt.toISOString().slice(11, 16)})`
-    : '';
   if (change.field === 'user_avatar' || change.field === 'member_avatar') {
-    return `${time}  <@${change.discordUserId}>  ${label} changed${reverted}`;
+    return `${time}  <@${change.discordUserId}>  ${label} changed`;
   }
   return `${time}  <@${change.discordUserId}>  ${label} "${
     change.oldValue ?? '—'
-  }" → "${change.newValue ?? '—'}"${reverted}`;
+  }" → "${change.newValue ?? '—'}"`;
 }
 
 export function formatIdentityDigest(
-  changes: AnnotatedChange[],
+  changes: IdentityChangeMetadata[],
   stats: { changeCount: number; totalBytes: number },
 ): LogEntry | undefined {
   if (changes.length === 0) {
@@ -164,7 +138,7 @@ export async function runIdentityDigestOnce(client: Client): Promise<void> {
     const changes = await repo.listChangesMetadataBetween(since, until);
     const stats = await repo.storageStats();
 
-    const entry = formatIdentityDigest(annotateReverts(changes), stats);
+    const entry = formatIdentityDigest(changes, stats);
     if (entry) {
       // logAlert swallows every error by design, so an outage or a permission
       // change would otherwise leave the claim consumed, a success logged, no

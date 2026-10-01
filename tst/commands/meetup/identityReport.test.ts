@@ -10,7 +10,7 @@ import {
 import {
   estimateReportBytes,
   estimateReportBytesFromCounts,
-} from '../../../src/lib/helpers/identityReport.js';
+} from '../../../src/lib/helpers/identity/report.js';
 import { IdentityChangeRecord } from '../../../src/lib/repositories/identityTypes.js';
 
 const repo = vi.hoisted(() => ({
