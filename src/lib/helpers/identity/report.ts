@@ -90,7 +90,7 @@ ${changes
       change.field === 'user_avatar' || change.field === 'member_avatar';
     return `<tr>
 <td class="when">${change.detectedAt.toISOString().replace('T', ' ').slice(0, 16)}</td>
-<td class="who">${escapeHtml(change.discordUserId)}</td>
+<td class="who">${escapeHtml(change.subjectId)}</td>
 <td>${escapeHtml(FIELD_LABELS[change.field])}</td>
 <td>${isAvatarField ? img(change.oldThumb) : escapeHtml(change.oldValue)}</td>
 <td>${isAvatarField ? img(change.newThumb) : escapeHtml(change.newValue)}</td>

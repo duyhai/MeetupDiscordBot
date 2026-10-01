@@ -3,8 +3,8 @@ import { Logger } from 'tslog';
 
 import { ApplicationIdentityRepository } from '../../../util/identityRepository.js';
 import {
-  ChangeSource,
   IdentityChange,
+  WritableChangeSource,
 } from '../../repositories/identityTypes.js';
 import { diffIdentity } from './diff.js';
 import { snapshotMember } from './snapshot.js';
@@ -22,7 +22,7 @@ const logger = new Logger({ name: 'identityMonitor' });
  */
 export async function recordIdentityFor(
   member: GuildMember,
-  source: ChangeSource,
+  source: WritableChangeSource,
 ): Promise<IdentityChange[]> {
   if (member.user.bot) {
     return [];
@@ -34,7 +34,7 @@ export async function recordIdentityFor(
 
   const after = snapshotMember(member);
 
-  const before = await repo.getSnapshot(member.id);
+  const before = await repo.getSnapshot(after.scopeId, member.id);
   const changes = diffIdentity(before, after);
 
   if (!before) {

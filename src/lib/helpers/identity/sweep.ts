@@ -1,7 +1,8 @@
 import { Client } from 'discord.js';
 import { Logger } from 'tslog';
 
-import { ChangeSource } from '../../repositories/identityTypes.js';
+import { GUILD_ID } from '../../../constants.js';
+import { WritableChangeSource } from '../../repositories/identityTypes.js';
 import { recordIdentityFor } from './monitor.js';
 
 const logger = new Logger({ name: 'identitySweep' });
@@ -17,14 +18,12 @@ const logger = new Logger({ name: 'identitySweep' });
  */
 export async function runIdentitySweep(
   client: Client,
-  source: ChangeSource,
+  source: WritableChangeSource,
 ): Promise<{ scanned: number; changed: number }> {
-  const guilds = await client.guilds.fetch();
-  const guildId = guilds.first()?.id;
-  if (!guildId) {
-    return { scanned: 0, changed: 0 };
-  }
-  const guild = await client.guilds.fetch(guildId);
+  // Resolve the configured guild explicitly. guilds.first() is insertion-
+  // ordered, so with a second guild present (test server, staging, a fork)
+  // the sweep would diff one guild's members against another's baselines.
+  const guild = await client.guilds.fetch(GUILD_ID);
   const members = await guild.members.fetch();
 
   let scanned = 0;

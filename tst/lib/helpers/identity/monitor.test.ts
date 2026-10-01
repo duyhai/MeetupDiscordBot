@@ -36,10 +36,23 @@ function fakeMember(overrides: Record<string, unknown> = {}) {
   } as unknown as GuildMember;
 }
 
+/** A member whose global avatar hash has moved from 'aaa' to 'bbb'. */
+function memberWithNewAvatar() {
+  return fakeMember({
+    user: {
+      username: 'someone',
+      globalName: 'Someone',
+      avatar: 'bbb',
+      bot: false,
+    },
+  });
+}
+
 describe('recordIdentityFor', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     repo.getSnapshot.mockResolvedValue({
+      scopeId: 'g1',
       discordUserId: 'u1',
       username: 'someone',
       globalName: 'Someone',
@@ -50,7 +63,7 @@ describe('recordIdentityFor', () => {
   });
 
   it('records nothing and writes no baseline when nothing changed', async () => {
-    const changes = await recordIdentityFor(fakeMember(), 'event');
+    const changes = await recordIdentityFor(fakeMember(), 'sweep');
 
     expect(changes).toEqual([]);
     expect(repo.recordChanges).not.toHaveBeenCalled();
@@ -59,22 +72,25 @@ describe('recordIdentityFor', () => {
   });
 
   it('records the change and advances the baseline', async () => {
-    const member = fakeMember({
-      user: {
-        username: 'someone',
-        globalName: 'Someone',
-        avatar: 'bbb',
-        bot: false,
-      },
-    });
-
-    const changes = await recordIdentityFor(member, 'event');
+    const changes = await recordIdentityFor(memberWithNewAvatar(), 'sweep');
 
     expect(changes).toHaveLength(1);
     expect(changes[0].field).toBe('user_avatar');
     expect(repo.recordChanges).toHaveBeenCalledTimes(1);
     // Baseline must advance, or the same change re-reports on every sweep.
     expect(repo.putSnapshot).toHaveBeenCalledTimes(1);
+  });
+
+  it('records the change before advancing the baseline', async () => {
+    await recordIdentityFor(memberWithNewAvatar(), 'sweep');
+
+    // Load-bearing and previously untested: swapping these two writes left
+    // every test in the branch green. Crash between them in this order and
+    // the next sweep re-records a harmless duplicate; reversed, the baseline
+    // advances while the evidence is lost for good.
+    expect(repo.recordChanges.mock.invocationCallOrder[0]).toBeLessThan(
+      repo.putSnapshot.mock.invocationCallOrder[0],
+    );
   });
 
   it('writes a baseline but no change for a first sighting', async () => {

@@ -1,7 +1,10 @@
+export type IdentityPlatform = 'discord' | 'meetup';
+
 export type IdentityField =
   'user_avatar' | 'member_avatar' | 'nickname' | 'username' | 'global_name';
 
 export interface IdentitySnapshot {
+  scopeId: string;
   discordUserId: string;
   username: string | null;
   globalName: string | null;
@@ -11,14 +14,39 @@ export interface IdentitySnapshot {
 }
 
 export interface IdentityChange {
-  discordUserId: string;
+  platform: IdentityPlatform;
+  scopeId: string;
+  subjectId: string;
   field: IdentityField;
   oldValue: string | null;
   newValue: string | null;
 }
 
-// 'event' is historical: nothing writes it any more, but existing rows keep it.
-export type ChangeSource = 'event' | 'sweep' | 'backfill';
+/** The before/after images recorded with one change row. */
+export interface ChangeThumbs {
+  oldThumb: Buffer | null;
+  newThumb: Buffer | null;
+}
+
+/**
+ * Thumbnails keyed by `${platform}:${scopeId}:${subjectId}:${field}` -- the
+ * four parts that pick exactly one change row out of a member's change set.
+ */
+export type ChangeThumbMap = Map<string, ChangeThumbs>;
+
+/**
+ * How a change was detected.
+ *
+ * `'event'` is HISTORICAL: it was written by the gateway listeners of the
+ * first deployment, which have since been removed, and ~125 production rows
+ * still carry it. No code writes it any more and nothing should start to --
+ * it stays in the union only so the type is honest about rows the digest and
+ * report read back.
+ */
+export type ChangeSource = 'sweep' | 'backfill' | 'event';
+
+/** The sources current code may write. Excludes the historical `'event'`. */
+export type WritableChangeSource = Exclude<ChangeSource, 'event'>;
 
 export interface IdentityChangeRecord extends IdentityChange {
   id: string;

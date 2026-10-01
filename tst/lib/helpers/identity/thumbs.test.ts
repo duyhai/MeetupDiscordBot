@@ -18,7 +18,9 @@ describe('fetchChangeThumbs', () => {
     const thumbs = await fetchChangeThumbs(
       [
         {
-          discordUserId: 'u1',
+          platform: 'discord',
+          scopeId: 'g1',
+          subjectId: 'u1',
           field: 'user_avatar',
           oldValue: 'aaa',
           newValue: 'bbb',
@@ -27,7 +29,7 @@ describe('fetchChangeThumbs', () => {
       'g1',
     );
 
-    const entry = thumbs.get('u1:user_avatar');
+    const entry = thumbs.get('discord:g1:u1:user_avatar');
     expect(entry?.oldThumb?.equals(Buffer.from([1, 2]))).toBe(true);
     expect(entry?.newThumb?.equals(Buffer.from([3, 4]))).toBe(true);
     expect(scope.isDone()).toBe(true);
@@ -42,7 +44,9 @@ describe('fetchChangeThumbs', () => {
     const thumbs = await fetchChangeThumbs(
       [
         {
-          discordUserId: 'u1',
+          platform: 'discord',
+          scopeId: 'g1',
+          subjectId: 'u1',
           field: 'user_avatar',
           oldValue: 'gone',
           newValue: null,
@@ -52,7 +56,7 @@ describe('fetchChangeThumbs', () => {
     );
 
     // Evidence that the change happened matters more than the picture.
-    expect(thumbs.get('u1:user_avatar')?.oldThumb).toBeNull();
+    expect(thumbs.get('discord:g1:u1:user_avatar')?.oldThumb).toBeNull();
   });
 
   it('records null when the fetch itself fails', async () => {
@@ -64,7 +68,9 @@ describe('fetchChangeThumbs', () => {
     const thumbs = await fetchChangeThumbs(
       [
         {
-          discordUserId: 'u1',
+          platform: 'discord',
+          scopeId: 'g1',
+          subjectId: 'u1',
           field: 'user_avatar',
           oldValue: 'aaa',
           newValue: null,
@@ -75,14 +81,16 @@ describe('fetchChangeThumbs', () => {
 
     // A transport failure must not propagate: it would abandon the whole
     // change record, and the record is the evidence this feature exists for.
-    expect(thumbs.get('u1:user_avatar')?.oldThumb).toBeNull();
+    expect(thumbs.get('discord:g1:u1:user_avatar')?.oldThumb).toBeNull();
   });
 
   it('does not fetch anything for non-avatar fields', async () => {
     const thumbs = await fetchChangeThumbs(
       [
         {
-          discordUserId: 'u1',
+          platform: 'discord',
+          scopeId: 'g1',
+          subjectId: 'u1',
           field: 'nickname',
           oldValue: 'A',
           newValue: 'B',
@@ -94,4 +102,31 @@ describe('fetchChangeThumbs', () => {
     // A nickname has no image; hitting the CDN for one wastes a request.
     expect(thumbs.size).toBe(0);
   });
+
+  it('gives up on a stalled CDN instead of hanging', async () => {
+    nock('https://cdn.discordapp.com')
+      .get('/avatars/u1/bbb.webp')
+      .query({ size: '64' })
+      .delayConnection(10_000)
+      .reply(200, Buffer.from([1, 2]));
+
+    const thumbs = await fetchChangeThumbs(
+      [
+        {
+          platform: 'discord',
+          scopeId: 'g1',
+          subjectId: 'u1',
+          field: 'user_avatar',
+          oldValue: null,
+          newValue: 'bbb',
+        },
+      ],
+      'g1',
+    );
+
+    // This fetch runs inside the digest AFTER the day-claim is taken. A stall
+    // hangs the digest without throwing, so the catch never releases the
+    // claim: no digest, no error, no retry until a restart.
+    expect(thumbs.get('discord:g1:u1:user_avatar')?.newThumb).toBeNull();
+  }, 15_000);
 });

@@ -15,14 +15,16 @@ const change = (
   over: Partial<IdentityChangeRecord> = {},
 ): IdentityChangeRecord => ({
   id: '1',
-  discordUserId: 'u1',
+  platform: 'discord',
+  scopeId: 'g1',
+  subjectId: 'u1',
   field: 'user_avatar',
   oldValue: 'aaa',
   newValue: 'bbb',
   oldThumb: Buffer.from([1, 2, 3]),
   newThumb: Buffer.from([4, 5, 6]),
   detectedAt: new Date('2026-08-16T14:02:00Z'),
-  source: 'event',
+  source: 'sweep',
   ...over,
 });
 
@@ -92,7 +94,7 @@ describe('renderIdentityReport', () => {
 
   it('escapes html in the discord user id shown in the member column', () => {
     const html = renderIdentityReport(
-      [change({ discordUserId: '<img src=x onerror=alert(1)>' })],
+      [change({ subjectId: '<img src=x onerror=alert(1)>' })],
       range,
     );
 

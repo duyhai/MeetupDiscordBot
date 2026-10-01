@@ -39,14 +39,16 @@ const change = (
   over: Partial<IdentityChangeRecord> = {},
 ): IdentityChangeRecord => ({
   id: '1',
-  discordUserId: 'u1',
+  platform: 'discord',
+  scopeId: 'g1',
+  subjectId: 'u1',
   field: 'user_avatar',
   oldValue: 'aaa',
   newValue: 'bbb',
   oldThumb: null,
   newThumb: null,
   detectedAt: at('2026-08-16T14:02:00Z'),
-  source: 'event',
+  source: 'sweep',
   ...over,
 });
 
@@ -69,7 +71,7 @@ describe('formatIdentityDigest', () => {
 
   it('truncates a flood rather than exceeding the embed limit', () => {
     const many = Array.from({ length: 200 }, (_, i) =>
-      change({ id: String(i), discordUserId: `u${i}` }),
+      change({ id: String(i), subjectId: `u${i}` }),
     );
 
     const entry = formatIdentityDigest(many, stats);
