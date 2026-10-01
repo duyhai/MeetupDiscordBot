@@ -2,6 +2,7 @@ import {
   ApplicationCommandOptionType,
   CommandInteraction,
   PermissionFlagsBits,
+  User,
 } from 'discord.js';
 import { Discord, Slash, SlashOption } from 'discordx';
 import { Logger } from 'tslog';
@@ -11,6 +12,7 @@ import {
   REVERIFY_ROLE_NAME,
   ensureReverifyRole,
   findReverifyRole,
+  limitToMember,
   selectEnforceTargets,
   selectReverifyTargets,
   startRoleJob,
@@ -30,6 +32,14 @@ const confirmOption = {
   description:
     'Leave off to preview the count. Set to true to make the change.',
   type: ApplicationCommandOptionType.Boolean,
+  required: false,
+} as const;
+
+const memberOption = {
+  name: 'member',
+  description:
+    'Only this member, e.g. a test account. Default: everyone eligible.',
+  type: ApplicationCommandOptionType.User,
   required: false,
 } as const;
 
@@ -55,6 +65,7 @@ export class ReverifyCommands {
   })
   async tagHandler(
     @SlashOption(confirmOption) confirm: boolean | undefined,
+    @SlashOption(memberOption) member: User | undefined,
     interaction: CommandInteraction,
   ) {
     await discordCommandWrapper(interaction, async () => {
@@ -75,8 +86,11 @@ export class ReverifyCommands {
               .map((candidate) => candidate.id)
           : [],
       );
-      const targets = selectReverifyTargets(candidates, rows).filter(
-        (id) => !alreadyTagged.has(id),
+      const targets = limitToMember(
+        selectReverifyTargets(candidates, rows).filter(
+          (id) => !alreadyTagged.has(id),
+        ),
+        member?.id,
       );
 
       if (!confirm) {
@@ -133,6 +147,7 @@ export class ReverifyCommands {
   })
   async enforceHandler(
     @SlashOption(confirmOption) confirm: boolean | undefined,
+    @SlashOption(memberOption) member: User | undefined,
     interaction: CommandInteraction,
   ) {
     await discordCommandWrapper(interaction, async () => {
@@ -148,7 +163,10 @@ export class ReverifyCommands {
         );
       }
       const { candidates, rows } = await loadMembersAndRecords(interaction);
-      const targets = selectEnforceTargets(candidates, rows, role.id);
+      const targets = limitToMember(
+        selectEnforceTargets(candidates, rows, role.id),
+        member?.id,
+      );
 
       if (!confirm) {
         await interaction.followUp({

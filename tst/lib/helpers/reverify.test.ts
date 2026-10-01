@@ -6,6 +6,7 @@ import { logModeration } from '../../../src/lib/helpers/discordLogger.js';
 import {
   ReverifyCandidate,
   formatReverifyProgress,
+  limitToMember,
   selectEnforceTargets,
   selectReverifyTargets,
   startRoleJob,
@@ -161,5 +162,20 @@ describe('startRoleJob', () => {
     await vi.waitFor(() =>
       expect(startRoleJob(client, 'third', [], async () => {})).toBe(true),
     );
+  });
+});
+
+describe('limitToMember', () => {
+  it('keeps every target when no member is named', () => {
+    expect(limitToMember(['a', 'b'], undefined)).toEqual(['a', 'b']);
+  });
+
+  it('narrows to the named member, for a one-account test run', () => {
+    expect(limitToMember(['a', 'b'], 'b')).toEqual(['b']);
+  });
+
+  it('acts on nobody when the named member is not eligible', () => {
+    // Naming a mod or a linked member must not bypass the rules.
+    expect(limitToMember(['a', 'b'], 'mod')).toEqual([]);
   });
 });

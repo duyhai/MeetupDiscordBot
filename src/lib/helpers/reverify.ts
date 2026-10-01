@@ -87,6 +87,19 @@ export function selectEnforceTargets(
     .map((member) => member.id);
 }
 
+/**
+ * Narrows a run to one member, so the flow can be tried on a test account
+ * before it touches everyone. The member still has to pass the same rules.
+ */
+export function limitToMember(
+  targets: string[],
+  memberId: string | undefined,
+): string[] {
+  return memberId === undefined
+    ? targets
+    : targets.filter((id) => id === memberId);
+}
+
 export function formatReverifyProgress({
   stillTagged,
   linked,
