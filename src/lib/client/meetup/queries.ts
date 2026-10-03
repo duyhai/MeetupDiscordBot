@@ -89,6 +89,43 @@ export const getSelfPastRsvpCount = gql`
   }
 `;
 
+// The same attendance history, as events. A member can always read their own
+// RSVPs, whatever their role in the group.
+export const getSelfPastRsvpEvents = gql`
+  query ($groupId: ID!, $first: Int!, $after: String) {
+    self {
+      id
+      rsvps(
+        first: $first
+        after: $after
+        filter: {
+          groupId: $groupId
+          eventStatus: PAST
+          rsvpStatus: [YES, ATTENDED]
+        }
+      ) {
+        pageInfo {
+          hasNextPage
+          hasPreviousPage
+          startCursor
+          endCursor
+        }
+        totalCount
+        edges {
+          node {
+            event {
+              id
+              title
+              dateTime
+              eventUrl
+            }
+          }
+        }
+      }
+    }
+  }
+`;
+
 export const getEventRsvps = gql`
   query ($eventId: ID!, $first: Int!, $after: String, $filter: RsvpFilter) {
     event(id: $eventId) {
