@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { EventSummary } from '../../../src/lib/client/meetup/types.js';
 import {
   WhereHaveWeMetDeps,
+  configuredLookup,
   findSharedEvents,
   formatWhereHaveWeMet,
   parseMeetupMemberId,
@@ -94,6 +95,9 @@ describe('findSharedEvents', () => {
       findByDiscordId: async () => undefined,
       myPastEvents: async () => ({ meetupId: 'm1', events: myEvents }),
       attendeeIds,
+      theirPastEvents: async () => {
+        throw new Error('the attendee-lists lookup must not read their RSVPs');
+      },
     };
     return { d, attendeeIds };
   }
@@ -146,6 +150,47 @@ describe('findSharedEvents', () => {
 
     expect(await findSharedEvents(d, 'm1')).toEqual({ kind: 'self' });
     expect(attendeeIds).not.toHaveBeenCalled();
+  });
+});
+
+describe('findSharedEvents with the member-rsvps lookup', () => {
+  function deps(
+    myEvents: EventSummary[],
+    theirEvents: EventSummary[] | undefined,
+  ): WhereHaveWeMetDeps {
+    return {
+      findByDiscordId: async () => undefined,
+      myPastEvents: async () => ({ meetupId: 'm1', events: myEvents }),
+      attendeeIds: async () => {
+        throw new Error('the member-rsvps lookup must not read attendee lists');
+      },
+      theirPastEvents: async () => theirEvents,
+    };
+  }
+
+  it('shows the overlap, and only events the requester went to', async () => {
+    const d = deps([picnic, hike], [hike, trivia, picnic]);
+
+    expect(await findSharedEvents(d, 'm2', 'member-rsvps')).toEqual({
+      kind: 'found',
+      shared: [hike, picnic],
+    });
+  });
+
+  it('says when the other person is no longer in the group', async () => {
+    const d = deps([hike], undefined);
+
+    expect(await findSharedEvents(d, 'm2', 'member-rsvps')).toEqual({
+      kind: 'target-not-in-group',
+    });
+  });
+});
+
+describe('configuredLookup', () => {
+  it('uses attendee lists unless member-rsvps is switched on', () => {
+    expect(configuredLookup(undefined)).toBe('attendee-lists');
+    expect(configuredLookup('typo')).toBe('attendee-lists');
+    expect(configuredLookup('member-rsvps')).toBe('member-rsvps');
   });
 });
 

@@ -27,6 +27,23 @@ const MOST_RECENT_SHOWN = 5;
 // cached, so only the first lookup after a cache expiry pays for them.
 const ATTENDEE_FETCH_CONCURRENCY = 5;
 
+/**
+ * How the other person's attendance is read:
+ * - attendee-lists (default): check the attendee list of each event the
+ *   requester went to. Uses only what any member can see on Meetup.
+ * - member-rsvps: read the other person's RSVP list directly. Two requests
+ *   instead of one per event, but not yet verified to work for a requester
+ *   who isn't an organizer. Set WHERE_HAVE_WE_MET_LOOKUP=member-rsvps to
+ *   switch once it is.
+ */
+export type SharedEventsLookup = 'attendee-lists' | 'member-rsvps';
+
+export function configuredLookup(
+  value = process.env.WHERE_HAVE_WE_MET_LOOKUP,
+): SharedEventsLookup {
+  return value === 'member-rsvps' ? 'member-rsvps' : 'attendee-lists';
+}
+
 /** A Meetup profile link (…/members/<id>/…) or a bare member ID. */
 export function parseMeetupMemberId(input: string): string | undefined {
   const trimmed = input.trim();
@@ -42,6 +59,7 @@ export type WhereHaveWeMetTarget =
 export type WhereHaveWeMetResult =
   | { kind: 'found'; shared: EventSummary[] }
   | { kind: 'target-unlinked' }
+  | { kind: 'target-not-in-group' }
   | { kind: 'self' };
 
 export interface WhereHaveWeMetDeps {
@@ -50,6 +68,11 @@ export interface WhereHaveWeMetDeps {
   findByDiscordId(discordUserId: string): Promise<MemberRecord | undefined>;
   /** The requester's Meetup ID and the past events they went to. */
   myPastEvents(): Promise<{ events: EventSummary[]; meetupId: string }>;
+  /**
+   * member-rsvps lookup only: past events the member RSVP'd yes to or
+   * attended; undefined if they aren't in the group any more.
+   */
+  theirPastEvents(meetupId: string): Promise<EventSummary[] | undefined>;
 }
 
 /** The other person's Meetup ID, or undefined if they haven't linked. */
@@ -69,16 +92,29 @@ export async function resolveTargetMeetupId(
 export async function findSharedEvents(
   deps: WhereHaveWeMetDeps,
   theirMeetupId: string,
+  lookup: SharedEventsLookup = 'attendee-lists',
 ): Promise<WhereHaveWeMetResult> {
   const { meetupId: myMeetupId, events } = await deps.myPastEvents();
   if (theirMeetupId === myMeetupId) {
     return { kind: 'self' };
   }
   const mine = [...new Map(events.map((event) => [event.id, event])).values()];
+  let theyWent: (event: EventSummary) => Promise<boolean>;
+  if (lookup === 'member-rsvps') {
+    const theirs = await deps.theirPastEvents(theirMeetupId);
+    if (theirs === undefined) {
+      return { kind: 'target-not-in-group' };
+    }
+    const theirIds = new Set(theirs.map((event) => event.id));
+    theyWent = async (event) => theirIds.has(event.id);
+  } else {
+    theyWent = async (event) =>
+      (await deps.attendeeIds(event.id)).includes(theirMeetupId);
+  }
   const wentToo = await mapWithConcurrency(
     mine,
     ATTENDEE_FETCH_CONCURRENCY,
-    async (event) => (await deps.attendeeIds(event.id)).includes(theirMeetupId),
+    theyWent,
   );
   const shared = mine
     .filter((_, index) => wentToo[index])
@@ -125,6 +161,8 @@ const replies = {
     `${theirName} hasn't linked their Meetup account yet, so I can't look them up from Discord. ` +
     'Nudge them to press **Link Meetup Account**! ' +
     'If you know their Meetup profile, you can also run `/where_have_we_met meetup_profile:` with its link.',
+  targetNotInGroup: (theirName: string) =>
+    `${theirName} isn't a current member of the Meetup group, so their events can't be looked up.`,
   self: "That's you! Try it on someone you've met at an event.",
 };
 
@@ -179,13 +217,22 @@ export async function replyWhereHaveWeMet(
           });
           return rsvps.map((rsvp) => rsvp.member.id);
         },
+        theirPastEvents: (meetupId) =>
+          meetupClient.getMemberRsvpEvents(
+            meetupId,
+            Configuration.meetup.groupId,
+            { rsvpStatus: ['YES', 'ATTENDED'], eventStatus: ['PAST'] },
+          ),
       },
       theirMeetupId,
+      configuredLookup(),
     );
-    await reply(
-      result.kind === 'found'
-        ? formatWhereHaveWeMet(theirName, result.shared)
-        : replies.self,
-    );
+    if (result.kind === 'found') {
+      await reply(formatWhereHaveWeMet(theirName, result.shared));
+    } else if (result.kind === 'target-not-in-group') {
+      await reply(replies.targetNotInGroup(theirName));
+    } else {
+      await reply(replies.self);
+    }
   });
 }
