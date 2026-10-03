@@ -28,7 +28,8 @@ export class WhereHaveWeMetCommands {
     member: User | undefined,
     @SlashOption({
       name: 'meetup_profile',
-      description: 'Or their Meetup profile link, for someone not on Discord.',
+      description:
+        'Or their Meetup profile link, for someone not on Discord or not linked yet.',
       type: ApplicationCommandOptionType.String,
       required: false,
     })
