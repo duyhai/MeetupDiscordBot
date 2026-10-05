@@ -256,23 +256,54 @@ describe('configuredLookup', () => {
 });
 
 describe('formatWhereHaveWeMet', () => {
-  it('leads with the first shared event and the total', () => {
+  const caveat =
+    'Counted from Meetup RSVPs, so an event one of you signed up for but missed still counts.';
+
+  // A yes RSVP is not proof anyone met: the lead claims a shared sign-up,
+  // never a meeting. A member compared histories with a friend and the
+  // "first met" event turned out to be one neither remembered attending.
+  it('leads with the first shared sign-up, and never claims they met', () => {
     const text = formatWhereHaveWeMet('Jane', [hike, trivia, picnic]);
     expect(text).toContain(
-      'You and Jane first met at [Hike](https://www.meetup.com/e/1/) on Mar 2, 2024.',
+      'The first event you and Jane were both signed up for was [Hike](https://www.meetup.com/e/1/) on Mar 2, 2024.',
     );
-    expect(text).toContain("You've been to 3 events together.");
+    expect(text).toContain('3 shared events in all.');
+    expect(text).not.toContain('first met');
+    expect(text).toContain(caveat);
   });
 
-  it('lists the five most recent shared events, newest first', () => {
+  it('shows all shared events oldest first when there are few', () => {
+    const text = formatWhereHaveWeMet('Jane', [hike, trivia, picnic]);
+    const listed = text.split('\n').filter((line) => line.startsWith('- '));
+    expect(listed).toHaveLength(3);
+    expect(listed[0]).toContain('Mar 2, 2024');
+    expect(listed[2]).toContain('Aug 15, 2026');
+  });
+
+  it('shows the earliest three and most recent three when there are many', () => {
     const many = Array.from({ length: 8 }, (_, i) =>
       event(`${i}`, `2026-0${i + 1}-05T18:00:00-07:00`),
     );
     const text = formatWhereHaveWeMet('Jane', many);
     const listed = text.split('\n').filter((line) => line.startsWith('- '));
-    expect(listed).toHaveLength(5);
-    expect(listed[0]).toContain('Aug 5, 2026');
-    expect(listed[4]).toContain('Apr 5, 2026');
+    expect(text.indexOf('Earliest together:')).toBeLessThan(
+      text.indexOf('Most recent:'),
+    );
+    expect(listed).toHaveLength(6);
+    // Earliest first ...
+    expect(listed[0]).toContain('Jan 5, 2026');
+    expect(listed[2]).toContain('Mar 5, 2026');
+    // ... then most recent, newest first.
+    expect(listed[3]).toContain('Aug 5, 2026');
+    expect(listed[5]).toContain('Jun 5, 2026');
+  });
+
+  it('handles a single shared event without a list', () => {
+    const text = formatWhereHaveWeMet('Jane', [trivia]);
+    expect(text).toContain('the only event you were both signed up for so far');
+    expect(
+      text.split('\n').filter((line) => line.startsWith('- ')),
+    ).toHaveLength(0);
   });
 
   it('uses Seattle dates, not UTC', () => {

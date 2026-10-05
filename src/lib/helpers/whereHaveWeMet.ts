@@ -23,7 +23,9 @@ import { EventSummary } from '../client/meetup/types.js';
 import { MemberRecord } from '../repositories/types.js';
 import { hasCancelledTitle } from './hallOfFame.js';
 
-const MOST_RECENT_SHOWN = 5;
+// Beyond this, the list shows the earliest and most recent ends.
+const FULL_LIST_LIMIT = 6;
+const ENDS_SHOWN = 3;
 // One attendee-list fetch per event the requester went to; the lists are
 // cached, so only the first lookup after a cache expiry pays for them.
 const ATTENDEE_FETCH_CONCURRENCY = 5;
@@ -146,6 +148,16 @@ function eventDay(event: EventSummary): string {
   return tz(dayjs(event.dateTime)).format('ll');
 }
 
+function eventLine(event: EventSummary): string {
+  return `- ${linkStr(event.title, event.eventUrl)}, ${eventDay(event)}`;
+}
+
+/**
+ * A yes RSVP is not proof anyone was there, let alone that two people met,
+ * so this never says "met": it reports shared sign-ups and says so. The
+ * earliest few are listed because the event people actually remember meeting
+ * at is often one or two behind the earliest shared RSVP.
+ */
 export function formatWhereHaveWeMet(
   theirName: string,
   shared: EventSummary[],
@@ -153,26 +165,38 @@ export function formatWhereHaveWeMet(
   if (shared.length === 0) {
     return `You and ${theirName} haven't been to the same event yet. Maybe the next one!`;
   }
+  const caveat =
+    'Counted from Meetup RSVPs, so an event one of you signed up for but missed still counts.';
   const [first] = shared;
-  const recent = shared.slice(-MOST_RECENT_SHOWN).reverse();
-  return [
-    `You and ${theirName} first met at ${linkStr(
-      first.title,
-      first.eventUrl,
-    )} on ${eventDay(first)}.`,
-    shared.length === 1
-      ? "That's the only event you've been to together so far."
-      : `You've been to ${shared.length} events together.`,
-    ...(shared.length > 1
-      ? [
+  const lead = `The first event you and ${theirName} were both signed up for was ${linkStr(
+    first.title,
+    first.eventUrl,
+  )} on ${eventDay(first)}.`;
+  if (shared.length === 1) {
+    return [
+      lead,
+      "It's the only event you were both signed up for so far.",
+      '',
+      caveat,
+    ].join('\n');
+  }
+  const list =
+    shared.length <= FULL_LIST_LIMIT
+      ? ['All of them, oldest first:', ...shared.map(eventLine)]
+      : [
+          'Earliest together:',
+          ...shared.slice(0, ENDS_SHOWN).map(eventLine),
           '',
           'Most recent:',
-          ...recent.map(
-            (event) =>
-              `- ${linkStr(event.title, event.eventUrl)}, ${eventDay(event)}`,
-          ),
-        ]
-      : []),
+          ...shared.slice(-ENDS_SHOWN).reverse().map(eventLine),
+        ];
+  return [
+    lead,
+    `${shared.length} shared events in all.`,
+    '',
+    ...list,
+    '',
+    caveat,
   ].join('\n');
 }
 
