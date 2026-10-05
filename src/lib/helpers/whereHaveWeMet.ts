@@ -21,6 +21,7 @@ import {
 } from '../client/meetup/paginationHelper.js';
 import { EventSummary } from '../client/meetup/types.js';
 import { MemberRecord } from '../repositories/types.js';
+import { hasCancelledTitle } from './hallOfFame.js';
 
 const MOST_RECENT_SHOWN = 5;
 // One attendee-list fetch per event the requester went to; the lists are
@@ -44,13 +45,28 @@ export function configuredLookup(
   return value === 'member-rsvps' ? 'member-rsvps' : 'attendee-lists';
 }
 
-/** A Meetup profile link (…/members/<id>/…) or a bare member ID. */
+/**
+ * A Meetup profile link or a bare member ID. Accepts the plain link
+ * (meetup.com/members/<id>/) and the ones copied from a group's member list
+ * or a localized page (meetup.com/<group or locale>/members/<id>/).
+ */
 export function parseMeetupMemberId(input: string): string | undefined {
   const trimmed = input.trim();
   if (/^\d+$/.test(trimmed)) {
     return trimmed;
   }
-  return /meetup\.com\/members\/(\d+)/.exec(trimmed)?.[1];
+  let url: URL;
+  try {
+    url = new URL(
+      /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`,
+    );
+  } catch {
+    return undefined;
+  }
+  if (url.hostname !== 'meetup.com' && !url.hostname.endsWith('.meetup.com')) {
+    return undefined;
+  }
+  return /(?:^|\/)members\/(\d+)(?:\/|$)/.exec(url.pathname)?.[1];
 }
 
 export type WhereHaveWeMetTarget =
@@ -98,7 +114,11 @@ export async function findSharedEvents(
   if (theirMeetupId === myMeetupId) {
     return { kind: 'self' };
   }
-  const mine = [...new Map(events.map((event) => [event.id, event])).values()];
+  // Hosts sometimes rename an event "cancelled" instead of cancelling it on
+  // the platform; nobody met at those.
+  const mine = [
+    ...new Map(events.map((event) => [event.id, event])).values(),
+  ].filter((event) => !hasCancelledTitle(event.title));
   let theyWent: (event: EventSummary) => Promise<boolean>;
   if (lookup === 'member-rsvps') {
     const theirs = await deps.theirPastEvents(theirMeetupId);

@@ -47,6 +47,25 @@ describe('parseMeetupMemberId', () => {
       ),
     ).toBe('238429835');
     expect(parseMeetupMemberId(' 238429835 ')).toBe('238429835');
+    expect(parseMeetupMemberId('meetup.com/members/238429835')).toBe(
+      '238429835',
+    );
+  });
+
+  it('reads the ID from a link copied from the group’s member list or a localized page', () => {
+    expect(
+      parseMeetupMemberId(
+        'https://www.meetup.com/1-5genasians/members/238429835/',
+      ),
+    ).toBe('238429835');
+    expect(
+      parseMeetupMemberId(
+        'https://www.meetup.com/1-5genasians/members/238429835/profile/?x=1',
+      ),
+    ).toBe('238429835');
+    expect(
+      parseMeetupMemberId('https://www.meetup.com/en-US/members/99/'),
+    ).toBe('99');
   });
 
   it('rejects anything else', () => {
@@ -54,6 +73,24 @@ describe('parseMeetupMemberId', () => {
       parseMeetupMemberId('https://www.meetup.com/1-5genasians/'),
     ).toBeUndefined();
     expect(parseMeetupMemberId('jane')).toBeUndefined();
+    expect(
+      parseMeetupMemberId('https://www.meetup.com/1-5genasians/members/'),
+    ).toBeUndefined();
+    expect(
+      parseMeetupMemberId('https://www.meetup.com/members/12abc/'),
+    ).toBeUndefined();
+  });
+
+  it('rejects links that are not on meetup.com', () => {
+    expect(
+      parseMeetupMemberId('https://notmeetup.com/members/5/'),
+    ).toBeUndefined();
+    expect(
+      parseMeetupMemberId('https://evil.example/?x=meetup.com/members/1'),
+    ).toBeUndefined();
+    expect(
+      parseMeetupMemberId('https://meetup.com.evil.example/members/1/'),
+    ).toBeUndefined();
   });
 });
 
@@ -136,6 +173,20 @@ describe('findSharedEvents', () => {
     });
   });
 
+  it('skips events renamed "cancelled", without reading their attendee lists', async () => {
+    const renamed = event('4', '2023-01-07T10:00:00-08:00', 'CANCELLED: Hike');
+    const { d, attendeeIds } = deps([renamed, trivia], {
+      '2': ['m1', 'm2'],
+      '4': ['m1', 'm2'],
+    });
+
+    expect(await findSharedEvents(d, 'm2')).toEqual({
+      kind: 'found',
+      shared: [trivia],
+    });
+    expect(attendeeIds).not.toHaveBeenCalledWith('4');
+  });
+
   it('finds nothing when they never went to the same event', async () => {
     const { d } = deps([hike], { '1': ['m1'] });
 
@@ -174,6 +225,16 @@ describe('findSharedEvents with the member-rsvps lookup', () => {
     expect(await findSharedEvents(d, 'm2', 'member-rsvps')).toEqual({
       kind: 'found',
       shared: [hike, picnic],
+    });
+  });
+
+  it('skips events renamed "cancelled"', async () => {
+    const renamed = event('4', '2023-01-07T10:00:00-08:00', 'Hike (canceled)');
+    const d = deps([renamed, hike], [renamed, hike]);
+
+    expect(await findSharedEvents(d, 'm2', 'member-rsvps')).toEqual({
+      kind: 'found',
+      shared: [hike],
     });
   });
 

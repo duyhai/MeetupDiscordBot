@@ -1,6 +1,7 @@
 import {
   ApplicationCommandOptionType,
   CommandInteraction,
+  GuildMember,
   User,
 } from 'discord.js';
 import { Discord, Slash, SlashOption } from 'discordx';
@@ -19,13 +20,14 @@ export class WhereHaveWeMetCommands {
       'See the events you and someone else both went to. Output is private.',
   })
   async whereHaveWeMetHandler(
+    // discordx passes a GuildMember when the person is on the server.
     @SlashOption({
       name: 'member',
       description: 'Someone on this Discord server.',
       type: ApplicationCommandOptionType.User,
       required: false,
     })
-    member: User | undefined,
+    member: GuildMember | User | undefined,
     @SlashOption({
       name: 'meetup_profile',
       description:
@@ -44,7 +46,7 @@ export class WhereHaveWeMetCommands {
         await replyWhereHaveWeMet(
           interaction,
           { discordUserId: member.id },
-          member.globalName ?? member.username,
+          member.displayName,
         );
         return;
       }
