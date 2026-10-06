@@ -11,7 +11,7 @@ import dayjs from 'dayjs';
 import { ButtonInteraction, CommandInteraction } from 'discord.js';
 
 import Configuration from '../../configuration.js';
-import { linkStr } from '../../util/discord.js';
+
 import { ApplicationMemberRepository } from '../../util/memberRepository.js';
 import { withMeetupClient } from '../../util/meetup.js';
 import { tz } from '../../util/timezone.js';
@@ -23,7 +23,9 @@ import { EventSummary } from '../client/meetup/types.js';
 import { MemberRecord } from '../repositories/types.js';
 import { hasCancelledTitle } from './hallOfFame.js';
 
-const MOST_RECENT_SHOWN = 5;
+// Beyond this, the list shows the earliest and most recent ends.
+const FULL_LIST_LIMIT = 10;
+const ENDS_SHOWN = 5;
 // One attendee-list fetch per event the requester went to; the lists are
 // cached, so only the first lookup after a cache expiry pays for them.
 const ATTENDEE_FETCH_CONCURRENCY = 5;
@@ -146,6 +148,23 @@ function eventDay(event: EventSummary): string {
   return tz(dayjs(event.dateTime)).format('ll');
 }
 
+/**
+ * Markdown link with the URL in angle brackets: Discord then renders no
+ * preview card, which matters when ten event links share one message.
+ */
+function quietLink(text: string, url: string): string {
+  return `[${text}](<${url}>)`;
+}
+
+function eventLine(event: EventSummary): string {
+  return `- ${quietLink(event.title, event.eventUrl)}, ${eventDay(event)}`;
+}
+
+/**
+ * The lead says "first met" because that's what members mean by the lookup
+ * (Hai's call, 2026-10-05); the closing caveat carries the honesty, since a
+ * yes RSVP proves a sign-up, not attendance.
+ */
 export function formatWhereHaveWeMet(
   theirName: string,
   shared: EventSummary[],
@@ -153,26 +172,38 @@ export function formatWhereHaveWeMet(
   if (shared.length === 0) {
     return `You and ${theirName} haven't been to the same event yet. Maybe the next one!`;
   }
+  const caveat =
+    'Counted from Meetup RSVPs, so an event one of you signed up for but missed still counts.';
   const [first] = shared;
-  const recent = shared.slice(-MOST_RECENT_SHOWN).reverse();
-  return [
-    `You and ${theirName} first met at ${linkStr(
-      first.title,
-      first.eventUrl,
-    )} on ${eventDay(first)}.`,
-    shared.length === 1
-      ? "That's the only event you've been to together so far."
-      : `You've been to ${shared.length} events together.`,
-    ...(shared.length > 1
-      ? [
+  const lead = `You and ${theirName} first met at ${quietLink(
+    first.title,
+    first.eventUrl,
+  )} on ${eventDay(first)}.`;
+  if (shared.length === 1) {
+    return [
+      lead,
+      "It's the only event you've been to together so far.",
+      '',
+      caveat,
+    ].join('\n');
+  }
+  const list =
+    shared.length <= FULL_LIST_LIMIT
+      ? ['All of them, oldest first:', ...shared.map(eventLine)]
+      : [
+          'Earliest together:',
+          ...shared.slice(0, ENDS_SHOWN).map(eventLine),
           '',
           'Most recent:',
-          ...recent.map(
-            (event) =>
-              `- ${linkStr(event.title, event.eventUrl)}, ${eventDay(event)}`,
-          ),
-        ]
-      : []),
+          ...shared.slice(-ENDS_SHOWN).reverse().map(eventLine),
+        ];
+  return [
+    lead,
+    `${shared.length} shared events in all.`,
+    '',
+    ...list,
+    '',
+    caveat,
   ].join('\n');
 }
 
