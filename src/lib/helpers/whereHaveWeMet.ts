@@ -11,7 +11,7 @@ import dayjs from 'dayjs';
 import { ButtonInteraction, CommandInteraction } from 'discord.js';
 
 import Configuration from '../../configuration.js';
-import { linkStr } from '../../util/discord.js';
+
 import { ApplicationMemberRepository } from '../../util/memberRepository.js';
 import { withMeetupClient } from '../../util/meetup.js';
 import { tz } from '../../util/timezone.js';
@@ -24,8 +24,8 @@ import { MemberRecord } from '../repositories/types.js';
 import { hasCancelledTitle } from './hallOfFame.js';
 
 // Beyond this, the list shows the earliest and most recent ends.
-const FULL_LIST_LIMIT = 6;
-const ENDS_SHOWN = 3;
+const FULL_LIST_LIMIT = 10;
+const ENDS_SHOWN = 5;
 // One attendee-list fetch per event the requester went to; the lists are
 // cached, so only the first lookup after a cache expiry pays for them.
 const ATTENDEE_FETCH_CONCURRENCY = 5;
@@ -148,15 +148,22 @@ function eventDay(event: EventSummary): string {
   return tz(dayjs(event.dateTime)).format('ll');
 }
 
+/**
+ * Markdown link with the URL in angle brackets: Discord then renders no
+ * preview card, which matters when ten event links share one message.
+ */
+function quietLink(text: string, url: string): string {
+  return `[${text}](<${url}>)`;
+}
+
 function eventLine(event: EventSummary): string {
-  return `- ${linkStr(event.title, event.eventUrl)}, ${eventDay(event)}`;
+  return `- ${quietLink(event.title, event.eventUrl)}, ${eventDay(event)}`;
 }
 
 /**
- * A yes RSVP is not proof anyone was there, let alone that two people met,
- * so this never says "met": it reports shared sign-ups and says so. The
- * earliest few are listed because the event people actually remember meeting
- * at is often one or two behind the earliest shared RSVP.
+ * The lead says "first met" because that's what members mean by the lookup
+ * (Hai's call, 2026-10-05); the closing caveat carries the honesty, since a
+ * yes RSVP proves a sign-up, not attendance.
  */
 export function formatWhereHaveWeMet(
   theirName: string,
@@ -168,14 +175,14 @@ export function formatWhereHaveWeMet(
   const caveat =
     'Counted from Meetup RSVPs, so an event one of you signed up for but missed still counts.';
   const [first] = shared;
-  const lead = `The first event you and ${theirName} were both signed up for was ${linkStr(
+  const lead = `You and ${theirName} first met at ${quietLink(
     first.title,
     first.eventUrl,
   )} on ${eventDay(first)}.`;
   if (shared.length === 1) {
     return [
       lead,
-      "It's the only event you were both signed up for so far.",
+      "It's the only event you've been to together so far.",
       '',
       caveat,
     ].join('\n');
