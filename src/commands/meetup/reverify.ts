@@ -11,6 +11,7 @@ import { SERVER_ROLES } from '../../constants.js';
 import {
   REVERIFY_ROLE_NAME,
   ensureReverifyRole,
+  fetchAllMembers,
   findReverifyRole,
   moveToOnboardingIfStillUnlinked,
   selectEnforceTargets,
@@ -51,7 +52,7 @@ const busyMessage =
 async function loadMembersAndRecords(interaction: CommandInteraction) {
   const repo = await ApplicationMemberRepository();
   const [guildMembers, rows] = await Promise.all([
-    interaction.guild.members.fetch(),
+    fetchAllMembers(interaction.guild),
     repo.listAll(),
   ]);
   return { candidates: guildMembers.map(toCandidate), rows, repo };

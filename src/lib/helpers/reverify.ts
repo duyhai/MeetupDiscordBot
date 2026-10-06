@@ -29,6 +29,32 @@ export interface ReverifyCandidate {
   roleIds: string[];
 }
 
+/**
+ * Every guild member, paged over REST. Not guild.members.fetch(): that goes
+ * through the gateway's request-guild-members opcode, whose budget is shared
+ * with the rest of the connection -- a preview run followed by confirm:true
+ * hit "Request with opcode 8 was rate limited" in production (2026-10-05).
+ * REST rate limits are queued by discord.js instead of thrown.
+ */
+export async function fetchAllMembers(guild: Guild): Promise<GuildMember[]> {
+  const PAGE = 1000;
+  const members: GuildMember[] = [];
+  let after: string | undefined;
+  for (;;) {
+    // eslint-disable-next-line no-await-in-loop
+    const page = await guild.members.list({ limit: PAGE, after });
+    members.push(...page.values());
+    if (page.size < PAGE) {
+      return members;
+    }
+    // Ids come back ascending, but take the max rather than trust the order:
+    // a wrong cursor would silently skip everyone after it.
+    after = [...page.keys()].reduce(function maxId(a, b) {
+      return BigInt(a) > BigInt(b) ? a : b;
+    });
+  }
+}
+
 export function toCandidate(member: GuildMember): ReverifyCandidate {
   return {
     id: member.id,
