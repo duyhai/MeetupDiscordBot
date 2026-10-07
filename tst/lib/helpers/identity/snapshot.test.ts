@@ -4,13 +4,14 @@ import { describe, expect, it } from 'vitest';
 import {
   avatarThumbUrl,
   snapshotMember,
-} from '../../../src/lib/helpers/identitySnapshot.js';
+} from '../../../../src/lib/helpers/identity/snapshot.js';
 
 function fakeMember(overrides: Record<string, unknown> = {}) {
   return {
     id: 'u1',
     nickname: 'Some One',
     avatar: null,
+    guild: { id: 'g1' },
     user: {
       username: 'someone',
       globalName: 'Someone',
@@ -24,6 +25,7 @@ function fakeMember(overrides: Record<string, unknown> = {}) {
 describe('snapshotMember', () => {
   it('reads every tracked field off the member', () => {
     expect(snapshotMember(fakeMember())).toEqual({
+      scopeId: 'g1',
       discordUserId: 'u1',
       username: 'someone',
       globalName: 'Someone',
