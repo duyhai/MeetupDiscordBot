@@ -4,6 +4,7 @@ import { Logger } from 'tslog';
 import { ApplicationIdentityRepository } from '../../../util/identityRepository.js';
 import { PostgresIdentityRepository } from '../../repositories/postgresIdentityRepository.js';
 import {
+  IdentityBaselineThumbs,
   IdentityChange,
   IdentitySnapshot,
   StoredIdentitySnapshot,
@@ -132,9 +133,15 @@ export async function recordIdentityFor(
  * a member's nickname during onboarding, so its own writes never appear in
  * the digest as suspicious name changes.
  *
- * Passes no thumbs: this runs inline in an onboarding interaction, where two
- * CDN fetches would be latency a user waits on for an avatar that did not
- * change. Whatever the baseline already holds is left untouched.
+ * Fetches no thumbs: this runs inline in an onboarding interaction, where
+ * CDN fetches would be latency a user waits on. But it cannot simply leave
+ * the stored images untouched either: if the member changed an avatar since
+ * the last sweep, this write advances the hash, and a stale thumb surviving
+ * under the new hash is non-null -- so needsThumbHeal never fires and the
+ * member's next change records the wrong before-image. So the stored
+ * baseline is read first, and any thumbed field whose hash this write moves
+ * gets an explicit null (clear); the sweep's heal path then fetches the
+ * right image next run. Unmoved hashes keep their images (key omitted).
  */
 export async function updateBaselineSilently(
   member: GuildMember,
@@ -146,5 +153,17 @@ export async function updateBaselineSilently(
   if (!repo) {
     return;
   }
-  await repo.putSnapshot(snapshotMember(member));
+  const after = snapshotMember(member);
+  const before = await repo.getSnapshot(after.scopeId, member.id);
+  const staleThumbClears: IdentityBaselineThumbs = {};
+  if (before && before.userAvatarHash !== after.userAvatarHash) {
+    staleThumbClears.userAvatarThumb = null;
+  }
+  if (before && before.memberAvatarHash !== after.memberAvatarHash) {
+    staleThumbClears.memberAvatarThumb = null;
+  }
+  await repo.putSnapshot(
+    after,
+    Object.keys(staleThumbClears).length > 0 ? staleThumbClears : undefined,
+  );
 }

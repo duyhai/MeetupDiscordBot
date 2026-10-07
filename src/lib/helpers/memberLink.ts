@@ -36,12 +36,13 @@ export interface MeetupLinkInfo {
  *   already linked to a different Discord user.
  * - Alerts (but allows) when this Discord user switches Meetup accounts.
  * - Repository failures never block onboarding: they alert instead.
+ * Returns whether the link was saved.
  */
 export async function recordMeetupLink(
   interaction: ButtonInteraction | CommandInteraction,
   info: MeetupLinkInfo,
   method: 'self_onboard' | 'sync_v2',
-): Promise<void> {
+): Promise<boolean> {
   const { client, user } = interaction;
   const meetupLink = linkStr(info.meetupName, info.meetupMemberUrl);
   try {
@@ -88,6 +89,7 @@ export async function recordMeetupLink(
         { name: 'Method', value: method, inline: true },
       ],
     });
+    return true;
   } catch (error) {
     if (error instanceof DuplicateMeetupAccountError) {
       throw error;
@@ -109,6 +111,7 @@ export async function recordMeetupLink(
         error,
       )}`,
     });
+    return false;
   }
 }
 

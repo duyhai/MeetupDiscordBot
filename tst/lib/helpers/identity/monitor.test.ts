@@ -402,4 +402,56 @@ describe('updateBaselineSilently', () => {
     // an omitted key leaves whatever the baseline already stores alone.
     expect(repo.putSnapshot.mock.calls[0][1]).toBeUndefined();
   });
+
+  it('clears the stored thumb when the silent advance moves its hash', async () => {
+    // A member changes their avatar between sweeps and then onboards. The
+    // silent advance writes the new hash; if the old thumb survives under it,
+    // the thumb is non-null so needsThumbHeal never fires, and the member's
+    // NEXT avatar change records the wrong before-image -- silently corrupted
+    // impersonation evidence. The stale thumb must be cleared (explicit null)
+    // so the heal path repairs it on the next sweep. No network fetch is
+    // allowed here: this is inline in an onboarding interaction.
+    repo.getSnapshot.mockResolvedValue({
+      scopeId: 'g1',
+      discordUserId: 'u1',
+      username: 'someone',
+      globalName: 'Someone',
+      nickname: 'Some One',
+      userAvatarHash: 'aaa',
+      memberAvatarHash: null,
+      userAvatarThumb: STORED_OLD,
+      memberAvatarThumb: null,
+    });
+
+    await updateBaselineSilently(memberWithNewAvatar());
+
+    expect(repo.putSnapshot).toHaveBeenCalledTimes(1);
+    // Explicit null (clear), not undefined/absent (preserve), and NOT the
+    // stale buffer.
+    expect(repo.putSnapshot.mock.calls[0][1]).toEqual({
+      userAvatarThumb: null,
+    });
+    // nock.disableNetConnect() is active file-wide, so reaching this point
+    // also proves no thumbnail fetch was attempted.
+  });
+
+  it('leaves stored thumbs alone when the hashes did not move', async () => {
+    repo.getSnapshot.mockResolvedValue({
+      scopeId: 'g1',
+      discordUserId: 'u1',
+      username: 'someone',
+      globalName: 'Someone',
+      nickname: 'Old Nick',
+      userAvatarHash: 'aaa',
+      memberAvatarHash: null,
+      userAvatarThumb: STORED_OLD,
+      memberAvatarThumb: null,
+    });
+
+    await updateBaselineSilently(fakeMember());
+
+    // Nickname-only advance: the avatar images are still correct for their
+    // hashes, so no key may be passed that would clear them.
+    expect(repo.putSnapshot.mock.calls[0][1]).toBeUndefined();
+  });
 });

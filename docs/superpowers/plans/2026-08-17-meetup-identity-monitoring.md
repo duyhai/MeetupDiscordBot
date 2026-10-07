@@ -1,5 +1,27 @@
 # Meetup-Side Identity Monitoring Implementation Plan
 
+> ## ⚠️ SUPERSEDED — do not execute this plan as written (2026-10-07)
+>
+> This plan predates the sweep-only redesign and the deployment of the first
+> identity PR, and several of its tasks now contradict the specs beside it.
+> Where this plan and the specs disagree, the specs win:
+> `docs/superpowers/specs/2026-08-16-identity-monitoring-design.md` (sweep-only
+> redesign) and the "Migrating the deployed schema" section of
+> `docs/superpowers/specs/2026-08-17-meetup-identity-monitoring-design.md`.
+> Specifically:
+>
+> - **Tasks that touch `identityEvents.ts` or `identitySuppression.ts` must
+>   not be executed.** The sweep-only redesign deletes both files; there is no
+>   event listener and no suppression bracket anymore.
+> - **"Nothing in this feature has deployed... do not write migration code"
+>   (Global Constraints below) is wrong.** PR #61 is live in production.
+>   Schema changes are migrations, written in `identitySchema.ts` and
+>   serialized with `pg_advisory_xact_lock`, per the 08-17 spec's "Migrating
+>   the deployed schema" section.
+> - **Task 8's time-window digest must not be built.** The digest uses a
+>   high-water mark (`identity_digest_state` in Postgres), not a nominal time
+>   window; the window approach drops rows at the boundaries.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Extend identity monitoring to Meetup profiles, sharing one scope-keyed change log with the Discord side, and fix the defects an independent review found in the Discord branch while it is still unmerged.

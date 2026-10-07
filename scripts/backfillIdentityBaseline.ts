@@ -10,6 +10,14 @@
  * per avatar, sequential: expect this run to take considerably longer than a
  * steady-state sweep.
  *
+ * The sweep is run with an UNLIMITED heal budget, not the daily sweep's
+ * standard 120s one. After the schema migration the baselines already exist
+ * with NULL thumbs, so this script's work routes through the heal path; under
+ * the 120s budget one run heals only a few hundred members and then prints
+ * "Backfill complete" with most thumbs still missing. Unlimited is safe here
+ * because this script is run deliberately, outside the digest's day-claim,
+ * and its whole purpose is to finish the thumbnail capture in one run.
+ *
  * Run against production explicitly:
  *   DISCORD_API_KEY=$(heroku config:get DISCORD_API_KEY -a meetup-discord-bot) \
  *   DATABASE_URL=$(heroku config:get DATABASE_URL -a meetup-discord-bot) \
@@ -18,6 +26,7 @@
 import { Client, GatewayIntentBits } from 'discord.js';
 import { Logger } from 'tslog';
 
+import { HealBudget } from '../src/lib/helpers/identity/healBudget.js';
 import { runIdentitySweep } from '../src/lib/helpers/identity/sweep.js';
 
 const logger = new Logger({ name: 'backfillIdentityBaseline' });
@@ -51,7 +60,12 @@ readyTimeout.unref();
 client.once('clientReady', async () => {
   clearTimeout(readyTimeout);
   try {
-    const result = await runIdentitySweep(client, 'backfill');
+    // See the header comment: unlimited, or the run stops healing after 120s.
+    const result = await runIdentitySweep(
+      client,
+      'backfill',
+      new HealBudget(Number.POSITIVE_INFINITY),
+    );
     logger.info(
       `Backfill complete: ${result.scanned} scanned, ${result.changed} changes recorded (expected 0 on a fresh table)`,
     );

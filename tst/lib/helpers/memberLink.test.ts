@@ -44,7 +44,9 @@ describe('recordMeetupLink', () => {
   });
 
   it('stores a new link and logs activity', async () => {
-    await recordMeetupLink(makeInteraction(), info, 'self_onboard');
+    await expect(
+      recordMeetupLink(makeInteraction(), info, 'self_onboard'),
+    ).resolves.toBe(true);
 
     const row = await repo.findByDiscordId('discord-1');
     expect(row).toMatchObject({
@@ -112,7 +114,7 @@ describe('recordMeetupLink', () => {
 
     await expect(
       recordMeetupLink(makeInteraction(), info, 'self_onboard'),
-    ).resolves.toBeUndefined();
+    ).resolves.toBe(false);
     expect(vi.mocked(discordLogger.logAlert)).toHaveBeenCalledTimes(1);
   });
 });

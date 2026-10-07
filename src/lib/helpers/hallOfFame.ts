@@ -15,6 +15,10 @@ const CANCELLED_STATUSES: EventStatus[] = [
   'AUTOSCHED_CANCELLED',
 ];
 
+export function hasCancelledTitle(title: string): boolean {
+  return CANCELLED_TITLE.test(title);
+}
+
 /**
  * Hosts sometimes rename an event "cancelled" instead of cancelling it on
  * the platform, so the title check matters even though the group-events
@@ -24,8 +28,7 @@ export function isCancelledEvent(
   event: Pick<Event, 'title' | 'status'>,
 ): boolean {
   return (
-    CANCELLED_TITLE.test(event.title) ||
-    CANCELLED_STATUSES.includes(event.status)
+    hasCancelledTitle(event.title) || CANCELLED_STATUSES.includes(event.status)
   );
 }
 

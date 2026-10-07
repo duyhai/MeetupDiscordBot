@@ -73,6 +73,18 @@ describe('runIdentitySweep', () => {
     expect(result.scanned).toBe(3);
   });
 
+  it('uses a caller-provided heal budget instead of the default', async () => {
+    // The backfill script needs an effectively unlimited budget: with the
+    // standard 120s one, a run over ~2,000 already-migrated baselines heals
+    // only a few hundred thumbs and still prints "Backfill complete".
+    const unlimited = new HealBudget(Number.POSITIVE_INFINITY);
+
+    await runIdentitySweep(fakeClient(['a', 'b']), 'backfill', unlimited);
+
+    expect(vi.mocked(recordIdentityFor).mock.calls[0][2]).toBe(unlimited);
+    expect(vi.mocked(recordIdentityFor).mock.calls[1][2]).toBe(unlimited);
+  });
+
   it('passes the requested source through', async () => {
     await runIdentitySweep(fakeClient(['a']), 'backfill');
 
