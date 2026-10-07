@@ -81,6 +81,17 @@ The Postgres data volume survives `yarn docker:down`. If the schema ever changes
 
 # Deployment
 
+### Where have we met?
+
+`WHERE_HAVE_WE_MET_LOOKUP` (optional) chooses how `/where_have_we_met` reads
+the other person's attendance:
+
+- unset, or any other value: check the attendee list of each event the
+  requester went to. Works for any member; the default.
+- `member-rsvps`: read the other person's RSVP list directly. Two requests
+  instead of one per event, but not yet verified for a requester who isn't an
+  organizer, and it doesn't fall back to attendee lists if it fails.
+
 ### Identity monitoring
 
 Before the first digest, populate the baseline once so existing members are

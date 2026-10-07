@@ -5,7 +5,8 @@ import { SERVER_ROLES } from '../../constants.js';
 import { ApplicationCache } from '../../util/cache.js';
 import { ApplicationMemberRepository } from '../../util/memberRepository.js';
 import { MemberRecord } from '../repositories/types.js';
-import { LogEntry, logAlert } from './discordLogger.js';
+import { LogEntry, logAlert, logModeration } from './discordLogger.js';
+import { findReverifyRole, formatReverifyProgress } from './reverify.js';
 
 const logger = new Logger({ name: 'unlinkedDigest' });
 
@@ -58,15 +59,32 @@ export async function runDigestOnce(client: Client): Promise<void> {
 
   const repo = await ApplicationMemberRepository();
   const rows = await repo.listAll();
+  const reverifyRole = await findReverifyRole(guild);
 
-  const unlinked = collectUnlinkedMemberIds(
-    guildMembers.map((member) => ({
-      id: member.id,
-      isBot: member.user.bot,
-      hasOnboardingRole: member.roles.cache.has(SERVER_ROLES.onboarding),
-    })),
-    rows,
-  );
+  // During the Reverify migration the full unlinked list is ~1,450 names;
+  // staff need the progress number instead, so the list isn't built.
+  let progress: LogEntry | undefined;
+  let unlinked: string[] = [];
+  if (reverifyRole) {
+    const memberIds = new Set(guildMembers.keys());
+    progress = formatReverifyProgress({
+      stillTagged: guildMembers.filter((member) =>
+        member.roles.cache.has(reverifyRole.id),
+      ).size,
+      linked: rows.filter(
+        (row) => row.meetupId !== null && memberIds.has(row.discordUserId),
+      ).length,
+    });
+  } else {
+    unlinked = collectUnlinkedMemberIds(
+      guildMembers.map((member) => ({
+        id: member.id,
+        isBot: member.user.bot,
+        hasOnboardingRole: member.roles.cache.has(SERVER_ROLES.onboarding),
+      })),
+      rows,
+    );
+  }
 
   // Claim the day only after the fallible collection succeeds, so a failed
   // run leaves the claim unconsumed and a restart within the hour can retry.
@@ -76,6 +94,12 @@ export async function runDigestOnce(client: Client): Promise<void> {
   const today = new Date().toISOString().slice(0, 10);
   const claimed = await cache.exclusive_set(`unlinked-digest-${today}`, '1');
   if (!claimed) {
+    return;
+  }
+
+  if (progress) {
+    await logModeration(client, progress);
+    logger.info('Unlinked digest ran in Reverify progress mode');
     return;
   }
 
