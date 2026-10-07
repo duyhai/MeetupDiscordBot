@@ -241,6 +241,9 @@ describe.skipIf(!POSTGRES_AVAILABLE)('identity schema migration', () => {
       nickname: 'Some One',
       userAvatarHash: 'aaa',
       memberAvatarHash: null,
+      // Not captured before the migration; the sweep heals these.
+      userAvatarThumb: null,
+      memberAvatarThumb: null,
     });
 
     const window = await repo.listChangesBetween(
@@ -252,17 +255,21 @@ describe.skipIf(!POSTGRES_AVAILABLE)('identity schema migration', () => {
 
     // The new upsert's conflict target now exists, and new rows continue the
     // old id sequence rather than colliding with it.
-    await repo.putSnapshot({
-      scopeId: GUILD_ID,
-      discordUserId: 'u1',
-      username: 'someone',
-      globalName: 'Someone',
-      nickname: 'Renamed',
-      userAvatarHash: 'aaa',
-      memberAvatarHash: null,
-    });
-    const updated = await repo.getSnapshot(GUILD_ID, 'u1');
-    expect(updated?.nickname).toBe('Renamed');
+    await repo.putSnapshot(
+      {
+        scopeId: GUILD_ID,
+        discordUserId: 'u1',
+        username: 'someone',
+        globalName: 'Someone',
+        nickname: 'Renamed',
+        userAvatarHash: 'aaa',
+        memberAvatarHash: null,
+      },
+      { userAvatarThumb: NEW_THUMB },
+    );
+    const healed = await repo.getSnapshot(GUILD_ID, 'u1');
+    expect(healed?.nickname).toBe('Renamed');
+    expect(healed?.userAvatarThumb?.equals(NEW_THUMB)).toBe(true);
     await repo.recordChanges(
       [
         {
@@ -277,10 +284,7 @@ describe.skipIf(!POSTGRES_AVAILABLE)('identity schema migration', () => {
       'sweep',
       new Map(),
     );
-    const maxId = await scoped.query<{ max: string }>(
-      'SELECT max(id)::text AS max FROM member_identity_changes',
-    );
-    expect(BigInt(maxId.rows[0].max)).toBeGreaterThan(
+    expect(BigInt(await repo.maxChangeId())).toBeGreaterThan(
       BigInt(oldIds[oldIds.length - 1]),
     );
   });
