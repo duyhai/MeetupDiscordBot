@@ -19,6 +19,7 @@ import {
   withDiscordFileAttachment,
 } from '../../util/discord.js';
 import { ApplicationIdentityRepository } from '../../util/identityRepository.js';
+import { ApplicationMemberRepository } from '../../util/memberRepository.js';
 
 const logger = new Logger({ name: 'IdentityReportCommands' });
 
@@ -64,6 +65,10 @@ export function tooLargeMessage(
 export function buildReportAttachment(
   changes: IdentityChangeRecord[],
   days: number,
+  // Same mapping the digest builds, threaded through so both surfaces keep
+  // the promise the spec makes on both: a Meetup change resolves to the
+  // linked Discord account where one exists.
+  meetupToDiscord: Map<string, string> = new Map(),
 ): ReportAttachment {
   const to = new Date();
   const from = new Date(to.getTime() - days * 24 * 60 * 60 * 1000);
@@ -76,8 +81,25 @@ export function buildReportAttachment(
   return {
     ok: true,
     fileName: `identity-report-${to.toISOString().slice(0, 10)}.html`,
-    html: renderIdentityReport(changes, { from, to }),
+    html: renderIdentityReport(changes, { from, to }, meetupToDiscord),
   };
+}
+
+/**
+ * Built fresh per report rather than cached, for the same reason the digest
+ * rebuilds it: a link created an hour ago should resolve in the report an
+ * organizer pulls now.
+ */
+export async function buildMeetupToDiscordMap(): Promise<Map<string, string>> {
+  const memberRepo = await ApplicationMemberRepository();
+  const members = await memberRepo.listAll();
+  const map = new Map<string, string>();
+  for (const member of members) {
+    if (member.meetupId) {
+      map.set(member.meetupId, member.discordUserId);
+    }
+  }
+  return map;
 }
 
 @Discord()
@@ -133,9 +155,10 @@ export class IdentityReportCommands {
       }
 
       const changes = await repo.listChangesBetween(from, to);
+      const meetupToDiscord = await buildMeetupToDiscordMap();
 
       // Backstop only: the pre-fetch measurement above is the real guard.
-      const built = buildReportAttachment(changes, windowDays);
+      const built = buildReportAttachment(changes, windowDays, meetupToDiscord);
       // `=== false` (not `!built.ok`): this project builds without
       // strictNullChecks, and without it plain truthy/falsy checks don't
       // reliably narrow a discriminated union — only literal equality does.

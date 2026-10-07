@@ -3,6 +3,7 @@ import pg from 'pg';
 import { beforeAll, describe, expect, it } from 'vitest';
 
 import { GUILD_ID } from '../../src/constants.js';
+import { MeetupSnapshot } from '../../src/lib/helpers/identity/meetupSnapshot.js';
 import { PostgresIdentityRepository } from '../../src/lib/repositories/postgresIdentityRepository.js';
 import { IdentitySnapshot } from '../../src/lib/repositories/identityTypes.js';
 
@@ -36,6 +37,16 @@ const freshSnapshot = (): IdentitySnapshot => ({
   nickname: 'Some One',
   userAvatarHash: 'aaa',
   memberAvatarHash: null,
+});
+
+const MEETUP_SCOPE = '7595882';
+
+const freshMeetupSnapshot = (): MeetupSnapshot => ({
+  scopeId: MEETUP_SCOPE,
+  meetupMemberId: `meetup-${crypto.randomUUID()}`,
+  name: 'Jane D.',
+  username: 'janed',
+  photoId: 'p1',
 });
 
 describe.skipIf(!POSTGRES_AVAILABLE)('PostgresIdentityRepository', () => {
@@ -220,9 +231,9 @@ describe.skipIf(!POSTGRES_AVAILABLE)('PostgresIdentityRepository', () => {
           platform: 'meetup',
           scopeId: '7595882',
           subjectId: id,
-          field: 'nickname',
-          oldValue: 'A',
-          newValue: 'B',
+          field: 'photo',
+          oldValue: 'p1',
+          newValue: 'p2',
         },
       ],
       'sweep',
@@ -722,5 +733,118 @@ describe.skipIf(!POSTGRES_AVAILABLE)('PostgresIdentityRepository', () => {
 
     expect(stats.changeCount).toBeGreaterThan(0);
     expect(stats.totalBytes).toBeGreaterThan(0);
+  });
+
+  it('round-trips a Meetup snapshot', async () => {
+    const snap = freshMeetupSnapshot();
+    await repo.putMeetupSnapshot(snap);
+
+    expect(
+      await repo.getMeetupSnapshot(snap.scopeId, snap.meetupMemberId),
+    ).toEqual({ ...snap, photoThumb: null });
+  });
+
+  it('round-trips a Meetup baseline photo as bytes', async () => {
+    const snap = freshMeetupSnapshot();
+    // JPEG magic plus high bytes: Meetup serves JPEG, and a string coercion
+    // would corrupt 0xff/0xd8 rather than merely reordering them.
+    const photo = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0xfe]);
+
+    await repo.putMeetupSnapshot(snap, { photoThumb: photo });
+
+    const stored = await repo.getMeetupSnapshot(
+      snap.scopeId,
+      snap.meetupMemberId,
+    );
+    // The Meetup baseline keeps a photo id, never the URL behind it, so these
+    // bytes are the only possible before-image for a future photo change.
+    expect(stored?.photoThumb?.equals(photo)).toBe(true);
+  });
+
+  it('leaves a stored Meetup photo alone when a put supplies none', async () => {
+    const snap = freshMeetupSnapshot();
+    const photo = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0xfe]);
+    await repo.putMeetupSnapshot(snap, { photoThumb: photo });
+
+    // A name-only change carries no photo information.
+    await repo.putMeetupSnapshot({ ...snap, name: 'Jane E.' });
+
+    const stored = await repo.getMeetupSnapshot(
+      snap.scopeId,
+      snap.meetupMemberId,
+    );
+    expect(stored?.name).toBe('Jane E.');
+    // A blind overwrite would discard the image on every name or username
+    // edit, and Meetup cannot serve it again.
+    expect(stored?.photoThumb?.equals(photo)).toBe(true);
+  });
+
+  it('overwrites an existing Meetup snapshot rather than duplicating it', async () => {
+    const snap = freshMeetupSnapshot();
+    await repo.putMeetupSnapshot(snap);
+    await repo.putMeetupSnapshot({ ...snap, photoId: 'p2' });
+
+    const stored = await repo.getMeetupSnapshot(
+      snap.scopeId,
+      snap.meetupMemberId,
+    );
+    expect(stored?.photoId).toBe('p2');
+  });
+
+  it('erases a Meetup member baseline as well as its change history', async () => {
+    const snap = freshMeetupSnapshot();
+    await repo.putMeetupSnapshot(snap);
+    await repo.recordChanges(
+      [
+        {
+          platform: 'meetup',
+          scopeId: snap.scopeId,
+          subjectId: snap.meetupMemberId,
+          field: 'name',
+          oldValue: 'Old Name',
+          newValue: snap.name,
+        },
+      ],
+      'sweep',
+      new Map(),
+    );
+
+    const removed = await repo.deleteMemberIdentity(
+      'meetup',
+      snap.scopeId,
+      snap.meetupMemberId,
+    );
+
+    expect(removed).toBeGreaterThan(0);
+    // Before this task, deleteMemberIdentity only ever cleared the Discord
+    // baseline table (member_identity). A Meetup erasure that left this row
+    // behind would keep re-seeding the "before" side of the next diff from
+    // identity that was supposedly erased.
+    expect(
+      await repo.getMeetupSnapshot(snap.scopeId, snap.meetupMemberId),
+    ).toBeUndefined();
+  });
+
+  it("erasing a Meetup member's baseline leaves a Discord baseline untouched", async () => {
+    const meetupSnap = freshMeetupSnapshot();
+    const discordSnap = freshSnapshot();
+    await repo.putMeetupSnapshot(meetupSnap);
+    await repo.putSnapshot(discordSnap);
+
+    await repo.deleteMemberIdentity(
+      'meetup',
+      meetupSnap.scopeId,
+      meetupSnap.meetupMemberId,
+    );
+
+    // The two platforms keep separate baseline tables; a Meetup erasure must
+    // not reach into member_identity and wipe an unrelated Discord baseline.
+    expect(
+      await repo.getSnapshot(discordSnap.scopeId, discordSnap.discordUserId),
+    ).toEqual({
+      ...discordSnap,
+      userAvatarThumb: null,
+      memberAvatarThumb: null,
+    });
   });
 });
