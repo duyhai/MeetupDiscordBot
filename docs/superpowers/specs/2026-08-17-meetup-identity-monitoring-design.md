@@ -257,7 +257,9 @@ both sweeps heal: for an *unchanged* member whose baseline has a hash or
 that same identifier) and store it through the same column-conditional upsert.
 A member whose images are present still costs zero writes. Healing is bounded
 by time, not count — `HEAL_BUDGET_MS`, two minutes per sweep run — because both
-sweeps run inside the digest's 30-minute lease and each fetch may take up to
+sweeps run inside the digest's `exclusive_set` day-claim (a 30-minute claim
+lease arrives only with the later digest-hardening design; at this point the
+claim simply holds the day) and each fetch may take up to
 5s; members not reached heal on a later day. A heal is not a change: it records
 nothing, does not count toward the Meetup systemic-change thumbnail cap, and is
 not stopped by it.
@@ -448,10 +450,16 @@ now migrates.) They ship with this work:
   The digest title states the actual span of the rows it contains, since
   there is no longer a nominal window to quote.
 - **Connection budget.** This pool's `max: 3` plus the member repository's
-  `max: 5` is 8 per dyno, 16 across a deploy's dyno overlap, against
-  essential-0's 20 — and the backfill script opens its own pool of 3, reaching
-  19. Drop this pool to 2 (the sweep is sequential and needs one) and document
-  running the backfill outside a deploy window.
+  `max: 5` is 8 per dyno — but the full picture also includes the suspension
+  repository's pool (`max: 5`) and, once the Meetup API credential store
+  lands, the credential pool (`max: 1`). With this pool dropped to 2 that is
+  2 + 5 + 5 + 1 = **13 per dyno, 26 across a deploy's dyno overlap**, against
+  essential-0's 20 — over the cap on paper. These are pool caps, not
+  reservations, so overlap is survivable in practice (the pools rarely fill
+  simultaneously), but it is not the comfortable margin the per-dyno number
+  suggests. The backfill script opens its own pool of 3 on top. Drop this
+  pool to 2 (the sweep is sequential and needs one) and document running the
+  backfill outside a deploy window.
 
 ## Per-member erasure
 

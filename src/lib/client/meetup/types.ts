@@ -218,6 +218,19 @@ export type EventSummary = Pick<
   'dateTime' | 'eventUrl' | 'id' | 'title'
 >;
 
+export interface GetSelfPastRsvpEventsResponse {
+  self: {
+    id: string;
+    rsvps: PaginatedData<{ event: EventSummary }>;
+  };
+}
+
+export type GetSelfPastRsvpEventsInput = {
+  after?: string;
+  first: number;
+  groupId: string;
+};
+
 export interface MemberRsvpFilter {
   eventStatus: ('PAST' | 'UPCOMING')[];
   rsvpStatus: RsvpStatus[];
