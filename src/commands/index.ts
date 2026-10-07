@@ -6,10 +6,12 @@ import { MeetupGetUnannouncedEventsCommands } from './meetup/getUnannouncedEvent
 import { MeetupListSuspensionsCommands } from './meetup/listSuspensions.js';
 import { MeetupNoShowReportCommands } from './meetup/noShowReport.js';
 import { MeetupRecordSuspensionCommands } from './meetup/recordSuspension.js';
+import { ReverifyCommands } from './meetup/reverify.js';
 import { MeetupTestGqlCommands } from './meetup/testGQL.js';
 import { UnlinkAccountCommands } from './meetup/unlinkAccount.js';
 import { MeetupVoidSuspensionCommands } from './meetup/voidSuspension.js';
 import { MeetupWhoisCommands } from './meetup/whoisAccount.js';
+import { WhereHaveWeMetCommands } from './meetup/whereHaveWeMet.js';
 import { SendMessageCommands } from './sendMessage.js';
 
 const Commands = [
@@ -21,11 +23,13 @@ const Commands = [
   MeetupNoShowCommands,
   MeetupNoShowReportCommands,
   MeetupRecordSuspensionCommands,
+  ReverifyCommands,
   SendMessageCommands,
   MeetupTestGqlCommands,
   UnlinkAccountCommands,
   MeetupVoidSuspensionCommands,
   MeetupWhoisCommands,
+  WhereHaveWeMetCommands,
 ];
 
 export default Commands;
