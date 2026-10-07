@@ -10,6 +10,7 @@ interface ConfigurationSchema {
     endpoint: string;
     groupId: string;
     groupUrlName: string;
+    organizerRefreshToken: string | undefined;
   };
 }
 
@@ -25,6 +26,9 @@ const Configuration: ConfigurationSchema = {
     endpoint: 'https://api.meetup.com/gql-ext',
     groupId: '7595882',
     groupUrlName: '1-5genasians',
+    // Deliberately absent from REQUIRED_VARS: the bot must still start
+    // without it, with only Meetup-side identity monitoring disabled.
+    organizerRefreshToken: process.env.MEETUP_ORGANIZER_REFRESH_TOKEN,
   },
 };
 
