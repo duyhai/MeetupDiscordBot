@@ -20,16 +20,18 @@ const logger = new Logger({ name: 'identitySweep' });
 export async function runIdentitySweep(
   client: Client,
   source: WritableChangeSource,
+  // One budget for the whole run: baseline-thumb healing stops once the
+  // budget is spent, and whoever is left heals on a later day. The default
+  // (HEAL_BUDGET_MS) suits the daily digest-hosted sweep; the backfill
+  // script passes an effectively unlimited budget because its whole purpose
+  // is to finish the healing in one run.
+  healBudget: HealBudget = new HealBudget(),
 ): Promise<{ scanned: number; changed: number }> {
   // Resolve the configured guild explicitly. guilds.first() is insertion-
   // ordered, so with a second guild present (test server, staging, a fork)
   // the sweep would diff one guild's members against another's baselines.
   const guild = await client.guilds.fetch(GUILD_ID);
   const members = await guild.members.fetch();
-
-  // One budget for the whole run: baseline-thumb healing stops once it has
-  // used HEAL_BUDGET_MS, and whoever is left heals on a later day.
-  const healBudget = new HealBudget();
 
   let scanned = 0;
   let changed = 0;
