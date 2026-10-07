@@ -1,4 +1,4 @@
-import { Client } from 'discord.js';
+import { Client, Collection } from 'discord.js';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import * as discordLogger from '../../../src/lib/helpers/discordLogger.js';
@@ -14,6 +14,7 @@ import * as memberRepository from '../../../src/util/memberRepository.js';
 
 vi.mock('../../../src/lib/helpers/discordLogger.js', () => ({
   logAlert: vi.fn().mockResolvedValue(undefined),
+  logModeration: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock('../../../src/util/cache.js', () => ({
   ApplicationCache: vi.fn(),
@@ -69,12 +70,28 @@ describe('runDigestOnce', () => {
   const unlinkedMember = {
     id: 'unlinked-1',
     user: { bot: false },
-    roles: { cache: { has: () => false } },
+    roles: { cache: { has: (_id: string) => false } },
   };
 
-  function makeClient(membersFetch: () => Promise<(typeof unlinkedMember)[]>) {
+  function makeClient(
+    membersFetch: () => Promise<(typeof unlinkedMember)[]>,
+    reverifyRole?: { id: string; name: string },
+  ) {
     const guild = {
-      members: { fetch: vi.fn().mockImplementation(membersFetch) },
+      // guild.members.fetch() resolves to a Collection keyed by member ID.
+      members: {
+        fetch: vi
+          .fn()
+          .mockImplementation(() =>
+            membersFetch().then(
+              (list) =>
+                new Collection(list.map((member) => [member.id, member])),
+            ),
+          ),
+      },
+      roles: {
+        fetch: vi.fn().mockResolvedValue(reverifyRole ? [reverifyRole] : []),
+      },
     };
     return {
       guilds: {
@@ -118,6 +135,34 @@ describe('runDigestOnce', () => {
     await runDigestOnce(workingClient);
 
     expect(vi.mocked(discordLogger.logAlert)).toHaveBeenCalledTimes(1);
+  });
+
+  it('posts Reverify progress to the staff channel while the migration runs', async () => {
+    const role = { id: 'reverify-role', name: 'Reverify' };
+    const tagged = {
+      id: 'tagged-1',
+      user: { bot: false },
+      roles: { cache: { has: (id: string) => id === role.id } },
+    };
+    vi.mocked(memberRepository.ApplicationMemberRepository).mockResolvedValue({
+      listAll: async () => [linkedRow('linked-1'), linkedRow('left-server')],
+    } as unknown as Awaited<
+      ReturnType<typeof memberRepository.ApplicationMemberRepository>
+    >);
+    const linkedMember = { ...unlinkedMember, id: 'linked-1' };
+
+    await runDigestOnce(
+      makeClient(() => Promise.resolve([tagged, linkedMember]), role),
+    );
+
+    expect(discordLogger.logAlert).not.toHaveBeenCalled();
+    expect(discordLogger.logModeration).toHaveBeenCalledWith(
+      expect.anything(),
+      {
+        title: 'Reverify progress: 1 still need to link',
+        description: '1 members linked to Meetup so far.',
+      },
+    );
   });
 
   it('posts at most once per day across restarts', async () => {

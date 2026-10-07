@@ -38,6 +38,26 @@ export class PaginationCapError extends Error {
 }
 
 /**
+ * Thrown when the API claims another page exists but the cursor is absent or
+ * has not moved. Silently returning the partial roster here hid mid-walk
+ * truncation: a stall on page 2 of 60 dropped 58 pages while every caller
+ * believed it had everything. Named like PaginationCapError so the digest's
+ * per-sweep handler can report a degraded sweep instead of a mystery failure.
+ */
+export class PaginationStallError extends Error {
+  /** See PaginationCapError: composed here, never from an API response. */
+  readonly organizerSafeMessage = true;
+
+  constructor(pages: number, collected: number) {
+    super(
+      `Pagination stalled after ${pages} pages (${collected} records collected) -- ` +
+        'the API claims another page but the cursor is absent or unmoved.',
+    );
+    this.name = 'PaginationStallError';
+  }
+}
+
+/**
  * Maps `items` through `fn` with at most `limit` calls in flight at once,
  * preserving input order in the result. Used to bound fan-out calls (e.g.
  * one paginated RSVP fetch per event) that would otherwise all fire in
@@ -103,22 +123,32 @@ export async function getPaginatedData<TOutput>(
       after: cursor,
       first: PAGINATION_SIZE,
     });
-    results.push(...pageResult.edges.map((edge) => edge.node));
-
     const previousCursor = cursor;
     cursor = pageResult.pageInfo.endCursor;
+
+    // `hasNextPage: true` with a cursor that is absent or has not moved is
+    // the API contradicting itself. Following it re-requests the same page
+    // forever: the same `after` yields the same page, which again claims a
+    // next page. Returning the partial roster silently is just as bad -- a
+    // stall mid-walk truncates everything after it while the caller believes
+    // it has the full set -- so the stall throws, like the page cap. An
+    // unmoved cursor means this page is a re-serve of the previous one, so
+    // its nodes are duplicates and are not counted as collected. Reached
+    // only when hasNextPage is true, so a normal final page -- which
+    // routinely reports a null cursor -- is unaffected.
+    const stalled =
+      pageResult.pageInfo.hasNextPage && (!cursor || cursor === previousCursor);
+    const isDuplicatePage =
+      stalled && previousCursor !== undefined && cursor === previousCursor;
+    if (!isDuplicatePage) {
+      results.push(...pageResult.edges.map((edge) => edge.node));
+    }
 
     if (!pageResult.pageInfo.hasNextPage) {
       return results;
     }
-    // `hasNextPage: true` with a cursor that is absent or has not moved is
-    // the API contradicting itself. Following it re-requests page 1 forever:
-    // the same `after` yields the same page, which again claims a next page.
-    // Stopping loses at most one page of a malformed response; continuing
-    // loses the dyno. Reached only when hasNextPage is true, so a normal
-    // final page -- which routinely reports a null cursor -- is unaffected.
-    if (!cursor || cursor === previousCursor) {
-      return results;
+    if (stalled) {
+      throw new PaginationStallError(page + 1, results.length);
     }
   }
   throw new PaginationCapError(MAX_PAGES, results.length);

@@ -24,6 +24,7 @@ import {
   getGroupMemberships,
   getMemberRsvps,
   getSelfPastRsvpCount,
+  getSelfPastRsvpEvents,
   getUserHostedEvents,
   getUserInfo,
   getUserMembershipInfo,
@@ -52,6 +53,8 @@ import {
   GetGroupMembersByIdsResponse,
   GetMemberRsvpsInput,
   GetMemberRsvpsResponse,
+  GetSelfPastRsvpEventsInput,
+  GetSelfPastRsvpEventsResponse,
   GetUserHostedEventsInput,
   GetUserHostedEventsResponse,
   GetUserInfoResponse,
@@ -180,6 +183,41 @@ export class GqlMeetupClient {
     } catch (error) {
       logger.error(error);
       throw error;
+    }
+  }
+
+  /**
+   * Who the token belongs to, and every past event in the group they RSVP'd
+   * yes to or attended, all pages. Not cached: it is user-specific.
+   */
+  public async getSelfPastRsvpEvents(
+    groupId: string,
+  ): Promise<{ events: EventSummary[]; meetupId: string }> {
+    logger.info(`Calling getSelfPastRsvpEvents for group ${groupId}`);
+    const events: EventSummary[] = [];
+    let after: string | undefined;
+    for (;;) {
+      let result: GetSelfPastRsvpEventsResponse;
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        result = await this.client.request<
+          GetSelfPastRsvpEventsResponse,
+          GetSelfPastRsvpEventsInput
+        >(getSelfPastRsvpEvents, {
+          groupId,
+          first: MEMBER_RSVP_PAGE_SIZE,
+          after,
+        });
+      } catch (error) {
+        logger.error(error);
+        throw error;
+      }
+      const { id, rsvps } = result.self;
+      events.push(...rsvps.edges.map(({ node }) => node.event));
+      if (!rsvps.pageInfo.hasNextPage) {
+        return { meetupId: id, events };
+      }
+      after = rsvps.pageInfo.endCursor;
     }
   }
 
