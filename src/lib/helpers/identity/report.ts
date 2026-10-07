@@ -1,6 +1,7 @@
 import {
   IdentityChangeRecord,
   IdentityField,
+  IdentityPlatform,
 } from '../../repositories/identityTypes.js';
 
 /**
@@ -21,10 +22,19 @@ const FIELD_LABELS: Record<IdentityField, string> = {
   nickname: 'Nickname',
   username: 'Username',
   global_name: 'Display name',
+  photo: 'Profile photo',
+  name: 'Name',
 };
 
-function escapeHtml(value: string | null): string {
-  if (value === null) {
+// The Platform column already says which service a row is from, so these
+// stay short rather than repeating "Meetup"/"Discord" inside the field name.
+const PLATFORM_LABELS: Record<IdentityPlatform, string> = {
+  discord: 'Discord',
+  meetup: 'Meetup',
+};
+
+function escapeHtml(value: string | null | undefined): string {
+  if (value === null || value === undefined) {
     return '—';
   }
   return value
@@ -35,11 +45,66 @@ function escapeHtml(value: string | null): string {
     .replace(/'/g, '&#39;');
 }
 
+/**
+ * Determines the media type from the bytes rather than assuming one.
+ *
+ * The report hardcoded `image/webp`, which was true only of Discord's CDN.
+ * Meetup's thumbnails are JPEG, so every Meetup photo change rendered as a
+ * broken image in a document whose entire purpose is showing organizers the
+ * before and after. Sniffing keeps the report correct for whatever a future
+ * source returns instead of encoding one CDN's current behaviour.
+ */
+function mimeOf(thumb: Buffer): string {
+  if (thumb.length >= 2 && thumb[0] === 0xff && thumb[1] === 0xd8) {
+    return 'image/jpeg';
+  }
+  if (thumb.length >= 2 && thumb[0] === 0x89 && thumb[1] === 0x50) {
+    return 'image/png';
+  }
+  if (
+    thumb.length >= 12 &&
+    thumb.toString('ascii', 0, 4) === 'RIFF' &&
+    thumb.toString('ascii', 8, 12) === 'WEBP'
+  ) {
+    return 'image/webp';
+  }
+  return 'image/webp';
+}
+
 function img(thumb: Buffer | null): string {
   if (!thumb) {
     return '<span class="none">no image</span>';
   }
-  return `<img src="data:image/webp;base64,${thumb.toString('base64')}" alt="">`;
+  return `<img src="data:${mimeOf(thumb)};base64,${thumb.toString(
+    'base64',
+  )}" alt="">`;
+}
+
+/**
+ * Renders the Member cell.
+ *
+ * The spec promises the Meetup-to-Discord mapping on BOTH surfaces, but only
+ * the digest had it: the report showed a bare 9-digit Meetup id, which is
+ * exactly the "member 404060606 changed their photo" the mapping exists to
+ * avoid. Discord mention markup is useless in a static HTML file, so this
+ * renders the resolved Discord user id as text and always keeps the raw
+ * Meetup id alongside -- the raw id is what an organizer needs to search
+ * Meetup with, so resolving must add information rather than replace it.
+ */
+function memberCell(
+  change: IdentityChangeRecord,
+  meetupToDiscord: Map<string, string>,
+): string {
+  if (change.platform === 'discord') {
+    return escapeHtml(change.subjectId);
+  }
+  const discordUserId = meetupToDiscord.get(change.subjectId);
+  if (!discordUserId) {
+    return escapeHtml(change.subjectId);
+  }
+  return `${escapeHtml(discordUserId)} <span class="raw">(Meetup ${escapeHtml(
+    change.subjectId,
+  )})</span>`;
 }
 
 /**
@@ -69,6 +134,9 @@ export function estimateReportBytes(changes: IdentityChangeRecord[]): number {
 export function renderIdentityReport(
   changes: IdentityChangeRecord[],
   range: { from: Date; to: Date },
+  // Defaulted so a caller with no link table still renders raw ids rather
+  // than throwing -- the documented fallback, not a new failure mode.
+  meetupToDiscord: Map<string, string> = new Map(),
 ): string {
   const header = `Identity changes ${range.from
     .toISOString()
@@ -78,19 +146,23 @@ export function renderIdentityReport(
     changes.length === 0
       ? '<p class="none">No identity changes in this range.</p>'
       : `<table>
-<thead><tr><th>When (UTC)</th><th>Member</th><th>Field</th><th>Before</th><th>After</th><th>Source</th></tr></thead>
+<thead><tr><th>When (UTC)</th><th>Platform</th><th>Member</th><th>Field</th><th>Before</th><th>After</th><th>Source</th></tr></thead>
 <tbody>
 ${changes
   .map((change) => {
-    // Avatar fields always render as image cells, even when the thumb is
-    // null (CDN fetch failed): img() renders a "no image" placeholder for
-    // null. Non-avatar fields (nickname, username, ...) never have thumbs
-    // at all, so they render their text value.
+    // Avatar/photo fields always render as image cells, even when the thumb
+    // is null (CDN fetch failed, or Meetup's old-photo URL is unrecoverable):
+    // img() renders a "no image" placeholder for null. Non-photo fields
+    // (nickname, username, name, ...) never have thumbs at all, so they
+    // render their text value.
     const isAvatarField =
-      change.field === 'user_avatar' || change.field === 'member_avatar';
+      change.field === 'user_avatar' ||
+      change.field === 'member_avatar' ||
+      change.field === 'photo';
     return `<tr>
 <td class="when">${change.detectedAt.toISOString().replace('T', ' ').slice(0, 16)}</td>
-<td class="who">${escapeHtml(change.discordUserId)}</td>
+<td>${escapeHtml(PLATFORM_LABELS[change.platform])}</td>
+<td class="who">${memberCell(change, meetupToDiscord)}</td>
 <td>${escapeHtml(FIELD_LABELS[change.field])}</td>
 <td>${isAvatarField ? img(change.oldThumb) : escapeHtml(change.oldValue)}</td>
 <td>${isAvatarField ? img(change.newThumb) : escapeHtml(change.newValue)}</td>
@@ -114,6 +186,7 @@ th{background:#f5f5f5}
 img{width:64px;height:64px;object-fit:cover;border-radius:4px;display:block}
 .when{white-space:nowrap;font-variant-numeric:tabular-nums}
 .who{font-family:ui-monospace,monospace;font-size:12px}
+.raw{color:#888}
 .none{color:#888;font-style:italic}
 </style></head>
 <body>

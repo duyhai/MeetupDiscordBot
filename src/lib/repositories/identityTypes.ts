@@ -1,7 +1,16 @@
+export type IdentityPlatform = 'discord' | 'meetup';
+
 export type IdentityField =
-  'user_avatar' | 'member_avatar' | 'nickname' | 'username' | 'global_name';
+  | 'user_avatar'
+  | 'member_avatar'
+  | 'nickname'
+  | 'username'
+  | 'global_name'
+  | 'photo'
+  | 'name';
 
 export interface IdentitySnapshot {
+  scopeId: string;
   discordUserId: string;
   username: string | null;
   globalName: string | null;
@@ -10,15 +19,70 @@ export interface IdentitySnapshot {
   memberAvatarHash: string | null;
 }
 
+/**
+ * A baseline row as it is stored: the pure snapshot plus the 64px thumbnails
+ * kept alongside it.
+ *
+ * The thumbs live here rather than on `IdentitySnapshot` because a snapshot is
+ * built from a live `GuildMember` and describes only what Discord told us.
+ * The stored thumbs are ours -- fetched once and kept so that the *before*
+ * image of a future change survives Discord purging the superseded avatar.
+ */
+export interface StoredIdentitySnapshot extends IdentitySnapshot {
+  userAvatarThumb: Buffer | null;
+  memberAvatarThumb: Buffer | null;
+}
+
+/**
+ * Thumbnails to write alongside a baseline.
+ *
+ * Presence is meaningful and distinct from the value. A key that is ABSENT
+ * leaves the stored column untouched -- a nickname-only change must not
+ * discard an avatar thumb it knows nothing about. A key present with `null`
+ * clears the column, which is what an avatar change whose fetch failed (or
+ * whose new avatar is "none") has to do: the thumb column describes the hash
+ * column beside it, and leaving the superseded image there would make the
+ * next change's before-image a lie.
+ */
+export interface IdentityBaselineThumbs {
+  userAvatarThumb?: Buffer | null;
+  memberAvatarThumb?: Buffer | null;
+}
+
 export interface IdentityChange {
-  discordUserId: string;
+  platform: IdentityPlatform;
+  scopeId: string;
+  subjectId: string;
   field: IdentityField;
   oldValue: string | null;
   newValue: string | null;
 }
 
-// 'event' is historical: nothing writes it any more, but existing rows keep it.
-export type ChangeSource = 'event' | 'sweep' | 'backfill';
+/** The before/after images recorded with one change row. */
+export interface ChangeThumbs {
+  oldThumb: Buffer | null;
+  newThumb: Buffer | null;
+}
+
+/**
+ * Thumbnails keyed by `${platform}:${scopeId}:${subjectId}:${field}` -- the
+ * four parts that pick exactly one change row out of a member's change set.
+ */
+export type ChangeThumbMap = Map<string, ChangeThumbs>;
+
+/**
+ * How a change was detected.
+ *
+ * `'event'` is HISTORICAL: it was written by the gateway listeners of the
+ * first deployment, which have since been removed, and ~125 production rows
+ * still carry it. No code writes it any more and nothing should start to --
+ * it stays in the union only so the type is honest about rows the digest and
+ * report read back.
+ */
+export type ChangeSource = 'sweep' | 'backfill' | 'event';
+
+/** The sources current code may write. Excludes the historical `'event'`. */
+export type WritableChangeSource = Exclude<ChangeSource, 'event'>;
 
 export interface IdentityChangeRecord extends IdentityChange {
   id: string;

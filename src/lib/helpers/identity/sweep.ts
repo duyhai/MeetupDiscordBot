@@ -1,7 +1,9 @@
 import { Client } from 'discord.js';
 import { Logger } from 'tslog';
 
-import { ChangeSource } from '../../repositories/identityTypes.js';
+import { GUILD_ID } from '../../../constants.js';
+import { WritableChangeSource } from '../../repositories/identityTypes.js';
+import { HealBudget } from './healBudget.js';
 import { recordIdentityFor } from './monitor.js';
 
 const logger = new Logger({ name: 'identitySweep' });
@@ -17,14 +19,18 @@ const logger = new Logger({ name: 'identitySweep' });
  */
 export async function runIdentitySweep(
   client: Client,
-  source: ChangeSource,
+  source: WritableChangeSource,
+  // One budget for the whole run: baseline-thumb healing stops once the
+  // budget is spent, and whoever is left heals on a later day. The default
+  // (HEAL_BUDGET_MS) suits the daily digest-hosted sweep; the backfill
+  // script passes an effectively unlimited budget because its whole purpose
+  // is to finish the healing in one run.
+  healBudget: HealBudget = new HealBudget(),
 ): Promise<{ scanned: number; changed: number }> {
-  const guilds = await client.guilds.fetch();
-  const guildId = guilds.first()?.id;
-  if (!guildId) {
-    return { scanned: 0, changed: 0 };
-  }
-  const guild = await client.guilds.fetch(guildId);
+  // Resolve the configured guild explicitly. guilds.first() is insertion-
+  // ordered, so with a second guild present (test server, staging, a fork)
+  // the sweep would diff one guild's members against another's baselines.
+  const guild = await client.guilds.fetch(GUILD_ID);
   const members = await guild.members.fetch();
 
   let scanned = 0;
@@ -35,7 +41,7 @@ export async function runIdentitySweep(
       // Sequential on purpose: 2,008 concurrent diffs would each want a
       // Postgres connection from a pool of three.
       // eslint-disable-next-line no-await-in-loop
-      const changes = await recordIdentityFor(member, source);
+      const changes = await recordIdentityFor(member, source, healBudget);
       if (changes.length > 0) {
         changed += 1;
       }
@@ -43,6 +49,11 @@ export async function runIdentitySweep(
       // One bad member must not abandon the rest of the guild.
       logger.warn(`Sweep failed for ${member.id}: ${String(error)}`);
     }
+  }
+  if (healBudget.exhausted) {
+    logger.info(
+      'Identity sweep: thumbnail-heal budget used up; remaining baselines heal on a later sweep',
+    );
   }
   logger.info(
     `Identity sweep (${source}): ${scanned} scanned, ${changed} changed`,
