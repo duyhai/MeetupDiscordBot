@@ -3,6 +3,7 @@ import pg from 'pg';
 import { beforeAll, describe, expect, it } from 'vitest';
 
 import { GUILD_ID } from '../../src/constants.js';
+import { MeetupSnapshot } from '../../src/lib/helpers/identity/meetupSnapshot.js';
 import { PostgresIdentityRepository } from '../../src/lib/repositories/postgresIdentityRepository.js';
 import { IdentitySnapshot } from '../../src/lib/repositories/identityTypes.js';
 
@@ -24,6 +25,10 @@ if (!POSTGRES_AVAILABLE) {
 // any other scope is correctly invisible to them.
 const DEFAULT_SCOPE = GUILD_ID;
 
+// Well above anything these fixtures write, so ordinary tests never hit the
+// page cap by accident -- the cap itself is exercised separately, below.
+const AMPLE_LIMIT = 1000;
+
 const freshSnapshot = (): IdentitySnapshot => ({
   scopeId: DEFAULT_SCOPE,
   discordUserId: `discord-${crypto.randomUUID()}`,
@@ -32,6 +37,16 @@ const freshSnapshot = (): IdentitySnapshot => ({
   nickname: 'Some One',
   userAvatarHash: 'aaa',
   memberAvatarHash: null,
+});
+
+const MEETUP_SCOPE = '7595882';
+
+const freshMeetupSnapshot = (): MeetupSnapshot => ({
+  scopeId: MEETUP_SCOPE,
+  meetupMemberId: `meetup-${crypto.randomUUID()}`,
+  name: 'Jane D.',
+  username: 'janed',
+  photoId: 'p1',
 });
 
 describe.skipIf(!POSTGRES_AVAILABLE)('PostgresIdentityRepository', () => {
@@ -216,9 +231,9 @@ describe.skipIf(!POSTGRES_AVAILABLE)('PostgresIdentityRepository', () => {
           platform: 'meetup',
           scopeId: '7595882',
           subjectId: id,
-          field: 'nickname',
-          oldValue: 'A',
-          newValue: 'B',
+          field: 'photo',
+          oldValue: 'p1',
+          newValue: 'p2',
         },
       ],
       'sweep',
@@ -422,8 +437,219 @@ describe.skipIf(!POSTGRES_AVAILABLE)('PostgresIdentityRepository', () => {
     expect(none).toEqual({ changeCount: 0, thumbBytes: 0 });
   });
 
+  it('returns only changes above the given id, in id order', async () => {
+    const a = `discord-${crypto.randomUUID()}`;
+    const b = `discord-${crypto.randomUUID()}`;
+    const before = (await repo.maxChangeId()) ?? '0';
+    for (const id of [a, b]) {
+      // eslint-disable-next-line no-await-in-loop
+      await repo.recordChanges(
+        [
+          {
+            platform: 'discord',
+            scopeId: DEFAULT_SCOPE,
+            subjectId: id,
+            field: 'nickname',
+            oldValue: 'A',
+            newValue: 'B',
+          },
+        ],
+        'sweep',
+        new Map(),
+      );
+    }
+    const after = await repo.maxChangeId();
+
+    const rows = await repo.listChangesMetadataAfterId(
+      before,
+      after,
+      AMPLE_LIMIT,
+    );
+    const subjects = rows.map((r) => r.subjectId);
+
+    expect(subjects).toContain(a);
+    expect(subjects).toContain(b);
+    // Ordering is what makes the mark meaningful: the digest advances to the
+    // last id it reported, so the rows must arrive in that order.
+    expect(subjects.indexOf(a)).toBeLessThan(subjects.indexOf(b));
+    expect(rows.every((r) => Number(r.id) > Number(before))).toBe(true);
+  });
+
+  it('excludes the row at the mark itself, so nothing is reported twice', async () => {
+    const id = `discord-${crypto.randomUUID()}`;
+    await repo.recordChanges(
+      [
+        {
+          platform: 'discord',
+          scopeId: DEFAULT_SCOPE,
+          subjectId: id,
+          field: 'nickname',
+          oldValue: 'A',
+          newValue: 'B',
+        },
+      ],
+      'sweep',
+      new Map(),
+    );
+    const mark = await repo.maxChangeId();
+
+    // Yesterday's digest stored `mark` after reporting that row. Today's must
+    // start strictly above it -- `>=` would re-report the boundary row every
+    // single day.
+    const rows = await repo.listChangesMetadataAfterId(mark, mark, AMPLE_LIMIT);
+
+    expect(rows).toHaveLength(0);
+  });
+
+  it('respects the ceiling, leaving newer rows for the next run', async () => {
+    const early = `discord-${crypto.randomUUID()}`;
+    const late = `discord-${crypto.randomUUID()}`;
+    const before = (await repo.maxChangeId()) ?? '0';
+    await repo.recordChanges(
+      [
+        {
+          platform: 'discord',
+          scopeId: DEFAULT_SCOPE,
+          subjectId: early,
+          field: 'nickname',
+          oldValue: 'A',
+          newValue: 'B',
+        },
+      ],
+      'sweep',
+      new Map(),
+    );
+    const ceiling = await repo.maxChangeId();
+    await repo.recordChanges(
+      [
+        {
+          platform: 'discord',
+          scopeId: DEFAULT_SCOPE,
+          subjectId: late,
+          field: 'nickname',
+          oldValue: 'A',
+          newValue: 'B',
+        },
+      ],
+      'sweep',
+      new Map(),
+    );
+
+    const rows = await repo.listChangesMetadataAfterId(
+      before,
+      ceiling,
+      AMPLE_LIMIT,
+    );
+    const subjects = rows.map((r) => r.subjectId);
+
+    // The ceiling models a gateway event arriving mid-digest: it must not be
+    // reported now, and (because the mark advances only to the last row
+    // actually read) it must still be reportable tomorrow.
+    expect(subjects).toContain(early);
+    expect(subjects).not.toContain(late);
+  });
+
+  it('caps the number of rows returned at the given limit', async () => {
+    const before = (await repo.maxChangeId()) ?? '0';
+    for (let i = 0; i < 5; i += 1) {
+      // eslint-disable-next-line no-await-in-loop
+      await repo.recordChanges(
+        [
+          {
+            platform: 'discord',
+            scopeId: DEFAULT_SCOPE,
+            subjectId: `discord-${crypto.randomUUID()}`,
+            field: 'nickname',
+            oldValue: 'A',
+            newValue: 'B',
+          },
+        ],
+        'sweep',
+        new Map(),
+      );
+    }
+    const after = await repo.maxChangeId();
+
+    const rows = await repo.listChangesMetadataAfterId(before, after, 3);
+
+    // An outage-length backlog must not be read in a single unbounded pass;
+    // the caller advances the mark to the last row returned here, not to
+    // `after`, so the remainder is picked up by a later run.
+    expect(rows).toHaveLength(3);
+  });
+
+  it('round-trips the digest high-water mark', async () => {
+    // Values derived from the clock, not fixed literals: the mark is
+    // monotonic (see the next test), this suite runs against a persistent
+    // database, and a fixed literal could be silently rejected by a value an
+    // earlier run already left behind.
+    const base = Date.now();
+    const first = String(base + 100);
+    await repo.setDigestCursor(first);
+    expect(await repo.getDigestCursor()).toBe(first);
+
+    // Upsert, not insert: the mark advances every day for the life of the app.
+    const second = String(base + 200);
+    await repo.setDigestCursor(second);
+    expect(await repo.getDigestCursor()).toBe(second);
+  });
+
+  it('keeps the high-water mark monotonic when writes race out of order', async () => {
+    // Two overlapping digest runs (the accepted >30-minute-lease case) can
+    // finish out of order: a faster run posts through a higher id and writes
+    // it, then a slower run writes a lower one. `base` is derived from the
+    // clock so this value is guaranteed larger than any fixed id another test
+    // in this file writes to the same key.
+    const base = Date.now();
+    const high = String(base + 500);
+    const low = String(base + 400);
+
+    await repo.setDigestCursor(high);
+    await repo.setDigestCursor(low);
+
+    // A blind overwrite would move the mark backwards and re-report every
+    // row between `low` and `high` on the next run.
+    expect(await repo.getDigestCursor()).toBe(high);
+  });
+
+  it('finds the last id before a cutoff for the first run', async () => {
+    const id = `discord-${crypto.randomUUID()}`;
+    await repo.recordChanges(
+      [
+        {
+          platform: 'discord',
+          scopeId: DEFAULT_SCOPE,
+          subjectId: id,
+          field: 'nickname',
+          oldValue: 'A',
+          newValue: 'B',
+        },
+      ],
+      'sweep',
+      new Map(),
+    );
+
+    const cutoff = new Date(Date.now() + 60_000);
+    const boundary = await repo.changeIdBefore(cutoff);
+
+    expect(Number(boundary)).toBeGreaterThan(0);
+    // Everything already recorded is below the boundary, so the first digest
+    // reports nothing older than its window rather than the whole backfill.
+    const rows = await repo.listChangesMetadataAfterId(
+      boundary,
+      await repo.maxChangeId(),
+      AMPLE_LIMIT,
+    );
+    expect(rows.some((r) => r.subjectId === id)).toBe(false);
+  });
+
+  it('returns 0 from changeIdBefore when nothing precedes the cutoff', async () => {
+    expect(await repo.changeIdBefore(new Date(0))).toBe('0');
+  });
+
   it('hides changes recorded under an unmonitored scope', async () => {
     const stranger = `discord-${crypto.randomUUID()}`;
+    const before = (await repo.maxChangeId()) ?? '0';
     await repo.recordChanges(
       [
         {
@@ -447,12 +673,18 @@ describe.skipIf(!POSTGRES_AVAILABLE)('PostgresIdentityRepository', () => {
       from: new Date(Date.now() - 60_000),
       to: new Date(Date.now() + 60_000),
     };
+    const afterId = await repo.listChangesMetadataAfterId(
+      before,
+      (await repo.maxChangeId()) ?? before,
+      AMPLE_LIMIT,
+    );
     const between = await repo.listChangesBetween(window.from, window.to);
     const metadata = await repo.listChangesMetadataBetween(
       window.from,
       window.to,
     );
 
+    expect(afterId.some((r) => r.subjectId === stranger)).toBe(false);
     expect(between.some((r) => r.subjectId === stranger)).toBe(false);
     expect(metadata.some((r) => r.subjectId === stranger)).toBe(false);
   });
@@ -501,5 +733,118 @@ describe.skipIf(!POSTGRES_AVAILABLE)('PostgresIdentityRepository', () => {
 
     expect(stats.changeCount).toBeGreaterThan(0);
     expect(stats.totalBytes).toBeGreaterThan(0);
+  });
+
+  it('round-trips a Meetup snapshot', async () => {
+    const snap = freshMeetupSnapshot();
+    await repo.putMeetupSnapshot(snap);
+
+    expect(
+      await repo.getMeetupSnapshot(snap.scopeId, snap.meetupMemberId),
+    ).toEqual({ ...snap, photoThumb: null });
+  });
+
+  it('round-trips a Meetup baseline photo as bytes', async () => {
+    const snap = freshMeetupSnapshot();
+    // JPEG magic plus high bytes: Meetup serves JPEG, and a string coercion
+    // would corrupt 0xff/0xd8 rather than merely reordering them.
+    const photo = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0xfe]);
+
+    await repo.putMeetupSnapshot(snap, { photoThumb: photo });
+
+    const stored = await repo.getMeetupSnapshot(
+      snap.scopeId,
+      snap.meetupMemberId,
+    );
+    // The Meetup baseline keeps a photo id, never the URL behind it, so these
+    // bytes are the only possible before-image for a future photo change.
+    expect(stored?.photoThumb?.equals(photo)).toBe(true);
+  });
+
+  it('leaves a stored Meetup photo alone when a put supplies none', async () => {
+    const snap = freshMeetupSnapshot();
+    const photo = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0xfe]);
+    await repo.putMeetupSnapshot(snap, { photoThumb: photo });
+
+    // A name-only change carries no photo information.
+    await repo.putMeetupSnapshot({ ...snap, name: 'Jane E.' });
+
+    const stored = await repo.getMeetupSnapshot(
+      snap.scopeId,
+      snap.meetupMemberId,
+    );
+    expect(stored?.name).toBe('Jane E.');
+    // A blind overwrite would discard the image on every name or username
+    // edit, and Meetup cannot serve it again.
+    expect(stored?.photoThumb?.equals(photo)).toBe(true);
+  });
+
+  it('overwrites an existing Meetup snapshot rather than duplicating it', async () => {
+    const snap = freshMeetupSnapshot();
+    await repo.putMeetupSnapshot(snap);
+    await repo.putMeetupSnapshot({ ...snap, photoId: 'p2' });
+
+    const stored = await repo.getMeetupSnapshot(
+      snap.scopeId,
+      snap.meetupMemberId,
+    );
+    expect(stored?.photoId).toBe('p2');
+  });
+
+  it('erases a Meetup member baseline as well as its change history', async () => {
+    const snap = freshMeetupSnapshot();
+    await repo.putMeetupSnapshot(snap);
+    await repo.recordChanges(
+      [
+        {
+          platform: 'meetup',
+          scopeId: snap.scopeId,
+          subjectId: snap.meetupMemberId,
+          field: 'name',
+          oldValue: 'Old Name',
+          newValue: snap.name,
+        },
+      ],
+      'sweep',
+      new Map(),
+    );
+
+    const removed = await repo.deleteMemberIdentity(
+      'meetup',
+      snap.scopeId,
+      snap.meetupMemberId,
+    );
+
+    expect(removed).toBeGreaterThan(0);
+    // Before this task, deleteMemberIdentity only ever cleared the Discord
+    // baseline table (member_identity). A Meetup erasure that left this row
+    // behind would keep re-seeding the "before" side of the next diff from
+    // identity that was supposedly erased.
+    expect(
+      await repo.getMeetupSnapshot(snap.scopeId, snap.meetupMemberId),
+    ).toBeUndefined();
+  });
+
+  it("erasing a Meetup member's baseline leaves a Discord baseline untouched", async () => {
+    const meetupSnap = freshMeetupSnapshot();
+    const discordSnap = freshSnapshot();
+    await repo.putMeetupSnapshot(meetupSnap);
+    await repo.putSnapshot(discordSnap);
+
+    await repo.deleteMemberIdentity(
+      'meetup',
+      meetupSnap.scopeId,
+      meetupSnap.meetupMemberId,
+    );
+
+    // The two platforms keep separate baseline tables; a Meetup erasure must
+    // not reach into member_identity and wipe an unrelated Discord baseline.
+    expect(
+      await repo.getSnapshot(discordSnap.scopeId, discordSnap.discordUserId),
+    ).toEqual({
+      ...discordSnap,
+      userAvatarThumb: null,
+      memberAvatarThumb: null,
+    });
   });
 });

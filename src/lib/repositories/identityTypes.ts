@@ -1,7 +1,13 @@
 export type IdentityPlatform = 'discord' | 'meetup';
 
 export type IdentityField =
-  'user_avatar' | 'member_avatar' | 'nickname' | 'username' | 'global_name';
+  | 'user_avatar'
+  | 'member_avatar'
+  | 'nickname'
+  | 'username'
+  | 'global_name'
+  | 'photo'
+  | 'name';
 
 export interface IdentitySnapshot {
   scopeId: string;
