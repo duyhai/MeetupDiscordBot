@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import {
   PaginationCapError,
+  PaginationStallError,
   getPaginatedData,
   mapWithConcurrency,
 } from '../../../../src/lib/client/meetup/paginationHelper.js';
@@ -152,31 +153,47 @@ describe('getPaginatedData', () => {
     expect(call.mock.calls[1][0].after).toBe('c1');
   });
 
-  it('stops when the cursor does not advance', async () => {
+  it('throws a named error when the cursor does not advance', async () => {
     // The runaway shape: the API insists there is another page but hands back
     // the same cursor, so `after` never moves and page 1 is re-fetched
-    // forever, accumulating into one array until the dyno is OOM-killed --
-    // inside the digest, while the day-claim is held.
+    // forever. Silently returning partial results here hid mid-roster
+    // truncation: stuck on page 2 of 60 would quietly drop 58 pages while
+    // every caller believed it had the full roster. The stall must be loud,
+    // like the page cap.
     const call = vi
       .fn<FakeCall>()
       .mockResolvedValue(
         page(['a'], { endCursor: 'stuck', hasNextPage: true }),
       );
 
-    const result = await getPaginatedData(call);
-
+    await expect(getPaginatedData(call)).rejects.toBeInstanceOf(
+      PaginationStallError,
+    );
     expect(call.mock.calls.length).toBeLessThanOrEqual(2);
-    expect(result).toEqual(['a', 'a']);
   });
 
-  it('stops when hasNextPage is true but the cursor is missing', async () => {
+  it('does not double-count the re-served page in the stall error', async () => {
+    // The second fetch with an unmoved `after` re-serves page 1; its nodes
+    // are duplicates and must not be counted as collected records.
+    const call = vi
+      .fn<FakeCall>()
+      .mockResolvedValue(
+        page(['a'], { endCursor: 'stuck', hasNextPage: true }),
+      );
+
+    await expect(getPaginatedData(call)).rejects.toThrow(/1 records collected/);
+  });
+
+  it('throws a named error when hasNextPage is true but the cursor is missing', async () => {
     const call = vi
       .fn<FakeCall>()
       .mockResolvedValue(
         page(['a'], { endCursor: undefined, hasNextPage: true }),
       );
 
-    expect(await getPaginatedData(call)).toEqual(['a']);
+    await expect(getPaginatedData(call)).rejects.toBeInstanceOf(
+      PaginationStallError,
+    );
     expect(call).toHaveBeenCalledTimes(1);
   });
 
