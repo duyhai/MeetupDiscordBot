@@ -88,5 +88,28 @@ describe('refreshMeetupToken', () => {
 
     expect(error).toBeInstanceOf(MeetupTokenRefreshError);
     expect((error as MeetupTokenRefreshError).status).toBe(401);
+    expect((error as MeetupTokenRefreshError).oauthError).toBe(
+      'invalid_client',
+    );
+  });
+
+  it.each([
+    ['is not JSON', 'Bad Gateway'],
+    ['has no error field', { message: 'nope' }],
+    // Only a short OAuth-style code is carried; anything else could be the
+    // provider echoing request data, and this value gets logged.
+    [
+      'carries something that is not an error code',
+      { error: 'token abc123 was REJECTED!' },
+    ],
+  ])('carries no OAuth error code when the body %s', async (_name, body) => {
+    nock('https://secure.meetup.com').post('/oauth2/access').reply(400, body);
+
+    const error: unknown = await refreshMeetupToken('revoked').catch(
+      (caught: unknown) => caught,
+    );
+
+    expect(error).toBeInstanceOf(MeetupTokenRefreshError);
+    expect((error as MeetupTokenRefreshError).oauthError).toBeUndefined();
   });
 });

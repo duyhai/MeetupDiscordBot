@@ -92,11 +92,12 @@ async function showMeetupTokenUrl(
  * A wrapper for Meetup commands to handle:
  * 1. Authentication
  * 2. Grabbing token, silently refreshing an expired one
- * @param commandFn Lambda for command implementation
+ * @param commandFn Lambda for command implementation. Also handed the token
+ *   set the client was built from, for the one command that shows it.
  */
 export async function withMeetupClient(
   interaction: ButtonInteraction | CommandInteraction | ModalSubmitInteraction,
-  commandFn: (meetupClient: GqlMeetupClient) => Promise<void>,
+  commandFn: (meetupClient: GqlMeetupClient, tokens: Tokens) => Promise<void>,
 ) {
   const tokenKey = meetupTokenKey(interaction.user.id);
   const cache = await ApplicationCache();
@@ -105,13 +106,15 @@ export async function withMeetupClient(
     logger.info(
       `Tokens are not present for ${interaction.user.username} at ${tokenKey}. Getting token through OAuth`,
     );
+    // A set that could not be refreshed because Meetup was unreachable is
+    // kept for next time. It is not an authorization: only a different
+    // value landing at the key means the member finished connecting. Noted
+    // before the prompt goes out, so an authorization that completes while
+    // it is being sent is not mistaken for the kept one.
+    const unusable = await cache.get(tokenKey);
     await showMeetupTokenUrl(interaction);
     // Generous window: the iOS hand-off to Safari can require a sign-in
     // before consent, and the interaction token lasts ~15 minutes.
-    // A set that could not be refreshed because Meetup was unreachable is
-    // kept for next time. It is not an authorization: only a different
-    // value landing at the key means the member finished connecting.
-    const unusable = await cache.get(tokenKey);
     const waitResult = await waitForMeetupTokens(
       async (key) => {
         const rawTokens = await cache.get(key);
@@ -130,5 +133,5 @@ export async function withMeetupClient(
     tokens = JSON.parse(waitResult.rawTokens) as Tokens;
   }
   const client = new GqlMeetupClient(tokens.accessToken);
-  await commandFn(client);
+  await commandFn(client, tokens);
 }

@@ -73,42 +73,70 @@ const isFresh = (tokens: Tokens) =>
   tokens.expiresAt - EXPIRY_SKEW_MS > Date.now();
 
 /**
- * Statuses that mean Meetup has refused this refresh token for good. Anything
- * else -- a timeout, a network error, a 5xx, a 429 -- says nothing about the
- * grant, so the connection is kept for the next attempt.
+ * The one answer that means this member's grant is dead. Everything else
+ * says nothing about the grant, so the connection is kept for the next
+ * attempt: a timeout, a network error, a 5xx, a 429 -- and `invalid_client`,
+ * which is OUR credentials being wrong. A rotated or mistyped MEETUP_SECRET
+ * fails every refresh at once, and must not cost every member who runs a
+ * command their connection.
  */
-const REJECTED_GRANT_STATUSES = [400, 401];
-
 const isRejectedGrant = (error: unknown) =>
   error instanceof MeetupTokenRefreshError &&
-  REJECTED_GRANT_STATUSES.includes(error.status);
+  error.oauthError === 'invalid_grant';
 
 /**
  * What can safely be said about a failed refresh. The error's message embeds
  * Meetup's raw response body, which is untrusted and may echo the credential
- * that was sent, so only the HTTP status or the error's class name is kept.
+ * that was sent, so only the HTTP status, the OAuth error code, or the
+ * error's class name is kept.
  */
 function describeRefreshFailure(error: unknown): string {
   if (error instanceof MeetupTokenRefreshError) {
-    return `HTTP ${error.status}`;
+    return error.oauthError
+      ? `HTTP ${error.status} ${error.oauthError}`
+      : `HTTP ${error.status}`;
   }
   return error instanceof Error ? error.name : 'unknown error';
 }
 
 /**
- * Removes the set only if it is still the one that was judged unusable. A
- * newer one may have landed since -- another process won the refresh during
- * a deploy overlap, or the member just re-authorized -- and deleting that
- * would throw away a working connection.
+ * Whether the stored set is still the one a refresh started from. It may not
+ * be: another process won the refresh during a deploy overlap, the member
+ * just re-authorized, or a moderator unlinked them. Whatever is there now is
+ * the truth, so a changed set is neither deleted nor overwritten; if it is a
+ * usable one it is handed back for this command to run on.
  */
-async function removeIfUnchanged(
+async function readSinceRefreshStarted(
   cache: KeyValueCache,
   key: string,
   rawTokens: string | undefined,
-): Promise<void> {
-  if (rawTokens !== undefined && (await cache.get(key)) === rawTokens) {
+): Promise<{ changed: boolean; replacement?: Tokens }> {
+  const current = await cache.get(key);
+  if (current === rawTokens) {
+    return { changed: false };
+  }
+  const tokens = current ? parseTokens(current) : undefined;
+  return {
+    changed: true,
+    replacement: tokens && isFresh(tokens) ? tokens : undefined,
+  };
+}
+
+/** Removes the set judged unusable, unless something else has replaced it. */
+async function removeUnlessReplaced(
+  cache: KeyValueCache,
+  key: string,
+  rawTokens: string | undefined,
+): Promise<Tokens | undefined> {
+  const { changed, replacement } = await readSinceRefreshStarted(
+    cache,
+    key,
+    rawTokens,
+  );
+  if (!changed && rawTokens !== undefined) {
     await cache.remove(key);
   }
+  return replacement;
 }
 
 async function refreshStoredTokens(
@@ -127,8 +155,7 @@ async function refreshStoredTokens(
 
   if (!tokens?.refreshToken) {
     // Nothing here can ever be refreshed.
-    await removeIfUnchanged(cache, key, rawTokens);
-    return undefined;
+    return removeUnlessReplaced(cache, key, rawTokens);
   }
 
   let refreshed: Tokens;
@@ -141,13 +168,14 @@ async function refreshStoredTokens(
         `Could not refresh Meetup tokens for Discord user ${discordUserId} ` +
           `(${failure}); the grant was rejected, so they will be asked to reconnect`,
       );
-      await removeIfUnchanged(cache, key, rawTokens);
-    } else {
-      logger.warn(
-        `Could not refresh Meetup tokens for Discord user ${discordUserId} ` +
-          `(${failure}); keeping the connection for the next attempt`,
-      );
+      // A rejection is also what the loser of a deploy-overlap race sees,
+      // after the winner has stored a good set: use that one.
+      return removeUnlessReplaced(cache, key, rawTokens);
     }
+    logger.warn(
+      `Could not refresh Meetup tokens for Discord user ${discordUserId} ` +
+        `(${failure}); keeping the connection for the next attempt`,
+    );
     return undefined;
   }
 
@@ -155,13 +183,15 @@ async function refreshStoredTokens(
   // resolveOrganizerTokens: the tokens in hand are good, so this command runs
   // on them whatever happens to the write.
   try {
-    const current = await cache.get(key);
-    if (current !== rawTokens) {
-      // The set changed while the refresh was in the air. Forgotten (a
-      // moderator unlinked them): do not write the connection back. Replaced
-      // (another process, or a new authorization): that one is the truth.
-      const replacement = current ? parseTokens(current) : undefined;
-      return replacement && isFresh(replacement) ? replacement : undefined;
+    const { changed, replacement } = await readSinceRefreshStarted(
+      cache,
+      key,
+      rawTokens,
+    );
+    if (changed) {
+      // Forgotten while the refresh was in the air: do not write the
+      // connection back. Replaced: run on the replacement.
+      return replacement;
     }
     await storeMeetupTokens(cache, discordUserId, refreshed);
     logger.info(`Refreshed Meetup tokens for Discord user ${discordUserId}`);

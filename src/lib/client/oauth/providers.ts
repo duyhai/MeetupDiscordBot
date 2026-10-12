@@ -85,18 +85,40 @@ export async function exchangeMeetupCode(code: string): Promise<Tokens> {
 }
 
 /**
- * Meetup answered a refresh request with a non-2xx status. `status` is there
- * so callers can tell a rejected grant from an outage without parsing the
- * message -- which embeds Meetup's raw response body and is not safe to log
- * anywhere a member or a Discord channel can read it.
+ * The OAuth `error` code from a token-endpoint error body (RFC 6749 §5.2),
+ * e.g. `invalid_grant`. Only a short code-shaped value is accepted: this is
+ * the one part of the body callers may log, and the rest of it is untrusted
+ * and may echo the credentials that were sent.
+ */
+function oauthErrorCodeFrom(body: string): string | undefined {
+  try {
+    const { error } = JSON.parse(body) as { error?: unknown };
+    return typeof error === 'string' && /^[a-z_]{1,40}$/.test(error)
+      ? error
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Meetup answered a refresh request with a non-2xx status. `status` and
+ * `oauthError` are there so callers can tell a dead grant (`invalid_grant`)
+ * from a problem with our own client credentials (`invalid_client`) or an
+ * outage without parsing the message -- which embeds Meetup's raw response
+ * body and is not safe to log anywhere a member or a Discord channel can
+ * read it.
  */
 export class MeetupTokenRefreshError extends Error {
+  readonly oauthError: string | undefined;
+
   constructor(
     readonly status: number,
     body: string,
   ) {
     super(`Meetup token refresh failed: [${status}] ${body}`);
     this.name = 'MeetupTokenRefreshError';
+    this.oauthError = oauthErrorCodeFrom(body);
   }
 }
 
