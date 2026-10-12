@@ -41,6 +41,18 @@ export async function storeMeetupTokens(
   );
 }
 
+/**
+ * Drops the member's saved Meetup connection, so the next Meetup command
+ * asks them to connect again. This is how a wrong-account connection gets
+ * undone: while a token set is stored it is reused and refreshed silently.
+ */
+export async function forgetMeetupTokens(
+  cache: KeyValueCache,
+  discordUserId: string,
+): Promise<void> {
+  await cache.remove(meetupTokenKey(discordUserId));
+}
+
 function parseTokens(rawTokens: string): Tokens | undefined {
   try {
     const tokens = JSON.parse(rawTokens) as Tokens;

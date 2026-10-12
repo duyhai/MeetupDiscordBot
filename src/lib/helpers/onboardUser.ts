@@ -13,6 +13,7 @@ import { GqlMeetupClient } from '../client/meetup/gqlClient.js';
 import { MemberGender } from '../client/meetup/types.js';
 import { logAlert } from './discordLogger.js';
 import { updateBaselineSilently } from './identity/monitor.js';
+import { forgetMeetupTokens } from './meetupTokens.js';
 import { recordManualOnboard, recordMeetupLink } from './memberLink.js';
 import { removeReverifyRole } from './reverify.js';
 
@@ -217,7 +218,7 @@ export async function selfOnboardUser(
 
   if (!isMeetupGroupMember) {
     const cache = await ApplicationCache();
-    await cache.remove(`${interaction.user.id}-meetup-tokens`);
+    await forgetMeetupTokens(cache, interaction.user.id);
 
     logger.warn(
       `Non-member user failed to onboard: ${interaction.user.username}.
