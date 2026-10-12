@@ -8,6 +8,8 @@ import { Discord, Slash, SlashOption } from 'discordx';
 import { Logger } from 'tslog';
 
 import { logActivity } from '../../lib/helpers/discordLogger.js';
+import { forgetMeetupTokens } from '../../lib/helpers/meetupTokens.js';
+import { ApplicationCache } from '../../util/cache.js';
 import {
   discordCommandWrapper,
   requireModOrOrganizer,
@@ -18,9 +20,13 @@ const logger = new Logger({ name: 'UnlinkAccountCommands' });
 
 const strings = {
   notAllowed: 'Only moderators and organizers can unlink accounts.',
-  noRow: (user: User) => `${user.toString()} has no member record to unlink.`,
+  noRow: (user: User) =>
+    `${user.toString()} has no member record to unlink. Their saved Meetup ` +
+    'connection was cleared, so they will be asked to connect again.',
   done: (user: User) =>
-    `Unlinked ${user.toString()}. They can re-link via the Get Verified button.`,
+    `Unlinked ${user.toString()} and cleared their saved Meetup connection. ` +
+    'They will be asked to connect again when they re-link via the Get ' +
+    'Verified button.',
 };
 
 @Discord()
@@ -45,6 +51,10 @@ export class UnlinkAccountCommands {
   ) {
     await discordCommandWrapper(interaction, async () => {
       await requireModOrOrganizer(interaction, strings.notAllowed);
+
+      // Before the row check: a blocked duplicate link leaves a saved
+      // connection but no row, and that connection is the thing to undo.
+      await forgetMeetupTokens(await ApplicationCache(), user.id);
 
       const repo = await ApplicationMemberRepository();
       const row = await repo.findByDiscordId(user.id);

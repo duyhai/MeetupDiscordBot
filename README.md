@@ -28,10 +28,13 @@ https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/workin
   self-contained HTML report of member photo and name changes over the last
   N days (default 7), with before/after thumbnails embedded, covering both
   Discord and Meetup.
-- `/meetup_get_token` — sends your Meetup access token privately. Mods and
-  organizers additionally see a long-lived refresh token, used to set
-  `MEETUP_ORGANIZER_REFRESH_TOKEN` and enable Meetup-side identity
-  monitoring.
+- `/meetup_get_token [sweep_credential]` — sends your Meetup access token
+  privately, and nothing else by default. With `sweep_credential: True`, mods
+  and organizers running it in the server additionally see a long-lived
+  refresh token, used to set `MEETUP_ORGANIZER_REFRESH_TOKEN` and enable
+  Meetup-side identity monitoring; the bot then forgets their Meetup
+  connection, so they are asked to connect again on their next Meetup
+  command. See "Where the credential must come from" below.
 
 # Testing
 
@@ -140,8 +143,13 @@ diff a member before the other advances the baseline, so the same change is
 recorded twice.
 
 1. Deploy (merge to `main`). The migration runs on the first identity query.
-2. Run `/meetup_get_token` as an organizer, copy the refresh token from the
-   reply, and set it as `MEETUP_ORGANIZER_REFRESH_TOKEN` in Heroku config.
+2. Get the sweep's credential from a **dedicated Meetup account**: one that
+   is an organizer of the group and that nobody uses for their own Meetup
+   commands. Sign in to meetup.com as that account, run
+   `/meetup_get_token sweep_credential:True` in the server as an organizer,
+   copy the refresh token from the reply, and set it as
+   `MEETUP_ORGANIZER_REFRESH_TOKEN` in Heroku config. See "Where the
+   credential must come from" below before doing this.
 3. Run the Meetup backfill and confirm it reports 0 changes:
 
        DATABASE_URL=$(heroku config:get DATABASE_URL -a meetup-discord-bot) \
@@ -159,6 +167,32 @@ Either backfill script exiting non-zero (including "0 scanned") means something 
 wrong with credentials or connectivity, not that the roster is empty --
 resolve it before the next digest runs.
 
+#### Where the credential must come from
+
+A Meetup grant must have exactly one thing refreshing it. The sweep refreshes
+its credential every day, and the bot also refreshes each member's own
+connection whenever they use a Meetup command. If both held the same grant
+and Meetup rotates refresh tokens, each refresh would invalidate the other
+holder's copy: the sweep would stop, or the member would be asked to
+reconnect, at random.
+
+So the seed must never be a token whose owner also uses Meetup commands:
+
+- Use a dedicated Meetup account for monitoring, with organizer access to the
+  group so it can read the roster.
+- The refresh token is only shown with `sweep_credential: True`. Without the
+  option the command shows an access token and leaves your connection alone.
+- `/meetup_get_token` returns the token of whichever Meetup account your
+  Discord user is connected with. If the reply comes back **without** a
+  "connect your Meetup account" prompt first, it is from a connection saved
+  earlier -- most likely your own account. Discard it, sign in to meetup.com
+  as the dedicated account, and run the command again; this time you will be
+  prompted, and the reply is the dedicated account's token.
+- Showing the refresh token hands the connection over: the bot forgets it
+  straight after the reply, so the sweep is the only holder. The next Meetup
+  command you run will ask you to connect again -- sign back in to meetup.com
+  as yourself first.
+
 #### Replacing the Meetup organizer credential
 
 Which steps you need depends on whether the *stored* credential still works.
@@ -166,9 +200,11 @@ The sweep resolves the stored pair first and only falls back to the config
 var, so the two cases are genuinely different:
 
 - **The grant was revoked or expired** (the sweep is alerting). The stored
-  refresh token now fails, so the fallback already fires. Run
-  `/meetup_get_token`, copy the refresh token, set
-  `MEETUP_ORGANIZER_REFRESH_TOKEN`. Nothing else is needed.
+  refresh token now fails, so the fallback already fires. Signed in to
+  meetup.com as the dedicated account (see above), run
+  `/meetup_get_token sweep_credential:True`,
+  copy the refresh token, set `MEETUP_ORGANIZER_REFRESH_TOKEN`. Nothing else
+  is needed.
 - **The stored pair is still valid but you want a different grant** -- a new
   organizer, or rotating away from someone leaving. Setting the config var
   alone changes nothing, because the still-working stored pair keeps winning.
@@ -177,7 +213,8 @@ var, so the two cases are genuinely different:
       DATABASE_URL=$(heroku config:get DATABASE_URL -a meetup-discord-bot) \
       yarn tsx scripts/backfillMeetupIdentity.ts --clear-credential
 
-  Then set `MEETUP_ORGANIZER_REFRESH_TOKEN` to the new refresh token. The
+  Then set `MEETUP_ORGANIZER_REFRESH_TOKEN` to the new refresh token, obtained
+  from the dedicated account as above. The
   next sweep seeds from it and stores the result.
 
 Revoking the old grant itself is done from Meetup's application settings;

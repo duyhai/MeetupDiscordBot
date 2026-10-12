@@ -6,22 +6,46 @@ import {
 } from 'discord.js';
 import { Logger } from 'tslog';
 
+import { ApplicationCache } from '../../util/cache.js';
 import { linkStr } from '../../util/discord.js';
 import { ApplicationMemberRepository } from '../../util/memberRepository.js';
 import { MeetupIdConflictError } from '../repositories/types.js';
 import { logActivity, logAlert } from './discordLogger.js';
+import { forgetMeetupTokens } from './meetupTokens.js';
 
 const logger = new Logger({ name: 'memberLink' });
 
 const strings = {
-  duplicateAccount:
-    'This Meetup account is already linked to another Discord account — please contact the mods.',
+  // Names the account because a common cause is a browser still logged in
+  // to someone else's meetup.com account, and reconnecting alone hands that
+  // same account straight back.
+  duplicateAccount: (meetupName: string) =>
+    `The Meetup account you connected, "${meetupName}", is already linked ` +
+    "to another Discord account. If that's the wrong account, log out of " +
+    'meetup.com in your browser, log back in with your own account, and ' +
+    'try again. If it is your account, please contact the mods.',
 };
 
 export class DuplicateMeetupAccountError extends Error {
   // The duplicate alert is posted where this is thrown; the marker tells
   // discordCommandWrapper to skip its generic failure alert.
   readonly alertHandled = true;
+}
+
+/**
+ * The member connected a Meetup account that belongs to someone else. Their
+ * saved connection has to go with the block: kept, it would be reused
+ * silently on every retry and they could never choose a different account.
+ * Best-effort, because a cache failure must not turn the block into a pass.
+ */
+async function forgetBlockedConnection(discordUserId: string) {
+  try {
+    await forgetMeetupTokens(await ApplicationCache(), discordUserId);
+  } catch (error) {
+    logger.error(
+      `Could not clear the blocked Meetup connection: ${String(error)}`,
+    );
+  }
 }
 
 export interface MeetupLinkInfo {
@@ -57,7 +81,10 @@ export async function recordMeetupLink(
         }>.`,
         fields: [{ name: 'Meetup ID', value: info.meetupId }],
       });
-      throw new DuplicateMeetupAccountError(strings.duplicateAccount);
+      await forgetBlockedConnection(user.id);
+      throw new DuplicateMeetupAccountError(
+        strings.duplicateAccount(info.meetupName),
+      );
     }
 
     const existing = await repo.findByDiscordId(user.id);
@@ -102,7 +129,10 @@ export async function recordMeetupLink(
         description: `${user.toString()} tried to link ${meetupLink}, already linked to another member (caught by unique constraint).`,
         fields: [{ name: 'Meetup ID', value: info.meetupId }],
       });
-      throw new DuplicateMeetupAccountError(strings.duplicateAccount);
+      await forgetBlockedConnection(user.id);
+      throw new DuplicateMeetupAccountError(
+        strings.duplicateAccount(info.meetupName),
+      );
     }
     logger.error(`Failed to record Meetup link: ${String(error)}`);
     await logAlert(client, {

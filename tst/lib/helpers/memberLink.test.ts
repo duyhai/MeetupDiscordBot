@@ -19,6 +19,17 @@ vi.mock('../../../src/util/memberRepository.js', () => ({
   ApplicationMemberRepository: vi.fn(),
 }));
 
+const savedConnections = vi.hoisted(() => new Map<string, string>());
+vi.mock('../../../src/util/cache.js', () => ({
+  ApplicationCache: () =>
+    Promise.resolve({
+      remove: (key: string) => {
+        savedConnections.delete(key);
+        return Promise.resolve();
+      },
+    }),
+}));
+
 const info = {
   meetupId: 'meetup-1',
   meetupName: 'Test User',
@@ -38,6 +49,9 @@ describe('recordMeetupLink', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     repo = new InMemoryMemberRepository();
+    savedConnections.clear();
+    savedConnections.set('discord-1-meetup-tokens', 'owner');
+    savedConnections.set('discord-2-meetup-tokens', 'wrong-account');
     vi.mocked(memberRepository.ApplicationMemberRepository).mockResolvedValue(
       repo,
     );
@@ -69,6 +83,37 @@ describe('recordMeetupLink', () => {
     expect(vi.mocked(discordLogger.logAlert)).toHaveBeenCalledTimes(1);
   });
 
+  it('forgets the blocked account, so the retry asks which account to connect', async () => {
+    await recordMeetupLink(makeInteraction('discord-1'), info, 'self_onboard');
+
+    await expect(
+      recordMeetupLink(makeInteraction('discord-2'), info, 'sync_v2'),
+    ).rejects.toThrow(DuplicateMeetupAccountError);
+
+    // Kept, the saved connection would be reused silently on every retry and
+    // the member could never get past the duplicate block on their own.
+    expect(savedConnections.has('discord-2-meetup-tokens')).toBe(false);
+    expect(savedConnections.has('discord-1-meetup-tokens')).toBe(true);
+  });
+
+  it('names the blocked account and says how to switch to the right one', async () => {
+    await recordMeetupLink(makeInteraction('discord-1'), info, 'self_onboard');
+
+    let message = '';
+    try {
+      await recordMeetupLink(makeInteraction('discord-2'), info, 'sync_v2');
+    } catch (error: unknown) {
+      message = (error as Error).message;
+    }
+
+    // Often a shared browser still logged in to someone else's meetup.com
+    // account; reconnecting alone hands that same account back.
+    expect(message).toContain('Test User');
+    expect(message).toMatch(/already linked to another Discord account/);
+    expect(message).toMatch(/log out of meetup\.com/i);
+    expect(message).toMatch(/contact the mods/i);
+  });
+
   it('blocks a concurrent duplicate link that slips past the pre-check', async () => {
     await recordMeetupLink(makeInteraction('discord-1'), info, 'self_onboard');
     // Simulate the check-then-write race: the pre-check misses the row that
@@ -83,6 +128,7 @@ describe('recordMeetupLink', () => {
     expect(vi.mocked(discordLogger.logAlert)).toHaveBeenCalledTimes(1);
     const [, entry] = vi.mocked(discordLogger.logAlert).mock.calls[0];
     expect(entry.title).toContain('Duplicate Meetup link blocked');
+    expect(savedConnections.has('discord-2-meetup-tokens')).toBe(false);
   });
 
   it('alerts (but allows) when a user switches Meetup accounts', async () => {

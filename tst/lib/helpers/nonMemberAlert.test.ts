@@ -73,7 +73,7 @@ describe('non-member verification alert', () => {
   it('posts the Meetup profile so organizers can follow up', async () => {
     await expect(
       selfOnboardUser(fakeClient(PROFILE_URL), fakeInteraction()),
-    ).rejects.toThrow(/not a member on Meetup/);
+    ).rejects.toThrow(/not a member of our Meetup group/);
 
     const entry = alertPayload();
     expect(entry.title).toBe('Non-member tried to verify');
@@ -92,7 +92,7 @@ describe('non-member verification alert', () => {
   it('falls back to the member id when Meetup returns no profile url', async () => {
     await expect(
       selfOnboardUser(fakeClient(''), fakeInteraction()),
-    ).rejects.toThrow(/not a member on Meetup/);
+    ).rejects.toThrow(/not a member of our Meetup group/);
 
     const entry = alertPayload();
     // An empty memberUrl must not render as a broken masked link...
@@ -104,6 +104,22 @@ describe('non-member verification alert', () => {
         expect.objectContaining({ name: 'Meetup ID', value: MEETUP_ID }),
       ]),
     );
+  });
+
+  it('tells the member which account they connected and how to switch', async () => {
+    let message = '';
+    try {
+      await selfOnboardUser(fakeClient(PROFILE_URL), fakeInteraction());
+    } catch (error: unknown) {
+      message = (error as Error).message;
+    }
+
+    // The usual cause is being logged in to meetup.com with a different
+    // account than the one in the group; reconnecting alone hands the same
+    // account back, so the message has to name it and say to log out.
+    expect(message).toContain('Jane D.');
+    expect(message).toMatch(/log out of meetup\.com/i);
+    expect(message).toMatch(/join the group/i);
   });
 
   it('marks the error handled so the wrapper skips its generic alert', async () => {

@@ -356,6 +356,9 @@ describe('runMeetupSweep', () => {
     expect(logAlert).toHaveBeenCalledTimes(1);
     const [, entry] = vi.mocked(logAlert).mock.calls[0];
     expect(entry.description).toContain('MEETUP_ORGANIZER_REFRESH_TOKEN');
+    // The seed must not be a grant somebody also uses for their own Meetup
+    // commands: two refreshers of one grant can invalidate each other.
+    expect(entry.description).toMatch(/dedicated Meetup account/i);
   });
 
   it('logs instead of alerting when there is no client', async () => {
