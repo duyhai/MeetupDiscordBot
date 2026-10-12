@@ -1,6 +1,10 @@
 import { CommandInteraction } from 'discord.js';
 import { Discord, Slash } from 'discordx';
 import { Tokens } from '../../lib/client/discord/types.js';
+import {
+  forgetMeetupTokens,
+  meetupTokenKey,
+} from '../../lib/helpers/meetupTokens.js';
 import { ApplicationCache } from '../../util/cache.js';
 import {
   discordCommandWrapper,
@@ -18,7 +22,7 @@ export class MeetupGetTokenCommands {
   async meetupGetTokenHandler(interaction: CommandInteraction) {
     await discordCommandWrapper(interaction, async () => {
       await withMeetupClient(interaction, async (_meetupClient) => {
-        const tokenKey = `${interaction.user.id}-meetup-tokens`;
+        const tokenKey = meetupTokenKey(interaction.user.id);
         const cache = await ApplicationCache();
         const rawTokens = await cache.get(tokenKey);
 
@@ -69,6 +73,12 @@ export class MeetupGetTokenCommands {
                 '```',
                 tokens.refreshToken,
                 '```',
+                '⚠️ This connection has now been handed over: the bot has',
+                'forgotten it so that the sweep is the only thing refreshing',
+                'this grant, and you will be asked to connect again the next',
+                'time you use a Meetup command. Only use a token from the',
+                'dedicated monitoring Meetup account as the sweep credential,',
+                'never one from an account that also runs Meetup commands.',
               ]
             : [];
 
@@ -85,6 +95,15 @@ export class MeetupGetTokenCommands {
             ...refreshSection,
           ].join('\n'),
         });
+
+        // Whoever was shown the refresh token may make it the sweep's
+        // credential, and a grant must have exactly one refresher: if Meetup
+        // rotates refresh tokens, this member's next command and the sweep
+        // would each invalidate the other's copy. After the reply, so a
+        // failed delivery does not cost them the connection.
+        if (refreshSection.length > 0) {
+          await forgetMeetupTokens(cache, interaction.user.id);
+        }
       });
     });
   }

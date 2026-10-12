@@ -11,7 +11,10 @@ const TOKENS = {
   expiresAt: Date.now() + 3600 * 1000,
 };
 
-const cache = vi.hoisted(() => ({ get: vi.fn() }));
+const cache = vi.hoisted(() => ({
+  get: vi.fn(),
+  remove: vi.fn().mockResolvedValue(undefined),
+}));
 
 vi.mock('../../../src/util/cache.js', () => ({
   ApplicationCache: vi.fn(async () => cache),
@@ -110,6 +113,28 @@ describe('meetup_get_token refresh token gate', () => {
     // MEETUP_ORGANIZER_REFRESH_TOKEN in Heroku. requireModOrOrganizer already
     // treats admin as sufficient; this gate was the odd one out.
     expect(content).toContain(TOKENS.refreshToken);
+  });
+
+  it('hands the connection over once the refresh token has been shown', async () => {
+    const content = await runCommand([SERVER_ROLES.organizer]);
+
+    // The refresh token is about to become the sweep's credential. If this
+    // member's own commands kept refreshing the same grant, a rotation on
+    // either side would invalidate the other.
+    expect(cache.remove).toHaveBeenCalledWith('discord-1-meetup-tokens');
+    expect(content).toMatch(/connect again/i);
+  });
+
+  it("keeps a non-organizer's connection", async () => {
+    await runCommand([]);
+
+    expect(cache.remove).not.toHaveBeenCalled();
+  });
+
+  it('keeps the connection in a DM, where no refresh token is shown', async () => {
+    await runCommand([SERVER_ROLES.organizer], { inGuild: false });
+
+    expect(cache.remove).not.toHaveBeenCalled();
   });
 
   it('still delivers the access token when invoked from a DM', async () => {
