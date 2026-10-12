@@ -16,8 +16,14 @@ import { forgetMeetupTokens } from './meetupTokens.js';
 const logger = new Logger({ name: 'memberLink' });
 
 const strings = {
-  duplicateAccount:
-    'This Meetup account is already linked to another Discord account — please contact the mods.',
+  // Names the account because a common cause is a browser still logged in
+  // to someone else's meetup.com account, and reconnecting alone hands that
+  // same account straight back.
+  duplicateAccount: (meetupName: string) =>
+    `The Meetup account you connected, "${meetupName}", is already linked ` +
+    "to another Discord account. If that's the wrong account, log out of " +
+    'meetup.com in your browser, log back in with your own account, and ' +
+    'try again. If it is your account, please contact the mods.',
 };
 
 export class DuplicateMeetupAccountError extends Error {
@@ -76,7 +82,9 @@ export async function recordMeetupLink(
         fields: [{ name: 'Meetup ID', value: info.meetupId }],
       });
       await forgetBlockedConnection(user.id);
-      throw new DuplicateMeetupAccountError(strings.duplicateAccount);
+      throw new DuplicateMeetupAccountError(
+        strings.duplicateAccount(info.meetupName),
+      );
     }
 
     const existing = await repo.findByDiscordId(user.id);
@@ -122,7 +130,9 @@ export async function recordMeetupLink(
         fields: [{ name: 'Meetup ID', value: info.meetupId }],
       });
       await forgetBlockedConnection(user.id);
-      throw new DuplicateMeetupAccountError(strings.duplicateAccount);
+      throw new DuplicateMeetupAccountError(
+        strings.duplicateAccount(info.meetupName),
+      );
     }
     logger.error(`Failed to record Meetup link: ${String(error)}`);
     await logAlert(client, {

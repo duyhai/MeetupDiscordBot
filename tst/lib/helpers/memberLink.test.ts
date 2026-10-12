@@ -96,6 +96,24 @@ describe('recordMeetupLink', () => {
     expect(savedConnections.has('discord-1-meetup-tokens')).toBe(true);
   });
 
+  it('names the blocked account and says how to switch to the right one', async () => {
+    await recordMeetupLink(makeInteraction('discord-1'), info, 'self_onboard');
+
+    let message = '';
+    try {
+      await recordMeetupLink(makeInteraction('discord-2'), info, 'sync_v2');
+    } catch (error: unknown) {
+      message = (error as Error).message;
+    }
+
+    // Often a shared browser still logged in to someone else's meetup.com
+    // account; reconnecting alone hands that same account back.
+    expect(message).toContain('Test User');
+    expect(message).toMatch(/already linked to another Discord account/);
+    expect(message).toMatch(/log out of meetup\.com/i);
+    expect(message).toMatch(/contact the mods/i);
+  });
+
   it('blocks a concurrent duplicate link that slips past the pre-check', async () => {
     await recordMeetupLink(makeInteraction('discord-1'), info, 'self_onboard');
     // Simulate the check-then-write race: the pre-check misses the row that
