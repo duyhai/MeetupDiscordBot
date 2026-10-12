@@ -33,6 +33,15 @@ Welcome ${user.toString()}. \
 Please go to <id:browse> in the left menu to join different discussion channels. \
 Have fun exploring the server!
 `,
+  // Names the account because the usual cause is a browser logged in to
+  // meetup.com with a different account than the one in the group, and
+  // reconnecting alone hands that same account straight back.
+  notGroupMember: (meetupName: string) =>
+    `You're not a member of our Meetup group. You connected the Meetup ` +
+    `account "${meetupName}". If that's the wrong account, log out of ` +
+    'meetup.com in your browser, log back in with the account you joined ' +
+    'the group with, and try again. If it is the right account, join the ' +
+    'group on Meetup first and then try again.',
   replyToModerator:
     'User is onboarded! Please make sure you checked their intro, Meetup profile and name (FirstName + LastName/Initial)',
   invisibleCharacter: ' ',
@@ -248,9 +257,7 @@ export async function selfOnboardUser(
       ],
     });
 
-    throw new NonMemberError(
-      `You're not a member on Meetup. Please join the group and try onboarding again`,
-    );
+    throw new NonMemberError(strings.notGroupMember(meetupName));
   }
 
   const { name } = userInfo.self;
