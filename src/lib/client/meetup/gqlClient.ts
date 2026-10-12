@@ -2,6 +2,11 @@ import dayjs from 'dayjs';
 import { GraphQLClient } from 'graphql-request';
 import { Logger } from 'tslog';
 import Configuration from '../../../configuration.js';
+import {
+  FetchInit,
+  FetchUrl,
+  boundedFetch,
+} from '../../../util/boundedFetch.js';
 import { cachedClientRequest } from '../cacheClientHelper.js';
 import {
   announceEvent,
@@ -16,6 +21,7 @@ import {
   getGroupEvents,
   getGroupEventsCount,
   getGroupMembersByIds,
+  getGroupMemberships,
   getMemberRsvps,
   getSelfPastRsvpCount,
   getSelfPastRsvpEvents,
@@ -42,6 +48,8 @@ import {
   GetGroupEventsInput,
   GetGroupEventsResponse,
   GetGroupMembersByIdsInput,
+  GetGroupMembershipsInput,
+  GetGroupMembershipsResponse,
   GetGroupMembersByIdsResponse,
   GetMemberRsvpsInput,
   GetMemberRsvpsResponse,
@@ -67,6 +75,42 @@ const logger = new Logger({ name: 'GqlMeetupClient' });
 const MEMBER_LOOKUP_PAGE_SIZE = 100;
 const MEMBER_RSVP_PAGE_SIZE = 100;
 
+/**
+ * Applied client-wide rather than to the roster query alone.
+ *
+ * Undici sets no total-request deadline, so a stalled connection to Meetup
+ * never rejects. That is survivable on an interactive command -- the
+ * interaction times out and a human retries -- but the roster walk runs
+ * inside the daily digest after the day-claim is taken, where a hang means no
+ * digest, no error and no retry until someone notices.
+ *
+ * Deliberately generous. This is a guard against hanging forever, not a
+ * latency budget: the point is that every request terminates, and 30s is far
+ * beyond anything a healthy Meetup query takes, so no existing caller's
+ * behaviour changes. Tightening it toward real latencies would start failing
+ * slow-but-working queries, which is a different and worse bug.
+ */
+const GQL_REQUEST_TIMEOUT_MS = 30_000;
+
+/**
+ * The group came back null. Named and self-describing because this is the
+ * one error on the roster path an organizer can actually act on, and it
+ * reaches them through the digest's degraded-sweep alert.
+ */
+export class MeetupGroupUnreadableError extends Error {
+  /** Composed here rather than lifted from a response body; see below. */
+  readonly organizerSafeMessage = true;
+
+  constructor(urlname: string) {
+    super(
+      `Meetup returned no group for "${urlname}": the organizer token cannot ` +
+        'read this group -- check that the grant is still valid and was made ' +
+        'by an organizer of it.',
+    );
+    this.name = 'MeetupGroupUnreadableError';
+  }
+}
+
 export class GqlMeetupClient {
   private client: GraphQLClient;
 
@@ -75,6 +119,8 @@ export class GqlMeetupClient {
       headers: {
         authorization: `Bearer ${accessToken}`,
       },
+      fetch: (url: FetchUrl, init?: FetchInit) =>
+        boundedFetch(url, init, GQL_REQUEST_TIMEOUT_MS),
     });
   }
 
@@ -416,6 +462,46 @@ export class GqlMeetupClient {
         return events;
       }
       after = rsvps.pageInfo.endCursor;
+    }
+  }
+
+  // Deliberately NOT wrapped in cachedClientRequest, unlike getGroupEvents
+  // above: the identity sweep diffs today's roster against yesterday's
+  // stored snapshot, so this call must always hit the live API. A cached
+  // roster would make the sweep compare today's baseline against yesterday's
+  // data, which defeats the point of the diff.
+  public async getGroupMemberships(input: PaginationInput) {
+    logger.info(
+      `Calling getGroupMemberships with input: ${JSON.stringify(input)}`,
+    );
+    try {
+      const result = await this.client.request<
+        GetGroupMembershipsResponse,
+        GetGroupMembershipsInput
+      >(getGroupMemberships, {
+        urlname: Configuration.meetup.groupUrlName,
+        ...input,
+      });
+      // Meetup answers an unreadable group with a null node and no GraphQL
+      // error, so this is the shape an expired or under-scoped organizer
+      // grant actually arrives in. Without the check it becomes "cannot read
+      // properties of null" from inside the pagination loop, which says
+      // nothing about the credential that is the real cause.
+      if (!result.groupByUrlname) {
+        throw new MeetupGroupUnreadableError(Configuration.meetup.groupUrlName);
+      }
+      // Counts only, not the full page: this method returns ~60 full roster
+      // pages of member names and photo URLs daily, and this repo has a
+      // production log-flooding history (a previous feature emitted ~900
+      // lines per run before an incident surfaced it).
+      const { edges, pageInfo } = result.groupByUrlname.memberships;
+      logger.info(
+        `getGroupMemberships page: ${edges.length} members, hasNextPage=${pageInfo.hasNextPage}`,
+      );
+      return result;
+    } catch (error) {
+      logger.error(error);
+      throw error;
     }
   }
 

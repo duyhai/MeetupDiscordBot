@@ -49,10 +49,14 @@ export class RedisCache implements KeyValueCache {
     await this.client.set(key, value, { EX: ttlSec ?? ITEM_TTL_SEC });
   }
 
-  async exclusive_set(key: string, value: string): Promise<boolean> {
+  async exclusive_set(
+    key: string,
+    value: string,
+    ttlSec?: number,
+  ): Promise<boolean> {
     const result = await this.client.set(key, value, {
       NX: true,
-      EX: ITEM_TTL_SEC,
+      EX: ttlSec ?? ITEM_TTL_SEC,
     });
     return result === 'OK';
   }

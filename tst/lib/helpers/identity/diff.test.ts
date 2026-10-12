@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
-import { diffIdentity } from '../../../src/lib/helpers/identityDiff.js';
-import { IdentitySnapshot } from '../../../src/lib/repositories/identityTypes.js';
+import { diffIdentity } from '../../../../src/lib/helpers/identity/diff.js';
+import { IdentitySnapshot } from '../../../../src/lib/repositories/identityTypes.js';
 
 const base: IdentitySnapshot = {
+  scopeId: 'g1',
   discordUserId: 'u1',
   username: 'someone',
   globalName: 'Someone',
@@ -23,13 +24,17 @@ describe('diffIdentity', () => {
     expect(diffIdentity(base, after)).toEqual(
       expect.arrayContaining([
         {
-          discordUserId: 'u1',
+          platform: 'discord',
+          scopeId: 'g1',
+          subjectId: 'u1',
           field: 'user_avatar',
           oldValue: 'aaa',
           newValue: 'bbb',
         },
         {
-          discordUserId: 'u1',
+          platform: 'discord',
+          scopeId: 'g1',
+          subjectId: 'u1',
           field: 'nickname',
           oldValue: 'Some One',
           newValue: 'Someone Else',
@@ -44,7 +49,9 @@ describe('diffIdentity', () => {
 
     expect(diffIdentity(base, after)).toEqual([
       {
-        discordUserId: 'u1',
+        platform: 'discord',
+        scopeId: 'g1',
+        subjectId: 'u1',
         field: 'member_avatar',
         oldValue: null,
         newValue: 'ccc',
@@ -57,7 +64,9 @@ describe('diffIdentity', () => {
 
     expect(diffIdentity(base, after)).toEqual([
       {
-        discordUserId: 'u1',
+        platform: 'discord',
+        scopeId: 'g1',
+        subjectId: 'u1',
         field: 'nickname',
         oldValue: 'Some One',
         newValue: null,

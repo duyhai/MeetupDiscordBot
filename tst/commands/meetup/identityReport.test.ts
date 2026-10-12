@@ -10,7 +10,7 @@ import {
 import {
   estimateReportBytes,
   estimateReportBytesFromCounts,
-} from '../../../src/lib/helpers/identityReport.js';
+} from '../../../src/lib/helpers/identity/report.js';
 import { IdentityChangeRecord } from '../../../src/lib/repositories/identityTypes.js';
 
 const repo = vi.hoisted(() => ({
@@ -42,14 +42,16 @@ const change = (
   over: Partial<IdentityChangeRecord> = {},
 ): IdentityChangeRecord => ({
   id: '1',
-  discordUserId: 'u1',
+  platform: 'discord',
+  scopeId: 'g1',
+  subjectId: 'u1',
   field: 'user_avatar',
   oldValue: 'aaa',
   newValue: 'bbb',
   oldThumb: Buffer.from([1, 2, 3]),
   newThumb: Buffer.from([4, 5, 6]),
   detectedAt: new Date('2026-08-16T14:02:00Z'),
-  source: 'event',
+  source: 'sweep',
   ...over,
 });
 
