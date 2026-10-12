@@ -28,10 +28,13 @@ https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/workin
   self-contained HTML report of member photo and name changes over the last
   N days (default 7), with before/after thumbnails embedded, covering both
   Discord and Meetup.
-- `/meetup_get_token` — sends your Meetup access token privately. Mods and
-  organizers additionally see a long-lived refresh token, used to set
-  `MEETUP_ORGANIZER_REFRESH_TOKEN` and enable Meetup-side identity
-  monitoring.
+- `/meetup_get_token [sweep_credential]` — sends your Meetup access token
+  privately, and nothing else by default. With `sweep_credential: True`, mods
+  and organizers running it in the server additionally see a long-lived
+  refresh token, used to set `MEETUP_ORGANIZER_REFRESH_TOKEN` and enable
+  Meetup-side identity monitoring; the bot then forgets their Meetup
+  connection, so they are asked to connect again on their next Meetup
+  command. See "Where the credential must come from" below.
 
 # Testing
 
@@ -142,8 +145,9 @@ recorded twice.
 1. Deploy (merge to `main`). The migration runs on the first identity query.
 2. Get the sweep's credential from a **dedicated Meetup account**: one that
    is an organizer of the group and that nobody uses for their own Meetup
-   commands. Sign in to meetup.com as that account, run `/meetup_get_token`
-   as an organizer, copy the refresh token from the reply, and set it as
+   commands. Sign in to meetup.com as that account, run
+   `/meetup_get_token sweep_credential:True` in the server as an organizer,
+   copy the refresh token from the reply, and set it as
    `MEETUP_ORGANIZER_REFRESH_TOKEN` in Heroku config. See "Where the
    credential must come from" below before doing this.
 3. Run the Meetup backfill and confirm it reports 0 changes:
@@ -176,6 +180,8 @@ So the seed must never be a token whose owner also uses Meetup commands:
 
 - Use a dedicated Meetup account for monitoring, with organizer access to the
   group so it can read the roster.
+- The refresh token is only shown with `sweep_credential: True`. Without the
+  option the command shows an access token and leaves your connection alone.
 - `/meetup_get_token` returns the token of whichever Meetup account your
   Discord user is connected with. If the reply comes back **without** a
   "connect your Meetup account" prompt first, it is from a connection saved
@@ -195,7 +201,8 @@ var, so the two cases are genuinely different:
 
 - **The grant was revoked or expired** (the sweep is alerting). The stored
   refresh token now fails, so the fallback already fires. Signed in to
-  meetup.com as the dedicated account (see above), run `/meetup_get_token`,
+  meetup.com as the dedicated account (see above), run
+  `/meetup_get_token sweep_credential:True`,
   copy the refresh token, set `MEETUP_ORGANIZER_REFRESH_TOKEN`. Nothing else
   is needed.
 - **The stored pair is still valid but you want a different grant** -- a new

@@ -302,9 +302,10 @@ export async function runMeetupSweep(
     const remedy =
       'Could not obtain a Meetup organizer token, so the Meetup sweep was skipped. ' +
       'To fix: sign in to meetup.com as the dedicated Meetup account used ' +
-      'for monitoring, run `/meetup_get_token`, copy the refresh token, and ' +
-      'set `MEETUP_ORGANIZER_REFRESH_TOKEN` in Heroku config. Do not use a ' +
-      'token from an account that also runs Meetup commands.';
+      'for monitoring, run `/meetup_get_token sweep_credential:True`, copy ' +
+      'the refresh token, and set `MEETUP_ORGANIZER_REFRESH_TOKEN` in ' +
+      'Heroku config. Do not use a token from an account that also runs ' +
+      'Meetup commands.';
     // The only way credential expiry becomes visible. A sweep that fails
     // quietly leaves monitoring looking healthy while watching nothing, so
     // this fires on the first failure rather than after a retry streak. The

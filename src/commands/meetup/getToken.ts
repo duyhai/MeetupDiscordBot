@@ -1,10 +1,6 @@
-import { CommandInteraction } from 'discord.js';
-import { Discord, Slash } from 'discordx';
-import { Tokens } from '../../lib/client/discord/types.js';
-import {
-  forgetMeetupTokens,
-  meetupTokenKey,
-} from '../../lib/helpers/meetupTokens.js';
+import { ApplicationCommandOptionType, CommandInteraction } from 'discord.js';
+import { Discord, Slash, SlashOption } from 'discordx';
+import { forgetMeetupTokens } from '../../lib/helpers/meetupTokens.js';
 import { ApplicationCache } from '../../util/cache.js';
 import {
   discordCommandWrapper,
@@ -19,22 +15,22 @@ export class MeetupGetTokenCommands {
     name: 'meetup_get_token',
     description: `Get your Meetup access token (sent privately). Useful for notebooks/scripts.`,
   })
-  async meetupGetTokenHandler(interaction: CommandInteraction) {
+  async meetupGetTokenHandler(
+    @SlashOption({
+      name: 'sweep_credential',
+      description:
+        'Organizers only: also show the refresh token for identity monitoring, and disconnect you.',
+      type: ApplicationCommandOptionType.Boolean,
+      required: false,
+    })
+    sweepCredential: boolean | undefined,
+    interaction: CommandInteraction,
+  ) {
     await discordCommandWrapper(interaction, async () => {
-      await withMeetupClient(interaction, async (_meetupClient) => {
-        const tokenKey = meetupTokenKey(interaction.user.id);
-        const cache = await ApplicationCache();
-        const rawTokens = await cache.get(tokenKey);
-
-        if (!rawTokens) {
-          throw new Error(
-            '❌ No Meetup token found. Press **Link Meetup Account** in the ' +
-              'get-verified channel to connect your Meetup account first.',
-          );
-        }
-
-        const tokens = JSON.parse(rawTokens) as Tokens;
-
+      // The set withMeetupClient resolved, not a second read of the cache:
+      // if a refreshed set could not be stored, the cached pair is stale and
+      // its access token is already dead.
+      await withMeetupClient(interaction, async (_meetupClient, tokens) => {
         const expiresInfo = tokens.expiresAt
           ? `\n⏰ Expires: <t:${Math.floor(tokens.expiresAt / 1000)}:R>`
           : '';
@@ -58,27 +54,38 @@ export class MeetupGetTokenCommands {
           (isAdmin(member) ||
             hasAnyServerRole(member, ['moderator', 'organizer'])),
         );
-        // Only an organizer sees the refresh token: it is the long-lived
-        // credential behind the whole Meetup-side sweep, so surfacing it to
-        // every member who runs this command would hand out a standing
-        // password with no way to tell who holds a copy.
-        const refreshSection =
-          isOrganizer && tokens.refreshToken
+        // The refresh token is the long-lived credential behind the whole
+        // Meetup-side sweep, so it is shown only when asked for and only to
+        // an organizer. Asked for, because showing it also hands the
+        // connection over (below): a routine call for an access token must
+        // neither surface a standing password nor disconnect the caller.
+        const handOver = Boolean(
+          sweepCredential && isOrganizer && tokens.refreshToken,
+        );
+        const refreshSection = handOver
+          ? [
+              '',
+              '🔁 **Refresh token** — long-lived, unlike the access token above.',
+              'Set this as `MEETUP_ORGANIZER_REFRESH_TOKEN` in Heroku config to',
+              'enable Meetup-side identity monitoring. Treat it as a password:',
+              'it does not expire until revoked.',
+              '```',
+              tokens.refreshToken,
+              '```',
+              '⚠️ This connection has now been handed over: the bot has',
+              'forgotten it so that the sweep is the only thing refreshing',
+              'this grant, and you will be asked to connect again the next',
+              'time you use a Meetup command. Only use a token from the',
+              'dedicated monitoring Meetup account as the sweep credential,',
+              'never one from an account that also runs Meetup commands.',
+            ]
+          : [];
+        const declinedSection =
+          sweepCredential && !handOver
             ? [
                 '',
-                '🔁 **Refresh token** — long-lived, unlike the access token above.',
-                'Set this as `MEETUP_ORGANIZER_REFRESH_TOKEN` in Heroku config to',
-                'enable Meetup-side identity monitoring. Treat it as a password:',
-                'it does not expire until revoked.',
-                '```',
-                tokens.refreshToken,
-                '```',
-                '⚠️ This connection has now been handed over: the bot has',
-                'forgotten it so that the sweep is the only thing refreshing',
-                'this grant, and you will be asked to connect again the next',
-                'time you use a Meetup command. Only use a token from the',
-                'dedicated monitoring Meetup account as the sweep credential,',
-                'never one from an account that also runs Meetup commands.',
+                'ℹ️ `sweep_credential` only applies to moderators and organizers',
+                'running this command in the server, so no refresh token is shown.',
               ]
             : [];
 
@@ -93,6 +100,7 @@ export class MeetupGetTokenCommands {
             '',
             '💡 Paste this into the `ACCESS_TOKEN` field in the analysis notebook.',
             ...refreshSection,
+            ...declinedSection,
           ].join('\n'),
         });
 
@@ -101,8 +109,11 @@ export class MeetupGetTokenCommands {
         // rotates refresh tokens, this member's next command and the sweep
         // would each invalidate the other's copy. After the reply, so a
         // failed delivery does not cost them the connection.
-        if (refreshSection.length > 0) {
-          await forgetMeetupTokens(cache, interaction.user.id);
+        if (handOver) {
+          await forgetMeetupTokens(
+            await ApplicationCache(),
+            interaction.user.id,
+          );
         }
       });
     });
