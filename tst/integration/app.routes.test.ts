@@ -62,6 +62,26 @@ describe('cookie-free OAuth chain', () => {
     });
   });
 
+  it('keeps the token set long enough for its refresh token to be used', async () => {
+    const state = await createOAuthState('user-1e');
+    const cache = await ApplicationCache();
+    const set = vi.spyOn(cache, 'set');
+
+    nockMeetupExchange();
+    const meetupCb = await request(app).get(
+      `/connect/meetup/callback?state=${state}&code=mcode`,
+    );
+    expect(meetupCb.status).toBe(200);
+
+    // The cache default (12 hours) discards the refresh token before it has
+    // ever been needed twice; the set must be stored with a far longer life.
+    const tokenWrite = set.mock.calls.find(
+      ([key]) => key === 'user-1e-meetup-tokens',
+    );
+    expect(tokenWrite?.[2]).toBeGreaterThanOrEqual(30 * 24 * 60 * 60);
+    set.mockRestore();
+  });
+
   it('rejects an unknown state with the expired-link page', async () => {
     for (const path of [
       '/connect/meetup?state=nope',

@@ -13,6 +13,10 @@ import { createOAuthState } from '../lib/client/oauth/state.js';
 import { Tokens } from '../lib/client/discord/types.js';
 import { GqlMeetupClient } from '../lib/client/meetup/gqlClient.js';
 import { ApplicationCache } from './cache.js';
+import {
+  getUsableMeetupTokens,
+  meetupTokenKey,
+} from '../lib/helpers/meetupTokens.js';
 import { waitForMeetupTokens } from '../lib/helpers/oauthWait.js';
 import { keepReplyVisible } from './discord.js';
 
@@ -87,17 +91,17 @@ async function showMeetupTokenUrl(
 /**
  * A wrapper for Meetup commands to handle:
  * 1. Authentication
- * 2. Grabbing token
+ * 2. Grabbing token, silently refreshing an expired one
  * @param commandFn Lambda for command implementation
  */
 export async function withMeetupClient(
   interaction: ButtonInteraction | CommandInteraction | ModalSubmitInteraction,
   commandFn: (meetupClient: GqlMeetupClient) => Promise<void>,
 ) {
-  const tokenKey = `${interaction.user.id}-meetup-tokens`;
+  const tokenKey = meetupTokenKey(interaction.user.id);
   const cache = await ApplicationCache();
-  let rawTokens = await cache.get(tokenKey);
-  if (!rawTokens) {
+  let tokens = await getUsableMeetupTokens(cache, interaction.user.id);
+  if (!tokens) {
     logger.info(
       `Tokens are not present for ${interaction.user.username} at ${tokenKey}. Getting token through OAuth`,
     );
@@ -116,9 +120,8 @@ export async function withMeetupClient(
       await showRetry(interaction);
       return;
     }
-    rawTokens = waitResult.rawTokens;
+    tokens = JSON.parse(waitResult.rawTokens) as Tokens;
   }
-  const tokens = JSON.parse(rawTokens) as Tokens;
   const client = new GqlMeetupClient(tokens.accessToken);
   await commandFn(client);
 }

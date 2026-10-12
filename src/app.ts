@@ -3,6 +3,7 @@ import express, { ErrorRequestHandler, RequestHandler } from 'express';
 import { Logger } from 'tslog';
 
 import { logActivity, logAlert } from './lib/helpers/discordLogger.js';
+import { storeMeetupTokens } from './lib/helpers/meetupTokens.js';
 import {
   buildMeetupAuthUrl,
   exchangeMeetupCode,
@@ -122,7 +123,7 @@ export const meetupConnectCallbackHandler: RequestHandler = (async (
   try {
     const tokens = await exchangeMeetupCode(String(req.query.code));
     const cache = await ApplicationCache();
-    await cache.set(`${userId}-meetup-tokens`, JSON.stringify(tokens));
+    await storeMeetupTokens(cache, userId, tokens);
     await consumeOAuthState(state);
     return res.send(getAuthLandingPage('success', strings.meetupSuccess));
   } catch (error) {
