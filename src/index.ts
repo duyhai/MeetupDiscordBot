@@ -1,4 +1,4 @@
-import { GatewayIntentBits, Interaction, Message } from 'discord.js';
+import { GatewayIntentBits, Interaction, Message, Partials } from 'discord.js';
 import { Client } from 'discordx';
 import { Logger } from 'tslog';
 
@@ -8,6 +8,7 @@ import './commands';
 import app, { setOAuthAlertClient } from './app.js';
 import Configuration from './configuration.js';
 import { startIdentityDigestScheduler } from './lib/helpers/identity/digest.js';
+import { registerMemberLeaveListener } from './lib/helpers/memberLeave.js';
 import { startUnlinkedDigestScheduler } from './lib/helpers/unlinkedDigest.js';
 
 const logger = new Logger({ name: 'MeetupBot' });
@@ -33,6 +34,10 @@ const client = new Client({
     GatewayIntentBits.GuildMessageReactions,
     GatewayIntentBits.GuildVoiceStates,
   ],
+  // Without this, discord.js only emits guildMemberRemove for members it
+  // happens to have cached, and most of the server never is. The listener
+  // below needs to hear about everyone who leaves.
+  partials: [Partials.GuildMember],
   // If you only want to use global commands only, comment this line
   botGuilds: [(botClient) => botClient.guilds.cache.map((guild) => guild.id)],
 });
@@ -66,6 +71,10 @@ client.on('interactionCreate', async (interaction: Interaction) => {
 client.on('messageCreate', async (message: Message) => {
   await client.executeCommand(message);
 });
+
+// Clears a departing member's saved Meetup connection. Unrelated to identity
+// monitoring, whose gateway listeners were removed in favour of the sweep.
+registerMemberLeaveListener(client);
 
 async function run() {
   const token = Configuration.discord.apiKey;
