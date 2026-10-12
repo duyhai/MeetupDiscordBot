@@ -74,11 +74,11 @@ describe('cookie-free OAuth chain', () => {
     expect(meetupCb.status).toBe(200);
 
     // The cache default (12 hours) discards the refresh token before it has
-    // ever been needed twice; the set must be stored with a far longer life.
+    // ever been needed twice; the set is stored for 30 days instead.
     const tokenWrite = set.mock.calls.find(
       ([key]) => key === 'user-1e-meetup-tokens',
     );
-    expect(tokenWrite?.[2]).toBeGreaterThanOrEqual(30 * 24 * 60 * 60);
+    expect(tokenWrite?.[2]).toBe(30 * 24 * 60 * 60);
     set.mockRestore();
   });
 

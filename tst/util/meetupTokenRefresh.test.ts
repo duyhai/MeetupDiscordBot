@@ -203,7 +203,7 @@ describe('withMeetupClient token reuse', () => {
     expect(storedTokens().expiresAt).toBeGreaterThan(Date.now());
   });
 
-  it('persists a rotated refresh token, and keeps it far longer than 12 hours', async () => {
+  it('persists a rotated refresh token, and keeps it for 30 days from the refresh', async () => {
     storeExpired();
     nockRefresh().reply(200, {
       access_token: SECRETS.newAccess,
@@ -214,7 +214,8 @@ describe('withMeetupClient token reuse', () => {
     await withMeetupClient(slashInteraction(), vi.fn());
 
     expect(storedTokens().refreshToken).toBe(SECRETS.rotatedRefresh);
-    expect(fake.ttls.get(TOKEN_KEY)).toBeGreaterThanOrEqual(THIRTY_DAYS_SEC);
+    // Every refresh restarts the full 30 days: retention slides with use.
+    expect(fake.ttls.get(TOKEN_KEY)).toBe(THIRTY_DAYS_SEC);
   });
 
   it('keeps the existing refresh token when Meetup does not rotate it', async () => {

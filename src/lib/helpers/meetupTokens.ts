@@ -11,17 +11,19 @@ const logger = new Logger({ name: 'MeetupTokens' });
 
 /**
  * How long a member's token set is kept, counted from the last time it was
- * written -- which is every authorization and every refresh.
+ * written -- which is every authorization and every refresh, so retention
+ * slides with use.
  *
  * The cache's general-purpose default is 12 hours, and falling back to it is
  * what made members reconnect Meetup about once a day: the refresh token was
  * deleted along with the access token it could have renewed. Meetup's refresh
  * tokens do not expire on their own, so this is purely our retention choice:
- * long enough that anyone who uses a Meetup command at least once a quarter
+ * long enough that anyone who uses a Meetup command at least once a month
  * never sees the connect prompt again, short enough that the credentials of
- * someone who has stopped using the bot do not sit in the cache indefinitely.
+ * someone who has stopped using the bot are gone within the month. Someone
+ * who leaves the server loses theirs at once (see memberLeave.ts).
  */
-export const MEETUP_TOKEN_TTL_SEC = 90 * 24 * 60 * 60;
+export const MEETUP_TOKEN_TTL_SEC = 30 * 24 * 60 * 60;
 
 /**
  * Refresh a little before the stated expiry, so a token is not handed to a

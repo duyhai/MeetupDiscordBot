@@ -13,7 +13,7 @@ export type OAuthWaitResult =
  * Polls the cache until the member's Meetup authorization lands.
  *
  * Running out of time is NOT an error: once the authorization lands, the
- * tokens stay in the cache for months, so a member who wanders off
+ * tokens stay in the cache for weeks, so a member who wanders off
  * mid-authorization only has to try again and the next attempt completes
  * instantly. Returning `pending` keeps that ordinary
  * slowness out of the alerts channel, which is reserved for genuine faults.
