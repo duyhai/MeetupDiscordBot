@@ -1,7 +1,10 @@
 import nock from 'nock';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { refreshMeetupToken } from '../../../../src/lib/client/oauth/providers.js';
+import {
+  MeetupTokenRefreshError,
+  refreshMeetupToken,
+} from '../../../../src/lib/client/oauth/providers.js';
 
 afterEach(() => nock.cleanAll());
 
@@ -72,5 +75,18 @@ describe('refreshMeetupToken', () => {
       .reply(400, 'invalid_grant');
 
     await expect(refreshMeetupToken('revoked')).rejects.toThrow(/400/);
+  });
+
+  it('reports the HTTP status on its error, so callers need not parse the message', async () => {
+    nock('https://secure.meetup.com')
+      .post('/oauth2/access')
+      .reply(401, { error: 'invalid_client' });
+
+    const error: unknown = await refreshMeetupToken('revoked').catch(
+      (caught: unknown) => caught,
+    );
+
+    expect(error).toBeInstanceOf(MeetupTokenRefreshError);
+    expect((error as MeetupTokenRefreshError).status).toBe(401);
   });
 });

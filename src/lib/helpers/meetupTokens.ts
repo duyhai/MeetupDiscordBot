@@ -2,7 +2,10 @@ import { Logger } from 'tslog';
 
 import { KeyValueCache } from '../cache/base.js';
 import { Tokens } from '../client/discord/types.js';
-import { refreshMeetupToken } from '../client/oauth/providers.js';
+import {
+  MeetupTokenRefreshError,
+  refreshMeetupToken,
+} from '../client/oauth/providers.js';
 
 const logger = new Logger({ name: 'MeetupTokens' });
 
@@ -70,19 +73,42 @@ const isFresh = (tokens: Tokens) =>
   tokens.expiresAt - EXPIRY_SKEW_MS > Date.now();
 
 /**
- * What can safely be said about a failed refresh. `refreshMeetupToken`'s
- * error message embeds Meetup's raw response body, which is untrusted and
- * may echo the credential that was sent, so only the HTTP status or the
- * error's class name is kept.
+ * Statuses that mean Meetup has refused this refresh token for good. Anything
+ * else -- a timeout, a network error, a 5xx, a 429 -- says nothing about the
+ * grant, so the connection is kept for the next attempt.
+ */
+const REJECTED_GRANT_STATUSES = [400, 401];
+
+const isRejectedGrant = (error: unknown) =>
+  error instanceof MeetupTokenRefreshError &&
+  REJECTED_GRANT_STATUSES.includes(error.status);
+
+/**
+ * What can safely be said about a failed refresh. The error's message embeds
+ * Meetup's raw response body, which is untrusted and may echo the credential
+ * that was sent, so only the HTTP status or the error's class name is kept.
  */
 function describeRefreshFailure(error: unknown): string {
-  const status = /\[(\d{3})\]/.exec(
-    error instanceof Error ? error.message : '',
-  );
-  if (status) {
-    return `HTTP ${status[1]}`;
+  if (error instanceof MeetupTokenRefreshError) {
+    return `HTTP ${error.status}`;
   }
   return error instanceof Error ? error.name : 'unknown error';
+}
+
+/**
+ * Removes the set only if it is still the one that was judged unusable. A
+ * newer one may have landed since -- another process won the refresh during
+ * a deploy overlap, or the member just re-authorized -- and deleting that
+ * would throw away a working connection.
+ */
+async function removeIfUnchanged(
+  cache: KeyValueCache,
+  key: string,
+  rawTokens: string | undefined,
+): Promise<void> {
+  if (rawTokens !== undefined && (await cache.get(key)) === rawTokens) {
+    await cache.remove(key);
+  }
 }
 
 async function refreshStoredTokens(
@@ -99,27 +125,55 @@ async function refreshStoredTokens(
     return tokens;
   }
 
-  if (tokens?.refreshToken) {
-    try {
-      const refreshed = await refreshMeetupToken(tokens.refreshToken);
-      await storeMeetupTokens(cache, discordUserId, refreshed);
-      logger.info(`Refreshed Meetup tokens for Discord user ${discordUserId}`);
-      return refreshed;
-    } catch (error: unknown) {
-      logger.warn(
-        `Could not refresh Meetup tokens for Discord user ${discordUserId} ` +
-          `(${describeRefreshFailure(error)}); they will be asked to reconnect`,
-      );
-    }
+  if (!tokens?.refreshToken) {
+    // Nothing here can ever be refreshed.
+    await removeIfUnchanged(cache, key, rawTokens);
+    return undefined;
   }
 
-  // Unusable, whatever the reason. It has to go: the connect prompt waits for
-  // a token set to appear at this key, and one left behind would be picked up
-  // as if the member had just authorized.
-  if (rawTokens) {
-    await cache.remove(key);
+  let refreshed: Tokens;
+  try {
+    refreshed = await refreshMeetupToken(tokens.refreshToken);
+  } catch (error: unknown) {
+    const failure = describeRefreshFailure(error);
+    if (isRejectedGrant(error)) {
+      logger.warn(
+        `Could not refresh Meetup tokens for Discord user ${discordUserId} ` +
+          `(${failure}); the grant was rejected, so they will be asked to reconnect`,
+      );
+      await removeIfUnchanged(cache, key, rawTokens);
+    } else {
+      logger.warn(
+        `Could not refresh Meetup tokens for Discord user ${discordUserId} ` +
+          `(${failure}); keeping the connection for the next attempt`,
+      );
+    }
+    return undefined;
   }
-  return undefined;
+
+  // Storing is a SEPARATE failure from refreshing, as in the Meetup sweep's
+  // resolveOrganizerTokens: the tokens in hand are good, so this command runs
+  // on them whatever happens to the write.
+  try {
+    const current = await cache.get(key);
+    if (current !== rawTokens) {
+      // The set changed while the refresh was in the air. Forgotten (a
+      // moderator unlinked them): do not write the connection back. Replaced
+      // (another process, or a new authorization): that one is the truth.
+      const replacement = current ? parseTokens(current) : undefined;
+      return replacement && isFresh(replacement) ? replacement : undefined;
+    }
+    await storeMeetupTokens(cache, discordUserId, refreshed);
+    logger.info(`Refreshed Meetup tokens for Discord user ${discordUserId}`);
+  } catch (error: unknown) {
+    logger.error(
+      `Meetup tokens for Discord user ${discordUserId} were refreshed but ` +
+        'could not be stored; this command continues on the fresh token, ' +
+        'but if Meetup rotates refresh tokens the stored set is now stale: ' +
+        `${error instanceof Error ? error.name : 'unknown error'}`,
+    );
+  }
+  return refreshed;
 }
 
 const refreshesInFlight = new Map<string, Promise<Tokens | undefined>>();
@@ -127,7 +181,9 @@ const refreshesInFlight = new Map<string, Promise<Tokens | undefined>>();
 /**
  * The member's Meetup tokens with an access token that is good to use right
  * now, refreshing it first if it has expired. `undefined` means there is
- * nothing usable and the member has to connect their Meetup account again.
+ * nothing usable right now and the member is shown the connect prompt. That
+ * does not always mean the stored set is gone: after an outage it is kept,
+ * so callers waiting for a new authorization must not mistake it for one.
  * Never throws for a failed refresh.
  *
  * One refresh per member at a time: two commands arriving together would

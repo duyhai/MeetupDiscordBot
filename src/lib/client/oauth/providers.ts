@@ -85,6 +85,22 @@ export async function exchangeMeetupCode(code: string): Promise<Tokens> {
 }
 
 /**
+ * Meetup answered a refresh request with a non-2xx status. `status` is there
+ * so callers can tell a rejected grant from an outage without parsing the
+ * message -- which embeds Meetup's raw response body and is not safe to log
+ * anywhere a member or a Discord channel can read it.
+ */
+export class MeetupTokenRefreshError extends Error {
+  constructor(
+    readonly status: number,
+    body: string,
+  ) {
+    super(`Meetup token refresh failed: [${status}] ${body}`);
+    this.name = 'MeetupTokenRefreshError';
+  }
+}
+
+/**
  * Exchanges a refresh token for a fresh access token. Meetup access tokens
  * expire after an hour, so anything that must run on a schedule -- the daily
  * Meetup sweep -- needs this rather than a stored access token.
@@ -108,9 +124,7 @@ export async function refreshMeetupToken(
     TOKEN_REQUEST_TIMEOUT_MS,
   );
   if (!response.ok) {
-    throw new Error(
-      `Meetup token refresh failed: [${response.status}] ${await response.text()}`,
-    );
+    throw new MeetupTokenRefreshError(response.status, await response.text());
   }
   const raw = (await response.json()) as APIAccessTokenResponse;
   return {

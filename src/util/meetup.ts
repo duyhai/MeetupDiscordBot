@@ -108,8 +108,15 @@ export async function withMeetupClient(
     await showMeetupTokenUrl(interaction);
     // Generous window: the iOS hand-off to Safari can require a sign-in
     // before consent, and the interaction token lasts ~15 minutes.
+    // A set that could not be refreshed because Meetup was unreachable is
+    // kept for next time. It is not an authorization: only a different
+    // value landing at the key means the member finished connecting.
+    const unusable = await cache.get(tokenKey);
     const waitResult = await waitForMeetupTokens(
-      (key) => cache.get(key),
+      async (key) => {
+        const rawTokens = await cache.get(key);
+        return rawTokens === unusable ? undefined : rawTokens;
+      },
       tokenKey,
       { timeoutMs: OAUTH_HOP_TIMEOUT_MS, intervalMs: 1000 },
     );

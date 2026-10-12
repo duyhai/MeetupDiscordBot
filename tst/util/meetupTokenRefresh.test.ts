@@ -3,6 +3,8 @@ import { CommandInteraction } from 'discord.js';
 import nock from 'nock';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { getUsableMeetupTokens } from '../../src/lib/helpers/meetupTokens.js';
+import { waitForMeetupTokens } from '../../src/lib/helpers/oauthWait.js';
 import { withMeetupClient } from '../../src/util/meetup.js';
 
 const TOKEN_KEY = 'u1-meetup-tokens';
@@ -21,13 +23,19 @@ const fake = vi.hoisted(() => {
   const data = new Map<string, string>();
   const ttls = new Map<string, number | undefined>();
   const logged: string[] = [];
+  const failure = { nextSet: false };
   return {
     data,
     ttls,
     logged,
+    failure,
     cache: {
       get: (key: string) => Promise.resolve(data.get(key)),
       set: (key: string, value: string, ttlSec?: number) => {
+        if (failure.nextSet) {
+          failure.nextSet = false;
+          return Promise.reject(new Error('redis is down'));
+        }
         data.set(key, value);
         ttls.set(key, ttlSec);
         return Promise.resolve();
@@ -148,6 +156,8 @@ describe('withMeetupClient token reuse', () => {
     fake.data.clear();
     fake.ttls.clear();
     fake.logged.length = 0;
+    fake.failure.nextSet = false;
+    vi.mocked(waitForMeetupTokens).mockClear();
     nock.disableNetConnect();
   });
 
@@ -266,20 +276,173 @@ describe('withMeetupClient token reuse', () => {
     expect(fake.data.has(TOKEN_KEY)).toBe(false);
   });
 
-  it('falls back to the connect prompt when Meetup cannot be reached', async () => {
+  it('also drops the set when Meetup answers 401', async () => {
     storeExpired();
-    nockRefresh().replyWithError('socket hang up');
+    nockRefresh().reply(401, { error: 'invalid_client' });
+    const interaction = slashInteraction();
+
+    await withMeetupClient(interaction, vi.fn());
+
+    expect(replies(interaction)).toContain(
+      'Please connect your Meetup account',
+    );
+    expect(fake.data.has(TOKEN_KEY)).toBe(false);
+  });
+
+  it.each([
+    [
+      'Meetup cannot be reached',
+      () => nockRefresh().replyWithError('socket hang up'),
+    ],
+    ['Meetup answers 503', () => nockRefresh().reply(503, 'unavailable')],
+    ['Meetup answers 429', () => nockRefresh().reply(429, 'slow down')],
+  ])(
+    'shows the connect prompt but keeps the set when %s',
+    async (_name, failRefresh) => {
+      storeExpired();
+      const before = fake.data.get(TOKEN_KEY);
+      failRefresh();
+      const interaction = slashInteraction();
+      const commandFn = vi.fn();
+
+      await expect(
+        withMeetupClient(interaction, commandFn),
+      ).resolves.toBeUndefined();
+
+      // Nothing says the grant is dead, so the connection must survive for
+      // the next attempt...
+      expect(fake.data.get(TOKEN_KEY)).toBe(before);
+      // ...without being mistaken for a fresh authorization in the meantime.
+      expect(commandFn).not.toHaveBeenCalled();
+      expect(replies(interaction)).toContain(
+        'Please connect your Meetup account',
+      );
+    },
+  );
+
+  it('picks up a new authorization that lands while a kept set is waiting', async () => {
+    storeExpired();
+    nockRefresh().reply(503, 'unavailable');
+    vi.mocked(waitForMeetupTokens).mockImplementationOnce(async (read, key) => {
+      // The member finishes the OAuth hop: the callback replaces the set.
+      storeTokens({
+        accessToken: 'just-authorized',
+        refreshToken: SECRETS.rotatedRefresh,
+        expiresAt: Date.now() + HOUR_MS,
+      });
+      const rawTokens = await read(key);
+      return rawTokens ? { status: 'ready', rawTokens } : { status: 'pending' };
+    });
+    const commandFn = vi.fn();
+
+    await withMeetupClient(slashInteraction(), commandFn);
+
+    expect(accessTokensSeenBy(commandFn)).toEqual(['just-authorized']);
+  });
+
+  it('runs the command on the refreshed token even when it cannot be stored', async () => {
+    storeExpired();
+    const before = fake.data.get(TOKEN_KEY);
+    nockRefresh().reply(200, {
+      access_token: SECRETS.newAccess,
+      refresh_token: SECRETS.rotatedRefresh,
+      expires_in: 3600,
+    });
+    fake.failure.nextSet = true;
     const interaction = slashInteraction();
     const commandFn = vi.fn();
 
-    await expect(
-      withMeetupClient(interaction, commandFn),
-    ).resolves.toBeUndefined();
+    await withMeetupClient(interaction, commandFn);
 
+    // The refresh worked; only the write did not. That is not a failed
+    // refresh: the command runs, and nothing is deleted.
+    expect(accessTokensSeenBy(commandFn)).toEqual([SECRETS.newAccess]);
+    expect(interaction.editReply).not.toHaveBeenCalled();
+    expect(fake.data.get(TOKEN_KEY)).toBe(before);
+    expect(fake.logged.join('\n')).toMatch(/could not be stored/i);
+    expect(fake.logged.join('\n')).not.toMatch(/could not refresh/i);
+    expectNoSecretsIn(fake.logged.join('\n'));
+  });
+
+  it('does not delete a newer set stored while its own refresh was rejected', async () => {
+    storeExpired();
+    const newer = JSON.stringify({
+      accessToken: 'from-the-other-dyno',
+      refreshToken: SECRETS.rotatedRefresh,
+      expiresAt: Date.now() + HOUR_MS,
+    });
+    // Deploy overlap: another process refreshed first, so this one's refresh
+    // token is rejected -- after the winner has already stored its result.
+    nockRefresh().reply(400, () => {
+      fake.data.set(TOKEN_KEY, newer);
+      return { error: 'invalid_grant' };
+    });
+
+    await withMeetupClient(slashInteraction(), vi.fn());
+
+    expect(fake.data.get(TOKEN_KEY)).toBe(newer);
+  });
+
+  it('does not write a connection back after it was forgotten mid-refresh', async () => {
+    storeExpired();
+    // A moderator runs /meetup_unlink while the refresh is in the air.
+    nockRefresh().reply(200, () => {
+      fake.data.delete(TOKEN_KEY);
+      return {
+        access_token: SECRETS.newAccess,
+        refresh_token: SECRETS.rotatedRefresh,
+        expires_in: 3600,
+      };
+    });
+    const interaction = slashInteraction();
+    const commandFn = vi.fn();
+
+    await withMeetupClient(interaction, commandFn);
+
+    expect(fake.data.has(TOKEN_KEY)).toBe(false);
     expect(commandFn).not.toHaveBeenCalled();
     expect(replies(interaction)).toContain(
       'Please connect your Meetup account',
     );
+  });
+
+  it('does not refresh again when a caller holding a stale read arrives after the refresh', async () => {
+    storeExpired();
+    const refresh = nockRefresh().reply(200, {
+      access_token: SECRETS.newAccess,
+      refresh_token: SECRETS.rotatedRefresh,
+      expires_in: 3600,
+    });
+    // Caller B's first read is taken now (stale) but handed over only after
+    // caller A has refreshed, stored, and left the in-flight map empty.
+    const staleRead = fake.data.get(TOKEN_KEY);
+    let releaseStaleRead: () => void = () => undefined;
+    const held = new Promise<void>((resolve) => {
+      releaseStaleRead = resolve;
+    });
+    let firstRead = true;
+    const cacheForB = {
+      ...fake.cache,
+      get: async (key: string) => {
+        if (firstRead) {
+          firstRead = false;
+          await held;
+          return staleRead;
+        }
+        return fake.cache.get(key);
+      },
+    };
+
+    const callerB = getUsableMeetupTokens(cacheForB, 'u1');
+    const tokensA = await getUsableMeetupTokens(fake.cache, 'u1');
+    releaseStaleRead();
+    const tokensB = await callerB;
+
+    // A second request would find no interceptor and fail, leaving B empty.
+    expect(refresh.isDone()).toBe(true);
+    expect(tokensA?.accessToken).toBe(SECRETS.newAccess);
+    expect(tokensB?.accessToken).toBe(SECRETS.newAccess);
+    expect(storedTokens().refreshToken).toBe(SECRETS.rotatedRefresh);
   });
 
   it('falls back to the connect prompt when an expired set has no refresh token', async () => {
