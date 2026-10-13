@@ -335,6 +335,58 @@ describe('renderIdentityReport', () => {
     );
   });
 
+  const DISCORD_ID = '1287595364798693490';
+  const DISCORD_PROFILE = `https://discord.com/users/${DISCORD_ID}`;
+
+  it('links a Discord member name to their Discord profile', () => {
+    const html = renderIdentityReport(
+      [change({ subjectId: DISCORD_ID })],
+      range,
+      new Map(),
+      new Map([[identityNameKey('discord', 'g1', DISCORD_ID), 'George']]),
+    );
+
+    expect(html).toContain(
+      `<a href="${DISCORD_PROFILE}" rel="noopener noreferrer"><bdi>George</bdi></a> <span class="raw">(${DISCORD_ID})</span>`,
+    );
+  });
+
+  it('links the bare Discord id when no name is stored', () => {
+    const html = renderIdentityReport(
+      [change({ subjectId: DISCORD_ID })],
+      range,
+      new Map(),
+    );
+
+    expect(html).toContain(
+      `<td class="who"><a href="${DISCORD_PROFILE}" rel="noopener noreferrer">${DISCORD_ID}</a></td>`,
+    );
+  });
+
+  it('links the Discord account a Meetup member is linked to', () => {
+    const html = renderIdentityReport(
+      [meetupRow()],
+      range,
+      new Map([['404060606', DISCORD_ID]]),
+      meetupName('Jane D.'),
+    );
+
+    expect(html).toContain(
+      ` · Discord <a href="${DISCORD_PROFILE}" rel="noopener noreferrer">${DISCORD_ID}</a>`,
+    );
+  });
+
+  it('does not build an href from a Discord id that is not numeric', () => {
+    const html = renderIdentityReport(
+      [change({ subjectId: '1" onmouseover="alert(1)' })],
+      range,
+      new Map(),
+    );
+
+    expect(html).not.toContain('<a ');
+    expect(html).not.toContain('" onmouseover="');
+  });
+
   it('shows only the id for a Discord member with no stored name', () => {
     const html = renderIdentityReport([change()], range, new Map());
 

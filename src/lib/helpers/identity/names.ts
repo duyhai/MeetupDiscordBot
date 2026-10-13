@@ -93,6 +93,16 @@ export function meetupProfileUrl(meetupMemberId: string): string | undefined {
     : undefined;
 }
 
+/**
+ * A Discord user's profile, which opens in the app or the browser. Same
+ * numeric-only rule as meetupProfileUrl, for the same reason.
+ */
+export function discordProfileUrl(discordUserId: string): string | undefined {
+  return /^\d+$/.test(discordUserId)
+    ? `https://discord.com/users/${discordUserId}`
+    : undefined;
+}
+
 const MAX_DISPLAY_LENGTH = 64;
 
 // Characters that draw nothing: zero-width space and marks, bidi overrides

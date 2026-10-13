@@ -5,6 +5,7 @@ import {
 } from '../../repositories/identityTypes.js';
 import {
   IdentityNames,
+  discordProfileUrl,
   displayNameFor,
   meetupDisplayNameFor,
   meetupProfileUrl,
@@ -94,15 +95,24 @@ function img(thumb: Buffer | null): string {
  * shows their name as a link to their Meetup profile, the raw Meetup id (it
  * is what survives a rename and what an organizer searches with), and the
  * linked Discord user id where the link table has one. Discord mention
- * markup is useless in a static HTML file, so ids render as text.
+ * markup is useless in a static HTML file, so Discord members and linked
+ * accounts link to discord.com/users/<id> instead.
  *
- * Names are attacker-controlled and are HTML-escaped; the href is built only
- * from a numeric id (see meetupProfileUrl).
+ * Names are attacker-controlled and are HTML-escaped; every href is built
+ * only from a numeric id (see meetupProfileUrl, discordProfileUrl).
  */
 // <bdi> isolates the name's direction, so a bidi override inside it cannot
 // visually reorder the id rendered beside it.
 function bdi(name: string): string {
   return `<bdi>${escapeHtml(name)}</bdi>`;
+}
+
+// Only ever called with a url from meetupProfileUrl/discordProfileUrl, which
+// build it from a numeric id; `content` is already escaped by the caller.
+function profileLink(url: string | undefined, content: string): string {
+  return url
+    ? `<a href="${url}" rel="noopener noreferrer">${content}</a>`
+    : content;
 }
 
 function memberCell(
@@ -113,23 +123,31 @@ function memberCell(
   const id = escapeHtml(change.subjectId);
   if (change.platform === 'discord') {
     const name = displayNameFor(change, names);
-    return name ? `${bdi(name)} <span class="raw">(${id})</span>` : id;
+    const url = discordProfileUrl(change.subjectId);
+    return name
+      ? `${profileLink(url, bdi(name))} <span class="raw">(${id})</span>`
+      : profileLink(url, id);
   }
   const name = meetupDisplayNameFor(change, names);
-  const url = meetupProfileUrl(change.subjectId);
-  const text = name ? bdi(name) : id;
-  const member = url
-    ? `<a href="${url}" rel="noopener noreferrer">${text}</a>`
-    : text;
+  const member = profileLink(
+    meetupProfileUrl(change.subjectId),
+    name ? bdi(name) : id,
+  );
   const rawId = name ? ` <span class="raw">(Meetup ${id})</span>` : '';
   const discordUserId = meetupToDiscord.get(change.subjectId);
-  const linked = discordUserId ? ` · Discord ${escapeHtml(discordUserId)}` : '';
+  const linked = discordUserId
+    ? ` · Discord ${profileLink(
+        discordProfileUrl(discordUserId),
+        escapeHtml(discordUserId),
+      )}`
+    : '';
   return `${member}${rawId}${linked}`;
 }
 
 /**
  * Base64 inflates by 4/3; the markup around each row is up to roughly 500
- * bytes (a named Meetup row carries a profile link, the name and both ids).
+ * bytes (a named, linked Meetup row carries two profile links, the name and
+ * both ids: about 400 with a typical name).
  *
  * Takes counts rather than rows so the command can ask Postgres for
  * `count(*)` and `sum(octet_length(...))` and refuse an oversized range

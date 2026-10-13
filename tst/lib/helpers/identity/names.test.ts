@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   discordDisplayName,
+  discordProfileUrl,
   displayNameFor,
   escapeDiscordLinkText,
   escapeDiscordText,
@@ -63,6 +64,19 @@ describe('meetupProfileUrl', () => {
   it('refuses a non-numeric id, which could otherwise smuggle markup into the url', () => {
     expect(meetupProfileUrl('1) [x](https://evil.example')).toBeUndefined();
     expect(meetupProfileUrl('')).toBeUndefined();
+  });
+});
+
+describe('discordProfileUrl', () => {
+  it('builds the user profile url', () => {
+    expect(discordProfileUrl('1287595364798693490')).toBe(
+      'https://discord.com/users/1287595364798693490',
+    );
+  });
+
+  it('refuses a non-numeric id', () => {
+    expect(discordProfileUrl('1" onmouseover="x')).toBeUndefined();
+    expect(discordProfileUrl('')).toBeUndefined();
   });
 });
 
