@@ -235,6 +235,14 @@ the general bot activity log, since the entries carry member names and
 disciplinary detail. Failures still raise an alert in the bot alerts
 channel.
 
+`/meetup_get_host_event_stats` logs there as well (added 2026-10-13 at Hai's
+request): it carries nothing disciplinary, but moderators run it alongside
+the no-show report and expect to find both in one place. Because its runs
+land in the staff channel, the handler now makes the same
+moderator-or-organizer check as `/meetup_get_noshow_event_stats`, before any
+Meetup read. A refused run posts nothing to the moderation channel; like any
+failed command it raises a "failed" alert in the bot alerts channel.
+
 ## Testing
 
 - Unit tests for the pure logic (cancelled filtering, recurring-event

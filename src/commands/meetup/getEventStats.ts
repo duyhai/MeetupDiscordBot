@@ -135,6 +135,12 @@ export class MeetupGetEventStatsCommands {
     const shouldShowDates = showDates ?? true;
     const shouldIncludeLinks = includeLinks ?? true;
     await discordCommandWrapper(interaction, async () => {
+      // Its run is logged to the staff channel, so it is gated like the
+      // no-show stats: a refused member reads nothing and logs nothing there.
+      await requireModOrOrganizer(
+        interaction,
+        'Only moderators and organizers can view hosting stats.',
+      );
       await withMeetupClient(interaction, async (meetupClient) => {
         logger.info('Fetching data');
         await interaction.editReply({ content: 'Sit tight! Fetching data.' });
@@ -231,6 +237,19 @@ ${readyToPost}`;
             });
           },
         );
+        // Logged with the other monthly report commands in the staff
+        // channel, where moderators look for them, rather than the general
+        // activity log.
+        await logModerationAction(interaction, {
+          title: 'Hosting stats run',
+          description: `${interaction.user.toString()} ran /meetup_get_host_event_stats for ${year}${
+            month > 0 ? `-${month}` : ' (whole year)'
+          }.`,
+          fields: [
+            { name: 'Events', value: String(totalEvents), inline: true },
+            { name: 'Hosts', value: String(hostStats.length), inline: true },
+          ],
+        });
       });
     });
   }
