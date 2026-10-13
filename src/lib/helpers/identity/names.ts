@@ -35,7 +35,7 @@ export function displayNameFor(
   const name = names.get(
     identityNameKey(subject.platform, subject.scopeId, subject.subjectId),
   );
-  return name && name.trim() ? name : undefined;
+  return name && sanitizeDisplayText(name) ? name : undefined;
 }
 
 /**
@@ -60,8 +60,9 @@ export function meetupDisplayNameFor(
     return undefined;
   }
   return (
-    [change.newValue, change.oldValue].find((value) => value && value.trim()) ??
-    undefined
+    [change.newValue, change.oldValue].find(
+      (value) => value && sanitizeDisplayText(value),
+    ) ?? undefined
   );
 }
 
@@ -76,7 +77,7 @@ export function discordDisplayName(snapshot: {
 }): string | null {
   return (
     [snapshot.nickname, snapshot.globalName, snapshot.username].find(
-      (value) => value && value.trim(),
+      (value) => value && sanitizeDisplayText(value),
     ) ?? null
   );
 }
@@ -94,14 +95,56 @@ export function meetupProfileUrl(meetupMemberId: string): string | undefined {
 
 const MAX_DISPLAY_LENGTH = 64;
 
-// Bidi overrides/isolates and zero-width characters: invisible, and able to
-// reorder or disguise the rest of the row.
-const INVISIBLE = /[\u200B-\u200F\u202A-\u202E\u2060-\u2069\uFEFF]/g;
+// Characters that draw nothing: zero-width space and marks, bidi overrides
+// and isolates, word joiners, the Hangul fillers, soft hyphen, combining
+// grapheme joiner, Mongolian vowel separator, Arabic letter mark. Able to
+// fake a blank name, or to reorder or disguise the rest of the row. The two
+// joiners (U+200C, U+200D) are deliberately NOT here -- see ORPHAN_JOINER.
+const INVISIBLE =
+  /[\u00AD\u034F\u061C\u115F\u1160\u180E\u200B\u200E\u200F\u202A-\u202E\u2060-\u2069\u3164\uFEFF\uFFA0]/g;
+// A joiner is kept only where it does its job: between letters (Persian and
+// Indic scripts need the non-joiner) or between emoji (family and flag
+// sequences need the joiner). Anywhere else -- leading, trailing, beside a
+// space, doubled, or all on its own -- it is just another invisible.
+const ORPHAN_JOINER =
+  /(?<![\p{L}\p{M}\p{Extended_Pictographic}\uFE0F\u{1F3FB}-\u{1F3FF}])[\u200C\u200D]|[\u200C\u200D](?![\p{L}\p{Extended_Pictographic}])/gu;
+const JOINER = /[\u200C\u200D]/g;
 const WHITESPACE_OR_CONTROL = /[\s\u0000-\u001F\u007F]+/g;
 // Everything Discord's markdown gives meaning to mid-line: emphasis, code,
 // spoilers, link text and targets, mentions (<@id>, <@&role>, @everyone),
 // channel links, custom emoji and bare urls (via the colon).
 const MARKDOWN = /[\\*_~`|[\]()<>#:@]/g;
+
+/**
+ * The one definition of what a name or value "is" once the characters that
+ * draw nothing are gone. Every picker decides blankness on this, so a name
+ * made only of invisible characters falls back to the id instead of
+ * rendering as an empty link or an empty pair of brackets.
+ */
+export function sanitizeDisplayText(text: string): string {
+  return text
+    .replace(INVISIBLE, '')
+    .replace(ORPHAN_JOINER, '')
+    .replace(WHITESPACE_OR_CONTROL, ' ')
+    .trim();
+}
+
+/**
+ * What a reader actually sees: sanitizeDisplayText with the surviving
+ * joiners removed too. A joiner between two Latin letters is kept for
+ * display but draws nothing, so comparing sanitised text alone would call
+ * "Bob" and "Bo<ZWJ>b" different while showing them identically.
+ */
+export function visibleSkeleton(text: string): string {
+  return sanitizeDisplayText(text).replace(JOINER, '');
+}
+
+function truncate(text: string, maxLength: number): string {
+  const points = Array.from(text);
+  return points.length > maxLength
+    ? `${points.slice(0, maxLength).join('')}…`
+    : text;
+}
 
 /**
  * Makes attacker-controlled text (a Meetup or Discord name) safe to place in
@@ -115,14 +158,25 @@ export function escapeDiscordText(
   text: string,
   maxLength: number = MAX_DISPLAY_LENGTH,
 ): string {
-  const flat = text
-    .replace(INVISIBLE, '')
-    .replace(WHITESPACE_OR_CONTROL, ' ')
-    .trim();
-  const points = Array.from(flat);
-  const cut =
-    points.length > maxLength
-      ? `${points.slice(0, maxLength).join('')}…`
-      : flat;
-  return cut.replace(MARKDOWN, '\\$&');
+  return truncate(sanitizeDisplayText(text), maxLength).replace(
+    MARKDOWN,
+    '\\$&',
+  );
+}
+
+/**
+ * escapeDiscordText for the text of a masked link, `[text](url)`.
+ *
+ * Square brackets become parentheses instead of being escaped: a
+ * backslash-escaped bracket inside link text stops Discord matching the link
+ * at all, so "Jane [she/her]" would have rendered as raw markup.
+ */
+export function escapeDiscordLinkText(
+  text: string,
+  maxLength: number = MAX_DISPLAY_LENGTH,
+): string {
+  return escapeDiscordText(
+    text.replace(/\[/g, '(').replace(/\]/g, ')'),
+    maxLength,
+  );
 }

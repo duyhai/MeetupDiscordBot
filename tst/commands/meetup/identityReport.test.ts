@@ -266,6 +266,15 @@ describe('estimateReportBytesFromCounts', () => {
     );
   });
 
+  it('allows for the name, link and id markup on every row', () => {
+    // A named, linked Meetup row carries about 500 bytes of markup; the old
+    // 300 would under-count a large report and let it past the guard.
+    expect(
+      estimateReportBytesFromCounts(1001, 0) -
+        estimateReportBytesFromCounts(1, 0),
+    ).toBe(500_000);
+  });
+
   it('counts base64 inflation, not just the raw bytes', () => {
     // 3 MB of thumbnails is ~4 MB once base64-encoded into the document.
     expect(estimateReportBytesFromCounts(0, 3_000_000)).toBeGreaterThan(

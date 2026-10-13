@@ -14,9 +14,11 @@ import { runMeetupSweep } from './meetupSweep.js';
 import {
   IdentityNames,
   displayNameFor,
+  escapeDiscordLinkText,
   escapeDiscordText,
   meetupDisplayNameFor,
   meetupProfileUrl,
+  visibleSkeleton,
 } from './names.js';
 import { runIdentitySweep } from './sweep.js';
 
@@ -80,6 +82,14 @@ const MAX_DESCRIPTION = 4096; // Discord's hard embed description limit
  * and comfortably below where that cost matters.
  */
 export const DIGEST_PAGE_LIMIT = 5000;
+
+/**
+ * Names are only looked up for rows that can be shown. The embed fits a few
+ * dozen rows (the shortest possible row is ~40 characters, so never more
+ * than ~100), and rows are shown in order from the first; resolving names
+ * for all of DIGEST_PAGE_LIMIT would be thousands of lookups nobody reads.
+ */
+export const DIGEST_NAME_LOOKUP_LIMIT = 200;
 
 // Short on purpose: every line already carries a platform label (below), so
 // these do not need to repeat "Meetup" -- they only need to read as distinct
@@ -187,7 +197,8 @@ const MAX_VALUE_LENGTH = 100;
  * mention when the link table has one. No angle brackets round the url: this
  * goes out in an embed description, and embeds never unfurl link previews.
  *
- * Every name is attacker-controlled and goes through escapeDiscordText.
+ * Every name is attacker-controlled and goes through escapeDiscordText (or
+ * its link-text variant, inside the masked link).
  */
 function subjectFor(
   change: IdentityChangeMetadata,
@@ -200,11 +211,11 @@ function subjectFor(
       ? `<@${change.subjectId}> (${escapeDiscordText(name)})`
       : `<@${change.subjectId}>`;
   }
-  const text = escapeDiscordText(
-    meetupDisplayNameFor(change, names) ?? change.subjectId,
-  );
+  const shown = meetupDisplayNameFor(change, names) ?? change.subjectId;
   const url = meetupProfileUrl(change.subjectId);
-  const member = url ? `[${text}](${url})` : text;
+  const member = url
+    ? `[${escapeDiscordLinkText(shown)}](${url})`
+    : escapeDiscordText(shown);
   const discordId = meetupToDiscord.get(change.subjectId);
   return discordId ? `${member} (<@${discordId}>)` : member;
 }
@@ -213,6 +224,26 @@ function quoted(value: string | null): string {
   return value === null || value === undefined
     ? '—'
     : escapeDiscordText(value, MAX_VALUE_LENGTH);
+}
+
+/**
+ * Sanitising the values for display can erase the very change the row
+ * reports: "Bob" -> "Bo<zero-width space>b" would read `"Bob" → "Bob"`. An
+ * invisible-character edit made to imitate another member is exactly what
+ * this monitor exists to surface, so say that is what happened.
+ */
+function invisibleOnlyNote(change: IdentityChangeMetadata): string {
+  const { oldValue, newValue } = change;
+  if (
+    typeof oldValue !== 'string' ||
+    typeof newValue !== 'string' ||
+    oldValue === newValue
+  ) {
+    return '';
+  }
+  return visibleSkeleton(oldValue) === visibleSkeleton(newValue)
+    ? ' (differs only in invisible characters or spacing)'
+    : '';
 }
 
 function line(
@@ -229,7 +260,7 @@ function line(
   }
   return `${time}  ${platform}  ${who}  ${label} "${quoted(
     change.oldValue,
-  )}" → "${quoted(change.newValue)}"`;
+  )}" → "${quoted(change.newValue)}"${invisibleOnlyNote(change)}`;
 }
 
 const stamp = (date: Date) => date.toISOString().slice(0, 16).replace('T', ' ');
@@ -428,7 +459,9 @@ export async function runIdentityDigestOnce(client: Client): Promise<void> {
     // degrades to mentions and ids rather than costing the day's digest.
     let names: IdentityNames = new Map();
     try {
-      names = await repo.listIdentityNames(changes);
+      names = await repo.listIdentityNames(
+        changes.slice(0, DIGEST_NAME_LOOKUP_LIMIT),
+      );
     } catch (error: unknown) {
       logger.error(`Identity name lookup failed: ${String(error)}`);
     }

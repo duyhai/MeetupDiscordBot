@@ -99,6 +99,12 @@ function img(thumb: Buffer | null): string {
  * Names are attacker-controlled and are HTML-escaped; the href is built only
  * from a numeric id (see meetupProfileUrl).
  */
+// <bdi> isolates the name's direction, so a bidi override inside it cannot
+// visually reorder the id rendered beside it.
+function bdi(name: string): string {
+  return `<bdi>${escapeHtml(name)}</bdi>`;
+}
+
 function memberCell(
   change: IdentityChangeRecord,
   meetupToDiscord: Map<string, string>,
@@ -107,11 +113,11 @@ function memberCell(
   const id = escapeHtml(change.subjectId);
   if (change.platform === 'discord') {
     const name = displayNameFor(change, names);
-    return name ? `${escapeHtml(name)} <span class="raw">(${id})</span>` : id;
+    return name ? `${bdi(name)} <span class="raw">(${id})</span>` : id;
   }
   const name = meetupDisplayNameFor(change, names);
   const url = meetupProfileUrl(change.subjectId);
-  const text = name ? escapeHtml(name) : id;
+  const text = name ? bdi(name) : id;
   const member = url
     ? `<a href="${url}" rel="noopener noreferrer">${text}</a>`
     : text;
@@ -122,7 +128,8 @@ function memberCell(
 }
 
 /**
- * Base64 inflates by 4/3; the markup around each row is roughly 300 bytes.
+ * Base64 inflates by 4/3; the markup around each row is up to roughly 500
+ * bytes (a named Meetup row carries a profile link, the name and both ids).
  *
  * Takes counts rather than rows so the command can ask Postgres for
  * `count(*)` and `sum(octet_length(...))` and refuse an oversized range
@@ -132,7 +139,7 @@ export function estimateReportBytesFromCounts(
   changeCount: number,
   thumbBytes: number,
 ): number {
-  return Math.ceil((thumbBytes * 4) / 3) + changeCount * 300 + 2048;
+  return Math.ceil((thumbBytes * 4) / 3) + changeCount * 500 + 2048;
 }
 
 /** In-memory equivalent, used as a backstop once rows are already loaded. */

@@ -307,10 +307,85 @@ describe('formatIdentityDigest', () => {
     );
 
     expect(entry?.description).toContain(
-      `[Jane\\]\\(https\\://evil.example\\) \\[x](${PROFILE})`,
+      `[Jane\\)\\(https\\://evil.example\\) \\(x](${PROFILE})`,
     );
-    // No unescaped "](" other than the one this code wrote.
-    expect(entry?.description.match(/(?<!\\)\]\(/g)).toHaveLength(1);
+    // The only square brackets on the row are the two this code wrote.
+    expect(entry?.description.match(/[[\]]/g)).toHaveLength(2);
+  });
+
+  it('keeps the link intact for a name containing square brackets', () => {
+    const entry = formatIdentityDigest(
+      [meetupChange()],
+      stats,
+      new Map(),
+      meetupName('Jane [she/her]'),
+    );
+
+    expect(entry?.description).toContain(`[Jane \\(she/her\\)](${PROFILE})`);
+  });
+
+  it('falls back to the id for a Meetup name made only of invisible characters', () => {
+    const entry = formatIdentityDigest(
+      [meetupChange()],
+      stats,
+      new Map(),
+      meetupName('\u200B\u3164'),
+    );
+
+    expect(entry?.description).toContain(`[279964402](${PROFILE})`);
+    expect(entry?.description).not.toContain('[](');
+  });
+
+  it('shows the mention alone for a Discord name made only of invisible characters', () => {
+    const entry = formatIdentityDigest(
+      [change()],
+      stats,
+      new Map(),
+      discordName('\u200B\u2060'),
+    );
+
+    expect(entry?.description).toContain('Discord  <@u1>  user avatar changed');
+    expect(entry?.description).not.toContain('()');
+  });
+
+  const NOTE = '(differs only in invisible characters or spacing)';
+  const rename = (oldValue: string, newValue: string) =>
+    formatIdentityDigest(
+      [change({ field: 'nickname', oldValue, newValue })],
+      stats,
+      new Map(),
+    )?.description;
+
+  it('says so when a change is only a zero-width character', () => {
+    // Otherwise the row reads "Bob" -> "Bob": the edit an impersonator would
+    // make is the one the digest would render as nothing having happened.
+    expect(rename('Bob', 'Bo\u200Bb')).toContain(`"Bob" → "Bob" ${NOTE}`);
+  });
+
+  it('says so when a change is only a bidi override', () => {
+    expect(rename('Bob', '\u202EBob')).toContain(NOTE);
+  });
+
+  it('says so when a change is only a joiner between letters', () => {
+    expect(rename('Bob', 'Bo\u200Db')).toContain(NOTE);
+  });
+
+  it('says so when a change is only spacing', () => {
+    expect(rename('Bob Lee', 'Bob  Lee ')).toContain(NOTE);
+  });
+
+  it('adds no note to a visible change', () => {
+    expect(rename('Bob', 'B0b')).not.toContain(NOTE);
+  });
+
+  it('adds no note when a value was set or cleared', () => {
+    const entry = formatIdentityDigest(
+      [change({ field: 'nickname', oldValue: null, newValue: '\u200B' })],
+      stats,
+      new Map(),
+    );
+
+    expect(entry?.description).not.toContain(NOTE);
   });
 
   it('defuses mentions in a name', () => {
@@ -509,6 +584,28 @@ describe('runIdentityDigestOnce', () => {
     const [, entry] = vi.mocked(logAlert).mock.calls[0];
     expect(entry.description).toContain(`[279964402](${PROFILE})`);
     expect(repo.setDigestCursor).toHaveBeenCalled();
+    // Exactly one post: the failure neither drops the digest nor adds an
+    // alert of its own. And the day is finished, so no later tick re-runs it.
+    expect(vi.mocked(logAlert)).toHaveBeenCalledTimes(1);
+    expect(cache.set).toHaveBeenCalledWith(
+      'identity-digest-done-2026-08-16',
+      '1',
+      expect.any(Number),
+    );
+  });
+
+  it('looks up names only for rows that could be shown', async () => {
+    const rows = Array.from({ length: 300 }, (_, i) =>
+      meetupChange({ id: String(i), subjectId: String(100000000 + i) }),
+    );
+    repo.listChangesMetadataAfterId.mockResolvedValue(rows);
+
+    await runIdentityDigestOnce(client);
+
+    // The embed fits a few dozen rows; resolving names for up to
+    // DIGEST_PAGE_LIMIT of them would be thousands of wasted lookups.
+    const [subjects] = repo.listIdentityNames.mock.calls[0] as [unknown[]];
+    expect(subjects).toEqual(rows.slice(0, 200));
   });
 
   const client = {} as Client;

@@ -236,7 +236,7 @@ describe('renderIdentityReport', () => {
     );
 
     expect(html).toContain(
-      `<a href="${PROFILE}" rel="noopener noreferrer">Jane D.</a>`,
+      `<a href="${PROFILE}" rel="noopener noreferrer"><bdi>Jane D.</bdi></a>`,
     );
     // The id stays visible: it is what survives a rename.
     expect(html).toContain('(Meetup 404060606)');
@@ -250,7 +250,7 @@ describe('renderIdentityReport', () => {
       meetupName('Jane D.'),
     );
 
-    expect(html).toContain('>Jane D.</a>');
+    expect(html).toContain('<bdi>Jane D.</bdi></a>');
     expect(html).toContain('Discord discord-1');
   });
 
@@ -269,7 +269,7 @@ describe('renderIdentityReport', () => {
       new Map(),
     );
 
-    expect(html).toContain('>J. Doe</a>');
+    expect(html).toContain('<bdi>J. Doe</bdi></a>');
   });
 
   it('escapes html in a Meetup name', () => {
@@ -282,7 +282,7 @@ describe('renderIdentityReport', () => {
 
     expect(html).not.toContain('<script>');
     expect(html).toContain(
-      '&lt;/a&gt;&lt;script&gt;alert(1)&lt;/script&gt;</a>',
+      '<bdi>&lt;/a&gt;&lt;script&gt;alert(1)&lt;/script&gt;</bdi></a>',
     );
   });
 
@@ -305,7 +305,34 @@ describe('renderIdentityReport', () => {
       new Map([[identityNameKey('discord', 'g1', 'u1'), 'Ngò <b>']]),
     );
 
-    expect(html).toContain('Ngò &lt;b&gt; <span class="raw">(u1)</span>');
+    expect(html).toContain(
+      '<bdi>Ngò &lt;b&gt;</bdi> <span class="raw">(u1)</span>',
+    );
+  });
+
+  it('isolates a name so a bidi override cannot reorder the id beside it', () => {
+    const html = renderIdentityReport(
+      [meetupRow()],
+      range,
+      new Map(),
+      meetupName('\u202Eenaj'),
+    );
+
+    // The override stays inside <bdi>, whose isolation ends its reach.
+    expect(html).toMatch(/<bdi>[^<]*<\/bdi><\/a> <span class="raw">\(Meetup/);
+  });
+
+  it('shows the id for a name made only of invisible characters', () => {
+    const html = renderIdentityReport(
+      [meetupRow()],
+      range,
+      new Map(),
+      meetupName('\u200B\u3164'),
+    );
+
+    expect(html).toContain(
+      `<a href="${PROFILE}" rel="noopener noreferrer">404060606</a>`,
+    );
   });
 
   it('shows only the id for a Discord member with no stored name', () => {

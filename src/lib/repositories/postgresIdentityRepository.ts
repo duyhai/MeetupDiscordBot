@@ -13,6 +13,7 @@ import {
   IdentitySubject,
   discordDisplayName,
   identityNameKey,
+  sanitizeDisplayText,
 } from '../helpers/identity/names.js';
 import {
   ChangeSource,
@@ -384,7 +385,7 @@ export class PostgresIdentityRepository {
         [meetup.scopeIds, meetup.subjectIds],
       );
       result.rows.forEach((row) => {
-        if (row.name && row.name.trim()) {
+        if (row.name && sanitizeDisplayText(row.name)) {
           names.set(
             identityNameKey('meetup', row.scope_id, row.meetup_member_id),
             row.name,
