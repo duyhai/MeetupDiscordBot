@@ -9,6 +9,12 @@ import {
   StoredMeetupSnapshot,
 } from '../helpers/identity/meetupSnapshot.js';
 import {
+  IdentityNames,
+  IdentitySubject,
+  discordDisplayName,
+  identityNameKey,
+} from '../helpers/identity/names.js';
+import {
   ChangeSource,
   ChangeThumbMap,
   IdentityBaselineThumbs,
@@ -308,6 +314,86 @@ export class PostgresIdentityRepository {
     );
     const row = result.rows[0];
     return row ? toMeetupSnapshot(row) : undefined;
+  }
+
+  /**
+   * Display names for the subjects of a set of changes, keyed by
+   * identityNameKey, read from the stored baselines.
+   *
+   * At most two queries however many subjects are passed, and no thumbnail
+   * columns: this runs inside the digest, on a pool of two connections.
+   * Subjects with no baseline row, or no stored name, are simply absent.
+   */
+  async listIdentityNames(subjects: IdentitySubject[]): Promise<IdentityNames> {
+    const names: IdentityNames = new Map();
+    const pairsFor = (platform: IdentityPlatform) => {
+      const unique = new Map<string, IdentitySubject>();
+      subjects
+        .filter((subject) => subject.platform === platform)
+        .forEach((subject) =>
+          unique.set(`${subject.scopeId}:${subject.subjectId}`, subject),
+        );
+      const list = [...unique.values()];
+      return {
+        scopeIds: list.map((subject) => subject.scopeId),
+        subjectIds: list.map((subject) => subject.subjectId),
+      };
+    };
+
+    const discord = pairsFor('discord');
+    if (discord.subjectIds.length > 0) {
+      const result = await this.pool.query<{
+        scope_id: string;
+        discord_user_id: string;
+        username: string | null;
+        global_name: string | null;
+        nickname: string | null;
+      }>(
+        `SELECT scope_id, discord_user_id, username, global_name, nickname
+           FROM member_identity
+          WHERE (scope_id, discord_user_id) IN (
+                  SELECT * FROM unnest($1::text[], $2::text[]))`,
+        [discord.scopeIds, discord.subjectIds],
+      );
+      result.rows.forEach((row) => {
+        const name = discordDisplayName({
+          nickname: row.nickname,
+          globalName: row.global_name,
+          username: row.username,
+        });
+        if (name) {
+          names.set(
+            identityNameKey('discord', row.scope_id, row.discord_user_id),
+            name,
+          );
+        }
+      });
+    }
+
+    const meetup = pairsFor('meetup');
+    if (meetup.subjectIds.length > 0) {
+      const result = await this.pool.query<{
+        scope_id: string;
+        meetup_member_id: string;
+        name: string | null;
+      }>(
+        `SELECT scope_id, meetup_member_id, name
+           FROM meetup_identity
+          WHERE (scope_id, meetup_member_id) IN (
+                  SELECT * FROM unnest($1::text[], $2::text[]))`,
+        [meetup.scopeIds, meetup.subjectIds],
+      );
+      result.rows.forEach((row) => {
+        if (row.name && row.name.trim()) {
+          names.set(
+            identityNameKey('meetup', row.scope_id, row.meetup_member_id),
+            row.name,
+          );
+        }
+      });
+    }
+
+    return names;
   }
 
   /** Same presence-versus-value rule for `thumbs` as putSnapshot. */

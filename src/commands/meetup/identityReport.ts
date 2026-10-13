@@ -6,6 +6,7 @@ import {
 import { Discord, Slash, SlashOption } from 'discordx';
 import { Logger } from 'tslog';
 
+import { IdentityNames } from '../../lib/helpers/identity/names.js';
 import {
   MAX_REPORT_BYTES,
   estimateReportBytes,
@@ -69,6 +70,7 @@ export function buildReportAttachment(
   // the promise the spec makes on both: a Meetup change resolves to the
   // linked Discord account where one exists.
   meetupToDiscord: Map<string, string> = new Map(),
+  names: IdentityNames = new Map(),
 ): ReportAttachment {
   const to = new Date();
   const from = new Date(to.getTime() - days * 24 * 60 * 60 * 1000);
@@ -81,7 +83,7 @@ export function buildReportAttachment(
   return {
     ok: true,
     fileName: `identity-report-${to.toISOString().slice(0, 10)}.html`,
-    html: renderIdentityReport(changes, { from, to }, meetupToDiscord),
+    html: renderIdentityReport(changes, { from, to }, meetupToDiscord, names),
   };
 }
 
@@ -156,9 +158,22 @@ export class IdentityReportCommands {
 
       const changes = await repo.listChangesBetween(from, to);
       const meetupToDiscord = await buildMeetupToDiscordMap();
+      // Names make the rows readable; a failed lookup degrades to ids rather
+      // than refusing the report.
+      let names: IdentityNames = new Map();
+      try {
+        names = await repo.listIdentityNames(changes);
+      } catch (error: unknown) {
+        logger.error(`Identity name lookup failed: ${String(error)}`);
+      }
 
       // Backstop only: the pre-fetch measurement above is the real guard.
-      const built = buildReportAttachment(changes, windowDays, meetupToDiscord);
+      const built = buildReportAttachment(
+        changes,
+        windowDays,
+        meetupToDiscord,
+        names,
+      );
       // `=== false` (not `!built.ok`): this project builds without
       // strictNullChecks, and without it plain truthy/falsy checks don't
       // reliably narrow a discriminated union — only literal equality does.

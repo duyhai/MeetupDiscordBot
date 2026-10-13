@@ -3,6 +3,12 @@ import {
   IdentityField,
   IdentityPlatform,
 } from '../../repositories/identityTypes.js';
+import {
+  IdentityNames,
+  displayNameFor,
+  meetupDisplayNameFor,
+  meetupProfileUrl,
+} from './names.js';
 
 /**
  * Sized to the DYNO, not to Discord's upload limit.
@@ -83,28 +89,36 @@ function img(thumb: Buffer | null): string {
 /**
  * Renders the Member cell.
  *
- * The spec promises the Meetup-to-Discord mapping on BOTH surfaces, but only
- * the digest had it: the report showed a bare 9-digit Meetup id, which is
- * exactly the "member 404060606 changed their photo" the mapping exists to
- * avoid. Discord mention markup is useless in a static HTML file, so this
- * renders the resolved Discord user id as text and always keeps the raw
- * Meetup id alongside -- the raw id is what an organizer needs to search
- * Meetup with, so resolving must add information rather than replace it.
+ * Same promise as the digest: a row says WHO, not just which id. A Discord
+ * member shows their stored name with the user id alongside; a Meetup member
+ * shows their name as a link to their Meetup profile, the raw Meetup id (it
+ * is what survives a rename and what an organizer searches with), and the
+ * linked Discord user id where the link table has one. Discord mention
+ * markup is useless in a static HTML file, so ids render as text.
+ *
+ * Names are attacker-controlled and are HTML-escaped; the href is built only
+ * from a numeric id (see meetupProfileUrl).
  */
 function memberCell(
   change: IdentityChangeRecord,
   meetupToDiscord: Map<string, string>,
+  names: IdentityNames,
 ): string {
+  const id = escapeHtml(change.subjectId);
   if (change.platform === 'discord') {
-    return escapeHtml(change.subjectId);
+    const name = displayNameFor(change, names);
+    return name ? `${escapeHtml(name)} <span class="raw">(${id})</span>` : id;
   }
+  const name = meetupDisplayNameFor(change, names);
+  const url = meetupProfileUrl(change.subjectId);
+  const text = name ? escapeHtml(name) : id;
+  const member = url
+    ? `<a href="${url}" rel="noopener noreferrer">${text}</a>`
+    : text;
+  const rawId = name ? ` <span class="raw">(Meetup ${id})</span>` : '';
   const discordUserId = meetupToDiscord.get(change.subjectId);
-  if (!discordUserId) {
-    return escapeHtml(change.subjectId);
-  }
-  return `${escapeHtml(discordUserId)} <span class="raw">(Meetup ${escapeHtml(
-    change.subjectId,
-  )})</span>`;
+  const linked = discordUserId ? ` · Discord ${escapeHtml(discordUserId)}` : '';
+  return `${member}${rawId}${linked}`;
 }
 
 /**
@@ -137,6 +151,7 @@ export function renderIdentityReport(
   // Defaulted so a caller with no link table still renders raw ids rather
   // than throwing -- the documented fallback, not a new failure mode.
   meetupToDiscord: Map<string, string> = new Map(),
+  names: IdentityNames = new Map(),
 ): string {
   const header = `Identity changes ${range.from
     .toISOString()
@@ -162,7 +177,7 @@ ${changes
     return `<tr>
 <td class="when">${change.detectedAt.toISOString().replace('T', ' ').slice(0, 16)}</td>
 <td>${escapeHtml(PLATFORM_LABELS[change.platform])}</td>
-<td class="who">${memberCell(change, meetupToDiscord)}</td>
+<td class="who">${memberCell(change, meetupToDiscord, names)}</td>
 <td>${escapeHtml(FIELD_LABELS[change.field])}</td>
 <td>${isAvatarField ? img(change.oldThumb) : escapeHtml(change.oldValue)}</td>
 <td>${isAvatarField ? img(change.newThumb) : escapeHtml(change.newValue)}</td>

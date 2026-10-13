@@ -11,6 +11,7 @@ import {
 import { logAlert } from '../../../../src/lib/helpers/discordLogger.js';
 import { runMeetupSweep } from '../../../../src/lib/helpers/identity/meetupSweep.js';
 import { runIdentitySweep } from '../../../../src/lib/helpers/identity/sweep.js';
+import { identityNameKey } from '../../../../src/lib/helpers/identity/names.js';
 import { IdentityChangeRecord } from '../../../../src/lib/repositories/identityTypes.js';
 
 const repo = vi.hoisted(() => ({
@@ -20,6 +21,7 @@ const repo = vi.hoisted(() => ({
   getDigestCursor: vi.fn(),
   setDigestCursor: vi.fn(),
   storageStats: vi.fn(),
+  listIdentityNames: vi.fn(),
 }));
 const cache = vi.hoisted(() => ({
   exclusive_set: vi.fn(),
@@ -70,6 +72,20 @@ const change = (
 });
 
 const stats = { changeCount: 1204, totalBytes: 64_000_000 };
+
+const meetupChange = (over: Partial<IdentityChangeRecord> = {}) =>
+  change({
+    platform: 'meetup',
+    scopeId: 'grp',
+    subjectId: '279964402',
+    field: 'photo',
+    ...over,
+  });
+const meetupName = (name: string, subjectId = '279964402') =>
+  new Map([[identityNameKey('meetup', 'grp', subjectId), name]]);
+const discordName = (name: string, subjectId = 'u1') =>
+  new Map([[identityNameKey('discord', 'g1', subjectId), name]]);
+const PROFILE = 'https://www.meetup.com/members/279964402/';
 
 describe('formatIdentityDigest', () => {
   it('returns undefined when there were no changes', () => {
@@ -142,6 +158,275 @@ describe('formatIdentityDigest', () => {
     // A missing link must never render as a broken mention.
     expect(entry?.description).not.toContain('<@undefined>');
   });
+
+  it('shows a Meetup member by name, linked to their Meetup profile', () => {
+    const entry = formatIdentityDigest(
+      [meetupChange()],
+      stats,
+      new Map(),
+      meetupName('Jane D.'),
+    );
+
+    expect(entry?.description).toContain(
+      `Meetup  [Jane D.](${PROFILE})  profile photo changed`,
+    );
+  });
+
+  it('follows the Meetup name with the linked Discord mention', () => {
+    const entry = formatIdentityDigest(
+      [meetupChange()],
+      stats,
+      new Map([['279964402', '123']]),
+      meetupName('Jane D.'),
+    );
+
+    expect(entry?.description).toContain(
+      `Meetup  [Jane D.](${PROFILE}) (<@123>)  profile photo changed`,
+    );
+  });
+
+  it('links the bare Meetup id when no name is stored', () => {
+    const entry = formatIdentityDigest([meetupChange()], stats, new Map());
+
+    expect(entry?.description).toContain(
+      `Meetup  [279964402](${PROFILE})  profile photo changed`,
+    );
+  });
+
+  it('links the bare Meetup id when the stored name is blank', () => {
+    const entry = formatIdentityDigest(
+      [meetupChange()],
+      stats,
+      new Map(),
+      meetupName('  '),
+    );
+
+    expect(entry?.description).toContain(`[279964402](${PROFILE})`);
+  });
+
+  it('does not build a link from a Meetup id that is not numeric', () => {
+    const entry = formatIdentityDigest(
+      [meetupChange({ subjectId: '1) [x](https://evil.example' })],
+      stats,
+      new Map(),
+    );
+
+    expect(entry?.description).not.toContain('](https://evil.example');
+    expect(entry?.description).not.toContain('meetup.com/members');
+  });
+
+  it('labels a Meetup name change with the current name, next to old and new', () => {
+    const entry = formatIdentityDigest(
+      [
+        meetupChange({
+          field: 'name',
+          oldValue: 'Jane D.',
+          newValue: 'J. Doe',
+        }),
+      ],
+      stats,
+      new Map(),
+      meetupName('J. Doe'),
+    );
+
+    expect(entry?.description).toContain(
+      `Meetup  [J. Doe](${PROFILE})  name "Jane D." → "J. Doe"`,
+    );
+  });
+
+  it('labels a name change from the row itself when the baseline is gone', () => {
+    // The baseline row is deleted when a member is forgotten; the change row
+    // still carries the name, which beats a bare id.
+    const entry = formatIdentityDigest(
+      [
+        meetupChange({
+          field: 'name',
+          oldValue: 'Jane D.',
+          newValue: 'J. Doe',
+        }),
+      ],
+      stats,
+      new Map(),
+    );
+
+    expect(entry?.description).toContain(`[J. Doe](${PROFILE})`);
+  });
+
+  it('does not label a member with a photo id or a username', () => {
+    const entry = formatIdentityDigest(
+      [
+        meetupChange({ field: 'photo', newValue: 'photo-hash' }),
+        meetupChange({ field: 'username', oldValue: 'a', newValue: 'handle' }),
+      ],
+      stats,
+      new Map(),
+    );
+
+    expect(entry?.description).not.toContain('[photo-hash]');
+    expect(entry?.description).not.toContain('[handle]');
+  });
+
+  it('adds a plain-text name to a Discord row, keeping the mention', () => {
+    const entry = formatIdentityDigest(
+      [change()],
+      stats,
+      new Map(),
+      discordName('Ngò 🌿'),
+    );
+
+    // A mention only renders for a viewer whose client has that user cached;
+    // the text beside it is what keeps the row readable for everyone else.
+    expect(entry?.description).toContain(
+      'Discord  <@u1> (Ngò 🌿)  user avatar changed',
+    );
+  });
+
+  it('renders a Discord row with the mention alone when no name is stored', () => {
+    const entry = formatIdentityDigest([change()], stats, new Map());
+
+    expect(entry?.description).toContain('Discord  <@u1>  user avatar changed');
+  });
+
+  it('does not give a Discord row the name of a Meetup member sharing its id', () => {
+    const entry = formatIdentityDigest(
+      [change({ subjectId: '279964402' })],
+      stats,
+      new Map(),
+      meetupName('Jane D.'),
+    );
+
+    expect(entry?.description).not.toContain('Jane D.');
+  });
+
+  it('escapes a Meetup name that tries to close the link and open its own', () => {
+    const entry = formatIdentityDigest(
+      [meetupChange()],
+      stats,
+      new Map(),
+      meetupName('Jane](https://evil.example) [x'),
+    );
+
+    expect(entry?.description).toContain(
+      `[Jane\\]\\(https\\://evil.example\\) \\[x](${PROFILE})`,
+    );
+    // No unescaped "](" other than the one this code wrote.
+    expect(entry?.description.match(/(?<!\\)\]\(/g)).toHaveLength(1);
+  });
+
+  it('defuses mentions in a name', () => {
+    const entry = formatIdentityDigest(
+      [meetupChange()],
+      stats,
+      new Map(),
+      meetupName('@everyone <@&555> <@999>'),
+    );
+
+    expect(entry?.description).not.toMatch(/(?<!\\)@everyone/);
+    expect(entry?.description).not.toContain('<@&555>');
+    expect(entry?.description).not.toContain('<@999>');
+  });
+
+  it('keeps a name with a newline on one row', () => {
+    const entry = formatIdentityDigest(
+      [meetupChange()],
+      stats,
+      new Map(),
+      meetupName('Jane\n09:00  Discord  <@1>  user avatar changed'),
+    );
+
+    const rows = entry?.description.split('\n\n')[0].split('\n');
+    expect(rows).toHaveLength(1);
+  });
+
+  it('escapes markdown in a Discord name', () => {
+    const entry = formatIdentityDigest(
+      [change()],
+      stats,
+      new Map(),
+      discordName('**bold** `code` ) <@&555>'),
+    );
+
+    expect(entry?.description).toContain(
+      '<@u1> (\\*\\*bold\\*\\* \\`code\\` \\) \\<\\@&555\\>)',
+    );
+  });
+
+  it('escapes the old and new values of a text change', () => {
+    const entry = formatIdentityDigest(
+      [
+        change({
+          field: 'nickname',
+          oldValue: '<@&555>',
+          newValue: 'x\n@everyone [a](https://evil.example)',
+        }),
+      ],
+      stats,
+      new Map(),
+    );
+
+    expect(entry?.description).toContain(
+      'nickname "\\<\\@&555\\>" → "x \\@everyone \\[a\\]\\(https\\://evil.example\\)"',
+    );
+  });
+
+  it('still shows a dash for an absent old or new value', () => {
+    const entry = formatIdentityDigest(
+      [change({ field: 'nickname', oldValue: null, newValue: 'Nick' })],
+      stats,
+      new Map(),
+    );
+
+    expect(entry?.description).toContain('nickname "—" → "Nick"');
+  });
+
+  it('stays inside the embed limit when every row carries a long name and link', () => {
+    const names = new Map<string, string>();
+    const many = Array.from({ length: 300 }, (_, i) => {
+      const subjectId = String(100000000 + i);
+      names.set(identityNameKey('meetup', 'grp', subjectId), '*'.repeat(500));
+      return meetupChange({ id: String(i), subjectId });
+    });
+
+    const entry = formatIdentityDigest(
+      many,
+      stats,
+      new Map(many.map((c) => [c.subjectId, `9${c.subjectId}`])),
+      names,
+    );
+
+    expect(entry?.description.length).toBeLessThanOrEqual(4096);
+    expect(entry?.description).toContain(
+      'run /meetup_identity_report for the full list',
+    );
+    expect(entry?.description).toContain('Storage:');
+    // Truncated on a row boundary: every row shown is complete.
+    const rows = entry?.description.split('\n\n')[0].split('\n') ?? [];
+    rows
+      .filter((row) => !row.startsWith('…and'))
+      .forEach((row) => expect(row).toMatch(/profile photo changed$/));
+    const shown = rows.filter((row) => !row.startsWith('…and')).length;
+    expect(entry?.description).toContain(`…and ${300 - shown} more`);
+  });
+
+  it('bounds a single row no matter how long its name and values are', () => {
+    const entry = formatIdentityDigest(
+      [
+        meetupChange({
+          field: 'name',
+          oldValue: 'a'.repeat(5000),
+          newValue: 'b'.repeat(5000),
+        }),
+      ],
+      stats,
+      new Map(),
+      meetupName('c'.repeat(5000)),
+    );
+
+    // An unbounded row would not fit, be dropped, and leave a digest that
+    // reports "1 change" and shows none.
+    expect(entry?.description).toContain(PROFILE);
+    expect(entry?.description.length).toBeLessThan(600);
+  });
 });
 
 describe('identityDigestWindow', () => {
@@ -191,12 +476,40 @@ describe('runIdentityDigestOnce', () => {
     repo.setDigestCursor.mockResolvedValue(undefined);
     repo.listChangesMetadataAfterId.mockResolvedValue([change()]);
     repo.storageStats.mockResolvedValue(stats);
+    repo.listIdentityNames.mockResolvedValue(new Map());
     memberRepo.listAll.mockResolvedValue([]);
     vi.mocked(logAlert).mockResolvedValue(true);
     vi.mocked(runIdentitySweep).mockResolvedValue({ scanned: 0, changed: 0 });
     vi.mocked(runMeetupSweep).mockResolvedValue({ scanned: 0, changed: 0 });
   });
   afterEach(() => vi.useRealTimers());
+
+  it('names the members in the digest from the stored baselines', async () => {
+    const rows = [meetupChange(), change()];
+    repo.listChangesMetadataAfterId.mockResolvedValue(rows);
+    repo.listIdentityNames.mockResolvedValue(
+      new Map([...meetupName('Jane D.'), ...discordName('George')]),
+    );
+
+    await runIdentityDigestOnce(client);
+
+    expect(repo.listIdentityNames).toHaveBeenCalledWith(rows);
+    const [, entry] = vi.mocked(logAlert).mock.calls[0];
+    expect(entry.description).toContain(`[Jane D.](${PROFILE})`);
+    expect(entry.description).toContain('<@u1> (George)');
+  });
+
+  it('still posts the digest, with ids, when the name lookup fails', async () => {
+    repo.listChangesMetadataAfterId.mockResolvedValue([meetupChange()]);
+    repo.listIdentityNames.mockRejectedValue(new Error('pool exhausted'));
+
+    await runIdentityDigestOnce(client);
+
+    // Names are decoration. Losing them must not cost the day's evidence.
+    const [, entry] = vi.mocked(logAlert).mock.calls[0];
+    expect(entry.description).toContain(`[279964402](${PROFILE})`);
+    expect(repo.setDigestCursor).toHaveBeenCalled();
+  });
 
   const client = {} as Client;
 

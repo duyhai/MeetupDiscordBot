@@ -4,6 +4,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 
 import { GUILD_ID } from '../../src/constants.js';
 import { MeetupSnapshot } from '../../src/lib/helpers/identity/meetupSnapshot.js';
+import { identityNameKey } from '../../src/lib/helpers/identity/names.js';
 import { PostgresIdentityRepository } from '../../src/lib/repositories/postgresIdentityRepository.js';
 import { IdentitySnapshot } from '../../src/lib/repositories/identityTypes.js';
 
@@ -845,6 +846,99 @@ describe.skipIf(!POSTGRES_AVAILABLE)('PostgresIdentityRepository', () => {
       ...discordSnap,
       userAvatarThumb: null,
       memberAvatarThumb: null,
+    });
+  });
+
+  describe('listIdentityNames', () => {
+    const subject = (
+      platform: 'discord' | 'meetup',
+      scopeId: string,
+      subjectId: string,
+    ) => ({ platform, scopeId, subjectId });
+
+    it('returns the stored Meetup name for a Meetup subject', async () => {
+      const snap = freshMeetupSnapshot();
+      await repo.putMeetupSnapshot(snap);
+
+      const names = await repo.listIdentityNames([
+        subject('meetup', snap.scopeId, snap.meetupMemberId),
+      ]);
+
+      expect(
+        names.get(identityNameKey('meetup', snap.scopeId, snap.meetupMemberId)),
+      ).toBe('Jane D.');
+    });
+
+    it('returns the nickname for a Discord subject, falling back down the chain', async () => {
+      const withNick = freshSnapshot();
+      const globalOnly = { ...freshSnapshot(), nickname: null };
+      const usernameOnly = {
+        ...freshSnapshot(),
+        nickname: null,
+        globalName: null,
+      };
+      await repo.putSnapshot(withNick);
+      await repo.putSnapshot(globalOnly);
+      await repo.putSnapshot(usernameOnly);
+
+      const names = await repo.listIdentityNames(
+        [withNick, globalOnly, usernameOnly].map((snap) =>
+          subject('discord', snap.scopeId, snap.discordUserId),
+        ),
+      );
+
+      const nameOf = (snap: IdentitySnapshot) =>
+        names.get(identityNameKey('discord', snap.scopeId, snap.discordUserId));
+      expect(nameOf(withNick)).toBe('Some One');
+      expect(nameOf(globalOnly)).toBe('Someone');
+      expect(nameOf(usernameOnly)).toBe('someone');
+    });
+
+    it('omits a subject with no baseline or no stored name', async () => {
+      const nameless = { ...freshMeetupSnapshot(), name: null };
+      await repo.putMeetupSnapshot(nameless);
+
+      const names = await repo.listIdentityNames([
+        subject('meetup', nameless.scopeId, nameless.meetupMemberId),
+        subject('meetup', MEETUP_SCOPE, `missing-${crypto.randomUUID()}`),
+        subject('discord', DEFAULT_SCOPE, `missing-${crypto.randomUUID()}`),
+      ]);
+
+      expect(names.size).toBe(0);
+    });
+
+    it('does not cross platforms or scopes for the same subject id', async () => {
+      const sharedId = `shared-${crypto.randomUUID()}`;
+      await repo.putMeetupSnapshot({
+        ...freshMeetupSnapshot(),
+        meetupMemberId: sharedId,
+      });
+
+      const names = await repo.listIdentityNames([
+        // Same id, but as a Discord subject and as a Meetup subject in
+        // another group: neither is the member that was stored.
+        subject('discord', MEETUP_SCOPE, sharedId),
+        subject('meetup', 'another-group', sharedId),
+      ]);
+
+      expect(names.size).toBe(0);
+    });
+
+    it('resolves both platforms, and repeated subjects, in one call', async () => {
+      const discord = freshSnapshot();
+      const meetup = freshMeetupSnapshot();
+      await repo.putSnapshot(discord);
+      await repo.putMeetupSnapshot(meetup);
+      const d = subject('discord', discord.scopeId, discord.discordUserId);
+      const m = subject('meetup', meetup.scopeId, meetup.meetupMemberId);
+
+      const names = await repo.listIdentityNames([d, m, d, m, m]);
+
+      expect(names.size).toBe(2);
+    });
+
+    it('returns an empty map for no subjects', async () => {
+      expect((await repo.listIdentityNames([])).size).toBe(0);
     });
   });
 });
