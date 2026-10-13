@@ -135,6 +135,12 @@ export class MeetupGetEventStatsCommands {
     const shouldShowDates = showDates ?? true;
     const shouldIncludeLinks = includeLinks ?? true;
     await discordCommandWrapper(interaction, async () => {
+      // Its run is logged to the staff channel, so it is gated like the
+      // no-show stats: a refused member reads nothing and logs nothing there.
+      await requireModOrOrganizer(
+        interaction,
+        'Only moderators and organizers can view hosting stats.',
+      );
       await withMeetupClient(interaction, async (meetupClient) => {
         logger.info('Fetching data');
         await interaction.editReply({ content: 'Sit tight! Fetching data.' });
