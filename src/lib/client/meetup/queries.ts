@@ -225,6 +225,8 @@ export const getGroupMembersByIds = gql`
 // One member's RSVPs in this group, reached through the group's member list
 // (there is no root query by member ID). Meetup honours groupId and the
 // statuses, but not reliably startDate/endDate, so callers filter by date.
+// The fee and description are opt-in: only the no-show report's upcoming-RSVP
+// lookup reads them, and descriptions would bloat the long past-RSVP lists.
 export const getMemberRsvps = gql`
   query (
     $urlname: String!
@@ -232,6 +234,7 @@ export const getMemberRsvps = gql`
     $first: Int!
     $after: String
     $filter: RsvpFilter
+    $withPaymentInfo: Boolean = false
   ) {
     groupByUrlname(urlname: $urlname) {
       id
@@ -254,6 +257,11 @@ export const getMemberRsvps = gql`
                     title
                     dateTime
                     eventUrl
+                    description @include(if: $withPaymentInfo)
+                    feeSettings @include(if: $withPaymentInfo) {
+                      amount
+                      currency
+                    }
                   }
                 }
               }
