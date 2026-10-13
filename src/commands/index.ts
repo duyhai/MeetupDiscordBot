@@ -3,6 +3,7 @@ import { MeetupGetEventStatsCommands } from './meetup/getEventStats.js';
 import { MeetupNoShowCommands } from './meetup/getNoShow.js';
 import { MeetupGetTokenCommands } from './meetup/getToken.js';
 import { MeetupGetUnannouncedEventsCommands } from './meetup/getUnannouncedEvents.js';
+import { IdentityReportCommands } from './meetup/identityReport.js';
 import { MeetupListSuspensionsCommands } from './meetup/listSuspensions.js';
 import { MeetupNoShowReportCommands } from './meetup/noShowReport.js';
 import { MeetupRecordSuspensionCommands } from './meetup/recordSuspension.js';
@@ -15,6 +16,7 @@ import { WhereHaveWeMetCommands } from './meetup/whereHaveWeMet.js';
 import { SendMessageCommands } from './sendMessage.js';
 
 const Commands = [
+  IdentityReportCommands,
   MeetupCreateEventCommands,
   MeetupGetEventStatsCommands,
   MeetupListSuspensionsCommands,
