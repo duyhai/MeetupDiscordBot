@@ -54,6 +54,7 @@ export const BOT_ACTIVITY_LOG_CHANNEL_ID = '1537755629849149442';
 export const BOT_ALERTS_CHANNEL_ID = '1537755631602237473';
 // Staff-only channel for no-show reports, suspension records, and voids:
 // member names and disciplinary details stay out of the general bot log.
+// The monthly hosting stats run is logged here too, beside the no-show ones.
 export const MODERATION_LOG_CHANNEL_ID = '932897527940931594';
 
 // OAuth landing page destinations

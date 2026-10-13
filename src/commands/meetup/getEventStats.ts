@@ -231,6 +231,19 @@ ${readyToPost}`;
             });
           },
         );
+        // Logged with the other monthly report commands in the staff
+        // channel, where moderators look for them, rather than the general
+        // activity log.
+        await logModerationAction(interaction, {
+          title: 'Hosting stats run',
+          description: `${interaction.user.toString()} ran /meetup_get_host_event_stats for ${year}${
+            month > 0 ? `-${month}` : ' (whole year)'
+          }.`,
+          fields: [
+            { name: 'Events', value: String(totalEvents), inline: true },
+            { name: 'Hosts', value: String(hostStats.length), inline: true },
+          ],
+        });
       });
     });
   }

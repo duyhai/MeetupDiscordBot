@@ -235,6 +235,10 @@ the general bot activity log, since the entries carry member names and
 disciplinary detail. Failures still raise an alert in the bot alerts
 channel.
 
+`/meetup_get_host_event_stats` logs there as well (added 2026-10-13 at Hai's
+request): it carries nothing disciplinary, but moderators run it alongside
+the no-show report and expect to find both in one place.
+
 ## Testing
 
 - Unit tests for the pure logic (cancelled filtering, recurring-event
