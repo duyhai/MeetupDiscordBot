@@ -216,7 +216,16 @@ export interface GetGroupMembersByIdsResponse {
 export type EventSummary = Pick<
   Event,
   'dateTime' | 'eventUrl' | 'id' | 'title'
->;
+> & {
+  /** Only fetched when payment info is asked for. */
+  description?: string | null;
+  /**
+   * The fee Meetup lists for the event; null when it is free. Only fetched
+   * when payment info is asked for. It says the event costs money, not that
+   * a given member has paid.
+   */
+  feeSettings?: { amount: number; currency: string } | null;
+};
 
 export interface GetSelfPastRsvpEventsResponse {
   self: {
@@ -262,6 +271,7 @@ export type GetGroupMembersByIdsInput = {
   first: number;
   memberIds: number[];
   urlname: string;
+  withPaymentInfo?: boolean;
 };
 
 export interface CreateEventInput {

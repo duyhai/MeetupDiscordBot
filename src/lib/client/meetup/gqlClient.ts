@@ -420,11 +420,14 @@ export class GqlMeetupClient {
    *
    * Not cached: no-shows are marked after events and upcoming RSVPs change,
    * so a 12-hour-old answer would mislead the no-show report.
+   *
+   * `withPaymentInfo` adds each event's fee and description.
    */
   public async getMemberRsvpEvents(
     memberId: string,
     groupId: string,
     filter: MemberRsvpFilter,
+    { withPaymentInfo = false }: { withPaymentInfo?: boolean } = {},
   ): Promise<EventSummary[] | undefined> {
     logger.info(
       `Calling getMemberRsvpEvents with input: ${JSON.stringify({
@@ -447,6 +450,7 @@ export class GqlMeetupClient {
           first: MEMBER_RSVP_PAGE_SIZE,
           after,
           filter: { groupId, ...filter },
+          ...(withPaymentInfo && { withPaymentInfo }),
         });
       } catch (error) {
         logger.error(error);

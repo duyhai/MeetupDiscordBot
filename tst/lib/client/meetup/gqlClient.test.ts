@@ -237,6 +237,57 @@ describe('GqlMeetupClient.getMemberRsvpEvents', () => {
     expect(sent[1].after).toBe('after-e1');
   });
 
+  it('asks for fee and description only when payment info is requested', async () => {
+    type Sent = { query: string; variables: { withPaymentInfo?: boolean } };
+    const sent: Sent[] = [];
+    graphqlScope()
+      .times(2)
+      .reply(200, (_uri, body: Sent) => {
+        sent.push(body);
+        const page = rsvpPage([
+          { id: 'e1', dateTime: '2026-10-30T19:00:00-07:00' },
+        ]);
+        if (body.variables.withPaymentInfo) {
+          Object.assign(
+            page.data.groupByUrlname.memberships.edges[0].node.rsvps.edges[0]
+              .node.event,
+            {
+              feeSettings: { amount: 25, currency: 'USD' },
+              description: 'Level up!',
+            },
+          );
+        }
+        return page;
+      });
+
+    const client = new GqlMeetupClient('test-access-token');
+    const filter = {
+      rsvpStatus: ['YES' as const],
+      eventStatus: ['UPCOMING' as const],
+    };
+    const plain = await client.getMemberRsvpEvents('100', '7595882', filter);
+    const withPayment = await client.getMemberRsvpEvents(
+      '100',
+      '7595882',
+      filter,
+      { withPaymentInfo: true },
+    );
+
+    expect(sent[0].variables).not.toHaveProperty('withPaymentInfo');
+    expect(plain?.[0].feeSettings).toBeUndefined();
+    expect(sent[1].variables.withPaymentInfo).toBe(true);
+    expect(sent[1].query).toMatch(
+      /feeSettings @include\(if: \$withPaymentInfo\)/,
+    );
+    expect(sent[1].query).toMatch(
+      /description @include\(if: \$withPaymentInfo\)/,
+    );
+    expect(withPayment?.[0].feeSettings).toEqual({
+      amount: 25,
+      currency: 'USD',
+    });
+  });
+
   it('returns undefined for someone who is no longer a group member', async () => {
     graphqlScope().reply(200, {
       data: { groupByUrlname: { id: '7595882', memberships: { edges: [] } } },

@@ -14,9 +14,11 @@ import {
   formatNoShowReport,
   formatSuspensionCsv,
   nextEvent,
+  paymentNote,
   recommendedSuspensionDays,
   suspensionHistory,
   tallyNoShows,
+  upcomingEvents,
 } from '../../../src/lib/helpers/noShowReport.js';
 import { parseSuspensionCsv } from '../../../src/lib/helpers/suspensionCsv.js';
 import { SuspensionRecord } from '../../../src/lib/repositories/types.js';
@@ -262,6 +264,70 @@ describe('nextEvent', () => {
   });
 });
 
+describe('upcomingEvents', () => {
+  it('keeps every event still ahead, earliest first', () => {
+    const past = event('2026-09-27T18:00:00-07:00');
+    const later = event('2026-11-01T18:00:00-07:00');
+    const sooner = event('2026-10-03T18:00:00-07:00');
+    const middle = event('2026-10-17T10:00:00-07:00');
+    expect(
+      upcomingEvents([later, past, sooner, middle], now).map((e) => e.id),
+    ).toEqual([sooner.id, middle.id, later.id]);
+  });
+});
+
+describe('paymentNote', () => {
+  const upcoming = (extra: Partial<EventSummary>) => ({
+    ...event('2026-10-30T19:00:00-07:00'),
+    ...extra,
+  });
+
+  it('names the fee Meetup lists for the event', () => {
+    expect(
+      paymentNote(upcoming({ feeSettings: { amount: 25, currency: 'USD' } })),
+    ).toBe('$25 event fee');
+    expect(
+      paymentNote(upcoming({ feeSettings: { amount: 12.5, currency: 'USD' } })),
+    ).toBe('$12.50 event fee');
+    expect(
+      paymentNote(upcoming({ feeSettings: { amount: 20, currency: 'CAD' } })),
+    ).toBe('20 CAD event fee');
+  });
+
+  it.each([
+    'Please pay the host $10 at the door.',
+    'Venmo @host before Friday',
+    'Tickets are PAID in advance',
+    'This is a prepaid dinner',
+    'Payment covers lanes and shoes',
+  ])('flags a description that mentions payment: %s', (description) => {
+    expect(paymentNote(upcoming({ feeSettings: null, description }))).toBe(
+      'description mentions payment',
+    );
+  });
+
+  it('prefers the Meetup fee over a description mention', () => {
+    expect(
+      paymentNote(
+        upcoming({
+          feeSettings: { amount: 25, currency: 'USD' },
+          description: 'Pay on Meetup',
+        }),
+      ),
+    ).toBe('$25 event fee');
+  });
+
+  it.each([
+    {},
+    { feeSettings: null },
+    { feeSettings: { amount: 0, currency: 'USD' } },
+    { feeSettings: null, description: 'A free walk around Green Lake.' },
+    { description: 'Unpaid volunteers run this; bring a papaya.' },
+  ])('is undefined for an event with no sign of payment: %j', (extra) => {
+    expect(paymentNote(upcoming(extra))).toBeUndefined();
+  });
+});
+
 describe('tallyNoShows', () => {
   it('accumulates events per member across events', () => {
     const alice = member('1');
@@ -293,9 +359,24 @@ const suspensionCase: NoShowCase = {
   classification: 'suspension',
   priorSuspensions: 1,
   recommendedDays: 60,
-  nextRsvpEvent: event('2026-10-10T18:00:00-07:00', 'Bowling'),
+  upcomingRsvps: [event('2026-10-10T18:00:00-07:00', 'Bowling')],
   actBy: '2026-10-07',
   actNow: false,
+};
+const paidCase: NoShowCase = {
+  ...suspensionCase,
+  upcomingRsvps: [
+    event('2026-10-10T18:00:00-07:00', 'Bowling'),
+    {
+      ...event('2026-10-20T18:00:00-07:00', 'Dinner'),
+      feeSettings: null,
+      description: 'Venmo the host $15',
+    },
+    {
+      ...event('2026-10-30T19:00:00-07:00', 'Halloween'),
+      feeSettings: { amount: 25, currency: 'USD' },
+    },
+  ],
 };
 
 describe('formatNoShowReport', () => {
@@ -335,9 +416,59 @@ describe('formatNoShowReport', () => {
 
   it('notes when a candidate has no upcoming RSVPs', () => {
     const text = report([
-      { ...suspensionCase, nextRsvpEvent: undefined, actBy: undefined },
+      { ...suspensionCase, upcomingRsvps: [], actBy: undefined },
     ]);
-    expect(text).toContain('no upcoming RSVPs');
+    expect(text).toContain(
+      'no upcoming RSVPs in the group — suspend at any time',
+    );
+    expect(text).not.toContain('Upcoming RSVPs');
+  });
+
+  it('lists every upcoming RSVP in order, with Seattle date and time', () => {
+    const lines = report([paidCase]).split('\n');
+    const heading = lines.indexOf('    Upcoming RSVPs (3), earliest first:');
+    expect(heading).toBeGreaterThan(-1);
+    expect(lines.slice(heading + 1, heading + 4)).toEqual([
+      `        [Bowling](${paidCase.upcomingRsvps?.[0].eventUrl}) October 10, 2026 6:00 PM`,
+      `        [Dinner](${paidCase.upcomingRsvps?.[1].eventUrl}) October 20, 2026 6:00 PM — 💲 description mentions payment`,
+      `        [Halloween](${paidCase.upcomingRsvps?.[2].eventUrl}) October 30, 2026 7:00 PM — 💲 $25 event fee`,
+    ]);
+  });
+
+  it('keeps the counted no-shows under their own heading, apart from upcoming RSVPs', () => {
+    const lines = report([paidCase]).split('\n');
+    const counted = lines.indexOf('    No-shows counted (2):');
+    const upcoming = lines.indexOf('    Upcoming RSVPs (3), earliest first:');
+    expect(counted).toBeGreaterThan(-1);
+    expect(upcoming).toBeGreaterThan(counted);
+    const between = lines.slice(counted + 1, upcoming).join('\n');
+    expect(between).toMatch(/Hike[\s\S]*Picnic/);
+    expect(between).not.toMatch(/Bowling|Dinner|Halloween/);
+    expect(lines.slice(upcoming + 1).join('\n')).not.toMatch(/Hike|Picnic/);
+  });
+
+  it('bases the act-by line on the earliest upcoming RSVP', () => {
+    expect(report([paidCase])).toContain(
+      '    act by Oct 7, 2026 (aim for 3–5 days before Bowling, the next RSVP)',
+    );
+  });
+
+  it('cautions when any upcoming RSVP may involve payment, and only then', () => {
+    const caution =
+      '⚠️ 2 upcoming RSVPs may involve payment — check whether they paid before suspending';
+    expect(report([paidCase])).toContain(caution);
+    expect(report([suspensionCase])).not.toContain('may involve payment');
+    expect(
+      report([
+        { ...paidCase, upcomingRsvps: paidCase.upcomingRsvps?.slice(0, 2) },
+      ]),
+    ).toContain('⚠️ 1 upcoming RSVP may involve payment');
+  });
+
+  it('leaves a warning entry as it was', () => {
+    expect(report([warningCase])).toContain(
+      `**[Alice](https://meetup.com/members/1001) ID: 1001** — 1 no-show since 2025-09-28 (12 months ago)\n    [Trivia](${warningCase.counted[0].eventUrl}) September 5, 2026 6:00 PM\n\n`,
+    );
   });
 
   it('lists members with nothing countable and members who left', () => {
@@ -356,8 +487,22 @@ describe('formatSuspensionCsv', () => {
   it('emits only suspension candidates, with the date left for the moderator', () => {
     expect(formatSuspensionCsv([warningCase, suspensionCase])).toBe(
       'member_id,member_name,duration_days,suspended_at,notes\n' +
-        '"1002","Bob","60","","act by 2026-10-07; 2 no-shows since 2026-03-01; prior suspensions: 1"',
+        '"1002","Bob","60","","act by 2026-10-07; upcoming RSVPs: 1; 2 no-shows since 2026-03-01; prior suspensions: 1"',
     );
+  });
+
+  it('notes upcoming RSVPs, and how many may involve payment, without adding a column', () => {
+    const csv = formatSuspensionCsv([paidCase]) ?? '';
+    expect(csv).toBe(
+      'member_id,member_name,duration_days,suspended_at,notes\n' +
+        '"1002","Bob","60","","act by 2026-10-07; upcoming RSVPs: 3 (2 may involve payment); ' +
+        '2 no-shows since 2026-03-01; prior suspensions: 1"',
+    );
+    const [row] = parseSuspensionCsv(
+      csv.replace('"60",""', '"60","2026-10-05"'),
+    );
+    expect(row.durationDays).toBe(60);
+    expect(row.notes).toContain('upcoming RSVPs: 3 (2 may involve payment)');
   });
 
   it('returns undefined when there are no suspension candidates', () => {
@@ -387,7 +532,7 @@ describe('formatSuspensionCsv', () => {
         durationDays: 60,
         suspendedAt: new Date('2026-10-05T00:00:00Z'),
         notes:
-          'act by 2026-10-07; 2 no-shows since 2026-03-01; prior suspensions: 1',
+          'act by 2026-10-07; upcoming RSVPs: 1; 2 no-shows since 2026-03-01; prior suspensions: 1',
         rowNumber: 2,
       },
     ]);

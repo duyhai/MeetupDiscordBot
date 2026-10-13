@@ -22,9 +22,9 @@ import {
   buildNoShowCases,
   formatNoShowReport,
   formatSuspensionCsv,
-  nextEvent,
   suspensionHistory,
   tallyNoShows,
+  upcomingEvents,
 } from '../../lib/helpers/noShowReport.js';
 import { PostgresSuspensionRepository } from '../../lib/repositories/postgresSuspensionRepository.js';
 import {
@@ -76,11 +76,13 @@ async function getRsvpEventsByMember(
   groupId: string,
   memberIds: string[],
   filter: Parameters<GqlMeetupClient['getMemberRsvpEvents']>[2],
+  options?: Parameters<GqlMeetupClient['getMemberRsvpEvents']>[3],
 ): Promise<Map<string, EventSummary[] | undefined>> {
   const events = await mapWithConcurrency(
     memberIds,
     MEETUP_CONCURRENCY,
-    (memberId) => meetupClient.getMemberRsvpEvents(memberId, groupId, filter),
+    (memberId) =>
+      meetupClient.getMemberRsvpEvents(memberId, groupId, filter, options),
   );
   return new Map(memberIds.map((memberId, i) => [memberId, events[i]]));
 }
@@ -97,8 +99,11 @@ async function getSuspensionHistories(
   return new Map(memberIds.map((memberId, i) => [memberId, histories[i]]));
 }
 
-/** Adds the next RSVP'd event and act-by day to each suspension candidate. */
-async function withNextEvents(
+/**
+ * Adds every upcoming RSVP to each suspension candidate, plus the act-by day
+ * from the earliest one.
+ */
+async function withUpcomingRsvps(
   meetupClient: GqlMeetupClient,
   groupId: string,
   cases: NoShowCase[],
@@ -112,12 +117,12 @@ async function withNextEvents(
     groupId,
     candidateIds,
     { rsvpStatus: ['YES'], eventStatus: ['UPCOMING'] },
+    { withPaymentInfo: true },
   );
   return cases.map((c) => {
-    const next = nextEvent(upcoming.get(c.member.id) ?? [], now);
-    return next
-      ? { ...c, nextRsvpEvent: next, ...actByDate(next.dateTime, now) }
-      : c;
+    const upcomingRsvps = upcomingEvents(upcoming.get(c.member.id) ?? [], now);
+    const next = upcomingRsvps.at(0);
+    return next ? { ...c, upcomingRsvps, ...actByDate(next.dateTime, now) } : c;
   });
 }
 
@@ -236,7 +241,7 @@ export class MeetupNoShowReportCommands {
           historyByMember,
           now,
         });
-        result.cases = await withNextEvents(
+        result.cases = await withUpcomingRsvps(
           meetupClient,
           groupId,
           result.cases,

@@ -8,6 +8,9 @@
  * - 1 countable no-show → warning; 2+ → suspension candidate.
  * - Suspension length: 30 days × 2^(prior suspensions).
  * - Act 3–5 days before the member's next RSVP'd event.
+ * - A candidate's upcoming RSVPs are all listed, and any that may involve
+ *   payment flagged, so a suspension doesn't cost someone an event they
+ *   paid for without a moderator having looked.
  *
  * Every date comparison is by Seattle calendar day: suspensions are stored as
  * date-only values, and an evening event is already the next day in UTC.
@@ -110,15 +113,47 @@ export function actByDate(
   return { actBy, actNow: actBy <= localDay(now) };
 }
 
+/** The `events` still ahead of `now`, earliest first. */
+export function upcomingEvents(
+  events: EventSummary[],
+  now: dayjs.Dayjs,
+): EventSummary[] {
+  return events
+    .filter((event) => dayjs(event.dateTime).isAfter(now))
+    .sort((a, b) => dayjs(a.dateTime).valueOf() - dayjs(b.dateTime).valueOf());
+}
+
 /** The earliest of `events` still ahead of `now`, if any. */
 export function nextEvent(
   events: EventSummary[],
   now: dayjs.Dayjs,
 ): EventSummary | undefined {
-  return events
-    .filter((event) => dayjs(event.dateTime).isAfter(now))
-    .sort((a, b) => dayjs(a.dateTime).valueOf() - dayjs(b.dateTime).valueOf())
-    .at(0);
+  return upcomingEvents(events, now).at(0);
+}
+
+// Most paid events here are settled by Venmo outside Meetup, so the fee
+// alone misses them. Matches pay/pays/payment/paid/prepaid and Venmo, but
+// not "unpaid".
+const PAYMENT_MENTION = /\b(?:pre-?)?(?:pay|paid)|\bvenmo\b/i;
+
+/**
+ * Why an event may have cost the member money, if it may have: the fee
+ * Meetup lists, or else a mention of paying in the description. Neither
+ * shows that this member actually paid.
+ */
+export function paymentNote(event: EventSummary): string | undefined {
+  const fee = event.feeSettings;
+  if (fee && fee.amount > 0) {
+    const amount = Number.isInteger(fee.amount)
+      ? String(fee.amount)
+      : fee.amount.toFixed(2);
+    return `${
+      fee.currency === 'USD' ? `$${amount}` : `${amount} ${fee.currency}`
+    } event fee`;
+  }
+  return PAYMENT_MENTION.test(event.description ?? '')
+    ? 'description mentions payment'
+    : undefined;
 }
 
 export type NoShowTally = Map<
@@ -151,8 +186,9 @@ export interface NoShowCase {
   classification: 'warning' | 'suspension';
   priorSuspensions?: number;
   recommendedDays?: number;
-  nextRsvpEvent?: EventSummary;
-  /** YYYY-MM-DD. */
+  /** Upcoming YES RSVPs in the group, earliest first. */
+  upcomingRsvps?: EventSummary[];
+  /** YYYY-MM-DD, from the earliest upcoming RSVP. */
   actBy?: string;
   actNow?: boolean;
 }
@@ -227,10 +263,19 @@ function readableDay(day: string): string {
   return dayjs(day).format('ll');
 }
 
-function formatEventLine(event: EventSummary): string {
-  return `    ${linkStr(event.title, event.eventUrl)} ${tz(
+function formatEventLine(event: EventSummary, indent = '    '): string {
+  return `${indent}${linkStr(event.title, event.eventUrl)} ${tz(
     dayjs(event.dateTime),
   ).format('LLL')}`;
+}
+
+function formatUpcomingLine(event: EventSummary): string {
+  const note = paymentNote(event);
+  return `${formatEventLine(event, '        ')}${note ? ` — 💲 ${note}` : ''}`;
+}
+
+function plural(count: number, noun: string): string {
+  return `${count} ${noun}${count === 1 ? '' : 's'}`;
 }
 
 function formatCase(noShowCase: NoShowCase): string {
@@ -246,23 +291,43 @@ function formatCase(noShowCase: NoShowCase): string {
     lines.push(
       `    prior suspensions: ${noShowCase.priorSuspensions} → recommended: ${noShowCase.recommendedDays} days`,
     );
-    const next = noShowCase.nextRsvpEvent;
-    if (next && noShowCase.actBy) {
-      const timing = noShowCase.actNow
-        ? '**ACT NOW** (the event is 3 days away or less)'
-        : `act by ${readableDay(
-            noShowCase.actBy,
-          )} (aim for 3–5 days before the event)`;
+    const upcoming = noShowCase.upcomingRsvps ?? [];
+    const next = upcoming.at(0);
+    if (!next || !noShowCase.actBy) {
       lines.push(
-        `    next RSVP: ${linkStr(next.title, next.eventUrl)} ${tz(
-          dayjs(next.dateTime),
-        ).format('LLL')} → ${timing}`,
+        '    no upcoming RSVPs in the group — suspend at any time',
+        `    No-shows counted (${counted.length}):`,
+        ...counted.map((event) => formatEventLine(event, '        ')),
       );
-    } else {
-      lines.push('    no upcoming RSVPs in the group — suspend at any time');
+      return lines.join('\n');
     }
+    lines.push(
+      noShowCase.actNow
+        ? `    **ACT NOW** (${next.title}, the next RSVP, is 3 days away or less)`
+        : `    act by ${readableDay(noShowCase.actBy)} (aim for 3–5 days before ${
+            next.title
+          }, the next RSVP)`,
+    );
+    const mayInvolvePayment = upcoming.filter(paymentNote).length;
+    if (mayInvolvePayment > 0) {
+      lines.push(
+        `    ⚠️ ${plural(
+          mayInvolvePayment,
+          'upcoming RSVP',
+        )} may involve payment — check whether they paid before suspending`,
+      );
+    }
+    // Headed and indented apart, so a past no-show is never mistaken for an
+    // event the member is still due at.
+    lines.push(
+      `    No-shows counted (${counted.length}):`,
+      ...counted.map((event) => formatEventLine(event, '        ')),
+      `    Upcoming RSVPs (${upcoming.length}), earliest first:`,
+      ...upcoming.map(formatUpcomingLine),
+    );
+    return lines.join('\n');
   }
-  lines.push(...counted.map(formatEventLine));
+  lines.push(...counted.map((event) => formatEventLine(event)));
   return lines.join('\n');
 }
 
@@ -331,8 +396,21 @@ export function formatSuspensionCsv(cases: NoShowCase[]): string | undefined {
     return undefined;
   }
   const rows = suspensions.map((c) => {
+    const upcoming = c.upcomingRsvps ?? [];
+    const mayInvolvePayment = upcoming.filter(paymentNote).length;
+    // Kept in the notes column: the recorder accepts only its exact header,
+    // so a new column would make this file unuploadable.
     const notes = [
       ...(c.actBy ? [`act by ${c.actBy}`] : []),
+      ...(upcoming.length
+        ? [
+            `upcoming RSVPs: ${upcoming.length}${
+              mayInvolvePayment
+                ? ` (${mayInvolvePayment} may involve payment)`
+                : ''
+            }`,
+          ]
+        : []),
       `${c.counted.length} no-shows since ${c.since.day}`,
       `prior suspensions: ${c.priorSuspensions}`,
     ].join('; ');
