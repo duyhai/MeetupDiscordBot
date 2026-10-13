@@ -132,6 +132,20 @@ const PAYMENT_MENTION =
   /\b(?:pre-?)?(?:pay|paid)|\bvenmo\w*|\bzelle\b|\bcash ?app\b|\$\s?\d/i;
 
 /**
+ * Whether a description mentions paying for the event. Checked a sentence
+ * at a time, skipping any that is about parking: a parking cost isn't lost
+ * when a member is suspended, so it is no reason to hold one up.
+ */
+function mentionsPayment(description: string): boolean {
+  return description
+    .split(/[\n.;!?]+/)
+    .some(
+      (sentence) =>
+        !/\bparking\b/i.test(sentence) && PAYMENT_MENTION.test(sentence),
+    );
+}
+
+/**
  * Why an event may have cost the member money, if it may have: the fee
  * Meetup lists, or else a mention of paying in the description. Neither
  * shows that this member actually paid.
@@ -149,7 +163,7 @@ export function paymentNote(event: EventSummary): string | undefined {
       fee.currency === 'USD' ? `$${amount}` : `${amount} ${fee.currency}`
     } event fee`;
   }
-  return PAYMENT_MENTION.test(event.description ?? '')
+  return mentionsPayment(event.description ?? '')
     ? 'description mentions payment'
     : undefined;
 }
@@ -269,7 +283,7 @@ function formatEventLine(event: EventSummary, indent = '    '): string {
 
 function formatUpcomingLine(event: EventSummary): string {
   const note = paymentNote(event);
-  return `${formatEventLine(event, '        ')}${note ? ` — 💲 ${note}` : ''}`;
+  return `${formatEventLine(event, '        ')}${note ? ` — 💵 ${note}` : ''}`;
 }
 
 function plural(count: number, noun: string): string {
@@ -332,7 +346,7 @@ function formatCase(noShowCase: NoShowCase): string {
 }
 
 const PAYMENT_LEGEND =
-  '💲 marks an upcoming RSVP whose event appears to cost money (a fee on ' +
+  '💵 marks an upcoming RSVP whose event appears to cost money (a fee on ' +
   'Meetup, or payment mentioned in the description). It does not mean the ' +
   'member paid, and an unmarked event is not guaranteed free.';
 

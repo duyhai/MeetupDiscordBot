@@ -291,7 +291,10 @@ describe('paymentNote', () => {
     'This is a prepaid dinner',
     'Payment covers lanes and shoes',
     '$15 at the door',
-    'Bring $ 5 for parking',
+    'Bring $ 5 for the raffle',
+    'Parking is free. Dinner is $15 at the door.',
+    'Parking is $10; dinner is $15 at the door',
+    'Parking is $10 at the lot\nVenmo the host for your ticket',
     'Zelle the host',
     'Send it by CashApp',
     'Cash App works too',
@@ -336,6 +339,9 @@ describe('paymentNote', () => {
     { feeSettings: null, description: 'A free walk around Green Lake.' },
     { description: 'Unpaid volunteers run this; bring a papaya.' },
     { description: 'Bring cash, apparently the cafe takes no cards.' },
+    { description: 'Parking is $10 at the lot.' },
+    { description: 'You will need to pay $8 for PARKING in the garage!' },
+    { description: 'Free hike.\nStreet parking: about $3; bring water.' },
   ])('is undefined for an event with no sign of payment: %j', (extra) => {
     expect(paymentNote(upcoming(extra))).toBeUndefined();
   });
@@ -434,7 +440,7 @@ describe('formatNoShowReport', () => {
   it('explains the payment marker once, near the top', () => {
     const text = report([warningCase, paidCase]);
     const legend =
-      '💲 marks an upcoming RSVP whose event appears to cost money (a fee on Meetup, or payment ' +
+      '💵 marks an upcoming RSVP whose event appears to cost money (a fee on Meetup, or payment ' +
       'mentioned in the description). It does not mean the member paid, and an unmarked event is ' +
       'not guaranteed free.';
     expect(text.split(legend)).toHaveLength(2);
@@ -464,8 +470,8 @@ describe('formatNoShowReport', () => {
     expect(heading).toBeGreaterThan(-1);
     expect(lines.slice(heading + 1, heading + 4)).toEqual([
       `        [Bowling](${paidCase.upcomingRsvps?.[0].eventUrl}) October 10, 2026 6:00 PM`,
-      `        [Dinner](${paidCase.upcomingRsvps?.[1].eventUrl}) October 20, 2026 6:00 PM — 💲 description mentions payment`,
-      `        [Halloween](${paidCase.upcomingRsvps?.[2].eventUrl}) October 30, 2026 7:00 PM — 💲 $25 event fee`,
+      `        [Dinner](${paidCase.upcomingRsvps?.[1].eventUrl}) October 20, 2026 6:00 PM — 💵 description mentions payment`,
+      `        [Halloween](${paidCase.upcomingRsvps?.[2].eventUrl}) October 30, 2026 7:00 PM — 💵 $25 event fee`,
     ]);
   });
 
