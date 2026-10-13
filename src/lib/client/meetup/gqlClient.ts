@@ -450,7 +450,9 @@ export class GqlMeetupClient {
           first: MEMBER_RSVP_PAGE_SIZE,
           after,
           filter: { groupId, ...filter },
-          ...(withPaymentInfo && { withPaymentInfo }),
+          // Left out of the request when off, so the other callers send the
+          // variables they always did.
+          withPaymentInfo: withPaymentInfo || undefined,
         });
       } catch (error) {
         logger.error(error);

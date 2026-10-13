@@ -123,18 +123,13 @@ export function upcomingEvents(
     .sort((a, b) => dayjs(a.dateTime).valueOf() - dayjs(b.dateTime).valueOf());
 }
 
-/** The earliest of `events` still ahead of `now`, if any. */
-export function nextEvent(
-  events: EventSummary[],
-  now: dayjs.Dayjs,
-): EventSummary | undefined {
-  return upcomingEvents(events, now).at(0);
-}
-
 // Most paid events here are settled by Venmo outside Meetup, so the fee
-// alone misses them. Matches pay/pays/payment/paid/prepaid and Venmo, but
-// not "unpaid".
-const PAYMENT_MENTION = /\b(?:pre-?)?(?:pay|paid)|\bvenmo\b/i;
+// alone misses them. Deliberately broad: an unmarked paid event is the costly
+// mistake, a marked free one ("no need to pay") only costs a second look.
+// Matches pay/pays/payment/paid/prepaid, Venmo, Zelle, Cash App and a dollar
+// amount, but not "unpaid".
+const PAYMENT_MENTION =
+  /\b(?:pre-?)?(?:pay|paid)|\bvenmo\w*|\bzelle\b|\bcash ?app\b|\$\s?\d/i;
 
 /**
  * Why an event may have cost the member money, if it may have: the fee
@@ -143,10 +138,13 @@ const PAYMENT_MENTION = /\b(?:pre-?)?(?:pay|paid)|\bvenmo\b/i;
  */
 export function paymentNote(event: EventSummary): string | undefined {
   const fee = event.feeSettings;
-  if (fee && fee.amount > 0) {
-    const amount = Number.isInteger(fee.amount)
-      ? String(fee.amount)
-      : fee.amount.toFixed(2);
+  // Number(): not confirmed whether Meetup sends the amount as a number or a
+  // string, and one odd value must not fail the whole report.
+  const feeAmount = Number(fee?.amount);
+  if (fee && Number.isFinite(feeAmount) && feeAmount > 0) {
+    const amount = Number.isInteger(feeAmount)
+      ? String(feeAmount)
+      : feeAmount.toFixed(2);
     return `${
       fee.currency === 'USD' ? `$${amount}` : `${amount} ${fee.currency}`
     } event fee`;
@@ -291,13 +289,18 @@ function formatCase(noShowCase: NoShowCase): string {
     lines.push(
       `    prior suspensions: ${noShowCase.priorSuspensions} → recommended: ${noShowCase.recommendedDays} days`,
     );
+    // Headed and indented apart from the upcoming RSVPs, so a past no-show
+    // is never mistaken for an event the member is still due at.
+    const countedLines = [
+      `    No-shows counted (${counted.length}):`,
+      ...counted.map((event) => formatEventLine(event, '        ')),
+    ];
     const upcoming = noShowCase.upcomingRsvps ?? [];
     const next = upcoming.at(0);
     if (!next || !noShowCase.actBy) {
       lines.push(
         '    no upcoming RSVPs in the group — suspend at any time',
-        `    No-shows counted (${counted.length}):`,
-        ...counted.map((event) => formatEventLine(event, '        ')),
+        ...countedLines,
       );
       return lines.join('\n');
     }
@@ -317,11 +320,8 @@ function formatCase(noShowCase: NoShowCase): string {
         )} may involve payment — check whether they paid before suspending`,
       );
     }
-    // Headed and indented apart, so a past no-show is never mistaken for an
-    // event the member is still due at.
     lines.push(
-      `    No-shows counted (${counted.length}):`,
-      ...counted.map((event) => formatEventLine(event, '        ')),
+      ...countedLines,
       `    Upcoming RSVPs (${upcoming.length}), earliest first:`,
       ...upcoming.map(formatUpcomingLine),
     );
@@ -330,6 +330,11 @@ function formatCase(noShowCase: NoShowCase): string {
   lines.push(...counted.map((event) => formatEventLine(event)));
   return lines.join('\n');
 }
+
+const PAYMENT_LEGEND =
+  '💲 marks an upcoming RSVP whose event appears to cost money (a fee on ' +
+  'Meetup, or payment mentioned in the description). It does not mean the ' +
+  'member paid, and an unmarked event is not guaranteed free.';
 
 export function formatNoShowReport(
   periodLabel: string,
@@ -340,6 +345,7 @@ export function formatNoShowReport(
   const sections = [
     `**No Show report for ${periodLabel}**`,
     'Counted: no-shows in the last 12 months, after the member’s most recent suspension.',
+    PAYMENT_LEGEND,
     `__Warnings (1 no-show): ${warnings.length}__`,
     ...(warnings.length ? [warnings.map(formatCase).join('\n')] : []),
     `__Suspension candidates (2+ no-shows): ${suspensions.length}__`,

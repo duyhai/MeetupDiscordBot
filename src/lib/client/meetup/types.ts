@@ -224,7 +224,7 @@ export type EventSummary = Pick<
    * when payment info is asked for. It says the event costs money, not that
    * a given member has paid.
    */
-  feeSettings?: { amount: number; currency: string } | null;
+  feeSettings?: { amount: number | string; currency: string } | null;
 };
 
 export interface GetSelfPastRsvpEventsResponse {
@@ -265,13 +265,13 @@ export type GetMemberRsvpsInput = {
   first: number;
   memberIds: number[];
   urlname: string;
+  withPaymentInfo?: boolean;
 };
 
 export type GetGroupMembersByIdsInput = {
   first: number;
   memberIds: number[];
   urlname: string;
-  withPaymentInfo?: boolean;
 };
 
 export interface CreateEventInput {

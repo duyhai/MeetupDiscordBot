@@ -13,7 +13,6 @@ import {
   countableNoShows,
   formatNoShowReport,
   formatSuspensionCsv,
-  nextEvent,
   paymentNote,
   recommendedSuspensionDays,
   suspensionHistory,
@@ -251,19 +250,6 @@ describe('actByDate', () => {
   });
 });
 
-describe('nextEvent', () => {
-  it('picks the earliest event still ahead, whatever order Meetup returns', () => {
-    const past = event('2026-09-27T18:00:00-07:00');
-    const later = event('2026-11-01T18:00:00-07:00');
-    const sooner = event('2026-10-03T18:00:00-07:00');
-    expect(nextEvent([later, past, sooner], now)?.id).toBe(sooner.id);
-  });
-
-  it('is undefined with nothing upcoming', () => {
-    expect(nextEvent([], now)).toBeUndefined();
-  });
-});
-
 describe('upcomingEvents', () => {
   it('keeps every event still ahead, earliest first', () => {
     const past = event('2026-09-27T18:00:00-07:00');
@@ -273,6 +259,10 @@ describe('upcomingEvents', () => {
     expect(
       upcomingEvents([later, past, sooner, middle], now).map((e) => e.id),
     ).toEqual([sooner.id, middle.id, later.id]);
+  });
+
+  it('is empty with nothing upcoming', () => {
+    expect(upcomingEvents([], now)).toEqual([]);
   });
 });
 
@@ -300,8 +290,30 @@ describe('paymentNote', () => {
     'Tickets are PAID in advance',
     'This is a prepaid dinner',
     'Payment covers lanes and shoes',
+    '$15 at the door',
+    'Bring $ 5 for parking',
+    'Zelle the host',
+    'Send it by CashApp',
+    'Cash App works too',
+    'Venmoing the host is easiest',
+    // A known false positive, accepted: a marked free event costs a second
+    // look, an unmarked paid one could cost a member their money.
+    'Free event, no need to pay',
   ])('flags a description that mentions payment: %s', (description) => {
     expect(paymentNote(upcoming({ feeSettings: null, description }))).toBe(
+      'description mentions payment',
+    );
+  });
+
+  it('reads a fee amount that arrives as a string, and survives a bad one', () => {
+    const fee = (amount: string) =>
+      upcoming({ feeSettings: { amount, currency: 'USD' } });
+    expect(paymentNote(fee('25'))).toBe('$25 event fee');
+    expect(paymentNote(fee('12.5'))).toBe('$12.50 event fee');
+    expect(paymentNote(fee('0'))).toBeUndefined();
+    expect(paymentNote(fee('free'))).toBeUndefined();
+    expect(paymentNote(fee('Infinity'))).toBeUndefined();
+    expect(paymentNote({ ...fee('free'), description: 'Venmo the host' })).toBe(
       'description mentions payment',
     );
   });
@@ -323,6 +335,7 @@ describe('paymentNote', () => {
     { feeSettings: { amount: 0, currency: 'USD' } },
     { feeSettings: null, description: 'A free walk around Green Lake.' },
     { description: 'Unpaid volunteers run this; bring a papaya.' },
+    { description: 'Bring cash, apparently the cafe takes no cards.' },
   ])('is undefined for an event with no sign of payment: %j', (extra) => {
     expect(paymentNote(upcoming(extra))).toBeUndefined();
   });
@@ -411,16 +424,37 @@ describe('formatNoShowReport', () => {
   });
 
   it('says ACT NOW when the act-by day has come', () => {
-    expect(report([{ ...suspensionCase, actNow: true }])).toContain('ACT NOW');
+    const text = report([{ ...suspensionCase, actNow: true }]);
+    expect(text).toContain(
+      '\n    **ACT NOW** (Bowling, the next RSVP, is 3 days away or less)\n',
+    );
+    expect(text).not.toContain('act by');
+  });
+
+  it('explains the payment marker once, near the top', () => {
+    const text = report([warningCase, paidCase]);
+    const legend =
+      '💲 marks an upcoming RSVP whose event appears to cost money (a fee on Meetup, or payment ' +
+      'mentioned in the description). It does not mean the member paid, and an unmarked event is ' +
+      'not guaranteed free.';
+    expect(text.split(legend)).toHaveLength(2);
+    expect(text.indexOf(legend)).toBeLessThan(text.indexOf('__Warnings'));
   });
 
   it('notes when a candidate has no upcoming RSVPs', () => {
     const text = report([
       { ...suspensionCase, upcomingRsvps: [], actBy: undefined },
     ]);
-    expect(text).toContain(
-      'no upcoming RSVPs in the group — suspend at any time',
+    const lines = text.split('\n');
+    const none = lines.indexOf(
+      '    no upcoming RSVPs in the group — suspend at any time',
     );
+    expect(none).toBeGreaterThan(-1);
+    expect(lines.slice(none + 1, none + 4)).toEqual([
+      '    No-shows counted (2):',
+      `        [Hike](${suspensionCase.counted[0].eventUrl}) August 1, 2026 6:00 PM`,
+      `        [Picnic](${suspensionCase.counted[1].eventUrl}) September 5, 2026 6:00 PM`,
+    ]);
     expect(text).not.toContain('Upcoming RSVPs');
   });
 
