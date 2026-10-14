@@ -11,6 +11,15 @@ import {
 } from '../../repositories/identityTypes.js';
 import { LogEntry, logAlert } from '../discordLogger.js';
 import { runMeetupSweep } from './meetupSweep.js';
+import {
+  IdentityNames,
+  displayNameFor,
+  escapeDiscordLinkText,
+  escapeDiscordText,
+  meetupDisplayNameFor,
+  meetupProfileUrl,
+  visibleSkeleton,
+} from './names.js';
 import { runIdentitySweep } from './sweep.js';
 
 const logger = new Logger({ name: 'identityDigest' });
@@ -73,6 +82,14 @@ const MAX_DESCRIPTION = 4096; // Discord's hard embed description limit
  * and comfortably below where that cost matters.
  */
 export const DIGEST_PAGE_LIMIT = 5000;
+
+/**
+ * Names are only looked up for rows that can be shown. The embed fits a few
+ * dozen rows (the shortest possible row is ~40 characters, so never more
+ * than ~100), and rows are shown in order from the first; resolving names
+ * for all of DIGEST_PAGE_LIMIT would be thousands of lookups nobody reads.
+ */
+export const DIGEST_NAME_LOOKUP_LIMIT = 200;
 
 // Short on purpose: every line already carries a platform label (below), so
 // these do not need to repeat "Meetup" -- they only need to read as distinct
@@ -164,37 +181,86 @@ async function runSweepOrDegrade(
   }
 }
 
+// Long enough for any real name or nickname; short enough that one hostile
+// value cannot crowd every other row out of the embed.
+const MAX_VALUE_LENGTH = 100;
+
 /**
- * A Discord change's subject IS a Discord user id -- `<@id>` always renders.
- * A Meetup change's subject is a Meetup member id, which is meaningless as a
- * Discord mention; resolve it through the link table when possible, and fall
- * back to the raw id (never to a broken `<@undefined>`) when it is not.
+ * Who a row is about, readable without relying on Discord's client cache.
+ *
+ * A mention only renders as a name when the viewer's client happens to have
+ * that user cached; otherwise it shows as a raw `<@id>`. So a Discord row
+ * keeps the mention (clickable) and adds the stored name as plain text.
+ *
+ * A Meetup row shows the member's name as a link to their Meetup profile --
+ * the id alone told an organizer nothing -- followed by the linked Discord
+ * mention when the link table has one. No angle brackets round the url: this
+ * goes out in an embed description, and embeds never unfurl link previews.
+ *
+ * Every name is attacker-controlled and goes through escapeDiscordText (or
+ * its link-text variant, inside the masked link).
  */
-function mentionFor(
+function subjectFor(
   change: IdentityChangeMetadata,
   meetupToDiscord: Map<string, string>,
+  names: IdentityNames,
 ): string {
   if (change.platform === 'discord') {
-    return `<@${change.subjectId}>`;
+    const name = displayNameFor(change, names);
+    return name
+      ? `<@${change.subjectId}> (${escapeDiscordText(name)})`
+      : `<@${change.subjectId}>`;
   }
+  const shown = meetupDisplayNameFor(change, names) ?? change.subjectId;
+  const url = meetupProfileUrl(change.subjectId);
+  const member = url
+    ? `[${escapeDiscordLinkText(shown)}](${url})`
+    : escapeDiscordText(shown);
   const discordId = meetupToDiscord.get(change.subjectId);
-  return discordId ? `<@${discordId}>` : change.subjectId;
+  return discordId ? `${member} (<@${discordId}>)` : member;
+}
+
+function quoted(value: string | null): string {
+  return value === null || value === undefined
+    ? '—'
+    : escapeDiscordText(value, MAX_VALUE_LENGTH);
+}
+
+/**
+ * Sanitising the values for display can erase the very change the row
+ * reports: "Bob" -> "Bo<zero-width space>b" would read `"Bob" → "Bob"`. An
+ * invisible-character edit made to imitate another member is exactly what
+ * this monitor exists to surface, so say that is what happened.
+ */
+function invisibleOnlyNote(change: IdentityChangeMetadata): string {
+  const { oldValue, newValue } = change;
+  if (
+    typeof oldValue !== 'string' ||
+    typeof newValue !== 'string' ||
+    oldValue === newValue
+  ) {
+    return '';
+  }
+  return visibleSkeleton(oldValue) === visibleSkeleton(newValue)
+    ? ' (differs only in invisible characters or spacing)'
+    : '';
 }
 
 function line(
   change: IdentityChangeMetadata,
   meetupToDiscord: Map<string, string>,
+  names: IdentityNames,
 ): string {
   const time = change.detectedAt.toISOString().slice(11, 16);
   const label = FIELD_LABELS[change.field];
   const platform = PLATFORM_LABELS[change.platform];
-  const who = mentionFor(change, meetupToDiscord);
+  const who = subjectFor(change, meetupToDiscord, names);
   if (PHOTO_LIKE_FIELDS.has(change.field)) {
     return `${time}  ${platform}  ${who}  ${label} changed`;
   }
-  return `${time}  ${platform}  ${who}  ${label} "${
-    change.oldValue ?? '—'
-  }" → "${change.newValue ?? '—'}"`;
+  return `${time}  ${platform}  ${who}  ${label} "${quoted(
+    change.oldValue,
+  )}" → "${quoted(change.newValue)}"${invisibleOnlyNote(change)}`;
 }
 
 const stamp = (date: Date) => date.toISOString().slice(0, 16).replace('T', ' ');
@@ -203,6 +269,8 @@ export function formatIdentityDigest(
   changes: IdentityChangeMetadata[],
   stats: { changeCount: number; totalBytes: number },
   meetupToDiscord: Map<string, string>,
+  // Defaulted so a caller with no names still renders mentions and ids.
+  names: IdentityNames = new Map(),
 ): LogEntry | undefined {
   if (changes.length === 0) {
     return undefined;
@@ -215,7 +283,7 @@ export function formatIdentityDigest(
   let used = footer.length;
   let shown = 0;
   for (const change of changes) {
-    const next = `${line(change, meetupToDiscord)}\n`;
+    const next = `${line(change, meetupToDiscord, names)}\n`;
     // Reserve room for the overflow note (comfortably above its longest
     // realistic length -- "…and 5000 more — run /meetup_identity_report for
     // the full list\n" is 63 characters) so a flood degrades to a truncated
@@ -387,7 +455,18 @@ export async function runIdentityDigestOnce(client: Client): Promise<void> {
       }
     }
 
-    const entry = formatIdentityDigest(changes, stats, meetupToDiscord);
+    // Names make the rows readable; they are not evidence. A failed lookup
+    // degrades to mentions and ids rather than costing the day's digest.
+    let names: IdentityNames = new Map();
+    try {
+      names = await repo.listIdentityNames(
+        changes.slice(0, DIGEST_NAME_LOOKUP_LIMIT),
+      );
+    } catch (error: unknown) {
+      logger.error(`Identity name lookup failed: ${String(error)}`);
+    }
+
+    const entry = formatIdentityDigest(changes, stats, meetupToDiscord, names);
     if (entry) {
       // logAlert swallows every error by design, so an outage or a permission
       // change would otherwise leave the claim consumed, a success logged, no

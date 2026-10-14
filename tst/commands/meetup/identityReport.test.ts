@@ -1,4 +1,6 @@
 /* eslint-disable @typescript-eslint/unbound-method */
+import fs from 'fs';
+
 import { CommandInteraction } from 'discord.js';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -11,11 +13,13 @@ import {
   estimateReportBytes,
   estimateReportBytesFromCounts,
 } from '../../../src/lib/helpers/identity/report.js';
+import { identityNameKey } from '../../../src/lib/helpers/identity/names.js';
 import { IdentityChangeRecord } from '../../../src/lib/repositories/identityTypes.js';
 
 const repo = vi.hoisted(() => ({
   listChangesBetween: vi.fn(),
   measureChangesBetween: vi.fn(),
+  listIdentityNames: vi.fn(),
 }));
 
 vi.mock('../../../src/util/identityRepository.js', () => ({
@@ -84,6 +88,17 @@ describe('buildReportAttachment', () => {
     expect(result.reason).toContain('narrower');
   });
 
+  it('threads member names through to the rendered report', () => {
+    const built = buildReportAttachment(
+      [change()],
+      7,
+      new Map(),
+      new Map([[identityNameKey('discord', 'g1', 'u1'), 'George']]),
+    );
+
+    expect(built.ok === true && built.html).toContain('George');
+  });
+
   it('still builds a report when there are no changes', () => {
     const result = buildReportAttachment([], 7);
 
@@ -102,6 +117,7 @@ describe('identityReportHandler delivery', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     repo.listChangesBetween.mockResolvedValue([change()]);
+    repo.listIdentityNames.mockResolvedValue(new Map());
     repo.measureChangesBetween.mockResolvedValue({
       changeCount: 1,
       thumbBytes: 6,
@@ -129,6 +145,39 @@ describe('identityReportHandler delivery', () => {
     expect(vi.mocked(interaction.editReply)).not.toHaveBeenCalled();
   });
 
+  // The attachment is a temp file that is removed once followUp returns, so
+  // the only moment its contents exist to be read is inside the call.
+  const runAndReadHtml = async () => {
+    const interaction = fakeInteraction();
+    let html = '';
+    vi.mocked(interaction.followUp).mockImplementation((async (payload: {
+      files: { attachment: string }[];
+    }) => {
+      html = fs.readFileSync(payload.files[0].attachment, 'utf8');
+    }) as never);
+    await new IdentityReportCommands().identityReportHandler(7, interaction);
+    return html;
+  };
+
+  it('names members in the report from the stored baselines', async () => {
+    repo.listIdentityNames.mockResolvedValue(
+      new Map([[identityNameKey('discord', 'g1', 'u1'), 'George']]),
+    );
+
+    const html = await runAndReadHtml();
+
+    expect(repo.listIdentityNames).toHaveBeenCalledWith([change()]);
+    expect(html).toContain('George');
+  });
+
+  it('still delivers the report, with ids, when the name lookup fails', async () => {
+    repo.listIdentityNames.mockRejectedValue(new Error('pool exhausted'));
+
+    const html = await runAndReadHtml();
+
+    expect(html).toContain('<td class="who">u1</td>');
+  });
+
   it('attaches the html file to that followUp, ephemerally', async () => {
     const interaction = await run(7);
 
@@ -152,6 +201,7 @@ describe('identityReportHandler size guard', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     repo.listChangesBetween.mockResolvedValue([change()]);
+    repo.listIdentityNames.mockResolvedValue(new Map());
     repo.measureChangesBetween.mockResolvedValue({
       changeCount: 1,
       thumbBytes: 6,
@@ -214,6 +264,15 @@ describe('estimateReportBytesFromCounts', () => {
     expect(estimateReportBytesFromCounts(rows.length, thumbBytes)).toBe(
       estimateReportBytes(rows),
     );
+  });
+
+  it('allows for the name, link and id markup on every row', () => {
+    // A named, linked Meetup row carries about 500 bytes of markup; the old
+    // 300 would under-count a large report and let it past the guard.
+    expect(
+      estimateReportBytesFromCounts(1001, 0) -
+        estimateReportBytesFromCounts(1, 0),
+    ).toBe(500_000);
   });
 
   it('counts base64 inflation, not just the raw bytes', () => {

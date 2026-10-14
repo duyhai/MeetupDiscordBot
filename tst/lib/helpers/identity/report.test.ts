@@ -4,6 +4,7 @@ import {
   estimateReportBytes,
   renderIdentityReport,
 } from '../../../../src/lib/helpers/identity/report.js';
+import { identityNameKey } from '../../../../src/lib/helpers/identity/names.js';
 import { IdentityChangeRecord } from '../../../../src/lib/repositories/identityTypes.js';
 
 const range = {
@@ -212,6 +213,184 @@ describe('renderIdentityReport', () => {
     // user-controlled linking -- it is no more trusted than a nickname.
     expect(html).not.toContain('<img src=x onerror=alert(1)>');
     expect(html).toContain('&lt;img src=x onerror=alert(1)&gt;');
+  });
+
+  const meetupRow = (over: Partial<IdentityChangeRecord> = {}) =>
+    change({
+      platform: 'meetup',
+      scopeId: 'grp',
+      subjectId: '404060606',
+      field: 'photo',
+      ...over,
+    });
+  const meetupName = (name: string) =>
+    new Map([[identityNameKey('meetup', 'grp', '404060606'), name]]);
+  const PROFILE = 'https://www.meetup.com/members/404060606/';
+
+  it('shows a Meetup member by name, linked to their Meetup profile', () => {
+    const html = renderIdentityReport(
+      [meetupRow()],
+      range,
+      new Map(),
+      meetupName('Jane D.'),
+    );
+
+    expect(html).toContain(
+      `<a href="${PROFILE}" rel="noopener noreferrer"><bdi>Jane D.</bdi></a>`,
+    );
+    // The id stays visible: it is what survives a rename.
+    expect(html).toContain('(Meetup 404060606)');
+  });
+
+  it('keeps the linked Discord id beside a named Meetup member', () => {
+    const html = renderIdentityReport(
+      [meetupRow()],
+      range,
+      new Map([['404060606', 'discord-1']]),
+      meetupName('Jane D.'),
+    );
+
+    expect(html).toContain('<bdi>Jane D.</bdi></a>');
+    expect(html).toContain('Discord discord-1');
+  });
+
+  it('links the bare Meetup id when no name is stored', () => {
+    const html = renderIdentityReport([meetupRow()], range, new Map());
+
+    expect(html).toContain(
+      `<a href="${PROFILE}" rel="noopener noreferrer">404060606</a>`,
+    );
+  });
+
+  it('names a renamed Meetup member from the row when the baseline is gone', () => {
+    const html = renderIdentityReport(
+      [meetupRow({ field: 'name', oldValue: 'Jane D.', newValue: 'J. Doe' })],
+      range,
+      new Map(),
+    );
+
+    expect(html).toContain('<bdi>J. Doe</bdi></a>');
+  });
+
+  it('escapes html in a Meetup name', () => {
+    const html = renderIdentityReport(
+      [meetupRow()],
+      range,
+      new Map(),
+      meetupName('</a><script>alert(1)</script>'),
+    );
+
+    expect(html).not.toContain('<script>');
+    expect(html).toContain(
+      '<bdi>&lt;/a&gt;&lt;script&gt;alert(1)&lt;/script&gt;</bdi></a>',
+    );
+  });
+
+  it('does not build an href from a Meetup id that is not numeric', () => {
+    const html = renderIdentityReport(
+      [meetupRow({ subjectId: '1/" onmouseover="alert(1)' })],
+      range,
+      new Map(),
+    );
+
+    expect(html).not.toContain('<a ');
+    expect(html).not.toContain('" onmouseover="');
+  });
+
+  it('shows a Discord member by name with the id alongside', () => {
+    const html = renderIdentityReport(
+      [change()],
+      range,
+      new Map(),
+      new Map([[identityNameKey('discord', 'g1', 'u1'), 'Ngò <b>']]),
+    );
+
+    expect(html).toContain(
+      '<bdi>Ngò &lt;b&gt;</bdi> <span class="raw">(u1)</span>',
+    );
+  });
+
+  it('isolates a name so a bidi override cannot reorder the id beside it', () => {
+    const html = renderIdentityReport(
+      [meetupRow()],
+      range,
+      new Map(),
+      meetupName('\u202Eenaj'),
+    );
+
+    // The override stays inside <bdi>, whose isolation ends its reach.
+    expect(html).toMatch(/<bdi>[^<]*<\/bdi><\/a> <span class="raw">\(Meetup/);
+  });
+
+  it('shows the id for a name made only of invisible characters', () => {
+    const html = renderIdentityReport(
+      [meetupRow()],
+      range,
+      new Map(),
+      meetupName('\u200B\u3164'),
+    );
+
+    expect(html).toContain(
+      `<a href="${PROFILE}" rel="noopener noreferrer">404060606</a>`,
+    );
+  });
+
+  const DISCORD_ID = '1287595364798693490';
+  const DISCORD_PROFILE = `https://discord.com/users/${DISCORD_ID}`;
+
+  it('links a Discord member name to their Discord profile', () => {
+    const html = renderIdentityReport(
+      [change({ subjectId: DISCORD_ID })],
+      range,
+      new Map(),
+      new Map([[identityNameKey('discord', 'g1', DISCORD_ID), 'George']]),
+    );
+
+    expect(html).toContain(
+      `<a href="${DISCORD_PROFILE}" rel="noopener noreferrer"><bdi>George</bdi></a> <span class="raw">(${DISCORD_ID})</span>`,
+    );
+  });
+
+  it('links the bare Discord id when no name is stored', () => {
+    const html = renderIdentityReport(
+      [change({ subjectId: DISCORD_ID })],
+      range,
+      new Map(),
+    );
+
+    expect(html).toContain(
+      `<td class="who"><a href="${DISCORD_PROFILE}" rel="noopener noreferrer">${DISCORD_ID}</a></td>`,
+    );
+  });
+
+  it('links the Discord account a Meetup member is linked to', () => {
+    const html = renderIdentityReport(
+      [meetupRow()],
+      range,
+      new Map([['404060606', DISCORD_ID]]),
+      meetupName('Jane D.'),
+    );
+
+    expect(html).toContain(
+      ` · Discord <a href="${DISCORD_PROFILE}" rel="noopener noreferrer">${DISCORD_ID}</a>`,
+    );
+  });
+
+  it('does not build an href from a Discord id that is not numeric', () => {
+    const html = renderIdentityReport(
+      [change({ subjectId: '1" onmouseover="alert(1)' })],
+      range,
+      new Map(),
+    );
+
+    expect(html).not.toContain('<a ');
+    expect(html).not.toContain('" onmouseover="');
+  });
+
+  it('shows only the id for a Discord member with no stored name', () => {
+    const html = renderIdentityReport([change()], range, new Map());
+
+    expect(html).toContain('<td class="who">u1</td>');
   });
 
   it('does not throw on an unrecognised field from an older row', () => {
