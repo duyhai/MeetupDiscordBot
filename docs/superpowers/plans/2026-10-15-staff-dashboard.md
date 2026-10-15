@@ -10,7 +10,7 @@
 
 **Spec:** `docs/superpowers/specs/2026-10-15-staff-dashboard-design.md` (approved by Hai 2026-10-15). Executors read both.
 
-**Rollout (revised 2026-10-15 after the lead's independent review).** Six PRs, in order: PR 1 sign-in and shell → PR 1b `/redirect` allow-list → PR 2a organizer-token critical section → PR 2 snapshots and job → PR 3 pages and backfill → PR 4 workspace. Each starts only after the previous one merges.
+**Rollout (revised 2026-10-15 after the lead's independent review).** Six PRs, in order: PR 1 sign-in and shell → PR 1b `/redirect` allow-list (#109) → PR 2a organizer-token critical section → PR 2 snapshots and job → PR 3 pages and backfill → PR 4 workspace. Each starts only after the previous one merges.
 
 **Plan depth.** PR 1 is specified to the line: every step has its code. PRs 1b–4 are specified to files, interfaces, schema SQL, test names and acceptance checks, with code for the rules that are easy to get wrong. Each of them gets a full-code addendum (same format as PR 1) written at the start of that PR, against `main` as it is after the previous PR merges, because PR 1–3 change the files those PRs build on.
 
@@ -2597,15 +2597,21 @@ with `import { dashboardRouterFromEnv } from './web/dashboardDeps.js';`.
 
 ---
 
-# PR 1b — Close the `/redirect` open redirect
+# PR 1b — Close the `/redirect` open redirect (GitHub #109)
 
-Branch `fix/redirect-allow-list`. Right after PR 1 merges, before anyone is sent to the staff login. Small; full code written at the start.
+Branch `fix/redirect-allow-list`. Right after PR 1 merges, before anyone is sent to the staff login. Small; full code written at the start. The PR references #109.
 
-`/redirect/:url` in `src/app.ts` 307s to any base64-encoded URL, on the same origin as the staff login. It exists only as a local-dev trampoline (`debugRedirect` in `src/constants.ts`).
+`/redirect/:url` in `src/app.ts` 307s to any base64-encoded URL, on the same origin as the staff login. It cannot simply be removed or limited to localhost: production's own Meetup connect flow passes through it (production logs show `Redirecting to https://meetup-discord-bot.herokuapp.com/connect/meetup/callback`), because `debugRedirect` in `src/constants.ts` always builds the trampoline URL and Meetup does not accept localhost redirect URIs.
+
+**Allowed targets**, parsed with `URL` and compared exactly:
+- The app's own origin, derived from the configured base, not a hard-coded string: `new URL(debugRedirect('/')).origin`, or a new `PUBLIC_APP_ORIGIN` constant that both `debugRedirect` and the check use.
+- `http://localhost:<port>` and `http://127.0.0.1:<port>` (`http:` only, exact hostname).
+
+Everything else gets 400 with the branded error page: other hosts, look-alikes (`meetup-discord-bot.herokuapp.com.evil.example`, `localhost.evil.example`), userinfo (`https://x@evil.example`), other schemes (`javascript:`, `data:`, `https://localhost`). Malformed base64 or URLs also get 400 instead of throwing.
 
 | # | Task | Tests (file → names) | Acceptance |
 |---|---|---|---|
-| 1b.1 | Allow only `http://localhost:<port>` and `http://127.0.0.1:<port>` targets (parsed with `URL`, exact hostname match, `http:` only); anything else → 400 with the branded error page; malformed base64/URL → 400 instead of throwing | `tst/integration/app.routes.test.ts` → `redirects to a localhost target with the query appended`, `refuses an external host`, `refuses localhost.evil.example and userinfo tricks`, `refuses https://localhost (debug trampoline is http only)`, `answers 400 to malformed input` | Existing Meetup OAuth debug flow still works locally |
+| 1b.1 | Allow-list in the `/redirect/:url` handler, with the allowed origin shared with `debugRedirect` | `tst/integration/app.routes.test.ts` → `still redirects the production Meetup callback through the trampoline (query appended)`, `redirects to a localhost target with the query appended`, `redirects to a 127.0.0.1 target`, `refuses an external host`, `refuses look-alike hosts`, `refuses userinfo`, `refuses javascript:, data: and https://localhost`, `answers 400 to malformed base64 or URL` | Production Meetup connect flow unchanged; local dev trampoline still works |
 
 ---
 
