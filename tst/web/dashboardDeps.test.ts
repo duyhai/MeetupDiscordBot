@@ -1,6 +1,5 @@
 import express from 'express';
-import request from 'supertest';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 
 import { BASE_DISCORD_BOT_URL } from '../../src/constants.js';
 import {
@@ -8,31 +7,34 @@ import {
   dashboardOrigin,
   dashboardRouterFromEnv,
 } from '../../src/web/dashboardDeps.js';
+import { closeServers, serve } from './dashboardHarness.js';
+
+afterEach(closeServers);
 
 const appWith = (env: Record<string, string | undefined>) => {
   const app = express();
   app.use('/dashboard', dashboardRouterFromEnv(env));
-  return app;
+  return serve(app);
 };
 
 describe('dashboardRouterFromEnv', () => {
   it('serves a not-configured page when the session secret is missing', async () => {
-    const res = await request(appWith({})).get('/dashboard/login');
+    const res = await (await appWith({})).get('/dashboard/login');
     expect(res.status).toBe(503);
     expect(res.headers['cache-control']).toBe('no-store');
     expect(res.text).toContain('not set up yet');
   });
 
   it('refuses a session secret shorter than 32 characters', async () => {
-    const res = await request(
-      appWith({ DASHBOARD_SESSION_SECRET: 'short' }),
+    const res = await (
+      await appWith({ DASHBOARD_SESSION_SECRET: 'short' })
     ).get('/dashboard/login');
     expect(res.status).toBe(503);
   });
 
   it('serves the login page when configured', async () => {
-    const res = await request(
-      appWith({ DASHBOARD_SESSION_SECRET: 'k'.repeat(48) }),
+    const res = await (
+      await appWith({ DASHBOARD_SESSION_SECRET: 'k'.repeat(48) })
     ).get('/dashboard/login');
     expect(res.status).toBe(200);
     expect(res.text).toContain('Sign in with Discord');

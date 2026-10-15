@@ -1,13 +1,20 @@
-import request from 'supertest';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { DashboardDeps } from '../../src/web/dashboardRouter.js';
-import { USER, makeApp, signIn } from './dashboardHarness.js';
+import {
+  USER,
+  closeServers,
+  locationOf,
+  makeApp,
+  signIn,
+} from './dashboardHarness.js';
+
+afterEach(closeServers);
 
 describe('dashboard sign-in', () => {
   it('sends security headers and no-store on every response', async () => {
-    const { app } = makeApp();
-    const res = await request(app).get('/dashboard/login');
+    const { req } = await makeApp();
+    const res = await req.get('/dashboard/login');
     expect(res.status).toBe(200);
     expect(res.headers['cache-control']).toBe('no-store');
     expect(res.headers['x-content-type-options']).toBe('nosniff');
@@ -20,10 +27,10 @@ describe('dashboard sign-in', () => {
   });
 
   it('starts sign-in with a stored verifier and a state-binding cookie', async () => {
-    const { app, cache, deps } = makeApp();
-    const res = await request(app).get('/dashboard/auth/start');
+    const { req, cache, deps } = await makeApp();
+    const res = await req.get('/dashboard/auth/start');
     expect(res.status).toBe(302);
-    const state = new URL(res.headers.location).searchParams.get('state');
+    const state = locationOf(res).searchParams.get('state');
     expect(state).toBeTruthy();
     expect(cache.ttls.get(`dashboard-oauth-${state}`)).toBe(600);
     // eslint-disable-next-line @typescript-eslint/unbound-method
@@ -37,13 +44,11 @@ describe('dashboard sign-in', () => {
   });
 
   it('signs an allowed member in and sends them home', async () => {
-    const { app, deps } = makeApp();
-    const sessionCookie = await signIn(app);
+    const { req, deps } = await makeApp();
+    const sessionCookie = await signIn(req);
     expect(sessionCookie).toMatch(/^dash_sid=.+/);
     expect(deps.checkAccess).toHaveBeenCalledWith(USER.id);
-    const home = await request(app)
-      .get('/dashboard')
-      .set('Cookie', sessionCookie);
+    const home = await req.get('/dashboard').set('Cookie', sessionCookie);
     expect(home.status).toBe(200);
     expect(home.text).toContain('<bdi>Mod</bdi>');
     expect(deps.audit).toHaveBeenCalledWith(
@@ -52,10 +57,10 @@ describe('dashboard sign-in', () => {
   });
 
   it('sets the session cookie with all attributes and a 12-hour Max-Age', async () => {
-    const { app } = makeApp();
-    const start = await request(app).get('/dashboard/auth/start');
-    const state = new URL(start.headers.location).searchParams.get('state');
-    const cb = await request(app)
+    const { req } = await makeApp();
+    const start = await req.get('/dashboard/auth/start');
+    const state = locationOf(start).searchParams.get('state');
+    const cb = await req
       .get(`/dashboard/auth/callback?state=${state}&code=c`)
       .set('Cookie', `dash_oauth=${state}`);
     expect(cb.status).toBe(302);
@@ -69,12 +74,12 @@ describe('dashboard sign-in', () => {
   });
 
   it('refuses a member without a dashboard role and creates no session', async () => {
-    const { app, cache, deps } = makeApp({
+    const { req, cache, deps } = await makeApp({
       checkAccess: vi.fn().mockResolvedValue(false),
     });
-    const start = await request(app).get('/dashboard/auth/start');
-    const state = new URL(start.headers.location).searchParams.get('state');
-    const cb = await request(app)
+    const start = await req.get('/dashboard/auth/start');
+    const state = locationOf(start).searchParams.get('state');
+    const cb = await req
       .get(`/dashboard/auth/callback?state=${state}&code=c`)
       .set('Cookie', `dash_oauth=${state}`);
     expect(cb.status).toBe(403);
@@ -88,38 +93,38 @@ describe('dashboard sign-in', () => {
   });
 
   it('rejects a callback whose state does not match the login cookie', async () => {
-    const { app } = makeApp();
-    const start = await request(app).get('/dashboard/auth/start');
-    const state = new URL(start.headers.location).searchParams.get('state');
-    const cb = await request(app)
+    const { req } = await makeApp();
+    const start = await req.get('/dashboard/auth/start');
+    const state = locationOf(start).searchParams.get('state');
+    const cb = await req
       .get(`/dashboard/auth/callback?state=${state}&code=c`)
       .set('Cookie', 'dash_oauth=someone-elses-state');
     expect(cb.status).toBe(400);
-    const noCookie = await request(app).get(
+    const noCookie = await req.get(
       `/dashboard/auth/callback?state=${state}&code=c`,
     );
     expect(noCookie.status).toBe(400);
   });
 
   it('rejects a replayed state', async () => {
-    const { app } = makeApp();
-    const start = await request(app).get('/dashboard/auth/start');
-    const state = new URL(start.headers.location).searchParams.get('state');
-    const first = await request(app)
+    const { req } = await makeApp();
+    const start = await req.get('/dashboard/auth/start');
+    const state = locationOf(start).searchParams.get('state');
+    const first = await req
       .get(`/dashboard/auth/callback?state=${state}&code=c`)
       .set('Cookie', `dash_oauth=${state}`);
     expect(first.status).toBe(302);
-    const replay = await request(app)
+    const replay = await req
       .get(`/dashboard/auth/callback?state=${state}&code=c`)
       .set('Cookie', `dash_oauth=${state}`);
     expect(replay.status).toBe(400);
   });
 
   it('shows the login page again when the member cancels on Discord', async () => {
-    const { app, deps } = makeApp();
-    const start = await request(app).get('/dashboard/auth/start');
-    const state = new URL(start.headers.location).searchParams.get('state');
-    const cb = await request(app)
+    const { req, deps } = await makeApp();
+    const start = await req.get('/dashboard/auth/start');
+    const state = locationOf(start).searchParams.get('state');
+    const cb = await req
       .get(`/dashboard/auth/callback?state=${state}&error=access_denied`)
       .set('Cookie', `dash_oauth=${state}`);
     expect(cb.status).toBe(400);
@@ -129,16 +134,16 @@ describe('dashboard sign-in', () => {
   });
 
   it('answers 502 with a generic page when the code exchange fails', async () => {
-    const { app } = makeApp({
+    const { req } = await makeApp({
       oauth: {
         buildLoginUrl: (s: string) => `https://discord.com/x?state=${s}`,
         exchangeCode: vi.fn().mockRejectedValue(new Error('token body leak')),
         fetchIdentity: vi.fn(),
       },
     });
-    const start = await request(app).get('/dashboard/auth/start');
-    const state = new URL(start.headers.location).searchParams.get('state');
-    const cb = await request(app)
+    const start = await req.get('/dashboard/auth/start');
+    const state = locationOf(start).searchParams.get('state');
+    const cb = await req
       .get(`/dashboard/auth/callback?state=${state}&code=c`)
       .set('Cookie', `dash_oauth=${state}`);
     expect(cb.status).toBe(502);
@@ -146,12 +151,12 @@ describe('dashboard sign-in', () => {
   });
 
   it('answers 503 and creates no session when Discord cannot be asked about roles', async () => {
-    const { app } = makeApp({
+    const { req } = await makeApp({
       checkAccess: vi.fn().mockRejectedValue(new Error('discord down')),
     });
-    const start = await request(app).get('/dashboard/auth/start');
-    const state = new URL(start.headers.location).searchParams.get('state');
-    const cb = await request(app)
+    const start = await req.get('/dashboard/auth/start');
+    const state = locationOf(start).searchParams.get('state');
+    const cb = await req
       .get(`/dashboard/auth/callback?state=${state}&code=c`)
       .set('Cookie', `dash_oauth=${state}`);
     expect(cb.status).toBe(503);
@@ -161,8 +166,8 @@ describe('dashboard sign-in', () => {
   });
 
   it('sends HSTS', async () => {
-    const { app } = makeApp();
-    const res = await request(app).get('/dashboard/login');
+    const { req } = await makeApp();
+    const res = await req.get('/dashboard/login');
     expect(res.headers['strict-transport-security']).toBe('max-age=15552000');
   });
 
@@ -179,10 +184,10 @@ describe('dashboard sign-in', () => {
     ];
     await Promise.all(
       cases.map(async (overrides) => {
-        const { app } = makeApp(overrides);
-        const start = await request(app).get('/dashboard/auth/start');
-        const state = new URL(start.headers.location).searchParams.get('state');
-        const cb = await request(app)
+        const { req } = await makeApp(overrides);
+        const start = await req.get('/dashboard/auth/start');
+        const state = locationOf(start).searchParams.get('state');
+        const cb = await req
           .get(`/dashboard/auth/callback?state=${state}&code=c`)
           .set('Cookie', `dash_oauth=${state}`);
         expect([403, 502]).toContain(cb.status);
@@ -194,32 +199,30 @@ describe('dashboard sign-in', () => {
   });
 
   it('does not wait for the sign-in audit post', async () => {
-    const { app } = makeApp({
+    const { req } = await makeApp({
       audit: vi.fn(() => new Promise(() => undefined)),
     });
-    await expect(signIn(app)).resolves.toMatch(/^dash_sid=/);
+    await expect(signIn(req)).resolves.toMatch(/^dash_sid=/);
   });
 
   it('rate-limits the callback as well as the start', async () => {
     const { FixedWindowLimiter } = await import('../../src/web/rateLimit.js');
-    const { app } = makeApp({
+    const { req } = await makeApp({
       loginLimiter: new FixedWindowLimiter(1, 60_000),
     });
-    await request(app).get('/dashboard/auth/callback?state=a&code=c');
-    const second = await request(app).get(
-      '/dashboard/auth/callback?state=a&code=c',
-    );
+    await req.get('/dashboard/auth/callback?state=a&code=c');
+    const second = await req.get('/dashboard/auth/callback?state=a&code=c');
     expect(second.status).toBe(429);
   });
 
   it('rate-limits sign-in per IP', async () => {
     const { FixedWindowLimiter } = await import('../../src/web/rateLimit.js');
-    const { app } = makeApp({
+    const { req } = await makeApp({
       loginLimiter: new FixedWindowLimiter(2, 60_000),
     });
-    await request(app).get('/dashboard/auth/start');
-    await request(app).get('/dashboard/auth/start');
-    const third = await request(app).get('/dashboard/auth/start');
+    await req.get('/dashboard/auth/start');
+    await req.get('/dashboard/auth/start');
+    const third = await req.get('/dashboard/auth/start');
     expect(third.status).toBe(429);
     expect(third.headers['retry-after']).toBeDefined();
   });
