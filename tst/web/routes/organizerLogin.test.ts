@@ -606,6 +606,24 @@ describe('organizer login routes', () => {
     expect(res.text).not.toContain(ORGANIZER_ID);
   });
 
+  it("status page lets its form's redirect reach Meetup sign-in, and nothing else", async () => {
+    const { req, cookie } = await setup();
+    const page = await req
+      .get('/dashboard/organizer-login')
+      .set('Cookie', cookie);
+    const home = await req.get('/dashboard').set('Cookie', cookie);
+
+    // Browsers apply form-action to the redirect after a form POST, so the
+    // 303 to Meetup is blocked unless the page allows Meetup's sign-in host.
+    const csp = String(page.headers['content-security-policy']);
+    expect(csp).toContain("form-action 'self' https://secure.meetup.com;");
+    expect(csp).toContain("default-src 'none'");
+    expect(csp).toContain("frame-ancestors 'none'");
+    expect(String(home.headers['content-security-policy'])).toContain(
+      "form-action 'self';",
+    );
+  });
+
   it('status page shows a healthy credential', async () => {
     const { req, cookie } = await setup();
     const res = await req

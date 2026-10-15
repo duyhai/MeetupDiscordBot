@@ -17,6 +17,9 @@ const logger = new Logger({ name: 'dashboard' });
 
 const MEMBER_ID_PATTERN = /^[0-9]{1,20}$/;
 
+/** Where "Renew organizer login" sends the browser (buildMeetupAuthUrl). */
+const MEETUP_SIGN_IN_ORIGIN = 'https://secure.meetup.com';
+
 /**
  * Everything the "Renew organizer login" routes touch, injectable for tests.
  * Production wiring lives in organizerLoginDeps.ts.
@@ -141,6 +144,19 @@ export function registerOrganizerLoginRoutes(
       logger.warn(`Organizer login status read failed: ${errorName(error)}`);
       result(res, 503, 'Unable to continue', STORE_DOWN);
       return;
+    }
+    if (meta) {
+      // Browsers apply form-action to the redirect that follows a form POST,
+      // so the dashboard's `form-action 'self'` would block start's 303 to
+      // Meetup. This page alone also allows Meetup's sign-in host.
+      const csp = res.get('Content-Security-Policy') ?? '';
+      res.set(
+        'Content-Security-Policy',
+        csp.replace(
+          "form-action 'self';",
+          `form-action 'self' ${MEETUP_SIGN_IN_ORIGIN};`,
+        ),
+      );
     }
     const action = meta
       ? html`${statusLine(meta)}
