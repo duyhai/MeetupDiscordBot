@@ -14,7 +14,7 @@
 
 ## Global Constraints
 
-- Access: Discord members holding **Moderator** (`912474048775221270`) or **1.5 Leadership Team** (id supplied by Hai, see Prerequisites). Event Organizers excluded. Administrator permission alone does not admit (the spec lists roles only).
+- Access: Discord members holding **Moderator** (`912474048775221270`) or **1.5 Leadership Team** (`1347289004932075521`). Event Organizers excluded. Administrator permission alone does not admit (the spec lists roles only).
 - OAuth: Discord OAuth2, `identify` scope only, bot's existing Discord application (`DISCORD_CLIENT_ID` / `DISCORD_SECRET`). Redirect URI: `https://meetup-discord-bot.herokuapp.com/dashboard/auth/callback`.
 - Role check cached in the session for **10 minutes**, then re-checked.
 - Session: signed, `HttpOnly`, `Secure`, `SameSite=Lax` cookie; state in Redis; **12-hour** absolute lifetime.
@@ -33,7 +33,6 @@
 
 | Needed for | Item |
 |---|---|
-| PR 1 | The **1.5 Leadership Team role id** (Discord → Server Settings → Roles → right-click → Copy Role ID). |
 | PR 1 deploy | Add redirect URI `https://meetup-discord-bot.herokuapp.com/dashboard/auth/callback` to the bot's application in the Discord developer portal (OAuth2 → Redirects). Optional for local testing: `http://localhost:5000/dashboard/auth/callback`. |
 | PR 1 deploy | `heroku config:set -a meetup-discord-bot DASHBOARD_SESSION_SECRET="$(openssl rand -base64 48)"` (Hai runs it; never pasted into chat). The dashboard serves a "not configured" page until it is set; the bot is unaffected. |
 | PR 2 deploy | `DASHBOARD_NOTIFY_CHANNEL_ID` (the staff channel for "report ready", e.g. mod-watercooler). Unset → notice skipped, one alert. |
@@ -78,7 +77,7 @@ Branch `feat/dashboard-1-auth` off `main`. Draft PR against `main`.
 - Modify: `src/constants.ts` (the `SERVER_ROLES` object)
 - Test: `tst/web/roleGate.test.ts` (created in Task 1.3; this task only adds the constant)
 
-- [ ] **Step 1: Add the role id Hai supplied**
+- [ ] **Step 1: Add the role id**
 
 ```ts
 export const SERVER_ROLES = {
@@ -87,14 +86,14 @@ export const SERVER_ROLES = {
   ladies_lounge: '935435362984161292',
   gents_lounge: '1336180499231670374',
   // 1.5 Leadership Team: admitted to the staff dashboard with moderators.
-  leadership: '<the 17-20 digit id Hai supplied>',
+  leadership: '1347289004932075521',
   moderator: '912474048775221270',
   onboarding: '932906028725571594',
   organizer: '912474170594582568',
 };
 ```
 
-Do not start this task without the id. `ServerRoles` widens automatically; `requireModOrOrganizer` defaults are unchanged.
+Id read from the Discord API (guild roles) on 2026-10-15. `ServerRoles` widens automatically; `requireModOrOrganizer` defaults are unchanged.
 
 - [ ] **Step 2: Run the suite** — `yarn test` → all pass (nothing reads the key yet).
 
@@ -2175,7 +2174,7 @@ with `import { dashboardRouterFromEnv } from './web/dashboardDeps.js';`.
 
 - [ ] **Step 1:** `yarn lint && yarn test` → green. Integration: throwaway `postgres:16` on `127.0.0.1:55432` and `redis:7` on `127.0.0.1:56379`, then `DATABASE_URL=postgres://postgres:pw@127.0.0.1:55432/postgres REDISCLOUD_URL=redis://127.0.0.1:56379 yarn test:integration` → green; stop both containers (and colima if started here).
 - [ ] **Step 2: Local smoke without real Discord.** Do not use `yarn start` (it logs the bot in with real credentials). Run a scratch script in the session scratchpad that mounts `createDashboardRouter` with fake deps on port 5055, then load `/dashboard/login`, `/dashboard/auth/start`, the fake callback and `/dashboard` in the built-in browser; screenshot login and home pages for the PR.
-- [ ] **Step 3:** Push `feat/dashboard-1-auth`, open a **draft** PR against `main`. Description: summary; Hai's checklist (redirect URI, `DASHBOARD_SESSION_SECRET`, leadership role id confirmed); env vars added (names only); security notes (cookies, CSRF, CSP, rate limits, in-process limiter assumes one web dyno); mutation-check table; deploy-window note; footer line.
+- [ ] **Step 3:** Push `feat/dashboard-1-auth`, open a **draft** PR against `main`. Description: summary; Hai's checklist (redirect URI, `DASHBOARD_SESSION_SECRET`); env vars added (names only); security notes (cookies, CSRF, CSP, rate limits, in-process limiter assumes one web dyno); mutation-check table; deploy-window note; footer line.
 - [ ] **Step 4:** Report to the lead and wait for merge confirmation before PR 2.
 
 ---
