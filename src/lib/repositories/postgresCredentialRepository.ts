@@ -1,9 +1,33 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
+
 import pg from 'pg';
 import { Logger } from 'tslog';
 
 import { Tokens } from '../client/discord/types.js';
 
 const logger = new Logger({ name: 'PostgresCredentialRepository' });
+
+// A waiter gives up after this long rather than queueing forever behind a
+// stuck holder; comfortably above a 10 s-bounded refresh.
+const LOCK_TIMEOUT_MS = 30_000;
+// Postgres kills a holder that goes quiet mid-transaction this long, which
+// releases the lock even if the process holding it is wedged.
+const IDLE_IN_TRANSACTION_TIMEOUT_MS = 45_000;
+// Backstop for pool.connect(): never wait forever for the single connection.
+const CONNECTION_TIMEOUT_MS = 30_000;
+
+// True while code runs inside a locked transaction. With a one-connection
+// pool, calling back into the repository from there would wait forever for
+// the connection the transaction itself holds, so it fails fast instead.
+const insideLock = new AsyncLocalStorage<boolean>();
+
+function assertNotReentered(): void {
+  if (insideLock.getStore()) {
+    throw new Error(
+      'credential repository re-entered inside withLockedCredential',
+    );
+  }
+}
 
 const CREATE_TABLE_SQL = `
 CREATE TABLE IF NOT EXISTS oauth_credentials (
@@ -45,6 +69,15 @@ export interface LockedCredential {
   write(tokens: Tokens): Promise<void>;
   /** Upserts oauth_credential_meta.member_id; digits only (CHECK). */
   setMemberId(memberId: string): Promise<void>;
+  /** Locked markFailing: true iff this call started the episode. */
+  markFailing(): Promise<boolean>;
+  /** Locked clearFailing: true iff an episode was open. */
+  clearFailing(): Promise<boolean>;
+}
+
+export interface CredentialRepositoryOptions {
+  /** Test-only override of the lock wait bound. */
+  lockTimeoutMs?: number;
 }
 
 interface CredentialRow {
@@ -74,6 +107,14 @@ const UPSERT_CREDENTIAL_SQL = `INSERT INTO oauth_credentials (key, access_token,
          expires_at = EXCLUDED.expires_at,
          updated_at = now()`;
 
+const MARK_FAILING_SQL = `INSERT INTO oauth_credential_meta (key, failing_since) VALUES ($1, now())
+       ON CONFLICT (key) DO UPDATE SET failing_since = now()
+         WHERE oauth_credential_meta.failing_since IS NULL
+       RETURNING key`;
+
+const CLEAR_FAILING_SQL = `UPDATE oauth_credential_meta SET failing_since = NULL
+        WHERE key = $1 AND failing_since IS NOT NULL`;
+
 function toTokens(row: CredentialRow): Tokens {
   return {
     accessToken: row.access_token,
@@ -87,9 +128,12 @@ export class PostgresCredentialRepository {
 
   private schemaEnsured: Promise<void> | undefined;
 
+  private readonly lockTimeoutMs: number;
+
   private static singleton: PostgresCredentialRepository;
 
-  private constructor() {
+  private constructor(options: CredentialRepositoryOptions = {}) {
+    this.lockTimeoutMs = options.lockTimeoutMs ?? LOCK_TIMEOUT_MS;
     const connectionString = process.env.DATABASE_URL;
     if (!connectionString) {
       throw new Error(
@@ -108,6 +152,7 @@ export class PostgresCredentialRepository {
       // Heroku Postgres requires TLS but uses certs node rejects by default
       ssl: isLocal ? undefined : { rejectUnauthorized: false },
       allowExitOnIdle: true, // lets test processes exit cleanly instead of waiting on idle clients
+      connectionTimeoutMillis: CONNECTION_TIMEOUT_MS,
     });
     // Heroku recycles idle connections; pg.Pool is an EventEmitter, so without
     // a listener the resulting 'error' event would crash the whole process --
@@ -122,8 +167,15 @@ export class PostgresCredentialRepository {
    * Test-only: a second instance with its own pool (and so its own session),
    * standing in for another process racing the singleton for the lock.
    */
-  static createIsolatedForTest(): PostgresCredentialRepository {
-    return new PostgresCredentialRepository();
+  static createIsolatedForTest(
+    options?: CredentialRepositoryOptions,
+  ): PostgresCredentialRepository {
+    return new PostgresCredentialRepository(options);
+  }
+
+  /** Closes this instance's pool (test cleanup for isolated instances). */
+  async end(): Promise<void> {
+    await this.pool.end();
   }
 
   static async instance(): Promise<PostgresCredentialRepository> {
@@ -154,6 +206,7 @@ export class PostgresCredentialRepository {
 
   /** Unlocked read. Never use it to decide whether to refresh. */
   async get(key: string): Promise<Tokens | undefined> {
+    assertNotReentered();
     const result = await this.pool.query<CredentialRow>(
       'SELECT * FROM oauth_credentials WHERE key = $1',
       [key],
@@ -164,6 +217,7 @@ export class PostgresCredentialRepository {
 
   /** Unlocked read of the credential's meta row (dashboard status). */
   async getMeta(key: string): Promise<CredentialMeta> {
+    assertNotReentered();
     await this.ensureSchema();
     const result = await this.pool.query<MetaRow>(
       'SELECT member_id, failing_since FROM oauth_credential_meta WHERE key = $1',
@@ -177,13 +231,17 @@ export class PostgresCredentialRepository {
    * run `fn`; COMMIT (ROLLBACK if `fn` throws). The lock is released with the
    * transaction, so a crashed process can never leave it held.
    *
+   * Every key shares the one organizer lock, so all locked calls serialize.
+   *
    * `fn` must not call back into this repository: the pool holds a single
-   * connection, and this transaction owns it until `fn` settles.
+   * connection, and this transaction owns it until `fn` settles. Doing so
+   * rejects immediately instead of deadlocking.
    */
   async withLockedCredential<T>(
     key: string,
     fn: (locked: LockedCredential) => Promise<T>,
   ): Promise<T> {
+    assertNotReentered();
     return this.inLockedTransaction(key, async (client) => {
       const credential = (
         await client.query<CredentialRow>(
@@ -215,6 +273,10 @@ export class PostgresCredentialRepository {
             [key, memberId],
           );
         },
+        markFailing: async () =>
+          (await client.query(MARK_FAILING_SQL, [key])).rowCount === 1,
+        clearFailing: async () =>
+          (await client.query(CLEAR_FAILING_SQL, [key])).rowCount === 1,
       });
     });
   }
@@ -233,6 +295,21 @@ export class PostgresCredentialRepository {
     await this.ensureSchema();
     const client = await this.pool.connect();
     let open = true;
+    // Set when the connection is known bad (backend died, or ROLLBACK
+    // failed): destroy it rather than hand it back to a pool whose only slot
+    // every later sweep depends on.
+    let broken = false;
+    // pg-pool drops its idle 'error' listener while a client is checked out,
+    // so a backend dying mid-transaction (terminated, idle timeout, network)
+    // would emit an unhandled 'error' and crash the process. Handle it here.
+    const onError = (error: Error): void => {
+      logger.error(
+        `Postgres connection lost inside the credential lock: ${error.name}`,
+      );
+      broken = true;
+      open = false;
+    };
+    client.on('error', onError);
     const guarded = {
       query: ((...args: Parameters<pg.PoolClient['query']>) => {
         if (!open) {
@@ -245,37 +322,46 @@ export class PostgresCredentialRepository {
         return (client.query as (...a: unknown[]) => unknown)(...args);
       }) as pg.PoolClient['query'],
     };
-    // Set when ROLLBACK itself fails: the connection is in an unknown state
-    // (likely dead), so destroy it rather than hand it back to a pool whose
-    // only slot every later sweep depends on.
-    let broken = false;
     try {
-      await client.query('BEGIN');
+      // READ COMMITTED explicitly: every statement after the lock sees a
+      // fresh snapshot, so the read below includes the previous holder's
+      // committed write.
+      await client.query('BEGIN ISOLATION LEVEL READ COMMITTED');
+      await client.query(
+        `SELECT set_config('lock_timeout', $1, true),
+                set_config('idle_in_transaction_session_timeout', $2, true)`,
+        [`${this.lockTimeoutMs}ms`, `${IDLE_IN_TRANSACTION_TIMEOUT_MS}ms`],
+      );
       await client.query('SELECT pg_advisory_xact_lock($1)', [
         ORGANIZER_CREDENTIAL_LOCK,
       ]);
-      const result = await fn(guarded);
+      const result = await insideLock.run(true, () => fn(guarded));
       open = false;
       await client.query('COMMIT');
       return result;
     } catch (error) {
       open = false;
-      await client.query('ROLLBACK').catch(() => {
-        broken = true;
-      });
+      if (!broken) {
+        await client.query('ROLLBACK').catch(() => {
+          broken = true;
+        });
+      }
       throw error;
     } finally {
+      client.removeListener('error', onError);
       client.release(broken);
     }
   }
 
   /** Locked upsert: waits for any in-flight refresh to commit first. */
   async put(key: string, tokens: Tokens): Promise<void> {
+    assertNotReentered();
     await this.withLockedCredential(key, (locked) => locked.write(tokens));
   }
 
   /** Locked delete of the credential row only; its meta row is kept. */
   async clear(key: string): Promise<void> {
+    assertNotReentered();
     await this.inLockedTransaction(key, async (client) => {
       await client.query('DELETE FROM oauth_credentials WHERE key = $1', [key]);
     });
@@ -286,25 +372,17 @@ export class PostgresCredentialRepository {
    * True iff this call started the episode (so exactly one caller alerts).
    */
   async markFailing(key: string): Promise<boolean> {
+    assertNotReentered();
     await this.ensureSchema();
-    const result = await this.pool.query(
-      `INSERT INTO oauth_credential_meta (key, failing_since) VALUES ($1, now())
-       ON CONFLICT (key) DO UPDATE SET failing_since = now()
-         WHERE oauth_credential_meta.failing_since IS NULL
-       RETURNING key`,
-      [key],
-    );
+    const result = await this.pool.query(MARK_FAILING_SQL, [key]);
     return result.rowCount === 1;
   }
 
   /** Closes a failure episode. True iff one was open. */
   async clearFailing(key: string): Promise<boolean> {
+    assertNotReentered();
     await this.ensureSchema();
-    const result = await this.pool.query(
-      `UPDATE oauth_credential_meta SET failing_since = NULL
-        WHERE key = $1 AND failing_since IS NOT NULL`,
-      [key],
-    );
+    const result = await this.pool.query(CLEAR_FAILING_SQL, [key]);
     return result.rowCount === 1;
   }
 }

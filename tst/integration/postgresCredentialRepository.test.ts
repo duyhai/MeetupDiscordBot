@@ -67,9 +67,38 @@ describe.skipIf(!POSTGRES_AVAILABLE)('PostgresCredentialRepository', () => {
     await observer.connect();
   });
 
+  // Every isolated instance owns a pool; end them all so no connection
+  // outlives the suite.
+  const isolatedRepos: PostgresCredentialRepository[] = [];
+  const isolated = (
+    options?: Parameters<
+      typeof PostgresCredentialRepository.createIsolatedForTest
+    >[0],
+  ): PostgresCredentialRepository => {
+    const instance =
+      PostgresCredentialRepository.createIsolatedForTest(options);
+    isolatedRepos.push(instance);
+    return instance;
+  };
+
   afterAll(async () => {
+    await Promise.allSettled(isolatedRepos.map((instance) => instance.end()));
     await observer?.end();
   });
+
+  /** pid of the session currently holding the organizer lock. */
+  const lockHolderPid = async (): Promise<number> => {
+    const { rows } = await observer.query<{ pid: number }>(
+      `SELECT pid FROM pg_locks
+        WHERE locktype = 'advisory' AND granted
+          AND classid = $1 AND objid = $2 AND objsubid = 1`,
+      [LOCK_CLASSID, LOCK_OBJID],
+    );
+    if (rows.length !== 1) {
+      throw new Error(`expected one lock holder, found ${rows.length}`);
+    }
+    return rows[0].pid;
+  };
 
   /**
    * Resolves once some session is blocked waiting for the organizer lock, so
@@ -145,8 +174,8 @@ describe.skipIf(!POSTGRES_AVAILABLE)('PostgresCredentialRepository', () => {
 
   it('creates the meta table idempotently', async () => {
     // Two fresh instances each run the schema DDL against an existing schema.
-    const first = PostgresCredentialRepository.createIsolatedForTest();
-    const second = PostgresCredentialRepository.createIsolatedForTest();
+    const first = isolated();
+    const second = isolated();
     const key = `key-${crypto.randomUUID()}`;
     expect(await first.getMeta(key)).toEqual({
       memberId: null,
@@ -191,7 +220,7 @@ describe.skipIf(!POSTGRES_AVAILABLE)('PostgresCredentialRepository', () => {
   };
 
   it('put and clear go through the lock', async () => {
-    const holder = PostgresCredentialRepository.createIsolatedForTest();
+    const holder = isolated();
     const key = `key-${crypto.randomUUID()}`;
     const order: string[] = [];
 
@@ -239,7 +268,7 @@ describe.skipIf(!POSTGRES_AVAILABLE)('PostgresCredentialRepository', () => {
   });
 
   it('serializes two independent repository instances racing to refresh', async () => {
-    const other = PostgresCredentialRepository.createIsolatedForTest();
+    const other = isolated();
     const key = `key-${crypto.randomUUID()}`;
     await repo.put(key, tokensWithRefresh('r0'));
 
@@ -384,5 +413,121 @@ describe.skipIf(!POSTGRES_AVAILABLE)('PostgresCredentialRepository', () => {
       locked.setMemberId('468174923'),
     );
     expect((await repo.getMeta(key)).memberId).toBe('468174923');
+  });
+
+  it('survives the backend being terminated mid-transaction', async () => {
+    const holder = isolated();
+    const key = `key-${crypto.randomUUID()}`;
+    const order: string[] = [];
+    const held = holdLock(holder, key, 'never-stored', order);
+    const outcome = held.done.then(
+      () => 'resolved',
+      (error: unknown) => `rejected: ${String(error)}`,
+    );
+    try {
+      await held.inside;
+      const pid = await lockHolderPid();
+      await observer.query('SELECT pg_terminate_backend($1)', [pid]);
+      // Let the dead socket surface as a client 'error' event while the
+      // client is still checked out -- the case that used to crash the dyno.
+      await delay(200);
+    } finally {
+      held.release();
+    }
+    expect(await outcome).toMatch(/^rejected/);
+    expect(order).toEqual([]);
+    expect(await storedRefreshToken(key)).toBeUndefined();
+
+    // The broken connection was destroyed, not recycled: the same one-slot
+    // pool hands out a fresh connection and the next write succeeds.
+    await holder.put(key, tokensWithRefresh('after-terminate'));
+    expect(await storedRefreshToken(key)).toBe('after-terminate');
+  });
+
+  it('re-entering the repository inside the lock fails fast', async () => {
+    const key = `key-${crypto.randomUUID()}`;
+    const started = Date.now();
+    await expect(
+      repo.withLockedCredential(key, async (locked) => {
+        await locked.write(freshTokens());
+        // With a one-connection pool this used to wait forever.
+        await repo.getMeta(key);
+      }),
+    ).rejects.toThrow(
+      'credential repository re-entered inside withLockedCredential',
+    );
+    expect(Date.now() - started).toBeLessThan(2000);
+    // rolled back: the write inside never landed
+    expect(await repo.get(key)).toBeUndefined();
+
+    // every public entry point is guarded, not just getMeta
+    const reentries = await repo.withLockedCredential(key, async () =>
+      Promise.allSettled([
+        repo.get(key),
+        repo.getMeta(key),
+        repo.put(key, freshTokens()),
+        repo.clear(key),
+        repo.markFailing(key),
+        repo.clearFailing(key),
+        repo.withLockedCredential(key, async () => undefined),
+      ]),
+    );
+    expect(reentries.map((result) => result.status)).toEqual(
+      Array(7).fill('rejected'),
+    );
+  });
+
+  it('a waiter gives up after lock_timeout', async () => {
+    const holder = isolated();
+    const impatient = isolated({ lockTimeoutMs: 200 });
+    const key = `key-${crypto.randomUUID()}`;
+    const order: string[] = [];
+    const held = holdLock(holder, key, 'from-holder', order);
+    try {
+      await held.inside;
+      const started = Date.now();
+      await expect(
+        impatient.put(key, tokensWithRefresh('from-impatient')),
+      ).rejects.toThrow(/lock timeout/);
+      expect(Date.now() - started).toBeLessThan(5000);
+    } finally {
+      held.release();
+      await Promise.allSettled([held.done]);
+    }
+    await held.done;
+    expect(await storedRefreshToken(key)).toBe('from-holder');
+    // the impatient instance's pool is still usable afterwards
+    await impatient.put(key, tokensWithRefresh('later'));
+    expect(await storedRefreshToken(key)).toBe('later');
+  });
+
+  it('locked markFailing/clearFailing start and end an episode exactly once', async () => {
+    const key = `key-${crypto.randomUUID()}`;
+    const results = await repo.withLockedCredential(key, async (locked) => [
+      await locked.markFailing(),
+      await locked.markFailing(),
+    ]);
+    expect(results).toEqual([true, false]);
+    expect((await repo.getMeta(key)).failingSince).toBeInstanceOf(Date);
+
+    const cleared = await repo.withLockedCredential(key, async (locked) => [
+      await locked.clearFailing(),
+      await locked.clearFailing(),
+    ]);
+    expect(cleared).toEqual([true, false]);
+    expect((await repo.getMeta(key)).failingSince).toBeNull();
+  });
+
+  it('a rollback undoes a locked markFailing', async () => {
+    const key = `key-${crypto.randomUUID()}`;
+    await expect(
+      repo.withLockedCredential(key, async (locked) => {
+        expect(await locked.markFailing()).toBe(true);
+        throw new Error('refresh blew up');
+      }),
+    ).rejects.toThrow('refresh blew up');
+    expect((await repo.getMeta(key)).failingSince).toBeNull();
+    // and the episode can still be started afterwards
+    expect(await repo.markFailing(key)).toBe(true);
   });
 });
