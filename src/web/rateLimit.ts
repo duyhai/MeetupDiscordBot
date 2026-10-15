@@ -3,8 +3,10 @@
  * id for actions). Kept in process: the bot runs on a single web dyno. The
  * map is capped so a flood of distinct keys cannot grow memory on a dyno
  * with a memory-quota (R14) history. When full it first drops expired
- * windows, then the oldest-inserted key. Oldest is also the soonest to
- * expire, and live counters, including keys already over the limit, are kept.
+ * windows; then, while still full, deletes the oldest-inserted key whose
+ * count is still within the limit; only when every key is over the limit
+ * does it delete the oldest one. A flood of fresh keys therefore cannot
+ * evict a key that is currently being limited.
  */
 export class FixedWindowLimiter {
   private readonly hits = new Map<string, { count: number; resetAt: number }>();
@@ -48,10 +50,18 @@ export class FixedWindowLimiter {
       }
     }
     while (this.hits.size >= this.maxKeys) {
-      for (const oldest of this.hits.keys()) {
-        this.hits.delete(oldest);
-        break;
+      this.hits.delete(this.evictionCandidate());
+    }
+  }
+
+  /** Oldest key still within the limit, else the oldest key. */
+  private evictionCandidate(): string {
+    for (const [key, entry] of this.hits) {
+      if (entry.count <= this.limit) {
+        return key;
       }
     }
+    const [oldest] = this.hits.keys();
+    return oldest;
   }
 }
