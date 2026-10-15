@@ -1,7 +1,7 @@
 # Staff Dashboard — Design
 
 **Date:** 2026-10-15
-**Status:** Draft, awaiting Hai's review
+**Status:** Approved (Hai, 2026-10-15)
 
 ## Problem
 
