@@ -5,7 +5,7 @@ import { safeEqual } from './session.js';
 /**
  * Sign-in state kept in the browser instead of Redis, so an unauthenticated
  * request never writes to the shared cache. The cookie is
- * `base64url(JSON {s, v, e}).HMAC-SHA256(secret, that base64url part)`.
+ * `base64url(JSON {s, v, e}).HMAC-SHA256(secret, 'oauth:' + that part)`.
  * Single use comes from the callback always clearing it, the 10-minute
  * expiry, and Discord codes being single-use.
  */
@@ -16,8 +16,12 @@ export interface OAuthCookiePayload {
   expiresAt: number;
 }
 
+/** `oauth:` keeps this MAC apart from the session id's (`sid:`). */
 const mac = (body: string, secret: string) =>
-  crypto.createHmac('sha256', secret).update(body).digest('base64url');
+  crypto
+    .createHmac('sha256', secret)
+    .update(`oauth:${body}`)
+    .digest('base64url');
 
 export function sealOAuthCookie(
   { state, verifier, expiresAt }: OAuthCookiePayload,

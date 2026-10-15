@@ -7,6 +7,7 @@ import {
   signSessionId,
   verifySignedSessionId,
 } from '../../src/web/session.js';
+import { openOAuthCookie, sealOAuthCookie } from '../../src/web/oauthCookie.js';
 import { FakeCache } from './fakeCache.js';
 
 const SECRET = 'x'.repeat(48);
@@ -25,6 +26,25 @@ describe('signed session ids', () => {
     expect(verifySignedSessionId(signed, 'y'.repeat(48))).toBeUndefined();
     expect(verifySignedSessionId('no-dot', SECRET)).toBeUndefined();
     expect(verifySignedSessionId('.mac', SECRET)).toBeUndefined();
+  });
+});
+
+describe('MAC domain separation', () => {
+  it('an OAuth cookie value does not verify as a session id', () => {
+    const sealed = sealOAuthCookie(
+      { state: 's', verifier: 'v', expiresAt: 10 },
+      SECRET,
+    );
+    expect(verifySignedSessionId(sealed, SECRET)).toBeUndefined();
+  });
+
+  it('a signed session id does not open as an OAuth cookie', () => {
+    const body = Buffer.from(
+      JSON.stringify({ s: 's', v: 'v', e: 10 }),
+    ).toString('base64url');
+    expect(openOAuthCookie(signSessionId(body, SECRET), SECRET, 0)).toBe(
+      undefined,
+    );
   });
 });
 

@@ -25,8 +25,13 @@ const randomToken = () => crypto.randomBytes(32).toString('base64url');
 const sessionKey = (sid: string) =>
   `dashboard-session-${crypto.createHash('sha256').update(sid).digest('hex')}`;
 
+/**
+ * The `sid:` prefix separates this MAC from the OAuth cookie's (`oauth:`),
+ * which uses the same secret and the same `body.mac` shape: neither value can
+ * pass as the other.
+ */
 const mac = (sid: string, secret: string) =>
-  crypto.createHmac('sha256', secret).update(sid).digest('base64url');
+  crypto.createHmac('sha256', secret).update(`sid:${sid}`).digest('base64url');
 
 export function safeEqual(a: string, b: string): boolean {
   const left = Buffer.from(a);

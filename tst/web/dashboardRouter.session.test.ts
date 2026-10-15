@@ -15,6 +15,7 @@ import {
   makeApp,
   makeDeps,
   signIn,
+  startSignIn,
 } from './dashboardHarness.js';
 import { FakeCache } from './fakeCache.js';
 
@@ -148,6 +149,42 @@ describe('signed-out requests leave the session cookie alone', () => {
       .set('Cookie', `dash_sid=forged.x; ${cookie}`);
     expect(res.status).toBe(200);
     expect(clearsSid(res)).toBe(false);
+  });
+
+  it('a sealed OAuth cookie sent as dash_sid is not a session', async () => {
+    const { req } = await makeApp();
+    const { oauthCookie } = await startSignIn(req);
+    const value = oauthCookie.slice('dash_oauth='.length);
+    const res = await req.get('/dashboard').set('Cookie', `dash_sid=${value}`);
+    expect(res.status).toBe(302);
+    expect(res.headers.location).toBe('/dashboard/login');
+    expect(clearsSid(res)).toBe(false);
+  });
+
+  it('tries at most three distinct dash_sid values', async () => {
+    const { req, cache } = await makeApp();
+    const cookie = await signIn(req);
+    const get = vi.spyOn(cache, 'get');
+    // Many copies of one value cost one lookup.
+    const copies = Array.from({ length: 50 }, () => cookie).join('; ');
+    expect((await req.get('/dashboard').set('Cookie', copies)).status).toBe(
+      200,
+    );
+    expect(get).toHaveBeenCalledTimes(1);
+    // Validly signed but sessionless values: the real one 4th is not reached.
+    const ghosts = ['g1', 'g2', 'g3', 'g4'].map(
+      (sid) => `dash_sid=${signSessionId(sid, SECRET)}`,
+    );
+    get.mockClear();
+    const fourth = await req
+      .get('/dashboard')
+      .set('Cookie', [...ghosts.slice(0, 3), cookie].join('; '));
+    expect(fourth.status).toBe(302);
+    expect(get).toHaveBeenCalledTimes(3);
+    const third = await req
+      .get('/dashboard')
+      .set('Cookie', [...ghosts.slice(0, 2), cookie].join('; '));
+    expect(third.status).toBe(200);
   });
 
   it('wrong-case and encoded paths never serve a protected page or log out', async () => {

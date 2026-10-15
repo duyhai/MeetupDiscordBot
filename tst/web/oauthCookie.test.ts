@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import { describe, expect, it } from 'vitest';
 
 import { openOAuthCookie, sealOAuthCookie } from '../../src/web/oauthCookie.js';
+import { signSessionId, verifySignedSessionId } from '../../src/web/session.js';
 
 const SECRET = 'x'.repeat(48);
 const PAYLOAD = { state: 'st', verifier: 've', expiresAt: 1_000 };
@@ -11,7 +12,7 @@ const signRaw = (body: string, secret = SECRET) => {
   const encoded = Buffer.from(body).toString('base64url');
   const mac = crypto
     .createHmac('sha256', secret)
-    .update(encoded)
+    .update(`oauth:${encoded}`)
     .digest('base64url');
   return `${encoded}.${mac}`;
 };
@@ -71,5 +72,17 @@ describe('OAuth cookie', () => {
         openOAuthCookie(signRaw(JSON.stringify(body)), SECRET, 0),
       ).toBeUndefined();
     }
+  });
+
+  it('does not open a signed session id, nor verify as one', () => {
+    const body = Buffer.from(
+      JSON.stringify({ s: 'st', v: 've', e: 1_000 }),
+    ).toString('base64url');
+    expect(openOAuthCookie(signSessionId(body, SECRET), SECRET, 0)).toBe(
+      undefined,
+    );
+    expect(
+      verifySignedSessionId(sealOAuthCookie(PAYLOAD, SECRET), SECRET),
+    ).toBeUndefined();
   });
 });

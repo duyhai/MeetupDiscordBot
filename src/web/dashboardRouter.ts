@@ -43,6 +43,7 @@ export const PUBLIC_ROUTE_PATHS: readonly string[] = [
 const OAUTH_COOKIE_PATH = '/dashboard/auth';
 const SESSION_COOKIE_PATH = '/dashboard';
 const OAUTH_TTL_SEC = 10 * 60;
+const MAX_SESSION_COOKIES = 3;
 /** Everything else, OPTIONS included, needs the CSRF token. */
 const SAFE_METHODS = new Set(['GET', 'HEAD']);
 
@@ -193,8 +194,8 @@ export function createDashboardRouter(deps: DashboardDeps): express.Router {
   };
 
   /**
-   * Tries every dash_sid the browser sent, so a forged one planted ahead of
-   * ours cannot hide it. `stale` is true when a cookie we signed was sent but
+   * Tries the first three distinct dash_sid values the browser sent, so a
+   * forged one planted ahead of ours cannot hide it. `stale` is true when a cookie we signed was sent but
    * its session is gone: only then is clearing the cookie ours to do.
    */
   async function readSession(
@@ -204,10 +205,12 @@ export function createDashboardRouter(deps: DashboardDeps): express.Router {
     | { sid?: undefined; session?: undefined; stale: boolean }
   > {
     let stale = false;
-    for (const signed of parseCookieValues(
-      req.headers.cookie,
-      SESSION_COOKIE,
-    )) {
+    // Distinct values only, and at most a few, so a header stuffed with
+    // copies cannot turn into many Redis reads.
+    const candidates = [
+      ...new Set(parseCookieValues(req.headers.cookie, SESSION_COOKIE)),
+    ].slice(0, MAX_SESSION_COOKIES);
+    for (const signed of candidates) {
       const sid = verifySignedSessionId(signed, deps.sessionSecret);
       if (!sid) {
         continue;
