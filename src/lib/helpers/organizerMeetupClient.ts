@@ -29,6 +29,10 @@ export const ORGANIZER_TOKEN_REUSE_MS = 5 * 60 * 1000;
 
 const MEMBER_ID_PATTERN = /^[0-9]{1,20}$/;
 
+// Set once this process has posted the wrong-account alert: the condition
+// persists until someone renews, and the daily sweep would otherwise repeat it.
+let wrongAccountAlerted = false;
+
 const RESTORED_ALERT = {
   title: 'Meetup organizer login restored',
   description:
@@ -192,16 +196,39 @@ async function postAlert(
  * Best-effort: learn the organizer account's member id from its own token
  * and store it, in a separate short locked call. Runs outside the token
  * transaction because the lookup is a Meetup call, not a bounded one.
+ *
+ * When MEETUP_ORGANIZER_MEMBER_ID is set, only that id is stored: a token
+ * seeded from someone's personal account must not become the stored
+ * organizer identity that later renewals are checked against. When it is
+ * unset, the observed id is recorded (bootstrap). Neither id is ever shown.
  */
 async function recordMemberId(
   credentials: PostgresCredentialRepository,
   accessToken: string,
+  client: Client | undefined,
 ): Promise<void> {
   try {
     const info = await new GqlMeetupClient(accessToken).getUserInfo();
     const memberId = info?.self?.id;
     if (typeof memberId !== 'string' || !MEMBER_ID_PATTERN.test(memberId)) {
       logger.warn('Meetup returned no usable member id for the organizer');
+      return;
+    }
+    const expected = Configuration.meetup.organizerMemberId;
+    if (expected && expected !== memberId) {
+      logger.error(
+        'The stored Meetup organizer credential belongs to a different ' +
+          'account than MEETUP_ORGANIZER_MEMBER_ID; its member id was not recorded',
+      );
+      if (client && !wrongAccountAlerted) {
+        wrongAccountAlerted = true;
+        await postAlert(client, {
+          title: 'Meetup organizer credential belongs to a different account',
+          description:
+            'The stored Meetup organizer credential is not the shared organizer account set in MEETUP_ORGANIZER_MEMBER_ID. ' +
+            `Renew it at ${BASE_DISCORD_BOT_URL}/dashboard/organizer-login while signed in to Meetup as the shared organizer account.`,
+        });
+      }
       return;
     }
     await credentials.withLockedCredential(
@@ -245,9 +272,20 @@ async function resolveOrganizerAccessToken(
       );
       return refreshedAccessToken;
     }
+    // The store or lock failed before any refresh: nothing was obtained and
+    // nothing could be recorded. Not deduplicated -- there is nowhere to
+    // record an episode -- matching the old sweep, which alerted every time.
     logger.error(
       `Could not read the organizer credential under its lock: ${errorName(error)}`,
     );
+    if (client) {
+      await postAlert(client, {
+        title: 'Meetup organizer credential store unavailable',
+        description:
+          `Could not read the shared Meetup organizer credential from the database (${errorName(error)}), ` +
+          'so Meetup identity monitoring was skipped this time. It retries on the next run.',
+      });
+    }
     return undefined;
   }
 
@@ -267,7 +305,7 @@ async function resolveOrganizerAccessToken(
     await postAlert(client, RESTORED_ALERT);
   }
   if (outcome.memberIdMissing) {
-    await recordMemberId(credentials, outcome.accessToken);
+    await recordMemberId(credentials, outcome.accessToken, client);
   }
   return outcome.accessToken;
 }
@@ -275,6 +313,7 @@ async function resolveOrganizerAccessToken(
 // One resolution per process at a time, per kind: concurrent callers share
 // it. A forced call never joins an unforced one -- its caller has just seen
 // the token refused, so the reused one would be no help.
+// Joined callers share the first caller's client; there is one Discord client per process.
 const inFlight = new Map<boolean, Promise<string | undefined>>();
 
 /**
@@ -308,4 +347,5 @@ export async function getOrganizerAccessToken(
 /** Test-only: forget any in-flight resolution so tests cannot leak into each other. */
 export function resetOrganizerTokenStateForTest(): void {
   inFlight.clear();
+  wrongAccountAlerted = false;
 }

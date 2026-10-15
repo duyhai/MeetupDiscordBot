@@ -159,6 +159,7 @@ beforeEach(() => {
     rolledBack: 0,
   });
   Configuration.meetup.organizerRefreshToken = 'SEED-REFRESH';
+  Configuration.meetup.organizerMemberId = undefined;
   refresh.mockReset();
   alert.mockClear();
   fake.getUserInfo.mockReset();
@@ -174,6 +175,7 @@ beforeEach(() => {
 
 afterEach(() => {
   Configuration.meetup.organizerRefreshToken = undefined;
+  Configuration.meetup.organizerMemberId = undefined;
 });
 
 describe('getOrganizerAccessToken', () => {
@@ -443,6 +445,85 @@ describe('getOrganizerAccessToken', () => {
     expect(db.memberId).toBe('468174923');
     // Its own short locked call, after the token transaction committed.
     expect(credentials.withLockedCredential).toHaveBeenCalledTimes(2);
+  });
+
+  it('records the member id only when it matches MEETUP_ORGANIZER_MEMBER_ID', async () => {
+    db.current = stored(60 * MINUTE);
+    db.memberId = null;
+    Configuration.meetup.organizerMemberId = '468174923';
+    fake.getUserInfo.mockResolvedValueOnce({ self: { id: '468174923' } });
+
+    await expect(getOrganizerAccessToken({ client })).resolves.toBe(
+      'STORED-ACCESS',
+    );
+    expect(db.memberId).toBe('468174923');
+    expect(alert).not.toHaveBeenCalled();
+  });
+
+  it('a different account stores nothing and alerts once', async () => {
+    db.current = stored(60 * MINUTE);
+    db.memberId = null;
+    Configuration.meetup.organizerMemberId = '468174923';
+    fake.getUserInfo.mockResolvedValue({ self: { id: '999000111' } });
+
+    await expect(getOrganizerAccessToken({ client })).resolves.toBe(
+      'STORED-ACCESS',
+    );
+    await expect(getOrganizerAccessToken({ client })).resolves.toBe(
+      'STORED-ACCESS',
+    );
+
+    expect(locked.setMemberId).not.toHaveBeenCalled();
+    expect(db.memberId).toBeNull();
+    expect(alert).toHaveBeenCalledTimes(1);
+    expect(alert).toHaveBeenCalledWith(client, {
+      title: 'Meetup organizer credential belongs to a different account',
+      description:
+        'The stored Meetup organizer credential is not the shared organizer account set in MEETUP_ORGANIZER_MEMBER_ID. ' +
+        `Renew it at ${BASE_DISCORD_BOT_URL}/dashboard/organizer-login while signed in to Meetup as the shared organizer account.`,
+    });
+    const shown = JSON.stringify(alert.mock.calls) + fake.logged.join('\n');
+    expect(shown).not.toContain('999000111');
+    expect(JSON.stringify(alert.mock.calls)).not.toContain('468174923');
+    expect(fake.logged.join('\n')).not.toContain('468174923');
+    expect(
+      fake.logged.filter((line) => line.includes('different account')),
+    ).not.toHaveLength(0);
+  });
+
+  it('records as observed when no organizer id is configured', async () => {
+    db.current = stored(60 * MINUTE);
+    db.memberId = null;
+    fake.getUserInfo.mockResolvedValueOnce({ self: { id: '999000111' } });
+
+    await getOrganizerAccessToken({ client });
+
+    expect(db.memberId).toBe('999000111');
+    expect(alert).not.toHaveBeenCalled();
+  });
+
+  it('alerts when the credential store is unavailable', async () => {
+    class LockTimeoutError extends Error {
+      name = 'LockTimeoutError';
+    }
+    const lockTimeout = new LockTimeoutError(
+      'canceling statement due to lock timeout',
+    );
+    credentials.withLockedCredential
+      .mockRejectedValueOnce(lockTimeout)
+      .mockRejectedValueOnce(lockTimeout);
+
+    await expect(getOrganizerAccessToken({ client })).resolves.toBeUndefined();
+    await expect(getOrganizerAccessToken({ client })).resolves.toBeUndefined();
+
+    expect(alert).toHaveBeenCalledTimes(2);
+    expect(alert).toHaveBeenCalledWith(client, {
+      title: 'Meetup organizer credential store unavailable',
+      description:
+        'Could not read the shared Meetup organizer credential from the database (LockTimeoutError), ' +
+        'so Meetup identity monitoring was skipped this time. It retries on the next run.',
+    });
+    expect(fake.logged.join('\n')).toMatch(/LockTimeoutError/);
   });
 
   it('does not look up the member id when one is stored', async () => {
