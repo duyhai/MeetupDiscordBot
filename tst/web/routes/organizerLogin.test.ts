@@ -552,6 +552,27 @@ describe('organizer login routes', () => {
     expect(fake.logged.join('\n') + res.text).not.toContain(TOKENS.accessToken);
   });
 
+  it('an account-guard rejection is logged by name, with the same generic page', async () => {
+    class OrganizerAccountChangedError extends Error {
+      name = 'OrganizerAccountChangedError';
+    }
+    const { req, cookie, org } = await setup({
+      saveRenewedCredential: vi
+        .fn()
+        .mockRejectedValue(new OrganizerAccountChangedError('changed')),
+    });
+    const state = await startRenewal(req, cookie);
+
+    const res = await complete(req, cookie, { state, code: 'c' });
+
+    expect(res.status).toBe(503);
+    expect(res.text).toContain(
+      'The renewed login could not be saved. Please start again in a minute.',
+    );
+    expect(fake.logged.join('\n')).toContain('OrganizerAccountChangedError');
+    expect(auditTitles(org)).toContain('Organizer login renewal failed');
+  });
+
   it('logs each attempt to the moderation channel with <@id> and no token', async () => {
     const { req, cookie, org } = await setup();
     const state = await startRenewal(req, cookie);

@@ -25,6 +25,17 @@ import {
 import { OrganizerLoginDeps } from './routes/organizerLogin.js';
 
 /**
+ * The in-lock guard refused: a different organizer account was recorded
+ * after the route checked it. Named so the log tells it from an outage.
+ */
+export class OrganizerAccountChangedError extends Error {
+  constructor() {
+    super('A different organizer account was recorded during the renewal');
+    this.name = 'OrganizerAccountChangedError';
+  }
+}
+
+/**
  * Stores a renewed organizer credential through the same advisory-locked
  * transaction refresh uses: tokens, member id and the episode close commit
  * together or not at all. True iff a failure episode was open (post the
@@ -42,9 +53,7 @@ export async function renewOrganizerCredential(
 ): Promise<boolean> {
   return repo.withLockedCredential(key, async (locked) => {
     if (locked.meta.memberId !== null && locked.meta.memberId !== memberId) {
-      throw new Error(
-        'A different organizer account was recorded during the renewal',
-      );
+      throw new OrganizerAccountChangedError();
     }
     await locked.write(tokens);
     await locked.setMemberId(memberId);

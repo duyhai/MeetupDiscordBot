@@ -16,7 +16,10 @@ import {
   LockedCredential,
 } from '../../src/lib/repositories/postgresCredentialRepository.js';
 import { ApplicationCredentialRepository } from '../../src/util/credentialRepository.js';
-import { organizerLoginDeps } from '../../src/web/organizerLoginDeps.js';
+import {
+  OrganizerAccountChangedError,
+  organizerLoginDeps,
+} from '../../src/web/organizerLoginDeps.js';
 
 const fake = vi.hoisted(() => ({ getUserInfo: vi.fn() }));
 
@@ -169,8 +172,10 @@ describe('organizerLoginDeps', () => {
         TOKENS,
         ORGANIZER_ID,
       ),
-    ).rejects.toThrow();
+    ).rejects.toBeInstanceOf(OrganizerAccountChangedError);
     expect(locked.write).not.toHaveBeenCalled();
+    expect(locked.setMemberId).not.toHaveBeenCalled();
+    expect(logAlert).not.toHaveBeenCalled();
     expect(noteOrganizerCredentialRenewed).not.toHaveBeenCalled();
   });
 
