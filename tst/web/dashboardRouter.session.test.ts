@@ -575,6 +575,44 @@ describe('dashboard CSRF and logout', () => {
   });
 });
 
+describe('protected router case sensitivity', () => {
+  const csrfOf = async (
+    req: Awaited<ReturnType<typeof makeApp>>['req'],
+    cookie: string,
+  ) =>
+    /name="_csrf" value="([^"]+)"/.exec(
+      (await req.get('/dashboard').set('Cookie', cookie)).text,
+    )[1];
+
+  it('wrong-case protected paths are 404, not the real route', async () => {
+    const { req } = await makeApp({
+      protectedRoutes: (r) => {
+        r.get('/dummy', (_req, res) => {
+          res.status(200).send('ok');
+        });
+      },
+    });
+    const cookie = await signIn(req);
+    const token = await csrfOf(req, cookie);
+    const wrong = await req
+      .post('/dashboard/Logout')
+      .set('Cookie', cookie)
+      .type('form')
+      .send({ _csrf: token });
+    expect(wrong.status).toBe(404);
+    // The session survived: the wrong-case path did not log anyone out.
+    expect((await req.get('/dashboard').set('Cookie', cookie)).status).toBe(
+      200,
+    );
+    expect(
+      (await req.get('/dashboard/DUMMY').set('Cookie', cookie)).status,
+    ).toBe(404);
+    expect(
+      (await req.get('/dashboard/dummy').set('Cookie', cookie)).status,
+    ).toBe(200);
+  });
+});
+
 describe('protectedRouteList', () => {
   it('protectedRouteList throws for a router without the gate', () => {
     expect(() => protectedRouteList(express.Router())).toThrow(

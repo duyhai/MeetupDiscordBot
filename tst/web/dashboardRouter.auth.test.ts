@@ -59,6 +59,122 @@ describe('dashboard sign-in', () => {
     expect(cache.values.size).toBe(0);
   });
 
+  it('no cache writes or removes on any path that does not sign someone in', async () => {
+    const failingOauth = {
+      buildLoginUrl: (s: string) => `https://discord.com/x?state=${s}`,
+      exchangeCode: vi.fn().mockRejectedValue(new Error('x')),
+      fetchIdentity: vi.fn(),
+    };
+    const touched: string[] = [];
+    // Each scenario gets a fresh app; its cache's set and remove are spied.
+    const scenario = async (
+      name: string,
+      overrides: Partial<DashboardDeps>,
+      drive: (
+        req: Awaited<ReturnType<typeof makeApp>>['req'],
+      ) => Promise<number>,
+      expected: number,
+    ) => {
+      const { req, cache } = await makeApp(overrides);
+      const set = vi.spyOn(cache, 'set');
+      const remove = vi.spyOn(cache, 'remove');
+      expect(await drive(req), name).toBe(expected);
+      if (set.mock.calls.length || remove.mock.calls.length) {
+        touched.push(name);
+      }
+      expect(cache.values.size, name).toBe(0);
+    };
+    const callback = async (
+      req: Awaited<ReturnType<typeof makeApp>>['req'],
+      cookie: (c: { state: string; oauthCookie: string }) => string | undefined,
+      query = (state: string) => `state=${state}&code=c`,
+    ) => {
+      const started = await startSignIn(req);
+      const res = await req
+        .get(`/dashboard/auth/callback?${query(started.state)}`)
+        .set('Cookie', cookie(started) ?? '');
+      return res.status;
+    };
+
+    await scenario(
+      'start',
+      {},
+      async (req) => {
+        await startSignIn(req);
+        return 200;
+      },
+      200,
+    );
+    await scenario(
+      'mismatched state',
+      {},
+      (req) =>
+        callback(
+          req,
+          (c) => c.oauthCookie,
+          () => 'state=other&code=c',
+        ),
+      400,
+    );
+    await scenario(
+      'no OAuth cookie',
+      {},
+      (req) => callback(req, () => ''),
+      400,
+    );
+    await scenario(
+      'tampered OAuth cookie',
+      {},
+      (req) => callback(req, (c) => `${c.oauthCookie.slice(0, -2)}xx`),
+      400,
+    );
+    let now = 0;
+    await scenario(
+      'expired OAuth cookie',
+      { now: () => now },
+      async (req) => {
+        const started = await startSignIn(req);
+        now = 10 * 60 * 1000;
+        return (
+          await req
+            .get(`/dashboard/auth/callback?state=${started.state}&code=c`)
+            .set('Cookie', started.oauthCookie)
+        ).status;
+      },
+      400,
+    );
+    await scenario(
+      '403 refusal',
+      { checkAccess: vi.fn().mockResolvedValue(false) },
+      (req) => callback(req, (c) => c.oauthCookie),
+      403,
+    );
+    await scenario(
+      '502 exchange failure',
+      { oauth: failingOauth },
+      (req) => callback(req, (c) => c.oauthCookie),
+      502,
+    );
+    await scenario(
+      '503 role check failure',
+      { checkAccess: vi.fn().mockRejectedValue(new Error('discord down')) },
+      (req) => callback(req, (c) => c.oauthCookie),
+      503,
+    );
+    await scenario(
+      'cancelled sign-in',
+      {},
+      (req) =>
+        callback(
+          req,
+          (c) => c.oauthCookie,
+          (state) => `state=${state}&error=access_denied`,
+        ),
+      400,
+    );
+    expect(touched).toEqual([]);
+  });
+
   it('hands exchangeCode exactly the verifier given to buildLoginUrl', async () => {
     const { req, deps } = await makeApp();
     await signIn(req);
