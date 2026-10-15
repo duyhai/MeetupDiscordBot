@@ -9,16 +9,13 @@ import { LogEntry } from '../../lib/helpers/discordLogger.js';
 import { CredentialMeta } from '../../lib/repositories/postgresCredentialRepository.js';
 import { tz } from '../../util/timezone.js';
 import { dashboardLocals } from '../dashboardRouter.js';
-import { SafeHtml, html } from '../html.js';
+import { SafeHtml, html, safeHref } from '../html.js';
 import { layout } from '../pages.js';
 import { safeEqual } from '../session.js';
 
 const logger = new Logger({ name: 'dashboard' });
 
 const MEMBER_ID_PATTERN = /^[0-9]{1,20}$/;
-
-/** Where "Renew organizer login" sends the browser (buildMeetupAuthUrl). */
-const MEETUP_SIGN_IN_ORIGIN = 'https://secure.meetup.com';
 
 /**
  * Everything the "Renew organizer login" routes touch, injectable for tests.
@@ -65,7 +62,10 @@ const PRIVATE_WINDOW_STEPS = html`<ol>
     Open this page in a <strong>private window</strong> (so your own Meetup
     login is not used) and sign in with Discord.
   </li>
-  <li>Press <strong>Renew organizer login</strong>.</li>
+  <li>
+    Press <strong>Renew organizer login</strong>, then
+    <strong>Continue to Meetup sign-in</strong>.
+  </li>
   <li>
     Sign in to Meetup as the <strong>shared organizer account</strong>, not your
     personal account, and allow access.
@@ -145,19 +145,6 @@ export function registerOrganizerLoginRoutes(
       result(res, 503, 'Unable to continue', STORE_DOWN);
       return;
     }
-    if (meta) {
-      // Browsers apply form-action to the redirect that follows a form POST,
-      // so the dashboard's `form-action 'self'` would block start's 303 to
-      // Meetup. This page alone also allows Meetup's sign-in host.
-      const csp = res.get('Content-Security-Policy') ?? '';
-      res.set(
-        'Content-Security-Policy',
-        csp.replace(
-          "form-action 'self';",
-          `form-action 'self' ${MEETUP_SIGN_IN_ORIGIN};`,
-        ),
-      );
-    }
     const action = meta
       ? html`${statusLine(meta)}
           <h2>Renew</h2>
@@ -188,6 +175,9 @@ export function registerOrganizerLoginRoutes(
   }) as RequestHandler);
 
   // Behind the unsafe-method guard: CSRF token, Origin and rate limit.
+  // Answers with a page that LINKS to Meetup rather than a redirect: browsers
+  // apply the dashboard's `form-action 'self'` to every redirect after a form
+  // POST, and Meetup's sign-in may bounce through more than one host.
   router.post('/organizer-login/start', (async (_req, res) => {
     const { session, sid } = dashboardLocals(res);
     let meta: CredentialMeta | undefined;
@@ -203,11 +193,42 @@ export function registerOrganizerLoginRoutes(
       return;
     }
     const state = await deps.createState(session.userId, sessionHashOf(sid));
+    // Only Meetup's authorize endpoint passes safeHref; anything else is a
+    // wiring fault, refused rather than linked.
+    const href = safeHref(deps.buildAuthUrl(state));
+    if (!href) {
+      logger.error(
+        'Organizer login start built a sign-in URL safeHref refused',
+      );
+      result(
+        res,
+        500,
+        'Something went wrong',
+        'The Meetup sign-in link could not be built. Please try again.',
+      );
+      return;
+    }
     audit({
       title: 'Organizer login renewal started',
       description: `<@${session.userId}> started renewing the shared Meetup organizer login.`,
     });
-    res.redirect(303, deps.buildAuthUrl(state));
+    page(
+      res,
+      200,
+      'Renew organizer login',
+      html`<div class="card">
+        <h1>Continue to Meetup</h1>
+        <p>
+          Sign in to Meetup as the <strong>shared organizer account</strong>,
+          not your personal account. This link works once, in this window, for
+          10 minutes.
+        </p>
+        <p>
+          <a class="button" href="${href}">Continue to Meetup sign-in</a>
+        </p>
+        <p><a href="/dashboard/organizer-login">Back to organizer login</a></p>
+      </div>`,
+    );
   }) as RequestHandler);
 
   /**

@@ -130,6 +130,18 @@ const csrfOf = (page: string) => {
   return match[1];
 };
 
+/** The continue link on the start page, attribute-unescaped. */
+function continueHref(page: string): string {
+  const match =
+    /<a class="button" href="([^"]+)">Continue to Meetup sign-in<\/a>/.exec(
+      page,
+    );
+  if (!match) {
+    throw new Error('start page has no continue link');
+  }
+  return match[1].replace(/&amp;/g, '&');
+}
+
 async function startRenewal(req: Client, cookie: string): Promise<string> {
   const page = await req
     .get('/dashboard/organizer-login')
@@ -140,10 +152,10 @@ async function startRenewal(req: Client, cookie: string): Promise<string> {
     .set('Origin', ORIGIN)
     .type('form')
     .send({ _csrf: csrfOf(page.text) });
-  if (res.status !== 303) {
+  if (res.status !== 200) {
     throw new Error(`start answered ${res.status}`);
   }
-  return new URL(res.headers.location).searchParams.get('state');
+  return new URL(continueHref(res.text)).searchParams.get('state');
 }
 
 const complete = (req: Client, cookie: string, query: Record<string, string>) =>
@@ -205,12 +217,18 @@ describe('organizer login routes', () => {
 
     now = 10 * 60 * 1000;
     checkAccess.mockResolvedValue(false);
+    const statuses: Record<string, number> = {};
     for (const { method, path } of routes) {
-      // The first request ends the session (403); later ones find none.
       // eslint-disable-next-line no-await-in-loop
-      const res = await call(method, path, true);
-      expect([403, 302]).toContain(res.status);
+      statuses[`${method} ${path}`] = (await call(method, path, true)).status;
     }
+    // The first request ends the session (403); after that there is none, so
+    // the POST is refused (403) and the GET goes to sign-in (302).
+    expect(statuses).toEqual({
+      'get /organizer-login': 403,
+      'post /organizer-login/start': 403,
+      'get /organizer-login/complete': 302,
+    });
     expect((await call('get', routes[0].path, true)).status).toBe(302);
     expect(org.createState).not.toHaveBeenCalled();
   });
@@ -273,7 +291,7 @@ describe('organizer login routes', () => {
     expect(org.createState).not.toHaveBeenCalled();
   });
 
-  it('start binds the state to this session and redirects to Meetup', async () => {
+  it('start binds the state to this session and links to Meetup', async () => {
     const { req, cookie, org } = await setup();
     const page = await req
       .get('/dashboard/organizer-login')
@@ -285,15 +303,14 @@ describe('organizer login routes', () => {
       .type('form')
       .send({ _csrf: csrfOf(page.text) });
 
-    expect(res.status).toBe(303);
+    expect(res.status).toBe(200);
+    expect(res.headers.location).toBeUndefined();
     expect(org.createState).toHaveBeenCalledWith(
       USER.id,
       sha256(sidOf(cookie)),
     );
     const state = [...org.states.records.keys()][0];
-    const location = String(res.headers.location);
-    expect(location).toBe(org.buildAuthUrl(state));
-    expect(location.startsWith(MEETUP_AUTHORIZE)).toBe(true);
+    expect(continueHref(res.text)).toBe(org.buildAuthUrl(state));
     // The raw session id never leaves the dashboard.
     expect(JSON.stringify(org.states.records.get(state))).not.toContain(
       sidOf(cookie),
@@ -606,22 +623,58 @@ describe('organizer login routes', () => {
     expect(res.text).not.toContain(ORGANIZER_ID);
   });
 
-  it("status page lets its form's redirect reach Meetup sign-in, and nothing else", async () => {
+  it('start renders a continue link to Meetup sign-in', async () => {
+    const { req, cookie, org } = await setup();
+    const page = await req
+      .get('/dashboard/organizer-login')
+      .set('Cookie', cookie);
+    const res = await req
+      .post('/dashboard/organizer-login/start')
+      .set('Cookie', cookie)
+      .set('Origin', ORIGIN)
+      .type('form')
+      .send({ _csrf: csrfOf(page.text) });
+
+    expect(res.status).toBe(200);
+    const href = continueHref(res.text);
+    expect(href.startsWith(`${MEETUP_AUTHORIZE}?`)).toBe(true);
+    expect(res.text).toContain('shared organizer account');
+    expect(res.text).toContain('href="/dashboard/organizer-login"');
+    expect(auditTitles(org)).toEqual(['Organizer login renewal started']);
+    // The page only links: nothing redirects the POST off-site.
+    expect(String(res.headers['content-security-policy'])).toContain(
+      "form-action 'self';",
+    );
+  });
+
+  it('start refuses to link anywhere but the Meetup authorize endpoint', async () => {
+    const { req, cookie, org } = await setup({
+      buildAuthUrl: vi.fn(() => 'https://evil.example/oauth2/authorize?x=1'),
+    });
+    const page = await req
+      .get('/dashboard/organizer-login')
+      .set('Cookie', cookie);
+    const res = await req
+      .post('/dashboard/organizer-login/start')
+      .set('Cookie', cookie)
+      .set('Origin', ORIGIN)
+      .type('form')
+      .send({ _csrf: csrfOf(page.text) });
+
+    expect(res.status).toBe(500);
+    expect(res.text).not.toContain('evil.example');
+    expect(auditTitles(org)).not.toContain('Organizer login renewal started');
+  });
+
+  it("the status page keeps form-action 'self'", async () => {
     const { req, cookie } = await setup();
     const page = await req
       .get('/dashboard/organizer-login')
       .set('Cookie', cookie);
-    const home = await req.get('/dashboard').set('Cookie', cookie);
 
-    // Browsers apply form-action to the redirect after a form POST, so the
-    // 303 to Meetup is blocked unless the page allows Meetup's sign-in host.
     const csp = String(page.headers['content-security-policy']);
-    expect(csp).toContain("form-action 'self' https://secure.meetup.com;");
-    expect(csp).toContain("default-src 'none'");
-    expect(csp).toContain("frame-ancestors 'none'");
-    expect(String(home.headers['content-security-policy'])).toContain(
-      "form-action 'self';",
-    );
+    expect(csp).toContain("form-action 'self';");
+    expect(csp).not.toContain('meetup.com');
   });
 
   it('status page shows a healthy credential', async () => {

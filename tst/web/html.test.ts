@@ -52,6 +52,29 @@ describe('safeHref', () => {
     );
   });
 
+  it('allows exactly the Meetup OAuth authorize endpoint, with its query', () => {
+    const url =
+      'https://secure.meetup.com/oauth2/authorize?response_type=code&client_id=k&state=s&redirect_uri=https%3A%2F%2Fx';
+    expect(safeHref(url)).toBe(url);
+    expect(safeHref('https://secure.meetup.com/oauth2/authorize')).toBe(
+      'https://secure.meetup.com/oauth2/authorize',
+    );
+  });
+
+  it('refuses other secure.meetup.com paths', () => {
+    [
+      'https://secure.meetup.com/',
+      'https://secure.meetup.com/oauth2/access',
+      'https://secure.meetup.com/oauth2/authorize/',
+      'https://secure.meetup.com/oauth2/authorize/../access',
+      'https://secure.meetup.com/oauth2/authorizex',
+      'https://secure.meetup.com/login/',
+      'http://secure.meetup.com/oauth2/authorize',
+      'https://secure.meetup.com:444/oauth2/authorize',
+      'https://secure.meetup.com.evil.example/oauth2/authorize',
+    ].forEach((url) => expect(safeHref(url)).toBeUndefined());
+  });
+
   it('refuses everything else', () => {
     [
       'javascript:alert(1)',
