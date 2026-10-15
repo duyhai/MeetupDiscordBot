@@ -16,13 +16,16 @@ const IDLE_IN_TRANSACTION_TIMEOUT_MS = 45_000;
 // Backstop for pool.connect(): never wait forever for the single connection.
 const CONNECTION_TIMEOUT_MS = 30_000;
 
-// True while code runs inside a locked transaction. With a one-connection
+// Marks code running inside a locked transaction. With a one-connection
 // pool, calling back into the repository from there would wait forever for
 // the connection the transaction itself holds, so it fails fast instead.
-const insideLock = new AsyncLocalStorage<boolean>();
+// The store is a mutable token cleared when the transaction ends: async work
+// spawned inside fn (timers, fire-and-forget chains) inherits the context,
+// and must be free to use the repository once the lock is released.
+const insideLock = new AsyncLocalStorage<{ active: boolean }>();
 
 function assertNotReentered(): void {
-  if (insideLock.getStore()) {
+  if (insideLock.getStore()?.active === true) {
     throw new Error(
       'credential repository re-entered inside withLockedCredential',
     );
@@ -299,6 +302,7 @@ export class PostgresCredentialRepository {
     // failed): destroy it rather than hand it back to a pool whose only slot
     // every later sweep depends on.
     let broken = false;
+    let connectionError: Error | undefined;
     // pg-pool drops its idle 'error' listener while a client is checked out,
     // so a backend dying mid-transaction (terminated, idle timeout, network)
     // would emit an unhandled 'error' and crash the process. Handle it here.
@@ -306,12 +310,21 @@ export class PostgresCredentialRepository {
       logger.error(
         `Postgres connection lost inside the credential lock: ${error.name}`,
       );
+      connectionError = error;
       broken = true;
       open = false;
     };
     client.on('error', onError);
+    const lockToken = { active: true };
     const guarded = {
       query: ((...args: Parameters<pg.PoolClient['query']>) => {
+        if (connectionError) {
+          return Promise.reject(
+            new Error(
+              `Credential transaction lost its database connection: ${connectionError.name}`,
+            ),
+          );
+        }
         if (!open) {
           return Promise.reject(
             new Error(
@@ -335,7 +348,14 @@ export class PostgresCredentialRepository {
       await client.query('SELECT pg_advisory_xact_lock($1)', [
         ORGANIZER_CREDENTIAL_LOCK,
       ]);
-      const result = await insideLock.run(true, () => fn(guarded));
+      // Deactivate as soon as fn settles, not after COMMIT: work fn spawned
+      // may run while COMMIT is in flight, and should simply wait for the
+      // connection rather than be refused as re-entry.
+      const result = await insideLock
+        .run(lockToken, () => fn(guarded))
+        .finally(() => {
+          lockToken.active = false;
+        });
       open = false;
       await client.query('COMMIT');
       return result;
@@ -348,6 +368,7 @@ export class PostgresCredentialRepository {
       }
       throw error;
     } finally {
+      lockToken.active = false;
       client.removeListener('error', onError);
       client.release(broken);
     }

@@ -434,7 +434,9 @@ describe.skipIf(!POSTGRES_AVAILABLE)('PostgresCredentialRepository', () => {
     } finally {
       held.release();
     }
-    expect(await outcome).toMatch(/^rejected/);
+    expect(await outcome).toMatch(
+      /^rejected: Error: Credential transaction lost its database connection: /,
+    );
     expect(order).toEqual([]);
     expect(await storedRefreshToken(key)).toBeUndefined();
 
@@ -529,5 +531,37 @@ describe.skipIf(!POSTGRES_AVAILABLE)('PostgresCredentialRepository', () => {
     expect((await repo.getMeta(key)).failingSince).toBeNull();
     // and the episode can still be started afterwards
     expect(await repo.markFailing(key)).toBe(true);
+  });
+
+  it('work started inside the lock can use the repository after the transaction ends', async () => {
+    const key = `key-${crypto.randomUUID()}`;
+    let later!: Promise<unknown>;
+    const committed = gate();
+    await repo.withLockedCredential(key, async (locked) => {
+      await locked.setMemberId('12345');
+      // Fire-and-forget work spawned inside fn, running only after commit.
+      later = new Promise((resolve, reject) => {
+        setTimeout(() => {
+          committed.promise.then(() => repo.getMeta(key)).then(resolve, reject);
+        }, 0);
+      });
+    });
+    committed.open();
+    await expect(later).resolves.toEqual({
+      memberId: '12345',
+      failingSince: null,
+    });
+
+    // Ungated: the timer may fire while COMMIT is still in flight. It must
+    // wait for the connection, not be refused as re-entry.
+    let racing!: Promise<unknown>;
+    await repo.withLockedCredential(key, async () => {
+      racing = new Promise((resolve, reject) => {
+        setTimeout(() => {
+          repo.getMeta(key).then(resolve, reject);
+        }, 0);
+      });
+    });
+    await expect(racing).resolves.toMatchObject({ memberId: '12345' });
   });
 });
