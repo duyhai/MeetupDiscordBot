@@ -30,3 +30,28 @@ describe('FixedWindowLimiter', () => {
     expect(limiter.size).toBeLessThanOrEqual(3);
   });
 });
+
+describe('FixedWindowLimiter eviction', () => {
+  it('keeps an over-limit key limited when a flood of new keys fills the map', () => {
+    const limiter = new FixedWindowLimiter(1, 60_000, () => 0, 3);
+    limiter.take('b');
+    limiter.take('c');
+    expect(limiter.take('a')).toBe(true);
+    expect(limiter.take('a')).toBe(false);
+    limiter.take('d');
+    expect(limiter.size).toBeLessThanOrEqual(3);
+    expect(limiter.take('a')).toBe(false);
+  });
+
+  it('drops expired windows before evicting live ones', () => {
+    let now = 0;
+    const limiter = new FixedWindowLimiter(1, 1000, () => now, 2);
+    limiter.take('old');
+    now = 1500;
+    limiter.take('live');
+    now = 1600;
+    limiter.take('new');
+    expect(limiter.size).toBe(2);
+    expect(limiter.take('live')).toBe(false);
+  });
+});

@@ -2,7 +2,9 @@
  * Fixed-window request limiter, per key (an IP for sign-in, a Discord user
  * id for actions). Kept in process: the bot runs on a single web dyno. The
  * map is capped so a flood of distinct keys cannot grow memory on a dyno
- * with an R14 history; when full it drops expired windows, then everything.
+ * with a memory-quota (R14) history. When full it first drops expired
+ * windows, then the oldest-inserted key. Oldest is also the soonest to
+ * expire, and live counters, including keys already over the limit, are kept.
  */
 export class FixedWindowLimiter {
   private readonly hits = new Map<string, { count: number; resetAt: number }>();
@@ -45,8 +47,11 @@ export class FixedWindowLimiter {
         this.hits.delete(key);
       }
     }
-    if (this.hits.size >= this.maxKeys) {
-      this.hits.clear();
+    while (this.hits.size >= this.maxKeys) {
+      for (const oldest of this.hits.keys()) {
+        this.hits.delete(oldest);
+        break;
+      }
     }
   }
 }
