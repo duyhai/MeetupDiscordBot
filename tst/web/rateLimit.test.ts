@@ -65,6 +65,24 @@ describe('FixedWindowLimiter eviction', () => {
     expect(limiter.take('b')).toBe(false);
   });
 
+  it('keeps an at-limit key over an under-limit one', () => {
+    const limiter = new FixedWindowLimiter(2, 60_000, () => 0, 2);
+    limiter.take('a');
+    limiter.take('a');
+    limiter.take('b');
+    limiter.take('c');
+    expect(limiter.size).toBe(2);
+    // 'a' sat at its limit and was kept; 'b' (under) was evicted.
+    expect(limiter.take('a')).toBe(false);
+  });
+
+  it('keeps an over-limit key over an at-limit one', () => {
+    const limiter = new FixedWindowLimiter(1, 60_000, () => 0, 2);
+    ['a', 'a', 'b'].forEach((key) => limiter.take(key));
+    limiter.take('c');
+    expect(limiter.take('a')).toBe(false);
+  });
+
   it('drops expired windows before evicting live ones', () => {
     let now = 0;
     const limiter = new FixedWindowLimiter(1, 1000, () => now, 2);

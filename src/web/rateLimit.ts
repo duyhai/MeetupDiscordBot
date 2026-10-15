@@ -4,9 +4,11 @@
  * map is capped so a flood of distinct keys cannot grow memory on a dyno
  * with a memory-quota (R14) history. When full it first drops expired
  * windows; then, while still full, deletes the oldest-inserted key whose
- * count is still within the limit; only when every key is over the limit
- * does it delete the oldest one. A flood of fresh keys therefore cannot
- * evict a key that is currently being limited.
+ * count is strictly under the limit; failing that, the oldest key sitting
+ * exactly at the limit (e.g. an "already posted" audit entry); only when
+ * every key is over the limit does it delete the oldest one. A flood of
+ * fresh keys therefore cannot free a key that is at or over its limit
+ * while any lesser key remains.
  */
 export class FixedWindowLimiter {
   private readonly hits = new Map<string, { count: number; resetAt: number }>();
@@ -54,12 +56,19 @@ export class FixedWindowLimiter {
     }
   }
 
-  /** Oldest key still within the limit, else the oldest key. */
+  /** Oldest key under the limit, else oldest at it, else the oldest key. */
   private evictionCandidate(): string {
+    let atLimit: string | undefined;
     for (const [key, entry] of this.hits) {
-      if (entry.count <= this.limit) {
+      if (entry.count < this.limit) {
         return key;
       }
+      if (atLimit === undefined && entry.count === this.limit) {
+        atLimit = key;
+      }
+    }
+    if (atLimit !== undefined) {
+      return atLimit;
     }
     const [oldest] = this.hits.keys();
     return oldest;
