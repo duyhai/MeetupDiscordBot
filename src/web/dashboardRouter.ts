@@ -11,7 +11,12 @@ import { Logger } from 'tslog';
 
 import { KeyValueCache } from '../lib/cache/base.js';
 import { LogEntry } from '../lib/helpers/discordLogger.js';
-import { clearCookie, parseCookies, serializeCookie } from './cookies.js';
+import {
+  clearCookie,
+  parseCookieValues,
+  parseCookies,
+  serializeCookie,
+} from './cookies.js';
 import { openOAuthCookie, sealOAuthCookie } from './oauthCookie.js';
 import { errorPage, homePage, loginPage } from './pages.js';
 import { FixedWindowLimiter } from './rateLimit.js';
@@ -178,24 +183,46 @@ export function createDashboardRouter(deps: DashboardDeps): express.Router {
       );
   };
 
-  async function readSession(req: Request) {
-    const signed = parseCookies(req.headers.cookie).get(SESSION_COOKIE);
-    const sid = signed && verifySignedSessionId(signed, deps.sessionSecret);
-    if (!sid) {
-      return undefined;
+  /**
+   * Tries every dash_sid the browser sent, so a forged one planted ahead of
+   * ours cannot hide it. `stale` is true when a cookie we signed was sent but
+   * its session is gone: only then is clearing the cookie ours to do.
+   */
+  async function readSession(
+    req: Request,
+  ): Promise<
+    | { sid: string; session: DashboardSession; stale?: undefined }
+    | { sid?: undefined; session?: undefined; stale: boolean }
+  > {
+    let stale = false;
+    for (const signed of parseCookieValues(
+      req.headers.cookie,
+      SESSION_COOKIE,
+    )) {
+      const sid = verifySignedSessionId(signed, deps.sessionSecret);
+      if (!sid) {
+        continue;
+      }
+      // eslint-disable-next-line no-await-in-loop
+      const session = await (await sessions()).get(sid);
+      if (session) {
+        return { sid, session };
+      }
+      stale = true;
     }
-    const session = await (await sessions()).get(sid);
-    return session ? { sid, session } : undefined;
+    return { stale };
   }
 
-  const router = express.Router();
+  // Case-sensitive like the cookie paths browsers match against, so
+  // /dashboard/Login is not the login route.
+  const router = express.Router({ caseSensitive: true });
   router.use(securityHeaders);
   router.use(express.urlencoded({ extended: false, limit: '16kb' }));
 
   // ---- Public routes: the only ones reachable without a session. ----
 
   router.get('/login', (async (req, res) => {
-    if (await readSession(req)) {
+    if ((await readSession(req)).session) {
       res.redirect(302, '/dashboard');
       return;
     }
@@ -293,23 +320,26 @@ export function createDashboardRouter(deps: DashboardDeps): express.Router {
     res: Response,
     next: NextFunction,
   ) {
-    const signedOut = () => {
-      res.append(
-        'Set-Cookie',
-        clearCookie(SESSION_COOKIE, SESSION_COOKIE_PATH),
-      );
+    // Clears the cookie only when it verified, so a forged cookie or a
+    // wrong-case URL (whose request carries no cookie) cannot log anyone out.
+    const signedOut = (clear: boolean) => {
+      if (clear) {
+        res.append(
+          'Set-Cookie',
+          clearCookie(SESSION_COOKIE, SESSION_COOKIE_PATH),
+        );
+      }
       if (req.method === 'GET' || req.method === 'HEAD') {
         res.redirect(302, '/dashboard/login');
       } else {
         fail(res, 403);
       }
     };
-    const found = await readSession(req);
-    if (!found) {
-      signedOut();
+    const { sid, session, stale } = await readSession(req);
+    if (!session) {
+      signedOut(stale);
       return;
     }
-    const { sid, session } = found;
     if (now() - session.roleCheckedAt >= ROLE_RECHECK_MS) {
       let allowed: boolean;
       try {
@@ -336,7 +366,7 @@ export function createDashboardRouter(deps: DashboardDeps): express.Router {
         return;
       }
       if (!(await store.markRoleChecked(sid, session))) {
-        signedOut();
+        signedOut(true);
         return;
       }
     }
@@ -347,7 +377,7 @@ export function createDashboardRouter(deps: DashboardDeps): express.Router {
 
   // ---- Everything behind the gate lives on this one router. ----
 
-  const protectedRouter = express.Router();
+  const protectedRouter = express.Router({ caseSensitive: true });
 
   /**
    * Every method except GET and HEAD (OPTIONS too, since a hook route could

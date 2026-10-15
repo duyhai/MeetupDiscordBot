@@ -111,6 +111,76 @@ describe('dashboard session gate', () => {
   });
 });
 
+describe('signed-out requests leave the session cookie alone', () => {
+  const clearsSid = (res: { headers: Record<string, unknown> }) =>
+    ((res.headers['set-cookie'] ?? []) as string[]).some((c) =>
+      c.startsWith('dash_sid='),
+    );
+
+  it('does not clear an absent or unverifiable session cookie', async () => {
+    const { req } = await makeApp();
+    const responses = [
+      await req.get('/dashboard'),
+      await req.get('/dashboard').set('Cookie', 'dash_sid=abc.def'),
+      await req.post('/dashboard/logout').set('Cookie', 'dash_sid=abc.def'),
+      await req.post('/dashboard/logout'),
+    ];
+    expect(responses.map((r) => r.status)).toEqual([302, 302, 403, 403]);
+    expect(responses.some(clearsSid)).toBe(false);
+  });
+
+  it('clears a verified session cookie whose session is gone', async () => {
+    const { req, cache } = await makeApp();
+    const cookie = await signIn(req);
+    cache.values.clear();
+    const res = await req.get('/dashboard').set('Cookie', cookie);
+    expect(res.status).toBe(302);
+    expect(res.headers['set-cookie']).toContain(
+      'dash_sid=; Path=/dashboard; HttpOnly; Secure; SameSite=Lax; Max-Age=0',
+    );
+  });
+
+  it('a forged dash_sid placed first does not hide the real one', async () => {
+    const { req } = await makeApp();
+    const cookie = await signIn(req);
+    const res = await req
+      .get('/dashboard')
+      .set('Cookie', `dash_sid=forged.x; ${cookie}`);
+    expect(res.status).toBe(200);
+    expect(clearsSid(res)).toBe(false);
+  });
+
+  it('wrong-case and encoded paths never serve a protected page or log out', async () => {
+    const { req } = await makeApp();
+    const cookie = await signIn(req);
+    const paths = [
+      '/Dashboard',
+      '/DASHBOARD/',
+      '/dashboard/Login',
+      '/dashboard%2flogin',
+      '/dashboard/./',
+      '//dashboard',
+    ];
+    const signedOut = await Promise.all(paths.map(async (p) => req.get(p)));
+    for (const [i, res] of signedOut.entries()) {
+      const gated =
+        res.status === 404 ||
+        (res.status === 302 && res.headers.location === '/dashboard/login');
+      expect({ path: paths[i], gated }).toEqual({
+        path: paths[i],
+        gated: true,
+      });
+      expect(clearsSid(res)).toBe(false);
+    }
+    // Browsers match cookie paths case-sensitively; a signed-in member who
+    // lands on a wrong-case URL with or without the cookie keeps it.
+    const signedIn = await Promise.all(
+      paths.map(async (p) => req.get(p).set('Cookie', cookie)),
+    );
+    expect(signedIn.some(clearsSid)).toBe(false);
+  });
+});
+
 describe('routes are gated by construction', () => {
   const ok = (_req: express.Request, res: express.Response) => {
     res.status(200).send('ok');

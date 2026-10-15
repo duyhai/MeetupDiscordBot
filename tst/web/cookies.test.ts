@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   clearCookie,
+  parseCookieValues,
   parseCookies,
   serializeCookie,
 } from '../../src/web/cookies.js';
@@ -15,6 +16,23 @@ describe('parseCookies', () => {
   it('tolerates a missing header and malformed encoding', () => {
     expect(parseCookies(undefined).size).toBe(0);
     expect(parseCookies('x=%E0%A4%A').get('x')).toBe('%E0%A4%A');
+  });
+});
+
+describe('parseCookieValues', () => {
+  it('returns every value for the name, in order, decoded', () => {
+    expect(parseCookieValues('a=1; b=2; a=x%20y; a=3', 'a')).toEqual([
+      '1',
+      'x y',
+      '3',
+    ]);
+  });
+  it('returns nothing for an absent name or header', () => {
+    expect(parseCookieValues('b=2', 'a')).toEqual([]);
+    expect(parseCookieValues(undefined, 'a')).toEqual([]);
+  });
+  it('matches the name exactly', () => {
+    expect(parseCookieValues('aa=1; A=2; a =3', 'a')).toEqual(['3']);
   });
 });
 
