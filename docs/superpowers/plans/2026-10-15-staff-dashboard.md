@@ -14,7 +14,7 @@
 
 ## Global Constraints
 
-- Access: Discord members holding **Moderator** (`912474048775221270`) or **1.5 Leadership Team** (`1347289004932075521`). Event Organizers excluded. Administrator permission alone does not admit (the spec lists roles only).
+- Access: Discord members holding **Moderator** (`912474048775221270`) or **1.5 Leadership Team** (`1347289004932075521`). Event Organizers excluded. Administrator permission alone does not admit: the Admin role (`912473408577609778`) without either dashboard role is refused (Hai, 2026-10-15).
 - OAuth: Discord OAuth2, `identify` scope only, bot's existing Discord application (`DISCORD_CLIENT_ID` / `DISCORD_SECRET`). Redirect URI: `https://meetup-discord-bot.herokuapp.com/dashboard/auth/callback`.
 - Role check cached in the session for **10 minutes**, then re-checked.
 - Session: signed, `HttpOnly`, `Secure`, `SameSite=Lax` cookie; state in Redis; **12-hour** absolute lifetime.
@@ -251,8 +251,14 @@ import {
   hasDashboardRole,
 } from '../../src/web/roleGate.js';
 
-const memberWith = (roleIds: string[]) => ({
+// Admin role: carries the Administrator permission, but is not a dashboard
+// role. Hai decided (2026-10-15) that admins without Moderator or 1.5
+// Leadership Team are refused.
+const ADMIN_ROLE_ID = '912473408577609778';
+
+const memberWith = (roleIds: string[], isAdministrator = false) => ({
   roles: { cache: new Map(roleIds.map((id) => [id, {}])) },
+  permissions: { has: vi.fn().mockReturnValue(isAdministrator) },
 });
 
 const clientReturning = (fetchMember: ReturnType<typeof vi.fn>) => {
@@ -285,6 +291,9 @@ describe('hasDashboardRole', () => {
   it('refuses no roles', () => {
     expect(hasDashboardRole([])).toBe(false);
   });
+  it('refuses the Admin role on its own', () => {
+    expect(hasDashboardRole([ADMIN_ROLE_ID])).toBe(false);
+  });
 });
 
 describe('discordAccessCheck', () => {
@@ -306,6 +315,15 @@ describe('discordAccessCheck', () => {
   it('denies a member without a dashboard role', async () => {
     const { client } = clientReturning(
       vi.fn().mockResolvedValue(memberWith([SERVER_ROLES.organizer])),
+    );
+    await expect(
+      discordAccessCheck(() => client as never)('1'),
+    ).resolves.toBe(false);
+  });
+
+  it('refuses a member with only the Admin role and the Administrator permission', async () => {
+    const { client } = clientReturning(
+      vi.fn().mockResolvedValue(memberWith([ADMIN_ROLE_ID], true)),
     );
     await expect(
       discordAccessCheck(() => client as never)('1'),
@@ -2012,6 +2030,7 @@ describe('dashboard CSRF and logout', () => {
   4. In the callback, delete `!safeEqual(state, bound) ||`.
   5. In `SessionStore.get`, delete the absolute-expiry check.
   6. In `hasDashboardRole`, add `SERVER_ROLES.organizer` to `DASHBOARD_ROLE_IDS`.
+  6b. In `discordAccessCheck`, return `true` when `member.permissions.has(PermissionFlagsBits.Administrator)`.
   7. In `serializeCookie`, drop `'Secure'`.
   Record the result per mutation in the PR description.
 
