@@ -62,6 +62,11 @@ export interface DashboardDeps {
   origin: string;
   audit: (entry: LogEntry) => Promise<unknown>;
   now?: () => number;
+  /**
+   * Answer plain-HTTP requests with a 308 to `origin` before anything else
+   * runs. Needs `trust proxy` so req.secure reflects X-Forwarded-Proto.
+   */
+  requireHttps?: boolean;
   loginLimiter?: FixedWindowLimiter; // default 10 per minute per IP
   actionLimiter?: FixedWindowLimiter; // default 30 per minute per user
   /**
@@ -216,6 +221,19 @@ export function createDashboardRouter(deps: DashboardDeps): express.Router {
   // Case-sensitive like the cookie paths browsers match against, so
   // /dashboard/Login is not the login route.
   const router = express.Router({ caseSensitive: true });
+
+  // First, so a plain-HTTP request reads no cookie and writes nothing. The
+  // target comes from the configured origin, never the Host header; only
+  // the path and query are taken from the request.
+  router.use(function dashboardHttpsRedirect(req, res, next) {
+    if (!deps.requireHttps || req.secure) {
+      next();
+      return;
+    }
+    const { pathname, search } = new URL(req.originalUrl, 'http://localhost');
+    res.set('Cache-Control', 'no-store');
+    res.redirect(308, `${deps.origin}${pathname}${search}`);
+  });
   router.use(securityHeaders);
   router.use(express.urlencoded({ extended: false, limit: '16kb' }));
 

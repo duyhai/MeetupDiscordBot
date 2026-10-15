@@ -94,6 +94,7 @@ export function dashboardRouterFromEnv(
     },
     sessionSecret: secret,
     origin: dashboardOrigin(),
+    requireHttps: dashboardOrigin().startsWith('https://'),
     audit: async (entry) => {
       if (!discordClient) {
         return false;

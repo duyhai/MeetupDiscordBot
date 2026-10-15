@@ -13,6 +13,7 @@ afterEach(closeServers);
 
 const appWith = (env: Record<string, string | undefined>) => {
   const app = express();
+  app.set('trust proxy', 1);
   app.use('/dashboard', dashboardRouterFromEnv(env));
   return serve(app);
 };
@@ -35,9 +36,22 @@ describe('dashboardRouterFromEnv', () => {
   it('serves the login page when configured', async () => {
     const res = await (
       await appWith({ DASHBOARD_SESSION_SECRET: 'k'.repeat(48) })
-    ).get('/dashboard/login');
+    )
+      .get('/dashboard/login')
+      .set('X-Forwarded-Proto', 'https');
     expect(res.status).toBe(200);
     expect(res.text).toContain('Sign in with Discord');
+  });
+
+  it('redirects plain HTTP to HTTPS when the origin is HTTPS', async () => {
+    expect(dashboardOrigin()).toBe('https://meetup-discord-bot.herokuapp.com');
+    const res = await (
+      await appWith({ DASHBOARD_SESSION_SECRET: 'k'.repeat(48) })
+    ).get('/dashboard/login');
+    expect(res.status).toBe(308);
+    expect(res.headers.location).toBe(
+      'https://meetup-discord-bot.herokuapp.com/dashboard/login',
+    );
   });
 });
 

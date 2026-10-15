@@ -146,7 +146,11 @@ describe('cookie-free OAuth chain', () => {
 
 describe('staff dashboard mount', () => {
   it('mounts the dashboard ahead of the generic 404 page', async () => {
-    const res = await request(app).get('/dashboard/login');
+    // Heroku's router marks HTTPS; without it a configured dashboard
+    // answers 308 to the HTTPS origin.
+    const res = await request(app)
+      .get('/dashboard/login')
+      .set('X-Forwarded-Proto', 'https');
     expect([200, 503]).toContain(res.status);
     expect(res.headers['cache-control']).toBe('no-store');
   });

@@ -181,6 +181,47 @@ describe('signed-out requests leave the session cookie alone', () => {
   });
 });
 
+describe('HTTPS redirect', () => {
+  it('redirects plain HTTP to the configured origin before anything runs', async () => {
+    const { req, deps } = await makeApp({ requireHttps: true });
+    const res = await req.get('/dashboard/login');
+    expect(res.status).toBe(308);
+    expect(res.headers.location).toBe(`${ORIGIN}/dashboard/login`);
+    expect(res.headers['set-cookie']).toBeUndefined();
+    // The callback would clear dash_oauth; the redirect comes first.
+    const cb = await req
+      .get('/dashboard/auth/callback?state=a&code=b')
+      .set('Cookie', 'dash_oauth=x');
+    expect(cb.status).toBe(308);
+    expect(cb.headers.location).toBe(
+      `${ORIGIN}/dashboard/auth/callback?state=a&code=b`,
+    );
+    expect(cb.headers['set-cookie']).toBeUndefined();
+    // eslint-disable-next-line @typescript-eslint/unbound-method
+    expect(deps.oauth.exchangeCode).not.toHaveBeenCalled();
+  });
+
+  it('serves requests the proxy marks as HTTPS', async () => {
+    const { req } = await makeApp({ requireHttps: true });
+    const res = await req
+      .get('/dashboard/login')
+      .set('X-Forwarded-Proto', 'https');
+    expect(res.status).toBe(200);
+  });
+
+  it('never builds the redirect from the Host header', async () => {
+    const { req } = await makeApp({ requireHttps: true });
+    const res = await req.get('/dashboard/login').set('Host', 'evil.example');
+    expect(res.status).toBe(308);
+    expect(res.headers.location).toBe(`${ORIGIN}/dashboard/login`);
+  });
+
+  it('is off by default', async () => {
+    const { req } = await makeApp();
+    expect((await req.get('/dashboard/login')).status).toBe(200);
+  });
+});
+
 describe('routes are gated by construction', () => {
   const ok = (_req: express.Request, res: express.Response) => {
     res.status(200).send('ok');
@@ -218,6 +259,7 @@ describe('routes are gated by construction', () => {
         .sort(),
     ).toEqual([...PUBLIC_ROUTE_PATHS].sort());
     expect(beforeGate.filter((l) => !l.route).map((l) => l.name)).toEqual([
+      'dashboardHttpsRedirect',
       'securityHeaders',
       'urlencodedParser',
     ]);
