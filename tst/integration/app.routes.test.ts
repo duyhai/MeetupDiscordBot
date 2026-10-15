@@ -1,6 +1,6 @@
 import nock from 'nock';
 import request from 'supertest';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import app from '../../src/app.js';
 import { PUBLIC_APP_ORIGIN } from '../../src/constants.js';
@@ -195,15 +195,6 @@ describe('cookie-free OAuth chain', () => {
 
 describe('Meetup callback: organizer login renewal', () => {
   const HASH = 'c'.repeat(64);
-
-  // Nothing in this branch may reach Meetup: any un-mocked request fails.
-  beforeEach(() => {
-    nock.disableNetConnect();
-    nock.enableNetConnect('127.0.0.1');
-  });
-  afterEach(() => {
-    nock.enableNetConnect();
-  });
 
   it('the Meetup callback hands an organizer-renew state to the dashboard completion path (only state/code/error forwarded)', async () => {
     const state = await createOrganizerRenewState('user-org-1', HASH);

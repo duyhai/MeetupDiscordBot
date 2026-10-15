@@ -4,6 +4,8 @@ import { defineConfig } from 'vitest/config';
 export default defineConfig({
   test: {
     environment: 'node',
+    // Every test file: no request leaves the machine.
+    setupFiles: ['tst/setup/blockNetwork.ts'],
     include: ['tst/**/*.test.ts'],
     exclude: ['**/node_modules/**', '**/dist/**', 'tst/integration/**'],
     env: {

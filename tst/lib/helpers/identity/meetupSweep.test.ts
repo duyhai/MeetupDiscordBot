@@ -22,6 +22,7 @@ import {
   isMeetupUnauthorized,
 } from '../../../../src/lib/helpers/organizerMeetupClient.js';
 import { runMeetupSweep } from '../../../../src/lib/helpers/identity/meetupSweep.js';
+import { applyNetworkBlock } from '../../../setup/blockNetwork.js';
 
 // Token concerns (refresh, lock, episode alerts) belong to the helper and its
 // own suite; the sweep only consumes the result.
@@ -58,7 +59,7 @@ const SCOPE_ID = Configuration.meetup.groupId;
 // makes any request a test has not explicitly intercepted fail immediately --
 // degrading to the documented null thumb -- instead of reaching Meetup's CDN.
 beforeAll(() => nock.disableNetConnect());
-afterAll(() => nock.enableNetConnect());
+afterAll(() => applyNetworkBlock());
 
 const PHOTO_HOST = 'https://secure.meetupstatic.com';
 const PHOTO_PATH = '/photos/member/1/2/3/thumb.jpeg';
