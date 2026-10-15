@@ -11,6 +11,7 @@ import {
   ORGANIZER_TOKEN_REUSE_MS,
   getOrganizerAccessToken,
   isMeetupUnauthorized,
+  noteOrganizerCredentialRenewed,
   organizerFailureRemedy,
   resetOrganizerTokenStateForTest,
 } from '../../../src/lib/helpers/organizerMeetupClient.js';
@@ -665,6 +666,72 @@ describe('getOrganizerAccessToken', () => {
     fake.getUserInfo.mockResolvedValueOnce({ self: { id: '1' } });
     locked.setMemberId.mockRejectedValueOnce(new Error('write failed'));
     await expect(getOrganizerAccessToken()).resolves.toBe('STORED-ACCESS');
+  });
+});
+
+describe('noteOrganizerCredentialRenewed', () => {
+  it('re-arms the wrong-account check and alert after a renewal', async () => {
+    db.current = stored(60 * MINUTE);
+    db.memberId = null;
+    Configuration.meetup.organizerMemberId = '468174923';
+    fake.getUserInfo.mockResolvedValue({ self: { id: '999000111' } });
+
+    await getOrganizerAccessToken({ client });
+    expect(alert).toHaveBeenCalledTimes(1);
+
+    // Without a renewal the check and the alert stay spent for this process.
+    await getOrganizerAccessToken({ client });
+    expect(fake.getUserInfo).toHaveBeenCalledTimes(1);
+    expect(alert).toHaveBeenCalledTimes(1);
+
+    noteOrganizerCredentialRenewed();
+
+    // A renewal with the right account: the stored id is now present, so no
+    // lookup and no stale wrong-account alert.
+    db.memberId = '468174923';
+    await getOrganizerAccessToken({ client });
+    expect(fake.getUserInfo).toHaveBeenCalledTimes(1);
+    expect(alert).toHaveBeenCalledTimes(1);
+
+    // And a later mismatch is detected and alerted afresh.
+    noteOrganizerCredentialRenewed();
+    db.memberId = null;
+    await getOrganizerAccessToken({ client });
+    expect(fake.getUserInfo).toHaveBeenCalledTimes(2);
+    expect(alert).toHaveBeenCalledTimes(2);
+  });
+
+  it('a later caller does not join a resolution started before the renewal', async () => {
+    db.current = stored(0);
+    const before = deferred<Tokens>();
+    refresh.mockReturnValueOnce(before.promise);
+    const stale = getOrganizerAccessToken();
+    await vi.waitFor(() => expect(refresh).toHaveBeenCalled());
+
+    noteOrganizerCredentialRenewed();
+    db.current = { ...fresh(9), expiresAt: Date.now() + 60 * MINUTE };
+    await expect(getOrganizerAccessToken()).resolves.toBe('FRESH-ACCESS-9');
+
+    before.resolve(fresh(1));
+    await expect(stale).resolves.toBe('FRESH-ACCESS-1');
+  });
+
+  it('a mismatch found by a resolution that began before the renewal is ignored', async () => {
+    db.current = stored(60 * MINUTE);
+    db.memberId = null;
+    Configuration.meetup.organizerMemberId = '468174923';
+    const lookup = deferred<{ self: { id: string } }>();
+    fake.getUserInfo.mockReturnValueOnce(lookup.promise);
+
+    const stale = getOrganizerAccessToken({ client });
+    await vi.waitFor(() => expect(fake.getUserInfo).toHaveBeenCalled());
+    noteOrganizerCredentialRenewed();
+    db.memberId = '468174923';
+    lookup.resolve({ self: { id: '999000111' } });
+    await stale;
+
+    await getOrganizerAccessToken({ client });
+    expect(alert).not.toHaveBeenCalled();
   });
 });
 

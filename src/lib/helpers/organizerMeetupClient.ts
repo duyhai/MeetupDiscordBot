@@ -35,8 +35,13 @@ const MEMBER_ID_PATTERN = /^[0-9]{1,20}$/;
 let memberIdChecked = false;
 let wrongAccountDetected = false;
 let wrongAccountAlerted = false;
+// Bumped by noteOrganizerCredentialRenewed: a resolution that began before a
+// renewal checked the old credential, so what it learns about the account
+// must not land on the new one.
+let credentialGeneration = 0;
 
-const RESTORED_ALERT = {
+/** Posted to the alerts channel when a failure episode ends. */
+export const ORGANIZER_RESTORED_ALERT = {
   title: 'Meetup organizer login restored',
   description:
     'The shared Meetup organizer credential works again; Meetup identity monitoring resumes with the next sweep.',
@@ -224,6 +229,7 @@ async function postAlert(
 async function recordMemberId(
   credentials: PostgresCredentialRepository,
   accessToken: string,
+  generation: number,
 ): Promise<void> {
   try {
     const info = await new GqlMeetupClient(accessToken).getUserInfo();
@@ -231,6 +237,9 @@ async function recordMemberId(
     if (typeof memberId !== 'string' || !MEMBER_ID_PATTERN.test(memberId)) {
       logger.warn('Meetup returned no usable member id for the organizer');
       return;
+    }
+    if (generation !== credentialGeneration) {
+      return; // renewed meanwhile: this token is no longer the credential
     }
     const expected = Configuration.meetup.organizerMemberId;
     if (expected && expected !== memberId) {
@@ -258,6 +267,7 @@ async function resolveOrganizerAccessToken(
   refusedAccessToken: string | undefined,
   client: Client | undefined,
 ): Promise<string | undefined> {
+  const generation = credentialGeneration;
   let refreshedAccessToken: string | undefined;
   let credentials: PostgresCredentialRepository | undefined;
   let outcome: LockedOutcome;
@@ -316,10 +326,10 @@ async function resolveOrganizerAccessToken(
   }
 
   if (outcome.recovered && client) {
-    await postAlert(client, RESTORED_ALERT);
+    await postAlert(client, ORGANIZER_RESTORED_ALERT);
   }
   if (outcome.memberIdMissing && !memberIdChecked) {
-    await recordMemberId(credentials, outcome.accessToken);
+    await recordMemberId(credentials, outcome.accessToken, generation);
   }
   if (wrongAccountDetected && client && !wrongAccountAlerted) {
     wrongAccountAlerted = true;
@@ -372,6 +382,20 @@ export async function getOrganizerAccessToken(
     inFlight.set(forceRefresh, pending);
   }
   return pending;
+}
+
+/**
+ * Called after the dashboard stores a renewed organizer credential: forget
+ * this process's verdicts about the old one (member-id check, wrong-account
+ * alert) and stop handing new callers a resolution that began before the
+ * renewal, so the renewed credential is picked up at once.
+ */
+export function noteOrganizerCredentialRenewed(): void {
+  credentialGeneration += 1;
+  inFlight.clear();
+  memberIdChecked = false;
+  wrongAccountDetected = false;
+  wrongAccountAlerted = false;
 }
 
 /** Test-only: forget any in-flight resolution so tests cannot leak into each other. */
