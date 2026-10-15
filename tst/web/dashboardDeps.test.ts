@@ -7,6 +7,7 @@ import {
   dashboardOrigin,
   dashboardRouterFromEnv,
 } from '../../src/web/dashboardDeps.js';
+import { protectedRouteList } from '../../src/web/dashboardRouter.js';
 import { closeServers, serve } from './dashboardHarness.js';
 
 afterEach(closeServers);
@@ -41,6 +42,19 @@ describe('dashboardRouterFromEnv', () => {
       .set('X-Forwarded-Proto', 'https');
     expect(res.status).toBe(200);
     expect(res.text).toContain('Sign in with Discord');
+  });
+
+  it('registers the organizer login routes behind the session gate', () => {
+    const router = dashboardRouterFromEnv({
+      DASHBOARD_SESSION_SECRET: 'k'.repeat(48),
+    });
+    expect(protectedRouteList(router)).toEqual(
+      expect.arrayContaining([
+        { method: 'get', path: '/organizer-login' },
+        { method: 'post', path: '/organizer-login/start' },
+        { method: 'get', path: '/organizer-login/complete' },
+      ]),
+    );
   });
 
   it('redirects plain HTTP to HTTPS when the origin is HTTPS', async () => {
