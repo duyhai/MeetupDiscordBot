@@ -6,6 +6,7 @@ import {
   createDashboardRouter,
   protectedRouteList,
 } from '../../src/web/dashboardRouter.js';
+import { FixedWindowLimiter } from '../../src/web/rateLimit.js';
 import { signSessionId } from '../../src/web/session.js';
 import {
   ORIGIN,
@@ -212,6 +213,45 @@ describe('routes are gated by construction', () => {
     const { req } = await withDummies();
     expect((await req.put('/dashboard/dummy')).status).toBe(403);
     expect((await req.get('/dashboard/dummy')).status).toBe(302);
+  });
+
+  it('treats only GET and HEAD as safe', async () => {
+    const { req } = await withDummies();
+    const head = await req.head('/dashboard');
+    expect(head.status).toBe(302);
+    expect(head.headers.location).toBe('/dashboard/login');
+    expect((await req.options('/dashboard')).status).toBe(403);
+    const cookie = await signIn(req);
+    expect((await req.head('/dashboard').set('Cookie', cookie)).status).toBe(
+      200,
+    );
+    expect(
+      (await req.options('/dashboard/dummy').set('Cookie', cookie)).status,
+    ).toBe(403);
+  });
+
+  it('rate-limits unsafe requests per user', async () => {
+    const { req } = await makeApp({
+      actionLimiter: new FixedWindowLimiter(1, 60_000),
+      protectedRoutes: (r) => {
+        r.post('/dummy', ok);
+      },
+    });
+    const cookie = await signIn(req);
+    const token = /name="_csrf" value="([^"]+)"/.exec(
+      (await req.get('/dashboard').set('Cookie', cookie)).text,
+    )[1];
+    const post = () =>
+      req
+        .post('/dashboard/dummy')
+        .set('Cookie', cookie)
+        .set('Origin', ORIGIN)
+        .type('form')
+        .send({ _csrf: token });
+    expect((await post()).status).toBe(200);
+    const second = await post();
+    expect(second.status).toBe(429);
+    expect(Number(second.headers['retry-after'])).toBeGreaterThan(0);
   });
 });
 

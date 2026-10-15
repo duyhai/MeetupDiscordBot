@@ -38,7 +38,8 @@ export const PUBLIC_ROUTE_PATHS: readonly string[] = [
 const OAUTH_COOKIE_PATH = '/dashboard/auth';
 const SESSION_COOKIE_PATH = '/dashboard';
 const OAUTH_TTL_SEC = 10 * 60;
-const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
+/** Everything else, OPTIONS included, needs the CSRF token. */
+const SAFE_METHODS = new Set(['GET', 'HEAD']);
 
 export interface DashboardOAuth {
   buildLoginUrl(state: string, codeVerifier: string): string;
@@ -349,7 +350,8 @@ export function createDashboardRouter(deps: DashboardDeps): express.Router {
   const protectedRouter = express.Router();
 
   /**
-   * Every method that can change state: per-user rate limit, then a
+   * Every method except GET and HEAD (OPTIONS too, since a hook route could
+   * act on it): per-user rate limit, then a
    * same-origin request (Origin, when sent, must be ours; Sec-Fetch-Site
    * must not be cross-site), then the session's CSRF token from the form
    * body or the X-CSRF-Token header. Each check stands alone: a matching
