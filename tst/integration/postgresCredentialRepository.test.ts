@@ -339,6 +339,25 @@ describe.skipIf(!POSTGRES_AVAILABLE)('PostgresCredentialRepository', () => {
     expect(await repo.get(key)).toBeDefined();
   });
 
+  it('a statement error inside fn makes withLockedCredential reject', async () => {
+    // Postgres aborts the transaction on any statement error, and COMMIT then
+    // answers ROLLBACK without raising. fn swallowing the error must not
+    // turn that silent rollback into an apparent success.
+    const key = `key-${crypto.randomUUID()}`;
+    await expect(
+      repo.withLockedCredential(key, async (locked) => {
+        await locked.write(freshTokens());
+        await locked.setMemberId('abc').catch(() => undefined);
+        return 'fn finished';
+      }),
+    ).rejects.toThrow('Credential transaction was rolled back by the database');
+
+    expect(await repo.get(key)).toBeUndefined();
+    // and the lock was released
+    await repo.put(key, freshTokens());
+    expect(await repo.get(key)).toBeDefined();
+  });
+
   it('hands fn the current credential and meta read under the lock', async () => {
     const key = `key-${crypto.randomUUID()}`;
     const tokens = freshTokens();

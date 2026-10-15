@@ -357,7 +357,15 @@ export class PostgresCredentialRepository {
           lockToken.active = false;
         });
       open = false;
-      await client.query('COMMIT');
+      // A statement error inside fn aborts the transaction even when fn
+      // catches it, and COMMIT then answers ROLLBACK without raising. Report
+      // that as the failure it is, not as a successful write.
+      const commit = await client.query('COMMIT');
+      if (commit.command === 'ROLLBACK') {
+        throw new Error(
+          'Credential transaction was rolled back by the database',
+        );
+      }
       return result;
     } catch (error) {
       open = false;
