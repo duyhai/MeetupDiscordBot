@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { DashboardDeps } from '../../src/web/dashboardRouter.js';
 import { openOAuthCookie, sealOAuthCookie } from '../../src/web/oauthCookie.js';
+import { FixedWindowLimiter } from '../../src/web/rateLimit.js';
 import {
   SECRET,
   USER,
@@ -285,6 +286,61 @@ describe('dashboard sign-in', () => {
     );
   });
 
+  it('posts "sign-in refused" at most once per user per hour', async () => {
+    let now = 0;
+    const fetchIdentity = vi.fn().mockResolvedValue(USER);
+    const { req, deps } = await makeApp({
+      checkAccess: vi.fn().mockResolvedValue(false),
+      oauth: {
+        buildLoginUrl: (s: string) => `https://discord.com/x?state=${s}`,
+        exchangeCode: vi.fn().mockResolvedValue('access'),
+        fetchIdentity,
+      },
+      refusedAuditLimiter: new FixedWindowLimiter(1, 3_600_000, () => now),
+    });
+    const refuse = async () => {
+      const { state, oauthCookie } = await startSignIn(req);
+      const cb = await req
+        .get(`/dashboard/auth/callback?state=${state}&code=c`)
+        .set('Cookie', oauthCookie);
+      expect(cb.status).toBe(403);
+    };
+    const refusedPosts = () =>
+      vi
+        .mocked(deps.audit)
+        .mock.calls.filter(([e]) => e.title === 'Dashboard sign-in refused')
+        .map(([e]) => e.description);
+    await refuse();
+    await refuse();
+    expect(refusedPosts()).toHaveLength(1);
+    fetchIdentity.mockResolvedValue({
+      id: '999999999999999999',
+      username: 'B',
+    });
+    await refuse();
+    expect(refusedPosts()).toHaveLength(2);
+    expect(refusedPosts()[1]).toContain('<@999999999999999999>');
+    now = 3_600_000;
+    fetchIdentity.mockResolvedValue(USER);
+    await refuse();
+    expect(refusedPosts()).toHaveLength(3);
+  });
+
+  it('dedupes refused audit posts by default', async () => {
+    const { req, deps } = await makeApp({
+      checkAccess: vi.fn().mockResolvedValue(false),
+    });
+    const refuse = async () => {
+      const { state, oauthCookie } = await startSignIn(req);
+      return req
+        .get(`/dashboard/auth/callback?state=${state}&code=c`)
+        .set('Cookie', oauthCookie);
+    };
+    expect((await refuse()).status).toBe(403);
+    expect((await refuse()).status).toBe(403);
+    expect(deps.audit).toHaveBeenCalledTimes(1);
+  });
+
   it('does not wait for the sign-in audit post', async () => {
     const { req } = await makeApp({
       audit: vi.fn(() => new Promise(() => undefined)),
@@ -293,7 +349,6 @@ describe('dashboard sign-in', () => {
   });
 
   it('rate-limits the callback as well as the start', async () => {
-    const { FixedWindowLimiter } = await import('../../src/web/rateLimit.js');
     const { req } = await makeApp({
       loginLimiter: new FixedWindowLimiter(1, 60_000),
     });
@@ -303,7 +358,6 @@ describe('dashboard sign-in', () => {
   });
 
   it('rate-limits sign-in per IP', async () => {
-    const { FixedWindowLimiter } = await import('../../src/web/rateLimit.js');
     const { req } = await makeApp({
       loginLimiter: new FixedWindowLimiter(2, 60_000),
     });

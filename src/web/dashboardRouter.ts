@@ -69,6 +69,8 @@ export interface DashboardDeps {
   requireHttps?: boolean;
   loginLimiter?: FixedWindowLimiter; // default 10 per minute per IP
   actionLimiter?: FixedWindowLimiter; // default 30 per minute per user
+  /** Caps "sign-in refused" audit posts; default 1 per hour per Discord user. */
+  refusedAuditLimiter?: FixedWindowLimiter;
   /**
    * Later PRs add their pages here. Whatever this registers is mounted
    * AFTER the session gate and AFTER the unsafe-method guard (CSRF, Origin,
@@ -175,6 +177,8 @@ export function createDashboardRouter(deps: DashboardDeps): express.Router {
   const loginLimiter = deps.loginLimiter ?? new FixedWindowLimiter(10, 60_000);
   const actionLimiter =
     deps.actionLimiter ?? new FixedWindowLimiter(30, 60_000);
+  const refusedAuditLimiter =
+    deps.refusedAuditLimiter ?? new FixedWindowLimiter(1, 60 * 60 * 1000);
   const sessions = async () => new SessionStore(await deps.cache(), now);
   const byIp = (req: Request) => req.ip ?? 'unknown';
 
@@ -304,10 +308,13 @@ export function createDashboardRouter(deps: DashboardDeps): express.Router {
       return;
     }
     if (!allowed) {
-      audit({
-        title: 'Dashboard sign-in refused',
-        description: `<@${identity.id}> tried to sign in without a dashboard role.`,
-      });
+      // Once per user per hour, so a non-member cannot flood the channel.
+      if (refusedAuditLimiter.take(identity.id)) {
+        audit({
+          title: 'Dashboard sign-in refused',
+          description: `<@${identity.id}> tried to sign in without a dashboard role.`,
+        });
+      }
       fail(res, 403);
       return;
     }
