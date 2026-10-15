@@ -392,6 +392,18 @@ export function createDashboardRouter(deps: DashboardDeps): express.Router {
   router.use(dashboardSessionGate as RequestHandler, protectedRouter);
 
   router.use(function dashboardErrorHandler(error, _req, res, _next) {
+    const { status, statusCode } = (error ?? {}) as {
+      status?: unknown;
+      statusCode?: unknown;
+    };
+    const code = typeof status === 'number' ? status : statusCode;
+    // Body-parser rejections (oversized or malformed bodies) are the
+    // client's fault, not ours.
+    if (typeof code === 'number' && code >= 400 && code < 500) {
+      logger.warn(`Dashboard request rejected: ${code}`);
+      fail(res, 400);
+      return;
+    }
     logger.error(`Dashboard route error: ${String(error)}`);
     fail(res, 500);
   } as ErrorRequestHandler);

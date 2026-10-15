@@ -3,54 +3,12 @@ import request from 'supertest';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
-  DashboardDeps,
   PUBLIC_ROUTE_PATHS,
   createDashboardRouter,
   protectedRouteList,
 } from '../../src/web/dashboardRouter.js';
+import { ORIGIN, makeApp, signIn } from './dashboardHarness.js';
 import { FakeCache } from './fakeCache.js';
-
-const SECRET = 's'.repeat(48);
-const ORIGIN = 'https://meetup-discord-bot.herokuapp.com';
-const USER = { id: '123456789012345678', username: 'Mod' };
-
-function makeApp(overrides: Partial<DashboardDeps> = {}) {
-  const cache = new FakeCache();
-  const deps: DashboardDeps = {
-    cache: async () => cache,
-    checkAccess: vi.fn().mockResolvedValue(true),
-    oauth: {
-      buildLoginUrl: vi.fn(
-        (state: string) =>
-          `https://discord.com/oauth2/authorize?state=${state}`,
-      ),
-      exchangeCode: vi.fn().mockResolvedValue('access'),
-      fetchIdentity: vi.fn().mockResolvedValue(USER),
-    },
-    sessionSecret: SECRET,
-    origin: ORIGIN,
-    audit: vi.fn().mockResolvedValue(true),
-    ...overrides,
-  };
-  const app = express();
-  app.use('/dashboard', createDashboardRouter(deps));
-  return { app, cache, deps };
-}
-
-/** Walks start → callback and returns the session cookie pair. */
-async function signIn(app: express.Express): Promise<string> {
-  const start = await request(app).get('/dashboard/auth/start');
-  const state = new URL(start.headers.location).searchParams.get('state');
-  const oauthCookie = (start.headers['set-cookie'] as unknown as string[])
-    .find((c) => c.startsWith('dash_oauth='))
-    .split(';')[0];
-  const cb = await request(app)
-    .get(`/dashboard/auth/callback?state=${state}&code=c`)
-    .set('Cookie', oauthCookie);
-  return (cb.headers['set-cookie'] as unknown as string[])
-    .find((c) => c.startsWith('dash_sid='))
-    .split(';')[0];
-}
 
 const hasSession = (cache: FakeCache) =>
   [...cache.values.keys()].some((k) => k.startsWith('dashboard-session-'));
@@ -130,6 +88,13 @@ describe('dashboard session gate', () => {
     let now = 0;
     const { app } = makeApp({ now: () => now });
     const cookie = await signIn(app);
+    // Re-check runs here and resets roleCheckedAt, so the request at the
+    // 12-hour mark is inside the re-check window and only the absolute
+    // expiry in SessionStore.get can end the session.
+    now = (11 * 60 + 55) * 60 * 1000;
+    expect(
+      (await request(app).get('/dashboard').set('Cookie', cookie)).status,
+    ).toBe(200);
     now = 12 * 60 * 60 * 1000;
     expect(
       (await request(app).get('/dashboard').set('Cookie', cookie)).status,
@@ -350,6 +315,20 @@ describe('dashboard CSRF and logout', () => {
     const res = await request(app).get('/dashboard/nope').set('Cookie', cookie);
     expect(res.status).toBe(404);
     expect(res.headers['cache-control']).toBe('no-store');
+  });
+
+  it('answers an oversized form body with the generic 400 page', async () => {
+    const { app } = makeApp();
+    const cookie = await signIn(app);
+    const res = await request(app)
+      .post('/dashboard/logout')
+      .set('Cookie', cookie)
+      .type('form')
+      .send(`_csrf=${'a'.repeat(20 * 1024)}`);
+    expect(res.status).toBe(400);
+    expect(res.headers['cache-control']).toBe('no-store');
+    expect(res.text).not.toContain('entity too large');
+    expect(res.text).not.toContain('PayloadTooLarge');
   });
 
   it('renders the generic 500 page when a dependency throws', async () => {
