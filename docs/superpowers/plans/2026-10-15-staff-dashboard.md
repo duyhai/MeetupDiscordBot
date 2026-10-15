@@ -2648,6 +2648,48 @@ COMMIT;
 | 2a.3 | Switch the sweep; 401 retry | `meetupSweep` tests → `retries once with a forced refresh on 401`, existing tests green | |
 | 2a.4 | Read-only visibility check (needs Hai's go-ahead to use the real organizer credential) | — | The slash commands use the invoking mod's token today. Before PR 2 relies on the organizer token, confirm it can see `NO_SHOW` and `ATTENDED` RSVPs: one read-only `getEventRsvps` on a past event, counts only, no names printed. Hai runs it or explicitly approves running it. |
 
+## Renew organizer login (added 2026-10-15, Hai via the lead)
+
+**Why.** When the shared organizer credential dies (refresh fails with `invalid_grant`, or the locked path cannot produce a usable token), any dashboard user (Moderator or 1.5 Leadership Team) restores it from the dashboard. Today that takes `/meetup_get_token sweep_credential:True` plus a Heroku config change. Meetup returns no refresh-token lifetime, so there is no advance warning; the failure itself is the trigger.
+
+**How a staff member uses it.** The alert links to the page. They open the dashboard in a private/incognito window, sign in with Discord, open **Renew organizer login**, press the button, and sign in to Meetup as the shared organizer account. The bot verifies the account and stores the credential.
+
+**Design.**
+
+- **Routes**, registered via `protectedRoutes`, so they sit behind the gate and the unsafe-method guard:
+  - `GET /dashboard/organizer-login`: the page. It shows the credential status (healthy / failing since …) and the start button.
+  - `POST /dashboard/organizer-login/start` (CSRF).
+  - `GET /dashboard/organizer-login/complete`.
+- **OAuth state** is its own one-time value in Redis (`organizer-renew-<state>`, 10 min TTL). Its record holds `{ purpose: 'organizer-renew', sessionHash: sha256(sid), discordUserId }`.
+- **The callback.** Meetup's only registered redirect is still `/connect/meetup/callback`, through the trampoline, so it works under the #109 allow-list unchanged.
+  - The existing callback handler sees `purpose: 'organizer-renew'` and 302s to `/dashboard/organizer-login/complete?state=…&code=…`, a fixed same-origin path; the state stays unconsumed.
+  - That hop is needed because the dashboard session cookie (`Path=/dashboard`) is not sent to `/connect/...`.
+  - The member-link flow is untouched for every other state.
+- **`/complete`**, behind the gate:
+  - Requires the state's `sessionHash` to equal the current session's, and consumes the state (one-time).
+  - Exchanges the code, reads `self { id }` with the new access token, then applies the safeguard (below).
+  - Saves through the same advisory-locked repository write that refresh uses (`withLockedCredential`), so a renewal and a refresh are serialized.
+- **Safeguard.** No personal account may become the sweep credential.
+  - `oauth_credentials` gains `member_id TEXT` (`ALTER TABLE … ADD COLUMN IF NOT EXISTS`).
+  - It is recorded on every successful store or refresh: one `self { id }` query when the column is null.
+  - At renewal the authorizing account's id must equal the recorded one. If it differs: "This Meetup account is not the shared organizer account. Nothing was saved." Nothing is stored and nothing is consumed except the state.
+- **Bootstrap** (no id recorded yet). The expected id falls back to a new non-secret config value, `MEETUP_ORGANIZER_MEMBER_ID`, the shared account's Meetup member id, which Hai sets once.
+  - If neither the recorded id nor the config value exists, the renewal is refused, with a message saying to set it.
+  - Chosen over a role check: Meetup's `LEADER` status also covers Event Organizers, who log in with personal accounts, so a role check would let exactly the wrong account through. An explicit id is unambiguous.
+- **Alert, reusing the sweep's existing one.** "Meetup identity monitoring is not running" already fires on credential failure.
+  - It becomes episode-based: `oauth_credentials.failing_since TIMESTAMPTZ` is set (inside the lock) on the first failure, and the alert posts only when it changes from null.
+  - The description gains a link to `/dashboard/organizer-login`.
+  - On the next success `failing_since` is cleared and one recovery post goes out: "Meetup organizer login restored".
+  - The failure state is durable in Postgres, so restarts don't re-post.
+- **Logging.** Every renewal attempt goes to the staff moderation channel, accepted or refused, naming the actor as `<@id>` and the reason (wrong account / bootstrap missing / success). It never includes tokens or the Meetup account's details beyond "matches" / "does not match".
+- **Unchanged:** `/meetup_get_token sweep_credential:True` keeps working. The config seed `MEETUP_ORGANIZER_REFRESH_TOKEN` stays as a recovery path.
+
+| # | Task | Tests (file → names) | Acceptance |
+|---|---|---|---|
+| 2a.5 | Credential schema: `member_id`, `failing_since`; record the id on store/refresh | `tst/integration/postgresCredentialRepository.test.ts` → `adds the columns idempotently`, `records the member id on the first successful refresh`, `marks and clears failing_since inside the lock` | |
+| 2a.6 | Episode-based alert with renew link + recovery post | `tst/lib/helpers/organizerMeetupClient.test.ts` → `alerts once per failure episode`, `does not re-alert across restarts while failing`, `posts one recovery message when it works again`, `alert links the renew page and never includes the error body` | Reuses the existing alert title |
+| 2a.7 | Renew routes + callback branch | `tst/web/routes/organizerLogin.test.ts` → `signed out → 302 / wrong role → 403 on every route`, `start requires CSRF`, `complete refuses a state from another session`, `complete refuses a replayed state`, `stores the right account through the locked write`, `refuses the wrong account and stores nothing`, `bootstrap: uses MEETUP_ORGANIZER_MEMBER_ID when none is recorded`, `bootstrap: refuses when neither is set`, `logs each attempt to the moderation channel with <@id> and no token`; `tst/integration/app.routes.test.ts` → `the Meetup callback hands an organizer-renew state to the dashboard completion path`, `member-link states are unaffected`; integration → `a renewal concurrent with a refresh is serialized by the lock` | Works through the #109 trampoline allow-list |
+
 ---
 
 # PR 2 — Snapshots and build job
