@@ -3,6 +3,7 @@ import request from 'supertest';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import app from '../../src/app.js';
+import { PUBLIC_APP_ORIGIN } from '../../src/constants.js';
 import { createOAuthState } from '../../src/lib/client/oauth/state.js';
 import { ApplicationCache } from '../../src/util/cache.js';
 
@@ -134,6 +135,48 @@ describe('cookie-free OAuth chain', () => {
     const res = await request(app).get(`/redirect/${encoded}?a=1`);
     expect(res.status).toBe(307);
     expect(res.headers.location).toBe('http://localhost:5000/target?a=1');
+  });
+
+  const trampoline = (target: string) =>
+    `/redirect/${Buffer.from(target).toString('base64')}`;
+
+  it('still redirects the production Meetup callback through the trampoline', async () => {
+    const res = await request(app).get(
+      `${trampoline(`${PUBLIC_APP_ORIGIN}/connect/meetup/callback`)}?code=c&state=s`,
+    );
+    expect(res.status).toBe(307);
+    expect(res.headers.location).toBe(
+      `${PUBLIC_APP_ORIGIN}/connect/meetup/callback?code=c&state=s`,
+    );
+  });
+
+  it('redirects to a 127.0.0.1 dev target', async () => {
+    const res = await request(app).get(trampoline('http://127.0.0.1:5055/x'));
+    expect(res.status).toBe(307);
+    expect(res.headers.location).toBe('http://127.0.0.1:5055/x');
+  });
+
+  it('refuses targets outside the allow-list with the branded page', async () => {
+    const targets = [
+      'https://evil.example/',
+      'https://meetup-discord-bot.herokuapp.com.evil.example/',
+      'https://meetup-discord-bot.herokuapp.com@evil.example/',
+      'javascript:alert(1)',
+      'https://localhost/',
+    ];
+    const responses = await Promise.all(
+      targets.map((target) => request(app).get(trampoline(target))),
+    );
+    responses.forEach((res, i) => {
+      expect(res.status, targets[i]).toBe(400);
+      expect(res.headers.location, targets[i]).toBeUndefined();
+      expect(res.text).toContain('This link is not valid');
+    });
+  });
+
+  it('answers malformed input with 400, not 500', async () => {
+    const res = await request(app).get('/redirect/@@@');
+    expect(res.status).toBe(400);
   });
 
   it('never shows the default Express 404 for a stale or mistyped URL', async () => {

@@ -14,6 +14,7 @@ import {
 } from './lib/client/oauth/state.js';
 import { getAuthLandingPage } from './templates/authLanding.js';
 import { ApplicationCache } from './util/cache.js';
+import { allowedRedirectTarget } from './util/redirectTarget.js';
 import { dashboardRouterFromEnv } from './web/dashboardDeps.js';
 
 const logger = new Logger({ name: 'MeetupBot' });
@@ -33,6 +34,8 @@ const strings = {
   meetupSuccess: 'Connected to Meetup. Heading back to Discord…',
   unexpected:
     'Something went wrong on our end. Please go back to Discord and try again in a moment.',
+  badRedirect:
+    'This link is not valid. Please go back to Discord and try again.',
   notFound:
     'There is nothing at this address. Head back to Discord and press the button again.',
 };
@@ -144,21 +147,20 @@ app.get('/connect/meetup', meetupConnectHandler);
 app.get('/connect/meetup/callback', meetupConnectCallbackHandler);
 
 app.get('/redirect/:url', (req, res) => {
-  const { url } = req.params;
-  if (url) {
-    const decodedUrl = Buffer.from(url, 'base64').toString('utf-8');
-    const redirectUrl = new URL(decodedUrl);
-    if (req.query) {
-      Object.entries(req.query).forEach(([key, value]) => {
-        redirectUrl.searchParams.append(key, value.toString());
-      });
-    }
-    logger.info(
-      `Redirecting to ${redirectUrl.origin}${redirectUrl.pathname} [query redacted]`,
-    );
-    return res.redirect(307, redirectUrl.toString());
+  const decoded = Buffer.from(req.params.url ?? '', 'base64').toString('utf-8');
+  const target = allowedRedirectTarget(decoded);
+  if (!target) {
+    // Never log the decoded value: it is attacker-chosen text.
+    logger.warn('Refused /redirect to a target outside the allow-list');
+    return errorPage(res, 400, strings.badRedirect);
   }
-  return res.send('Invalid url');
+  Object.entries(req.query).forEach(([key, value]) => {
+    target.searchParams.append(key, String(value));
+  });
+  logger.info(
+    `Redirecting to ${target.origin}${target.pathname} [query redacted]`,
+  );
+  return res.redirect(307, target.toString());
 });
 
 app.use('/dashboard', dashboardRouterFromEnv());

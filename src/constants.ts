@@ -94,13 +94,18 @@ export const ELEVATED_MEETUP_AUTH_SCOPES: MeetupScope[] = [
   'event_management',
 ];
 
+// The deployed bot's public origin. The /redirect trampoline always lives
+// here, even for the local dev bot: Meetup does not accept localhost redirect
+// URIs, so dev OAuth bounces through production back to localhost.
+export const PUBLIC_APP_ORIGIN = 'https://meetup-discord-bot.herokuapp.com';
+
 export const BASE_DISCORD_BOT_URL = process.env.TS_NODE_DEBUG
   ? `http://localhost:${process.env.PORT || 5000}`
-  : 'https://meetup-discord-bot.herokuapp.com';
+  : PUBLIC_APP_ORIGIN;
 
 export const debugRedirect = (url: string) => {
   const encodedUrl = Buffer.from(url).toString('base64');
-  return `https://meetup-discord-bot.herokuapp.com/redirect/${encodedUrl}`;
+  return `${PUBLIC_APP_ORIGIN}/redirect/${encodedUrl}`;
 };
 
 export const generateOAuthUrl = (
