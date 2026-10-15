@@ -7,6 +7,7 @@ import {
   PostgresCredentialRepository,
 } from '../../src/lib/repositories/postgresCredentialRepository.js';
 import { Tokens } from '../../src/lib/client/discord/types.js';
+import { renewOrganizerCredential } from '../../src/web/organizerLoginDeps.js';
 
 // Exercises the upsert conflict target and TIMESTAMPTZ handling against a
 // real Postgres -- a mock would paper over both. Requires DATABASE_URL;
@@ -317,6 +318,79 @@ describe.skipIf(!POSTGRES_AVAILABLE)('PostgresCredentialRepository', () => {
     expect(events).toEqual(['A read', 'A wrote', 'B read', 'B wrote']);
     expect(seen).toEqual({ A: 'r0', B: 'r0>A' });
     expect((await repo.get(key))?.refreshToken).toBe('r0>A>B');
+  });
+
+  it('a renewal concurrent with a refresh is serialized by the lock', async () => {
+    const refresher = isolated();
+    const key = `key-${crypto.randomUUID()}`;
+    await repo.put(key, tokensWithRefresh('r0'));
+    await repo.markFailing(key);
+
+    const events: string[] = [];
+    const refreshEntered = gate();
+    const letRefreshFinish = gate();
+    const refresh = refresher.withLockedCredential(key, async (locked) => {
+      events.push(`refresh read ${locked.current?.refreshToken}`);
+      refreshEntered.open();
+      await letRefreshFinish.promise;
+      await locked.write(
+        tokensWithRefresh(`${locked.current?.refreshToken}>refreshed`),
+      );
+      events.push('refresh wrote');
+    });
+    await refreshEntered.promise;
+
+    // The dashboard's renewal, through the production locked write.
+    const renewal = renewOrganizerCredential(
+      repo,
+      tokensWithRefresh('renewed'),
+      '468174923',
+      key,
+    ).then((recovered) => {
+      events.push('renewal committed');
+      return recovered;
+    });
+    try {
+      await waitForLockWaiter();
+      expect(events).toEqual(['refresh read r0']);
+    } finally {
+      letRefreshFinish.open();
+      await Promise.allSettled([refresh, renewal]);
+    }
+
+    await expect(renewal).resolves.toBe(true); // it closed the open episode
+    expect(events).toEqual([
+      'refresh read r0',
+      'refresh wrote',
+      'renewal committed',
+    ]);
+    // The renewal landed after the refresh, so its tokens are what is stored,
+    // and the next refresh reads them.
+    expect(await storedRefreshToken(key)).toBe('renewed');
+    expect(await repo.getMeta(key)).toEqual({
+      memberId: '468174923',
+      failingSince: null,
+    });
+    await refresher.withLockedCredential(key, async (locked) => {
+      expect(locked.current?.refreshToken).toBe('renewed');
+    });
+  });
+
+  it('a renewal refuses to overwrite a different recorded account', async () => {
+    const key = `key-${crypto.randomUUID()}`;
+    await repo.put(key, tokensWithRefresh('r0'));
+    await repo.withLockedCredential(key, (locked) => locked.setMemberId('111'));
+
+    await expect(
+      renewOrganizerCredential(
+        repo,
+        tokensWithRefresh('renewed'),
+        '468174923',
+        key,
+      ),
+    ).rejects.toThrow();
+    expect(await storedRefreshToken(key)).toBe('r0');
+    expect((await repo.getMeta(key)).memberId).toBe('111');
   });
 
   it('rolls back when fn throws', async () => {
