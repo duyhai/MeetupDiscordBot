@@ -6,6 +6,8 @@ import { BASE_DISCORD_BOT_URL } from '../constants.js';
 import { boundedFetch } from '../util/boundedFetch.js';
 
 const IDENTITY_TIMEOUT_MS = 10_000;
+const TOKEN_TIMEOUT_MS = 10_000;
+const DISCORD_TOKEN_ENDPOINT = 'https://discord.com/api/oauth2/token';
 const SNOWFLAKE = /^\d{17,20}$/;
 
 /**
@@ -32,13 +34,41 @@ export function buildDashboardLoginUrl(
     .toString();
 }
 
-/** The access token is used once, for /users/@me, and never stored. */
+/**
+ * Hand-rolled instead of arctic's validateAuthorizationCode: that call uses
+ * bare fetch with no deadline, so a stalled connection would hang the
+ * sign-in callback. The access token is used once, for /users/@me, and never
+ * stored.
+ */
 export async function exchangeDashboardCode(
   code: string,
   codeVerifier: string,
 ): Promise<string> {
-  const tokens = await provider().validateAuthorizationCode(code, codeVerifier);
-  return tokens.accessToken();
+  const body = new URLSearchParams({
+    client_id: Configuration.discord.oauthClientId,
+    client_secret: Configuration.discord.oauthSecret,
+    grant_type: 'authorization_code',
+    code,
+    redirect_uri: dashboardRedirectUri(),
+    code_verifier: codeVerifier,
+  });
+  const response = await boundedFetch(
+    DISCORD_TOKEN_ENDPOINT,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body,
+    },
+    TOKEN_TIMEOUT_MS,
+  );
+  if (!response.ok) {
+    throw new Error(`Discord token exchange failed: ${response.status}`);
+  }
+  const raw = (await response.json()) as { access_token?: unknown };
+  if (typeof raw.access_token !== 'string' || !raw.access_token) {
+    throw new Error('Discord token exchange returned no access token');
+  }
+  return raw.access_token;
 }
 
 export async function fetchDiscordIdentity(

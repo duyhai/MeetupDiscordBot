@@ -42,14 +42,37 @@ describe('dashboard Discord OAuth', () => {
   });
 
   it('exchanges a code for an access token', async () => {
-    nock('https://discord.com').post('/api/oauth2/token').reply(200, {
-      access_token: 'at',
-      token_type: 'Bearer',
-      expires_in: 600,
-      scope: 'identify',
-    });
-    await expect(exchangeDashboardCode('code', 'v'.repeat(43))).resolves.toBe(
-      'at',
+    const verifier = 'v'.repeat(43);
+    let seen = '';
+    nock('https://discord.com')
+      .post('/api/oauth2/token', (body) => {
+        seen = new URLSearchParams(body as Record<string, string>).toString();
+        return true;
+      })
+      .reply(200, { access_token: 'at', token_type: 'Bearer' });
+    await expect(exchangeDashboardCode('code', verifier)).resolves.toBe('at');
+    const sent = new URLSearchParams(seen);
+    expect(sent.get('code')).toBe('code');
+    expect(sent.get('code_verifier')).toBe(verifier);
+    expect(sent.get('grant_type')).toBe('authorization_code');
+    expect(sent.get('redirect_uri')).toBe(dashboardRedirectUri());
+  });
+
+  it('rejects a failed exchange without echoing the body', async () => {
+    nock('https://discord.com')
+      .post('/api/oauth2/token')
+      .reply(400, '{"error":"invalid_grant","secret":"leak"}');
+    await expect(exchangeDashboardCode('code', 'v')).rejects.toThrow(
+      /^Discord token exchange failed: 400$/,
+    );
+  });
+
+  it('rejects an exchange response without an access token', async () => {
+    nock('https://discord.com')
+      .post('/api/oauth2/token')
+      .reply(200, { token_type: 'Bearer' });
+    await expect(exchangeDashboardCode('code', 'v')).rejects.toThrow(
+      'Discord token exchange returned no access token',
     );
   });
 
@@ -68,7 +91,7 @@ describe('dashboard Discord OAuth', () => {
     });
   });
 
-  it('falls back to the username and rejects a non-snowflake id', async () => {
+  it('falls back to the username when there is no display name', async () => {
     nock('https://discord.com')
       .get('/api/v10/users/@me')
       .reply(200, { id: '123456789012345678', username: 'handle' });
@@ -76,10 +99,13 @@ describe('dashboard Discord OAuth', () => {
       id: '123456789012345678',
       username: 'handle',
     });
+  });
+
+  it('rejects a non-snowflake id', async () => {
     nock('https://discord.com')
       .get('/api/v10/users/@me')
       .reply(200, { id: '../x', username: 'h' });
-    await expect(fetchDiscordIdentity('at')).rejects.toThrow();
+    await expect(fetchDiscordIdentity('at')).rejects.toThrow('no usable id');
   });
 
   it('fails on a non-2xx identity response without echoing the body', async () => {
