@@ -286,10 +286,16 @@ describe('getOrganizerAccessToken', () => {
   it('persist failure keeps the fresh token for this run', async () => {
     db.current = stored(0);
     refresh.mockResolvedValueOnce(fresh());
+    db.failing = true;
     locked.write.mockRejectedValueOnce(new Error('write failed'));
 
-    await expect(getOrganizerAccessToken()).resolves.toBe('FRESH-ACCESS-1');
+    await expect(getOrganizerAccessToken({ client })).resolves.toBe(
+      'FRESH-ACCESS-1',
+    );
     expect(db.rolledBack).toBe(0); // fn returned rather than threw
+    // Postgres aborted the transaction at the failed write, so the episode
+    // was not durably closed: no recovery message.
+    expect(alert).not.toHaveBeenCalled();
     expect(fake.logged.join('\n')).toMatch(/refreshed but could NOT be stored/);
     // Only the first candidate: a persist failure is not a refresh failure.
     expect(refresh).toHaveBeenCalledTimes(1);
@@ -376,14 +382,81 @@ describe('getOrganizerAccessToken', () => {
     });
   });
 
-  it('closes the episode when a stored token is simply reused', async () => {
+  it('reusing a stored token does not close an open episode', async () => {
+    // Only a successful refresh proves the grant works: a reused token may
+    // be the very one Meetup just refused.
     db.current = stored(60 * MINUTE);
     db.failing = true;
 
+    await expect(getOrganizerAccessToken({ client })).resolves.toBe(
+      'STORED-ACCESS',
+    );
+
+    expect(locked.clearFailing).not.toHaveBeenCalled();
+    expect(db.failing).toBe(true);
+    expect(alert).not.toHaveBeenCalled();
+  });
+
+  it('a forced refresh reuses a token another process already rotated', async () => {
+    db.current = stored(60 * MINUTE);
+
+    await expect(
+      getOrganizerAccessToken({
+        forceRefresh: true,
+        refusedAccessToken: 'OLD-ACCESS',
+      }),
+    ).resolves.toBe('STORED-ACCESS');
+    expect(refresh).not.toHaveBeenCalled();
+  });
+
+  it('a forced refresh still refreshes when the stored token is the refused one', async () => {
+    db.current = stored(60 * MINUTE);
+    refresh.mockResolvedValueOnce(fresh());
+
+    await expect(
+      getOrganizerAccessToken({
+        forceRefresh: true,
+        refusedAccessToken: 'STORED-ACCESS',
+      }),
+    ).resolves.toBe('FRESH-ACCESS-1');
+    expect(refresh).toHaveBeenCalledWith('STORED-REFRESH');
+  });
+
+  it('a forced refresh refreshes a rotated token inside the 5-minute window', async () => {
+    db.current = stored(ORGANIZER_TOKEN_REUSE_MS - MINUTE);
+    refresh.mockResolvedValueOnce(fresh());
+
+    await expect(
+      getOrganizerAccessToken({
+        forceRefresh: true,
+        refusedAccessToken: 'OLD-ACCESS',
+      }),
+    ).resolves.toBe('FRESH-ACCESS-1');
+  });
+
+  it('a failed forced refresh is not followed by a false recovery', async () => {
+    // Grant revoked: the stored token is unexpired but Meetup refuses it.
+    db.current = stored(60 * MINUTE);
+    refresh.mockRejectedValue(refreshError());
+
+    await expect(
+      getOrganizerAccessToken({
+        client,
+        forceRefresh: true,
+        refusedAccessToken: 'STORED-ACCESS',
+      }),
+    ).resolves.toBeUndefined();
+    expect(alert).toHaveBeenCalledTimes(1); // the episode alert
+
+    // The next sweeps reuse the still-unexpired, refused token.
+    await getOrganizerAccessToken({ client });
     await getOrganizerAccessToken({ client });
 
-    expect(db.failing).toBe(false);
+    expect(db.failing).toBe(true);
     expect(alert).toHaveBeenCalledTimes(1);
+    expect(alert.mock.calls[0][1].title).toBe(
+      'Meetup identity monitoring is not running',
+    );
   });
 
   it('logs instead of alerting without a client', async () => {
@@ -500,6 +573,44 @@ describe('getOrganizerAccessToken', () => {
 
     expect(db.memberId).toBe('999000111');
     expect(alert).not.toHaveBeenCalled();
+  });
+
+  it('alerts when the credential store cannot be opened', async () => {
+    class ConnectionError extends Error {
+      name = 'ConnectionError';
+    }
+    vi.mocked(ApplicationCredentialRepository).mockRejectedValueOnce(
+      new ConnectionError('connect ECONNREFUSED'),
+    );
+
+    await expect(getOrganizerAccessToken({ client })).resolves.toBeUndefined();
+    expect(alert).toHaveBeenCalledWith(client, {
+      title: 'Meetup organizer credential store unavailable',
+      description:
+        'Could not read the shared Meetup organizer credential from the database (ConnectionError), ' +
+        'so Meetup identity monitoring was skipped this time. It retries on the next run.',
+    });
+    expect(fake.logged.join('\n')).toMatch(/ConnectionError/);
+  });
+
+  it('checks a mismatched member id once, and alerts once a client is present', async () => {
+    db.current = stored(60 * MINUTE);
+    db.memberId = null;
+    Configuration.meetup.organizerMemberId = '468174923';
+    fake.getUserInfo.mockResolvedValue({ self: { id: '999000111' } });
+
+    await getOrganizerAccessToken();
+    await getOrganizerAccessToken();
+    expect(fake.getUserInfo).toHaveBeenCalledTimes(1);
+    expect(alert).not.toHaveBeenCalled();
+
+    await getOrganizerAccessToken({ client });
+    await getOrganizerAccessToken({ client });
+    expect(fake.getUserInfo).toHaveBeenCalledTimes(1);
+    expect(alert).toHaveBeenCalledTimes(1);
+    expect(alert.mock.calls[0][1].title).toBe(
+      'Meetup organizer credential belongs to a different account',
+    );
   });
 
   it('alerts when the credential store is unavailable', async () => {

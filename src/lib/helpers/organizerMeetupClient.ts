@@ -29,8 +29,11 @@ export const ORGANIZER_TOKEN_REUSE_MS = 5 * 60 * 1000;
 
 const MEMBER_ID_PATTERN = /^[0-9]{1,20}$/;
 
-// Set once this process has posted the wrong-account alert: the condition
-// persists until someone renews, and the daily sweep would otherwise repeat it.
+// Per-process member-id state. A mismatch persists until someone renews, so
+// the lookup runs once per process (memberIdChecked), and the wrong-account
+// alert is posted once, by the first caller that has a client.
+let memberIdChecked = false;
+let wrongAccountDetected = false;
 let wrongAccountAlerted = false;
 
 const RESTORED_ALERT = {
@@ -97,18 +100,27 @@ async function recordEpisode(
 async function resolveLocked(
   locked: LockedCredential,
   forceRefresh: boolean,
+  refusedAccessToken: string | undefined,
   onRefreshed: (tokens: Tokens) => void,
 ): Promise<LockedOutcome> {
   const memberIdMissing = locked.meta.memberId === null;
   const { current } = locked;
+  // A forced call reuses the stored token only when it is not the one its
+  // caller saw refused: another process has already rotated it.
+  const reusable =
+    !forceRefresh ||
+    (refusedAccessToken !== undefined &&
+      current?.accessToken !== refusedAccessToken);
   if (
-    !forceRefresh &&
+    reusable &&
     current &&
     current.expiresAt - Date.now() > ORGANIZER_TOKEN_REUSE_MS
   ) {
+    // The episode stays as it is: only a successful refresh proves the grant
+    // works, and an unexpired token may be the one Meetup just refused.
     return {
       accessToken: current.accessToken,
-      recovered: await recordEpisode(() => locked.clearFailing(), 'close'),
+      recovered: false,
       episodeStarted: false,
       memberIdMissing,
     };
@@ -154,10 +166,14 @@ async function resolveLocked(
     // failure as a refresh failure would fall through to a seed Meetup just
     // invalidated. So: loud in the log, and this run proceeds on the fresh
     // token; the next run re-refreshes from whatever is stored or seeded.
+    let stored = true;
     try {
       // eslint-disable-next-line no-await-in-loop
       await locked.write(refreshed);
     } catch (error: unknown) {
+      // Postgres has aborted the transaction: nothing in it is durable,
+      // including the episode close above.
+      stored = false;
       logger.error(
         'Meetup credential refreshed but could NOT be stored; this run ' +
           'continues on the fresh token, but if Meetup rotates refresh ' +
@@ -166,7 +182,7 @@ async function resolveLocked(
     }
     return {
       accessToken: refreshed.accessToken,
-      recovered,
+      recovered: stored && recovered,
       episodeStarted: false,
       memberIdMissing,
     };
@@ -194,8 +210,9 @@ async function postAlert(
 
 /**
  * Best-effort: learn the organizer account's member id from its own token
- * and store it, in a separate short locked call. Runs outside the token
- * transaction because the lookup is a Meetup call, not a bounded one.
+ * and store it, in a separate short locked call. The lookup is bounded,
+ * but it runs outside the token transaction anyway: Meetup calls stay out
+ * of the lock so its hold time is the refresh alone.
  *
  * When MEETUP_ORGANIZER_MEMBER_ID is set, only that id is stored: a token
  * seeded from someone's personal account must not become the stored
@@ -205,7 +222,6 @@ async function postAlert(
 async function recordMemberId(
   credentials: PostgresCredentialRepository,
   accessToken: string,
-  client: Client | undefined,
 ): Promise<void> {
   try {
     const info = await new GqlMeetupClient(accessToken).getUserInfo();
@@ -216,19 +232,12 @@ async function recordMemberId(
     }
     const expected = Configuration.meetup.organizerMemberId;
     if (expected && expected !== memberId) {
+      memberIdChecked = true;
+      wrongAccountDetected = true;
       logger.error(
         'The stored Meetup organizer credential belongs to a different ' +
           'account than MEETUP_ORGANIZER_MEMBER_ID; its member id was not recorded',
       );
-      if (client && !wrongAccountAlerted) {
-        wrongAccountAlerted = true;
-        await postAlert(client, {
-          title: 'Meetup organizer credential belongs to a different account',
-          description:
-            'The stored Meetup organizer credential is not the shared organizer account set in MEETUP_ORGANIZER_MEMBER_ID. ' +
-            `Renew it at ${BASE_DISCORD_BOT_URL}/dashboard/organizer-login while signed in to Meetup as the shared organizer account.`,
-        });
-      }
       return;
     }
     await credentials.withLockedCredential(
@@ -244,20 +253,23 @@ async function recordMemberId(
 
 async function resolveOrganizerAccessToken(
   forceRefresh: boolean,
+  refusedAccessToken: string | undefined,
   client: Client | undefined,
 ): Promise<string | undefined> {
-  const credentials = await ApplicationCredentialRepository();
-  if (!credentials) {
-    return undefined;
-  }
-
   let refreshedAccessToken: string | undefined;
+  let credentials: PostgresCredentialRepository | undefined;
   let outcome: LockedOutcome;
   try {
+    // Inside the try: opening the store ensures its schema, which rejects
+    // when Postgres is unreachable -- the same outage as a failed lock.
+    credentials = await ApplicationCredentialRepository();
+    if (!credentials) {
+      return undefined; // no DATABASE_URL: monitoring disabled, no alert
+    }
     outcome = await credentials.withLockedCredential(
       MEETUP_ORGANIZER_CREDENTIAL_KEY,
       (locked) =>
-        resolveLocked(locked, forceRefresh, (tokens) => {
+        resolveLocked(locked, forceRefresh, refusedAccessToken, (tokens) => {
           refreshedAccessToken = tokens.accessToken;
         }),
     );
@@ -304,8 +316,17 @@ async function resolveOrganizerAccessToken(
   if (outcome.recovered && client) {
     await postAlert(client, RESTORED_ALERT);
   }
-  if (outcome.memberIdMissing) {
-    await recordMemberId(credentials, outcome.accessToken, client);
+  if (outcome.memberIdMissing && !memberIdChecked) {
+    await recordMemberId(credentials, outcome.accessToken);
+  }
+  if (wrongAccountDetected && client && !wrongAccountAlerted) {
+    wrongAccountAlerted = true;
+    await postAlert(client, {
+      title: 'Meetup organizer credential belongs to a different account',
+      description:
+        'The stored Meetup organizer credential is not the shared organizer account set in MEETUP_ORGANIZER_MEMBER_ID. ' +
+        `Renew it at ${BASE_DISCORD_BOT_URL}/dashboard/organizer-login while signed in to Meetup as the shared organizer account.`,
+    });
   }
   return outcome.accessToken;
 }
@@ -313,7 +334,8 @@ async function resolveOrganizerAccessToken(
 // One resolution per process at a time, per kind: concurrent callers share
 // it. A forced call never joins an unforced one -- its caller has just seen
 // the token refused, so the reused one would be no help.
-// Joined callers share the first caller's client; there is one Discord client per process.
+// Joined callers share the first caller's client (there is one Discord client
+// per process) and, for forced calls, the first caller's refusedAccessToken.
 const inFlight = new Map<boolean, Promise<string | undefined>>();
 
 /**
@@ -325,13 +347,19 @@ const inFlight = new Map<boolean, Promise<string | undefined>>();
  * without one, a failure logs the remedy instead.
  */
 export async function getOrganizerAccessToken(
-  opts: { forceRefresh?: boolean; client?: Client } = {},
+  opts: {
+    forceRefresh?: boolean;
+    /** With forceRefresh: the token Meetup refused, so a rotated one is reused. */
+    refusedAccessToken?: string;
+    client?: Client;
+  } = {},
 ): Promise<string | undefined> {
   const forceRefresh = opts.forceRefresh ?? false;
   let pending = inFlight.get(forceRefresh);
   if (pending === undefined) {
     const started: Promise<string | undefined> = resolveOrganizerAccessToken(
       forceRefresh,
+      opts.refusedAccessToken,
       opts.client,
     ).finally(() => {
       if (inFlight.get(forceRefresh) === started) {
@@ -347,5 +375,7 @@ export async function getOrganizerAccessToken(
 /** Test-only: forget any in-flight resolution so tests cannot leak into each other. */
 export function resetOrganizerTokenStateForTest(): void {
   inFlight.clear();
+  memberIdChecked = false;
+  wrongAccountDetected = false;
   wrongAccountAlerted = false;
 }
