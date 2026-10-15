@@ -12,7 +12,7 @@ describe('dashboard sign-in', () => {
     expect(res.headers['cache-control']).toBe('no-store');
     expect(res.headers['x-content-type-options']).toBe('nosniff');
     expect(res.headers['x-frame-options']).toBe('DENY');
-    expect(res.headers['referrer-policy']).toBe('no-referrer');
+    expect(res.headers['referrer-policy']).toBe('same-origin');
     expect(res.headers['content-security-policy']).toMatch(
       // eslint-disable-next-line @stylistic/max-len
       /default-src 'none'; style-src 'nonce-[A-Za-z0-9+/=]+'; script-src 'nonce-[A-Za-z0-9+/=]+'; img-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'/,

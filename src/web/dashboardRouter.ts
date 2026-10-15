@@ -104,7 +104,10 @@ const securityHeaders: RequestHandler = function securityHeaders(
     'Strict-Transport-Security': 'max-age=15552000',
     'X-Content-Type-Options': 'nosniff',
     'X-Frame-Options': 'DENY',
-    'Referrer-Policy': 'no-referrer',
+    // no-referrer makes browsers send `Origin: null` on our own form posts,
+    // which the CSRF guard refuses; same-origin keeps the real Origin for our
+    // own requests and still sends no referrer off-site.
+    'Referrer-Policy': 'same-origin',
     'X-Robots-Tag': 'noindex, nofollow',
   });
   next();
