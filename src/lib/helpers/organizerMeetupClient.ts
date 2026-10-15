@@ -92,10 +92,12 @@ async function recordEpisode(
 }
 
 /**
- * Runs inside the credential lock. Never throws for a Meetup or write
- * failure: returning is what commits, and the failure path must commit so
- * its markFailing persists. `onRefreshed` hands the fresh tokens out at once,
- * so they survive a COMMIT that fails afterwards.
+ * Runs inside the credential lock. Never throws for a Meetup failure:
+ * returning is what commits, and the failure path must commit so its
+ * markFailing persists. A write failure is caught here too, but Postgres has
+ * then aborted the transaction, so it surfaces as a commit failure
+ * (withLockedCredential rejects) and the caller still gets the fresh token.
+ * `onRefreshed` hands the fresh tokens out at once, so they survive that.
  */
 async function resolveLocked(
   locked: LockedCredential,

@@ -1,4 +1,5 @@
 import { Client } from 'discord.js';
+import { ClientError } from 'graphql-request';
 import nock from 'nock';
 import {
   afterAll,
@@ -14,12 +15,23 @@ import {
 import Configuration from '../../../../src/configuration.js';
 import { MeetupGroupMember } from '../../../../src/lib/client/meetup/types.js';
 import { getPaginatedData } from '../../../../src/lib/client/meetup/paginationHelper.js';
-import { refreshMeetupToken } from '../../../../src/lib/client/oauth/providers.js';
+import { GqlMeetupClient } from '../../../../src/lib/client/meetup/gqlClient.js';
 import { logAlert } from '../../../../src/lib/helpers/discordLogger.js';
+import {
+  getOrganizerAccessToken,
+  isMeetupUnauthorized,
+} from '../../../../src/lib/helpers/organizerMeetupClient.js';
 import { runMeetupSweep } from '../../../../src/lib/helpers/identity/meetupSweep.js';
 
-vi.mock('../../../../src/lib/client/oauth/providers.js', () => ({
-  refreshMeetupToken: vi.fn(),
+// Token concerns (refresh, lock, episode alerts) belong to the helper and its
+// own suite; the sweep only consumes the result.
+vi.mock('../../../../src/lib/helpers/organizerMeetupClient.js', () => ({
+  getOrganizerAccessToken: vi.fn(),
+  isMeetupUnauthorized: vi.fn(),
+}));
+
+vi.mock('../../../../src/lib/client/meetup/gqlClient.js', () => ({
+  GqlMeetupClient: vi.fn(),
 }));
 
 vi.mock('../../../../src/lib/client/meetup/paginationHelper.js', () => ({
@@ -28,16 +40,6 @@ vi.mock('../../../../src/lib/client/meetup/paginationHelper.js', () => ({
 
 vi.mock('../../../../src/lib/helpers/discordLogger.js', () => ({
   logAlert: vi.fn().mockResolvedValue(true),
-}));
-
-const credentials = {
-  get: vi.fn(),
-  put: vi.fn().mockResolvedValue(undefined),
-};
-
-vi.mock('../../../../src/util/credentialRepository.js', () => ({
-  ApplicationCredentialRepository: vi.fn(async () => credentials),
-  MEETUP_ORGANIZER_CREDENTIAL_KEY: 'meetup_organizer',
 }));
 
 const repo = {
@@ -97,28 +99,16 @@ function fakeClient() {
 }
 
 describe('runMeetupSweep', () => {
-  // Configuration is a module-level singleton shared by every test file in
-  // the run. A test that sets the seed and returns early -- or throws --
-  // leaks it into unrelated tests, so restore it unconditionally rather than
-  // on the happy path of whichever test set it.
   afterEach(() => {
-    Configuration.meetup.organizerRefreshToken = undefined;
     nock.cleanAll();
   });
 
   beforeEach(() => {
     vi.clearAllMocks();
-    credentials.put.mockResolvedValue(undefined);
-    credentials.get.mockResolvedValue({
-      accessToken: 'old-access',
-      refreshToken: 'stored-refresh',
-      expiresAt: Date.now() - 1000,
-    });
-    vi.mocked(refreshMeetupToken).mockResolvedValue({
-      accessToken: 'fresh-access',
-      refreshToken: 'stored-refresh',
-      expiresAt: Date.now() + 3_600_000,
-    });
+    vi.mocked(getOrganizerAccessToken).mockResolvedValue('token-1');
+    vi.mocked(isMeetupUnauthorized).mockImplementation(
+      (error) => error instanceof ClientError && error.response?.status === 401,
+    );
     repo.getMeetupSnapshot.mockResolvedValue(undefined);
   });
 
@@ -346,97 +336,102 @@ describe('runMeetupSweep', () => {
     ).toBe(true);
   });
 
-  it('alerts and stops when the credential cannot be refreshed', async () => {
-    vi.mocked(refreshMeetupToken).mockRejectedValue(new Error('invalid_grant'));
+  it('skips the sweep when no organizer token is available', async () => {
+    vi.mocked(getOrganizerAccessToken).mockResolvedValue(undefined);
+    const client = fakeClient();
 
-    await runMeetupSweep('sweep', fakeClient());
+    const result = await runMeetupSweep('sweep', client);
 
-    // A silently dead sweep is the worst outcome: monitoring looks healthy
-    // while watching nothing. This alert is the only way expiry is visible.
-    expect(logAlert).toHaveBeenCalledTimes(1);
-    const [, entry] = vi.mocked(logAlert).mock.calls[0];
-    expect(entry.description).toContain('MEETUP_ORGANIZER_REFRESH_TOKEN');
-    // The seed must not be a grant somebody also uses for their own Meetup
-    // commands: two refreshers of one grant can invalidate each other.
-    expect(entry.description).toMatch(/dedicated Meetup account/i);
+    // The helper owns the alert (episode-deduplicated); the sweep adds none.
+    expect(result).toEqual({ scanned: 0, changed: 0 });
+    expect(logAlert).not.toHaveBeenCalled();
+    expect(getPaginatedData).not.toHaveBeenCalled();
+    expect(getOrganizerAccessToken).toHaveBeenCalledWith({ client });
   });
 
-  it('logs instead of alerting when there is no client', async () => {
-    vi.mocked(refreshMeetupToken).mockRejectedValue(new Error('invalid_grant'));
+  it('asks the helper for a token with no client on the backfill path', async () => {
+    vi.mocked(getPaginatedData).mockResolvedValue([member('a')]);
 
     const result = await runMeetupSweep('backfill');
 
-    // The backfill script has no Discord connection; it must not attempt to
-    // post an alert, and surfaces failure through its own exit code instead.
-    expect(logAlert).not.toHaveBeenCalled();
-    expect(result).toEqual({ scanned: 0, changed: 0 });
-  });
-
-  it('never lets the raw refresh error reach the Discord alert', async () => {
-    vi.mocked(refreshMeetupToken).mockRejectedValue(
-      new Error('invalid_grant: {"secret":"do-not-leak"}'),
-    );
-
-    await runMeetupSweep('sweep', fakeClient());
-
-    const [, entry] = vi.mocked(logAlert).mock.calls[0];
-    expect(entry.description).not.toContain('do-not-leak');
-  });
-
-  it('falls back to the config seed when the stored token fails', async () => {
-    Configuration.meetup.organizerRefreshToken = 'seed-refresh';
-    credentials.get.mockResolvedValue({
-      accessToken: 'x',
-      refreshToken: 'stored-refresh',
-      expiresAt: Date.now() - 1000,
-    });
-    vi.mocked(refreshMeetupToken).mockImplementation(async (token: string) => {
-      if (token === 'stored-refresh') {
-        throw new Error('invalid_grant');
-      }
-      return {
-        accessToken: 'fresh-access',
-        refreshToken: 'seed-refresh',
-        expiresAt: Date.now() + 3_600_000,
-      };
-    });
-    vi.mocked(getPaginatedData).mockResolvedValue([member('a')]);
-
-    const result = await runMeetupSweep('sweep');
-
     expect(result.scanned).toBe(1);
-    expect(credentials.put).toHaveBeenCalledWith(
-      'meetup_organizer',
-      expect.objectContaining({ refreshToken: 'seed-refresh' }),
+    expect(getOrganizerAccessToken).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(getOrganizerAccessToken).mock.calls[0][0]?.client).toBe(
+      undefined,
     );
+    expect(GqlMeetupClient).toHaveBeenCalledWith('token-1');
   });
 
-  it('proceeds with the refreshed tokens when storing them fails', async () => {
-    credentials.put.mockRejectedValue(new Error('postgres unavailable'));
-    vi.mocked(getPaginatedData).mockResolvedValue([member('a')]);
+  describe('when Meetup refuses the roster request', () => {
+    function unauthorized() {
+      return new ClientError(
+        { status: 401, errors: [], headers: new Headers() } as never,
+        { query: 'q' },
+      );
+    }
 
-    const result = await runMeetupSweep('sweep', fakeClient());
+    it('retries the roster once with a forced refresh on 401', async () => {
+      vi.mocked(getOrganizerAccessToken)
+        .mockResolvedValueOnce('token-1')
+        .mockResolvedValueOnce('token-2');
+      vi.mocked(getPaginatedData)
+        .mockRejectedValueOnce(unauthorized())
+        .mockResolvedValueOnce([member('a'), member('b')]);
+      const client = fakeClient();
 
-    // The credential refresh SUCCEEDED. Only the write to Postgres failed, and
-    // under rotation the refreshed token is now the only valid one -- so
-    // discarding it and falling through to the (just-invalidated) seed would
-    // kill the credential permanently and alert the wrong remedy.
-    expect(result.scanned).toBe(1);
-    expect(logAlert).not.toHaveBeenCalled();
-  });
+      const result = await runMeetupSweep('sweep', client);
 
-  it('does not fall through to the seed when only the store failed', async () => {
-    Configuration.meetup.organizerRefreshToken = 'seed-refresh';
-    credentials.put.mockRejectedValue(new Error('postgres unavailable'));
-    vi.mocked(getPaginatedData).mockResolvedValue([member('a')]);
+      expect(result.scanned).toBe(2);
+      expect(getOrganizerAccessToken).toHaveBeenCalledTimes(2);
+      expect(getOrganizerAccessToken).toHaveBeenNthCalledWith(2, {
+        forceRefresh: true,
+        refusedAccessToken: 'token-1',
+        client,
+      });
+      expect(getPaginatedData).toHaveBeenCalledTimes(2);
+      // The retry runs on a rebuilt client holding the new token.
+      expect(GqlMeetupClient).toHaveBeenNthCalledWith(1, 'token-1');
+      expect(GqlMeetupClient).toHaveBeenNthCalledWith(2, 'token-2');
+    });
 
-    await runMeetupSweep('sweep');
+    it('returns an empty result when the forced refresh yields no token', async () => {
+      vi.mocked(getOrganizerAccessToken)
+        .mockResolvedValueOnce('token-1')
+        .mockResolvedValueOnce(undefined);
+      vi.mocked(getPaginatedData).mockRejectedValueOnce(unauthorized());
 
-    // One refresh, of the stored token. Retrying with the seed here would
-    // burn a second credential against a fault that has nothing to do with
-    // either of them.
-    expect(refreshMeetupToken).toHaveBeenCalledTimes(1);
-    expect(refreshMeetupToken).toHaveBeenCalledWith('stored-refresh');
+      const result = await runMeetupSweep('sweep', fakeClient());
+
+      expect(result).toEqual({ scanned: 0, changed: 0 });
+      expect(getPaginatedData).toHaveBeenCalledTimes(1);
+      expect(logAlert).not.toHaveBeenCalled();
+    });
+
+    it('does not retry on non-401 errors', async () => {
+      const failure = new Error('socket hang up');
+      vi.mocked(getPaginatedData).mockRejectedValue(failure);
+
+      await expect(runMeetupSweep('sweep', fakeClient())).rejects.toBe(failure);
+
+      expect(getOrganizerAccessToken).toHaveBeenCalledTimes(1);
+      expect(getPaginatedData).toHaveBeenCalledTimes(1);
+    });
+
+    it('a second 401 propagates', async () => {
+      const second = unauthorized();
+      vi.mocked(getOrganizerAccessToken)
+        .mockResolvedValueOnce('token-1')
+        .mockResolvedValueOnce('token-2');
+      vi.mocked(getPaginatedData)
+        .mockRejectedValueOnce(unauthorized())
+        .mockRejectedValueOnce(second);
+
+      await expect(runMeetupSweep('sweep', fakeClient())).rejects.toBe(second);
+
+      // One forced refresh only; no third attempt.
+      expect(getOrganizerAccessToken).toHaveBeenCalledTimes(2);
+      expect(getPaginatedData).toHaveBeenCalledTimes(2);
+    });
   });
 
   it('skips thumbnails once a systemic share of the roster has changed', async () => {
@@ -514,23 +509,6 @@ describe('runMeetupSweep', () => {
     // under the ceiling, and no alert should reach the organizers.
     expect(logAlert).not.toHaveBeenCalled();
   });
-
-  it('tries a shared stored/seed token only once', async () => {
-    // Steady state: the seed was pasted into Heroku and then stored verbatim,
-    // so both candidates are the same string. Trying it twice means two
-    // identical failed refreshes and two identical warnings for one problem.
-    Configuration.meetup.organizerRefreshToken = 'same-token';
-    credentials.get.mockResolvedValue({
-      accessToken: 'x',
-      refreshToken: 'same-token',
-      expiresAt: Date.now() - 1000,
-    });
-    vi.mocked(refreshMeetupToken).mockRejectedValue(new Error('invalid_grant'));
-
-    await runMeetupSweep('sweep');
-
-    expect(refreshMeetupToken).toHaveBeenCalledTimes(1);
-  });
 });
 
 describe('runMeetupSweep baseline photo healing', () => {
@@ -543,16 +521,7 @@ describe('runMeetupSweep baseline photo healing', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    credentials.get.mockResolvedValue({
-      accessToken: 'old-access',
-      refreshToken: 'stored-refresh',
-      expiresAt: Date.now() - 1000,
-    });
-    vi.mocked(refreshMeetupToken).mockResolvedValue({
-      accessToken: 'fresh-access',
-      refreshToken: 'stored-refresh',
-      expiresAt: Date.now() + 3_600_000,
-    });
+    vi.mocked(getOrganizerAccessToken).mockResolvedValue('token-1');
   });
 
   /** An unchanged member whose baseline has a photo id but no stored bytes. */
