@@ -45,6 +45,22 @@ describe('allowedRedirectTarget', () => {
     );
   });
 
+  it('pins how the parser normalises tricky targets', () => {
+    // A backslash is a path separator, so `@evil.example/` is path, not host.
+    const backslash = allowedRedirectTarget('http://localhost\\@evil.example/');
+    expect(backslash).toBeDefined();
+    expect(backslash?.host).toBe('localhost');
+    // A trailing dot makes a different host name.
+    expect(allowedRedirectTarget('http://localhost./')).toBeUndefined();
+    expect(
+      allowedRedirectTarget('https://meetup-discord-bot.herokuapp.com./'),
+    ).toBeUndefined();
+    // The decimal form of 127.0.0.1 is normalised to the loopback address.
+    expect(allowedRedirectTarget('http://2130706433/')?.toString()).toBe(
+      'http://127.0.0.1/',
+    );
+  });
+
   it('accepts what debugRedirect builds for the dev bot and for production', () => {
     for (const target of [
       'http://localhost:5000/connect/meetup/callback',

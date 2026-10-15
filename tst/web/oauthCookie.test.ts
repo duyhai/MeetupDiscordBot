@@ -17,7 +17,33 @@ const signRaw = (body: string, secret = SECRET) => {
   return `${encoded}.${mac}`;
 };
 
+const macOf = (input: string) =>
+  crypto.createHmac('sha256', SECRET).update(input).digest('base64url');
+
+const validBody = () => {
+  const sealed = sealOAuthCookie(PAYLOAD, SECRET);
+  return sealed.slice(0, sealed.lastIndexOf('.'));
+};
+
 describe('OAuth cookie', () => {
+  it('rejects an OAuth cookie whose MAC omits the oauth: prefix', () => {
+    const body = validBody();
+    expect(openOAuthCookie(`${body}.${macOf(body)}`, SECRET, 999)).toBe(
+      undefined,
+    );
+    // The prefixed MAC is what the source accepts, so the helper is faithful.
+    expect(
+      openOAuthCookie(`${body}.${macOf(`oauth:${body}`)}`, SECRET, 999),
+    ).toEqual({ state: 'st', verifier: 've' });
+  });
+
+  it('rejects an OAuth cookie MACed as a session id', () => {
+    const body = validBody();
+    expect(
+      openOAuthCookie(`${body}.${macOf(`sid:${body}`)}`, SECRET, 999),
+    ).toBeUndefined();
+  });
+
   it('round-trips state and verifier before expiry', () => {
     const sealed = sealOAuthCookie(PAYLOAD, SECRET);
     expect(sealed).toMatch(/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/);

@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -29,7 +30,28 @@ describe('signed session ids', () => {
   });
 });
 
+const macOf = (input: string) =>
+  crypto.createHmac('sha256', SECRET).update(input).digest('base64url');
+
 describe('MAC domain separation', () => {
+  it('rejects a session id whose MAC omits the sid: prefix', () => {
+    const sid = 'abc';
+    expect(
+      verifySignedSessionId(`${sid}.${macOf(sid)}`, SECRET),
+    ).toBeUndefined();
+    // The prefixed MAC is what the source accepts, so the helper is faithful.
+    expect(verifySignedSessionId(`${sid}.${macOf(`sid:${sid}`)}`, SECRET)).toBe(
+      sid,
+    );
+  });
+
+  it('rejects a session id MACed as an OAuth body', () => {
+    const sid = 'abc';
+    expect(
+      verifySignedSessionId(`${sid}.${macOf(`oauth:${sid}`)}`, SECRET),
+    ).toBeUndefined();
+  });
+
   it('an OAuth cookie value does not verify as a session id', () => {
     const sealed = sealOAuthCookie(
       { state: 's', verifier: 'v', expiresAt: 10 },
