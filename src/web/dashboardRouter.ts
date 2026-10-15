@@ -1,0 +1,400 @@
+import crypto from 'crypto';
+import express, {
+  ErrorRequestHandler,
+  NextFunction,
+  Request,
+  RequestHandler,
+  Response,
+} from 'express';
+import { generateCodeVerifier, generateState } from 'arctic';
+import { Logger } from 'tslog';
+
+import { KeyValueCache } from '../lib/cache/base.js';
+import { LogEntry } from '../lib/helpers/discordLogger.js';
+import { clearCookie, parseCookies, serializeCookie } from './cookies.js';
+import { errorPage, homePage, loginPage } from './pages.js';
+import { FixedWindowLimiter } from './rateLimit.js';
+import { AccessCheck } from './roleGate.js';
+import {
+  DashboardSession,
+  ROLE_RECHECK_MS,
+  SESSION_COOKIE,
+  SESSION_TTL_SEC,
+  SessionStore,
+  safeEqual,
+  signSessionId,
+  verifySignedSessionId,
+} from './session.js';
+
+const logger = new Logger({ name: 'dashboard' });
+
+export const OAUTH_COOKIE = 'dash_oauth';
+export const PUBLIC_ROUTE_PATHS: readonly string[] = [
+  '/login',
+  '/auth/start',
+  '/auth/callback',
+];
+const OAUTH_COOKIE_PATH = '/dashboard/auth';
+const SESSION_COOKIE_PATH = '/dashboard';
+const OAUTH_TTL_SEC = 10 * 60;
+const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
+const oauthKey = (state: string) => `dashboard-oauth-${state}`;
+
+export interface DashboardOAuth {
+  buildLoginUrl(state: string, codeVerifier: string): string;
+  exchangeCode(code: string, codeVerifier: string): Promise<string>;
+  fetchIdentity(accessToken: string): Promise<{ id: string; username: string }>;
+}
+
+export interface DashboardDeps {
+  cache: () => Promise<KeyValueCache>;
+  checkAccess: AccessCheck;
+  oauth: DashboardOAuth;
+  sessionSecret: string;
+  /** e.g. https://meetup-discord-bot.herokuapp.com — the only Origin a POST may carry. */
+  origin: string;
+  audit: (entry: LogEntry) => Promise<unknown>;
+  now?: () => number;
+  loginLimiter?: FixedWindowLimiter; // default 10 per minute per IP
+  actionLimiter?: FixedWindowLimiter; // default 30 per minute per user
+  /**
+   * Later PRs add their pages here. Whatever this registers is mounted
+   * AFTER the session gate and AFTER the unsafe-method guard (CSRF, Origin,
+   * Sec-Fetch-Site, per-user rate limit), so a route cannot be added
+   * without them.
+   */
+  protectedRoutes?: (router: express.Router) => void;
+}
+
+interface Locals {
+  nonce: string;
+  session?: DashboardSession;
+  sid?: string;
+}
+
+const locals = (res: Response) => res.locals as Locals;
+
+function send(res: Response, status: number, body: string) {
+  res.status(status).type('html').send(body);
+}
+
+function fail(res: Response, status: Parameters<typeof errorPage>[0]) {
+  if (!locals(res).nonce) {
+    locals(res).nonce = crypto.randomBytes(16).toString('base64');
+  }
+  send(res, status, errorPage(status, locals(res).nonce));
+}
+
+const securityHeaders: RequestHandler = function securityHeaders(
+  _req,
+  res,
+  next,
+) {
+  const nonce = crypto.randomBytes(16).toString('base64');
+  locals(res).nonce = nonce;
+  res.set({
+    'Cache-Control': 'no-store',
+    Pragma: 'no-cache',
+    'Content-Security-Policy':
+      `default-src 'none'; style-src 'nonce-${nonce}'; ` +
+      `script-src 'nonce-${nonce}'; img-src 'self'; form-action 'self'; ` +
+      "frame-ancestors 'none'; base-uri 'none'",
+    'Strict-Transport-Security': 'max-age=15552000',
+    'X-Content-Type-Options': 'nosniff',
+    'X-Frame-Options': 'DENY',
+    'Referrer-Policy': 'no-referrer',
+    'X-Robots-Tag': 'noindex, nofollow',
+  });
+  next();
+};
+
+function limit(
+  limiter: FixedWindowLimiter,
+  keyOf: (req: Request, res: Response) => string,
+): RequestHandler {
+  return (req, res, next) => {
+    const key = keyOf(req, res);
+    if (limiter.take(key)) {
+      next();
+      return;
+    }
+    res.set('Retry-After', String(limiter.retryAfterSec(key)));
+    fail(res, 429);
+  };
+}
+
+/** Express 5 layer shape, read only to list routes for tests and PR 3. */
+interface StackLayer {
+  name: string;
+  route?: { path: string; methods: Record<string, boolean> };
+  handle: { stack?: StackLayer[] };
+}
+
+export function protectedRouteList(
+  router: express.Router,
+): { method: string; path: string }[] {
+  const outer = (router as unknown as { stack: StackLayer[] }).stack;
+  const gate = outer.findIndex((l) => l.name === 'dashboardSessionGate');
+  const inner = outer[gate + 1]?.handle.stack ?? [];
+  return inner
+    .filter((l) => l.route)
+    .flatMap((l) =>
+      Object.keys(l.route.methods)
+        .filter((method) => l.route.methods[method])
+        .map((method) => ({ method, path: l.route.path })),
+    );
+}
+
+export function createDashboardRouter(deps: DashboardDeps): express.Router {
+  const now = deps.now ?? Date.now;
+  const loginLimiter = deps.loginLimiter ?? new FixedWindowLimiter(10, 60_000);
+  const actionLimiter =
+    deps.actionLimiter ?? new FixedWindowLimiter(30, 60_000);
+  const sessions = async () => new SessionStore(await deps.cache(), now);
+  const byIp = (req: Request) => req.ip ?? 'unknown';
+
+  // Audit posts are fire-and-forget: a slow or failing Discord post must
+  // never hold up or break a sign-in.
+  const audit = (entry: LogEntry) => {
+    Promise.resolve()
+      .then(() => deps.audit(entry))
+      .catch((error: unknown) =>
+        logger.warn(`Dashboard audit post failed: ${String(error)}`),
+      );
+  };
+
+  async function readSession(req: Request) {
+    const signed = parseCookies(req.headers.cookie).get(SESSION_COOKIE);
+    const sid = signed && verifySignedSessionId(signed, deps.sessionSecret);
+    if (!sid) {
+      return undefined;
+    }
+    const session = await (await sessions()).get(sid);
+    return session ? { sid, session } : undefined;
+  }
+
+  const router = express.Router();
+  router.use(securityHeaders);
+  router.use(express.urlencoded({ extended: false, limit: '16kb' }));
+
+  // ---- Public routes: the only ones reachable without a session. ----
+
+  router.get('/login', (async (req, res) => {
+    if (await readSession(req)) {
+      res.redirect(302, '/dashboard');
+      return;
+    }
+    send(res, 200, loginPage(locals(res).nonce));
+  }) as RequestHandler);
+
+  router.get('/auth/start', limit(loginLimiter, byIp), (async (_req, res) => {
+    const state = generateState();
+    const verifier = generateCodeVerifier();
+    await (await deps.cache()).set(oauthKey(state), verifier, OAUTH_TTL_SEC);
+    res.append(
+      'Set-Cookie',
+      serializeCookie(OAUTH_COOKIE, state, {
+        path: OAUTH_COOKIE_PATH,
+        maxAgeSec: OAUTH_TTL_SEC,
+      }),
+    );
+    res.redirect(302, deps.oauth.buildLoginUrl(state, verifier));
+  }) as RequestHandler);
+
+  router.get('/auth/callback', limit(loginLimiter, byIp), (async (req, res) => {
+    const state = String(req.query.state ?? '');
+    const bound = parseCookies(req.headers.cookie).get(OAUTH_COOKIE) ?? '';
+    res.append('Set-Cookie', clearCookie(OAUTH_COOKIE, OAUTH_COOKIE_PATH));
+    // The cookie binds the callback to the browser that started sign-in, so
+    // a callback URL lured into another browser cannot log that browser in.
+    if (!state || !bound || !safeEqual(state, bound)) {
+      fail(res, 400);
+      return;
+    }
+    const cache = await deps.cache();
+    const verifier = await cache.get(oauthKey(state));
+    await cache.remove(oauthKey(state));
+    if (!verifier) {
+      fail(res, 400);
+      return;
+    }
+    if (req.query.error || !req.query.code) {
+      send(res, 400, loginPage(locals(res).nonce, 'Sign-in was cancelled.'));
+      return;
+    }
+    let identity: { id: string; username: string };
+    try {
+      const accessToken = await deps.oauth.exchangeCode(
+        String(req.query.code),
+        verifier,
+      );
+      identity = await deps.oauth.fetchIdentity(accessToken);
+    } catch (error: unknown) {
+      logger.warn(`Dashboard sign-in exchange failed: ${String(error)}`);
+      fail(res, 502);
+      return;
+    }
+    let allowed: boolean;
+    try {
+      allowed = await deps.checkAccess(identity.id);
+    } catch (error: unknown) {
+      logger.warn(`Dashboard role check failed at sign-in: ${String(error)}`);
+      fail(res, 503);
+      return;
+    }
+    if (!allowed) {
+      audit({
+        title: 'Dashboard sign-in refused',
+        description: `<@${identity.id}> tried to sign in without a dashboard role.`,
+      });
+      fail(res, 403);
+      return;
+    }
+    const { sid } = await (
+      await sessions()
+    ).create({
+      userId: identity.id,
+      username: identity.username,
+    });
+    res.append(
+      'Set-Cookie',
+      serializeCookie(SESSION_COOKIE, signSessionId(sid, deps.sessionSecret), {
+        path: SESSION_COOKIE_PATH,
+        maxAgeSec: SESSION_TTL_SEC,
+      }),
+    );
+    audit({
+      title: 'Dashboard sign-in',
+      description: `<@${identity.id}> signed in to the staff dashboard.`,
+    });
+    res.redirect(302, '/dashboard');
+  }) as RequestHandler);
+
+  // ---- The gate: a live session whose role check is current. ----
+
+  const dashboardSessionGate = async function dashboardSessionGate(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ) {
+    const signedOut = () => {
+      res.append(
+        'Set-Cookie',
+        clearCookie(SESSION_COOKIE, SESSION_COOKIE_PATH),
+      );
+      if (req.method === 'GET' || req.method === 'HEAD') {
+        res.redirect(302, '/dashboard/login');
+      } else {
+        fail(res, 403);
+      }
+    };
+    const found = await readSession(req);
+    if (!found) {
+      signedOut();
+      return;
+    }
+    const { sid, session } = found;
+    if (now() - session.roleCheckedAt >= ROLE_RECHECK_MS) {
+      let allowed: boolean;
+      try {
+        allowed = await deps.checkAccess(session.userId);
+      } catch (error: unknown) {
+        // Fail closed, but keep the session: Discord being down is not the
+        // member losing their role.
+        logger.warn(`Dashboard role re-check failed: ${String(error)}`);
+        fail(res, 503);
+        return;
+      }
+      const store = await sessions();
+      if (!allowed) {
+        await store.destroy(sid);
+        res.append(
+          'Set-Cookie',
+          clearCookie(SESSION_COOKIE, SESSION_COOKIE_PATH),
+        );
+        audit({
+          title: 'Dashboard session ended',
+          description: `<@${session.userId}> no longer holds a dashboard role.`,
+        });
+        fail(res, 403);
+        return;
+      }
+      if (!(await store.markRoleChecked(sid, session))) {
+        signedOut();
+        return;
+      }
+    }
+    locals(res).session = session;
+    locals(res).sid = sid;
+    next();
+  };
+
+  // ---- Everything behind the gate lives on this one router. ----
+
+  const protectedRouter = express.Router();
+
+  /**
+   * Every method that can change state: per-user rate limit, then a
+   * same-origin request (Origin, when sent, must be ours; Sec-Fetch-Site
+   * must not be cross-site), then the session's CSRF token from the form
+   * body or the X-CSRF-Token header. Each check stands alone: a matching
+   * Origin never excuses a missing token.
+   */
+  protectedRouter.use(function dashboardUnsafeMethodGuard(req, res, next) {
+    if (SAFE_METHODS.has(req.method)) {
+      next();
+      return;
+    }
+    const { session } = locals(res);
+    if (!actionLimiter.take(session.userId)) {
+      res.set(
+        'Retry-After',
+        String(actionLimiter.retryAfterSec(session.userId)),
+      );
+      fail(res, 429);
+      return;
+    }
+    const origin = req.headers.origin;
+    const body = req.body as Record<string, unknown> | undefined;
+    const token =
+      typeof body?._csrf === 'string'
+        ? body._csrf
+        : req.headers['x-csrf-token'];
+    if (
+      req.headers['sec-fetch-site'] === 'cross-site' ||
+      (origin !== undefined && origin !== deps.origin) ||
+      typeof token !== 'string' ||
+      !safeEqual(token, session.csrfToken)
+    ) {
+      fail(res, 403);
+      return;
+    }
+    next();
+  });
+
+  protectedRouter.get('/', (_req, res) => {
+    const { session, nonce } = locals(res);
+    send(res, 200, homePage(session, nonce));
+  });
+
+  protectedRouter.post('/logout', (async (_req, res) => {
+    // Clear the cookie first, so the browser forgets it even if the store
+    // call below fails.
+    res.append('Set-Cookie', clearCookie(SESSION_COOKIE, SESSION_COOKIE_PATH));
+    await (await sessions()).destroy(locals(res).sid);
+    res.redirect(303, '/dashboard/login');
+  }) as RequestHandler);
+
+  deps.protectedRoutes?.(protectedRouter);
+
+  protectedRouter.use((_req, res) => fail(res, 404));
+
+  router.use(dashboardSessionGate as RequestHandler, protectedRouter);
+
+  router.use(function dashboardErrorHandler(error, _req, res, _next) {
+    logger.error(`Dashboard route error: ${String(error)}`);
+    fail(res, 500);
+  } as ErrorRequestHandler);
+
+  return router;
+}
