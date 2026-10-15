@@ -15,6 +15,7 @@ import {
   closeServers,
   makeApp,
   makeDeps,
+  rawRequest,
   signIn,
   startSignIn,
 } from './dashboardHarness.js';
@@ -202,7 +203,7 @@ describe('signed-out requests leave the session cookie alone', () => {
   });
 
   it('wrong-case and encoded paths never serve a protected page or log out', async () => {
-    const { req } = await makeApp();
+    const { req, server } = await makeApp();
     const cookie = await signIn(req);
     const paths = [
       '/Dashboard',
@@ -210,8 +211,26 @@ describe('signed-out requests leave the session cookie alone', () => {
       '/dashboard/Login',
       '/dashboard%2flogin',
       '/dashboard/./',
-      '//dashboard',
     ];
+    // Sent over a raw socket: through nock, an HTTP client would read
+    // `//dashboard` as a protocol-relative URL to host "dashboard".
+    const RAW_PATH = '//dashboard';
+    const raw = (headers: Record<string, string> = {}) =>
+      rawRequest(server, 'GET', RAW_PATH, headers);
+    const rawClearsSid = (res: { headers: Record<string, string> }) =>
+      (res.headers['set-cookie'] ?? '')
+        .split('\n')
+        .some((c) => c.startsWith('dash_sid='));
+
+    const rawSignedOut = await raw();
+    expect(rawSignedOut.status).toBe(404);
+    // Express itself answered, for the exact path bytes sent.
+    expect(rawSignedOut.body).toContain('Cannot GET //dashboard');
+    expect(rawClearsSid(rawSignedOut)).toBe(false);
+    const rawSignedIn = await raw({ Cookie: cookie });
+    expect(rawSignedIn.status).toBe(404);
+    expect(rawClearsSid(rawSignedIn)).toBe(false);
+
     const signedOut = await Promise.all(paths.map(async (p) => req.get(p)));
     for (const [i, res] of signedOut.entries()) {
       const gated =
