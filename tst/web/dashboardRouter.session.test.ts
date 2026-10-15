@@ -6,8 +6,10 @@ import {
   createDashboardRouter,
   protectedRouteList,
 } from '../../src/web/dashboardRouter.js';
+import { signSessionId } from '../../src/web/session.js';
 import {
   ORIGIN,
+  SECRET,
   closeServers,
   makeApp,
   makeDeps,
@@ -342,7 +344,9 @@ describe('dashboard CSRF and logout', () => {
         throw new Error('redis gone: secret detail');
       },
     });
-    const res = await req.get('/dashboard/auth/start');
+    const res = await req
+      .get('/dashboard')
+      .set('Cookie', `dash_sid=${signSessionId('sid', SECRET)}`);
     expect(res.status).toBe(500);
     expect(res.text).not.toContain('secret detail');
   });

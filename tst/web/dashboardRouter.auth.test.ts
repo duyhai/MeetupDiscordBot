@@ -1,12 +1,15 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { DashboardDeps } from '../../src/web/dashboardRouter.js';
+import { openOAuthCookie, sealOAuthCookie } from '../../src/web/oauthCookie.js';
 import {
+  SECRET,
   USER,
   closeServers,
   locationOf,
   makeApp,
   signIn,
+  startSignIn,
 } from './dashboardHarness.js';
 
 afterEach(closeServers);
@@ -26,20 +29,45 @@ describe('dashboard sign-in', () => {
     );
   });
 
-  it('starts sign-in with a stored verifier and a state-binding cookie', async () => {
-    const { req, cache, deps } = await makeApp();
+  it('starts sign-in with a signed OAuth cookie carrying state and verifier', async () => {
+    const { req, deps } = await makeApp({ now: () => 1_000 });
     const res = await req.get('/dashboard/auth/start');
-    expect(res.status).toBe(302);
     const state = locationOf(res).searchParams.get('state');
     expect(state).toBeTruthy();
-    expect(cache.ttls.get(`dashboard-oauth-${state}`)).toBe(600);
+    const header = (res.headers['set-cookie'] as unknown as string[])[0];
+    expect(header).toMatch(
+      /^dash_oauth=[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+; Path=\/dashboard\/auth; HttpOnly; Secure; SameSite=Lax; Max-Age=600$/,
+    );
+    const value = header.split(';')[0].slice('dash_oauth='.length);
+    const opened = openOAuthCookie(value, SECRET, 1_000);
+    expect(opened?.state).toBe(state);
     // eslint-disable-next-line @typescript-eslint/unbound-method
     expect(vi.mocked(deps.oauth.buildLoginUrl)).toHaveBeenCalledWith(
       state,
-      cache.values.get(`dashboard-oauth-${state}`),
+      opened?.verifier,
     );
-    expect(res.headers['set-cookie'][0]).toBe(
-      `dash_oauth=${state}; Path=/dashboard/auth; HttpOnly; Secure; SameSite=Lax; Max-Age=600`,
+    // Expires 10 minutes after start.
+    expect(openOAuthCookie(value, SECRET, 1_000 + 600_000 - 1)).toBeDefined();
+    expect(openOAuthCookie(value, SECRET, 1_000 + 600_000)).toBeUndefined();
+  });
+
+  it('start writes nothing to the cache', async () => {
+    const { req, cache } = await makeApp();
+    await startSignIn(req);
+    await startSignIn(req);
+    expect(cache.values.size).toBe(0);
+  });
+
+  it('hands exchangeCode exactly the verifier given to buildLoginUrl', async () => {
+    const { req, deps } = await makeApp();
+    await signIn(req);
+    // eslint-disable-next-line @typescript-eslint/unbound-method
+    const [, verifier] = vi.mocked(deps.oauth.buildLoginUrl).mock.calls[0];
+    expect(verifier).toBeTruthy();
+    // eslint-disable-next-line @typescript-eslint/unbound-method
+    expect(vi.mocked(deps.oauth.exchangeCode)).toHaveBeenCalledWith(
+      'c',
+      verifier,
     );
   });
 
@@ -58,11 +86,10 @@ describe('dashboard sign-in', () => {
 
   it('sets the session cookie with all attributes and a 12-hour Max-Age', async () => {
     const { req } = await makeApp();
-    const start = await req.get('/dashboard/auth/start');
-    const state = locationOf(start).searchParams.get('state');
+    const { state, oauthCookie } = await startSignIn(req);
     const cb = await req
       .get(`/dashboard/auth/callback?state=${state}&code=c`)
-      .set('Cookie', `dash_oauth=${state}`);
+      .set('Cookie', oauthCookie);
     expect(cb.status).toBe(302);
     expect(cb.headers.location).toBe('/dashboard');
     const sid = (cb.headers['set-cookie'] as unknown as string[]).find((c) =>
@@ -77,11 +104,10 @@ describe('dashboard sign-in', () => {
     const { req, cache, deps } = await makeApp({
       checkAccess: vi.fn().mockResolvedValue(false),
     });
-    const start = await req.get('/dashboard/auth/start');
-    const state = locationOf(start).searchParams.get('state');
+    const { state, oauthCookie } = await startSignIn(req);
     const cb = await req
       .get(`/dashboard/auth/callback?state=${state}&code=c`)
-      .set('Cookie', `dash_oauth=${state}`);
+      .set('Cookie', oauthCookie);
     expect(cb.status).toBe(403);
     expect(cb.text).toContain('only for Moderators');
     expect(
@@ -92,41 +118,105 @@ describe('dashboard sign-in', () => {
     );
   });
 
-  it('rejects a callback whose state does not match the login cookie', async () => {
-    const { req } = await makeApp();
-    const start = await req.get('/dashboard/auth/start');
-    const state = locationOf(start).searchParams.get('state');
+  it('rejects a callback whose state does not match the OAuth cookie', async () => {
+    const { req, deps } = await makeApp();
+    const { state } = await startSignIn(req);
+    const other = await startSignIn(req);
     const cb = await req
       .get(`/dashboard/auth/callback?state=${state}&code=c`)
-      .set('Cookie', 'dash_oauth=someone-elses-state');
+      .set('Cookie', other.oauthCookie);
     expect(cb.status).toBe(400);
-    const noCookie = await req.get(
-      `/dashboard/auth/callback?state=${state}&code=c`,
-    );
-    expect(noCookie.status).toBe(400);
+    const raw = await req
+      .get(`/dashboard/auth/callback?state=${state}&code=c`)
+      .set('Cookie', `dash_oauth=${state}`);
+    expect(raw.status).toBe(400);
+    // eslint-disable-next-line @typescript-eslint/unbound-method
+    expect(deps.oauth.exchangeCode).not.toHaveBeenCalled();
   });
 
-  it('rejects a replayed state', async () => {
+  it('a callback without the OAuth cookie is refused', async () => {
+    const { req, deps } = await makeApp();
+    const { state } = await startSignIn(req);
+    const cb = await req.get(`/dashboard/auth/callback?state=${state}&code=c`);
+    expect(cb.status).toBe(400);
+    // eslint-disable-next-line @typescript-eslint/unbound-method
+    expect(deps.oauth.exchangeCode).not.toHaveBeenCalled();
+  });
+
+  it('the callback always clears the OAuth cookie', async () => {
+    const cleared =
+      'dash_oauth=; Path=/dashboard/auth; HttpOnly; Secure; SameSite=Lax; Max-Age=0';
     const { req } = await makeApp();
-    const start = await req.get('/dashboard/auth/start');
-    const state = locationOf(start).searchParams.get('state');
-    const first = await req
+    const { state, oauthCookie } = await startSignIn(req);
+    const responses = [
+      await req.get(`/dashboard/auth/callback?state=${state}&code=c`),
+      await req
+        .get(`/dashboard/auth/callback?state=${state}&error=access_denied`)
+        .set('Cookie', oauthCookie),
+      await req
+        .get(`/dashboard/auth/callback?state=${state}&code=c`)
+        .set('Cookie', oauthCookie),
+    ];
+    expect(responses.map((r) => r.status)).toEqual([400, 400, 302]);
+    for (const res of responses) {
+      expect(res.headers['set-cookie']).toContain(cleared);
+    }
+  });
+
+  it('an expired OAuth cookie is refused', async () => {
+    let now = 0;
+    const { req, deps } = await makeApp({ now: () => now });
+    const { state, oauthCookie } = await startSignIn(req);
+    now = 10 * 60 * 1000;
+    const cb = await req
       .get(`/dashboard/auth/callback?state=${state}&code=c`)
-      .set('Cookie', `dash_oauth=${state}`);
-    expect(first.status).toBe(302);
-    const replay = await req
-      .get(`/dashboard/auth/callback?state=${state}&code=c`)
-      .set('Cookie', `dash_oauth=${state}`);
-    expect(replay.status).toBe(400);
+      .set('Cookie', oauthCookie);
+    expect(cb.status).toBe(400);
+    // eslint-disable-next-line @typescript-eslint/unbound-method
+    expect(deps.oauth.exchangeCode).not.toHaveBeenCalled();
+  });
+
+  it('a tampered OAuth cookie is refused', async () => {
+    const { req, deps } = await makeApp();
+    const { state, oauthCookie } = await startSignIn(req);
+    const value = oauthCookie.slice('dash_oauth='.length);
+    const dot = value.lastIndexOf('.');
+    const body = JSON.parse(
+      Buffer.from(value.slice(0, dot), 'base64url').toString(),
+    ) as Record<string, unknown>;
+    const forgedBody = Buffer.from(
+      JSON.stringify({ ...body, e: Number.MAX_SAFE_INTEGER }),
+    ).toString('base64url');
+    const lastMacChar = value.endsWith('A') ? 'B' : 'A';
+    const tampered = [
+      `${forgedBody}${value.slice(dot)}`,
+      `${value.slice(0, -1)}${lastMacChar}`,
+      sealOAuthCookie(
+        { state, verifier: 'v', expiresAt: Number.MAX_SAFE_INTEGER },
+        'another-secret-that-is-long-enough-000',
+      ),
+    ];
+    const statuses = await Promise.all(
+      tampered.map(
+        async (forged) =>
+          (
+            await req
+              .get(`/dashboard/auth/callback?state=${state}&code=c`)
+              .set('Cookie', `dash_oauth=${forged}`)
+          ).status,
+      ),
+    );
+    expect(statuses).toEqual([400, 400, 400]);
+    // eslint-disable-next-line @typescript-eslint/unbound-method
+    expect(deps.oauth.exchangeCode).not.toHaveBeenCalled();
   });
 
   it('shows the login page again when the member cancels on Discord', async () => {
     const { req, deps } = await makeApp();
-    const start = await req.get('/dashboard/auth/start');
-    const state = locationOf(start).searchParams.get('state');
+    const { state, oauthCookie } = await startSignIn(req);
     const cb = await req
       .get(`/dashboard/auth/callback?state=${state}&error=access_denied`)
-      .set('Cookie', `dash_oauth=${state}`);
+      .set('Cookie', oauthCookie);
     expect(cb.status).toBe(400);
     expect(cb.text).toContain('Sign-in was cancelled');
     // eslint-disable-next-line @typescript-eslint/unbound-method
@@ -141,11 +231,10 @@ describe('dashboard sign-in', () => {
         fetchIdentity: vi.fn(),
       },
     });
-    const start = await req.get('/dashboard/auth/start');
-    const state = locationOf(start).searchParams.get('state');
+    const { state, oauthCookie } = await startSignIn(req);
     const cb = await req
       .get(`/dashboard/auth/callback?state=${state}&code=c`)
-      .set('Cookie', `dash_oauth=${state}`);
+      .set('Cookie', oauthCookie);
     expect(cb.status).toBe(502);
     expect(cb.text).not.toContain('token body leak');
   });
@@ -154,11 +243,10 @@ describe('dashboard sign-in', () => {
     const { req } = await makeApp({
       checkAccess: vi.fn().mockRejectedValue(new Error('discord down')),
     });
-    const start = await req.get('/dashboard/auth/start');
-    const state = locationOf(start).searchParams.get('state');
+    const { state, oauthCookie } = await startSignIn(req);
     const cb = await req
       .get(`/dashboard/auth/callback?state=${state}&code=c`)
-      .set('Cookie', `dash_oauth=${state}`);
+      .set('Cookie', oauthCookie);
     expect(cb.status).toBe(503);
     expect(JSON.stringify(cb.headers['set-cookie'] ?? [])).not.toContain(
       'dash_sid=',
@@ -185,11 +273,10 @@ describe('dashboard sign-in', () => {
     await Promise.all(
       cases.map(async (overrides) => {
         const { req } = await makeApp(overrides);
-        const start = await req.get('/dashboard/auth/start');
-        const state = locationOf(start).searchParams.get('state');
+        const { state, oauthCookie } = await startSignIn(req);
         const cb = await req
           .get(`/dashboard/auth/callback?state=${state}&code=c`)
-          .set('Cookie', `dash_oauth=${state}`);
+          .set('Cookie', oauthCookie);
         expect([403, 502]).toContain(cb.status);
         expect(JSON.stringify(cb.headers['set-cookie'] ?? [])).not.toContain(
           'dash_sid=',

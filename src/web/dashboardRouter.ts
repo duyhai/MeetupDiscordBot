@@ -12,6 +12,7 @@ import { Logger } from 'tslog';
 import { KeyValueCache } from '../lib/cache/base.js';
 import { LogEntry } from '../lib/helpers/discordLogger.js';
 import { clearCookie, parseCookies, serializeCookie } from './cookies.js';
+import { openOAuthCookie, sealOAuthCookie } from './oauthCookie.js';
 import { errorPage, homePage, loginPage } from './pages.js';
 import { FixedWindowLimiter } from './rateLimit.js';
 import { AccessCheck } from './roleGate.js';
@@ -38,7 +39,6 @@ const OAUTH_COOKIE_PATH = '/dashboard/auth';
 const SESSION_COOKIE_PATH = '/dashboard';
 const OAUTH_TTL_SEC = 10 * 60;
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
-const oauthKey = (state: string) => `dashboard-oauth-${state}`;
 
 export interface DashboardOAuth {
   buildLoginUrl(state: string, codeVerifier: string): string;
@@ -47,6 +47,7 @@ export interface DashboardOAuth {
 }
 
 export interface DashboardDeps {
+  /** Sessions only: nothing writes here before a member has authenticated. */
   cache: () => Promise<KeyValueCache>;
   checkAccess: AccessCheck;
   oauth: DashboardOAuth;
@@ -200,37 +201,38 @@ export function createDashboardRouter(deps: DashboardDeps): express.Router {
     send(res, 200, loginPage(locals(res).nonce));
   }) as RequestHandler);
 
-  router.get('/auth/start', limit(loginLimiter, byIp), (async (_req, res) => {
+  // Sign-in state lives in a signed cookie, not Redis: nothing a signed-out
+  // request does writes to the cache that holds members' Meetup tokens.
+  router.get('/auth/start', limit(loginLimiter, byIp), (_req, res) => {
     const state = generateState();
     const verifier = generateCodeVerifier();
-    await (await deps.cache()).set(oauthKey(state), verifier, OAUTH_TTL_SEC);
+    const sealed = sealOAuthCookie(
+      { state, verifier, expiresAt: now() + OAUTH_TTL_SEC * 1000 },
+      deps.sessionSecret,
+    );
     res.append(
       'Set-Cookie',
-      serializeCookie(OAUTH_COOKIE, state, {
+      serializeCookie(OAUTH_COOKIE, sealed, {
         path: OAUTH_COOKIE_PATH,
         maxAgeSec: OAUTH_TTL_SEC,
       }),
     );
     res.redirect(302, deps.oauth.buildLoginUrl(state, verifier));
-  }) as RequestHandler);
+  });
 
   router.get('/auth/callback', limit(loginLimiter, byIp), (async (req, res) => {
-    const state = String(req.query.state ?? '');
-    const bound = parseCookies(req.headers.cookie).get(OAUTH_COOKIE) ?? '';
+    const state = typeof req.query.state === 'string' ? req.query.state : '';
+    const sealed = parseCookies(req.headers.cookie).get(OAUTH_COOKIE) ?? '';
+    // Cleared on every callback, so each cookie is good for one attempt.
     res.append('Set-Cookie', clearCookie(OAUTH_COOKIE, OAUTH_COOKIE_PATH));
     // The cookie binds the callback to the browser that started sign-in, so
     // a callback URL lured into another browser cannot log that browser in.
-    if (!state || !bound || !safeEqual(state, bound)) {
+    const bound = openOAuthCookie(sealed, deps.sessionSecret, now());
+    if (!state || !bound || !safeEqual(state, bound.state)) {
       fail(res, 400);
       return;
     }
-    const cache = await deps.cache();
-    const verifier = await cache.get(oauthKey(state));
-    await cache.remove(oauthKey(state));
-    if (!verifier) {
-      fail(res, 400);
-      return;
-    }
+    const { verifier } = bound;
     if (req.query.error || !req.query.code) {
       send(res, 400, loginPage(locals(res).nonce, 'Sign-in was cancelled.'));
       return;
