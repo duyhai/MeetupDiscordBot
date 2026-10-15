@@ -3,6 +3,8 @@ import { describe, expect, it } from 'vitest';
 import { PUBLIC_APP_ORIGIN, debugRedirect } from '../../src/constants.js';
 import { allowedRedirectTarget } from '../../src/util/redirectTarget.js';
 
+const host = new URL(PUBLIC_APP_ORIGIN).host;
+
 describe('allowedRedirectTarget', () => {
   it('allows the app origin, including the production Meetup callback', () => {
     const target = `${PUBLIC_APP_ORIGIN}/connect/meetup/callback`;
@@ -23,17 +25,19 @@ describe('allowedRedirectTarget', () => {
   it('refuses everything else', () => {
     [
       'https://evil.example/',
-      'https://meetup-discord-bot.herokuapp.com.evil.example/',
-      'https://evil.example/meetup-discord-bot.herokuapp.com',
-      'https://meetup-discord-bot.herokuapp.com@evil.example/',
-      'https://x@meetup-discord-bot.herokuapp.com/',
-      'https://meetup-discord-bot.herokuapp.com:8443/',
-      'http://meetup-discord-bot.herokuapp.com/',
+      `https://${host}.evil.example/`,
+      `https://evil.example/${host}`,
+      `https://${host}@evil.example/`,
+      `https://x@${host}/`,
+      `https://${host}:8443/`,
+      `http://${host}/`,
       'http://localhost.evil.example/',
       'http://localhost@evil.example/',
       'http://user:pw@localhost:5000/',
       'https://localhost:5000/',
       'http://[::1]:5000/',
+      `https://${host}./`,
+      `blob:${PUBLIC_APP_ORIGIN}/x`,
       'javascript:alert(1)',
       'data:text/html,hi',
       '//evil.example/',
@@ -70,5 +74,13 @@ describe('allowedRedirectTarget', () => {
       const decoded = Buffer.from(encoded, 'base64').toString('utf-8');
       expect(allowedRedirectTarget(decoded)?.toString()).toBe(target);
     }
+  });
+
+  it("allows the dev bot's sign-in start through the trampoline", () => {
+    const target = allowedRedirectTarget(
+      'http://localhost:5000/connect/meetup?state=s',
+    );
+    expect(target?.pathname).toBe('/connect/meetup');
+    expect(target?.search).toBe('?state=s');
   });
 });

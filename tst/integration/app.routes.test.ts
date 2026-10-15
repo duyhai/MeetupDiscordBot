@@ -159,8 +159,9 @@ describe('cookie-free OAuth chain', () => {
   it('refuses targets outside the allow-list with the branded page', async () => {
     const targets = [
       'https://evil.example/',
-      'https://meetup-discord-bot.herokuapp.com.evil.example/',
-      'https://meetup-discord-bot.herokuapp.com@evil.example/',
+      `https://${new URL(PUBLIC_APP_ORIGIN).host}.evil.example/`,
+      `https://${new URL(PUBLIC_APP_ORIGIN).host}@evil.example/`,
+      `blob:${PUBLIC_APP_ORIGIN}/x`,
       'javascript:alert(1)',
       'https://localhost/',
     ];
