@@ -3,6 +3,8 @@ export const SERVER_ROLES = {
   guest_host: '912473798085836821',
   ladies_lounge: '935435362984161292',
   gents_lounge: '1336180499231670374',
+  // 1.5 Leadership Team: admitted to the staff dashboard with moderators.
+  leadership: '1347289004932075521',
   moderator: '912474048775221270',
   onboarding: '932906028725571594',
   organizer: '912474170594582568',

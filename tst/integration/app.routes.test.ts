@@ -143,3 +143,19 @@ describe('cookie-free OAuth chain', () => {
     expect(res.text).not.toContain('<pre>');
   });
 });
+
+describe('staff dashboard mount', () => {
+  it('mounts the dashboard ahead of the generic 404 page', async () => {
+    // Heroku's router marks HTTPS; without it a configured dashboard
+    // answers 308 to the HTTPS origin.
+    const res = await request(app)
+      .get('/dashboard/login')
+      .set('X-Forwarded-Proto', 'https');
+    expect([200, 503]).toContain(res.status);
+    expect(res.headers['cache-control']).toBe('no-store');
+  });
+
+  it('trusts exactly one proxy hop, never all of them', () => {
+    expect(app.get('trust proxy')).toBe(1);
+  });
+});

@@ -14,10 +14,14 @@ import {
 } from './lib/client/oauth/state.js';
 import { getAuthLandingPage } from './templates/authLanding.js';
 import { ApplicationCache } from './util/cache.js';
+import { dashboardRouterFromEnv } from './web/dashboardDeps.js';
 
 const logger = new Logger({ name: 'MeetupBot' });
 
 const app = express();
+// Heroku's router is one hop: req.ip is the client, for the dashboard rate
+// limits. A number, never `true`, which would trust a spoofed X-Forwarded-For.
+app.set('trust proxy', 1);
 
 const strings = {
   expiredState:
@@ -156,6 +160,8 @@ app.get('/redirect/:url', (req, res) => {
   }
   return res.send('Invalid url');
 });
+
+app.use('/dashboard', dashboardRouterFromEnv());
 
 // Any stale or mistyped bot URL should still land the user on a page that
 // points back to Discord, never on Express's default 404.

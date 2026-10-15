@@ -10,6 +10,7 @@ import Configuration from './configuration.js';
 import { startIdentityDigestScheduler } from './lib/helpers/identity/digest.js';
 import { registerMemberLeaveListener } from './lib/helpers/memberLeave.js';
 import { startUnlinkedDigestScheduler } from './lib/helpers/unlinkedDigest.js';
+import { setDashboardClient } from './web/dashboardDeps.js';
 
 const logger = new Logger({ name: 'MeetupBot' });
 
@@ -58,6 +59,7 @@ client.once('clientReady', async () => {
   // The express OAuth routes run outside discordCommandWrapper, so without a
   // client their failures reach nobody. Hand it over now that we can post.
   setOAuthAlertClient(client);
+  setDashboardClient(client);
 
   logger.info('Bot started');
 });
