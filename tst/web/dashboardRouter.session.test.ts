@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   PUBLIC_ROUTE_PATHS,
   createDashboardRouter,
+  httpsRedirectTarget,
   protectedRouteList,
 } from '../../src/web/dashboardRouter.js';
 import { FixedWindowLimiter } from '../../src/web/rateLimit.js';
@@ -215,6 +216,26 @@ describe('signed-out requests leave the session cookie alone', () => {
       paths.map(async (p) => req.get(p).set('Cookie', cookie)),
     );
     expect(signedIn.some(clearsSid)).toBe(false);
+  });
+});
+
+describe('httpsRedirectTarget', () => {
+  it('keeps the path and query on the configured origin', () => {
+    expect(httpsRedirectTarget(ORIGIN, '/dashboard/login?a=b')).toBe(
+      `${ORIGIN}/dashboard/login?a=b`,
+    );
+    expect(
+      httpsRedirectTarget(ORIGIN, 'http://evil.example/dashboard/login?a=b'),
+    ).toBe(`${ORIGIN}/dashboard/login?a=b`);
+  });
+
+  it('falls back to /dashboard when the target cannot be parsed', () => {
+    expect(httpsRedirectTarget(ORIGIN, 'http://[bad/dashboard')).toBe(
+      `${ORIGIN}/dashboard`,
+    );
+    expect(httpsRedirectTarget(ORIGIN, 'http://a:99999/dashboard')).toBe(
+      `${ORIGIN}/dashboard`,
+    );
   });
 });
 

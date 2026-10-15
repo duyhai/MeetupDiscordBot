@@ -173,6 +173,23 @@ export function protectedRouteList(
     );
 }
 
+/**
+ * Where a plain-HTTP request is sent: the configured origin plus only the
+ * request's path and query (an absolute-form target's host is dropped).
+ * A target that cannot be parsed goes to the dashboard home.
+ */
+export function httpsRedirectTarget(
+  origin: string,
+  originalUrl: string,
+): string {
+  try {
+    const { pathname, search } = new URL(originalUrl, 'http://localhost');
+    return `${origin}${pathname}${search}`;
+  } catch {
+    return `${origin}/dashboard`;
+  }
+}
+
 export function createDashboardRouter(deps: DashboardDeps): express.Router {
   const now = deps.now ?? Date.now;
   const loginLimiter = deps.loginLimiter ?? new FixedWindowLimiter(10, 60_000);
@@ -237,9 +254,8 @@ export function createDashboardRouter(deps: DashboardDeps): express.Router {
       next();
       return;
     }
-    const { pathname, search } = new URL(req.originalUrl, 'http://localhost');
     res.set('Cache-Control', 'no-store');
-    res.redirect(308, `${deps.origin}${pathname}${search}`);
+    res.redirect(308, httpsRedirectTarget(deps.origin, req.originalUrl));
   });
   router.use(securityHeaders);
   router.use(express.urlencoded({ extended: false, limit: '16kb' }));
