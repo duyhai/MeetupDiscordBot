@@ -11,6 +11,7 @@ interface ConfigurationSchema {
     groupId: string;
     groupUrlName: string;
     organizerRefreshToken: string | undefined;
+    organizerMemberId: string | undefined;
   };
 }
 
@@ -29,6 +30,9 @@ const Configuration: ConfigurationSchema = {
     // Deliberately absent from REQUIRED_VARS: the bot must still start
     // without it, with only Meetup-side identity monitoring disabled.
     organizerRefreshToken: process.env.MEETUP_ORGANIZER_REFRESH_TOKEN,
+    // The shared organizer account's Meetup member id: the bootstrap check
+    // for organizer renewal until one is stored. Optional, like the token.
+    organizerMemberId: process.env.MEETUP_ORGANIZER_MEMBER_ID,
   },
 };
 

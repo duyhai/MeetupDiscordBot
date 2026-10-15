@@ -1,0 +1,495 @@
+import { Client } from 'discord.js';
+import { ClientError } from 'graphql-request';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+import Configuration from '../../../src/configuration.js';
+import { BASE_DISCORD_BOT_URL } from '../../../src/constants.js';
+import { Tokens } from '../../../src/lib/client/discord/types.js';
+import { refreshMeetupToken } from '../../../src/lib/client/oauth/providers.js';
+import { logAlert } from '../../../src/lib/helpers/discordLogger.js';
+import {
+  ORGANIZER_TOKEN_REUSE_MS,
+  getOrganizerAccessToken,
+  isMeetupUnauthorized,
+  organizerFailureRemedy,
+  resetOrganizerTokenStateForTest,
+} from '../../../src/lib/helpers/organizerMeetupClient.js';
+import { LockedCredential } from '../../../src/lib/repositories/postgresCredentialRepository.js';
+import { ApplicationCredentialRepository } from '../../../src/util/credentialRepository.js';
+
+const fake = vi.hoisted(() => ({
+  logged: [] as string[],
+  getUserInfo: vi.fn(),
+}));
+
+vi.mock('tslog', () => {
+  const renderOne = (arg: unknown) => {
+    if (arg instanceof Error) {
+      return `${arg.message} ${arg.stack ?? ''}`;
+    }
+    return typeof arg === 'string' ? arg : JSON.stringify(arg);
+  };
+  const render = (args: unknown[]) => args.map(renderOne).join(' ');
+  class Logger {
+    debug = (...args: unknown[]) => fake.logged.push(render(args));
+
+    info = (...args: unknown[]) => fake.logged.push(render(args));
+
+    warn = (...args: unknown[]) => fake.logged.push(render(args));
+
+    error = (...args: unknown[]) => fake.logged.push(render(args));
+  }
+  return { Logger };
+});
+
+vi.mock('../../../src/lib/client/oauth/providers.js', () => ({
+  refreshMeetupToken: vi.fn(),
+}));
+
+vi.mock('../../../src/lib/helpers/discordLogger.js', () => ({
+  logAlert: vi.fn().mockResolvedValue(true),
+}));
+
+vi.mock('../../../src/lib/client/meetup/gqlClient.js', () => ({
+  GqlMeetupClient: class {
+    getUserInfo = fake.getUserInfo;
+  },
+}));
+
+// A stand-in for the locked transaction: fn sees the stored state; a throw
+// from fn is a rollback (nothing it did is kept), a return is a commit.
+const db = {
+  current: undefined as Tokens | undefined,
+  memberId: null as string | null,
+  failing: false,
+  commitFails: false,
+  rolledBack: 0,
+};
+
+const locked = {
+  write: vi.fn(async (tokens: Tokens) => {
+    db.current = tokens;
+  }),
+  setMemberId: vi.fn(async (memberId: string) => {
+    db.memberId = memberId;
+  }),
+  markFailing: vi.fn(async () => {
+    const started = !db.failing;
+    db.failing = true;
+    return started;
+  }),
+  clearFailing: vi.fn(async () => {
+    const wasOpen = db.failing;
+    db.failing = false;
+    return wasOpen;
+  }),
+};
+
+const credentials = {
+  withLockedCredential: vi.fn(
+    async <T>(
+      _key: string,
+      fn: (l: LockedCredential) => Promise<T>,
+    ): Promise<T> => {
+      const before = { ...db };
+      let result: T;
+      try {
+        result = await fn({
+          current: db.current,
+          meta: { memberId: db.memberId, failingSince: null },
+          ...locked,
+        });
+      } catch (error) {
+        Object.assign(db, before);
+        db.rolledBack += 1;
+        throw error;
+      }
+      if (db.commitFails) {
+        Object.assign(db, before);
+        throw new Error('COMMIT failed: connection terminated');
+      }
+      return result;
+    },
+  ),
+};
+
+vi.mock('../../../src/util/credentialRepository.js', () => ({
+  ApplicationCredentialRepository: vi.fn(async () => credentials),
+  MEETUP_ORGANIZER_CREDENTIAL_KEY: 'meetup_organizer',
+}));
+
+const refresh = vi.mocked(refreshMeetupToken);
+const alert = vi.mocked(logAlert);
+const client = {} as Client;
+
+const MINUTE = 60 * 1000;
+
+const stored = (expiresInMs: number, refreshToken = 'STORED-REFRESH') => ({
+  accessToken: 'STORED-ACCESS',
+  refreshToken,
+  expiresAt: Date.now() + expiresInMs,
+});
+
+const fresh = (n = 1): Tokens => ({
+  accessToken: `FRESH-ACCESS-${n}`,
+  refreshToken: `FRESH-REFRESH-${n}`,
+  expiresAt: Date.now() + 60 * MINUTE,
+});
+
+/** A refresh error whose message embeds a raw body, as the real one does. */
+const refreshError = () =>
+  new Error('Meetup token refresh failed: [400] RAW-BODY-SECRET');
+
+const deferred = <T>() => {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((r) => {
+    resolve = r;
+  });
+  return { promise, resolve };
+};
+
+beforeEach(() => {
+  resetOrganizerTokenStateForTest();
+  fake.logged.length = 0;
+  Object.assign(db, {
+    current: undefined,
+    memberId: '468174923',
+    failing: false,
+    commitFails: false,
+    rolledBack: 0,
+  });
+  Configuration.meetup.organizerRefreshToken = 'SEED-REFRESH';
+  refresh.mockReset();
+  alert.mockClear();
+  fake.getUserInfo.mockReset();
+  vi.mocked(ApplicationCredentialRepository).mockImplementation(
+    async () =>
+      credentials as unknown as Awaited<
+        ReturnType<typeof ApplicationCredentialRepository>
+      >,
+  );
+  Object.values(locked).forEach((m) => m.mockClear());
+  credentials.withLockedCredential.mockClear();
+});
+
+afterEach(() => {
+  Configuration.meetup.organizerRefreshToken = undefined;
+});
+
+describe('getOrganizerAccessToken', () => {
+  it('reuses an access token with more than 5 minutes left', async () => {
+    db.current = stored(ORGANIZER_TOKEN_REUSE_MS + MINUTE);
+
+    await expect(getOrganizerAccessToken()).resolves.toBe('STORED-ACCESS');
+    expect(refresh).not.toHaveBeenCalled();
+    expect(locked.write).not.toHaveBeenCalled();
+  });
+
+  it('refreshes inside 5 minutes of expiry', async () => {
+    db.current = stored(ORGANIZER_TOKEN_REUSE_MS - MINUTE);
+    refresh.mockResolvedValueOnce(fresh());
+
+    await expect(getOrganizerAccessToken()).resolves.toBe('FRESH-ACCESS-1');
+    expect(refresh).toHaveBeenCalledWith('STORED-REFRESH');
+    expect(db.current?.refreshToken).toBe('FRESH-REFRESH-1');
+  });
+
+  it('forceRefresh refreshes even when valid', async () => {
+    db.current = stored(60 * MINUTE);
+    refresh.mockResolvedValueOnce(fresh());
+
+    await expect(getOrganizerAccessToken({ forceRefresh: true })).resolves.toBe(
+      'FRESH-ACCESS-1',
+    );
+    expect(refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it('concurrent in-process callers share one refresh', async () => {
+    db.current = stored(0);
+    const pending = deferred<Tokens>();
+    refresh.mockReturnValueOnce(pending.promise);
+
+    const a = getOrganizerAccessToken();
+    const b = getOrganizerAccessToken();
+    pending.resolve(fresh());
+
+    await expect(Promise.all([a, b])).resolves.toEqual([
+      'FRESH-ACCESS-1',
+      'FRESH-ACCESS-1',
+    ]);
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(credentials.withLockedCredential).toHaveBeenCalledTimes(1);
+  });
+
+  it('a forced call does not join an unforced one', async () => {
+    db.current = stored(0);
+    const first = deferred<Tokens>();
+    refresh.mockReturnValueOnce(first.promise);
+    refresh.mockResolvedValueOnce(fresh(2));
+
+    const unforced = getOrganizerAccessToken();
+    const forced = getOrganizerAccessToken({ forceRefresh: true });
+    first.resolve(fresh(1));
+
+    await expect(unforced).resolves.toBe('FRESH-ACCESS-1');
+    await expect(forced).resolves.toBe('FRESH-ACCESS-2');
+    expect(refresh).toHaveBeenCalledTimes(2);
+  });
+
+  it('starts a new refresh once the shared one has settled', async () => {
+    db.current = stored(0);
+    refresh.mockResolvedValueOnce({ ...fresh(1), expiresAt: Date.now() });
+    refresh.mockResolvedValueOnce(fresh(2));
+
+    await getOrganizerAccessToken();
+    await expect(getOrganizerAccessToken()).resolves.toBe('FRESH-ACCESS-2');
+  });
+
+  it('falls back to the config seed only when the stored refresh fails', async () => {
+    db.current = stored(0);
+    refresh.mockRejectedValueOnce(refreshError());
+    refresh.mockResolvedValueOnce(fresh());
+
+    await expect(getOrganizerAccessToken()).resolves.toBe('FRESH-ACCESS-1');
+    expect(refresh.mock.calls.map(([token]) => token)).toEqual([
+      'STORED-REFRESH',
+      'SEED-REFRESH',
+    ]);
+
+    // And never touches the seed when the stored one works.
+    resetOrganizerTokenStateForTest();
+    refresh.mockReset();
+    db.current = stored(0, 'STORED-2');
+    refresh.mockResolvedValueOnce(fresh(2));
+    await getOrganizerAccessToken();
+    expect(refresh.mock.calls.map(([token]) => token)).toEqual(['STORED-2']);
+  });
+
+  it('tries an identical stored token and seed only once', async () => {
+    db.current = stored(0, 'SEED-REFRESH');
+    refresh.mockRejectedValue(refreshError());
+
+    await expect(getOrganizerAccessToken()).resolves.toBeUndefined();
+    expect(refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it('uses the seed when nothing is stored yet', async () => {
+    refresh.mockResolvedValueOnce(fresh());
+
+    await expect(getOrganizerAccessToken()).resolves.toBe('FRESH-ACCESS-1');
+    expect(refresh).toHaveBeenCalledWith('SEED-REFRESH');
+    expect(db.current?.accessToken).toBe('FRESH-ACCESS-1');
+  });
+
+  it('persist failure keeps the fresh token for this run', async () => {
+    db.current = stored(0);
+    refresh.mockResolvedValueOnce(fresh());
+    locked.write.mockRejectedValueOnce(new Error('write failed'));
+
+    await expect(getOrganizerAccessToken()).resolves.toBe('FRESH-ACCESS-1');
+    expect(db.rolledBack).toBe(0); // fn returned rather than threw
+    expect(fake.logged.join('\n')).toMatch(/refreshed but could NOT be stored/);
+    // Only the first candidate: a persist failure is not a refresh failure.
+    expect(refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the fresh token when the transaction fails to commit', async () => {
+    db.current = stored(0);
+    db.commitFails = true;
+    refresh.mockResolvedValueOnce(fresh());
+
+    await expect(getOrganizerAccessToken({ client })).resolves.toBe(
+      'FRESH-ACCESS-1',
+    );
+    expect(fake.logged.join('\n')).toMatch(/could NOT be stored/);
+    expect(alert).not.toHaveBeenCalled();
+  });
+
+  it('returns undefined when the lock cannot be taken and nothing was refreshed', async () => {
+    credentials.withLockedCredential.mockRejectedValueOnce(
+      new Error('lock timeout'),
+    );
+
+    await expect(getOrganizerAccessToken({ client })).resolves.toBeUndefined();
+    expect(refresh).not.toHaveBeenCalled();
+  });
+
+  it('returns undefined without DATABASE_URL', async () => {
+    vi.mocked(ApplicationCredentialRepository).mockResolvedValueOnce(undefined);
+
+    await expect(getOrganizerAccessToken({ client })).resolves.toBeUndefined();
+    expect(refresh).not.toHaveBeenCalled();
+    expect(alert).not.toHaveBeenCalled();
+  });
+
+  it('records the failure inside the locked transaction, which commits', async () => {
+    db.current = stored(0);
+    refresh.mockRejectedValue(refreshError());
+
+    await expect(getOrganizerAccessToken({ client })).resolves.toBeUndefined();
+    expect(locked.markFailing).toHaveBeenCalledTimes(1);
+    expect(db.failing).toBe(true);
+    expect(db.rolledBack).toBe(0);
+    expect(fake.logged.join('\n')).toMatch(/No usable Meetup credential/);
+  });
+
+  it('alerts once per failure episode', async () => {
+    db.current = stored(0);
+    refresh.mockRejectedValue(refreshError());
+
+    await getOrganizerAccessToken({ client });
+    await getOrganizerAccessToken({ client });
+
+    expect(locked.markFailing).toHaveBeenCalledTimes(2);
+    expect(alert).toHaveBeenCalledTimes(1);
+    expect(alert).toHaveBeenCalledWith(client, {
+      title: 'Meetup identity monitoring is not running',
+      description: organizerFailureRemedy(),
+    });
+  });
+
+  it('alerts when there is no credential at all', async () => {
+    Configuration.meetup.organizerRefreshToken = undefined;
+
+    await expect(getOrganizerAccessToken({ client })).resolves.toBeUndefined();
+    expect(refresh).not.toHaveBeenCalled();
+    expect(alert).toHaveBeenCalledTimes(1);
+  });
+
+  it('posts one recovery message when it works again', async () => {
+    db.current = stored(0);
+    db.failing = true;
+    refresh.mockResolvedValue(fresh());
+
+    await getOrganizerAccessToken({ client });
+    resetOrganizerTokenStateForTest();
+    await getOrganizerAccessToken({ client, forceRefresh: true });
+
+    expect(locked.clearFailing).toHaveBeenCalledTimes(2);
+    expect(alert).toHaveBeenCalledTimes(1);
+    expect(alert).toHaveBeenCalledWith(client, {
+      title: 'Meetup organizer login restored',
+      description:
+        'The shared Meetup organizer credential works again; Meetup identity monitoring resumes with the next sweep.',
+    });
+  });
+
+  it('closes the episode when a stored token is simply reused', async () => {
+    db.current = stored(60 * MINUTE);
+    db.failing = true;
+
+    await getOrganizerAccessToken({ client });
+
+    expect(db.failing).toBe(false);
+    expect(alert).toHaveBeenCalledTimes(1);
+  });
+
+  it('logs instead of alerting without a client', async () => {
+    db.current = stored(0);
+    refresh.mockRejectedValue(refreshError());
+
+    await getOrganizerAccessToken();
+    await getOrganizerAccessToken();
+
+    expect(alert).not.toHaveBeenCalled();
+    const remedies = fake.logged.filter((line) =>
+      line.includes(organizerFailureRemedy()),
+    );
+    expect(remedies).toHaveLength(2);
+  });
+
+  it('swallows a failure to record the episode', async () => {
+    db.current = stored(0);
+    refresh.mockRejectedValue(refreshError());
+    locked.markFailing.mockRejectedValueOnce(new Error('meta write failed'));
+
+    await expect(getOrganizerAccessToken({ client })).resolves.toBeUndefined();
+    expect(alert).not.toHaveBeenCalled();
+  });
+
+  it('swallows a failure to post the alert', async () => {
+    db.current = stored(0);
+    refresh.mockRejectedValue(refreshError());
+    alert.mockRejectedValueOnce(new Error('discord down'));
+
+    await expect(getOrganizerAccessToken({ client })).resolves.toBeUndefined();
+  });
+
+  it('alert text links the renew page and never includes the error body', async () => {
+    db.current = stored(0);
+    refresh.mockRejectedValue(refreshError());
+
+    await getOrganizerAccessToken({ client });
+
+    expect(organizerFailureRemedy()).toContain(
+      `${BASE_DISCORD_BOT_URL}/dashboard/organizer-login`,
+    );
+    expect(organizerFailureRemedy()).toBe(
+      'Could not obtain a Meetup organizer token, so Meetup identity monitoring is paused. ' +
+        `To fix: a Moderator or 1.5 Leadership Team member opens ${BASE_DISCORD_BOT_URL}/dashboard/organizer-login ` +
+        'in a private window, signs in with Discord, then signs in to Meetup as the shared organizer account. ' +
+        '(Fallback: /meetup_get_token sweep_credential:True and set MEETUP_ORGANIZER_REFRESH_TOKEN in Heroku.) ' +
+        'Do not use a personal Meetup account.',
+    );
+    expect(JSON.stringify(alert.mock.calls)).not.toContain('RAW-BODY-SECRET');
+  });
+
+  it('records the member id when none is stored', async () => {
+    db.current = stored(60 * MINUTE);
+    db.memberId = null;
+    fake.getUserInfo.mockResolvedValueOnce({ self: { id: '468174923' } });
+
+    await expect(getOrganizerAccessToken()).resolves.toBe('STORED-ACCESS');
+    expect(db.memberId).toBe('468174923');
+    // Its own short locked call, after the token transaction committed.
+    expect(credentials.withLockedCredential).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not look up the member id when one is stored', async () => {
+    db.current = stored(60 * MINUTE);
+
+    await getOrganizerAccessToken();
+
+    expect(fake.getUserInfo).not.toHaveBeenCalled();
+  });
+
+  it('never stores a member id that is not all digits', async () => {
+    db.current = stored(60 * MINUTE);
+    db.memberId = null;
+    fake.getUserInfo.mockResolvedValueOnce({ self: { id: 'abc' } });
+
+    await getOrganizerAccessToken();
+
+    expect(locked.setMemberId).not.toHaveBeenCalled();
+  });
+
+  it('member id lookup failure does not fail the token', async () => {
+    db.current = stored(60 * MINUTE);
+    db.memberId = null;
+    fake.getUserInfo.mockRejectedValueOnce(new Error('meetup down'));
+
+    await expect(getOrganizerAccessToken()).resolves.toBe('STORED-ACCESS');
+
+    fake.getUserInfo.mockResolvedValueOnce({ self: { id: '1' } });
+    locked.setMemberId.mockRejectedValueOnce(new Error('write failed'));
+    await expect(getOrganizerAccessToken()).resolves.toBe('STORED-ACCESS');
+  });
+});
+
+describe('isMeetupUnauthorized', () => {
+  const clientError = (status: number) =>
+    new ClientError(
+      { status, headers: new Headers(), body: '' },
+      { query: '' },
+    );
+
+  it('is true for a graphql-request 401', () => {
+    expect(isMeetupUnauthorized(clientError(401))).toBe(true);
+  });
+
+  it('is false for other statuses and other errors', () => {
+    expect(isMeetupUnauthorized(clientError(500))).toBe(false);
+    expect(isMeetupUnauthorized(new Error('401'))).toBe(false);
+    expect(isMeetupUnauthorized(undefined)).toBe(false);
+  });
+});
