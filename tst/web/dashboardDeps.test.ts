@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 
 import { BASE_DISCORD_BOT_URL } from '../../src/constants.js';
 import {
+  dashboardDisabledReason,
   dashboardOrigin,
   dashboardRouterFromEnv,
 } from '../../src/web/dashboardDeps.js';
@@ -52,5 +53,30 @@ describe('dashboardOrigin', () => {
     const origin = dashboardOrigin();
     expect(origin).toBe(new URL(BASE_DISCORD_BOT_URL).origin);
     expect(origin.endsWith('/')).toBe(false);
+  });
+});
+
+describe('dashboardDisabledReason', () => {
+  it('reports a missing secret', () => {
+    expect(dashboardDisabledReason({})).toBe(
+      'DASHBOARD_SESSION_SECRET is not set',
+    );
+  });
+
+  it('reports a short secret without echoing it', () => {
+    const secret = 'topsecret-short';
+    const reason = dashboardDisabledReason({
+      DASHBOARD_SESSION_SECRET: secret,
+    });
+    expect(reason).toBe(
+      'DASHBOARD_SESSION_SECRET is shorter than 32 characters',
+    );
+    expect(reason).not.toContain(secret);
+  });
+
+  it('returns undefined when the secret is long enough', () => {
+    expect(
+      dashboardDisabledReason({ DASHBOARD_SESSION_SECRET: 'k'.repeat(32) }),
+    ).toBeUndefined();
   });
 });

@@ -61,7 +61,9 @@ export interface DashboardDeps {
    * Later PRs add their pages here. Whatever this registers is mounted
    * AFTER the session gate and AFTER the unsafe-method guard (CSRF, Origin,
    * Sec-Fetch-Site, per-user rate limit), so a route cannot be added
-   * without them.
+   * without them. The unsafe-method guard reads `_csrf` only from a
+   * urlencoded form body, so routes that take JSON or multipart bodies must
+   * send the token in the `X-CSRF-Token` header.
    */
   protectedRoutes?: (router: express.Router) => void;
 }
@@ -130,11 +132,19 @@ interface StackLayer {
   handle: { stack?: StackLayer[] };
 }
 
+/**
+ * Lists the routes registered through the `protectedRoutes` hook, for tests
+ * and PR 3. Routes on sub-routers mounted with `r.use(...)` inside the hook
+ * are gated but not listed. Throws if the router has no session gate.
+ */
 export function protectedRouteList(
   router: express.Router,
 ): { method: string; path: string }[] {
   const outer = (router as unknown as { stack: StackLayer[] }).stack;
   const gate = outer.findIndex((l) => l.name === 'dashboardSessionGate');
+  if (gate === -1) {
+    throw new Error('dashboard router has no session gate');
+  }
   const inner = outer[gate + 1]?.handle.stack ?? [];
   return inner
     .filter((l) => l.route)

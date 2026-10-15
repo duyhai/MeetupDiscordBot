@@ -342,3 +342,11 @@ describe('dashboard CSRF and logout', () => {
     expect(res.text).not.toContain('secret detail');
   });
 });
+
+describe('protectedRouteList', () => {
+  it('protectedRouteList throws for a router without the gate', () => {
+    expect(() => protectedRouteList(express.Router())).toThrow(
+      'dashboard router has no session gate',
+    );
+  });
+});

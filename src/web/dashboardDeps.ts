@@ -1,6 +1,7 @@
 import crypto from 'crypto';
 import { Client } from 'discord.js';
 import express from 'express';
+import { Logger } from 'tslog';
 
 import { BASE_DISCORD_BOT_URL } from '../constants.js';
 import { logActivity } from '../lib/helpers/discordLogger.js';
@@ -16,6 +17,22 @@ import { layout } from './pages.js';
 import { discordAccessCheck } from './roleGate.js';
 
 export const MIN_SESSION_SECRET_LENGTH = 32;
+
+const logger = new Logger({ name: 'dashboard' });
+
+/** Why the dashboard is disabled, or undefined when it is configured. Never includes the secret. */
+export function dashboardDisabledReason(
+  env: Record<string, string | undefined>,
+): string | undefined {
+  const secret = env.DASHBOARD_SESSION_SECRET;
+  if (!secret) {
+    return 'DASHBOARD_SESSION_SECRET is not set';
+  }
+  if (secret.length < MIN_SESSION_SECRET_LENGTH) {
+    return `DASHBOARD_SESSION_SECRET is shorter than ${MIN_SESSION_SECRET_LENGTH} characters`;
+  }
+  return undefined;
+}
 
 // Express boots before Discord logs in; index.ts hands the client over on
 // ready, exactly as it does for the OAuth alert client.
@@ -61,8 +78,10 @@ function notConfiguredRouter(): express.Router {
 export function dashboardRouterFromEnv(
   env: Record<string, string | undefined> = process.env,
 ): express.Router {
+  const reason = dashboardDisabledReason(env);
   const secret = env.DASHBOARD_SESSION_SECRET;
-  if (!secret || secret.length < MIN_SESSION_SECRET_LENGTH) {
+  if (reason || !secret) {
+    logger.warn(`Staff dashboard disabled: ${reason}`);
     return notConfiguredRouter();
   }
   return createDashboardRouter({

@@ -6,6 +6,7 @@ import {
   DashboardDeps,
   createDashboardRouter,
 } from '../../src/web/dashboardRouter.js';
+import { FixedWindowLimiter } from '../../src/web/rateLimit.js';
 import { FakeCache } from './fakeCache.js';
 
 export const SECRET = 's'.repeat(48);
@@ -28,6 +29,7 @@ export function makeApp(overrides: Partial<DashboardDeps> = {}) {
     sessionSecret: SECRET,
     origin: ORIGIN,
     audit: vi.fn().mockResolvedValue(true),
+    loginLimiter: new FixedWindowLimiter(1000, 60_000),
     ...overrides,
   };
   const app = express();
