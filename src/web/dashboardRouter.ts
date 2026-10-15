@@ -43,7 +43,10 @@ export const PUBLIC_ROUTE_PATHS: readonly string[] = [
 const OAUTH_COOKIE_PATH = '/dashboard/auth';
 const SESSION_COOKIE_PATH = '/dashboard';
 const OAUTH_TTL_SEC = 10 * 60;
+/** Most verified dash_sid values looked up in Redis per request. */
 const MAX_SESSION_COOKIES = 3;
+/** Most distinct dash_sid values whose signature is checked per request. */
+const MAX_SESSION_COOKIE_CANDIDATES = 20;
 /** Everything else, OPTIONS included, needs the CSRF token. */
 const SAFE_METHODS = new Set(['GET', 'HEAD']);
 
@@ -211,9 +214,12 @@ export function createDashboardRouter(deps: DashboardDeps): express.Router {
   };
 
   /**
-   * Tries the first three distinct dash_sid values the browser sent, so a
-   * forged one planted ahead of ours cannot hide it. `stale` is true when a cookie we signed was sent but
-   * its session is gone: only then is clearing the cookie ours to do.
+   * Checks the signature on up to MAX_SESSION_COOKIE_CANDIDATES distinct
+   * dash_sid values and looks up at most MAX_SESSION_COOKIES of those that
+   * verify, so unsigned values planted ahead of ours cannot hide it and a
+   * stuffed header cannot fan out into Redis reads. `stale` is true when a
+   * cookie we signed was sent but its session is gone: only then is
+   * clearing the cookie ours to do.
    */
   async function readSession(
     req: Request,
@@ -222,16 +228,16 @@ export function createDashboardRouter(deps: DashboardDeps): express.Router {
     | { sid?: undefined; session?: undefined; stale: boolean }
   > {
     let stale = false;
-    // Distinct values only, and at most a few, so a header stuffed with
-    // copies cannot turn into many Redis reads.
-    const candidates = [
+    // HMAC checks are cheap; the candidate bound only stops pathological
+    // headers. The lookup cap applies to verified ids alone.
+    const verified = [
       ...new Set(parseCookieValues(req.headers.cookie, SESSION_COOKIE)),
-    ].slice(0, MAX_SESSION_COOKIES);
-    for (const signed of candidates) {
-      const sid = verifySignedSessionId(signed, deps.sessionSecret);
-      if (!sid) {
-        continue;
-      }
+    ]
+      .slice(0, MAX_SESSION_COOKIE_CANDIDATES)
+      .map((signed) => verifySignedSessionId(signed, deps.sessionSecret))
+      .filter((sid): sid is string => Boolean(sid))
+      .slice(0, MAX_SESSION_COOKIES);
+    for (const sid of verified) {
       // eslint-disable-next-line no-await-in-loop
       const session = await (await sessions()).get(sid);
       if (session) {

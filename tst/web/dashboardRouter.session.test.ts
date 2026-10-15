@@ -162,6 +162,19 @@ describe('signed-out requests leave the session cookie alone', () => {
     expect(clearsSid(res)).toBe(false);
   });
 
+  it('forged values ahead of the real cookie cannot hide it', async () => {
+    const { req } = await makeApp();
+    const cookie = await signIn(req);
+    const forged = ['f1', 'f2.x', 'f3.y', `f4.${'A'.repeat(43)}`].map(
+      (v) => `dash_sid=${v}`,
+    );
+    const res = await req
+      .get('/dashboard')
+      .set('Cookie', [...forged, cookie].join('; '));
+    expect(res.status).toBe(200);
+    expect(clearsSid(res)).toBe(false);
+  });
+
   it('tries at most three distinct dash_sid values', async () => {
     const { req, cache } = await makeApp();
     const cookie = await signIn(req);
