@@ -10,7 +10,9 @@
 
 **Spec:** `docs/superpowers/specs/2026-10-15-staff-dashboard-design.md` (approved by Hai 2026-10-15). Executors read both.
 
-**Plan depth.** PR 1 is specified to the line: every step has its code. PRs 2–4 are specified to files, interfaces, schema SQL, test names and acceptance checks, with code for the rules that are easy to get wrong. Each of them gets a full-code addendum (same format as PR 1) written at the start of that PR, against `main` as it is after the previous PR merges, because PR 1–3 change the files those PRs build on.
+**Rollout (revised 2026-10-15 after the lead's independent review).** Six PRs, in order: PR 1 sign-in and shell → PR 1b `/redirect` allow-list → PR 2a organizer-token critical section → PR 2 snapshots and job → PR 3 pages and backfill → PR 4 workspace. Each starts only after the previous one merges.
+
+**Plan depth.** PR 1 is specified to the line: every step has its code. PRs 1b–4 are specified to files, interfaces, schema SQL, test names and acceptance checks, with code for the rules that are easy to get wrong. Each of them gets a full-code addendum (same format as PR 1) written at the start of that PR, against `main` as it is after the previous PR merges, because PR 1–3 change the files those PRs build on.
 
 ## Global Constraints
 
@@ -21,9 +23,10 @@
 - Every state-changing request needs a CSRF token. Every dashboard response sends `Cache-Control: no-store`. Login and actions are rate-limited. Errors render a generic page; details go to logs only.
 - All member-supplied text is HTML-escaped and wrapped in `<bdi>`. Profile links only from all-digit ids: `https://www.meetup.com/members/<digits>/`, `https://discord.com/users/<digits>`.
 - Lists paginate at **50** rows. Thumbnails stream one image per request. 512 MB dyno: nothing assembles a whole month or whole table in memory.
-- Never written to Postgres: event descriptions, tokens, DM content. Descriptions (or values derived from them) cached in Redis for at most **12 hours**.
+- Never written to Postgres: event descriptions, tokens (other than the existing `oauth_credentials` row), DM content. Raw descriptions are only ever cached in Redis, for at most **12 hours**. A fixed label derived from one (e.g. the `paymentNote` text "description mentions payment") may be stored.
+- Every `href` built from data goes through `safeHref` (only `https://www.meetup.com/…` and `https://discord.com/users/…`). Never interpolate data into unquoted attributes, `<script>` or `<style>`.
 - Build job never runs 18:00–19:00 UTC. Backfill refuses to start 18:00–19:00 UTC.
-- `allowedMentions` on the report-ready notice limited to the Moderator and 1.5 Leadership Team roles.
+- Report-ready notice: role mentions in `content`, `allowedMentions` limited to the Moderator and 1.5 Leadership Team roles.
 - All existing slash commands keep working with unchanged output.
 - Tests: unit via `yarn test`; integration via `vitest.integration.config.ts` only against throwaway containers on unusual ports (postgres:16 on `55432`, redis:7 on `56379`), never the dev stack on 5432/6379. Stop colima afterwards if you started it.
 - No production reads or writes, no Discord posts, no Meetup calls with real credentials. Never print tokens or secrets.
@@ -35,7 +38,7 @@
 |---|---|
 | PR 1 deploy | Add redirect URI `https://meetup-discord-bot.herokuapp.com/dashboard/auth/callback` to the bot's application in the Discord developer portal (OAuth2 → Redirects). Optional for local testing: `http://localhost:5000/dashboard/auth/callback`. |
 | PR 1 deploy | `heroku config:set -a meetup-discord-bot DASHBOARD_SESSION_SECRET="$(openssl rand -base64 48)"` (Hai runs it; never pasted into chat). The dashboard serves a "not configured" page until it is set; the bot is unaffected. |
-| — | Resolved 2026-10-15, kept as constants in `src/constants.ts` (no env vars): report-ready channel `DASHBOARD_NOTIFY_CHANNEL_ID = '935074490394771487'` (🚔🚰mod-watercooler); `NO_SHOW_POLICY_URL = 'https://15genasian.notion.site/1b1176bcb5de453687cd7aa5c0cd239b'` (public, no login); `NO_SHOW_APPEAL_URL = 'https://forms.gle/tPiPYQ2DpAVZPL1T9'`. |
+| — | Resolved 2026-10-15, kept as constants in `src/constants.ts` (no env vars): report-ready notice goes to #meetup-bot-alerts, the existing `BOT_ALERTS_CHANNEL_ID` (`1537755631602237473`, Hai's choice); `NO_SHOW_POLICY_URL = 'https://15genasian.notion.site/1b1176bcb5de453687cd7aa5c0cd239b'` (public, no login); `NO_SHOW_APPEAL_URL = 'https://forms.gle/tPiPYQ2DpAVZPL1T9'`. |
 | PR 3 merge | Run the backfill as a one-off dyno (command in Task 3.8). |
 
 ## Review Focus
@@ -43,7 +46,7 @@
 1. **Stale or forged login callback** (state replayed, opened in another browser, cookie missing): expect a generic "link expired, sign in again" page and no session. Pinned in Task 1.7 (`rejects a callback whose state does not match the login cookie`, `rejects a replayed state`).
 2. **Member loses the role mid-session or leaves the server**: locked out within 10 minutes; Discord returning *Unknown Member* is a denial, Discord being down is a 503 that keeps the session. Pinned in Task 1.3 (`treats Unknown Member as denied`) and Task 1.8 (`re-checks the role after 10 minutes and destroys the session when it is gone`, `keeps the session but answers 503 when Discord is unreachable at re-check`).
 3. **Hostile display names** (`<script>`, RTL override, zero-width characters) in the header now and on every page later: rendered inert and direction-isolated. Pinned in Task 1.2 and Task 1.6 (`escapes and isolates the signed-in username`).
-4. **Back-dated builds of old months** (backfill, manual refresh of last year): classifications must reflect what was true at the end of that month, not today's 12-month window or later suspensions. Pinned in Task 2.3 (`classifies an old month as of its end, ignoring later suspensions`).
+4. **Back-dated builds of old months** (backfill, manual refresh of last year): classifications must reflect what was true at the end of that month, not today's 12-month window or later suspensions. Pinned in Task 2.3 (`classifies a finished month as of its end, ignoring later suspensions`, `refreshing a finished month after a new suspension still lists the member`).
 5. **Two people acting on the same workspace card**: the second gets "someone just updated this, reload" and nothing is half-written (suspension row without workspace row or vice versa). Pinned in Task 4.1 (`refuses a stale version and writes nothing`, `rolls back the suspension when the workspace update fails`).
 
 ---
@@ -105,14 +108,20 @@ Id read from the Discord API (guild roles) on 2026-10-15. `ServerRoles` widens a
 - Test: `tst/web/html.test.ts`
 
 **Interfaces:**
-- Produces: `class SafeHtml { readonly value: string }`, `escapeHtml(input: string): string`, `html(strings, ...values: HtmlValue[]): SafeHtml`, `memberText(text: string): SafeHtml`, `type HtmlValue = SafeHtml | string | number | null | undefined | false | HtmlValue[]`.
+- Produces: `class SafeHtml { readonly value: string }`, `escapeHtml(input: string): string`, `html(strings, ...values: HtmlValue[]): SafeHtml`, `memberText(text: string): SafeHtml`, `safeHref(url: string): string | undefined`, `type HtmlValue = SafeHtml | string | number | null | undefined | false | HtmlValue[]`.
 
 - [ ] **Step 1: Write the failing tests**
 
 ```ts
 import { describe, expect, it } from 'vitest';
 
-import { SafeHtml, escapeHtml, html, memberText } from '../../src/web/html.js';
+import {
+  SafeHtml,
+  escapeHtml,
+  html,
+  memberText,
+  safeHref,
+} from '../../src/web/html.js';
 
 describe('escapeHtml', () => {
   it('escapes the five HTML-significant characters', () => {
@@ -142,6 +151,35 @@ describe('html', () => {
 
   it('returns a SafeHtml', () => {
     expect(html`x`).toBeInstanceOf(SafeHtml);
+  });
+});
+
+describe('safeHref', () => {
+  it('allows Meetup pages and Discord user profiles over https', () => {
+    expect(safeHref('https://www.meetup.com/members/123/')).toBe(
+      'https://www.meetup.com/members/123/',
+    );
+    expect(safeHref('https://www.meetup.com/1-5genasians/events/9/')).toBe(
+      'https://www.meetup.com/1-5genasians/events/9/',
+    );
+    expect(safeHref('https://discord.com/users/123456789012345678')).toBe(
+      'https://discord.com/users/123456789012345678',
+    );
+  });
+
+  it('refuses everything else', () => {
+    [
+      'javascript:alert(1)',
+      'http://www.meetup.com/members/1/',
+      'https://www.meetup.com.evil.example/',
+      'https://www.meetup.com@evil.example/',
+      'https://user:pw@www.meetup.com/',
+      'https://www.meetup.com:8443/',
+      'https://discord.com/invite/abc',
+      'https://evil.example/',
+      '/dashboard',
+      'not a url',
+    ].forEach((url) => expect(safeHref(url)).toBeUndefined());
   });
 });
 
@@ -220,6 +258,39 @@ export function html(
  */
 export function memberText(text: string): SafeHtml {
   return html`<bdi>${text}</bdi>`;
+}
+
+const LINK_TARGETS = [
+  { host: 'www.meetup.com', pathPrefix: '/' },
+  { host: 'discord.com', pathPrefix: '/users/' },
+];
+
+/**
+ * The only outbound links a dashboard page may render. Event URLs and
+ * profile URLs come from Meetup data, so they are checked here rather than
+ * trusted: anything that isn't plain https to one of these places is
+ * dropped, and the caller renders the text without a link.
+ */
+export function safeHref(url: string): string | undefined {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return undefined;
+  }
+  if (
+    parsed.protocol !== 'https:' ||
+    parsed.username ||
+    parsed.password ||
+    parsed.port
+  ) {
+    return undefined;
+  }
+  const allowed = LINK_TARGETS.some(
+    ({ host, pathPrefix }) =>
+      parsed.hostname === host && parsed.pathname.startsWith(pathPrefix),
+  );
+  return allowed ? parsed.href : undefined;
 }
 ```
 
@@ -329,6 +400,21 @@ describe('discordAccessCheck', () => {
     ).resolves.toBe(false);
   });
 
+  it('treats Unknown User as denied', async () => {
+    const unknownUser = new DiscordAPIError(
+      { code: RESTJSONErrorCodes.UnknownUser, message: 'Unknown User' },
+      RESTJSONErrorCodes.UnknownUser,
+      404,
+      'GET',
+      '/guilds/x/members/y',
+      {},
+    );
+    const { client } = clientReturning(vi.fn().mockRejectedValue(unknownUser));
+    await expect(
+      discordAccessCheck(() => client as never)('1'),
+    ).resolves.toBe(false);
+  });
+
   it('treats Unknown Member as denied', async () => {
     const { client } = clientReturning(
       vi.fn().mockRejectedValue(unknownMember()),
@@ -413,7 +499,8 @@ export function discordAccessCheck(
     } catch (error: unknown) {
       if (
         error instanceof DiscordAPIError &&
-        error.code === RESTJSONErrorCodes.UnknownMember
+        (error.code === RESTJSONErrorCodes.UnknownMember ||
+          error.code === RESTJSONErrorCodes.UnknownUser)
       ) {
         return false;
       }
@@ -444,7 +531,7 @@ If the `DiscordAPIError` constructor signature in the installed discord.js diffe
   - `SESSION_COOKIE = 'dash_sid'`, `SESSION_TTL_SEC = 43200`, `ROLE_RECHECK_MS = 600000`
   - `interface DashboardSession { userId: string; username: string; csrfToken: string; createdAt: number; roleCheckedAt: number }`
   - `signSessionId(sid: string, secret: string): string`, `verifySignedSessionId(value: string, secret: string): string | undefined`
-  - `class SessionStore { constructor(cache: KeyValueCache, now?: () => number); create(user: { userId: string; username: string }): Promise<{ sid: string; session: DashboardSession }>; get(sid: string): Promise<DashboardSession | undefined>; markRoleChecked(sid: string, session: DashboardSession): Promise<void>; destroy(sid: string): Promise<void> }`
+  - `class SessionStore { constructor(cache: KeyValueCache, now?: () => number); create(user: { userId: string; username: string }): Promise<{ sid: string; session: DashboardSession }>; get(sid: string): Promise<DashboardSession | undefined>; markRoleChecked(sid: string, session: DashboardSession): Promise<boolean>; destroy(sid: string): Promise<void> }` (`markRoleChecked` returns false when the session was destroyed meanwhile)
   - `safeEqual(a: string, b: string): boolean`
   - Test helper `class FakeCache implements KeyValueCache` with `ttls: Map<string, number>`.
 
@@ -605,6 +692,15 @@ describe('SessionStore', () => {
     await store.markRoleChecked(sid, session);
     expect((await store.get(sid))?.roleCheckedAt).toBe(now);
     expect([...cache.ttls.values()]).toEqual([SESSION_TTL_SEC - 3600]);
+  });
+
+  it('does not resurrect a session destroyed during the re-check', async () => {
+    const cache = new FakeCache();
+    const store = new SessionStore(cache);
+    const { sid, session } = await store.create({ userId: '1', username: 'A' });
+    await store.destroy(sid);
+    await expect(store.markRoleChecked(sid, session)).resolves.toBe(false);
+    expect(cache.values.size).toBe(0);
   });
 
   it('ignores a corrupt or wrong-shaped record', async () => {
@@ -800,20 +896,32 @@ export class SessionStore {
     return parsed;
   }
 
-  async markRoleChecked(sid: string, session: DashboardSession): Promise<void> {
+  /**
+   * Re-reads before writing, so a logout that lands while Discord is being
+   * asked about roles is not undone by this write. KeyValueCache has no
+   * SET ... XX; the remaining window is one Redis round trip.
+   */
+  async markRoleChecked(
+    sid: string,
+    session: DashboardSession,
+  ): Promise<boolean> {
     const at = this.now();
     const remainingSec = Math.ceil(
       (session.createdAt + SESSION_TTL_SEC * 1000 - at) / 1000,
     );
     if (remainingSec <= 0) {
       await this.destroy(sid);
-      return;
+      return false;
+    }
+    if (!(await this.cache.get(sessionKey(sid)))) {
+      return false;
     }
     await this.cache.set(
       sessionKey(sid),
       JSON.stringify({ ...session, roleCheckedAt: at }),
       remainingSec,
     );
+    return true;
   }
 
   async destroy(sid: string): Promise<void> {
@@ -1007,6 +1115,7 @@ export class FixedWindowLimiter {
 import nock from 'nock';
 import { afterEach, describe, expect, it } from 'vitest';
 
+import { BASE_DISCORD_BOT_URL } from '../../src/constants.js';
 import {
   buildDashboardLoginUrl,
   dashboardRedirectUri,
@@ -1019,9 +1128,20 @@ afterEach(() => nock.cleanAll());
 describe('dashboard Discord OAuth', () => {
   it('uses the dashboard callback as the redirect URI', () => {
     expect(dashboardRedirectUri()).toBe(
-      'https://meetup-discord-bot.herokuapp.com/dashboard/auth/callback',
+      `${BASE_DISCORD_BOT_URL}/dashboard/auth/callback`,
     );
   });
+
+  // BASE_DISCORD_BOT_URL is read at import time and flips to localhost when
+  // TS_NODE_DEBUG is set, so the production value is only asserted without it.
+  it.skipIf(Boolean(process.env.TS_NODE_DEBUG))(
+    'is the URI registered in the Discord portal',
+    () => {
+      expect(dashboardRedirectUri()).toBe(
+        'https://meetup-discord-bot.herokuapp.com/dashboard/auth/callback',
+      );
+    },
+  );
 
   it('asks for identify only, with state and a PKCE challenge', () => {
     const url = new URL(buildDashboardLoginUrl('state-1', 'v'.repeat(43)));
@@ -1337,9 +1457,19 @@ export interface DashboardDeps {
   now?: () => number;
   loginLimiter?: FixedWindowLimiter; // default 10 per minute per IP
   actionLimiter?: FixedWindowLimiter; // default 30 per minute per user
+  /**
+   * Later PRs add their pages here. Whatever this registers is mounted
+   * AFTER the session gate and AFTER the unsafe-method guard (CSRF, Origin,
+   * Sec-Fetch-Site, per-user rate limit), so a route cannot be added
+   * without them.
+   */
+  protectedRoutes?: (router: express.Router) => void;
 }
 export function createDashboardRouter(deps: DashboardDeps): express.Router;
 export const OAUTH_COOKIE = 'dash_oauth';
+export const PUBLIC_ROUTE_PATHS: readonly string[]; // ['/login', '/auth/start', '/auth/callback']
+/** Every route behind the gate, derived from the router stack (PR 3's access matrix uses this). */
+export function protectedRouteList(router: express.Router): { method: string; path: string }[];
 ```
 
 Test harness used by Tasks 1.7 and 1.8 (put at the top of each test file):
@@ -1351,7 +1481,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   DashboardDeps,
+  PUBLIC_ROUTE_PATHS,
   createDashboardRouter,
+  protectedRouteList,
 } from '../../src/web/dashboardRouter.js';
 import { FakeCache } from './fakeCache.js';
 
@@ -1547,6 +1679,55 @@ describe('dashboard sign-in', () => {
     expect(JSON.stringify(cb.headers['set-cookie'] ?? [])).not.toContain('dash_sid=');
   });
 
+  it('sends HSTS', async () => {
+    const { app } = makeApp();
+    const res = await request(app).get('/dashboard/login');
+    expect(res.headers['strict-transport-security']).toBe(
+      'max-age=15552000',
+    );
+  });
+
+  it('sets no session cookie on a refused or failed callback', async () => {
+    for (const overrides of [
+      { checkAccess: vi.fn().mockResolvedValue(false) },
+      {
+        oauth: {
+          buildLoginUrl: (s: string) => `https://discord.com/x?state=${s}`,
+          exchangeCode: vi.fn().mockRejectedValue(new Error('x')),
+          fetchIdentity: vi.fn(),
+        },
+      },
+    ]) {
+      const { app } = makeApp(overrides);
+      const start = await request(app).get('/dashboard/auth/start');
+      const state = new URL(start.headers.location).searchParams.get('state');
+      const cb = await request(app)
+        .get(`/dashboard/auth/callback?state=${state}&code=c`)
+        .set('Cookie', `dash_oauth=${state}`);
+      expect([403, 502]).toContain(cb.status);
+      expect(JSON.stringify(cb.headers['set-cookie'] ?? [])).not.toContain(
+        'dash_sid=',
+      );
+    }
+  });
+
+  it('does not wait for the sign-in audit post', async () => {
+    const { app } = makeApp({
+      audit: vi.fn(() => new Promise(() => undefined)),
+    });
+    await expect(signIn(app)).resolves.toMatch(/^dash_sid=/);
+  });
+
+  it('rate-limits the callback as well as the start', async () => {
+    const { FixedWindowLimiter } = await import('../../src/web/rateLimit.js');
+    const { app } = makeApp({ loginLimiter: new FixedWindowLimiter(1, 60_000) });
+    await request(app).get('/dashboard/auth/callback?state=a&code=c');
+    const second = await request(app).get(
+      '/dashboard/auth/callback?state=a&code=c',
+    );
+    expect(second.status).toBe(429);
+  });
+
   it('rate-limits sign-in per IP', async () => {
     const { FixedWindowLimiter } = await import('../../src/web/rateLimit.js');
     const { app } = makeApp({ loginLimiter: new FixedWindowLimiter(2, 60_000) });
@@ -1561,7 +1742,7 @@ describe('dashboard sign-in', () => {
 
 - [ ] **Step 2: Run** `yarn test tst/web/dashboardRouter.auth.test.ts` → FAIL.
 
-- [ ] **Step 3: Implement** `src/web/dashboardRouter.ts` (this file is finished in Task 1.8; write it whole now and let 1.8's tests pin the session parts):
+- [ ] **Step 3: Implement** `src/web/dashboardRouter.ts` (this file is finished in Task 1.8; write it whole now and let 1.8's tests pin the session parts). Structure, by construction: public routes → `dashboardSessionGate` → one protected router whose first layer is `dashboardUnsafeMethodGuard` → error handler. Nothing else is ever mounted on the outer router.
 
 ```ts
 import crypto from 'crypto';
@@ -1595,9 +1776,15 @@ import {
 const logger = new Logger({ name: 'dashboard' });
 
 export const OAUTH_COOKIE = 'dash_oauth';
+export const PUBLIC_ROUTE_PATHS: readonly string[] = [
+  '/login',
+  '/auth/start',
+  '/auth/callback',
+];
 const OAUTH_COOKIE_PATH = '/dashboard/auth';
 const SESSION_COOKIE_PATH = '/dashboard';
 const OAUTH_TTL_SEC = 10 * 60;
+const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 const oauthKey = (state: string) => `dashboard-oauth-${state}`;
 
 export interface DashboardOAuth {
@@ -1616,6 +1803,7 @@ export interface DashboardDeps {
   now?: () => number;
   loginLimiter?: FixedWindowLimiter;
   actionLimiter?: FixedWindowLimiter;
+  protectedRoutes?: (router: express.Router) => void;
 }
 
 interface Locals {
@@ -1631,10 +1819,17 @@ function send(res: Response, status: number, body: string) {
 }
 
 function fail(res: Response, status: Parameters<typeof errorPage>[0]) {
+  if (!locals(res).nonce) {
+    locals(res).nonce = crypto.randomBytes(16).toString('base64');
+  }
   send(res, status, errorPage(status, locals(res).nonce));
 }
 
-const securityHeaders: RequestHandler = (_req, res, next) => {
+const securityHeaders: RequestHandler = function securityHeaders(
+  _req,
+  res,
+  next,
+) {
   const nonce = crypto.randomBytes(16).toString('base64');
   locals(res).nonce = nonce;
   res.set({
@@ -1644,6 +1839,7 @@ const securityHeaders: RequestHandler = (_req, res, next) => {
       `default-src 'none'; style-src 'nonce-${nonce}'; ` +
       `script-src 'nonce-${nonce}'; img-src 'self'; form-action 'self'; ` +
       "frame-ancestors 'none'; base-uri 'none'",
+    'Strict-Transport-Security': 'max-age=15552000',
     'X-Content-Type-Options': 'nosniff',
     'X-Frame-Options': 'DENY',
     'Referrer-Policy': 'no-referrer',
@@ -1667,6 +1863,28 @@ function limit(
   };
 }
 
+/** Express 5 layer shape, read only to list routes for tests and PR 3. */
+interface StackLayer {
+  name: string;
+  route?: { path: string; methods: Record<string, boolean> };
+  handle: { stack?: StackLayer[] };
+}
+
+export function protectedRouteList(
+  router: express.Router,
+): { method: string; path: string }[] {
+  const outer = (router as unknown as { stack: StackLayer[] }).stack;
+  const gate = outer.findIndex((l) => l.name === 'dashboardSessionGate');
+  const inner = outer[gate + 1]?.handle.stack ?? [];
+  return inner
+    .filter((l) => l.route)
+    .flatMap((l) =>
+      Object.keys(l.route.methods)
+        .filter((method) => l.route.methods[method])
+        .map((method) => ({ method, path: l.route.path })),
+    );
+}
+
 export function createDashboardRouter(deps: DashboardDeps): express.Router {
   const now = deps.now ?? Date.now;
   const loginLimiter = deps.loginLimiter ?? new FixedWindowLimiter(10, 60_000);
@@ -1675,9 +1893,15 @@ export function createDashboardRouter(deps: DashboardDeps): express.Router {
   const sessions = async () => new SessionStore(await deps.cache(), now);
   const byIp = (req: Request) => req.ip ?? 'unknown';
 
-  const router = express.Router();
-  router.use(securityHeaders);
-  router.use(express.urlencoded({ extended: false, limit: '16kb' }));
+  // Audit posts are fire-and-forget: a slow or failing Discord post must
+  // never hold up or break a sign-in.
+  const audit = (entry: LogEntry) => {
+    Promise.resolve()
+      .then(() => deps.audit(entry))
+      .catch((error: unknown) =>
+        logger.warn(`Dashboard audit post failed: ${String(error)}`),
+      );
+  };
 
   async function readSession(req: Request) {
     const signed = parseCookies(req.headers.cookie).get(SESSION_COOKIE);
@@ -1688,6 +1912,12 @@ export function createDashboardRouter(deps: DashboardDeps): express.Router {
     const session = await (await sessions()).get(sid);
     return session ? { sid, session } : undefined;
   }
+
+  const router = express.Router();
+  router.use(securityHeaders);
+  router.use(express.urlencoded({ extended: false, limit: '16kb' }));
+
+  // ---- Public routes: the only ones reachable without a session. ----
 
   router.get('/login', (async (req, res) => {
     if (await readSession(req)) {
@@ -1753,7 +1983,7 @@ export function createDashboardRouter(deps: DashboardDeps): express.Router {
       return;
     }
     if (!allowed) {
-      await deps.audit({
+      audit({
         title: 'Dashboard sign-in refused',
         description: `<@${identity.id}> tried to sign in without a dashboard role.`,
       });
@@ -1771,23 +2001,31 @@ export function createDashboardRouter(deps: DashboardDeps): express.Router {
         maxAgeSec: SESSION_TTL_SEC,
       }),
     );
-    await deps.audit({
+    audit({
       title: 'Dashboard sign-in',
       description: `<@${identity.id}> signed in to the staff dashboard.`,
     });
     res.redirect(302, '/dashboard');
   }) as RequestHandler);
 
-  // Everything below needs a live session whose role check is current.
-  router.use((async (req: Request, res: Response, next: NextFunction) => {
-    const found = await readSession(req);
-    if (!found) {
+  // ---- The gate: a live session whose role check is current. ----
+
+  const dashboardSessionGate = async function dashboardSessionGate(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ) {
+    const signedOut = () => {
       res.append('Set-Cookie', clearCookie(SESSION_COOKIE, SESSION_COOKIE_PATH));
-      if (req.method === 'GET') {
+      if (req.method === 'GET' || req.method === 'HEAD') {
         res.redirect(302, '/dashboard/login');
       } else {
         fail(res, 403);
       }
+    };
+    const found = await readSession(req);
+    if (!found) {
+      signedOut();
       return;
     }
     const { sid, session } = found;
@@ -1809,26 +2047,51 @@ export function createDashboardRouter(deps: DashboardDeps): express.Router {
           'Set-Cookie',
           clearCookie(SESSION_COOKIE, SESSION_COOKIE_PATH),
         );
-        await deps.audit({
+        audit({
           title: 'Dashboard session ended',
           description: `<@${session.userId}> no longer holds a dashboard role.`,
         });
         fail(res, 403);
         return;
       }
-      await store.markRoleChecked(sid, session);
+      if (!(await store.markRoleChecked(sid, session))) {
+        signedOut();
+        return;
+      }
     }
     locals(res).session = session;
     locals(res).sid = sid;
     next();
-  }) as RequestHandler);
+  };
 
-  /** Every POST: same origin, matching CSRF token, per-user rate limit. */
-  const requireCsrf: RequestHandler = (req, res, next) => {
+  // ---- Everything behind the gate lives on this one router. ----
+
+  const protectedRouter = express.Router();
+
+  /**
+   * Every method that can change state: per-user rate limit, then a
+   * same-origin request (Origin, when sent, must be ours; Sec-Fetch-Site
+   * must not be cross-site), then the session's CSRF token from the form
+   * body or the X-CSRF-Token header. Each check stands alone: a matching
+   * Origin never excuses a missing token.
+   */
+  protectedRouter.use(function dashboardUnsafeMethodGuard(req, res, next) {
+    if (SAFE_METHODS.has(req.method)) {
+      next();
+      return;
+    }
     const { session } = locals(res);
+    if (!actionLimiter.take(session.userId)) {
+      res.set('Retry-After', String(actionLimiter.retryAfterSec(session.userId)));
+      fail(res, 429);
+      return;
+    }
     const origin = req.headers.origin;
-    const token = (req.body as Record<string, unknown> | undefined)?._csrf;
+    const body = req.body as Record<string, unknown> | undefined;
+    const token =
+      typeof body?._csrf === 'string' ? body._csrf : req.headers['x-csrf-token'];
     if (
+      req.headers['sec-fetch-site'] === 'cross-site' ||
       (origin !== undefined && origin !== deps.origin) ||
       typeof token !== 'string' ||
       !safeEqual(token, session.csrfToken)
@@ -1837,40 +2100,40 @@ export function createDashboardRouter(deps: DashboardDeps): express.Router {
       return;
     }
     next();
-  };
-  const byUser = (_req: Request, res: Response) => locals(res).session.userId;
+  });
 
-  router.get('/', (_req, res) => {
+  protectedRouter.get('/', (_req, res) => {
     const { session, nonce } = locals(res);
     send(res, 200, homePage(session, nonce));
   });
 
-  router.post(
-    '/logout',
-    limit(actionLimiter, byUser),
-    requireCsrf,
-    (async (_req, res) => {
-      await (await sessions()).destroy(locals(res).sid);
-      res.append('Set-Cookie', clearCookie(SESSION_COOKIE, SESSION_COOKIE_PATH));
-      res.redirect(303, '/dashboard/login');
-    }) as RequestHandler,
-  );
+  protectedRouter.post('/logout', (async (_req, res) => {
+    // Clear the cookie first, so the browser forgets it even if the store
+    // call below fails.
+    res.append('Set-Cookie', clearCookie(SESSION_COOKIE, SESSION_COOKIE_PATH));
+    await (await sessions()).destroy(locals(res).sid);
+    res.redirect(303, '/dashboard/login');
+  }) as RequestHandler);
 
-  router.use((_req, res) => fail(res, 404));
+  deps.protectedRoutes?.(protectedRouter);
 
-  router.use(((error, _req, res, _next) => {
+  protectedRouter.use((_req, res) => fail(res, 404));
+
+  router.use(dashboardSessionGate as RequestHandler, protectedRouter);
+
+  router.use(function dashboardErrorHandler(error, _req, res, _next) {
     logger.error(`Dashboard route error: ${String(error)}`);
-    if (!locals(res).nonce) {
-      locals(res).nonce = crypto.randomBytes(16).toString('base64');
-    }
     fail(res, 500);
-  }) as ErrorRequestHandler);
+  } as ErrorRequestHandler);
 
   return router;
 }
 ```
 
-Note for the implementer: `res.append('Set-Cookie', …)` before `res.redirect` keeps both the cleared OAuth cookie and the session cookie. `req.ip` needs `app.set('trust proxy', 1)` on Heroku (Task 1.9).
+Notes for the implementer:
+- `res.append('Set-Cookie', …)` before `res.redirect` keeps both the cleared OAuth cookie and the session cookie. `req.ip` needs `app.set('trust proxy', 1)` on Heroku (Task 1.9).
+- The stack-walk test in Task 1.8 depends on Express 5 layer internals (`layer.name`, `layer.route.path`, `layer.route.methods`, `layer.handle.stack`). Check them against `node_modules/router/lib/layer.js` before writing the test; if a name differs (e.g. the body parser's layer name), fix the test's expected names, never the structure. `express.urlencoded`'s layer name is expected to be `urlencodedParser`.
+- `dashboardSessionGate` must stay a named function: the test finds it by name.
 
 - [ ] **Step 4: Run** `yarn test tst/web/dashboardRouter.auth.test.ts` → PASS.
 
@@ -1952,6 +2215,103 @@ describe('dashboard session gate', () => {
   });
 });
 
+describe('routes are gated by construction', () => {
+  const ok = (_req: express.Request, res: express.Response) => {
+    res.status(200).send('ok');
+  };
+  const withDummies = () =>
+    makeApp({
+      protectedRoutes: (r) => {
+        r.get('/dummy', ok);
+        r.post('/dummy', ok);
+        r.put('/dummy', ok);
+        r.delete('/dummy', ok);
+      },
+    });
+
+  it('has no direct routes before the gate except the public ones', () => {
+    const router = createDashboardRouter({
+      ...makeApp().deps,
+      protectedRoutes: (r) => {
+        r.post('/dummy', ok);
+      },
+    });
+    type Layer = {
+      name: string;
+      route?: { path: string };
+      handle: { stack?: Layer[] };
+    };
+    const stack = (router as unknown as { stack: Layer[] }).stack;
+    const gate = stack.findIndex((l) => l.name === 'dashboardSessionGate');
+    expect(gate).toBeGreaterThan(-1);
+    const beforeGate = stack.slice(0, gate);
+    expect(
+      beforeGate.filter((l) => l.route).map((l) => l.route.path).sort(),
+    ).toEqual([...PUBLIC_ROUTE_PATHS].sort());
+    expect(
+      beforeGate.filter((l) => !l.route).map((l) => l.name),
+    ).toEqual(['securityHeaders', 'urlencodedParser']);
+    // The gate is followed directly by the protected router, and nothing
+    // after it but the error handler.
+    const after = stack.slice(gate + 1);
+    expect(after.map((l) => l.name)).toEqual([
+      'router',
+      'dashboardErrorHandler',
+    ]);
+    // Inside the protected router the unsafe-method guard comes first.
+    expect(after[0].handle.stack[0].name).toBe('dashboardUnsafeMethodGuard');
+    expect(protectedRouteList(router)).toEqual(
+      expect.arrayContaining([
+        { method: 'get', path: '/' },
+        { method: 'post', path: '/logout' },
+        { method: 'post', path: '/dummy' },
+      ]),
+    );
+  });
+
+  it('refuses POST, PUT and DELETE on a hook route without a token', async () => {
+    const { app } = withDummies();
+    const cookie = await signIn(app);
+    for (const method of ['post', 'put', 'delete'] as const) {
+      const res = await request(app)[method]('/dashboard/dummy').set(
+        'Cookie',
+        cookie,
+      );
+      expect(res.status).toBe(403);
+    }
+    expect(
+      (await request(app).get('/dashboard/dummy').set('Cookie', cookie)).status,
+    ).toBe(200);
+  });
+
+  it('accepts a hook route with the token in the body or the header', async () => {
+    const { app } = withDummies();
+    const cookie = await signIn(app);
+    const token = /name="_csrf" value="([^"]+)"/.exec(
+      (await request(app).get('/dashboard').set('Cookie', cookie)).text,
+    )[1];
+    expect(
+      (await request(app)
+        .post('/dashboard/dummy')
+        .set('Cookie', cookie)
+        .type('form')
+        .send({ _csrf: token })).status,
+    ).toBe(200);
+    expect(
+      (await request(app)
+        .delete('/dashboard/dummy')
+        .set('Cookie', cookie)
+        .set('X-CSRF-Token', token)).status,
+    ).toBe(200);
+  });
+
+  it('refuses a hook route when signed out', async () => {
+    const { app } = withDummies();
+    expect((await request(app).put('/dashboard/dummy')).status).toBe(403);
+    expect((await request(app).get('/dashboard/dummy')).status).toBe(302);
+  });
+});
+
 describe('dashboard CSRF and logout', () => {
   const csrfFrom = (page: string) =>
     /name="_csrf" value="([^"]+)"/.exec(page)[1];
@@ -1965,6 +2325,42 @@ describe('dashboard CSRF and logout', () => {
       .type('form')
       .send({});
     expect(res.status).toBe(403);
+  });
+
+  it('rejects a same-origin POST that has no token', async () => {
+    const { app } = makeApp();
+    const cookie = await signIn(app);
+    const res = await request(app)
+      .post('/dashboard/logout')
+      .set('Cookie', cookie)
+      .set('Origin', ORIGIN)
+      .type('form')
+      .send({});
+    expect(res.status).toBe(403);
+  });
+
+  it('rejects Origin: null and Sec-Fetch-Site: cross-site even with the token', async () => {
+    const { app } = makeApp();
+    const cookie = await signIn(app);
+    const token = csrfFrom(
+      (await request(app).get('/dashboard').set('Cookie', cookie)).text,
+    );
+    expect(
+      (await request(app)
+        .post('/dashboard/logout')
+        .set('Cookie', cookie)
+        .set('Origin', 'null')
+        .type('form')
+        .send({ _csrf: token })).status,
+    ).toBe(403);
+    expect(
+      (await request(app)
+        .post('/dashboard/logout')
+        .set('Cookie', cookie)
+        .set('Sec-Fetch-Site', 'cross-site')
+        .type('form')
+        .send({ _csrf: token })).status,
+    ).toBe(403);
   });
 
   it('rejects a POST with the wrong token or a foreign Origin', async () => {
@@ -2030,6 +2426,10 @@ describe('dashboard CSRF and logout', () => {
   5. In `SessionStore.get`, delete the absolute-expiry check.
   6. In `hasDashboardRole`, add `SERVER_ROLES.organizer` to `DASHBOARD_ROLE_IDS`.
   6b. In `discordAccessCheck`, return `true` when `member.permissions.has(PermissionFlagsBits.Administrator)`.
+  8. Remove `limit(loginLimiter, byIp)` from the callback route.
+  9. In `dashboardUnsafeMethodGuard`, skip the token check when `origin === deps.origin`.
+  10. Mount one route with `router.post(...)` directly on the outer router instead of the protected one.
+  11. In `markRoleChecked`, drop the re-read.
   7. In `serializeCookie`, drop `'Secure'`.
   Record the result per mutation in the PR description.
 
@@ -2197,26 +2597,77 @@ with `import { dashboardRouterFromEnv } from './web/dashboardDeps.js';`.
 
 ---
 
+# PR 1b — Close the `/redirect` open redirect
+
+Branch `fix/redirect-allow-list`. Right after PR 1 merges, before anyone is sent to the staff login. Small; full code written at the start.
+
+`/redirect/:url` in `src/app.ts` 307s to any base64-encoded URL, on the same origin as the staff login. It exists only as a local-dev trampoline (`debugRedirect` in `src/constants.ts`).
+
+| # | Task | Tests (file → names) | Acceptance |
+|---|---|---|---|
+| 1b.1 | Allow only `http://localhost:<port>` and `http://127.0.0.1:<port>` targets (parsed with `URL`, exact hostname match, `http:` only); anything else → 400 with the branded error page; malformed base64/URL → 400 instead of throwing | `tst/integration/app.routes.test.ts` → `redirects to a localhost target with the query appended`, `refuses an external host`, `refuses localhost.evil.example and userinfo tricks`, `refuses https://localhost (debug trampoline is http only)`, `answers 400 to malformed input` | Existing Meetup OAuth debug flow still works locally |
+
+---
+
+# PR 2a — Organizer token: cross-process critical section
+
+Branch `feat/organizer-token-lock`. After PR 1b merges, before PR 2. Its own PR because it touches the production credential that identity monitoring depends on. Full code written at the start.
+
+**Problem.** The in-process mutex is not enough. The web dyno's 18:00 sweep, the build job, manual refresh and the backfill one-off dyno can each refresh the same rotating refresh token. The loser sends an already-rotated token, gets `invalid_grant`, and identity monitoring dies.
+
+**Design.**
+
+- New `src/lib/helpers/organizerMeetupClient.ts` exposes `getOrganizerAccessToken({ forceRefresh?: boolean }): Promise<string | undefined>` and `organizerMeetupClient(): Promise<GqlMeetupClient | undefined>`.
+- Refresh is a Postgres critical section on the credential repository's single connection, run by a new `PostgresCredentialRepository.withLockedCredential(key, fn)`:
+
+```sql
+BEGIN;
+SELECT pg_advisory_xact_lock(7595882001);   -- constant: organizer credential
+SELECT access_token, refresh_token, expires_at FROM oauth_credentials WHERE key = $1;
+-- if expires_at > now() + 5 min and not forceRefresh: COMMIT, return access_token
+-- else refreshMeetupToken(stored refresh, then config seed); UPDATE/INSERT the row
+COMMIT;
+```
+
+  All reads and writes happen on the transaction's client (the pool is `max: 1`; a nested pool query would deadlock).
+- A persist failure keeps the existing rule: use the fresh token for this run, log loudly, and never fall through to the seed.
+- In-process de-dup sits on top: concurrent callers in one process share one in-flight promise.
+- Callers fetch a token per batch, not once per run. On a 401 from a reused token they call `getOrganizerAccessToken({ forceRefresh: true })` once and retry.
+- `meetupSweep.ts` switches to this helper. Its behaviour changes on purpose (token reuse, cross-process lock); the existing sweep tests must still pass.
+
+| # | Task | Tests (file → names) | Acceptance |
+|---|---|---|---|
+| 2a.1 | `withLockedCredential` on the credential repository | `tst/integration/postgresCredentialRepository.test.ts` → `serializes two independent repository instances racing to refresh` (two pools against the same throwaway Postgres; refresh nock counts exactly one call; both callers get the same access token), `rolls back on a thrown refresh` | Throwaway pg :55432 |
+| 2a.2 | `organizerMeetupClient.ts` | `tst/lib/helpers/organizerMeetupClient.test.ts` → `reuses an access token with more than 5 minutes left`, `refreshes inside 5 minutes of expiry`, `forceRefresh refreshes even when valid`, `concurrent in-process callers share one refresh`, `falls back to the config seed only when the stored refresh fails`, `persist failure keeps the fresh token for this run`, `returns undefined without DATABASE_URL` | Mutation-check the 5-minute boundary and the seed fallback |
+| 2a.3 | Switch the sweep; 401 retry | `meetupSweep` tests → `retries once with a forced refresh on 401`, existing tests green | |
+| 2a.4 | Read-only visibility check (needs Hai's go-ahead to use the real organizer credential) | — | The slash commands use the invoking mod's token today. Before PR 2 relies on the organizer token, confirm it can see `NO_SHOW` and `ATTENDED` RSVPs: one read-only `getEventRsvps` on a past event, counts only, no names printed. Hai runs it or explicitly approves running it. |
+
+---
+
 # PR 2 — Snapshots and build job
 
-Branch `feat/dashboard-2-snapshots`. Starts after PR 1 merges. Full-code addendum written first.
+Branch `feat/dashboard-2-snapshots`. Starts after PR 2a merges. Full-code addendum first.
 
 ## File structure
 
 | File | Responsibility |
 |---|---|
-| `src/lib/reports/period.ts` | `Period` (`{ year, month }`), Pacific bounds, `previousPeriod`, `periodKey('2026-09')`, `parsePeriodKey` |
-| `src/lib/reports/meetupMonth.ts` | `getEventsYearMonth` (moved from the command, re-exported there), `fetchMonthRsvps` one pass per event for `ATTENDED`/`YES`/`NO_SHOW` |
+| `src/lib/reports/period.ts` | `Period` (`{ year, month }`), Pacific bounds, `previousPeriod`, `periodKey('2026-09')`, `parsePeriodKey`, `isFinished(period, now)` |
+| `src/lib/reports/meetupMonth.ts` | `getEventsYearMonth` (moved from the command, re-exported there), `fetchMonthRsvps`: one pass per event for `ATTENDED`/`YES`/`NO_SHOW` |
 | `src/lib/reports/hallOfFameReport.ts` | `buildHallOfFameReport` → JSON-safe payload; `formatHostingStatsText` (the command's attachment, byte-identical) |
 | `src/lib/reports/noShowReport.ts` | `buildNoShowReport` → JSON-safe payload with `asOf`; `toNoShowCases` for the existing text/CSV formatters |
-| `src/lib/helpers/organizerMeetupClient.ts` | `resolveOrganizerTokens` moved out of `meetupSweep.ts`, with an in-process mutex and access-token reuse; `organizerMeetupClient()` |
-| `src/lib/repositories/dashboardPool.ts` | One shared `pg.Pool` (`max: 3`) + idempotent `DASHBOARD_SCHEMA_SQL` |
+| `src/lib/repositories/dashboardPool.ts` | One shared `pg.Pool` (`max: 3` on the web dyno; `PG_POOL_MAX` overrides it for scripts) + idempotent `DASHBOARD_SCHEMA_SQL` |
 | `src/lib/repositories/postgresReportSnapshotRepository.ts` | `report_snapshots` reads/writes |
 | `src/lib/repositories/postgresLinkProgressRepository.ts` | `link_progress_daily` |
 | `src/lib/reports/linkProgress.ts` | Pure counting from guild members + member links |
 | `src/lib/reports/buildJob.ts` | Due-plan, lease, build, alerts, report-ready notice, scheduler, `requestRebuild` |
-| `src/lib/helpers/discordLogger.ts` (modify) | `postRoleNotice(client, channelId, roleIds, entry)` with `allowedMentions: { parse: [], roles }` |
+| `src/lib/helpers/discordLogger.ts` (modify) | `postRoleNotice(client, channelId, roleIds, content, entry)`: role mentions in `content` (embeds don't ping), `allowedMentions: { parse: [], roles: roleIds }` |
+| `src/lib/repositories/postgresSuspensionRepository.ts` (modify) | `listByMemberIds(ids: string[], before?: Date)`: one `member_id = ANY($1)` query |
 | `src/commands/meetup/getEventStats.ts`, `noShowReport.ts` (modify) | Call the services; output unchanged |
+
+## Connection budget
+
+The web dyno already holds up to 13 connections (member 5, suspension 5, identity 2, credential 1). The dashboard pool adds at most 3 (16 of essential-0's 20). The backfill dyno uses one small pool (`PG_POOL_MAX=2`) and reads suspension history with one `ANY($1)` query per batch.
 
 ## Schema (`DASHBOARD_SCHEMA_SQL`)
 
@@ -2250,63 +2701,88 @@ CREATE TABLE IF NOT EXISTS dashboard_notices (
 );
 ```
 
-`saveSnapshot` in one transaction: `pg_advisory_xact_lock(hashtext(type || period))`; `newId = nextval(pg_get_serial_sequence('report_snapshots','id'))`; `UPDATE … SET superseded_by = newId WHERE report_type=$1 AND period=$2 AND superseded_by IS NULL`; `INSERT … (id, …) VALUES (newId, …)`.
+**Bounded growth.** While a month is open (the current month), its snapshot row is updated in place (`UPDATE … SET payload, built_at, built_by, source_complete WHERE id = current`), so daily builds don't pile up. Once the month is finished, a rebuild inserts a new row and supersedes the old one, keeping the history someone may have acted on: `pg_advisory_xact_lock(hashtext(type || period))`; `newId = nextval(…)`; `UPDATE … SET superseded_by = newId WHERE … superseded_by IS NULL`; `INSERT … (id, …) VALUES (newId, …)`.
 
 ## Payload rules
 
-- **No descriptions in Postgres.** `upcomingRsvps` keep `id, title, eventUrl, dateTime, paymentNote` (computed with `paymentNote()` before the description is dropped); `description` and `feeSettings` are removed by `toSnapshotEvent`.
-- **`asOf`.** For the current month and the most recently finished month, `asOf = now`. For any older month (backfill or refresh), `asOf` = the first instant of the following month in Pacific time, suspension history is filtered to `suspendedAt < asOf`, and upcoming RSVPs are not fetched. `asOf` is stored in the payload and shown on pages.
-- **Every case carries `priorSuspensions`** (the warning template needs the next penalty) and `hostedPastEvent` (`getGroupEventsCount({ hostId, status: ['PAST'], beforeDateTime: asOf }) > 0`), computed at build time.
+- **No descriptions in Postgres.** Snapshots carry no upcoming RSVPs at all (see the next rule). Counted no-show events keep `id, title, eventUrl, dateTime` only.
+- **`asOf`.**
+  - **Finished months, every build** (job, backfill, manual refresh): `asOf` = the first instant of the following month in Pacific time. No-shows count only up to `asOf`; suspension history is filtered to `suspendedAt < asOf` (one `listByMemberIds(ids, asOf)` query). So refreshing September after a suspension recorded on Oct 3 still shows that member as a September candidate.
+  - **The current month:** `asOf = now`.
+  - `asOf` is stored in the payload and shown on pages.
+  - The slash commands keep using `now` and keep their output.
+- **Upcoming RSVPs, act-by dates and 💵 marks are live**, computed at render time (PR 4) with the organizer client and cached in Redis for at most 12 h. They are never frozen in a snapshot.
+- **Every case carries `priorSuspensions`** (as of `asOf`; the warning template needs the next penalty) and `hostedPastEvent` (`getGroupEventsCount({ hostId, status: ['PAST'], beforeDateTime: asOf }) > 0`).
 - **`source_complete`** is false when the month has events and none of their RSVPs is `ATTENDED` or `NO_SHOW` (attendance never taken).
-- Payload carries a small `summary` object (`events`, `hosts`, `newHosts`, `warnings`, `suspensionCandidates`, `noShows`) so trends read `payload->'summary'` without loading whole payloads.
+- **Summary.** The payload carries a small `summary` object (`events`, `hosts`, `newHosts`, `warnings`, `suspensionCandidates`, `noShows`), so trends read `payload->'summary'` without loading whole payloads.
+
+## Build job rules
+
+- **Never during the identity sweep.** Two guards, both required:
+  - Clock: no build starts 18:00–19:00 UTC.
+  - Claim: the build job and `requestRebuild` defer while today's `identity-digest-<date>` claim is held without its `identity-digest-done-<date>` marker.
+  - Manual refresh is also refused 18:00–19:00 UTC with "try again after 19:00 UTC".
+- **Postgres is the durable fact; Redis is only the lease.**
+  - A month is built when its current snapshot exists with `built_at` past the due time.
+  - Lease `report-build-claim` holds a random value and is released only if it still holds that value (the `withLock` pattern).
+  - The TTL starts at 30 min. Measure a fixture build and a real one (log the duration), and record both in the PR.
+- **Schedule** (15-minute ticks):
+  - The previous month is rebuilt daily from the 2nd through the 7th, after 16:00 UTC, because attendance is often marked late.
+  - The current month is rebuilt once per UTC day after 16:00 UTC.
+  - `link_progress_daily` is written once per day.
+- **Alerts** (#meetup-bot-alerts): one per failing month per day, plus a recovery alert. They include the duration and a safe error summary (the digest's `safeErrorSummary` rule).
+- **Report ready.**
+  - Posted to **#meetup-bot-alerts** (`BOT_ALERTS_CHANNEL_ID`, `1537755631602237473`, chosen by Hai 2026-10-15), so there is no new channel constant.
+  - The role mentions for Moderator and 1.5 Leadership Team go in `content`; `allowedMentions: { parse: [], roles: [those two] }`. It carries a link to the month's workspace.
+  - Posted for the **latest finished month** when no `dashboard_notices` row exists, even if the backfill built that month first. The backfill itself never posts it.
+  - The row is inserted before posting and deleted if the post fails, so the next tick retries.
 
 ## Tasks
 
 | # | Task | Tests (file → names) | Acceptance |
 |---|---|---|---|
-| 2.1 | Characterize current command output before touching it | `tst/commands/meetup/getEventStats.golden.test.ts` → `host stats attachment is unchanged for a fixture month`, `no-show stats attachment is unchanged`; `tst/commands/meetup/noShowReport.golden.test.ts` → `report text and CSV are unchanged for a fixture month` (fixtures in `tst/fixtures/meetup/2026-09/*.json`, synthetic names) | Goldens committed and green on unmodified code |
-| 2.2 | `period.ts` | `tst/lib/reports/period.test.ts` → `bounds are Pacific midnights across DST`, `previousPeriod wraps January`, `parsePeriodKey rejects 2026-13, 2026-1, 26-01, ../` | |
-| 2.3 | `meetupMonth.ts` + `noShowReport.ts` + `hallOfFameReport.ts`; commands switched over | `tst/lib/reports/noShowReport.test.ts` → `classifies an old month as of its end, ignoring later suspensions`, `drops descriptions but keeps the payment note`, `marks a month without attendance incomplete`, `adds prior suspensions to warnings`, `flags members who hosted a past event`; `tst/lib/reports/hallOfFameReport.test.ts` → `counts attendance from one RSVP pass`, `payload is JSON round-trippable` | 2.1 goldens still green (proof of no drift) |
-| 2.4 | Organizer client extraction | `tst/lib/helpers/organizerMeetupClient.test.ts` → `concurrent callers share one refresh`, `reuses an access token with more than 5 minutes left`, `persist failure keeps the fresh token for this run`; existing `meetupSweep` tests unchanged and green | No behaviour change for the sweep |
-| 2.5 | `dashboardPool.ts` + snapshot repository | `tst/integration/postgresReportSnapshotRepository.test.ts` → `save then getCurrent`, `rebuild supersedes and keeps history`, `concurrent saves leave exactly one current row`, `schema is idempotent`, `listSummaries pages without payloads` | Runs on throwaway pg :55432 |
-| 2.6 | Link progress (pure + repository) | `tst/lib/reports/linkProgress.test.ts` → `counts linked only among current non-bot members`, `excludes onboarding from unlinked`, `counts Reverify-tagged`; `tst/integration/postgresLinkProgressRepository.test.ts` → `upsert is idempotent per day` | |
-| 2.7 | Build job | `tst/lib/reports/buildJob.test.ts` → `never due during 18:00–19:00 UTC`, `previous month due from the 2nd 16:00 UTC until built`, `current month due once per UTC day after 16:00`, `link progress due once per day`, `claim prevents a second concurrent build`, `failure releases the claim and alerts once per day`, `recovery alert after failures`, `report-ready posts once, with only the two roles allowed`, `report-ready failure to post is alerted and retried (notice row removed)`, `backfill-built months never post report-ready`, `requestRebuild refuses while a build runs` | Mutation-check the due-plan and lease |
-| 2.8 | Wire scheduler into `index.ts`; PR | `tst/lib/reports/buildJob.scheduler.test.ts` → `tick swallows and logs errors` | Draft PR; adds `DASHBOARD_NOTIFY_CHANNEL_ID` constant; PR notes the bot needs View Channel + Send Messages + Mention roles in mod-watercooler |
-
-Lease keys (Redis, the identity digest's pattern): `report-build-claim` (TTL 30 min), `report-build-done-<YYYY-MM>-<UTC date>` (TTL 26 h), `report-build-failures-<YYYY-MM>-<UTC date>`.
+| 2.1 | Golden tests of current command output, before touching it | `tst/commands/meetup/getEventStats.golden.test.ts`, `tst/commands/meetup/noShowReport.golden.test.ts`. Mock at the **GraphQL HTTP layer** (nock on `https://api.meetup.com/gql-ext` with a responder that honours the query's filter variables: status, dates, `rsvpStatus`, `hostId`, pagination), not `GqlMeetupClient` methods. Fixtures (synthetic names) in `tst/fixtures/meetup/`: zero no-shows (early-exit message), cleared members, a departed member, a DST month (March/November), multi-page RSVPs, new vs returning hosts. Golden the attachment text, the CSV and the Discord message text. | Goldens committed and green on unmodified code |
+| 2.2 | `period.ts` | `tst/lib/reports/period.test.ts` → `bounds are Pacific midnights across DST`, `previousPeriod wraps January`, `parsePeriodKey rejects 2026-13, 2026-1, 26-01, ../`, `isFinished flips at Pacific month start` | |
+| 2.3 | `meetupMonth.ts` + `noShowReport.ts` + `hallOfFameReport.ts`; commands switched over | `tst/lib/reports/noShowReport.test.ts` → `classifies a finished month as of its end, ignoring later suspensions`, `refreshing a finished month after a new suspension still lists the member`, `counts no-shows only up to asOf`, `stores no upcoming RSVPs or descriptions`, `marks a month without attendance incomplete`, `adds prior suspensions to warnings`, `flags members who hosted a past event`; `tst/lib/reports/hallOfFameReport.test.ts` → `counts attendance from one RSVP pass`, `payload is JSON round-trippable` | 2.1 goldens still green (proof of no drift) |
+| 2.4 | `dashboardPool.ts` + snapshot repository | `tst/integration/postgresReportSnapshotRepository.test.ts` → `save then getCurrent`, `current month updates in place`, `finished-month rebuild supersedes and keeps history`, `concurrent saves leave exactly one current row`, `schema is idempotent`, `listSummaries pages without payloads`, `PG_POOL_MAX overrides the pool size` | Throwaway pg :55432 |
+| 2.5 | Link progress (pure + repository) | `tst/lib/reports/linkProgress.test.ts` → `counts linked only among current non-bot members`, `excludes onboarding from unlinked`, `counts Reverify-tagged`; `tst/integration/postgresLinkProgressRepository.test.ts` → `upsert is idempotent per day` | |
+| 2.6 | Build job | `tst/lib/reports/buildJob.test.ts` → `never starts 18:00–19:00 UTC`, `defers while the identity digest claim is held without its done marker`, `previous month rebuilt daily from the 2nd to the 7th after 16:00 UTC`, `current month due once per UTC day after 16:00`, `link progress due once per day`, `a missing Redis done-key does not rebuild a month Postgres shows as built`, `lease release only removes its own claim`, `failure releases the claim and alerts once per day`, `recovery alert after failures`, `report-ready mentions both roles in content with allowedMentions limited to them`, `report-ready posts once per period across restarts`, `report-ready for the latest finished month even when the backfill built it`, `failed report-ready post is retried`, `requestRebuild refuses while a build runs`, `requestRebuild refused 18:00–19:00 UTC` | Mutation-check the due-plan, both guards and the lease |
+| 2.7 | Wire the scheduler into `index.ts`; PR | `tst/lib/reports/buildJob.scheduler.test.ts` → `tick swallows and logs errors` | Draft PR. The bot already posts to #meetup-bot-alerts; the PR notes it also needs Mention @roles there (or the two roles must be mentionable) |
 
 ---
 
 # PR 3 — Read-only pages, trends, backfill
 
-Branch `feat/dashboard-3-pages`. Starts after PR 2 merges. Full-code addendum first.
+Branch `feat/dashboard-3-pages`. Starts after PR 2 merges. Full-code addendum first. Every page is registered through `protectedRoutes`, so the gate and the unsafe-method guard apply by construction.
 
 ## File structure
 
 | File | Responsibility |
 |---|---|
-| `src/web/links.ts` | `meetupProfileUrl(id)` / `discordProfileUrl(id)` → `undefined` unless all digits (Meetup `^\d{1,20}$`, Discord `^\d{17,20}$`); `memberLink(...)` |
+| `src/web/links.ts` | `meetupProfileUrl(id)` / `discordProfileUrl(id)` → `undefined` unless all digits (Meetup `^\d{1,20}$`, Discord `^\d{17,20}$`); `memberLink(...)`; every href passes `safeHref` |
 | `src/web/paging.ts` | `parsePage(query)` (1-based, cap 10 000), page links, `PAGE_SIZE = 50` |
-| `src/web/charts.ts` | Server-rendered inline SVG line/bar charts (no third-party JS; keeps the strict CSP) |
-| `src/web/routes/home.ts`, `hallOfFame.ts`, `noShowHistory.ts`, `suspensions.ts`, `identity.ts`, `linkProgress.ts`, `trends.ts` | One file per page: data fetch + render |
-| `src/web/routes/refresh.ts` | `POST /dashboard/reports/:type/:period/refresh` (CSRF, per-user limit) → `requestRebuild` |
+| `src/web/charts.ts` | Inline SVG line/bar charts drawn on the server. Presentation attributes only (`fill=`, `stroke=`), never `style=""`, which the nonce'd CSP blocks. No third-party JS. |
+| `src/web/routes/home.ts`, `hallOfFame.ts`, `noShowHistory.ts`, `suspensions.ts`, `identity.ts`, `linkProgress.ts`, `trends.ts` | One file per page: data fetch + render; each exports a `register(router)` passed to `protectedRoutes` |
+| `src/web/routes/refresh.ts` | `POST /dashboard/reports/:type/:period/refresh` → `requestRebuild` (guard handles CSRF and rate limit) |
 | `src/lib/repositories/postgresSuspensionRepository.ts` (modify) | `listPage({ state: 'active' \| 'past' \| 'voided', offset, limit })` including void fields |
 | `src/lib/repositories/postgresIdentityRepository.ts` (modify) | `listChangesPage({ since, until, platform, subjectId, beforeId, limit })` keyset; `getChangeThumb(id, side)` returning one `Buffer` |
 | `scripts/backfillReports.ts` | Resumable all-time backfill |
+
+Pages use form POSTs only (no `fetch`), so the CSP needs no `connect-src`. If a page ever uses `fetch`, add `connect-src 'self'`.
 
 ## Tasks
 
 | # | Task | Tests (file → names) | Acceptance |
 |---|---|---|---|
-| 3.1 | Links and paging | `tst/web/links.test.ts` → `refuses non-digit ids`, `refuses 21-digit ids`; `tst/web/paging.test.ts` → `clamps page`, `ignores junk` | |
-| 3.2 | Route test harness + per-route access matrix | `tst/web/routes/access.test.ts` → for every GET route: `signed out → 302`, `wrong role at re-check → 403`, `allowed → 200` | Table-driven over the route list, so a new route without a test fails |
+| 3.1 | Links and paging | `tst/web/links.test.ts` → `refuses non-digit ids`, `refuses 21-digit ids`, `event links pass safeHref or render as text`; `tst/web/paging.test.ts` → `clamps page`, `ignores junk` | |
+| 3.2 | Access matrix derived from the router | `tst/web/routes/access.test.ts` iterates `protectedRouteList(router)` (never a hand list) → for each GET: `signed out → 302`, `role gone at re-check → 403`, `allowed → 200`; for each unsafe method: `no token → 403` | A new route without coverage is impossible: the list comes from the stack |
 | 3.3 | Home | `home.test.ts` → `shows latest month counts`, `says "not built yet" with no snapshot`, `marks incomplete months` | |
-| 3.4 | Hall of Fame page + copy-ready text + refresh | `hallOfFame.test.ts` → `escapes host names and event titles`, `copy text matches the command's ready-to-post block`, `refresh requires CSRF`, `refresh refused while a build runs` | |
-| 3.5 | No-show history (per month, per member) | `noShowHistory.test.ts` → `per-member view lists every month the member appears in`, `member id must be digits`, `paginates at 50` | Per-member lookup uses `payload->'cases' @> '[{"memberId":"…"}]'` with a GIN index on `payload jsonb_path_ops` |
+| 3.4 | Hall of Fame page + copy-ready text + refresh | `hallOfFame.test.ts` → `escapes host names and event titles`, `copy text comes from a readonly textarea value`, `copy text matches the command's ready-to-post block`, `refresh refused while a build runs`, `refresh refused 18:00–19:00 UTC` | Copy button reads the `<textarea readonly>` value; never script-embedded text |
+| 3.5 | No-show history (per month, per member) | `noShowHistory.test.ts` → `per-member view lists every month the member appears in`, `member id must be digits`, `paginates at 50`, `shows asOf` | Per-member lookup uses `payload->'cases' @> '[{"memberId":"…"}]'` with a GIN index on `payload jsonb_path_ops` |
 | 3.6 | Suspension records | `suspensions.test.ts` + integration `listPage` tests → `active/past split matches /meetup_list_suspensions`, `shows void reason and who voided` | |
-| 3.7 | Identity changes + thumbnails | `identity.test.ts` → `filters by date, platform, member`, `keyset paging is stable`, `thumb route serves only PNG/JPEG/WebP by magic bytes`, `thumb route 404s for a missing side`, `thumb response is no-store and nosniff` | Thumbs read one row per request (`SELECT old_thumb …WHERE id=$1`) |
-| 3.8 | Link progress + trends | `charts.test.ts` → `escapes labels`, `handles a single point and all-zero series`; `trends.test.ts` → `reads summaries only` | |
-| 3.9 | Backfill script | `tst/scripts/backfillReports.test.ts` → `refuses to start 18:00–19:00 UTC`, `skips months with a snapshot unless --force`, `posts progress every 12 months`, `stores no-attendance months as incomplete`, `uses asOf = month end for old months` | Hai runs: `heroku run:detached -a meetup-discord-bot "yarn tsx scripts/backfillReports.ts"` (one-off dyno, never 18:00–19:00 UTC) |
+| 3.7 | Identity changes + thumbnails | `identity.test.ts` → `filters by date, platform, member`, `keyset paging is stable`, `thumb route serves only PNG/JPEG/WebP by magic bytes`, `thumb route 404s for a missing side`, `thumb response is no-store and nosniff` | Thumbs read one row per request (`SELECT old_thumb … WHERE id=$1`) |
+| 3.8 | Link progress + trends | `charts.test.ts` → `escapes labels`, `uses no style attributes`, `handles a single point and all-zero series`; `trends.test.ts` → `reads summaries only` | |
+| 3.9 | Backfill script | `tst/scripts/backfillReports.test.ts` → `refuses to start 18:00–19:00 UTC`, `skips months with a snapshot unless --force`, `posts progress every 12 months via REST`, `never logs in to the gateway or registers commands`, `stores no-attendance months as incomplete`, `uses asOf = month end`, `reads suspension history in one query per batch` | Discord via `@discordjs/rest` (`rest.post(Routes.channelMessages(BOT_ALERTS_CHANNEL_ID), { body: { embeds, allowed_mentions: { parse: [] } } })`), no `Client`. `PG_POOL_MAX=2`. Hai runs `heroku run:detached -a meetup-discord-bot "PG_POOL_MAX=2 yarn tsx scripts/backfillReports.ts"`, never 18:00–19:00 UTC |
 
 ---
 
@@ -2315,6 +2791,8 @@ Branch `feat/dashboard-3-pages`. Starts after PR 2 merges. Full-code addendum fi
 Branch `feat/dashboard-4-workspace`. Starts after PR 3 merges. Full-code addendum first.
 
 ## Schema
+
+The workspace schema references `suspension_records`, so `ensureWorkspaceSchema()` first awaits `PostgresSuspensionRepository.instance()`, which creates that table.
 
 ```sql
 CREATE TABLE IF NOT EXISTS noshow_workspace_rows (
@@ -2345,30 +2823,42 @@ CREATE TABLE IF NOT EXISTS noshow_workspace_events (
 CREATE INDEX IF NOT EXISTS noshow_workspace_events_row_idx ON noshow_workspace_events (row_id, id);
 ```
 
+## Which months get a workspace
+
+Rows are synced from the no-show snapshot only for the latest finished month and for months the job builds from launch onward, never for the whole backfill. Older months stay read-only history (PR 3).
+
+## Suspensions recorded outside the workspace
+
+- **Date convention:** the suspension date is a Pacific calendar date stored as UTC midnight, exactly as `parseUtcDateStrict` does for `/meetup_record_suspension`.
+- **Before inserting** (inside the action's transaction): look for a live suspension for the member with `suspended_at >= period start`. If one exists, refuse with "already suspended on <date> (#id); link it?" and offer the `link_suspension` action, which sets `suspension_record_id` and status `suspended` without inserting.
+- **Same-date conflict:** an empty `RETURNING` from the `ON CONFLICT … DO NOTHING` insert is treated as that same conflict, and the existing row is linked.
+- **Suspension state renders live:** the page joins `suspension_records` at render time, so a void done with `/meetup_void_suspension` shows immediately.
+
 ## Transition rules (`src/lib/workspace/transitions.ts`, pure)
 
 | Action | Allowed from | To | Note required | Classification |
 |---|---|---|---|---|
 | `copy_warning` | `new`, `warning_copied` | `warning_copied` | no | warning |
-| `copy_suspension` | any but `suspended`/`voided` | unchanged | no | suspension |
+| `copy_suspension` | any but `suspended` | unchanged | no | suspension |
 | `mark_sent` | `new`, `warning_copied` | `warning_sent` | no | warning |
 | `hold` | `new`, `warning_copied`, `warning_sent` | `on_hold` | yes | any |
-| `release_hold` | `on_hold` | `new` | no | any |
-| `record_suspension` | `new`, `on_hold` | `suspended` | no | suspension |
-| `skip` | `new`, `warning_copied`, `on_hold` | `skipped` | yes | any |
+| `skip` | `new`, `warning_copied`, `warning_sent`, `on_hold` | `skipped` | yes | any |
+| `reopen` | `on_hold`, `skipped` | the status before the hold/skip, read from the events log (so `warning_sent` is remembered and the warning can't be sent twice) | no | any |
+| `record_suspension` | `new`, `on_hold`, `voided` | `suspended` | no | suspension |
+| `link_suspension` | `new`, `on_hold`, `voided` | `suspended` | no | suspension |
 | `void` | `suspended` | `voided` | yes (void reason) | suspension |
 | `edit_notes` | any | unchanged | n/a | any |
 
-`release_hold` is not in the spec; without it a hold is permanent. Flagged for Hai.
+`reopen` replaces the earlier `release_hold`.
 
 ## Tasks
 
 | # | Task | Tests (file → names) | Acceptance |
 |---|---|---|---|
-| 4.1 | Schema + repository; suspension insert/void inside the workspace transaction (`insertSuspensionInTx`, `voidSuspensionInTx` exported from `postgresSuspensionRepository.ts`, sharing its SQL) | `tst/integration/postgresNoShowWorkspaceRepository.test.ts` → `sync from snapshot is idempotent and keeps edited rows`, `marks rows missing from a rebuild`, `refuses a stale version and writes nothing`, `rolls back the suspension when the workspace update fails`, `every action writes exactly one event row`, `events are never updated` | |
-| 4.2 | Transitions | `tst/lib/workspace/transitions.test.ts` → full matrix: every (status, action, classification) triple → allowed or refused; `note required for hold, skip, void`, `blank-after-trim note refused` | Mutation-check |
-| 4.3 | Templates | `tst/lib/workspace/templates.test.ts` → `fee doubles: $10, $20, $40`, `days double: 30, 60, 120`, `host waiver omits the fee sentence`, `first name is the first word of the Meetup name, falls back to "there"`, `no-show list uses Pacific dates`, `end_date is suspension date + days`, `links use NO_SHOW_POLICY_URL and NO_SHOW_APPEAL_URL`, `text is plain (escaped only when rendered)` | Templates copied verbatim from the spec |
-| 4.4 | Service: actions + moderation log + live 💵 | `tst/lib/workspace/service.test.ts` → `record suspension writes the same row /meetup_record_suspension would`, `duration follows 30 × 2^prior as of the chosen date`, `logs each action to the moderation channel with the actor`, `💵 note cached ≤12h and description never stored`, `Meetup down shows "Meetup unavailable"` | Parity test compares against `recordCsvRows` output for the same member/date |
-| 4.5 | Routes + page | `tst/web/routes/workspace.test.ts` → `every action requires CSRF`, `stale version → 409 "someone just updated this, reload"`, `Open on Meetup only for digit ids`, `record suspension needs the confirm step`, `notes are escaped in the card and history`, `action rate limit` | Copy uses `navigator.clipboard` in a nonce'd script; textarea fallback |
+| 4.1 | Schema + repository; suspension insert/void inside the workspace transaction (`insertSuspensionInTx`, `voidSuspensionInTx` exported from `postgresSuspensionRepository.ts`, sharing its SQL) | `tst/integration/postgresNoShowWorkspaceRepository.test.ts` → `creates the suspension table first on a fresh database`, `sync from snapshot is idempotent and keeps edited rows`, `marks rows missing from a rebuild`, `refuses a stale version and writes nothing`, `rolls back the suspension when the workspace update fails`, `refuses when a live suspension after the period start exists and offers to link it`, `same-date ON CONFLICT links the existing row`, `every action writes exactly one event row`, `events are never updated` | |
+| 4.2 | Transitions | `tst/lib/workspace/transitions.test.ts` → full matrix: every (status, action, classification) triple → allowed or refused; `note required for hold, skip, void`, `blank-after-trim note refused`, `reopen restores warning_sent`, `reopen restores new`, `record_suspension allowed from voided` | Mutation-check |
+| 4.3 | Templates | `tst/lib/workspace/templates.test.ts` → `fee doubles: $10, $20, $40`, `days double: 30, 60, 120`, `host waiver omits the fee sentence`, `first name is the first word of the Meetup name, falls back to "there"`, `no-show list uses Pacific dates`, `end_date is suspension date + days`, `links use NO_SHOW_POLICY_URL and NO_SHOW_APPEAL_URL`, `text is plain (escaped only when rendered)` | Templates copied verbatim from the spec. Constants: `NO_SHOW_POLICY_URL = 'https://15genasian.notion.site/1b1176bcb5de453687cd7aa5c0cd239b'`, `NO_SHOW_APPEAL_URL = 'https://forms.gle/tPiPYQ2DpAVZPL1T9'` |
+| 4.4 | Service: actions + moderation log + live upcoming RSVPs / act-by / 💵 | `tst/lib/workspace/service.test.ts` → `record suspension writes the same row /meetup_record_suspension would`, `duration follows 30 × 2^prior as of the chosen date`, `logs each action to the moderation channel naming the actor as <@id>`, `upcoming RSVPs and act-by are computed live and cached ≤12h`, `raw descriptions never reach Postgres`, `Meetup down shows "Meetup unavailable"` | Parity test compares against `recordCsvRows` output for the same member/date |
+| 4.5 | Routes + page (registered via `protectedRoutes`) | `tst/web/routes/workspace.test.ts` → `every action requires CSRF` (from `protectedRouteList`), `stale version → 409 "someone just updated this, reload"`, `Open on Meetup only for digit ids`, `record suspension needs the confirm step`, `notes are escaped in the card and history`, `copy reads the readonly textarea`, `action rate limit` | Form POSTs only |
 | 4.6 | Outcomes on no-show history (PR 3 page) | `noShowHistory.test.ts` → `shows workspace outcome per member` | |
-| 4.7 | Manual walkthrough + PR | Hai and Stacey walk one month end to end on staging-like local data | Draft PR; adds `NO_SHOW_POLICY_URL` / `NO_SHOW_APPEAL_URL` constants |
+| 4.7 | Manual walkthrough + PR | Hai and Stacey walk one month end to end on local data | Draft PR; adds `NO_SHOW_POLICY_URL` / `NO_SHOW_APPEAL_URL` constants |
