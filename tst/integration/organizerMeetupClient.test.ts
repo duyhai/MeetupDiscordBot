@@ -11,14 +11,21 @@ import {
 } from 'vitest';
 
 import Configuration from '../../src/configuration.js';
+import { Tokens } from '../../src/lib/client/discord/types.js';
 import { refreshMeetupToken } from '../../src/lib/client/oauth/providers.js';
 import { logAlert } from '../../src/lib/helpers/discordLogger.js';
 import {
   getOrganizerAccessToken,
   resetOrganizerTokenStateForTest,
 } from '../../src/lib/helpers/organizerMeetupClient.js';
-import { PostgresCredentialRepository } from '../../src/lib/repositories/postgresCredentialRepository.js';
-import { MEETUP_ORGANIZER_CREDENTIAL_KEY } from '../../src/util/credentialRepository.js';
+import {
+  ORGANIZER_CREDENTIAL_LOCK,
+  PostgresCredentialRepository,
+} from '../../src/lib/repositories/postgresCredentialRepository.js';
+import {
+  ApplicationCredentialRepository,
+  MEETUP_ORGANIZER_CREDENTIAL_KEY,
+} from '../../src/util/credentialRepository.js';
 
 // The helper against the real locked repository: the rotated token and the
 // failure episode must both survive the transaction's COMMIT. Meetup and
@@ -45,10 +52,26 @@ vi.mock('../../src/lib/client/meetup/gqlClient.js', () => ({
   },
 }));
 
+// The real factory, unless a test hands out its own repository instances.
+vi.mock('../../src/util/credentialRepository.js', async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import('../../src/util/credentialRepository.js')
+    >();
+  return {
+    ...actual,
+    ApplicationCredentialRepository: vi.fn(
+      actual.ApplicationCredentialRepository,
+    ),
+  };
+});
+
 const refresh = vi.mocked(refreshMeetupToken);
 const alert = vi.mocked(logAlert);
 const client = {} as Client;
 const KEY = MEETUP_ORGANIZER_CREDENTIAL_KEY;
+const LOCK_CLASSID = Math.floor(ORGANIZER_CREDENTIAL_LOCK / 2 ** 32);
+const LOCK_OBJID = ORGANIZER_CREDENTIAL_LOCK % 2 ** 32;
 
 describe.skipIf(!POSTGRES_AVAILABLE)(
   'getOrganizerAccessToken (Postgres)',
@@ -222,6 +245,69 @@ describe.skipIf(!POSTGRES_AVAILABLE)(
       // The close was undone with its savepoint: still failing, no recovery.
       expect((await repo.getMeta(KEY)).failingSince).not.toBeNull();
       expect(alert).not.toHaveBeenCalled();
+    });
+
+    it('two processes racing: exactly one refreshes, and both get the same token', async () => {
+      // Two repository instances, each with its own pool and so its own
+      // Postgres session, stand in for two processes.
+      const first = PostgresCredentialRepository.createIsolatedForTest();
+      const second = PostgresCredentialRepository.createIsolatedForTest();
+      try {
+        await first.put(KEY, {
+          accessToken: 'EXPIRED-ACCESS',
+          refreshToken: 'STORED-REFRESH',
+          expiresAt: Date.now() - 1000,
+        });
+        await observer.query(
+          `INSERT INTO oauth_credential_meta (key, member_id) VALUES ($1, '468174923')`,
+          [KEY],
+        );
+        let releaseRefresh!: (tokens: Tokens) => void;
+        refresh.mockImplementationOnce(
+          () =>
+            new Promise<Tokens>((resolve) => {
+              releaseRefresh = resolve;
+            }),
+        );
+        vi.mocked(ApplicationCredentialRepository)
+          .mockResolvedValueOnce(first)
+          .mockResolvedValueOnce(second);
+
+        // Process A takes the lock and is mid-refresh.
+        const a = getOrganizerAccessToken({ client });
+        await vi.waitFor(() => expect(refresh).toHaveBeenCalledTimes(1));
+
+        // Process B (a client-less script: a different in-process key, so
+        // it does not join A) queues on the advisory lock.
+        const b = getOrganizerAccessToken();
+        await vi.waitFor(async () => {
+          const { rows } = await observer.query<{ waiting: string }>(
+            `SELECT count(*) AS waiting FROM pg_locks
+              WHERE locktype = 'advisory' AND classid = $1 AND objid = $2
+                AND objsubid = 1 AND NOT granted`,
+            [LOCK_CLASSID, LOCK_OBJID],
+          );
+          // At least B; the repository suite may queue on the lock too.
+          expect(Number(rows[0].waiting)).toBeGreaterThanOrEqual(1);
+        });
+
+        releaseRefresh({
+          accessToken: 'ACCESS-A',
+          refreshToken: 'ROTATED-A',
+          expiresAt: Date.now() + 3600 * 1000,
+        });
+
+        await expect(Promise.all([a, b])).resolves.toEqual([
+          'ACCESS-A',
+          'ACCESS-A',
+        ]);
+        expect(refresh).toHaveBeenCalledTimes(1);
+        expect(refresh).toHaveBeenCalledWith('STORED-REFRESH');
+        expect((await repo.get(KEY))?.refreshToken).toBe('ROTATED-A');
+      } finally {
+        await first.end();
+        await second.end();
+      }
     });
   },
 );
