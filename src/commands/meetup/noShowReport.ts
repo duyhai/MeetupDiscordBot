@@ -34,7 +34,7 @@ import {
   withDiscordFileAttachment,
 } from '../../util/discord.js';
 import { withMeetupClient } from '../../util/meetup.js';
-import { getEventsYearMonth } from './getEventStats.js';
+import { getEventsYearMonth } from '../../lib/reports/meetupMonth.js';
 
 const logger = new Logger({ name: 'MeetupNoShowReportCommands' });
 

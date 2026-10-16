@@ -95,8 +95,17 @@ export function displayedEvents(hostStats: HostStats[]): Event[] {
   return Array.from(byId.values());
 }
 
-function collapseByTitle(events: Event[]): string[] {
-  const byTitle = new Map<string, Event[]>();
+type PostMember = Pick<BaseUserInfo, 'id' | 'name'>;
+type PostEvent = Pick<Event, 'title' | 'dateTime'> & {
+  eventHosts: { member: PostMember }[];
+};
+export interface HostStatsLike {
+  host: PostMember;
+  events: PostEvent[];
+}
+
+function collapseByTitle(events: PostEvent[]): string[] {
+  const byTitle = new Map<string, PostEvent[]>();
   for (const event of events) {
     const group = byTitle.get(event.title) ?? [];
     group.push(event);
@@ -112,8 +121,8 @@ function collapseByTitle(events: Event[]): string[] {
 }
 
 /** Co-hosts of a member across their events this period, deduped. */
-function coHostsOf(hostId: string, events: Event[]): BaseUserInfo[] {
-  const coHosts = new Map<string, BaseUserInfo>();
+function coHostsOf(hostId: string, events: PostEvent[]): PostMember[] {
+  const coHosts = new Map<string, PostMember>();
   for (const event of events) {
     for (const { member } of event.eventHosts) {
       if (member.id !== hostId) {
@@ -126,7 +135,7 @@ function coHostsOf(hostId: string, events: Event[]): BaseUserInfo[] {
 
 export function formatHallOfFamePost(input: {
   periodLabel: string;
-  hostStats: HostStats[];
+  hostStats: HostStatsLike[];
   totalEvents: number;
   newHostIds: Set<string>;
 }): string {
