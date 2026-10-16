@@ -11,7 +11,10 @@ import {
   manualRebuildDeps,
   setDashboardClient,
 } from '../../src/web/dashboardDeps.js';
-import { defaultBuildJobDeps } from '../../src/lib/reports/buildJob.js';
+import {
+  defaultBuildJobDeps,
+  requestRebuild,
+} from '../../src/lib/reports/buildJob.js';
 import { BUILD_LEASE_KEY } from '../../src/lib/reports/buildLease.js';
 import { ApplicationCache } from '../../src/util/cache.js';
 import { signSessionId } from '../../src/web/session.js';
@@ -45,7 +48,11 @@ vi.mock('../../src/util/cache.js', async (importOriginal) => {
 vi.mock('../../src/lib/reports/buildJob.js', async (importOriginal) => {
   const actual =
     await importOriginal<typeof import('../../src/lib/reports/buildJob.js')>();
-  return { ...actual, defaultBuildJobDeps: vi.fn() };
+  return {
+    ...actual,
+    defaultBuildJobDeps: vi.fn(),
+    requestRebuild: vi.fn(actual.requestRebuild),
+  };
 });
 
 vi.mock('../../src/web/dashboardRouter.js', async (importOriginal) => {
@@ -200,7 +207,7 @@ describe('dashboardPageDeps', () => {
     expect(defaultBuildJobDeps).not.toHaveBeenCalled();
   });
 
-  it('a refresh goes through requestRebuild on the manual rebuild deps', async () => {
+  it('a refresh builds the job deps for the ready client, and a deps failure rejects', async () => {
     const client = { tag: 'client' };
     setDashboardClient(client as never);
     try {
@@ -233,6 +240,9 @@ describe('dashboardPageDeps', () => {
     ).resolves.toBe(false);
   });
 });
+
+const REQUESTER = '123456789012345678';
+const SEPT = { year: 2026, month: 9 };
 
 describe('dashboard cache timeouts', () => {
   const never = () => new Promise<never>(() => undefined);
@@ -292,6 +302,61 @@ describe('dashboard cache timeouts', () => {
     await expect(pending).rejects.toBeInstanceOf(CacheTimeoutError);
     await vi.advanceTimersByTimeAsync(1_000);
     expect(inner.values.has(BUILD_LEASE_KEY)).toBe(false);
+  });
+
+  it('a refresh hands requestRebuild the manual rebuild deps (timed request phase, untimed build)', async () => {
+    setDashboardClient({ tag: 'client' } as never);
+    try {
+      vi.mocked(defaultBuildJobDeps).mockResolvedValue({
+        cache: ApplicationCache,
+        now: () => new Date('2026-10-05T16:15:00Z'),
+      } as never);
+      vi.mocked(requestRebuild).mockClear();
+      vi.mocked(requestRebuild).mockResolvedValueOnce({
+        status: 'busy',
+        message: 'm',
+      });
+      await dashboardPageDeps().rebuild(SEPT, REQUESTER);
+      expect(requestRebuild).toHaveBeenCalledTimes(1);
+      const [deps, period, by] = vi.mocked(requestRebuild).mock.calls[0];
+      /* eslint-disable @typescript-eslint/unbound-method -- identity checks only */
+      expect(deps.cache).toBe(dashboardRebuildCache);
+      expect(deps.backgroundCache).toBe(ApplicationCache);
+      /* eslint-enable @typescript-eslint/unbound-method */
+      expect(period).toEqual(SEPT);
+      expect(by).toBe(REQUESTER);
+    } finally {
+      setDashboardClient(undefined);
+    }
+  });
+
+  it('a refresh against a hanging Redis rejects with CacheTimeoutError after the dashboard deadline', async () => {
+    vi.useFakeTimers({ now: new Date('2026-10-05T16:15:00Z') });
+    vi.mocked(ApplicationCache).mockResolvedValue(hangingCache() as never);
+    // The job's own deps use the untimed shared cache, as production does.
+    vi.mocked(defaultBuildJobDeps).mockResolvedValue({
+      cache: ApplicationCache,
+      now: () => new Date(),
+      newLeaseValue: () => 'lease',
+    } as never);
+    setDashboardClient({ tag: 'client' } as never);
+    try {
+      let outcome: unknown = 'pending';
+      dashboardPageDeps()
+        .rebuild(SEPT, REQUESTER)
+        .then(
+          () => {
+            outcome = 'resolved';
+          },
+          (error: unknown) => {
+            outcome = error;
+          },
+        );
+      await vi.advanceTimersByTimeAsync(DASHBOARD_CACHE_TIMEOUT_MS);
+      expect(outcome).toBeInstanceOf(CacheTimeoutError);
+    } finally {
+      setDashboardClient(undefined);
+    }
   });
 
   it('manual rebuilds time the request phase and run the build on the untimed cache', async () => {
