@@ -1,10 +1,23 @@
 import { Client } from 'discord.js';
 import nock from 'nock';
-import request from 'supertest';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from 'vitest';
 
 import * as discordLogger from '../../src/lib/helpers/discordLogger.js';
 import { createOAuthState } from '../../src/lib/client/oauth/state.js';
+import {
+  LoopbackClient,
+  closeServers,
+  serve,
+} from '../setup/loopbackServer.js';
 
 vi.mock('../../src/lib/helpers/discordLogger.js', () => ({
   logActivity: vi.fn().mockResolvedValue(undefined),
@@ -15,6 +28,12 @@ vi.mock('../../src/lib/helpers/discordLogger.js', () => ({
 const { default: app, setOAuthAlertClient } = await import('../../src/app.js');
 
 const fakeClient = {} as Client;
+
+let http: LoopbackClient;
+beforeAll(async () => {
+  http = await serve(app);
+});
+afterAll(closeServers);
 
 const alertTitles = () =>
   vi.mocked(discordLogger.logAlert).mock.calls.map(([, entry]) => entry.title);
@@ -37,7 +56,7 @@ describe('OAuth callback visibility', () => {
     const state = await createOAuthState('user-exchange');
     nock('https://secure.meetup.com').post('/oauth2/access').reply(500, {});
 
-    await request(app).get(`/connect/meetup/callback?state=${state}&code=c`);
+    await http.get(`/connect/meetup/callback?state=${state}&code=c`);
 
     expect(alertTitles().join()).toMatch(/exchange/i);
   });
@@ -45,7 +64,7 @@ describe('OAuth callback visibility', () => {
   it('alerts when the member denies the provider prompt', async () => {
     const state = await createOAuthState('user-denied');
 
-    await request(app).get(
+    await http.get(
       `/connect/meetup/callback?state=${state}&error=access_denied`,
     );
 
@@ -53,8 +72,8 @@ describe('OAuth callback visibility', () => {
   });
 
   it('does NOT alert on an expired or unknown state -- stale links and crawlers are not faults', async () => {
-    await request(app).get('/connect/meetup/callback?state=nope&code=c');
-    await request(app).get('/connect/meetup?state=nope');
+    await http.get('/connect/meetup/callback?state=nope&code=c');
+    await http.get('/connect/meetup?state=nope');
 
     expect(alertTitles()).toEqual([]);
     expect(activityTitles().join()).toMatch(/expired/i);
@@ -64,7 +83,7 @@ describe('OAuth callback visibility', () => {
     setOAuthAlertClient(undefined);
     const state = await createOAuthState('user-noclient');
 
-    await request(app).get(
+    await http.get(
       `/connect/meetup/callback?state=${state}&error=access_denied`,
     );
 

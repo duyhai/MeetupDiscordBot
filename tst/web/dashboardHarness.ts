@@ -1,7 +1,6 @@
 import express from 'express';
 import http from 'http';
 import net, { AddressInfo } from 'net';
-import request from 'supertest';
 import { vi } from 'vitest';
 
 import {
@@ -9,37 +8,23 @@ import {
   createDashboardRouter,
 } from '../../src/web/dashboardRouter.js';
 import { FixedWindowLimiter } from '../../src/web/rateLimit.js';
+import {
+  LoopbackClient,
+  LoopbackResponse,
+  clientFor,
+  closeServers,
+  listen,
+  serve,
+} from '../setup/loopbackServer.js';
 import { FakeCache } from './fakeCache.js';
 
 export const SECRET = 's'.repeat(48);
 export const ORIGIN = 'https://meetup-discord-bot.herokuapp.com';
 export const USER = { id: '123456789012345678', username: 'Mod' };
 
-/** Requests against one long-lived test server, as `request(app)` would. */
-export type Client = ReturnType<typeof request>;
+export type Client = LoopbackClient;
 
-const servers = new Set<http.Server>();
-
-/**
- * Serves `app` on one loopback server for the whole test. Binding
- * 127.0.0.1 (not the dual-stack wildcard supertest uses) means the OS never
- * hands out a port another local process already holds on 127.0.0.1, so a
- * request cannot land on someone else's server. Close with closeServers().
- */
-export async function serve(app: express.Express): Promise<Client> {
-  return request(await listen(app));
-}
-
-/** The loopback server behind serve(); closed by closeServers(). */
-export async function listen(app: express.Express): Promise<http.Server> {
-  const server = http.createServer(app);
-  servers.add(server);
-  await new Promise<void>((resolve, reject) => {
-    server.once('error', reject);
-    server.listen(0, '127.0.0.1', () => resolve());
-  });
-  return server;
-}
+export { closeServers, listen, serve };
 
 /**
  * One HTTP/1.1 request over a raw socket, sending `path` byte for byte.
@@ -85,21 +70,6 @@ export async function rawRequest(
   return { status, headers: parsed, body: reply.slice(split + 4) };
 }
 
-/** For afterEach: closes every server serve() opened. */
-export async function closeServers(): Promise<void> {
-  const open = [...servers];
-  servers.clear();
-  await Promise.all(
-    open.map(
-      (server) =>
-        new Promise<void>((resolve) => {
-          server.closeAllConnections();
-          server.close(() => resolve());
-        }),
-    ),
-  );
-}
-
 export function makeDeps(overrides: Partial<DashboardDeps> = {}): {
   cache: FakeCache;
   deps: DashboardDeps;
@@ -132,11 +102,11 @@ export async function makeApp(overrides: Partial<DashboardDeps> = {}) {
   app.set('trust proxy', 1);
   app.use('/dashboard', createDashboardRouter(deps));
   const server = await listen(app);
-  return { app, cache, deps, server, req: request(server) };
+  return { app, cache, deps, server, req: clientFor(server) };
 }
 
 /** Asserts a 302 with a Location, failing with the status and body otherwise. */
-export function locationOf(res: request.Response): URL {
+export function locationOf(res: LoopbackResponse): URL {
   const { location } = res.headers as Record<string, string | undefined>;
   if (res.status !== 302 || !location) {
     throw new Error(
@@ -148,7 +118,7 @@ export function locationOf(res: request.Response): URL {
 
 /** The `name=value` pair of a Set-Cookie the response sent, if any. */
 export function setCookie(
-  res: request.Response,
+  res: LoopbackResponse,
   name: string,
 ): string | undefined {
   const all = (res.headers['set-cookie'] ?? []) as unknown as string[];
