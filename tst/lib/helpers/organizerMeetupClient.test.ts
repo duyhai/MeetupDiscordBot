@@ -697,7 +697,7 @@ describe('getOrganizerAccessToken', () => {
     expect(alert).toHaveBeenCalledWith(client, {
       title: 'Meetup organizer credential store unavailable',
       description:
-        'Could not read the shared Meetup organizer credential from the database (ConnectionError), ' +
+        'Could not read the shared Meetup organizer credential from the database (it is unavailable or busy: ConnectionError), ' +
         'so Meetup identity monitoring was skipped this time. It retries on the next run.',
     });
     expect(fake.logged.join('\n')).toMatch(/ConnectionError/);
@@ -741,7 +741,7 @@ describe('getOrganizerAccessToken', () => {
     expect(alert).toHaveBeenCalledWith(client, {
       title: 'Meetup organizer credential store unavailable',
       description:
-        'Could not read the shared Meetup organizer credential from the database (LockTimeoutError), ' +
+        'Could not read the shared Meetup organizer credential from the database (it is unavailable or busy: LockTimeoutError), ' +
         'so Meetup identity monitoring was skipped this time. It retries on the next run.',
     });
     expect(fake.logged.join('\n')).toMatch(/LockTimeoutError/);

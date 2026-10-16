@@ -361,7 +361,7 @@ async function resolveOrganizerAccessToken(
       await postAlert(client, {
         title: 'Meetup organizer credential store unavailable',
         description:
-          `Could not read the shared Meetup organizer credential from the database (${errorName(error)}), ` +
+          `Could not read the shared Meetup organizer credential from the database (it is unavailable or busy: ${errorName(error)}), ` +
           'so Meetup identity monitoring was skipped this time. It retries on the next run.',
       });
     }
