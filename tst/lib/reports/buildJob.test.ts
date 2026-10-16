@@ -42,6 +42,7 @@ import { PostgresSuspensionRepository } from '../../../src/lib/repositories/post
 import { FakeCache } from '../../web/fakeCache.js';
 import {
   Clock,
+  ExpiringCache,
   FakeLinkProgressStore,
   FakeNoticeStore,
   FakeSnapshotStore,
@@ -411,7 +412,8 @@ describe('failure alerts', () => {
       26 * 60 * 60,
     );
 
-    h.clock.set('2026-10-05T16:30:00Z');
+    // The next attempt is an hour later (backoff), and does not alert again.
+    h.clock.set('2026-10-05T17:15:00Z');
     await runBuildTick(h.deps);
     expect(fetchedPeriods(h)).toEqual(['2026-9', '2026-10', '2026-9']);
     expect(titles(h.alert)).toEqual(['Report build failed: September 2026']);
@@ -515,7 +517,7 @@ describe('failure alerts', () => {
       false,
     );
 
-    h.clock.set('2026-10-05T16:30:00Z');
+    h.clock.set('2026-10-05T17:15:00Z');
     await runBuildTick(h.deps);
     expect(titles(h.alert)).toEqual([
       'Report build failed: September 2026',
@@ -535,7 +537,7 @@ describe('failure alerts', () => {
     await runBuildTick(h.deps);
     expect(titles(h.alert)).toEqual(['Report build failed: September 2026']);
 
-    h.clock.set('2026-10-05T16:30:00Z');
+    h.clock.set('2026-10-05T17:15:00Z');
     await runBuildTick(h.deps);
     expect(titles(h.alert)).toEqual([
       'Report build failed: September 2026',
@@ -558,9 +560,269 @@ describe('failure alerts', () => {
     );
     await runBuildTick(h.deps);
     h.alert.mockResolvedValueOnce(false); // the recovery post
-    h.clock.set('2026-10-05T16:30:00Z');
+    h.clock.set('2026-10-05T17:15:00Z');
     await runBuildTick(h.deps);
     expect(h.cache.values.has('report-build-failing-2026-09')).toBe(true);
+  });
+});
+
+describe('failure backoff', () => {
+  const BACKOFF = 'report-build-backoff-2026-09';
+
+  it('a failing month is retried at most once an hour', async () => {
+    const h = makeDeps({
+      clock: new Clock('2026-10-05T16:00:00Z'),
+      reportReadyEnabled: false,
+    });
+    h.fetchMonthReports.mockImplementation(failSeptember);
+    const septAttempts: string[] = [];
+    for (const at of ['16:00', '16:15', '16:30', '16:45', '17:00']) {
+      h.clock.set(`2026-10-05T${at}:00Z`);
+      const before = fetchedPeriods(h).filter((p) => p === '2026-9').length;
+      // eslint-disable-next-line no-await-in-loop -- ticks are sequential
+      await runBuildTick(h.deps);
+      if (fetchedPeriods(h).filter((p) => p === '2026-9').length > before) {
+        septAttempts.push(at);
+      }
+    }
+    expect(septAttempts).toEqual(['16:00', '17:00']);
+    expect(h.cache.ttls.get(BACKOFF)).toBe(3600);
+
+    // A success clears the backoff.
+    h.fetchMonthReports.mockImplementation((period) =>
+      Promise.resolve(monthReports(period)),
+    );
+    h.clock.set('2026-10-06T16:15:00Z');
+    await runBuildTick(h.deps);
+    expect(fetchedPeriods(h).filter((p) => p === '2026-9')).toHaveLength(3);
+    expect(h.cache.values.has(BACKOFF)).toBe(false);
+  });
+
+  it('a backed-off month is skipped, not a stop: later items still run', async () => {
+    const h = makeDeps({ reportReadyEnabled: false });
+    h.cache.values.set(BACKOFF, '2026-10-05T16:00:00.000Z');
+    await runBuildTick(h.deps);
+    expect(fetchedPeriods(h)).toEqual(['2026-10']);
+    expect(h.linkProgress.days.has('2026-10-05')).toBe(true);
+  });
+
+  it('skips the month when the backoff key cannot be read (fail closed)', async () => {
+    const clock = new Clock('2026-10-05T16:15:00Z');
+    class BrokenBackoffCache extends ExpiringCache {
+      override async get(key: string) {
+        if (key.startsWith('report-build-backoff-')) {
+          throw new Error('redis down');
+        }
+        return super.get(key);
+      }
+    }
+    const h = makeDeps({
+      clock,
+      cache: new BrokenBackoffCache(clock),
+      reportReadyEnabled: false,
+    });
+    await runBuildTick(h.deps);
+    expect(h.fetchMonthReports).not.toHaveBeenCalled();
+    expect(h.linkProgress.days.has('2026-10-05')).toBe(true);
+    expect(h.cache.values.has(LEASE_KEY)).toBe(false);
+  });
+
+  it('a manual rebuild ignores the backoff, and a manual failure sets it', async () => {
+    const h = makeDeps({ reportReadyEnabled: false });
+    h.cache.values.set(BACKOFF, 'x');
+    const ok = await requestRebuild(h.deps, SEPT, REQUESTER);
+    expect(await (ok as { done: Promise<{ ok: boolean }> }).done).toEqual({
+      ok: true,
+    });
+    expect(fetchedPeriods(h)).toEqual(['2026-9']);
+    expect(h.cache.values.has(BACKOFF)).toBe(false); // cleared by the success
+
+    h.fetchMonthReports.mockImplementation(failSeptember);
+    h.cache.values.delete('report-rebuild-cooldown-2026-09'); // ten minutes later
+    const septFail = await requestRebuild(h.deps, SEPT, REQUESTER);
+    await (septFail as { done: Promise<{ ok: boolean }> }).done;
+    expect(h.cache.values.get(BACKOFF)).toBe('2026-10-05T16:15:00.000Z');
+    expect(h.cache.ttls.get(BACKOFF)).toBe(3600);
+  });
+
+  it('the job failure alert names the 17:45–19:00 window and the hourly retry', async () => {
+    const h = makeDeps();
+    h.fetchMonthReports.mockImplementation(failSeptember);
+    await runBuildTick(h.deps);
+    const [description] = descriptions(h.alert);
+    expect(description).toContain(
+      'It retries at most once an hour (never 17:45–19:00 UTC); this alert repeats at most once a day until it works.',
+    );
+    expect(description).not.toContain('18:00–19:00');
+  });
+});
+
+describe('finished-month summary', () => {
+  const septWith = (noShows: number) => (period: Period) => {
+    const reports = monthReports(period);
+    if (isSept(period)) {
+      reports.noShow.summary.noShows = noShows;
+    }
+    return Promise.resolve(reports);
+  };
+  const septSummaries = (h: ReturnType<typeof makeDeps>) =>
+    titles(h.alert).filter((t) => t === 'Reports built: September 2026').length;
+
+  it('the job posts it on the first finished build and when it changes, days 2–7', async () => {
+    const h = makeDeps({
+      clock: new Clock('2026-10-02T16:15:00Z'),
+      reportReadyEnabled: false,
+    });
+    // An open-month build from September 30th with the same numbers does not
+    // count: day 2 is still the first finished build.
+    h.snapshots.seedBoth(SEPT, '2026-09-30T16:05:00Z');
+    const posted: number[] = [];
+    for (const day of [2, 3, 4, 5, 6, 7]) {
+      h.fetchMonthReports.mockImplementation(septWith(day >= 5 ? 9 : 8));
+      h.clock.set(`2026-10-0${day}T16:15:00Z`);
+      const before = septSummaries(h);
+      // eslint-disable-next-line no-await-in-loop -- one day at a time
+      await runBuildTick(h.deps);
+      if (septSummaries(h) > before) {
+        posted.push(day);
+      }
+    }
+    expect(fetchedPeriods(h).filter((p) => p === '2026-9')).toHaveLength(6);
+    expect(posted).toEqual([2, 5]);
+    const last = descriptions(h.alert).filter((d) =>
+      d.includes('9 no-show RSVPs'),
+    );
+    expect(last).toHaveLength(1);
+  });
+
+  it('a Hall of Fame change alone posts it too', async () => {
+    const h = makeDeps({ reportReadyEnabled: false });
+    h.snapshots.seedBoth(SEPT, '2026-10-04T16:05:00Z');
+    await runBuildTick(h.deps);
+    expect(septSummaries(h)).toBe(0);
+    h.fetchMonthReports.mockImplementation((period) => {
+      const reports = monthReports(period);
+      reports.hallOfFame.summary.newHosts = 2;
+      return Promise.resolve(reports);
+    });
+    h.clock.set('2026-10-06T16:15:00Z');
+    await runBuildTick(h.deps);
+    expect(septSummaries(h)).toBe(1);
+  });
+
+  it('compares summaries regardless of key order (JSONB reorders keys)', async () => {
+    const h = makeDeps({ reportReadyEnabled: false });
+    h.snapshots.seed('hall_of_fame', SEPT, '2026-10-04T16:05:00Z', {
+      summary: { newHosts: 1, hosts: 3, events: 4 },
+    });
+    h.snapshots.seed('no_show', SEPT, '2026-10-04T16:05:00Z', {
+      summary: {
+        departed: 1,
+        cleared: 1,
+        suspensionCandidates: 3,
+        warnings: 2,
+        members: 7,
+        noShows: 8,
+      },
+    });
+    await runBuildTick(h.deps);
+    expect(fetchedPeriods(h)).toContain('2026-9');
+    expect(septSummaries(h)).toBe(0);
+  });
+
+  it('the zero-no-show note follows the same rule', async () => {
+    const zero = { pastEventsWithRsvps: 6, eventsWithNoShow: 0, noShows: 0 };
+    const h = makeDeps({
+      clock: new Clock('2026-10-02T16:15:00Z'),
+      reportReadyEnabled: false,
+    });
+    h.fetchMonthReports.mockImplementation((period) =>
+      Promise.resolve(monthReports(period, zero)),
+    );
+    await runBuildTick(h.deps);
+    h.clock.set('2026-10-03T16:15:00Z');
+    await runBuildTick(h.deps);
+    expect(
+      descriptions(h.alert).filter((d) => d.includes('no no-shows recorded')),
+    ).toHaveLength(1);
+  });
+
+  it('manual and backfill-style builds still post every time', async () => {
+    const h = makeDeps({ reportReadyEnabled: false });
+    h.snapshots.seedBoth(SEPT, '2026-10-04T16:05:00Z');
+    const result = await requestRebuild(h.deps, SEPT, REQUESTER);
+    await (result as { done: Promise<{ ok: boolean }> }).done;
+    expect(septSummaries(h)).toBe(1);
+  });
+
+  it('posts when the earlier summaries cannot be read', async () => {
+    const h = makeDeps({ reportReadyEnabled: false });
+    h.snapshots.seedBoth(SEPT, '2026-10-04T16:05:00Z');
+    const store = h.snapshots;
+    let reads = 0;
+    h.deps.snapshots = {
+      save: (write) => store.save(write),
+      getCurrentMeta: (type, period) => {
+        reads += 1;
+        // loadBuiltAt reads four rows first; the summary pre-read fails.
+        return reads > 4
+          ? Promise.reject(new Error('pg down'))
+          : store.getCurrentMeta(type, period);
+      },
+    };
+    await runBuildTick(h.deps);
+    expect(septSummaries(h)).toBe(1);
+    expect(h.snapshots.rows).toHaveLength(4);
+  });
+});
+
+describe('departed guard', () => {
+  const withMembers =
+    (members: number, departed: number, onlySept = true) =>
+    (period: Period) => {
+      const reports = monthReports(period);
+      if (!onlySept || isSept(period)) {
+        reports.noShow.summary.members = members;
+        reports.noShow.summary.departed = departed;
+      }
+      return Promise.resolve(reports);
+    };
+
+  it('refuses to save a finished month where every no-show member looks departed', async () => {
+    const h = makeDeps({ reportReadyEnabled: false });
+    h.fetchMonthReports.mockImplementation(withMembers(7, 7));
+    await runBuildTick(h.deps);
+    expect(h.snapshots.rows.filter((r) => isSept(r.period))).toEqual([]);
+    expect(titles(h.alert)).toEqual(['Report build failed: September 2026']);
+    expect(descriptions(h.alert)[0]).toContain(
+      'Every member with a no-show in September 2026 looks like they have left the group; ' +
+        'the organizer account may not be able to see memberships. Nothing was saved.',
+    );
+    expect(h.cache.values.has('report-build-backoff-2026-09')).toBe(true);
+  });
+
+  it('saves when at least one member is still present', async () => {
+    const h = makeDeps({ reportReadyEnabled: false });
+    h.fetchMonthReports.mockImplementation(withMembers(7, 6));
+    await runBuildTick(h.deps);
+    expect(h.snapshots.rows.filter((r) => isSept(r.period))).toHaveLength(2);
+  });
+
+  it('saves a month with no no-show members', async () => {
+    const h = makeDeps({ reportReadyEnabled: false });
+    h.fetchMonthReports.mockImplementation(withMembers(0, 0));
+    await runBuildTick(h.deps);
+    expect(h.snapshots.rows.filter((r) => isSept(r.period))).toHaveLength(2);
+  });
+
+  it('does not apply to the open month', async () => {
+    const h = makeDeps({ reportReadyEnabled: false });
+    h.snapshots.seedBoth(SEPT, '2026-10-05T16:05:00Z');
+    h.fetchMonthReports.mockImplementation(withMembers(7, 7, false));
+    await runBuildTick(h.deps);
+    expect(h.snapshots.rows.filter((r) => r.period.month === 10)).toHaveLength(
+      2,
+    );
   });
 });
 
@@ -890,13 +1152,15 @@ describe('requestRebuild', () => {
     expect(h.cache.values.has('report-build-alerted-2026-09-2026-10-05')).toBe(
       false,
     );
-    h.clock.set('2026-10-05T16:20:00Z');
+    // The manual failure set the hourly backoff; the job's next attempt
+    // still has its own daily alert available.
+    h.clock.set('2026-10-05T17:20:00Z');
     await runBuildTick(h.deps);
     expect(titles(h.alert)).toEqual([
       'Report build failed: September 2026',
       'Report build failed: September 2026',
     ]);
-    expect(descriptions(h.alert)[1]).toContain('retries every 15 minutes');
+    expect(descriptions(h.alert)[1]).toContain('retries at most once an hour');
   });
 
   it('requestRebuild refuses the same month again within 10 minutes', async () => {
@@ -972,6 +1236,7 @@ describe('buildSummaryEntry', () => {
     durationMs: 1200,
     sourceComplete: true,
     finished: true,
+    summaryIsNew: true,
     hallOfFame: { events: 4, hosts: 3, newHosts: 1 },
     noShow: {
       noShows: 8,

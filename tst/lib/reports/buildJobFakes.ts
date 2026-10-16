@@ -179,6 +179,48 @@ export class Clock {
   }
 }
 
+/** FakeCache whose TTLs expire on the harness clock, as Redis keys would. */
+export class ExpiringCache extends FakeCache {
+  private readonly expiries = new Map<string, number>();
+
+  constructor(private readonly clock: Clock) {
+    super();
+  }
+
+  private expire(key: string): void {
+    const at = this.expiries.get(key);
+    if (at !== undefined && this.clock.now().getTime() >= at) {
+      this.values.delete(key);
+      this.ttls.delete(key);
+      this.expiries.delete(key);
+    }
+  }
+
+  override async get(key: string) {
+    this.expire(key);
+    return super.get(key);
+  }
+
+  override async set(key: string, value: string, ttlSec?: number) {
+    await super.set(key, value, ttlSec);
+    if (ttlSec === undefined) {
+      this.expiries.delete(key);
+    } else {
+      this.expiries.set(key, this.clock.now().getTime() + ttlSec * 1000);
+    }
+  }
+
+  override async exclusive_set(key: string, value: string, ttlSec?: number) {
+    this.expire(key);
+    return super.exclusive_set(key, value, ttlSec);
+  }
+
+  override async remove(key: string) {
+    this.expiries.delete(key);
+    await super.remove(key);
+  }
+}
+
 export interface Harness {
   deps: BuildJobDeps;
   clock: Clock;
@@ -222,7 +264,7 @@ export interface HarnessOptions {
 
 export function makeDeps(options: HarnessOptions = {}): Harness {
   const clock = options.clock ?? new Clock('2026-10-05T16:15:00Z');
-  const cache = options.cache ?? new FakeCache();
+  const cache = options.cache ?? new ExpiringCache(clock);
   const snapshots = options.snapshots ?? new FakeSnapshotStore();
   const notices = options.notices ?? new FakeNoticeStore();
   const linkProgress = options.linkProgress ?? new FakeLinkProgressStore();

@@ -74,6 +74,45 @@ const rebuildCooldownKey = (p: Period) =>
 const DISCORD_ID = /^[0-9]{1,20}$/;
 const isManual = (builtBy: string) => DISCORD_ID.test(builtBy);
 const linkProgressAlertedKey = (day: string) => `link-progress-alerted-${day}`;
+/** After a failed build, the job retries that month at most once an hour. */
+const BACKOFF_TTL_SEC = 60 * 60;
+const backoffKey = (p: Period) => `report-build-backoff-${periodKey(p)}`;
+/** Consecutive failed ticks (an hour of them) before the job alerts in Discord. */
+const INFRA_ALERT_AFTER_FAILED_TICKS = 4;
+
+/**
+ * Every no-show member of a finished month looks departed: most likely the
+ * organizer token cannot see memberships, so the report would be wrong.
+ */
+export class MembershipsUnreadableError extends Error {
+  /** Its text may reach #meetup-bot-alerts. */
+  readonly organizerSafeMessage = true;
+
+  constructor(period: Period) {
+    super(
+      `Every member with a no-show in ${monthLabel(period)} looks like they have left the group; ` +
+        'the organizer account may not be able to see memberships. Nothing was saved.',
+    );
+    this.name = 'MembershipsUnreadableError';
+  }
+}
+
+/** Key-order-insensitive equality of two JSON values (JSONB reorders keys). */
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map(stableJson).join(',')}]`;
+  }
+  if (value !== null && typeof value === 'object') {
+    const entries = Object.keys(value as Record<string, unknown>)
+      .sort()
+      .map(
+        (key) =>
+          `${JSON.stringify(key)}:${stableJson((value as Record<string, unknown>)[key])}`,
+      );
+    return `{${entries.join(',')}}`;
+  }
+  return JSON.stringify(value) ?? 'undefined';
+}
 
 /**
  * The report-ready notice links to the month's dashboard page, which ships in
@@ -122,6 +161,12 @@ export interface MonthBuildOutcome {
   sourceComplete: boolean;
   /** The month had ended when the build started. */
   finished: boolean;
+  /**
+   * For a finished month: this is its first finished build (no current pair
+   * built at or after the period end before this save), or either summary
+   * differs from the previous current row's. Always true for an open month.
+   */
+  summaryIsNew: boolean;
   hallOfFame: HallOfFameSummary;
   noShow: NoShowSummary;
   attendance: AttendanceEvidence;
@@ -175,6 +220,13 @@ export async function buildMonth(
     asOf,
     finished ? suspensionCutoff(period) : undefined,
   );
+  const { members, departed } = reports.noShow.summary;
+  if (finished && members > 0 && departed === members) {
+    throw new MembershipsUnreadableError(period);
+  }
+  const summaryIsNew = finished
+    ? await finishedSummaryIsNew(deps, period, reports)
+    : true;
   const builtAt = started;
   const mode = finished ? 'supersede' : 'update-open';
   await deps.snapshots.save({
@@ -205,10 +257,44 @@ export async function buildMonth(
     durationMs,
     sourceComplete: reports.sourceComplete,
     finished,
+    summaryIsNew,
     hallOfFame: reports.hallOfFame.summary,
     noShow: reports.noShow.summary,
     attendance: reports.noShow.attendance,
   };
+}
+
+/** Read BEFORE saving: compares against the rows this build replaces. */
+async function finishedSummaryIsNew(
+  deps: BuildJobDeps,
+  period: Period,
+  reports: MonthReports,
+): Promise<boolean> {
+  try {
+    const [hof, noShow] = await Promise.all([
+      deps.snapshots.getCurrentMeta('hall_of_fame', period),
+      deps.snapshots.getCurrentMeta('no_show', period),
+    ]);
+    const end = periodEnd(period).getTime();
+    if (
+      !hof ||
+      !noShow ||
+      hof.builtAt.getTime() < end ||
+      noShow.builtAt.getTime() < end
+    ) {
+      return true; // the first finished build
+    }
+    return (
+      stableJson(hof.summary) !== stableJson(reports.hallOfFame.summary) ||
+      stableJson(noShow.summary) !== stableJson(reports.noShow.summary)
+    );
+  } catch (error) {
+    // Better a repeated summary than a silently missing one.
+    logger.error(
+      `Report build ${periodKey(period)}: reading the previous summaries failed: ${String(error)}`,
+    );
+    return true;
+  }
 }
 
 function builtByText(builtBy: string): string {
@@ -254,7 +340,7 @@ function failureEntry(
   const label = monthLabel(period);
   const next = manual
     ? 'Try the refresh again later; the daily job retries only months that are due.'
-    : 'It retries every 15 minutes (never 18:00–19:00 UTC); this alert repeats at most once a day until it works.';
+    : 'It retries at most once an hour (never 17:45–19:00 UTC); this alert repeats at most once a day until it works.';
   return {
     title: `Report build failed: ${label}`,
     description: `Building the ${label} reports failed after ${seconds(durationMs)} s: ${describeBuildError(error)}\n\n${next}`,
@@ -271,6 +357,8 @@ async function recordFailure(
 ): Promise<void> {
   try {
     const now = deps.now();
+    // Job and manual failures alike: the job leaves the month alone for an hour.
+    await cache.set(backoffKey(period), now.toISOString(), BACKOFF_TTL_SEC);
     // Keeps the first failure time.
     await cache.exclusive_set(
       failingKey(period),
@@ -322,6 +410,11 @@ async function buildAndRecord(
     return false;
   }
   try {
+    await cache.remove(backoffKey(period));
+  } catch (error) {
+    logger.error(`Report build backoff reset failed: ${String(error)}`);
+  }
+  try {
     if (await cache.get(failingKey(period))) {
       const label = monthLabel(period);
       const posted = await deps.alert({
@@ -335,10 +428,11 @@ async function buildAndRecord(
   } catch (error) {
     logger.error(`Report build recovery bookkeeping failed: ${String(error)}`);
   }
-  // The open month's daily build is logged only; finished months and manual
-  // refreshes post a summary.
+  // The open month's daily build is logged only. A job build of a finished
+  // month posts only its first finished build or a changed summary (days 2-7
+  // rebuild it daily); manual and backfill builds always post.
   try {
-    if (builtBy !== 'job' || outcome.finished) {
+    if (builtBy !== 'job' || (outcome.finished && outcome.summaryIsNew)) {
       await deps.alert(buildSummaryEntry(outcome));
     }
   } catch (error) {
@@ -392,6 +486,21 @@ async function loadBuiltAt(
   return builtAt;
 }
 
+/** A month that failed within the hour is skipped; an unreadable key skips too (fail closed). */
+async function monthBackedOff(
+  cache: KeyValueCache,
+  period: Period,
+): Promise<boolean> {
+  try {
+    return Boolean(await cache.get(backoffKey(period)));
+  } catch (error) {
+    logger.error(
+      `Report build backoff check for ${periodKey(period)} failed; skipping the month: ${String(error)}`,
+    );
+    return true;
+  }
+}
+
 /**
  * One tick: guards, lease, due plan from Postgres, each due month and link
  * progress in order, then report-ready. Never starts work in the quiet hour
@@ -437,6 +546,13 @@ export async function runBuildTick(deps: BuildJobDeps): Promise<void> {
           'Report build stopped early: too close to the identity sweep or the digests',
         );
         break;
+      }
+      // eslint-disable-next-line no-await-in-loop -- sequential on purpose: one month at a time
+      if (item.kind === 'month' && (await monthBackedOff(cache, item.period))) {
+        logger.info(
+          `Report build ${periodKey(item.period)} skipped: it failed within the last hour`,
+        );
+        continue; // skip, not stop: later items still run
       }
       // eslint-disable-next-line no-await-in-loop -- sequential on purpose: one month at a time
       await (item.kind === 'month'
@@ -668,17 +784,25 @@ export const BUILD_TICK_MS = 15 * 60 * 1000;
 
 type SchedulerLog = Pick<Logger<unknown>, 'error' | 'warn' | 'info'>;
 
-/** Never rejects: dependency or tick failures are logged. */
+/** `error` is set when the tick failed. */
+export interface TickResult {
+  ok: boolean;
+  error?: unknown;
+}
+
+/** Never rejects (unless logging throws): dependency or tick failures are logged and returned. */
 export async function runBuildTickSafely(
   makeDeps: () => Promise<BuildJobDeps>,
   log: Pick<Logger<unknown>, 'error'> = logger,
-): Promise<void> {
+): Promise<TickResult> {
   try {
     await runBuildTick(await makeDeps());
+    return { ok: true };
   } catch (error) {
     // Process log only (never Discord): what reaches here is infrastructure
     // (pg, Redis, the lease), and operators need its text.
     log.error(`Report build tick failed: ${String(error)}`);
+    return { ok: false, error };
   }
 }
 
@@ -689,6 +813,8 @@ export interface ReportBuildSchedulerOptions {
   log?: SchedulerLog;
   /** Milliseconds since the epoch (tests). */
   now?: () => number;
+  /** Posts to #meetup-bot-alerts (tests inject a fake). */
+  alert?: (entry: LogEntry) => Promise<boolean>;
 }
 
 /**
@@ -710,6 +836,36 @@ export function startReportBuildScheduler(
   }
   const makeDeps = options.makeDeps ?? (() => defaultBuildJobDeps(client));
   const now = options.now ?? Date.now;
+  const alert = options.alert ?? ((entry: LogEntry) => logAlert(client, entry));
+  let failedTicks = 0;
+  let infraAlertDay: string | undefined;
+  // Infrastructure failures (pg, Redis, the lease) never reach the month
+  // alerts: after an hour of them, say so in Discord once per UTC day.
+  const recordTick = async (result: TickResult) => {
+    if (result.ok) {
+      failedTicks = 0;
+      return;
+    }
+    failedTicks += 1;
+    const day = utcDay(new Date(now()));
+    if (failedTicks < INFRA_ALERT_AFTER_FAILED_TICKS || infraAlertDay === day) {
+      return;
+    }
+    infraAlertDay = day; // one attempt a day, posted or not
+    try {
+      const posted = await alert({
+        title: 'Report build job is failing',
+        description:
+          `The report build job has failed ${failedTicks} times in a row: ${describeBuildError(result.error)}\n\n` +
+          'It keeps retrying every 15 minutes; details are in the process log.',
+      });
+      if (!posted) {
+        log.error('Report build job failure alert was not posted');
+      }
+    } catch (error) {
+      log.error(`Report build job failure alert failed: ${String(error)}`);
+    }
+  };
   let running = false;
   let skipLogged = false;
   let tickStartedAt = 0;
@@ -735,6 +891,7 @@ export function startReportBuildScheduler(
     wedgeWarned = false;
     tickStartedAt = now();
     runBuildTickSafely(makeDeps, log)
+      .then(recordTick)
       .finally(() => {
         running = false;
       })

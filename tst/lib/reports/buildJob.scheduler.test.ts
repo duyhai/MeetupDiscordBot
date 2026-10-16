@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-unsafe-assignment -- expect.any() matchers */
 import { Client } from 'discord.js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -7,7 +8,7 @@ import {
   runBuildTickSafely,
   startReportBuildScheduler,
 } from '../../../src/lib/reports/buildJob.js';
-import { makeDeps } from './buildJobFakes.js';
+import { Clock, makeDeps } from './buildJobFakes.js';
 
 const client = {} as Client;
 const DB_ENV = { DATABASE_URL: 'postgres://fake' };
@@ -31,7 +32,10 @@ describe('runBuildTickSafely', () => {
     const log = fakeLog();
     const makeDepsFn = vi.fn(() => Promise.reject(new TypeError('no pool')));
 
-    await expect(runBuildTickSafely(makeDepsFn, log)).resolves.toBeUndefined();
+    await expect(runBuildTickSafely(makeDepsFn, log)).resolves.toEqual({
+      ok: false,
+      error: expect.any(TypeError),
+    });
 
     expect(log.error).toHaveBeenCalledTimes(1);
     const message = String(log.error.mock.calls[0][0]);
@@ -46,7 +50,7 @@ describe('runBuildTickSafely', () => {
 
     await expect(
       runBuildTickSafely(() => Promise.resolve(harness.deps), log),
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual({ ok: false, error: expect.any(Error) });
 
     expect(harness.cacheSpy).toHaveBeenCalled();
     expect(log.error).toHaveBeenCalledTimes(1);
@@ -233,5 +237,106 @@ describe('startReportBuildScheduler', () => {
     expect(log.error).toHaveBeenCalledTimes(2);
     expect(makeDepsFn).toHaveBeenCalledTimes(2);
     expect(rejections).toEqual([]);
+  });
+
+  it('alerts once a day after four consecutive failed ticks', async () => {
+    const { calls, setIntervalFn } = captureInterval();
+    const log = fakeLog();
+    const alert = vi.fn((_entry: { title: string; description?: string }) =>
+      Promise.resolve(true),
+    );
+    let nowMs = Date.parse('2026-10-05T16:00:00Z');
+    let failing = true;
+    // A successful tick: the clock is before 16:00, so it returns at once.
+    const quiet = makeDeps({ clock: new Clock('2026-10-05T15:00:00Z') });
+    const makeDepsFn = vi.fn(() => {
+      if (failing) {
+        return Promise.reject(new Error('connect ECONNREFUSED 127.0.0.1:5432'));
+      }
+      return Promise.resolve(quiet.deps);
+    });
+    startReportBuildScheduler(client, {
+      env: DB_ENV,
+      makeDeps: makeDepsFn,
+      setIntervalFn,
+      log,
+      alert,
+      now: () => nowMs,
+    });
+    const tickAgain = async () => {
+      nowMs += 15 * 60 * 1000;
+      calls[0].fn();
+      await settle();
+    };
+    await settle(); // tick 1 (at start) failed
+    await tickAgain();
+    await tickAgain(); // 3 failures
+    expect(alert).not.toHaveBeenCalled();
+    await tickAgain(); // 4th
+    expect(alert).toHaveBeenCalledTimes(1);
+    const [entry] = alert.mock.calls[0];
+    expect(entry.title).toBe('Report build job is failing');
+    expect(entry.description).toContain('Error (details in the process log)');
+    expect(entry.description).toContain('retrying every 15 minutes');
+    expect(entry.description).not.toContain('ECONNREFUSED');
+
+    await tickAgain();
+    await tickAgain(); // more failures the same day
+    expect(alert).toHaveBeenCalledTimes(1);
+
+    failing = false;
+    await tickAgain(); // success resets the count
+    failing = true;
+    for (let i = 0; i < 4; i += 1) {
+      // eslint-disable-next-line no-await-in-loop -- ticks are sequential
+      await tickAgain();
+    }
+    expect(alert).toHaveBeenCalledTimes(1); // still the same UTC day
+
+    failing = false;
+    nowMs = Date.parse('2026-10-06T16:00:00Z');
+    calls[0].fn();
+    await settle(); // success on the next day
+    failing = true;
+    for (let i = 0; i < 3; i += 1) {
+      // eslint-disable-next-line no-await-in-loop -- ticks are sequential
+      await tickAgain();
+    }
+    expect(alert).toHaveBeenCalledTimes(1); // 3 failures: not yet
+    await tickAgain();
+    expect(alert).toHaveBeenCalledTimes(2);
+  });
+
+  it('a failed infrastructure alert is only logged', async () => {
+    process.on('unhandledRejection', onRejection);
+    const { calls, setIntervalFn } = captureInterval();
+    const log = fakeLog();
+    const alert = vi.fn(() => Promise.reject(new Error('discord down')));
+    const makeDepsFn = vi.fn(() => Promise.reject(new Error('boom')));
+    startReportBuildScheduler(client, {
+      env: DB_ENV,
+      makeDeps: makeDepsFn,
+      setIntervalFn,
+      log,
+      alert,
+    });
+    await settle();
+    for (let i = 0; i < 3; i += 1) {
+      calls[0].fn();
+      // eslint-disable-next-line no-await-in-loop -- ticks are sequential
+      await settle();
+    }
+    await settle();
+    expect(alert).toHaveBeenCalledTimes(1);
+    expect(
+      log.error.mock.calls.some(([m]) =>
+        String(m).includes('Report build job failure alert'),
+      ),
+    ).toBe(true);
+    expect(rejections).toEqual([]);
+    // The ticks keep running.
+    calls[0].fn();
+    await settle();
+    expect(makeDepsFn).toHaveBeenCalledTimes(5);
   });
 });
