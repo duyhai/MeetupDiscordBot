@@ -13,8 +13,10 @@ import {
   fetchDiscordIdentity,
 } from './discordOAuth.js';
 import { html } from './html.js';
+import { organizerLoginDeps } from './organizerLoginDeps.js';
 import { layout } from './pages.js';
 import { discordAccessCheck } from './roleGate.js';
+import { registerOrganizerLoginRoutes } from './routes/organizerLogin.js';
 
 export const MIN_SESSION_SECRET_LENGTH = 32;
 
@@ -101,5 +103,12 @@ export function dashboardRouterFromEnv(
       }
       return logActivity(discordClient, entry);
     },
+    // Mounted by the router behind the session gate and the unsafe-method
+    // (CSRF / Origin / rate-limit) guard.
+    protectedRoutes: (router) =>
+      registerOrganizerLoginRoutes(
+        router,
+        organizerLoginDeps(() => discordClient),
+      ),
   });
 }

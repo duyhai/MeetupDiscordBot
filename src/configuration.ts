@@ -1,3 +1,5 @@
+import { Logger } from 'tslog';
+
 interface ConfigurationSchema {
   discord: {
     apiKey: string;
@@ -11,7 +13,33 @@ interface ConfigurationSchema {
     groupId: string;
     groupUrlName: string;
     organizerRefreshToken: string | undefined;
+    organizerMemberId: string | undefined;
   };
+}
+
+const ORGANIZER_MEMBER_ID_PATTERN = /^\d{1,20}$/;
+
+/**
+ * MEETUP_ORGANIZER_MEMBER_ID, trimmed; undefined when unset, blank or not
+ * 1-20 digits. A malformed value warns once, by name only (never the value),
+ * and counts as unset rather than becoming an account no token can match.
+ */
+export function organizerMemberIdFrom(
+  raw: string | undefined,
+  warn: (message: string) => void = (message) =>
+    new Logger({ name: 'configuration' }).warn(message),
+): string | undefined {
+  const value = raw?.trim();
+  if (!value) {
+    return undefined;
+  }
+  if (!ORGANIZER_MEMBER_ID_PATTERN.test(value)) {
+    warn(
+      'MEETUP_ORGANIZER_MEMBER_ID is not a Meetup member id (1-20 digits); ignoring it',
+    );
+    return undefined;
+  }
+  return value;
 }
 
 const Configuration: ConfigurationSchema = {
@@ -29,6 +57,11 @@ const Configuration: ConfigurationSchema = {
     // Deliberately absent from REQUIRED_VARS: the bot must still start
     // without it, with only Meetup-side identity monitoring disabled.
     organizerRefreshToken: process.env.MEETUP_ORGANIZER_REFRESH_TOKEN,
+    // The shared organizer account's Meetup member id: the bootstrap check
+    // for organizer renewal until one is stored. Optional, like the token.
+    organizerMemberId: organizerMemberIdFrom(
+      process.env.MEETUP_ORGANIZER_MEMBER_ID,
+    ),
   },
 };
 

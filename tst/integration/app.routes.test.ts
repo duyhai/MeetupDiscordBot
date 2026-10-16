@@ -4,7 +4,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import app from '../../src/app.js';
 import { PUBLIC_APP_ORIGIN } from '../../src/constants.js';
-import { createOAuthState } from '../../src/lib/client/oauth/state.js';
+import {
+  claimOAuthState,
+  createOAuthState,
+  createOrganizerRenewState,
+  resolveOAuthState,
+} from '../../src/lib/client/oauth/state.js';
 import { ApplicationCache } from '../../src/util/cache.js';
 
 // Every request below is a FRESH supertest client with no cookie jar: the
@@ -185,6 +190,72 @@ describe('cookie-free OAuth chain', () => {
     expect(res.status).toBe(404);
     expect(res.text).toContain('discord://-/channels/');
     expect(res.text).not.toContain('<pre>');
+  });
+});
+
+describe('Meetup callback: organizer login renewal', () => {
+  const HASH = 'c'.repeat(64);
+
+  it('the Meetup callback hands an organizer-renew state to the dashboard completion path (only state/code/error forwarded)', async () => {
+    const state = await createOrganizerRenewState('user-org-1', HASH);
+    const exchange = nockMeetupExchange();
+
+    const res = await request(app).get(
+      `/connect/meetup/callback?state=${state}&code=mcode&error=access_denied` +
+        '&next=https%3A%2F%2Fevil.example&redirect=%2F%2Fevil.example&code_verifier=x&sid=y',
+    );
+
+    expect(res.status).toBe(302);
+    const location = new URL(res.headers.location, 'https://base.invalid');
+    expect(location.origin).toBe('https://base.invalid');
+    expect(location.pathname).toBe('/dashboard/organizer-login/complete');
+    expect([...location.searchParams.entries()]).toEqual([
+      ['state', state],
+      ['code', 'mcode'],
+      ['error', 'access_denied'],
+    ]);
+    expect(res.headers['set-cookie']).toBeUndefined();
+    // Neither exchanged nor consumed nor claimed: the dashboard does that.
+    expect(exchange.isDone()).toBe(false);
+    expect(await resolveOAuthState(state)).toMatchObject({
+      purpose: 'organizer-renew',
+    });
+    expect(await claimOAuthState(state)).toBe(true);
+  });
+
+  it('forwards only the parameters Meetup actually sent', async () => {
+    const state = await createOrganizerRenewState('user-org-2', HASH);
+
+    const withCode = await request(app).get(
+      `/connect/meetup/callback?state=${state}&code=only-code`,
+    );
+    const repeated = await request(app).get(
+      `/connect/meetup/callback?state=${state}&code=a&code=b`,
+    );
+
+    expect(withCode.headers.location).toBe(
+      `/dashboard/organizer-login/complete?state=${state}&code=only-code`,
+    );
+    expect(repeated.headers.location).toBe(
+      `/dashboard/organizer-login/complete?state=${state}`,
+    );
+  });
+
+  it('member-link states are unaffected', async () => {
+    const state = await createOAuthState('user-link-1');
+    nockMeetupExchange();
+
+    const res = await request(app).get(
+      `/connect/meetup/callback?state=${state}&code=mcode&next=%2Fdashboard`,
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.headers.location).toBeUndefined();
+    const cache = await ApplicationCache();
+    expect(
+      JSON.parse(await cache.get('user-link-1-meetup-tokens')),
+    ).toMatchObject({ accessToken: 'meetup-access' });
+    expect(await resolveOAuthState(state)).toBeUndefined();
   });
 });
 

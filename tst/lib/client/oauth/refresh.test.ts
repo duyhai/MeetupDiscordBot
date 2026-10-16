@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import {
   MeetupTokenRefreshError,
+  MeetupTokenResponseError,
   refreshMeetupToken,
 } from '../../../../src/lib/client/oauth/providers.js';
 
@@ -112,4 +113,55 @@ describe('refreshMeetupToken', () => {
     expect(error).toBeInstanceOf(MeetupTokenRefreshError);
     expect((error as MeetupTokenRefreshError).oauthError).toBeUndefined();
   });
+
+  it.each([
+    ['is missing', { refresh_token: 'same-refresh', expires_in: 3600 }],
+    [
+      'is empty',
+      { access_token: '', refresh_token: 'same-refresh', expires_in: 3600 },
+    ],
+    [
+      'is not a string',
+      { access_token: 42, refresh_token: 'same-refresh', expires_in: 3600 },
+    ],
+  ])(
+    'throws MeetupTokenResponseError when the access token %s',
+    async (_name, body) => {
+      nock('https://secure.meetup.com').post('/oauth2/access').reply(200, body);
+
+      const error: unknown = await refreshMeetupToken('old-refresh').catch(
+        (caught: unknown) => caught,
+      );
+
+      expect(error).toBeInstanceOf(MeetupTokenResponseError);
+      // Not a refresh rejection: it must never count as a dead grant.
+      expect(error).not.toBeInstanceOf(MeetupTokenRefreshError);
+      expect((error as Error).name).toBe('MeetupTokenResponseError');
+      expect((error as Error).message).toBe(
+        'Meetup token response had no usable access token',
+      );
+    },
+  );
+
+  it.each([
+    ['is absent', { access_token: 'new-access', expires_in: 3600 }],
+    [
+      'is empty',
+      { access_token: 'new-access', refresh_token: '', expires_in: 3600 },
+    ],
+    [
+      'is not a string',
+      { access_token: 'new-access', refresh_token: 7, expires_in: 3600 },
+    ],
+  ])(
+    'keeps the refresh token it sent when the returned one %s',
+    async (_name, body) => {
+      nock('https://secure.meetup.com').post('/oauth2/access').reply(200, body);
+
+      const tokens = await refreshMeetupToken('old-refresh');
+
+      expect(tokens.accessToken).toBe('new-access');
+      expect(tokens.refreshToken).toBe('old-refresh');
+    },
+  );
 });

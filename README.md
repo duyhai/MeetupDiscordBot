@@ -199,12 +199,16 @@ Which steps you need depends on whether the *stored* credential still works.
 The sweep resolves the stored pair first and only falls back to the config
 var, so the two cases are genuinely different:
 
-- **The grant was revoked or expired** (the sweep is alerting). The stored
-  refresh token now fails, so the fallback already fires. Signed in to
-  meetup.com as the dedicated account (see above), run
-  `/meetup_get_token sweep_credential:True`,
-  copy the refresh token, set `MEETUP_ORGANIZER_REFRESH_TOKEN`. Nothing else
-  is needed.
+- **The grant was revoked or expired** (the sweep is alerting). The quickest
+  fix is the dashboard's Renew organizer login page
+  (`/dashboard/organizer-login`), signed in to Meetup as the dedicated
+  account. The config var still works as a fallback: once Meetup definitely
+  rejects the stored refresh token (`invalid_grant`, or a bare 401), the
+  sweep tries `MEETUP_ORGANIZER_REFRESH_TOKEN`. A timeout, outage, 5xx, 429
+  or `invalid_client` never falls through to it -- the stored token may be
+  fine. So, signed in to meetup.com as the dedicated account (see above), run
+  `/meetup_get_token sweep_credential:True`, copy the refresh token, set
+  `MEETUP_ORGANIZER_REFRESH_TOKEN`.
 - **The stored pair is still valid but you want a different grant** -- a new
   organizer, or rotating away from someone leaving. Setting the config var
   alone changes nothing, because the still-working stored pair keeps winning.
@@ -217,5 +221,29 @@ var, so the two cases are genuinely different:
   from the dedicated account as above. The
   next sweep seeds from it and stores the result.
 
+Either way the new token must belong to the organizer account on record
+(below): a token of any other Meetup account is refused before it is stored
+or used, and the sweep alerts instead.
+
 Revoking the old grant itself is done from Meetup's application settings;
 clearing the row only stops this bot from using it.
+
+#### Changing the recorded organizer account
+
+The bot records the organizer account's Meetup member id (in
+`oauth_credential_meta`) the first time it sees a working credential, and
+from then on refuses any refreshed, seeded or renewed token that belongs to a
+different account -- a personal account must never become the sweep
+credential. There is no admin page for changing it yet. To move the sweep to
+a different dedicated account:
+
+1. Set `MEETUP_ORGANIZER_MEMBER_ID` in Heroku config to the new account's
+   Meetup member id (digits only).
+2. Delete the recorded id (this also clears any open failure episode):
+
+       heroku pg:psql -a meetup-discord-bot
+       DELETE FROM oauth_credential_meta WHERE key = 'meetup_organizer';
+
+3. Renew from the dashboard (`/dashboard/organizer-login`) while signed in to
+   Meetup as the new account. The page checks the account against
+   `MEETUP_ORGANIZER_MEMBER_ID` and records it.

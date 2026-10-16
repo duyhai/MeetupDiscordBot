@@ -16,6 +16,7 @@ import {
   recordIdentityFor,
   updateBaselineSilently,
 } from '../../../../src/lib/helpers/identity/monitor.js';
+import { applyNetworkBlock } from '../../../setup/blockNetwork.js';
 
 const repo = {
   getSnapshot: vi.fn(),
@@ -34,7 +35,7 @@ vi.mock('../../../../src/util/identityRepository.js', () => ({
 // intercept fails fast (and degrades to the documented null thumb) rather
 // than reaching the real CDN from a test run.
 beforeAll(() => nock.disableNetConnect());
-afterAll(() => nock.enableNetConnect());
+afterAll(() => applyNetworkBlock());
 afterEach(() => nock.cleanAll());
 
 /** Not all-ASCII, so a byte-mangling round trip could not pass unnoticed. */

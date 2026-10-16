@@ -1,5 +1,6 @@
 import express from 'express';
 import http from 'http';
+import net, { AddressInfo } from 'net';
 import request from 'supertest';
 import { vi } from 'vitest';
 
@@ -26,13 +27,62 @@ const servers = new Set<http.Server>();
  * request cannot land on someone else's server. Close with closeServers().
  */
 export async function serve(app: express.Express): Promise<Client> {
+  return request(await listen(app));
+}
+
+/** The loopback server behind serve(); closed by closeServers(). */
+export async function listen(app: express.Express): Promise<http.Server> {
   const server = http.createServer(app);
   servers.add(server);
   await new Promise<void>((resolve, reject) => {
     server.once('error', reject);
     server.listen(0, '127.0.0.1', () => resolve());
   });
-  return request(server);
+  return server;
+}
+
+/**
+ * One HTTP/1.1 request over a raw socket, sending `path` byte for byte.
+ * For paths an HTTP client would reinterpret: nock (active in every test)
+ * reads `//dashboard` as a protocol-relative URL and retargets it to host
+ * "dashboard". nock does not intercept raw `net`, so this reaches the real
+ * loopback server. Repeated headers (Set-Cookie) are joined with newlines.
+ */
+export async function rawRequest(
+  server: http.Server,
+  method: string,
+  path: string,
+  headers: Record<string, string> = {},
+): Promise<{ status: number; headers: Record<string, string>; body: string }> {
+  const { port } = server.address() as AddressInfo;
+  const extra = Object.entries(headers)
+    .map(([name, value]) => `${name}: ${value}\r\n`)
+    .join('');
+  const reply = await new Promise<string>((resolve, reject) => {
+    const socket = net.connect(port, '127.0.0.1');
+    const chunks: Buffer[] = [];
+    socket.on('data', (chunk: Buffer) => chunks.push(chunk));
+    socket.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
+    socket.on('error', reject);
+    socket.write(
+      `${method} ${path} HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\n` +
+        `Connection: close\r\n${extra}\r\n`,
+    );
+  });
+  const split = reply.indexOf('\r\n\r\n');
+  const [statusLine, ...lines] = reply.slice(0, split).split('\r\n');
+  const status = Number(/^HTTP\/1\.1 (\d{3})/.exec(statusLine)?.[1]);
+  if (!status) {
+    throw new Error(`no HTTP status line in reply: ${statusLine}`);
+  }
+  const parsed: Record<string, string> = {};
+  for (const line of lines) {
+    const colon = line.indexOf(':');
+    const name = line.slice(0, colon).trim().toLowerCase();
+    const value = line.slice(colon + 1).trim();
+    parsed[name] = name in parsed ? `${parsed[name]}\n${value}` : value;
+  }
+  return { status, headers: parsed, body: reply.slice(split + 4) };
 }
 
 /** For afterEach: closes every server serve() opened. */
@@ -81,7 +131,8 @@ export async function makeApp(overrides: Partial<DashboardDeps> = {}) {
   const app = express();
   app.set('trust proxy', 1);
   app.use('/dashboard', createDashboardRouter(deps));
-  return { app, cache, deps, req: await serve(app) };
+  const server = await listen(app);
+  return { app, cache, deps, server, req: request(server) };
 }
 
 /** Asserts a 302 with a Location, failing with the status and body otherwise. */

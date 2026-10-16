@@ -94,6 +94,23 @@ interface Locals {
 
 const locals = (res: Response) => res.locals as Locals;
 
+/**
+ * What the session gate leaves for a route registered through
+ * `protectedRoutes`. Throws when called outside the gate, so a route that
+ * somehow ran without a session fails closed instead of acting as nobody.
+ */
+export function dashboardLocals(res: Response): {
+  session: DashboardSession;
+  sid: string;
+  nonce: string;
+} {
+  const { session, sid, nonce } = locals(res);
+  if (!session || !sid) {
+    throw new Error('dashboardLocals read outside the dashboard session gate');
+  }
+  return { session, sid, nonce };
+}
+
 function send(res: Response, status: number, body: string) {
   res.status(status).type('html').send(body);
 }

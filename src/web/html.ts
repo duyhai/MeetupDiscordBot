@@ -61,6 +61,14 @@ const LINK_TARGETS = [
 ];
 
 /**
+ * Exact-path targets: Meetup's OAuth authorize endpoint, for the "Renew
+ * organizer login" continue link. Any query is allowed; no other path is.
+ */
+const EXACT_LINK_TARGETS = [
+  { host: 'secure.meetup.com', pathname: '/oauth2/authorize' },
+];
+
+/**
  * The only outbound links a dashboard page may render. Event URLs and
  * profile URLs come from Meetup data, so they are checked here rather than
  * trusted: anything that isn't plain https to one of these places is
@@ -81,9 +89,14 @@ export function safeHref(url: string): string | undefined {
   ) {
     return undefined;
   }
-  const allowed = LINK_TARGETS.some(
-    ({ host, pathPrefix }) =>
-      parsed.hostname === host && parsed.pathname.startsWith(pathPrefix),
-  );
+  const allowed =
+    LINK_TARGETS.some(
+      ({ host, pathPrefix }) =>
+        parsed.hostname === host && parsed.pathname.startsWith(pathPrefix),
+    ) ||
+    EXACT_LINK_TARGETS.some(
+      ({ host, pathname }) =>
+        parsed.hostname === host && parsed.pathname === pathname,
+    );
   return allowed ? parsed.href : undefined;
 }

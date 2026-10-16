@@ -2,6 +2,7 @@ import nock from 'nock';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import {
+  MeetupTokenResponseError,
   buildMeetupAuthUrl,
   exchangeMeetupCode,
 } from '../../../../src/lib/client/oauth/providers.js';
@@ -65,4 +66,21 @@ describe('exchangeMeetupCode', () => {
       /Meetup token exchange failed/,
     );
   });
+
+  it.each([
+    ['is missing', { refresh_token: 'meetup-refresh', expires_in: 3600 }],
+    [
+      'is empty',
+      { access_token: '', refresh_token: 'meetup-refresh', expires_in: 3600 },
+    ],
+  ])(
+    'throws MeetupTokenResponseError when the access token %s',
+    async (_name, body) => {
+      nock('https://secure.meetup.com').post('/oauth2/access').reply(200, body);
+
+      await expect(exchangeMeetupCode('the-code')).rejects.toBeInstanceOf(
+        MeetupTokenResponseError,
+      );
+    },
+  );
 });

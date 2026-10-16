@@ -115,6 +115,24 @@ export const meetupConnectCallbackHandler: RequestHandler = (async (
     });
     return errorPage(res, 400, strings.expiredState);
   }
+  if (record.purpose === 'organizer-renew') {
+    // The staff dashboard's "Renew organizer login": hand the browser to the
+    // dashboard, which checks the session binding, claims the state and
+    // exchanges the code. Nothing is consumed or exchanged here. Only these
+    // three parameters, each a single string, are copied onto a fixed path:
+    // no other request input reaches the Location.
+    const forward = new URLSearchParams({ state });
+    for (const name of ['code', 'error'] as const) {
+      const value = req.query[name];
+      if (typeof value === 'string') {
+        forward.set(name, value);
+      }
+    }
+    return res.redirect(
+      302,
+      `/dashboard/organizer-login/complete?${forward.toString()}`,
+    );
+  }
   const userId = record.discordUserId;
   if (req.query.error || !req.query.code) {
     logger.warn(`Meetup authorize denied: ${String(req.query.error)}`);

@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { getUsableMeetupTokens } from '../../src/lib/helpers/meetupTokens.js';
 import { waitForMeetupTokens } from '../../src/lib/helpers/oauthWait.js';
 import { withMeetupClient } from '../../src/util/meetup.js';
+import { applyNetworkBlock } from '../setup/blockNetwork.js';
 
 const TOKEN_KEY = 'u1-meetup-tokens';
 const HOUR_MS = 60 * 60 * 1000;
@@ -163,7 +164,7 @@ describe('withMeetupClient token reuse', () => {
 
   afterEach(() => {
     nock.cleanAll();
-    nock.enableNetConnect();
+    applyNetworkBlock();
   });
 
   it('uses an unexpired access token as-is, without calling Meetup', async () => {
