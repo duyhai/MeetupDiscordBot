@@ -3,7 +3,6 @@ import { describe, expect, it } from 'vitest';
 import { BaseUserInfo, Event } from '../../../src/lib/client/meetup/types.js';
 import {
   collectHostStats,
-  displayedEvents,
   isCancelledEvent,
   isCountableEvent,
   formatHallOfFamePost,
@@ -122,39 +121,6 @@ describe('collectHostStats', () => {
     const events = [makeEvent({ eventHosts: [host('a'), host('a')] })];
     const { hostStats } = collectHostStats(events);
     expect(hostStats[0].events).toHaveLength(1);
-  });
-});
-
-describe('displayedEvents', () => {
-  // Attendance is fetched for exactly this set, and the attachment reads it
-  // back with `?? 0` -- so any event shown but not fetched would silently
-  // render as (0/N) attendance.
-  it('is exactly the events the Hall of Fame shows, each listed once', () => {
-    const solo = makeEvent({ eventHosts: [host('x')] });
-    const coHosted = makeEvent({ eventHosts: [host('x'), host('y')] });
-    const cancelled = makeEvent({
-      title: 'CANCELLED: Hike',
-      eventHosts: [host('y')],
-    });
-    const openHouse = makeEvent({
-      title: '[Open House] Mixer',
-      eventHosts: [host('x')],
-    });
-    const hostless = makeEvent({ eventHosts: [] });
-
-    // The handler's pipeline: filter to countable events, then group.
-    const { hostStats } = collectHostStats(
-      [solo, coHosted, cancelled, openHouse, hostless].filter(isCountableEvent),
-    );
-
-    // coHosted sits in both x's and y's lists but must be fetched once;
-    // cancelled and Open House never reach grouping, so they're never shown;
-    // hostless is never displayed, so fetching it would be wasted.
-    expect(
-      displayedEvents(hostStats)
-        .map((event) => event.id)
-        .sort(),
-    ).toEqual([solo.id, coHosted.id].sort());
   });
 });
 

@@ -60,6 +60,7 @@ export async function getEventsYearMonth(
   });
 }
 
+// Whole-year windows (month 0) are for the slash command only; the build job always passes a single month.
 export async function fetchMonthData(
   meetupClient: GqlMeetupClient,
   window: ReportWindow,

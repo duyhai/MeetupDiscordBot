@@ -71,9 +71,8 @@ describe('fetchMonthData', () => {
 
     expect(eventIds).toHaveLength(2);
     expect(eventIds.sort()).toEqual(['e1', 'e2']);
-    for (const filter of filters) {
-      expect(filter).toEqual({ rsvpStatus: ['ATTENDED', 'YES', 'NO_SHOW'] });
-    }
+    const expected = { rsvpStatus: ['ATTENDED', 'YES', 'NO_SHOW'] };
+    expect(filters).toEqual([expected, expected]);
     expect(data.events).toHaveLength(2);
     expect(data.rsvps.get('e1')).toHaveLength(1);
     expect(data.rsvps.get('e2')).toHaveLength(1);
