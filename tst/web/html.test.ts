@@ -423,3 +423,42 @@ describe('URL attributes, widened', () => {
     expect(() => html`${open}href="${plain}">x</a>`).toThrow(UnsafeUrlError);
   });
 });
+
+describe('brand checks survive prototype pollution', () => {
+  it('a SafeUrl never passes as SafeHtml, and a SafeHtml never as SafeUrl', () => {
+    const proto = Object.prototype as Record<string, unknown>;
+    const url = localUrl('/dashboard');
+    const markup = html`<b>x</b>`;
+    // Read everything while polluted, assert after restoring: the test
+    // runner itself misbehaves while Object.prototype.value is set.
+    let seen: Record<string, unknown> = {};
+    try {
+      proto.value = '<img src=x onerror=alert(1)>';
+      proto.href = 'javascript:alert(1)';
+      let urlInHref: unknown;
+      try {
+        // prettier-ignore
+        urlInHref = html`<a href="${markup}">x</a>`.value;
+      } catch (error) {
+        urlInHref = error instanceof UnsafeUrlError ? 'refused' : error;
+      }
+      seen = {
+        urlAsHtml: isSafeHtml(url),
+        htmlAsUrl: isSafeUrl(markup),
+        rendered: html`<p>${url}</p>`.value,
+        urlInHref,
+      };
+    } finally {
+      delete proto.value;
+      delete proto.href;
+    }
+    expect(seen).toEqual({
+      urlAsHtml: false,
+      htmlAsUrl: false,
+      rendered: '<p>/dashboard</p>',
+      urlInHref: 'refused',
+    });
+    expect(isSafeHtml(markup)).toBe(true);
+    expect(isSafeUrl(url)).toBe(true);
+  });
+});

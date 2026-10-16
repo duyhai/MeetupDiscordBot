@@ -26,7 +26,10 @@ export interface SafeUrl {
 export type HtmlValue =
   SafeHtml | SafeUrl | string | number | null | undefined | false | HtmlValue[];
 
-const minted = new WeakSet<object>();
+// One registry per brand: membership alone decides, never a property
+// lookup that a polluted Object.prototype could answer.
+const mintedHtml = new WeakSet<object>();
+const mintedUrls = new WeakSet<object>();
 
 function mintHtml(value: string): SafeHtml {
   // No fragment may end inside a URL attribute's value: whatever follows it
@@ -39,7 +42,7 @@ function mintHtml(value: string): SafeHtml {
     value,
     toString: () => value,
   }) as unknown as SafeHtml;
-  minted.add(out);
+  mintedHtml.add(out);
   return out;
 }
 
@@ -48,26 +51,16 @@ function mintUrl(href: string): SafeUrl {
     href,
     toString: () => href,
   }) as unknown as SafeUrl;
-  minted.add(out);
+  mintedUrls.add(out);
   return out;
 }
 
 export function isSafeHtml(value: unknown): value is SafeHtml {
-  return (
-    typeof value === 'object' &&
-    value !== null &&
-    minted.has(value) &&
-    'value' in value
-  );
+  return typeof value === 'object' && value !== null && mintedHtml.has(value);
 }
 
 export function isSafeUrl(value: unknown): value is SafeUrl {
-  return (
-    typeof value === 'object' &&
-    value !== null &&
-    minted.has(value) &&
-    'href' in value
-  );
+  return typeof value === 'object' && value !== null && mintedUrls.has(value);
 }
 
 export class UnsafeUrlError extends Error {
