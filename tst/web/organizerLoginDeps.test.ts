@@ -65,6 +65,7 @@ const locked = {
     events.push('clearFailing');
     return db.failing;
   }),
+  savepoint: vi.fn(),
 };
 const repo = {
   getMeta: vi.fn(async () => db.meta),

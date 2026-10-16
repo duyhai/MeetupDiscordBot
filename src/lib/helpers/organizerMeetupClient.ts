@@ -134,6 +134,8 @@ interface LockedOutcome {
   refreshed: boolean;
   /** A refreshed token's account was confirmed (or recorded) under the lock. */
   accountConfirmed: boolean;
+  /** The refreshed pair could not be written: retry the save once. */
+  writeFailed?: boolean;
   /** clearFailing closed an open episode: post the recovery message. */
   recovered: boolean;
   /** markFailing opened a new episode: post the alert. */
@@ -189,22 +191,31 @@ async function tryRefresh(
 }
 
 /**
- * Records the episode outcome on the transaction's own client. A failure is
- * logged and reported as "no change": episode bookkeeping must never cost
- * the caller its token.
+ * Records the episode outcome on the transaction's own client, inside a
+ * savepoint: a failed statement then undoes only itself, and cannot abort
+ * the transaction (and with it the credential write). A failure is logged
+ * and reported as "no change": bookkeeping must never cost the caller its
+ * token.
  */
 async function recordEpisode(
+  locked: LockedCredential,
   record: () => Promise<boolean>,
-  what: string,
+  what: 'open' | 'close',
 ): Promise<boolean> {
-  try {
-    return await record();
-  } catch (error: unknown) {
-    logger.error(
-      `Could not ${what} the organizer credential failure episode: ${errorName(error)}`,
-    );
-    return false;
+  const result = await locked.savepoint(`${what}_episode`, record);
+  if (result.ok) {
+    return result.value === true;
   }
+  logger.error(
+    `Could not ${what} the organizer credential failure episode: ${errorName(result.error)}`,
+  );
+  return false;
+}
+
+/** A refreshed pair, and the refresh token stored when the lock was taken. */
+interface RefreshedPair {
+  tokens: Tokens;
+  previousRefreshToken: string | undefined;
 }
 
 /**
@@ -237,14 +248,14 @@ async function lookUpMemberId(
  * returning is what commits, and the failure path must commit so its
  * markFailing persists. A write failure is caught here too, but Postgres has
  * then aborted the transaction, so it surfaces as a commit failure
- * (withLockedCredential rejects) and the caller still gets the fresh token.
- * `onRefreshed` hands the fresh tokens out at once, so they survive that.
+ * (withLockedCredential rejects). `onRefreshed` hands a verified pair out
+ * before the write, so the caller still uses it and retries the save once.
  */
 async function resolveLocked(
   locked: LockedCredential,
   forceRefresh: boolean,
   refusedAccessToken: string | undefined,
-  onRefreshed: (tokens: Tokens) => void,
+  onRefreshed: (pair: RefreshedPair) => void,
   recordEpisodes: boolean,
 ): Promise<LockedOutcome> {
   const storedMemberId = locked.meta.memberId;
@@ -317,7 +328,7 @@ async function resolveLocked(
     // one would mark it alerted while nobody was told.
     episodeStarted:
       recordEpisodes &&
-      (await recordEpisode(() => locked.markFailing(), 'open')),
+      (await recordEpisode(locked, () => locked.markFailing(), 'open')),
     storedMemberId,
   });
 
@@ -362,44 +373,58 @@ async function resolveLocked(
     const recordMemberId =
       storedMemberId === null && observed !== undefined ? observed : undefined;
 
-    onRefreshed(refreshed);
+    onRefreshed({
+      tokens: refreshed,
+      previousRefreshToken: current?.refreshToken,
+    });
 
-    // Close the episode BEFORE writing: if this statement fails, Postgres
-    // aborts the transaction, so the write below fails too and is logged as
-    // the persist failure it is -- rather than a write that appeared to
-    // succeed and was silently discarded by the aborted COMMIT.
+    // The credential write comes FIRST. Persisting is a separate failure from
+    // refreshing: if Meetup rotates refresh tokens (not documented; assume it
+    // does), `refreshed` holds the only valid one, so a write failure must
+    // not fall through to the seed. Postgres has then aborted the
+    // transaction, so the caller retries the save once, in a fresh locked
+    // call, and this run proceeds on the fresh token either way.
+    try {
+      await locked.write(refreshed);
+    } catch (error: unknown) {
+      logger.error(
+        'Meetup credential refreshed but could NOT be stored; this run ' +
+          `continues on the fresh token and retries the save once: ${errorName(error)}`,
+      );
+      return {
+        accessToken: refreshed.accessToken,
+        refreshed: true,
+        accountConfirmed: observed !== undefined,
+        writeFailed: true,
+        recovered: false,
+        episodeStarted: false,
+        storedMemberId,
+      };
+    }
+
+    // Bookkeeping AFTER the write, each in its own savepoint, so neither can
+    // abort the transaction and undo the write.
+    if (recordMemberId !== undefined) {
+      const recorded = await locked.savepoint('record_member_id', () =>
+        locked.setMemberId(recordMemberId),
+      );
+      if (!recorded.ok) {
+        logger.warn(
+          `Could not record the organizer's Meetup member id: ${errorName(recorded.error)}`,
+        );
+      }
+    }
     // Only a run that can post the recovery message closes the episode: a
     // client-less one (a script) would close it silently.
     const recovered =
       recordEpisodes &&
-      (await recordEpisode(() => locked.clearFailing(), 'close'));
+      (await recordEpisode(locked, () => locked.clearFailing(), 'close'));
 
-    // Persisting is a SEPARATE failure from refreshing. If Meetup rotates
-    // refresh tokens, `refreshed` holds the only valid one; treating a write
-    // failure as a refresh failure would fall through to a seed Meetup just
-    // invalidated. So: loud in the log, and this run proceeds on the fresh
-    // token; the next run re-refreshes from whatever is stored or seeded.
-    let stored = true;
-    try {
-      await locked.write(refreshed);
-      if (recordMemberId !== undefined) {
-        await locked.setMemberId(recordMemberId);
-      }
-    } catch (error: unknown) {
-      // Postgres has aborted the transaction: nothing in it is durable,
-      // including the episode close above.
-      stored = false;
-      logger.error(
-        'Meetup credential refreshed but could NOT be stored; this run ' +
-          'continues on the fresh token, but if Meetup rotates refresh ' +
-          `tokens the stored pair is now stale: ${errorName(error)}`,
-      );
-    }
     return {
       accessToken: refreshed.accessToken,
       refreshed: true,
       accountConfirmed: observed !== undefined,
-      recovered: stored && recovered,
+      recovered,
       episodeStarted: false,
       storedMemberId,
     };
@@ -533,7 +558,7 @@ async function reportFailure(
     try {
       started = await credentials.withLockedCredential(
         MEETUP_ORGANIZER_CREDENTIAL_KEY,
-        (locked) => recordEpisode(() => locked.markFailing(), 'open'),
+        (locked) => recordEpisode(locked, () => locked.markFailing(), 'open'),
       );
     } catch (error: unknown) {
       logger.error(
@@ -551,13 +576,51 @@ async function reportFailure(
   return undefined;
 }
 
+/**
+ * The refreshed pair was not durably stored (the write or the COMMIT
+ * failed). Try once more in a fresh locked call, but only if the stored
+ * refresh token is still the one this run's transaction read: otherwise
+ * another process has already advanced the credential, and its pair wins.
+ * Logged by outcome and error name only. Never throws.
+ */
+async function retryStore(
+  credentials: PostgresCredentialRepository,
+  pair: RefreshedPair,
+): Promise<void> {
+  try {
+    const stored = await credentials.withLockedCredential(
+      MEETUP_ORGANIZER_CREDENTIAL_KEY,
+      async (locked) => {
+        if (locked.current?.refreshToken !== pair.previousRefreshToken) {
+          return false;
+        }
+        await locked.write(pair.tokens);
+        return true;
+      },
+    );
+    if (stored) {
+      logger.info('Refreshed organizer credential stored on the retry');
+    } else {
+      logger.warn(
+        'Refreshed organizer credential not stored on the retry: another ' +
+          'process already advanced the stored credential',
+      );
+    }
+  } catch (error: unknown) {
+    logger.error(
+      'Retry storing the refreshed organizer credential failed; the stored ' +
+        `pair may now be stale: ${errorName(error)}`,
+    );
+  }
+}
+
 async function resolveOrganizerAccessToken(
   forceRefresh: boolean,
   refusedAccessToken: string | undefined,
   client: Client | undefined,
 ): Promise<string | undefined> {
   const generation = credentialGeneration;
-  let refreshedAccessToken: string | undefined;
+  let refreshedPair: RefreshedPair | undefined;
   let credentials: PostgresCredentialRepository | undefined;
   let outcome: LockedOutcome;
   try {
@@ -574,22 +637,24 @@ async function resolveOrganizerAccessToken(
           locked,
           forceRefresh,
           refusedAccessToken,
-          (tokens) => {
-            refreshedAccessToken = tokens.accessToken;
+          (pair) => {
+            refreshedPair = pair;
           },
           client !== undefined,
         ),
     );
   } catch (error: unknown) {
-    if (refreshedAccessToken !== undefined) {
-      // Refreshed, but the transaction did not commit: same rule as a failed
-      // write. Episode state is unknown, so nothing is posted.
+    if (refreshedPair !== undefined && credentials) {
+      // Refreshed and verified, but the transaction did not commit: same
+      // rule as a failed write. Episode state is unknown, so nothing is
+      // posted.
       logger.error(
         'Meetup credential refreshed but could NOT be stored (the ' +
           'transaction failed to commit); this run continues on the fresh ' +
-          `token, but the stored pair may now be stale: ${errorName(error)}`,
+          `token and retries the save once: ${errorName(error)}`,
       );
-      return refreshedAccessToken;
+      await retryStore(credentials, refreshedPair);
+      return refreshedPair.tokens.accessToken;
     }
     // The store or lock failed before any refresh: nothing was obtained and
     // nothing could be recorded. Not deduplicated -- there is nowhere to
@@ -615,6 +680,10 @@ async function resolveOrganizerAccessToken(
       client,
       outcome.episodeStarted,
     );
+  }
+
+  if (outcome.writeFailed && refreshedPair !== undefined) {
+    await retryStore(credentials, refreshedPair);
   }
 
   if (outcome.refreshed) {

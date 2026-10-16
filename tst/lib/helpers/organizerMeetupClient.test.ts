@@ -80,8 +80,11 @@ const db = {
   current: undefined as Tokens | undefined,
   memberId: null as string | null,
   failing: false,
-  commitFails: false,
+  /** How many of the next COMMITs fail (the transaction's work is lost). */
+  commitFails: 0,
   rolledBack: 0,
+  /** Run one per locked call, in order, before fn: another process's work. */
+  beforeLock: [] as Array<() => void>,
 };
 
 const locked = {
@@ -101,6 +104,16 @@ const locked = {
     db.failing = false;
     return wasOpen;
   }),
+  // A throw inside the savepoint undoes only the bookkeeping it did.
+  savepoint: vi.fn(async <T>(_name: string, run: () => Promise<T>) => {
+    const { memberId, failing } = db;
+    try {
+      return { ok: true as const, value: await run() };
+    } catch (error: unknown) {
+      Object.assign(db, { memberId, failing });
+      return { ok: false as const, error };
+    }
+  }),
 };
 
 const credentials = {
@@ -109,21 +122,22 @@ const credentials = {
       _key: string,
       fn: (l: LockedCredential) => Promise<T>,
     ): Promise<T> => {
+      db.beforeLock.shift()?.();
       const before = { ...db };
       let result: T;
       try {
         result = await fn({
           current: db.current,
           meta: { memberId: db.memberId, failingSince: null },
-          ...locked,
+          ...(locked as unknown as Omit<LockedCredential, 'current' | 'meta'>),
         });
       } catch (error) {
         Object.assign(db, before);
         db.rolledBack += 1;
         throw error;
       }
-      if (db.commitFails) {
-        Object.assign(db, before);
+      if (db.commitFails > 0) {
+        Object.assign(db, before, { commitFails: db.commitFails - 1 });
         throw new Error('COMMIT failed: connection terminated');
       }
       return result;
@@ -185,8 +199,9 @@ beforeEach(() => {
     current: undefined,
     memberId: '468174923',
     failing: false,
-    commitFails: false,
+    commitFails: 0,
     rolledBack: 0,
+    beforeLock: [],
   });
   Configuration.meetup.organizerRefreshToken = 'SEED-REFRESH';
   Configuration.meetup.organizerMemberId = undefined;
@@ -409,23 +424,123 @@ describe('getOrganizerAccessToken', () => {
     db.current = stored(0);
     refresh.mockResolvedValueOnce(fresh());
     db.failing = true;
+    // Both the write and its one retry fail.
+    locked.write.mockRejectedValueOnce(new Error('write failed'));
     locked.write.mockRejectedValueOnce(new Error('write failed'));
 
     await expect(getOrganizerAccessToken({ client })).resolves.toBe(
       'FRESH-ACCESS-1',
     );
-    expect(db.rolledBack).toBe(0); // fn returned rather than threw
+    // The token transaction returned rather than threw; only the retry,
+    // whose write threw too, rolled back.
+    expect(db.rolledBack).toBe(1);
     // Postgres aborted the transaction at the failed write, so the episode
-    // was not durably closed: no recovery message.
+    // is not touched: no recovery message.
+    expect(locked.clearFailing).not.toHaveBeenCalled();
     expect(alert).not.toHaveBeenCalled();
     expect(fake.logged.join('\n')).toMatch(/refreshed but could NOT be stored/);
     // Only the first candidate: a persist failure is not a refresh failure.
     expect(refresh).toHaveBeenCalledTimes(1);
+    expect(db.current?.refreshToken).toBe('STORED-REFRESH');
+  });
+
+  describe('a refreshed token survives a failed save', () => {
+    it('a failed write after refresh is retried once with compare-and-set', async () => {
+      db.current = stored(0);
+      refresh.mockResolvedValueOnce(fresh(1));
+      locked.write.mockRejectedValueOnce(new Error('write failed'));
+
+      await expect(getOrganizerAccessToken({ client })).resolves.toBe(
+        'FRESH-ACCESS-1',
+      );
+      expect(credentials.withLockedCredential).toHaveBeenCalledTimes(2);
+      expect(locked.write).toHaveBeenCalledTimes(2);
+      expect(db.current?.refreshToken).toBe('FRESH-REFRESH-1');
+      expect(refresh).toHaveBeenCalledTimes(1);
+      expect(fake.logged.join('\n')).toMatch(/stored on the retry/);
+    });
+
+    it('the retry does not overwrite a token another process already advanced', async () => {
+      db.current = stored(0);
+      refresh.mockResolvedValueOnce(fresh(1));
+      locked.write.mockRejectedValueOnce(new Error('write failed'));
+      const advanced = { ...fresh(7), refreshToken: 'ADVANCED-ELSEWHERE' };
+      db.beforeLock.push(
+        () => undefined,
+        () => {
+          db.current = advanced;
+        },
+      );
+
+      await expect(getOrganizerAccessToken({ client })).resolves.toBe(
+        'FRESH-ACCESS-1',
+      );
+      expect(credentials.withLockedCredential).toHaveBeenCalledTimes(2);
+      expect(locked.write).toHaveBeenCalledTimes(1); // only the failed one
+      expect(db.current).toEqual(advanced);
+      expect(fake.logged.join('\n')).toMatch(/already advanced/);
+    });
+
+    it('a failed COMMIT after refresh is retried once', async () => {
+      db.current = stored(0);
+      db.commitFails = 1;
+      refresh.mockResolvedValueOnce(fresh(1));
+
+      await expect(getOrganizerAccessToken({ client })).resolves.toBe(
+        'FRESH-ACCESS-1',
+      );
+      expect(credentials.withLockedCredential).toHaveBeenCalledTimes(2);
+      expect(db.current?.refreshToken).toBe('FRESH-REFRESH-1');
+      expect(refresh).toHaveBeenCalledTimes(1);
+    });
+
+    it('a retry after a seed refresh with nothing stored writes it', async () => {
+      db.commitFails = 1;
+      refresh.mockResolvedValueOnce(fresh(1));
+
+      await expect(getOrganizerAccessToken()).resolves.toBe('FRESH-ACCESS-1');
+      expect(db.current?.refreshToken).toBe('FRESH-REFRESH-1');
+    });
+
+    it('a failed retry is logged and the fresh token still returned', async () => {
+      db.current = stored(0);
+      db.commitFails = 2;
+      refresh.mockResolvedValueOnce(fresh(1));
+
+      await expect(getOrganizerAccessToken({ client })).resolves.toBe(
+        'FRESH-ACCESS-1',
+      );
+      expect(credentials.withLockedCredential).toHaveBeenCalledTimes(2);
+      expect(db.current?.refreshToken).toBe('STORED-REFRESH');
+      expect(fake.logged.join('\n')).toMatch(/retry .*failed/i);
+      expect(alert).not.toHaveBeenCalled();
+    });
+
+    it('a bookkeeping failure does not lose the credential write', async () => {
+      db.current = stored(0);
+      db.failing = true;
+      db.memberId = null;
+      refresh.mockResolvedValueOnce(fresh(1));
+      locked.clearFailing.mockRejectedValueOnce(new Error('meta write failed'));
+
+      await expect(getOrganizerAccessToken({ client })).resolves.toBe(
+        'FRESH-ACCESS-1',
+      );
+      // Written first; the bookkeeping ran after it, inside a savepoint.
+      expect(locked.write.mock.invocationCallOrder[0]).toBeLessThan(
+        locked.savepoint.mock.invocationCallOrder[0],
+      );
+      expect(db.current?.refreshToken).toBe('FRESH-REFRESH-1');
+      expect(credentials.withLockedCredential).toHaveBeenCalledTimes(1);
+      // The episode close was undone with its savepoint: no recovery post.
+      expect(db.failing).toBe(true);
+      expect(alert).not.toHaveBeenCalled();
+    });
   });
 
   it('keeps the fresh token when the transaction fails to commit', async () => {
     db.current = stored(0);
-    db.commitFails = true;
+    db.commitFails = 2; // the commit and its retry
     refresh.mockResolvedValueOnce(fresh());
 
     await expect(getOrganizerAccessToken({ client })).resolves.toBe(

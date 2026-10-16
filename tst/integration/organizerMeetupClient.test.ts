@@ -169,5 +169,59 @@ describe.skipIf(!POSTGRES_AVAILABLE)(
         /different Meetup account/,
       );
     });
+
+    it('a bookkeeping failure does not lose the credential write', async () => {
+      await repo.put(KEY, {
+        accessToken: 'STORED-ACCESS',
+        refreshToken: 'STORED-REFRESH',
+        expiresAt: Date.now() - 1000, // expired: forces a refresh
+      });
+      await observer.query(
+        `INSERT INTO oauth_credential_meta (key, member_id, failing_since)
+         VALUES ($1, '468174923', now())`,
+        [KEY],
+      );
+      // A real statement error in the episode close: any UPDATE of this
+      // key's meta row raises, as a dropped column or a bad deploy would.
+      await observer.query(`
+        CREATE OR REPLACE FUNCTION refuse_organizer_meta_update() RETURNS trigger
+        LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'bookkeeping refused'; END $$`);
+      await observer.query(`
+        CREATE TRIGGER refuse_organizer_meta_update
+        BEFORE UPDATE ON oauth_credential_meta FOR EACH ROW
+        WHEN (OLD.key = 'meetup_organizer')
+        EXECUTE FUNCTION refuse_organizer_meta_update()`);
+      const locks = vi.spyOn(repo, 'withLockedCredential');
+      refresh.mockResolvedValueOnce({
+        accessToken: 'ACCESS-3',
+        refreshToken: 'ROTATED-3',
+        expiresAt: Date.now() + 3600 * 1000,
+      });
+
+      let lockedCalls: number;
+      try {
+        await expect(getOrganizerAccessToken({ client })).resolves.toBe(
+          'ACCESS-3',
+        );
+      } finally {
+        lockedCalls = locks.mock.calls.length;
+        locks.mockRestore();
+        await observer.query(
+          'DROP TRIGGER IF EXISTS refuse_organizer_meta_update ON oauth_credential_meta',
+        );
+        await observer.query(
+          'DROP FUNCTION IF EXISTS refuse_organizer_meta_update()',
+        );
+      }
+
+      // Committed by the token transaction itself, not rescued by a retry.
+      expect(lockedCalls).toBe(1);
+      const row = await repo.get(KEY);
+      expect(row?.accessToken).toBe('ACCESS-3');
+      expect(row?.refreshToken).toBe('ROTATED-3');
+      // The close was undone with its savepoint: still failing, no recovery.
+      expect((await repo.getMeta(KEY)).failingSince).not.toBeNull();
+      expect(alert).not.toHaveBeenCalled();
+    });
   },
 );

@@ -64,6 +64,19 @@ export interface CredentialMeta {
   failingSince: Date | null;
 }
 
+/**
+ * What a savepoint-scoped block came to: `value` when `ok`, else `error`
+ * (never re-thrown). A plain shape: this project does not compile with
+ * strictNullChecks, so a discriminated union would not narrow.
+ */
+export interface SavepointResult<T> {
+  ok: boolean;
+  value?: T;
+  error?: unknown;
+}
+
+const SAVEPOINT_NAME = /^[a-z_][a-z0-9_]{0,62}$/;
+
 /** The credential as read under the lock, plus writes that stay inside it. */
 export interface LockedCredential {
   current: Tokens | undefined;
@@ -76,6 +89,14 @@ export interface LockedCredential {
   markFailing(): Promise<boolean>;
   /** Locked clearFailing: true iff an episode was open. */
   clearFailing(): Promise<boolean>;
+  /**
+   * Runs `fn` inside SAVEPOINT `name` on the locked transaction: RELEASE on
+   * success, ROLLBACK TO SAVEPOINT on a throw. A statement error inside `fn`
+   * then undoes only `fn`'s own work instead of aborting the transaction, so
+   * bookkeeping cannot cost the credential write. Never re-throws `fn`'s
+   * error; rejects only for a `name` that is not a plain identifier.
+   */
+  savepoint<T>(name: string, fn: () => Promise<T>): Promise<SavepointResult<T>>;
 }
 
 export interface CredentialRepositoryOptions {
@@ -280,6 +301,33 @@ export class PostgresCredentialRepository {
           (await client.query(MARK_FAILING_SQL, [key])).rowCount === 1,
         clearFailing: async () =>
           (await client.query(CLEAR_FAILING_SQL, [key])).rowCount === 1,
+        savepoint: async <S>(
+          name: string,
+          run: () => Promise<S>,
+        ): Promise<SavepointResult<S>> => {
+          // Interpolated (SAVEPOINT takes no parameters), so it must be a
+          // plain identifier.
+          if (!SAVEPOINT_NAME.test(name)) {
+            throw new Error(`Invalid savepoint name: ${JSON.stringify(name)}`);
+          }
+          try {
+            await client.query(`SAVEPOINT ${name}`);
+          } catch (error: unknown) {
+            return { ok: false, error };
+          }
+          try {
+            const value = await run();
+            await client.query(`RELEASE SAVEPOINT ${name}`);
+            return { ok: true, value };
+          } catch (error: unknown) {
+            // If this fails too the transaction stays aborted, and COMMIT
+            // reports it as the rollback it is.
+            await client
+              .query(`ROLLBACK TO SAVEPOINT ${name}`)
+              .catch(() => undefined);
+            return { ok: false, error };
+          }
+        },
       });
     });
   }

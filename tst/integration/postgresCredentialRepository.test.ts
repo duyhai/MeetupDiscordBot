@@ -432,6 +432,72 @@ describe.skipIf(!POSTGRES_AVAILABLE)('PostgresCredentialRepository', () => {
     expect(await repo.get(key)).toBeDefined();
   });
 
+  describe('savepoint', () => {
+    it('keeps its work and returns the value', async () => {
+      const key = `key-${crypto.randomUUID()}`;
+      const tokens = freshTokens();
+      const result = await repo.withLockedCredential(key, async (locked) => {
+        await locked.write(tokens);
+        return locked.savepoint('bookkeeping', async () => {
+          await locked.setMemberId('12345');
+          return 'recorded';
+        });
+      });
+
+      expect(result).toEqual({ ok: true, value: 'recorded' });
+      expect((await repo.get(key))?.refreshToken).toBe(tokens.refreshToken);
+      expect((await repo.getMeta(key)).memberId).toBe('12345');
+    });
+
+    it('rolls back only its own work on a statement error, and the write commits', async () => {
+      const key = `key-${crypto.randomUUID()}`;
+      const tokens = freshTokens();
+      const result = await repo.withLockedCredential(key, async (locked) => {
+        await locked.write(tokens);
+        const failed = await locked.savepoint('bookkeeping', async () => {
+          await locked.markFailing(); // undone with the savepoint
+          await locked.setMemberId('not-digits'); // CHECK violation
+        });
+        // The transaction is still usable after the savepoint.
+        const later = await locked.savepoint('after', () =>
+          locked.setMemberId('67890'),
+        );
+        return { failed, later };
+      });
+
+      expect(result.later.ok).toBe(true);
+      expect(result.failed).toMatchObject({ ok: false });
+      expect(String(result.failed.error)).toMatch(/check constraint/);
+      expect((await repo.get(key))?.refreshToken).toBe(tokens.refreshToken);
+      expect(await repo.getMeta(key)).toEqual({
+        memberId: '67890',
+        failingSince: null,
+      });
+    });
+
+    it('catches a thrown error without a statement error too', async () => {
+      const key = `key-${crypto.randomUUID()}`;
+      const result = await repo.withLockedCredential(key, async (locked) =>
+        locked.savepoint('plain', async () => {
+          await locked.setMemberId('12345');
+          throw new Error('not a database error');
+        }),
+      );
+
+      expect(result.ok).toBe(false);
+      expect((await repo.getMeta(key)).memberId).toBeNull();
+    });
+
+    it('refuses a name that is not a plain identifier', async () => {
+      const key = `key-${crypto.randomUUID()}`;
+      await expect(
+        repo.withLockedCredential(key, (locked) =>
+          locked.savepoint('x; DROP TABLE oauth_credentials', async () => 1),
+        ),
+      ).rejects.toThrow(/savepoint name/);
+    });
+  });
+
   it('hands fn the current credential and meta read under the lock', async () => {
     const key = `key-${crypto.randomUUID()}`;
     const tokens = freshTokens();
