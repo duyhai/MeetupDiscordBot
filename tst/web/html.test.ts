@@ -281,6 +281,7 @@ describe('staticHtml', () => {
     expect(out.value).toBe('<b>fixed</b>');
   });
 
+  /* eslint-disable no-restricted-syntax -- forged calls on purpose */
   it('staticHtml refuses interpolation', () => {
     const strings = Object.freeze(
       Object.assign(['a', 'b'], { raw: ['a', 'b'] }),
@@ -290,4 +291,54 @@ describe('staticHtml', () => {
       TypeError,
     );
   });
+  /* eslint-enable no-restricted-syntax */
 });
+
+/* eslint-disable no-restricted-syntax -- these tests call the tags as plain functions on purpose */
+describe('calling the tags as plain functions', () => {
+  const evil = '<img src=x onerror=alert(1)>';
+
+  it('html refuses a forged strings array', () => {
+    expect(() =>
+      html(
+        Object.assign([evil], {
+          raw: [evil],
+        }) as unknown as TemplateStringsArray,
+      ),
+    ).toThrow(TypeError);
+  });
+
+  it('staticHtml refuses a frozen forged strings array', () => {
+    expect(() =>
+      staticHtml(
+        Object.freeze(
+          Object.assign([evil], { raw: [evil] }),
+        ) as unknown as TemplateStringsArray,
+      ),
+    ).toThrow(TypeError);
+  });
+
+  it('refuses a forgery whose raw is frozen too', () => {
+    const forged = Object.freeze(
+      Object.assign([evil], { raw: Object.freeze([evil]) }),
+    ) as unknown as TemplateStringsArray;
+    expect(() => staticHtml(forged)).toThrow(TypeError);
+    expect(() => html(forged)).toThrow(TypeError);
+  });
+
+  it('refuses a forgery with a non-enumerable raw that was never frozen', () => {
+    const arr = [evil];
+    Object.defineProperty(arr, 'raw', { value: [evil] });
+    expect(() => html(arr as unknown as TemplateStringsArray)).toThrow(
+      TypeError,
+    );
+  });
+
+  it('still accepts real template literals, including a reused call site', () => {
+    const page = (x: string) => html`<p>${x}</p>`;
+    expect(page('a').value).toBe('<p>a</p>');
+    expect(page('b').value).toBe('<p>b</p>');
+    expect(String.raw`x` && staticHtml`<i>ok</i>`.value).toBe('<i>ok</i>');
+  });
+});
+/* eslint-enable no-restricted-syntax */

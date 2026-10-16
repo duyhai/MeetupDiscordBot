@@ -63,6 +63,30 @@ export default defineConfig(
       'import-x/first': 'error',
       'import-x/no-duplicates': 'error',
       'import-x/newline-after-import': 'error',
+      // html`` and staticHtml`` mint SafeHtml only as tagged templates: a
+      // plain call can hand them a forged strings array.
+      'no-restricted-syntax': [
+        'error',
+        {
+          selector:
+            "CallExpression[callee.type='Identifier'][callee.name=/^(html|staticHtml)$/]",
+          message:
+            'Use html`…` / staticHtml`…` as tagged templates, never as plain function calls.',
+        },
+        {
+          selector:
+            "CallExpression[callee.type='MemberExpression'][callee.property.name=/^(html|staticHtml)$/]",
+          message:
+            'Use html`…` / staticHtml`…` as tagged templates, never as plain function calls.',
+        },
+        {
+          // html.call(...), html.apply(...), html.bind(...)
+          selector:
+            "MemberExpression[object.type='Identifier'][object.name=/^(html|staticHtml)$/][property.name=/^(call|apply|bind)$/]",
+          message:
+            'Use html`…` / staticHtml`…` as tagged templates, never as plain function calls.',
+        },
+      ],
     },
   },
   {

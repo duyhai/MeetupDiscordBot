@@ -88,6 +88,52 @@ export function escapeHtml(input: string): string {
 const URL_ATTR =
   /[\s:](href|src|action|formaction)\s*=\s*(?:"([^"]*)|'([^']*)|())$/i;
 
+/** Template strings arrays already checked; a call site reuses its array. */
+const templates = new WeakSet<object>();
+
+/**
+ * True only for a strings array shaped like the one the engine passes to a
+ * tag: a frozen array whose own `raw` is non-enumerable, non-writable,
+ * non-configurable and a frozen array of strings of the same length.
+ * Object.assign([evil], { raw }) fails (raw is enumerable), with or without
+ * Object.freeze. A caller who rebuilds every one of those properties by hand
+ * is not stopped here; the no-restricted-syntax lint rule, which allows these
+ * tags only as tagged templates, covers that.
+ */
+function isTemplateStrings(strings: unknown): strings is TemplateStringsArray {
+  if (typeof strings !== 'object' || strings === null) {
+    return false;
+  }
+  if (templates.has(strings)) {
+    return true;
+  }
+  if (!Array.isArray(strings) || !Object.isFrozen(strings)) {
+    return false;
+  }
+  const raw = Object.getOwnPropertyDescriptor(strings, 'raw');
+  const value: unknown = raw?.value;
+  const ok =
+    raw !== undefined &&
+    !raw.enumerable &&
+    !raw.writable &&
+    !raw.configurable &&
+    Array.isArray(value) &&
+    Object.isFrozen(value) &&
+    value.length === strings.length &&
+    value.every((part) => typeof part === 'string') &&
+    strings.every((part) => typeof part === 'string' || part === undefined);
+  if (ok) {
+    templates.add(strings);
+  }
+  return ok;
+}
+
+function requireTemplate(strings: unknown, tag: string): void {
+  if (!isTemplateStrings(strings)) {
+    throw new TypeError(`${tag} must be used as a tagged template`);
+  }
+}
+
 function render(value: HtmlValue): string {
   if (value === null || value === undefined || value === false) {
     return '';
@@ -115,6 +161,7 @@ export function html(
   strings: TemplateStringsArray,
   ...values: HtmlValue[]
 ): SafeHtml {
+  requireTemplate(strings, 'html');
   let out = strings[0];
   values.forEach((value, i) => {
     const attr = URL_ATTR.exec(strings[i]);
@@ -143,13 +190,9 @@ export function html(
 
 /** Markup written in this codebase, with no interpolation at all (CSS, the copy script). */
 export function staticHtml(strings: TemplateStringsArray): SafeHtml {
-  // A real template literal's strings array is frozen and carries `raw`;
-  // one entry means nothing was interpolated.
-  if (
-    strings?.length !== 1 ||
-    !Object.isFrozen(strings) ||
-    !Array.isArray(strings.raw)
-  ) {
+  requireTemplate(strings, 'staticHtml');
+  // One entry means nothing was interpolated.
+  if (strings.length !== 1) {
     throw new TypeError(
       'staticHtml takes a template literal without interpolation',
     );
