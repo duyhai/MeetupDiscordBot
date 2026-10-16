@@ -8,6 +8,7 @@ import {
   protectedRouteList,
 } from '../../src/web/dashboardRouter.js';
 import { FixedWindowLimiter } from '../../src/web/rateLimit.js';
+import { timedCacheFactory } from '../../src/web/timedCache.js';
 import {
   ROLE_RECHECK_MS,
   SessionStore,
@@ -264,6 +265,41 @@ describe('dashboard session revocation', () => {
     expect((await req.get('/dashboard').set('Cookie', cookie)).status).toBe(
       302,
     );
+  });
+});
+
+describe('dashboard cache timeouts', () => {
+  it('a hung cache answers 503 within the deadline, not a hang', async () => {
+    const never = () => new Promise<never>(() => undefined);
+    const hangingCache = {
+      get: never,
+      set: never,
+      exclusive_set: never,
+      set_existing: never,
+      remove: never,
+    };
+    const { req } = await makeApp({
+      cache: timedCacheFactory(async () => hangingCache, 50),
+    });
+    const started = Date.now();
+    const res = await req
+      .get('/dashboard')
+      .set('Cookie', `dash_sid=${signSessionId('sid', SECRET)}`);
+    expect(Date.now() - started).toBeLessThan(1_000);
+    expect(res.status).toBe(503);
+    expect(res.text).toContain('Please try again in a minute.');
+    expect(res.headers['cache-control']).toBe('no-store');
+    expect(fake.logged).toContain('Dashboard cache timed out');
+  });
+
+  it('a cache that cannot be reached at all answers 503', async () => {
+    const { req } = await makeApp({
+      cache: timedCacheFactory(() => new Promise<never>(() => undefined), 50),
+    });
+    const res = await req
+      .get('/dashboard/login')
+      .set('Cookie', `dash_sid=${signSessionId('sid', SECRET)}`);
+    expect(res.status).toBe(503);
   });
 });
 

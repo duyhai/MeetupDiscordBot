@@ -5,6 +5,7 @@ import { Logger } from 'tslog';
 
 import { BASE_DISCORD_BOT_URL, SERVER_ROLES } from '../constants.js';
 import { LogEntry, logActivity } from '../lib/helpers/discordLogger.js';
+import { BuildJobDeps, defaultBuildJobDeps } from '../lib/reports/buildJob.js';
 import { ApplicationCache } from '../util/cache.js';
 import {
   baseSecurityHeaders,
@@ -24,6 +25,11 @@ import {
   registerAllProtectedRoutes,
 } from './routes/dashboardPages.js';
 import { SessionStore } from './session.js';
+import {
+  DASHBOARD_CACHE_TIMEOUT_MS,
+  releaseLateBuildLease,
+  timedCacheFactory,
+} from './timedCache.js';
 
 export const MIN_SESSION_SECRET_LENGTH = 32;
 
@@ -81,6 +87,33 @@ function notConfiguredRouter(): express.Router {
   return router;
 }
 
+/**
+ * The dashboard's cache: the shared client behind a 2 s deadline, so a Redis
+ * outage answers 503 instead of hanging. Only the dashboard uses this; the
+ * build job, the identity sweep and the token store keep the untimed
+ * ApplicationCache.
+ */
+const dashboardCache = timedCacheFactory(ApplicationCache);
+
+/**
+ * Manual rebuilds (the refresh route) get the same deadline, so the route
+ * cannot hang. A build lease granted after its request timed out is released
+ * at once through the untimed cache.
+ */
+export const dashboardRebuildCache = timedCacheFactory(
+  ApplicationCache,
+  DASHBOARD_CACHE_TIMEOUT_MS,
+  releaseLateBuildLease(ApplicationCache),
+);
+
+/** Build job deps for a staff member's refresh: the job's own, with the timed rebuild cache. */
+export async function manualRebuildDeps(client: Client): Promise<BuildJobDeps> {
+  return {
+    ...(await defaultBuildJobDeps(client)),
+    cache: dashboardRebuildCache,
+  };
+}
+
 const auditActivity = async (entry: LogEntry) => {
   if (!discordClient) {
     return false;
@@ -94,7 +127,7 @@ export function dashboardPageDeps(): DashboardPageDeps {
     now: () => new Date(),
     // The router's cache and clock (Date.now), so a revocation here is the
     // one the gate reads.
-    sessionStore: async () => new SessionStore(await ApplicationCache()),
+    sessionStore: async () => new SessionStore(await dashboardCache()),
     isLeadership: discordRoleCheck(
       () => discordClient,
       SERVER_ROLES.leadership,
@@ -114,7 +147,7 @@ export function dashboardRouterFromEnv(
   }
   const organizerDeps = organizerLoginDeps(() => discordClient);
   return createDashboardRouter({
-    cache: ApplicationCache,
+    cache: dashboardCache,
     checkAccess: discordAccessCheck(() => discordClient),
     oauth: {
       buildLoginUrl: buildDashboardLoginUrl,

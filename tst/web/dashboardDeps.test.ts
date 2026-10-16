@@ -6,9 +6,20 @@ import {
   dashboardDisabledReason,
   dashboardOrigin,
   dashboardPageDeps,
+  dashboardRebuildCache,
   dashboardRouterFromEnv,
+  manualRebuildDeps,
   setDashboardClient,
 } from '../../src/web/dashboardDeps.js';
+import { defaultBuildJobDeps } from '../../src/lib/reports/buildJob.js';
+import { BUILD_LEASE_KEY } from '../../src/lib/reports/buildLease.js';
+import { ApplicationCache } from '../../src/util/cache.js';
+import { signSessionId } from '../../src/web/session.js';
+import {
+  CacheTimeoutError,
+  DASHBOARD_CACHE_TIMEOUT_MS,
+} from '../../src/web/timedCache.js';
+import { FakeCache } from './fakeCache.js';
 import { DashboardUnavailableError } from '../../src/web/roleGate.js';
 import {
   createDashboardRouter,
@@ -23,6 +34,18 @@ vi.mock('../../src/web/organizerLoginDeps.js', async (importOriginal) => {
       typeof import('../../src/web/organizerLoginDeps.js')
     >();
   return { ...actual, organizerLoginDeps: vi.fn(actual.organizerLoginDeps) };
+});
+
+vi.mock('../../src/util/cache.js', async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import('../../src/util/cache.js')>();
+  return { ...actual, ApplicationCache: vi.fn(actual.ApplicationCache) };
+});
+
+vi.mock('../../src/lib/reports/buildJob.js', async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import('../../src/lib/reports/buildJob.js')>();
+  return { ...actual, defaultBuildJobDeps: vi.fn() };
 });
 
 vi.mock('../../src/web/dashboardRouter.js', async (importOriginal) => {
@@ -157,6 +180,77 @@ describe('dashboardPageDeps', () => {
     await expect(
       dashboardPageDeps().audit({ title: 't', description: 'd' }),
     ).resolves.toBe(false);
+  });
+});
+
+describe('dashboard cache timeouts', () => {
+  const never = () => new Promise<never>(() => undefined);
+  const hangingCache = () => ({
+    get: never,
+    set: never,
+    exclusive_set: never,
+    set_existing: never,
+    remove: never,
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.mocked(ApplicationCache).mockReset();
+  });
+
+  it('the production dashboard cache is timed', async () => {
+    vi.mocked(ApplicationCache).mockResolvedValue(hangingCache() as never);
+    const started = Date.now();
+    const res = await (
+      await appWith({ DASHBOARD_SESSION_SECRET: 's'.repeat(48) })
+    )
+      .get('/dashboard/login')
+      .set('X-Forwarded-Proto', 'https')
+      .set('Cookie', `dash_sid=${signSessionId('sid', 's'.repeat(48))}`);
+    expect(res.status).toBe(503);
+    expect(Date.now() - started).toBeLessThan(DASHBOARD_CACHE_TIMEOUT_MS + 500);
+  });
+
+  it('the sessions page store uses the same timed cache', async () => {
+    vi.useFakeTimers();
+    vi.mocked(ApplicationCache).mockResolvedValue(hangingCache() as never);
+    const store = await dashboardPageDeps().sessionStore();
+    const pending = store.revokeUser('123456789012345678');
+    pending.catch(() => undefined);
+    await vi.advanceTimersByTimeAsync(DASHBOARD_CACHE_TIMEOUT_MS);
+    await expect(pending).rejects.toBeInstanceOf(CacheTimeoutError);
+  });
+
+  it('the rebuild cache times out and releases a lease granted late', async () => {
+    vi.useFakeTimers();
+    class LateLease extends FakeCache {
+      override exclusive_set(key: string, value: string, ttl?: number) {
+        return new Promise<boolean>((resolve) => {
+          setTimeout(() => {
+            resolve(super.exclusive_set(key, value, ttl));
+          }, DASHBOARD_CACHE_TIMEOUT_MS + 1_000);
+        });
+      }
+    }
+    const inner = new LateLease();
+    vi.mocked(ApplicationCache).mockResolvedValue(inner as never);
+    const cache = await dashboardRebuildCache();
+    const pending = cache.exclusive_set(BUILD_LEASE_KEY, 'late', 60);
+    pending.catch(() => undefined);
+    await vi.advanceTimersByTimeAsync(DASHBOARD_CACHE_TIMEOUT_MS);
+    await expect(pending).rejects.toBeInstanceOf(CacheTimeoutError);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(inner.values.has(BUILD_LEASE_KEY)).toBe(false);
+  });
+
+  it('manual rebuilds use the timed rebuild cache; the build job keeps its own', async () => {
+    const jobDeps = { cache: ApplicationCache, now: () => new Date() };
+    vi.mocked(defaultBuildJobDeps).mockResolvedValue(jobDeps as never);
+    const deps = await manualRebuildDeps({} as never);
+    /* eslint-disable @typescript-eslint/unbound-method -- identity checks only */
+    expect(deps.cache).toBe(dashboardRebuildCache);
+    expect(jobDeps.cache).toBe(ApplicationCache);
+    /* eslint-enable @typescript-eslint/unbound-method */
   });
 });
 

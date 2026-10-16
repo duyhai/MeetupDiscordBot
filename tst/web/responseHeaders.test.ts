@@ -7,10 +7,13 @@ import {
   baseSecurityHeaders,
 } from '../../src/web/dashboardRouter.js';
 import { FixedWindowLimiter } from '../../src/web/rateLimit.js';
+import { signSessionId } from '../../src/web/session.js';
+import { timedCacheFactory } from '../../src/web/timedCache.js';
 import { LoopbackResponse } from '../setup/loopbackServer.js';
 import {
   Client,
   ORIGIN,
+  SECRET,
   closeServers,
   makeApp,
   serve,
@@ -138,6 +141,27 @@ describe('every dashboard response path sends the framing and no-store headers',
       .send(`_csrf=${'a'.repeat(17 * 1024)}`);
     expect(res.status).toBe(400);
     expectFramingHeaders(res, '400');
+  });
+
+  it('the 503 on a cache timeout', async () => {
+    const never = () => new Promise<never>(() => undefined);
+    const { req } = await makeApp({
+      cache: timedCacheFactory(
+        async () => ({
+          get: never,
+          set: never,
+          exclusive_set: never,
+          set_existing: never,
+          remove: never,
+        }),
+        50,
+      ),
+    });
+    const res = await req
+      .get('/dashboard')
+      .set('Cookie', `dash_sid=${signSessionId('sid', SECRET)}`);
+    expect(res.status).toBe(503);
+    expectFramingHeaders(res, '503 cache timeout');
   });
 
   it('the 503 when Discord cannot be asked', async () => {

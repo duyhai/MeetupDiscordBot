@@ -42,6 +42,7 @@ import { PostgresDashboardNoticeRepository } from '../../../src/lib/repositories
 import { PostgresLinkProgressRepository } from '../../../src/lib/repositories/postgresLinkProgressRepository.js';
 import { PostgresReportSnapshotRepository } from '../../../src/lib/repositories/postgresReportSnapshotRepository.js';
 import { PostgresSuspensionRepository } from '../../../src/lib/repositories/postgresSuspensionRepository.js';
+import { ApplicationCache } from '../../../src/util/cache.js';
 import { FakeCache } from '../../web/fakeCache.js';
 import {
   Clock,
@@ -1430,6 +1431,10 @@ describe('defaultBuildJobDeps', () => {
     const client = {} as Client;
 
     const deps = await defaultBuildJobDeps(client);
+    // The build job's cache is the untimed shared one: a Redis drop must
+    // hang the tick so the wedged-tick alert fires (dashboard timeouts are
+    // dashboard-scoped only).
+    expect(deps.cache).toBe(ApplicationCache);
     expect(deps.snapshots).toBe(snapshots);
     expect(deps.notices).toBe(notices);
     expect(deps.linkProgress).toBe(linkProgress);

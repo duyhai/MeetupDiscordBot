@@ -27,6 +27,7 @@ import {
 } from './pages.js';
 import type { OrganizerCredentialStatus } from './routes/organizerLogin.js';
 import { FixedWindowLimiter } from './rateLimit.js';
+import { CacheTimeoutError } from './timedCache.js';
 import { AccessCheck } from './roleGate.js';
 import {
   DashboardSession,
@@ -575,6 +576,13 @@ export function createDashboardRouter(deps: DashboardDeps): express.Router {
   router.use(dashboardSessionGate as RequestHandler, protectedRouter);
 
   router.use(function dashboardErrorHandler(error, _req, res, _next) {
+    // Redis did not answer within the dashboard's deadline (timedCache):
+    // the same "try again in a minute" page as a Discord outage.
+    if (error instanceof CacheTimeoutError) {
+      logger.warn('Dashboard cache timed out');
+      fail(res, 503);
+      return;
+    }
     const { status, statusCode } = (error ?? {}) as {
       status?: unknown;
       statusCode?: unknown;
