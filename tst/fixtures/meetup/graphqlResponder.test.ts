@@ -52,8 +52,14 @@ describe('installMeetupResponder', () => {
       'e106',
     ]);
 
+    // e085 is a never-held DRAFT of host 104: only the status filter drops it.
     const hosted = await client.getGroupEvents(page, { hostId: '104' });
-    expect(ids(hosted.groupByUrlname.events.edges)).toEqual(['e102']);
+    expect(ids(hosted.groupByUrlname.events.edges)).toEqual(['e085', 'e102']);
+    const hostedPast = await client.getGroupEvents(page, {
+      hostId: '104',
+      status: ['PAST', 'ACTIVE'],
+    });
+    expect(ids(hostedPast.groupByUrlname.events.edges)).toEqual(['e102']);
   });
 
   it('getGroupEventsCount counts the exact window', async () => {

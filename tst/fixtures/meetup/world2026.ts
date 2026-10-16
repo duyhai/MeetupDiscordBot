@@ -34,6 +34,17 @@ export const WORLD_2026: MeetupWorld = {
       maxTickets: 40,
       hostIds: ['101'],
     },
+    // Not in the brief's table: a never-held DRAFT of Dee's before September.
+    // Only a status-filtered "has this host held a PAST event" count keeps Dee
+    // new, so dropping that filter in findNewHostIds makes a golden fail.
+    {
+      id: 'e085',
+      title: 'Draft Hike (never held)',
+      dateTime: '2026-01-20T10:00-08:00',
+      status: 'DRAFT',
+      maxTickets: 10,
+      hostIds: ['104'],
+    },
     {
       id: 'e090',
       title: 'Valentine Mixer',
