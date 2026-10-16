@@ -63,28 +63,63 @@ export default defineConfig(
       'import-x/first': 'error',
       'import-x/no-duplicates': 'error',
       'import-x/newline-after-import': 'error',
-      // html`` and staticHtml`` mint SafeHtml only as tagged templates: a
-      // plain call can hand them a forged strings array.
+    },
+  },
+  // html`` and staticHtml`` live in src/web/html.ts and are used only under
+  // src/web and tst/web (other code has unrelated `html` variables, so the
+  // value-use ban below is scoped there, and importing the tags anywhere
+  // else is refused).
+  {
+    files: ['src/web/**/*.ts', 'tst/web/**/*.ts'],
+    rules: {
+      // html`` and staticHtml`` mint SafeHtml only as tagged templates: any
+      // other use of the function as a value (a call, an alias, Reflect.apply,
+      // (0, html)(x), [html][0], H['html']) could hand it a forged strings
+      // array. Allowed: a tagged template's tag, their own declaration, a
+      // type query, and un-aliased import/export specifiers.
       'no-restricted-syntax': [
         'error',
         {
           selector:
-            "CallExpression[callee.type='Identifier'][callee.name=/^(html|staticHtml)$/]",
+            'Identifier[name=/^(html|staticHtml)$/]' +
+            ':not(TaggedTemplateExpression > Identifier.tag)' +
+            ':not(FunctionDeclaration > Identifier.id)' +
+            ':not(ImportSpecifier > Identifier)' +
+            ':not(ExportSpecifier > Identifier)' +
+            ':not(TSTypeQuery > Identifier.exprName)',
           message:
-            'Use html`…` / staticHtml`…` as tagged templates, never as plain function calls.',
+            'Use html`…` / staticHtml`…` only as a tagged template, never as a value.',
         },
         {
           selector:
-            "CallExpression[callee.type='MemberExpression'][callee.property.name=/^(html|staticHtml)$/]",
+            'MemberExpression[computed=true] > Literal.property[value=/^(html|staticHtml)$/]',
           message:
-            'Use html`…` / staticHtml`…` as tagged templates, never as plain function calls.',
+            'Use html`…` / staticHtml`…` only as a tagged template, never as a value.',
         },
+        ...['html', 'staticHtml'].flatMap((name) => [
+          {
+            selector: `ImportSpecifier[imported.name='${name}'][local.name!='${name}']`,
+            message: `Import ${name} under its own name, so lint can see every use.`,
+          },
+          {
+            selector: `ExportSpecifier[local.name='${name}'][exported.name!='${name}']`,
+            message: `Export ${name} under its own name, so lint can see every use.`,
+          },
+        ]),
+      ],
+    },
+  },
+  {
+    files: ['**/*.ts'],
+    ignores: ['src/web/**', 'tst/web/**'],
+    rules: {
+      'no-restricted-syntax': [
+        'error',
         {
-          // html.call(...), html.apply(...), html.bind(...)
           selector:
-            "MemberExpression[object.type='Identifier'][object.name=/^(html|staticHtml)$/][property.name=/^(call|apply|bind)$/]",
+            'ImportDeclaration[source.value=/(^|\\/)web\\/html\\.js$/] > ImportSpecifier[imported.name=/^(html|staticHtml)$/]',
           message:
-            'Use html`…` / staticHtml`…` as tagged templates, never as plain function calls.',
+            'html`…` / staticHtml`…` are used only under src/web and tst/web, where lint checks every use.',
         },
       ],
     },

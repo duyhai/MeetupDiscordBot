@@ -572,6 +572,7 @@ describe('the forward tokenizer', () => {
     expect(html`<!doctype html><html lang="en"><p>${'x'}</p></html>`.value).toContain('<p>x</p>');
   });
 
+  /* eslint-disable no-restricted-syntax -- runtime-built tagged templates take the tag as an argument */
   it('an invalid escape (undefined cooked string) is a clear error', () => {
     // eslint-disable-next-line @typescript-eslint/no-implied-eval
     const build = new Function('tag', 'return tag`<p>\\unicode ${1}</p>`;') as (
@@ -606,4 +607,5 @@ describe('the forward tokenizer', () => {
       expect(out.value.length).toBeGreaterThan(5000 * 200);
     }
   });
+  /* eslint-enable no-restricted-syntax */
 });
