@@ -248,6 +248,56 @@ describe.skipIf(!POSTGRES_AVAILABLE)(
       expect(alert).not.toHaveBeenCalled();
     });
 
+    it('a refused member-id write still commits the refreshed credential', async () => {
+      await repo.put(KEY, {
+        accessToken: 'STORED-ACCESS',
+        refreshToken: 'STORED-REFRESH',
+        expiresAt: Date.now() - 1000, // expired: forces a refresh
+      });
+      // No member id on record and none configured: bootstrap, so the
+      // refreshed token's observed id is recorded -- and that write raises.
+      Configuration.meetup.organizerMemberId = undefined;
+      await observer.query(`
+        CREATE OR REPLACE FUNCTION refuse_organizer_member_id() RETURNS trigger
+        LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'member id refused'; END $$`);
+      await observer.query(`
+        CREATE TRIGGER refuse_organizer_member_id
+        BEFORE INSERT OR UPDATE OF member_id ON oauth_credential_meta FOR EACH ROW
+        WHEN (NEW.key = 'meetup_organizer' AND NEW.member_id IS NOT NULL)
+        EXECUTE FUNCTION refuse_organizer_member_id()`);
+      const locks = vi.spyOn(repo, 'withLockedCredential');
+      refresh.mockResolvedValueOnce({
+        accessToken: 'ACCESS-6',
+        refreshToken: 'ROTATED-6',
+        expiresAt: Date.now() + 3600 * 1000,
+      });
+
+      let lockedCalls: number;
+      try {
+        await expect(getOrganizerAccessToken({ client })).resolves.toBe(
+          'ACCESS-6',
+        );
+      } finally {
+        lockedCalls = locks.mock.calls.length;
+        locks.mockRestore();
+        await observer.query(
+          'DROP TRIGGER IF EXISTS refuse_organizer_member_id ON oauth_credential_meta',
+        );
+        await observer.query(
+          'DROP FUNCTION IF EXISTS refuse_organizer_member_id()',
+        );
+      }
+
+      // The savepoint isolated the refused statement: the token transaction
+      // itself committed the pair, with no retry.
+      expect(lockedCalls).toBe(1);
+      const row = await repo.get(KEY);
+      expect(row?.accessToken).toBe('ACCESS-6');
+      expect(row?.refreshToken).toBe('ROTATED-6');
+      expect((await repo.getMeta(KEY)).memberId).toBeNull();
+      expect(alert).not.toHaveBeenCalled();
+    });
+
     it('two processes racing: exactly one refreshes, and both get the same token', async () => {
       // Two repository instances, each with its own pool and so its own
       // Postgres session, stand in for two processes.
