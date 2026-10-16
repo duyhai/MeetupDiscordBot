@@ -10,7 +10,10 @@ import {
 } from '../../util/credentialRepository.js';
 import { Tokens } from '../client/discord/types.js';
 import { GqlMeetupClient } from '../client/meetup/gqlClient.js';
-import { refreshMeetupToken } from '../client/oauth/providers.js';
+import {
+  MeetupTokenRefreshError,
+  refreshMeetupToken,
+} from '../client/oauth/providers.js';
 import {
   LockedCredential,
   PostgresCredentialRepository,
@@ -79,6 +82,48 @@ function errorName(error: unknown): string {
 }
 
 /**
+ * Meetup definitely refused the refresh token itself: `invalid_grant`, or a
+ * bare 401 with no OAuth code. Nothing else says the grant is dead -- not a
+ * timeout, a network error, a 5xx or 429, nor `invalid_client` (OUR client
+ * credentials are wrong) -- so nothing else may fall through to the seed.
+ */
+export function isDefiniteRefreshRejection(error: unknown): boolean {
+  return (
+    error instanceof MeetupTokenRefreshError &&
+    (error.oauthError === 'invalid_grant' ||
+      (error.status === 401 && error.oauthError === undefined))
+  );
+}
+
+/**
+ * What may be logged about a failed refresh: its message embeds Meetup's raw
+ * response body, so only the HTTP status, OAuth code or error name is kept.
+ */
+function describeRefreshFailure(error: unknown): string {
+  if (error instanceof MeetupTokenRefreshError) {
+    return error.oauthError
+      ? `HTTP ${error.status} ${error.oauthError}`
+      : `HTTP ${error.status}`;
+  }
+  return errorName(error);
+}
+
+/** One refresh attempt; a failure is logged by status or name only. */
+async function tryRefresh(
+  refreshToken: string,
+  which: string,
+): Promise<{ tokens: Tokens } | { error: unknown }> {
+  try {
+    return { tokens: await refreshMeetupToken(refreshToken) };
+  } catch (error: unknown) {
+    logger.warn(
+      `Meetup credential refresh from the ${which} failed: ${describeRefreshFailure(error)}`,
+    );
+    return { error };
+  }
+}
+
+/**
  * Records the episode outcome on the transaction's own client. A failure is
  * logged and reported as "no change": episode bookkeeping must never cost
  * the caller its token.
@@ -136,31 +181,39 @@ async function resolveLocked(
   }
 
   // Stored pair first; the Heroku config var is the seed and the recovery
-  // path. Deduplicated: in steady state they are often the same string, and
-  // trying it twice means two identical failed refreshes for one problem.
-  const candidates = [
-    ...new Set(
-      [
-        current?.refreshToken,
-        Configuration.meetup.organizerRefreshToken,
-      ].filter((token): token is string => Boolean(token)),
-    ),
-  ];
-
+  // path, tried ONLY when nothing is stored or Meetup definitely rejected the
+  // stored token. After a timeout, outage or invalid_client the stored token
+  // may well be fine: the seed is older, and if Meetup rotates, sending it
+  // could trip reuse detection and revoke the whole token family -- or, if
+  // it is another account's, overwrite a good credential after one hiccup.
+  // Each attempt is bounded (10 s), so it is safe to hold the lock across it.
+  const seed = Configuration.meetup.organizerRefreshToken || undefined;
   let lastError: unknown;
-  for (const candidate of candidates) {
-    let refreshed: Tokens;
-    try {
-      // Sequential by intent: the seed is tried only when the stored pair
-      // fails. Bounded (10 s), so it is safe to hold the lock across it.
-      // eslint-disable-next-line no-await-in-loop
-      refreshed = await refreshMeetupToken(candidate);
-    } catch (error: unknown) {
-      lastError = error;
-      // The error embeds Meetup's raw response body: process log only.
-      logger.warn(`Meetup credential refresh failed: ${String(error)}`);
-      continue;
+  let refreshed: Tokens | undefined;
+  if (current?.refreshToken) {
+    const attempt = await tryRefresh(current.refreshToken, 'stored token');
+    if ('tokens' in attempt) {
+      refreshed = attempt.tokens;
+    } else {
+      lastError = attempt.error;
     }
+  }
+  if (
+    refreshed === undefined &&
+    seed !== undefined &&
+    // Deduplicated: in steady state they are often the same string.
+    seed !== current?.refreshToken &&
+    (!current?.refreshToken || isDefiniteRefreshRejection(lastError))
+  ) {
+    const attempt = await tryRefresh(seed, 'config seed');
+    if ('tokens' in attempt) {
+      refreshed = attempt.tokens;
+    } else {
+      lastError = attempt.error;
+    }
+  }
+
+  if (refreshed !== undefined) {
     onRefreshed(refreshed);
 
     // Close the episode BEFORE writing: if this statement fails, Postgres
@@ -171,7 +224,6 @@ async function resolveLocked(
     // client-less one (a script) would close it silently.
     const recovered =
       recordEpisodes &&
-      // eslint-disable-next-line no-await-in-loop
       (await recordEpisode(() => locked.clearFailing(), 'close'));
 
     // Persisting is a SEPARATE failure from refreshing. If Meetup rotates
@@ -181,7 +233,6 @@ async function resolveLocked(
     // token; the next run re-refreshes from whatever is stored or seeded.
     let stored = true;
     try {
-      // eslint-disable-next-line no-await-in-loop
       await locked.write(refreshed);
     } catch (error: unknown) {
       // Postgres has aborted the transaction: nothing in it is durable,
@@ -190,7 +241,7 @@ async function resolveLocked(
       logger.error(
         'Meetup credential refreshed but could NOT be stored; this run ' +
           'continues on the fresh token, but if Meetup rotates refresh ' +
-          `tokens the stored pair is now stale: ${String(error)}`,
+          `tokens the stored pair is now stale: ${errorName(error)}`,
       );
     }
     return {
@@ -201,7 +252,9 @@ async function resolveLocked(
     };
   }
 
-  logger.error(`No usable Meetup credential: ${String(lastError)}`);
+  logger.error(
+    `No usable Meetup credential: ${lastError === undefined ? 'none configured' : describeRefreshFailure(lastError)}`,
+  );
   return {
     accessToken: undefined,
     recovered: false,

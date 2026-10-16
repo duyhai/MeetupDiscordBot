@@ -25,7 +25,11 @@ import { MEETUP_ORGANIZER_CREDENTIAL_KEY } from '../../src/util/credentialReposi
 // Discord are mocked; requires DATABASE_URL, skipped otherwise.
 const POSTGRES_AVAILABLE = Boolean(process.env.DATABASE_URL);
 
-vi.mock('../../src/lib/client/oauth/providers.js', () => ({
+// The real MeetupTokenRefreshError: the seed gate tells rejections apart by it.
+vi.mock('../../src/lib/client/oauth/providers.js', async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import('../../src/lib/client/oauth/providers.js')
+  >()),
   refreshMeetupToken: vi.fn(),
 }));
 

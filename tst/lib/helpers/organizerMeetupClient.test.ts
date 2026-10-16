@@ -5,7 +5,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import Configuration from '../../../src/configuration.js';
 import { BASE_DISCORD_BOT_URL } from '../../../src/constants.js';
 import { Tokens } from '../../../src/lib/client/discord/types.js';
-import { refreshMeetupToken } from '../../../src/lib/client/oauth/providers.js';
+import {
+  MeetupTokenRefreshError,
+  refreshMeetupToken,
+} from '../../../src/lib/client/oauth/providers.js';
 import { logAlert } from '../../../src/lib/helpers/discordLogger.js';
 import {
   ORGANIZER_TOKEN_REUSE_MS,
@@ -43,9 +46,16 @@ vi.mock('tslog', () => {
   return { Logger };
 });
 
-vi.mock('../../../src/lib/client/oauth/providers.js', () => ({
-  refreshMeetupToken: vi.fn(),
-}));
+// The real MeetupTokenRefreshError: the seed gate tells rejections apart by it.
+vi.mock(
+  '../../../src/lib/client/oauth/providers.js',
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import('../../../src/lib/client/oauth/providers.js')
+    >()),
+    refreshMeetupToken: vi.fn(),
+  }),
+);
 
 vi.mock('../../../src/lib/helpers/discordLogger.js', () => ({
   logAlert: vi.fn().mockResolvedValue(true),
@@ -140,6 +150,18 @@ const fresh = (n = 1): Tokens => ({
 /** A refresh error whose message embeds a raw body, as the real one does. */
 const refreshError = () =>
   new Error('Meetup token refresh failed: [400] RAW-BODY-SECRET');
+
+/** Meetup's token endpoint answering `status`, optionally with an OAuth code. */
+const rejection = (status: number, oauthError?: string) =>
+  new MeetupTokenRefreshError(
+    status,
+    oauthError
+      ? JSON.stringify({
+          error: oauthError,
+          error_description: 'RAW-BODY-SECRET',
+        })
+      : 'RAW-BODY-SECRET',
+  );
 
 const deferred = <T>() => {
   let resolve!: (value: T) => void;
@@ -250,9 +272,9 @@ describe('getOrganizerAccessToken', () => {
     await expect(getOrganizerAccessToken()).resolves.toBe('FRESH-ACCESS-2');
   });
 
-  it('falls back to the config seed only when the stored refresh fails', async () => {
+  it('falls back to the config seed only when the stored refresh is rejected', async () => {
     db.current = stored(0);
-    refresh.mockRejectedValueOnce(refreshError());
+    refresh.mockRejectedValueOnce(rejection(400, 'invalid_grant'));
     refresh.mockResolvedValueOnce(fresh());
 
     await expect(getOrganizerAccessToken()).resolves.toBe('FRESH-ACCESS-1');
@@ -270,20 +292,109 @@ describe('getOrganizerAccessToken', () => {
     expect(refresh.mock.calls.map(([token]) => token)).toEqual(['STORED-2']);
   });
 
+  describe('the config seed is tried only after a definite rejection', () => {
+    const triedTokens = () => refresh.mock.calls.map(([token]) => token);
+
+    it('a timeout on the stored token never tries the seed', async () => {
+      db.current = stored(0);
+      refresh.mockRejectedValueOnce(
+        new DOMException(
+          'The operation was aborted due to timeout',
+          'TimeoutError',
+        ),
+      );
+      refresh.mockResolvedValue(fresh());
+
+      await expect(
+        getOrganizerAccessToken({ client }),
+      ).resolves.toBeUndefined();
+      expect(triedTokens()).toEqual(['STORED-REFRESH']);
+      expect(db.current?.refreshToken).toBe('STORED-REFRESH');
+      // A failure of this run like any other: the episode opens.
+      expect(db.failing).toBe(true);
+      expect(alert).toHaveBeenCalledTimes(1);
+    });
+
+    it('a network error on the stored token never tries the seed', async () => {
+      db.current = stored(0);
+      refresh.mockRejectedValueOnce(new TypeError('fetch failed'));
+      refresh.mockResolvedValue(fresh());
+
+      await expect(getOrganizerAccessToken()).resolves.toBeUndefined();
+      expect(triedTokens()).toEqual(['STORED-REFRESH']);
+    });
+
+    it('a 5xx on the stored token never tries the seed', async () => {
+      db.current = stored(0);
+      refresh.mockRejectedValueOnce(rejection(503));
+      refresh.mockResolvedValue(fresh());
+
+      await expect(getOrganizerAccessToken()).resolves.toBeUndefined();
+      expect(triedTokens()).toEqual(['STORED-REFRESH']);
+    });
+
+    it('a 429 on the stored token never tries the seed', async () => {
+      db.current = stored(0);
+      refresh.mockRejectedValueOnce(rejection(429));
+      refresh.mockResolvedValue(fresh());
+
+      await expect(getOrganizerAccessToken()).resolves.toBeUndefined();
+      expect(triedTokens()).toEqual(['STORED-REFRESH']);
+    });
+
+    it('invalid_client never tries the seed', async () => {
+      db.current = stored(0);
+      refresh.mockRejectedValueOnce(rejection(401, 'invalid_client'));
+      refresh.mockResolvedValue(fresh());
+
+      await expect(getOrganizerAccessToken()).resolves.toBeUndefined();
+      expect(triedTokens()).toEqual(['STORED-REFRESH']);
+    });
+
+    it('invalid_grant on the stored token tries the seed', async () => {
+      db.current = stored(0);
+      refresh.mockRejectedValueOnce(rejection(400, 'invalid_grant'));
+      refresh.mockResolvedValueOnce(fresh());
+
+      await expect(getOrganizerAccessToken()).resolves.toBe('FRESH-ACCESS-1');
+      expect(triedTokens()).toEqual(['STORED-REFRESH', 'SEED-REFRESH']);
+      expect(db.current?.refreshToken).toBe('FRESH-REFRESH-1');
+    });
+
+    it('a bare 401 on the stored token tries the seed', async () => {
+      db.current = stored(0);
+      refresh.mockRejectedValueOnce(rejection(401));
+      refresh.mockResolvedValueOnce(fresh());
+
+      await expect(getOrganizerAccessToken()).resolves.toBe('FRESH-ACCESS-1');
+      expect(triedTokens()).toEqual(['STORED-REFRESH', 'SEED-REFRESH']);
+    });
+
+    it('with no stored token the seed is used', async () => {
+      refresh.mockResolvedValueOnce(fresh());
+
+      await expect(getOrganizerAccessToken()).resolves.toBe('FRESH-ACCESS-1');
+      expect(triedTokens()).toEqual(['SEED-REFRESH']);
+      expect(db.current?.accessToken).toBe('FRESH-ACCESS-1');
+    });
+
+    it('never logs the raw refresh error body', async () => {
+      db.current = stored(0);
+      refresh.mockRejectedValue(rejection(400, 'invalid_grant'));
+
+      await getOrganizerAccessToken();
+      const logged = fake.logged.join('\n');
+      expect(logged).toContain('HTTP 400 invalid_grant');
+      expect(logged).not.toContain('RAW-BODY-SECRET');
+    });
+  });
+
   it('tries an identical stored token and seed only once', async () => {
     db.current = stored(0, 'SEED-REFRESH');
-    refresh.mockRejectedValue(refreshError());
+    refresh.mockRejectedValue(rejection(400, 'invalid_grant'));
 
     await expect(getOrganizerAccessToken()).resolves.toBeUndefined();
     expect(refresh).toHaveBeenCalledTimes(1);
-  });
-
-  it('uses the seed when nothing is stored yet', async () => {
-    refresh.mockResolvedValueOnce(fresh());
-
-    await expect(getOrganizerAccessToken()).resolves.toBe('FRESH-ACCESS-1');
-    expect(refresh).toHaveBeenCalledWith('SEED-REFRESH');
-    expect(db.current?.accessToken).toBe('FRESH-ACCESS-1');
   });
 
   it('persist failure keeps the fresh token for this run', async () => {
