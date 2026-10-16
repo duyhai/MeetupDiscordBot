@@ -233,6 +233,10 @@ describe('sessions page', () => {
     expect(unknown.text).not.toContain('<script>x');
     const proto = await page('toString');
     expect(proto.text).not.toContain('class="note"');
+    // Self-revoke lands on the login page, so there is no 'self' notice.
+    const self = await page('self');
+    expect(self.text).not.toContain('class="note"');
+    expect(self.text).not.toContain('You were signed out everywhere');
   });
 
   it('the page has both forms with the CSRF token', async () => {

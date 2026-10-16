@@ -15,7 +15,6 @@ export const REVOKE_SESSIONS_PATH = '/sessions/revoke';
 const DISCORD_ID = /^[0-9]{17,20}$/;
 
 const NOTICES = {
-  self: 'You were signed out everywhere.',
   done: 'That staff member was signed out everywhere. They can sign in again only while they still hold a dashboard role.',
   'bad-id': 'That is not a Discord user id.',
   'not-leadership':
