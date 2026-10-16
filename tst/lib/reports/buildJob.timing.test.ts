@@ -25,7 +25,7 @@ afterEach(() => {
   nock.cleanAll();
 });
 
-// Not a performance assertion: it records how long one month takes against
+// Run with REPORT_TIMING=1 to print the number. Not a performance assertion: it records how long one month takes against
 // the Task 1 fixture so the number can go in the PR, next to the lease TTL.
 describe('report build timing (fixture)', () => {
   it('builds September 2026 from the fixture responder', async () => {
@@ -49,11 +49,13 @@ describe('report build timing (fixture)', () => {
 
     const outcome = await buildMonth(h.deps, { year: 2026, month: 9 }, 'job');
 
-    // eslint-disable-next-line no-console -- the number goes in the PR
-    console.log(
-      `[timing] fixture build of 2026-09: ${outcome.durationMs} ms, ` +
-        `${responder.calls.length} Meetup calls (lease TTL ${BUILD_LEASE_TTL_SEC * 1000} ms)`,
-    );
+    if (process.env.REPORT_TIMING === '1') {
+      // eslint-disable-next-line no-console -- the number goes in the PR
+      console.log(
+        `[timing] fixture build of 2026-09: ${outcome.durationMs} ms, ` +
+          `${responder.calls.length} Meetup calls (lease TTL ${BUILD_LEASE_TTL_SEC * 1000} ms)`,
+      );
+    }
     expect(responder.unhandled()).toEqual([]);
     expect(responder.failures()).toEqual([]);
     expect(h.snapshots.rows).toHaveLength(2);
