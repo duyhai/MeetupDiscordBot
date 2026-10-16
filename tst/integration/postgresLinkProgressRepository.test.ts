@@ -85,6 +85,18 @@ if (!POSTGRES_AVAILABLE) {
       ]);
     });
 
+    it('treats a non-finite limit as the default', async () => {
+      const counts = {
+        linked: 1,
+        unlinked: 1,
+        reverifyTagged: 0,
+        onboarding: 0,
+      };
+      await repo.upsertDay('2026-10-04', counts);
+      expect(await repo.listDays(NaN)).toHaveLength(1);
+      expect(await repo.listDays(Infinity)).toHaveLength(1);
+    });
+
     it('rejects a malformed day', async () => {
       await expect(
         repo.upsertDay('2026-10-5', {

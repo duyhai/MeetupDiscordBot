@@ -73,7 +73,8 @@ export class PostgresLinkProgressRepository {
 
   /** Newest first. */
   async listDays(limit = DEFAULT_LIMIT): Promise<LinkProgressDay[]> {
-    const bounded = Math.min(Math.max(Math.trunc(limit), 1), MAX_LIMIT);
+    const requested = Number.isFinite(limit) ? limit : DEFAULT_LIMIT;
+    const bounded = Math.min(Math.max(Math.trunc(requested), 1), MAX_LIMIT);
     const result = await this.pool.query<DayRow>(
       `SELECT to_char(day, 'YYYY-MM-DD') AS day_key, linked, unlinked, reverify_tagged, onboarding
        FROM link_progress_daily ORDER BY day DESC LIMIT $1`,

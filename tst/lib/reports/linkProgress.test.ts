@@ -101,13 +101,7 @@ describe('collectLinkProgress', () => {
     const gatewayFetch = vi.fn();
     const guild = {
       members: { list: vi.fn().mockResolvedValue(page), fetch: gatewayFetch },
-      roles: {
-        fetch: vi
-          .fn()
-          .mockResolvedValue(
-            new Map([[REVERIFY, { id: REVERIFY, name: 'Reverify' }]]),
-          ),
-      },
+      roles: { fetch: vi.fn() },
     };
     // roles.fetch result needs Collection#find
     guild.roles.fetch.mockResolvedValue({

@@ -67,9 +67,9 @@ export function countLinkProgress(
 }
 
 /**
- * Read-only. Members are paged over REST (never guild.members.fetch(), which
- * uses the rate-limited gateway opcode) and reduced to small candidates as
- * soon as they arrive, so full GuildMember objects are not kept.
+ * Read-only. Members are paged in full over REST (never guild.members.fetch(),
+ * which uses the rate-limited gateway opcode) and then reduced to small
+ * candidates, so only the candidates are kept after collection.
  */
 export async function collectLinkProgress(
   client: Client,
