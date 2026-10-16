@@ -1,0 +1,14 @@
+--- editReply ---
+{
+  "content": "Sit tight! Checking attendance."
+}
+--- followUp ---
+{
+  "content": "No no-shows recorded for 2026-8. 🎉",
+  "ephemeral": true
+}
+--- moderation log ---
+{
+  "title": "No Show report run",
+  "description": "<@999000999> ran the 2026-8 report: no no-shows."
+}

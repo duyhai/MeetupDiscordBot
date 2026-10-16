@@ -8,22 +8,14 @@ import { Discord, Slash, SlashOption } from 'discordx';
 import { Logger } from 'tslog';
 
 import { GqlMeetupClient } from '../../lib/client/meetup/gqlClient.js';
-import {
-  getPaginatedData,
-  mapWithConcurrency,
-} from '../../lib/client/meetup/paginationHelper.js';
+import { mapWithConcurrency } from '../../lib/client/meetup/paginationHelper.js';
 import { EventSummary } from '../../lib/client/meetup/types.js';
 import {
   NoShowCase,
   NoShowCases,
-  NoShowTally,
-  SuspensionHistory,
   actByDate,
-  buildNoShowCases,
   formatNoShowReport,
   formatSuspensionCsv,
-  suspensionHistory,
-  tallyNoShows,
   upcomingEvents,
 } from '../../lib/helpers/noShowReport.js';
 import { PostgresSuspensionRepository } from '../../lib/repositories/postgresSuspensionRepository.js';
@@ -34,41 +26,17 @@ import {
   withDiscordFileAttachment,
 } from '../../util/discord.js';
 import { withMeetupClient } from '../../util/meetup.js';
-import { getEventsYearMonth } from './getEventStats.js';
+import { fetchMonthData } from '../../lib/reports/meetupMonth.js';
+import {
+  buildNoShowReport,
+  toNoShowCases,
+} from '../../lib/reports/noShowReport.js';
 
 const logger = new Logger({ name: 'MeetupNoShowReportCommands' });
 
 // Bounds parallel Meetup requests (one per event or per member) so a busy
 // month doesn't fire dozens of paginated requests at once.
 const MEETUP_CONCURRENCY = 5;
-
-/**
- * Who no-showed in the report month. Meetup has no group-wide "no-shows"
- * query, so this reads each of the month's events.
- */
-async function getMonthNoShows(
-  meetupClient: GqlMeetupClient,
-  year: number,
-  month: number,
-): Promise<NoShowTally> {
-  const events = await getEventsYearMonth(meetupClient, year, month);
-  const perEvent = await mapWithConcurrency(
-    events,
-    MEETUP_CONCURRENCY,
-    async (event) => {
-      const rsvps = await getPaginatedData(async (paginationInput) => {
-        const result = await meetupClient.getEventRsvps(
-          event.id,
-          paginationInput,
-          { rsvpStatus: ['NO_SHOW'] },
-        );
-        return result.event.rsvps;
-      });
-      return { event, rsvps };
-    },
-  );
-  return tallyNoShows(perEvent);
-}
 
 /** Each member's own RSVPs with the given statuses; undefined if they left. */
 async function getRsvpEventsByMember(
@@ -85,18 +53,6 @@ async function getRsvpEventsByMember(
       meetupClient.getMemberRsvpEvents(memberId, groupId, filter, options),
   );
   return new Map(memberIds.map((memberId, i) => [memberId, events[i]]));
-}
-
-async function getSuspensionHistories(
-  repo: PostgresSuspensionRepository,
-  memberIds: string[],
-): Promise<Map<string, SuspensionHistory>> {
-  const histories = await Promise.all(
-    memberIds.map(async (memberId) =>
-      suspensionHistory(await repo.listByMemberId(memberId)),
-    ),
-  );
-  return new Map(memberIds.map((memberId, i) => [memberId, histories[i]]));
 }
 
 /**
@@ -211,8 +167,29 @@ export class MeetupNoShowReportCommands {
           content: 'Sit tight! Checking attendance.',
         });
 
-        const monthTally = await getMonthNoShows(meetupClient, year, month);
-        if (monthTally.size === 0) {
+        const now = dayjs();
+        let groupId: string | undefined;
+        const resolveGroupId = async () => {
+          groupId ??= (await meetupClient.getUserMembershipInfo())
+            .groupByUrlname.id;
+          return groupId;
+        };
+        const data = await fetchMonthData(meetupClient, { year, month });
+        const report = await buildNoShowReport(
+          meetupClient,
+          { year, month },
+          data,
+          {
+            asOf: now.toDate(),
+            // The command has always read every live record.
+            suspensionCutoff: undefined,
+            resolveGroupId,
+            suspensions: repo,
+            // The report text never shows it; skip one Meetup call per case.
+            includeHostFlag: false,
+          },
+        );
+        if (report.summary.members === 0) {
           await interaction.followUp({
             content: `No no-shows recorded for ${year}-${month}. 🎉`,
             ephemeral: true,
@@ -224,26 +201,10 @@ export class MeetupNoShowReportCommands {
           return;
         }
 
-        const now = dayjs();
-        const groupId = (await meetupClient.getUserMembershipInfo())
-          .groupByUrlname.id;
-        const memberIds = [...monthTally.keys()];
-        const [noShowsByMember, historyByMember] = await Promise.all([
-          getRsvpEventsByMember(meetupClient, groupId, memberIds, {
-            rsvpStatus: ['NO_SHOW'],
-            eventStatus: ['PAST'],
-          }),
-          getSuspensionHistories(repo, memberIds),
-        ]);
-        const result = buildNoShowCases({
-          monthTally,
-          noShowsByMember,
-          historyByMember,
-          now,
-        });
+        const result = toNoShowCases(report);
         result.cases = await withUpcomingRsvps(
           meetupClient,
-          groupId,
+          await resolveGroupId(),
           result.cases,
           now,
         );

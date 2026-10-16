@@ -5,8 +5,11 @@ import {
   DIGEST_PAGE_LIMIT,
   IDENTITY_DIGEST_UTC_HOUR,
   formatIdentityDigest,
+  identityDigestClaimKey,
+  identityDigestDoneKey,
   identityDigestWindow,
   runIdentityDigestOnce,
+  safeErrorSummary,
 } from '../../../../src/lib/helpers/identity/digest.js';
 import { logAlert } from '../../../../src/lib/helpers/discordLogger.js';
 import { runMeetupSweep } from '../../../../src/lib/helpers/identity/meetupSweep.js';
@@ -1043,5 +1046,33 @@ describe('runIdentityDigestOnce', () => {
     await runIdentityDigestOnce(client);
 
     expect(logAlert).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('digest exports', () => {
+  it('safeErrorSummary shows organizer-safe messages and only the name of anything else', () => {
+    const safe = Object.assign(new Error('Meetup group is unreadable'), {
+      organizerSafeMessage: true,
+    });
+    expect(safeErrorSummary(safe)).toBe('Meetup group is unreadable');
+
+    // A graphql-request ClientError embeds the raw response body in its message.
+    const clientErrorLike = new Error('GraphQL Error: RAW-BODY {"secret":1}');
+    const summary = safeErrorSummary(clientErrorLike);
+    expect(summary).toBe('Error (details in the process log)');
+    expect(summary).not.toContain('RAW-BODY');
+
+    expect(safeErrorSummary('RAW-BODY')).toBe(
+      'unknown error (details in the process log)',
+    );
+  });
+
+  it('the digest claim and done keys are built by the exported helpers', () => {
+    expect(identityDigestClaimKey('2026-08-16')).toBe(
+      'identity-digest-2026-08-16',
+    );
+    expect(identityDigestDoneKey('2026-08-16')).toBe(
+      'identity-digest-done-2026-08-16',
+    );
   });
 });

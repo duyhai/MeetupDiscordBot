@@ -1,0 +1,108 @@
+--- editReply ---
+{
+  "content": "Sit tight! Checking attendance."
+}
+--- attachment No Show report 2026-9.txt ---
+**No Show report for 2026 September**
+
+Counted: no-shows in the last 12 months, after the member’s most recent suspension.
+
+💵 marks an upcoming RSVP whose event appears to cost money (a fee on Meetup, or payment mentioned in the description). It does not mean the member paid, and an unmarked event is not guaranteed free.
+
+__Warnings (1 no-show): 1__
+
+**[Lou Diaz](https://www.meetup.com/members/216/) ID: 216** — 1 no-show since 2025-10-05 (12 months ago)
+    [Board Game Night](https://www.meetup.com/1-5genasians/events/e103/) September 17, 2026 7:00 PM
+
+__Suspension candidates (2+ no-shows): 3__
+
+**[Dana Lee](https://www.meetup.com/members/201/) ID: 201** — 2 no-shows since 2025-10-05 (12 months ago)
+    prior suspensions: 0 → recommended: 30 days
+    **ACT NOW** (Coffee Crawl, the next RSVP, is 3 days away or less)
+    ⚠️ 1 upcoming RSVP may involve payment — check whether they paid before suspending
+    No-shows counted (2):
+        [End of March Trivia](https://www.meetup.com/1-5genasians/events/e094/) March 31, 2026 11:30 PM
+        [Board Game Night](https://www.meetup.com/1-5genasians/events/e101/) September 3, 2026 7:00 PM
+    Upcoming RSVPs (1), earliest first:
+        [Coffee Crawl](https://www.meetup.com/1-5genasians/events/e109/) October 8, 2026 6:00 PM — 💵 description mentions payment
+**[Eli Park](https://www.meetup.com/members/202/) ID: 202** — 2 no-shows since 2026-03-01 (last suspension)
+    prior suspensions: 1 → recommended: 60 days
+    **ACT NOW** (Coffee Crawl, the next RSVP, is 3 days away or less)
+    ⚠️ 2 upcoming RSVPs may involve payment — check whether they paid before suspending
+    No-shows counted (2):
+        [Board Game Night](https://www.meetup.com/1-5genasians/events/e101/) September 3, 2026 7:00 PM
+        [Hike at Tiger Mountain](https://www.meetup.com/1-5genasians/events/e102/) September 12, 2026 9:00 AM
+    Upcoming RSVPs (2), earliest first:
+        [Coffee Crawl](https://www.meetup.com/1-5genasians/events/e109/) October 8, 2026 6:00 PM — 💵 description mentions payment
+        [Paid Cooking Class](https://www.meetup.com/1-5genasians/events/e108/) October 20, 2026 6:00 PM — 💵 $15 event fee
+**[Hana Kim](https://www.meetup.com/members/205/) ID: 205** — 2 no-shows since 2025-10-05 (12 months ago)
+    prior suspensions: 0 → recommended: 30 days
+    no upcoming RSVPs in the group — suspend at any time
+    No-shows counted (2):
+        [Holiday Party](https://www.meetup.com/1-5genasians/events/e080/) December 10, 2025 7:00 PM
+        [Late Night Karaoke](https://www.meetup.com/1-5genasians/events/e106/) September 30, 2026 10:30 PM
+
+__No action needed — this month's no-shows no longer count: 2__
+
+[Fay Wong](https://www.meetup.com/members/203/) ID: 203 — suspended 2026-09-20
+[Max Ortiz](https://www.meetup.com/members/217/) ID: 217 — suspended 2026-10-02
+
+__No longer in the group — not classified: 1__
+
+[Gus Tran](https://www.meetup.com/members/204/) ID: 204
+--- end attachment ---
+--- followUp ---
+{
+  "files": [
+    {
+      "name": "No Show report 2026-9.txt",
+      "body": "**No Show report for 2026 September**\n\nCounted: no-shows in the last 12 months, after the member’s most recent suspension.\n\n💵 marks an upcoming RSVP whose event appears to cost money (a fee on Meetup, or payment mentioned in the description). It does not mean the member paid, and an unmarked event is not guaranteed free.\n\n__Warnings (1 no-show): 1__\n\n**[Lou Diaz](https://www.meetup.com/members/216/) ID: 216** — 1 no-show since 2025-10-05 (12 months ago)\n    [Board Game Night](https://www.meetup.com/1-5genasians/events/e103/) September 17, 2026 7:00 PM\n\n__Suspension candidates (2+ no-shows): 3__\n\n**[Dana Lee](https://www.meetup.com/members/201/) ID: 201** — 2 no-shows since 2025-10-05 (12 months ago)\n    prior suspensions: 0 → recommended: 30 days\n    **ACT NOW** (Coffee Crawl, the next RSVP, is 3 days away or less)\n    ⚠️ 1 upcoming RSVP may involve payment — check whether they paid before suspending\n    No-shows counted (2):\n        [End of March Trivia](https://www.meetup.com/1-5genasians/events/e094/) March 31, 2026 11:30 PM\n        [Board Game Night](https://www.meetup.com/1-5genasians/events/e101/) September 3, 2026 7:00 PM\n    Upcoming RSVPs (1), earliest first:\n        [Coffee Crawl](https://www.meetup.com/1-5genasians/events/e109/) October 8, 2026 6:00 PM — 💵 description mentions payment\n**[Eli Park](https://www.meetup.com/members/202/) ID: 202** — 2 no-shows since 2026-03-01 (last suspension)\n    prior suspensions: 1 → recommended: 60 days\n    **ACT NOW** (Coffee Crawl, the next RSVP, is 3 days away or less)\n    ⚠️ 2 upcoming RSVPs may involve payment — check whether they paid before suspending\n    No-shows counted (2):\n        [Board Game Night](https://www.meetup.com/1-5genasians/events/e101/) September 3, 2026 7:00 PM\n        [Hike at Tiger Mountain](https://www.meetup.com/1-5genasians/events/e102/) September 12, 2026 9:00 AM\n    Upcoming RSVPs (2), earliest first:\n        [Coffee Crawl](https://www.meetup.com/1-5genasians/events/e109/) October 8, 2026 6:00 PM — 💵 description mentions payment\n        [Paid Cooking Class](https://www.meetup.com/1-5genasians/events/e108/) October 20, 2026 6:00 PM — 💵 $15 event fee\n**[Hana Kim](https://www.meetup.com/members/205/) ID: 205** — 2 no-shows since 2025-10-05 (12 months ago)\n    prior suspensions: 0 → recommended: 30 days\n    no upcoming RSVPs in the group — suspend at any time\n    No-shows counted (2):\n        [Holiday Party](https://www.meetup.com/1-5genasians/events/e080/) December 10, 2025 7:00 PM\n        [Late Night Karaoke](https://www.meetup.com/1-5genasians/events/e106/) September 30, 2026 10:30 PM\n\n__No action needed — this month's no-shows no longer count: 2__\n\n[Fay Wong](https://www.meetup.com/members/203/) ID: 203 — suspended 2026-09-20\n[Max Ortiz](https://www.meetup.com/members/217/) ID: 217 — suspended 2026-10-02\n\n__No longer in the group — not classified: 1__\n\n[Gus Tran](https://www.meetup.com/members/204/) ID: 204"
+    }
+  ],
+  "content": "Report ready — hand this to Melissa. She sends warnings and applies suspensions; record outcomes with /meetup_record_suspension.",
+  "ephemeral": true
+}
+--- attachment suggested_suspensions_2026-9.csv ---
+member_id,member_name,duration_days,suspended_at,notes
+"201","Dana Lee","30","","act by 2026-10-05; upcoming RSVPs: 1 (1 may involve payment); 2 no-shows since 2025-10-05; prior suspensions: 0"
+"202","Eli Park","60","","act by 2026-10-05; upcoming RSVPs: 2 (2 may involve payment); 2 no-shows since 2026-03-01; prior suspensions: 1"
+"205","Hana Kim","30","","2 no-shows since 2025-10-05; prior suspensions: 0"
+--- end attachment ---
+--- followUp ---
+{
+  "files": [
+    {
+      "name": "suggested_suspensions_2026-9.csv",
+      "body": "member_id,member_name,duration_days,suspended_at,notes\n\"201\",\"Dana Lee\",\"30\",\"\",\"act by 2026-10-05; upcoming RSVPs: 1 (1 may involve payment); 2 no-shows since 2025-10-05; prior suspensions: 0\"\n\"202\",\"Eli Park\",\"60\",\"\",\"act by 2026-10-05; upcoming RSVPs: 2 (2 may involve payment); 2 no-shows since 2026-03-01; prior suspensions: 1\"\n\"205\",\"Hana Kim\",\"30\",\"\",\"2 no-shows since 2025-10-05; prior suspensions: 0\""
+    }
+  ],
+  "content": "Suggested suspensions as an editable CSV. Delete the rows Melissa didn’t act on, fill in `suspended_at` with the day she applied each one, then upload it via /meetup_record_suspension.",
+  "ephemeral": true
+}
+--- moderation log ---
+{
+  "title": "No Show report run",
+  "description": "<@999000999> ran the 2026-9 report.",
+  "fields": [
+    {
+      "name": "Warnings",
+      "value": "1",
+      "inline": true
+    },
+    {
+      "name": "Suspension candidates",
+      "value": "3",
+      "inline": true
+    },
+    {
+      "name": "No action needed",
+      "value": "2",
+      "inline": true
+    },
+    {
+      "name": "No longer in the group",
+      "value": "1",
+      "inline": true
+    }
+  ]
+}

@@ -115,12 +115,20 @@ export class MeetupGroupUnreadableError extends Error {
 export class GqlMeetupClient {
   private client: GraphQLClient;
 
+  private readonly bypassCache: boolean;
+
   /**
    * `timeoutMs` overrides the per-request deadline (default 30 s). The
    * organizer account check passes a short one: it runs inside the
    * credential lock, whose idle-in-transaction timeout is 45 s.
+   * `bypassCache` makes the cached read methods skip the request cache
+   * entirely (see `cached`).
    */
-  constructor(accessToken: string, options: { timeoutMs?: number } = {}) {
+  constructor(
+    accessToken: string,
+    options: { timeoutMs?: number; bypassCache?: boolean } = {},
+  ) {
+    this.bypassCache = options.bypassCache ?? false;
     const timeoutMs = options.timeoutMs ?? GQL_REQUEST_TIMEOUT_MS;
     this.client = new GraphQLClient(Configuration.meetup.endpoint, {
       headers: {
@@ -129,6 +137,19 @@ export class GqlMeetupClient {
       fetch: (url: FetchUrl, init?: FetchInit) =>
         boundedFetch(url, init, timeoutMs),
     });
+  }
+
+  /**
+   * cachedClientRequest keys ignore the token. A client that must not share
+   * answers with other tokens (the organizer report job) bypasses the cache
+   * both ways: it neither reads another token's answer nor leaves its own.
+   */
+  private cached<TInput, TResponse>(
+    name: string,
+    input: TInput,
+    fn: (input: TInput) => Promise<TResponse>,
+  ): Promise<TResponse> {
+    return this.bypassCache ? fn(input) : cachedClientRequest(name, input, fn);
   }
 
   public async customRequest(query: string, args: string): Promise<string> {
@@ -304,7 +325,7 @@ export class GqlMeetupClient {
     }
 
     // Can be cached because it doesn't retrieve user specific data
-    return cachedClientRequest(
+    return this.cached(
       'getGroupEvents',
       {
         urlname: Configuration.meetup.groupUrlName,
@@ -365,7 +386,7 @@ export class GqlMeetupClient {
       `Calling getGroupEventsCount with input: ${JSON.stringify({ filter })}`,
     );
     // Can be cached because it doesn't retrieve user specific data
-    return cachedClientRequest(
+    return this.cached(
       'getGroupEventsCount',
       {
         urlname: Configuration.meetup.groupUrlName,
@@ -424,7 +445,7 @@ export class GqlMeetupClient {
       })}`,
     );
     // Can be cached because it doesn't retrieve user specific data
-    return cachedClientRequest(
+    return this.cached(
       'getGroupMembersByIds',
       {
         urlname: Configuration.meetup.groupUrlName,
@@ -560,7 +581,7 @@ export class GqlMeetupClient {
       })}`,
     );
     // Can be cached because it doesn't retrieve user specific data
-    return cachedClientRequest(
+    return this.cached(
       'getEventRsvps',
       {
         eventId,

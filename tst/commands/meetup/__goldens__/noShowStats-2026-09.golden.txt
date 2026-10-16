@@ -1,0 +1,54 @@
+--- editReply ---
+{
+  "content": "Sit tight! Fetching data."
+}
+--- attachment **No Show stats for 2026 September**.txt ---
+
+**No Show stats for 2026 September**
+          
+**1 [Dana Lee](https://www.meetup.com/members/201/) ID: 201**
+    [Board Game Night](https://www.meetup.com/1-5genasians/events/e101/) September 3, 2026 7:00 PM
+**2 [Eli Park](https://www.meetup.com/members/202/) ID: 202**
+    [Board Game Night](https://www.meetup.com/1-5genasians/events/e101/) September 3, 2026 7:00 PM
+    [Hike at Tiger Mountain](https://www.meetup.com/1-5genasians/events/e102/) September 12, 2026 9:00 AM
+**1 [Fay Wong](https://www.meetup.com/members/203/) ID: 203**
+    [Hike at Tiger Mountain](https://www.meetup.com/1-5genasians/events/e102/) September 12, 2026 9:00 AM
+**1 [Gus Tran](https://www.meetup.com/members/204/) ID: 204**
+    [Board Game Night](https://www.meetup.com/1-5genasians/events/e103/) September 17, 2026 7:00 PM
+**1 [Lou Diaz](https://www.meetup.com/members/216/) ID: 216**
+    [Board Game Night](https://www.meetup.com/1-5genasians/events/e103/) September 17, 2026 7:00 PM
+**1 [Max Ortiz](https://www.meetup.com/members/217/) ID: 217**
+    [Board Game Night](https://www.meetup.com/1-5genasians/events/e103/) September 17, 2026 7:00 PM
+**1 [Hana Kim](https://www.meetup.com/members/205/) ID: 205**
+    [Late Night Karaoke](https://www.meetup.com/1-5genasians/events/e106/) September 30, 2026 10:30 PM
+
+**Total: 8**
+--- end attachment ---
+--- followUp ---
+{
+  "files": [
+    {
+      "name": "**No Show stats for 2026 September**.txt",
+      "body": "\n**No Show stats for 2026 September**\n          \n**1 [Dana Lee](https://www.meetup.com/members/201/) ID: 201**\n    [Board Game Night](https://www.meetup.com/1-5genasians/events/e101/) September 3, 2026 7:00 PM\n**2 [Eli Park](https://www.meetup.com/members/202/) ID: 202**\n    [Board Game Night](https://www.meetup.com/1-5genasians/events/e101/) September 3, 2026 7:00 PM\n    [Hike at Tiger Mountain](https://www.meetup.com/1-5genasians/events/e102/) September 12, 2026 9:00 AM\n**1 [Fay Wong](https://www.meetup.com/members/203/) ID: 203**\n    [Hike at Tiger Mountain](https://www.meetup.com/1-5genasians/events/e102/) September 12, 2026 9:00 AM\n**1 [Gus Tran](https://www.meetup.com/members/204/) ID: 204**\n    [Board Game Night](https://www.meetup.com/1-5genasians/events/e103/) September 17, 2026 7:00 PM\n**1 [Lou Diaz](https://www.meetup.com/members/216/) ID: 216**\n    [Board Game Night](https://www.meetup.com/1-5genasians/events/e103/) September 17, 2026 7:00 PM\n**1 [Max Ortiz](https://www.meetup.com/members/217/) ID: 217**\n    [Board Game Night](https://www.meetup.com/1-5genasians/events/e103/) September 17, 2026 7:00 PM\n**1 [Hana Kim](https://www.meetup.com/members/205/) ID: 205**\n    [Late Night Karaoke](https://www.meetup.com/1-5genasians/events/e106/) September 30, 2026 10:30 PM\n\n**Total: 8**"
+    }
+  ],
+  "content": "Check the results in the attachment!",
+  "ephemeral": true
+}
+--- moderation log ---
+{
+  "title": "No-show stats run",
+  "description": "<@999000999> ran /meetup_get_noshow_event_stats for 2026-9.",
+  "fields": [
+    {
+      "name": "No-shows",
+      "value": "8",
+      "inline": true
+    },
+    {
+      "name": "Members",
+      "value": "7",
+      "inline": true
+    }
+  ]
+}

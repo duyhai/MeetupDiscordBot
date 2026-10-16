@@ -17,8 +17,9 @@
  */
 import dayjs from 'dayjs';
 
-import { BaseUserInfo, EventSummary } from '../client/meetup/types.js';
+import { EventSummary } from '../client/meetup/types.js';
 import { SuspensionRecord } from '../repositories/types.js';
+import { MemberRef } from '../reports/types.js';
 import { linkStr } from '../../util/discord.js';
 import { tz } from '../../util/timezone.js';
 import { utcDateOnly } from './suspensionList.js';
@@ -170,13 +171,13 @@ export function paymentNote(event: EventSummary): string | undefined {
 
 export type NoShowTally = Map<
   string,
-  { member: BaseUserInfo; events: EventSummary[] }
+  { member: MemberRef; events: EventSummary[] }
 >;
 
 export function tallyNoShows(
   resultsPerEvent: {
     event: EventSummary;
-    rsvps: { member: BaseUserInfo }[];
+    rsvps: { member: MemberRef }[];
   }[],
 ): NoShowTally {
   const tally: NoShowTally = new Map();
@@ -191,7 +192,7 @@ export function tallyNoShows(
 }
 
 export interface NoShowCase {
-  member: BaseUserInfo;
+  member: MemberRef;
   /** The countable no-shows, oldest first. */
   counted: EventSummary[];
   since: CountingSince;
@@ -207,7 +208,7 @@ export interface NoShowCase {
 
 /** A member with month no-shows but none that count any more. */
 export interface ClearedMember {
-  member: BaseUserInfo;
+  member: MemberRef;
   lastSuspendedDay?: string;
 }
 
@@ -215,7 +216,7 @@ export interface NoShowCases {
   cases: NoShowCase[];
   cleared: ClearedMember[];
   /** No longer in the group, so their history can't be read. */
-  departed: BaseUserInfo[];
+  departed: MemberRef[];
 }
 
 /**

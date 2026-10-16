@@ -194,6 +194,23 @@ export class PostgresSuspensionRepository implements SuspensionRepository {
     return result.rows.map(toRecord);
   }
 
+  async listByMemberIds(
+    memberIds: string[],
+    before?: Date,
+  ): Promise<SuspensionRecord[]> {
+    if (memberIds.length === 0) {
+      return [];
+    }
+    const result = await this.pool.query<SuspensionRow>(
+      `SELECT * FROM suspension_records
+       WHERE member_id = ANY($1::text[]) AND voided_at IS NULL
+         AND ($2::timestamptz IS NULL OR suspended_at < $2::timestamptz)
+       ORDER BY member_id, suspended_at DESC`,
+      [memberIds, before ?? null],
+    );
+    return result.rows.map(toRecord);
+  }
+
   async listAll(): Promise<SuspensionRecord[]> {
     const result = await this.pool.query<SuspensionRow>(
       `SELECT * FROM suspension_records

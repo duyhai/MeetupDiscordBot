@@ -142,6 +142,41 @@ if (!POSTGRES_AVAILABLE) {
       expect(rows).toHaveLength(2);
       expect(rows.map((row) => row.memberId)).toEqual(['m2', 'm1']);
     });
+    it('listByMemberIds returns live records for the given members before the cutoff', async () => {
+      const day = (iso: string) => new Date(`${iso}T00:00:00Z`);
+      await repo.insert({ ...record, suspendedAt: day('2026-09-01') });
+      await repo.insert({ ...record, suspendedAt: day('2026-10-01') });
+      const voided = await repo.insert({
+        ...record,
+        memberId: 'm2',
+        suspendedAt: day('2026-09-15'),
+      });
+      await repo.void(voided.id, 'mod-1', 'wrong member');
+      await repo.insert({
+        ...record,
+        memberId: 'm3',
+        suspendedAt: day('2026-09-20'),
+      });
+
+      const beforeCutoff = await repo.listByMemberIds(
+        ['m1', 'm2'],
+        day('2026-10-01'),
+      );
+      expect(
+        beforeCutoff.map((r) => [r.memberId, r.suspendedAt.toISOString()]),
+      ).toEqual([['m1', '2026-09-01T00:00:00.000Z']]);
+
+      const all = await repo.listByMemberIds(['m1', 'm2']);
+      expect(all.map((r) => [r.memberId, r.suspendedAt.toISOString()])).toEqual(
+        [
+          ['m1', '2026-10-01T00:00:00.000Z'],
+          ['m1', '2026-09-01T00:00:00.000Z'],
+        ],
+      );
+
+      expect(await repo.listByMemberIds([])).toEqual([]);
+    });
+
     describe('void', () => {
       it('returns the voided record with who voided it and why', async () => {
         const inserted = await repo.insert(record);

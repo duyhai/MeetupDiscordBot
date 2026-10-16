@@ -105,7 +105,7 @@ One row per report type, month and build.
 | `report_type` | `hall_of_fame` or `no_show` |
 | `period` | first day of the month (Pacific) |
 | `built_at`, `built_by` | `built_by` = `job`, `backfill`, or a Discord user id for manual refresh |
-| `source_complete` | false when Meetup data for the month looks incomplete (e.g. older months with no no-shows recorded); pages say "incomplete" instead of showing zero |
+| `source_complete` | true when the build read Meetup completely. Attendance is never inferred (ruling 2026-10-16: the organizer account sees NO_SHOW RSVPs, Meetup returns no ATTENDED for this group), so every build so far stores true; a finished month with RSVPs but zero no-shows is stored complete and its build alert adds "check that attendance was taken" |
 | `payload` | JSONB, the report service's result |
 | `superseded_by` | id of a newer build of the same month, or null |
 
@@ -240,10 +240,12 @@ When the host waiver applies, the fee sentence is omitted.
 ## Build job and notifications
 
 - **Schedule.** Runs in-process on the existing 15-minute tick pattern with a
-  Postgres lease (as the identity digest does). Builds the previous month on
-  the 2nd of each month at 16:00 UTC, plus the current month daily, and writes
-  `link_progress_daily`. It never runs during 18:00–19:00 UTC (identity sweep
-  hour).
+  Redis lease (30 minutes). From 16:00 UTC it builds the current month daily,
+  rebuilds the previous month daily on the 2nd–7th (with catch-up if those
+  days were missed), and writes `link_progress_daily`. No month build starts
+  between 17:45 and 19:00 UTC, and the link-progress member pass runs only in
+  hours 16 and 19–23 UTC, so neither overlaps the 17:00 unlinked digest or the
+  18:00 identity sweep.
 - **Manual refresh.** "Refresh from Meetup" on the workspace and report pages
   queues a rebuild of that month (one at a time; refused while one is
   running).
@@ -262,8 +264,9 @@ A one-off script (`scripts/backfillReports.ts`), run as a Heroku one-off dyno,
 builds every month from the group's first event to last month. It is
 resumable (skips months that already have a snapshot unless `--force`),
 rate-limited, logs progress to #meetup-bot-alerts every 12 months processed,
-and refuses to start during 18:00–19:00 UTC. Months where Meetup returns no
-attendance data are saved with `source_complete = false`.
+and refuses to start during 17:45–19:00 UTC (the unlinked digest and the
+identity sweep). Months with zero no-shows are saved as complete, like the
+daily job's builds; attendance is never inferred from ATTENDED RSVPs.
 
 ## Failure handling
 

@@ -1,0 +1,62 @@
+--- editReply ---
+{
+  "content": "Sit tight! Fetching data."
+}
+--- attachment **Hosting stats for 2026 March**.txt ---
+
+**Hosting stats for 2026 March**
+
+**#1: 2 [Cy Host](https://www.meetup.com/members/103/) ID: 103** 🆕
+    [First of March Brunch (2/8)](https://www.meetup.com/1-5genasians/events/e092/) March 1, 2026 12:30 AM
+    [Spring Forward Social (3/30)](https://www.meetup.com/1-5genasians/events/e093/) March 8, 2026 7:00 PM
+**#2: 1 [Ava Host](https://www.meetup.com/members/101/) ID: 101**
+    [Spring Forward Social (3/30)](https://www.meetup.com/1-5genasians/events/e093/) March 8, 2026 7:00 PM
+**#3: 1 [Ben Host](https://www.meetup.com/members/102/) ID: 102**
+    [End of March Trivia (1/16)](https://www.meetup.com/1-5genasians/events/e094/) March 31, 2026 11:30 PM
+
+**Total: 3**
+
+----- READY TO POST -----
+
+**Hall of Fame — 2026 March**
+
+**#1: Cy Host — 2 events** 🆕
+    First of March Brunch (Mar 1)
+    Spring Forward Social (Mar 8)
+**#2: Ava Host — 1 event**
+    Spring Forward Social (Mar 8)
+**#3: Ben Host — 1 event**
+    End of March Trivia (Mar 31)
+
+New hosts: Cy Host (co-hosts: Ava Host)
+
+**Hosts: 3 · Events: 3**
+--- end attachment ---
+--- followUp ---
+{
+  "files": [
+    {
+      "name": "**Hosting stats for 2026 March**.txt",
+      "body": "\n**Hosting stats for 2026 March**\n\n**#1: 2 [Cy Host](https://www.meetup.com/members/103/) ID: 103** 🆕\n    [First of March Brunch (2/8)](https://www.meetup.com/1-5genasians/events/e092/) March 1, 2026 12:30 AM\n    [Spring Forward Social (3/30)](https://www.meetup.com/1-5genasians/events/e093/) March 8, 2026 7:00 PM\n**#2: 1 [Ava Host](https://www.meetup.com/members/101/) ID: 101**\n    [Spring Forward Social (3/30)](https://www.meetup.com/1-5genasians/events/e093/) March 8, 2026 7:00 PM\n**#3: 1 [Ben Host](https://www.meetup.com/members/102/) ID: 102**\n    [End of March Trivia (1/16)](https://www.meetup.com/1-5genasians/events/e094/) March 31, 2026 11:30 PM\n\n**Total: 3**\n\n----- READY TO POST -----\n\n**Hall of Fame — 2026 March**\n\n**#1: Cy Host — 2 events** 🆕\n    First of March Brunch (Mar 1)\n    Spring Forward Social (Mar 8)\n**#2: Ava Host — 1 event**\n    Spring Forward Social (Mar 8)\n**#3: Ben Host — 1 event**\n    End of March Trivia (Mar 31)\n\nNew hosts: Cy Host (co-hosts: Ava Host)\n\n**Hosts: 3 · Events: 3**"
+    }
+  ],
+  "content": "Check the results in the attachment!",
+  "ephemeral": true
+}
+--- moderation log ---
+{
+  "title": "Hosting stats run",
+  "description": "<@999000999> ran /meetup_get_host_event_stats for 2026-3.",
+  "fields": [
+    {
+      "name": "Events",
+      "value": "3",
+      "inline": true
+    },
+    {
+      "name": "Hosts",
+      "value": "3",
+      "inline": true
+    }
+  ]
+}

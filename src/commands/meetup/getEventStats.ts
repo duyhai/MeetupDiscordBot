@@ -6,7 +6,6 @@ import {
 } from 'discord.js';
 import { Discord, Slash, SlashOption } from 'discordx';
 import { Logger } from 'tslog';
-import { GqlMeetupClient } from '../../lib/client/meetup/gqlClient.js';
 import {
   getPaginatedData,
   mapWithConcurrency,
@@ -14,11 +13,14 @@ import {
 
 import { BaseUserInfo, Event } from '../../lib/client/meetup/types.js';
 import {
-  collectHostStats,
-  displayedEvents,
-  formatHallOfFamePost,
-  isCountableEvent,
-} from '../../lib/helpers/hallOfFame.js';
+  buildHallOfFameReport,
+  formatHostingStatsText,
+} from '../../lib/reports/hallOfFameReport.js';
+import {
+  RSVP_FETCH_CONCURRENCY,
+  fetchMonthData,
+  getEventsYearMonth,
+} from '../../lib/reports/meetupMonth.js';
 import {
   discordCommandWrapper,
   logModerationAction,
@@ -31,65 +33,7 @@ import { tz } from '../../util/timezone.js';
 
 const logger = new Logger({ name: 'MeetupGetStatsCommands' });
 
-// Bounds parallel RSVP-fetch fan-outs so a month with many events doesn't
-// fire dozens of paginated requests at Meetup simultaneously.
-const RSVP_FETCH_CONCURRENCY = 5;
-
-export async function getEventsYearMonth(
-  meetupClient: GqlMeetupClient,
-  year: number,
-  month: number,
-) {
-  let startDate = tz(dayjs()).set('year', year).startOf('year');
-  let endDate = startDate.endOf('year');
-  if (month !== 0) {
-    startDate = startDate.set('month', month - 1).startOf('month');
-    endDate = startDate.endOf('month');
-  }
-
-  return getPaginatedData(async (paginationInput) => {
-    const result = await meetupClient.getGroupEvents(paginationInput, {
-      // No AUTOSCHED: a recurring series can generate a copy of an event
-      // that already exists (same title, time, and hosts), and the copy stays
-      // AUTOSCHED instead of becoming PAST. Checked 2026-09-28: all 11
-      // past-dated AUTOSCHED events in 2026 were such copies, and no real
-      // event was left AUTOSCHED.
-      status: ['PAST', 'ACTIVE'],
-      afterDateTime: startDate.toISOString(),
-      beforeDateTime: endDate.toISOString(),
-    });
-    return result.groupByUrlname.events;
-  });
-}
-
-/**
- * A host is "new" when the group has no PAST event of theirs before the
- * report window. One first:1 totalCount query per host, run in parallel.
- * Live-schema introspection (2026-09-25) confirmed GroupEventFilter accepts
- * hostId + beforeDateTime + status; see the design spec for the fallback if
- * the resolver ignores the combination.
- */
-export async function findNewHostIds(
-  meetupClient: GqlMeetupClient,
-  hostIds: string[],
-  beforeIso: string,
-): Promise<Set<string>> {
-  const checks = await mapWithConcurrency(
-    hostIds,
-    RSVP_FETCH_CONCURRENCY,
-    async (hostId) => {
-      const priorCount = await meetupClient.getGroupEventsCount({
-        hostId,
-        beforeDateTime: beforeIso,
-        status: ['PAST'],
-      });
-      return { hostId, priorCount };
-    },
-  );
-  return new Set(
-    checks.filter((check) => check.priorCount === 0).map((c) => c.hostId),
-  );
-}
+export { getEventsYearMonth } from '../../lib/reports/meetupMonth.js';
 
 @Discord()
 export class MeetupGetEventStatsCommands {
@@ -145,62 +89,13 @@ export class MeetupGetEventStatsCommands {
         logger.info('Fetching data');
         await interaction.editReply({ content: 'Sit tight! Fetching data.' });
 
-        const pastEvents = await getEventsYearMonth(meetupClient, year, month);
-        const countableEvents = pastEvents.filter(isCountableEvent);
-        const { hostStats, totalEvents } = collectHostStats(countableEvents);
-
-        // Attendance for the detailed attachment, fetched for exactly the
-        // events it displays (see displayedEvents).
-        const rsvpCounts = new Map<string, number>();
-        await mapWithConcurrency(
-          displayedEvents(hostStats),
-          RSVP_FETCH_CONCURRENCY,
-          async (event) => {
-            const rsvps = await getPaginatedData(async (paginationInput) => {
-              const result = await meetupClient.getEventRsvps(
-                event.id,
-                paginationInput,
-                { rsvpStatus: ['ATTENDED', 'YES'] },
-              );
-              return result.event.rsvps;
-            });
-            rsvpCounts.set(event.id, rsvps.length);
-          },
-        );
-
-        const monthStart = tz(dayjs())
-          .set('year', year)
-          .set('month', month === 0 ? 0 : month - 1)
-          .startOf(month === 0 ? 'year' : 'month');
-        const newHostIds = await findNewHostIds(
+        const data = await fetchMonthData(meetupClient, { year, month });
+        const report = await buildHallOfFameReport(
           meetupClient,
-          hostStats.map((stats) => stats.host.id),
-          monthStart.toISOString(),
+          { year, month },
+          data,
+          new Date(),
         );
-
-        const detailedResult = hostStats
-          .map((stats, index) => {
-            const { host, events } = stats;
-            const header = `**#${index + 1}: ${events.length} ${
-              shouldIncludeLinks
-                ? linkStr(host.name, host.memberUrl)
-                : host.name
-            } ID: ${host.id}**${newHostIds.has(host.id) ? ' 🆕' : ''}\n`;
-            const body = events
-              .map((event) => {
-                const titleStr = `${event.title} (${
-                  rsvpCounts.get(event.id) ?? 0
-                }/${event.maxTickets})`;
-                return `    ${
-                  shouldIncludeLinks
-                    ? linkStr(titleStr, event.eventUrl)
-                    : titleStr
-                } ${shouldShowDates ? tz(dayjs(event.dateTime)).format('LLL') : ''}`;
-              })
-              .join('\n');
-            return header + body;
-          })
-          .join('\n');
 
         const periodLabel = `${year}${
           month > 0
@@ -210,22 +105,11 @@ export class MeetupGetEventStatsCommands {
             : ''
         }`;
         const header = `**Hosting stats for ${periodLabel}**`;
-        const readyToPost = formatHallOfFamePost({
+        const result = formatHostingStatsText(report, {
           periodLabel,
-          hostStats,
-          totalEvents,
-          newHostIds,
+          showDates: shouldShowDates,
+          includeLinks: shouldIncludeLinks,
         });
-        const result = `
-${header}
-
-${detailedResult}
-
-**Total: ${totalEvents}**
-
------ READY TO POST -----
-
-${readyToPost}`;
         await withDiscordFileAttachment(
           `${header}.txt`,
           result,
@@ -246,8 +130,8 @@ ${readyToPost}`;
             month > 0 ? `-${month}` : ' (whole year)'
           }.`,
           fields: [
-            { name: 'Events', value: String(totalEvents), inline: true },
-            { name: 'Hosts', value: String(hostStats.length), inline: true },
+            { name: 'Events', value: String(report.totalEvents), inline: true },
+            { name: 'Hosts', value: String(report.hosts.length), inline: true },
           ],
         });
       });
