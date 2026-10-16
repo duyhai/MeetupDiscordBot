@@ -30,6 +30,31 @@ function expiresAtFrom(expiresIn: unknown): number {
   return Date.now() + seconds * 1000;
 }
 
+/**
+ * Meetup answered a token request with 2xx but no usable access token. Not
+ * a rejection of the grant -- it says nothing about whether the refresh
+ * token is dead -- so it never sends the caller to the config seed. Fixed
+ * message: the body is never carried.
+ */
+export class MeetupTokenResponseError extends Error {
+  constructor() {
+    super('Meetup token response had no usable access token');
+    this.name = 'MeetupTokenResponseError';
+  }
+}
+
+const isNonEmptyString = (value: unknown): value is string =>
+  typeof value === 'string' && value.length > 0;
+
+/** The access token of a 2xx token response, or MeetupTokenResponseError. */
+function accessTokenFrom(raw: APIAccessTokenResponse): string {
+  const accessToken: unknown = raw?.access_token;
+  if (!isNonEmptyString(accessToken)) {
+    throw new MeetupTokenResponseError();
+  }
+  return accessToken;
+}
+
 // Registered with the providers; must be byte-identical in the authorize URL
 // and the token exchange. debugRedirect keeps local dev working through the
 // production /redirect trampoline.
@@ -78,7 +103,7 @@ export async function exchangeMeetupCode(code: string): Promise<Tokens> {
   }
   const raw = (await response.json()) as APIAccessTokenResponse;
   return {
-    accessToken: raw.access_token,
+    accessToken: accessTokenFrom(raw),
     refreshToken: raw.refresh_token,
     expiresAt: expiresAtFrom(raw.expires_in),
   };
@@ -149,11 +174,16 @@ export async function refreshMeetupToken(
     throw new MeetupTokenRefreshError(response.status, await response.text());
   }
   const raw = (await response.json()) as APIAccessTokenResponse;
+  const accessToken = accessTokenFrom(raw);
+  const returnedRefreshToken: unknown = raw?.refresh_token;
   return {
-    accessToken: raw.access_token,
+    accessToken,
     // Providers differ on whether refresh tokens rotate. Carry back whatever
-    // arrived so the caller can persist it; fall back to the one we sent.
-    refreshToken: raw.refresh_token ?? refreshToken,
+    // arrived so the caller can persist it; fall back to the one we sent
+    // when none (or an empty or non-string one) came back.
+    refreshToken: isNonEmptyString(returnedRefreshToken)
+      ? returnedRefreshToken
+      : refreshToken,
     expiresAt: expiresAtFrom(raw.expires_in),
   };
 }

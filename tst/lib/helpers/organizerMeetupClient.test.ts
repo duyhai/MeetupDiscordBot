@@ -1,5 +1,6 @@
 import { Client } from 'discord.js';
 import { ClientError } from 'graphql-request';
+import nock from 'nock';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import Configuration from '../../../src/configuration.js';
@@ -637,6 +638,41 @@ describe('getOrganizerAccessToken', () => {
       title: 'Meetup identity monitoring is not running',
       description: organizerFailureRemedy(),
     });
+  });
+
+  it('a 200 with no access token is an unusable credential: alert, no seed, nothing stored', async () => {
+    db.current = stored(0);
+    // The real refresh, against a token endpoint that answers 200 without
+    // an access token.
+    const actual = await vi.importActual<
+      typeof import('../../../src/lib/client/oauth/providers.js')
+    >('../../../src/lib/client/oauth/providers.js');
+    refresh.mockImplementation(actual.refreshMeetupToken);
+    nock('https://secure.meetup.com')
+      .post('/oauth2/access')
+      .reply(200, { refresh_token: 'ROTATED-REFRESH', expires_in: 3600 });
+
+    try {
+      await expect(
+        getOrganizerAccessToken({ client }),
+      ).resolves.toBeUndefined();
+    } finally {
+      nock.cleanAll();
+    }
+
+    expect(refresh.mock.calls.map(([token]) => token)).toEqual([
+      'STORED-REFRESH',
+    ]);
+    expect(locked.write).not.toHaveBeenCalled();
+    expect(db.current?.refreshToken).toBe('STORED-REFRESH');
+    expect(db.current?.accessToken).toBe('STORED-ACCESS');
+    expect(db.failing).toBe(true);
+    expect(alert).toHaveBeenCalledTimes(1);
+    expect(alert).toHaveBeenCalledWith(client, {
+      title: 'Meetup identity monitoring is not running',
+      description: organizerFailureRemedy(),
+    });
+    expect(fake.logged.join('\n')).toMatch(/MeetupTokenResponseError/);
   });
 
   it('alerts when there is no credential at all', async () => {
