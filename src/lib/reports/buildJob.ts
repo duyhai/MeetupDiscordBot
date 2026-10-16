@@ -813,6 +813,12 @@ export async function defaultBuildJobDeps(
 
 export const BUILD_TICK_MS = 15 * 60 * 1000;
 
+/** The "Report build job is failing" text for a tick stuck past the lease TTL (fixed: names no error). */
+export const WEDGED_TICK_ALERT =
+  'A report build tick has been running for over 30 minutes and has not finished. ' +
+  'This usually means Redis or Postgres stopped answering (Redis queues commands while it is offline). ' +
+  'No reports are built until it ends; details are in the process log.';
+
 type SchedulerLog = Pick<Logger<unknown>, 'error' | 'warn' | 'info'>;
 
 /** `error` is set when the tick failed. */
@@ -870,6 +876,26 @@ export function startReportBuildScheduler(
   const alert = options.alert ?? ((entry: LogEntry) => logAlert(client, entry));
   let failedTicks = 0;
   let infraAlertDay: string | undefined;
+  /** One "Report build job is failing" post per UTC day, whatever triggered it. */
+  const alertOncePerDay = async (description: string) => {
+    const day = utcDay(new Date(now()));
+    if (infraAlertDay === day) {
+      return;
+    }
+    infraAlertDay = day; // one attempt a day, posted or not
+    try {
+      const posted = await alert({
+        title: 'Report build job is failing',
+        description,
+      });
+      if (!posted) {
+        log.error('Report build job failure alert was not posted');
+      }
+    } catch (error) {
+      // Process log only: the Discord text is fixed or describeBuildError.
+      log.error(`Report build job failure alert failed: ${String(error)}`);
+    }
+  };
   // Infrastructure failures (pg, Redis, the lease) never reach the month
   // alerts: after an hour of them, say so in Discord once per UTC day.
   const recordTick = async (result: TickResult) => {
@@ -878,24 +904,13 @@ export function startReportBuildScheduler(
       return;
     }
     failedTicks += 1;
-    const day = utcDay(new Date(now()));
-    if (failedTicks < INFRA_ALERT_AFTER_FAILED_TICKS || infraAlertDay === day) {
+    if (failedTicks < INFRA_ALERT_AFTER_FAILED_TICKS) {
       return;
     }
-    infraAlertDay = day; // one attempt a day, posted or not
-    try {
-      const posted = await alert({
-        title: 'Report build job is failing',
-        description:
-          `The report build job has failed ${failedTicks} times in a row: ${describeBuildError(result.error)}\n\n` +
-          'It keeps retrying every 15 minutes; details are in the process log.',
-      });
-      if (!posted) {
-        log.error('Report build job failure alert was not posted');
-      }
-    } catch (error) {
-      log.error(`Report build job failure alert failed: ${String(error)}`);
-    }
+    await alertOncePerDay(
+      `The report build job has failed ${failedTicks} times in a row: ${describeBuildError(result.error)}\n\n` +
+        'It keeps retrying every 15 minutes; details are in the process log.',
+    );
   };
   let running = false;
   let skipLogged = false;
@@ -914,6 +929,9 @@ export function startReportBuildScheduler(
       if (!wedgeWarned && now() - tickStartedAt > BUILD_LEASE_TTL_SEC * 1000) {
         log.warn('Report build tick has been running for over 30 minutes');
         wedgeWarned = true;
+        // A hung tick never reaches recordTick (a Redis drop hangs, it does
+        // not throw), so this is the only way the outage reaches Discord.
+        alertOncePerDay(WEDGED_TICK_ALERT).catch(() => undefined);
       }
       return;
     }

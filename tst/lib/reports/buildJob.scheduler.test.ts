@@ -7,6 +7,7 @@ import {
   BuildJobDeps,
   runBuildTickSafely,
   startReportBuildScheduler,
+  WEDGED_TICK_ALERT,
 } from '../../../src/lib/reports/buildJob.js';
 import { Clock, makeDeps } from './buildJobFakes.js';
 
@@ -338,5 +339,251 @@ describe('startReportBuildScheduler', () => {
     calls[0].fn();
     await settle();
     expect(makeDepsFn).toHaveBeenCalledTimes(5);
+  });
+
+  /** makeDeps whose ticks hang until `finish()` rejects the current one. */
+  function hangingTicks() {
+    let finish: () => void = () => undefined;
+    const makeDepsFn = vi.fn(
+      () =>
+        new Promise<BuildJobDeps>((_resolve, reject) => {
+          finish = () => reject(new Error('released'));
+        }),
+    );
+    return { makeDepsFn, finish: () => finish() };
+  }
+
+  const THIRTY_MIN = 30 * 60 * 1000;
+  const FAILING = 'Report build job is failing';
+
+  it('the wedged-tick alert text is fixed and names no error', () => {
+    expect(WEDGED_TICK_ALERT).toBe(
+      'A report build tick has been running for over 30 minutes and has not finished. ' +
+        'This usually means Redis or Postgres stopped answering (Redis queues commands while it is offline). ' +
+        'No reports are built until it ends; details are in the process log.',
+    );
+  });
+
+  it('a wedged tick sends the daily failure alert', async () => {
+    const { calls, setIntervalFn } = captureInterval();
+    const log = fakeLog();
+    const alert = vi.fn((_entry: { title: string; description?: string }) =>
+      Promise.resolve(true),
+    );
+    let nowMs = Date.parse('2026-10-05T16:00:00Z');
+    const { makeDepsFn } = hangingTicks();
+    startReportBuildScheduler(client, {
+      env: DB_ENV,
+      makeDeps: makeDepsFn,
+      setIntervalFn,
+      log,
+      alert,
+      now: () => nowMs,
+    });
+
+    nowMs += THIRTY_MIN;
+    calls[0].fn(); // exactly 30 min: not yet
+    await settle();
+    expect(alert).not.toHaveBeenCalled();
+    nowMs += 1;
+    calls[0].fn();
+    await settle();
+    expect(alert).toHaveBeenCalledTimes(1);
+    expect(alert).toHaveBeenCalledWith({
+      title: FAILING,
+      description: WEDGED_TICK_ALERT,
+    });
+
+    nowMs += 15 * 60 * 1000;
+    calls[0].fn();
+    await settle();
+    expect(alert).toHaveBeenCalledTimes(1);
+    expect(log.error).not.toHaveBeenCalled();
+  });
+
+  it('wedge and failed ticks share one alert per UTC day', async () => {
+    const { calls, setIntervalFn } = captureInterval();
+    const log = fakeLog();
+    const alert = vi.fn((_entry: { title: string; description?: string }) =>
+      Promise.resolve(true),
+    );
+    let nowMs = Date.parse('2026-10-05T16:00:00Z');
+    let failing = true;
+    let finish: () => void = () => undefined;
+    // A successful tick: the clock is before 16:00, so it returns at once.
+    const quiet = makeDeps({ clock: new Clock('2026-10-05T15:00:00Z') });
+    const makeDepsFn = vi.fn(() => {
+      if (failing) {
+        return Promise.reject(new Error('connect ECONNREFUSED 127.0.0.1:5432'));
+      }
+      return new Promise<BuildJobDeps>((resolve) => {
+        finish = () => resolve(quiet.deps);
+      });
+    });
+    startReportBuildScheduler(client, {
+      env: DB_ENV,
+      makeDeps: makeDepsFn,
+      setIntervalFn,
+      log,
+      alert,
+      now: () => nowMs,
+    });
+    await settle(); // failure 1
+    for (let i = 0; i < 3; i += 1) {
+      nowMs += 15 * 60 * 1000;
+      calls[0].fn();
+      // eslint-disable-next-line no-await-in-loop -- ticks are sequential
+      await settle();
+    }
+    expect(alert).toHaveBeenCalledTimes(1); // 4 failed ticks
+    expect(alert.mock.calls[0][0].description).not.toBe(WEDGED_TICK_ALERT);
+
+    // Same UTC day: a hanging tick passes 30 minutes.
+    failing = false;
+    nowMs += 15 * 60 * 1000;
+    calls[0].fn(); // starts the hanging tick
+    await settle();
+    nowMs += THIRTY_MIN + 1;
+    calls[0].fn();
+    await settle();
+    expect(alert).toHaveBeenCalledTimes(1);
+
+    // Next UTC day: the hang ends (resetting the failure count), and a new
+    // tick hangs 30 minutes: the wedge alone alerts that day.
+    nowMs = Date.parse('2026-10-06T16:00:00Z');
+    finish();
+    await settle();
+    expect(alert).toHaveBeenCalledTimes(1);
+    calls[0].fn(); // new hanging tick
+    await settle();
+    nowMs += THIRTY_MIN + 1;
+    calls[0].fn();
+    await settle();
+    expect(alert).toHaveBeenCalledTimes(2);
+    expect(alert.mock.calls[1][0]).toEqual({
+      title: FAILING,
+      description: WEDGED_TICK_ALERT,
+    });
+  });
+
+  it('a wedge alert on a new day comes before the failed-tick alert that day', async () => {
+    const { calls, setIntervalFn } = captureInterval();
+    const log = fakeLog();
+    const alert = vi.fn((_entry: { title: string; description?: string }) =>
+      Promise.resolve(true),
+    );
+    let nowMs = Date.parse('2026-10-05T16:00:00Z');
+    let hang = true;
+    let finish: () => void = () => undefined;
+    const makeDepsFn = vi.fn(() => {
+      if (hang) {
+        return new Promise<BuildJobDeps>((_resolve, reject) => {
+          finish = () => reject(new Error('released'));
+        });
+      }
+      return Promise.reject(new Error('boom'));
+    });
+    startReportBuildScheduler(client, {
+      env: DB_ENV,
+      makeDeps: makeDepsFn,
+      setIntervalFn,
+      log,
+      alert,
+      now: () => nowMs,
+    });
+    nowMs += THIRTY_MIN + 1;
+    calls[0].fn();
+    await settle();
+    expect(alert).toHaveBeenCalledTimes(1); // the wedge
+    hang = false;
+    finish(); // failed tick 1
+    await settle();
+    for (let i = 0; i < 4; i += 1) {
+      nowMs += 15 * 60 * 1000;
+      calls[0].fn();
+      // eslint-disable-next-line no-await-in-loop -- ticks are sequential
+      await settle();
+    }
+    expect(makeDepsFn).toHaveBeenCalledTimes(5);
+    expect(alert).toHaveBeenCalledTimes(1); // same UTC day: shared
+  });
+
+  it('a failed wedge alert is only logged', async () => {
+    process.on('unhandledRejection', onRejection);
+    const { calls, setIntervalFn } = captureInterval();
+    const log = fakeLog();
+    const alert = vi.fn(() => Promise.reject(new Error('discord down')));
+    let nowMs = Date.parse('2026-10-05T16:00:00Z');
+    const { makeDepsFn } = hangingTicks();
+    startReportBuildScheduler(client, {
+      env: DB_ENV,
+      makeDeps: makeDepsFn,
+      setIntervalFn,
+      log,
+      alert,
+      now: () => nowMs,
+    });
+    nowMs += THIRTY_MIN + 1;
+    calls[0].fn();
+    await settle();
+    await settle();
+    expect(alert).toHaveBeenCalledTimes(1);
+    expect(
+      log.error.mock.calls.some(([m]) =>
+        String(m).startsWith('Report build job failure alert failed'),
+      ),
+    ).toBe(true);
+    expect(rejections).toEqual([]);
+  });
+
+  it('a wedge alert that was not posted is logged', async () => {
+    const { calls, setIntervalFn } = captureInterval();
+    const log = fakeLog();
+    const alert = vi.fn(() => Promise.resolve(false));
+    let nowMs = Date.parse('2026-10-05T16:00:00Z');
+    const { makeDepsFn } = hangingTicks();
+    startReportBuildScheduler(client, {
+      env: DB_ENV,
+      makeDeps: makeDepsFn,
+      setIntervalFn,
+      log,
+      alert,
+      now: () => nowMs,
+    });
+    nowMs += THIRTY_MIN + 1;
+    calls[0].fn();
+    await settle();
+    expect(log.error).toHaveBeenCalledWith(
+      'Report build job failure alert was not posted',
+    );
+  });
+
+  it('a wedge alert whose logger also throws never reaches the process', async () => {
+    process.on('unhandledRejection', onRejection);
+    const { calls, setIntervalFn } = captureInterval();
+    const log = {
+      ...fakeLog(),
+      error: vi.fn(() => {
+        throw new Error('logger broke');
+      }),
+    };
+    const alert = vi.fn(() => Promise.reject(new Error('discord down')));
+    let nowMs = Date.parse('2026-10-05T16:00:00Z');
+    const { makeDepsFn } = hangingTicks();
+    startReportBuildScheduler(client, {
+      env: DB_ENV,
+      makeDeps: makeDepsFn,
+      setIntervalFn,
+      log,
+      alert,
+      now: () => nowMs,
+    });
+    nowMs += THIRTY_MIN + 1;
+    calls[0].fn();
+    await settle();
+    await settle();
+    expect(alert).toHaveBeenCalledTimes(1);
+    expect(log.error).toHaveBeenCalled();
+    expect(rejections).toEqual([]);
   });
 });
