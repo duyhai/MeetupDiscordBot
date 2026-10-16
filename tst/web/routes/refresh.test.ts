@@ -49,6 +49,15 @@ const sleep = (ms: number) =>
 
 type Rebuild = DashboardPageDeps['rebuild'];
 
+/** A promise and its resolve, for gating a fake on the test's say-so. */
+function deferred(): { promise: Promise<void>; resolve: () => void } {
+  let resolve: () => void = () => undefined;
+  const promise = new Promise<void>((r) => {
+    resolve = r;
+  });
+  return { promise, resolve };
+}
+
 async function setup(
   options: {
     rebuild?: Rebuild;
@@ -247,30 +256,51 @@ describe('POST /dashboard/reports/:period/refresh', () => {
 
   it('a timed-out lease answers 503, is released when it lands, and the next refresh starts', async () => {
     const TIMEOUT_MS = 50;
-    const LEASE_DELAY_MS = 150;
-    /** The build lease's SET NX lands only after LEASE_DELAY_MS, like Redis returning from an outage. */
-    class SlowLeaseCache extends FakeCache {
-      slow = true;
+    /**
+     * The build lease's SET NX is held at a gate until the test opens it, like
+     * Redis returning from an outage; the deadline runs on fake timers, so
+     * nothing depends on real elapsed time.
+     */
+    class GatedLeaseCache extends FakeCache {
+      gated = true;
+
+      private readonly gate = deferred();
+
+      readonly requested = deferred();
+
+      readonly removed = deferred();
+
+      release(): void {
+        this.gate.resolve();
+      }
 
       override async exclusive_set(
         key: string,
         value: string,
         ttlSec?: number,
       ) {
-        if (this.slow && key === BUILD_LEASE_KEY) {
-          await sleep(LEASE_DELAY_MS);
+        if (this.gated && key === BUILD_LEASE_KEY) {
+          this.requested.resolve();
+          await this.gate.promise;
         }
         return super.exclusive_set(key, value, ttlSec);
       }
+
+      override async remove(key: string) {
+        await super.remove(key);
+        if (key === BUILD_LEASE_KEY) {
+          this.removed.resolve();
+        }
+      }
     }
-    const slowLease = new SlowLeaseCache();
+    const lease = new GatedLeaseCache();
     const h = makeBuildDeps();
     const deps = {
       ...h.deps,
       cache: timedCacheFactory(
-        async () => slowLease,
+        async () => lease,
         TIMEOUT_MS,
-        releaseLateBuildLease(async () => slowLease),
+        releaseLateBuildLease(async () => lease),
       ),
     };
     let done: Promise<unknown> = Promise.resolve();
@@ -283,19 +313,36 @@ describe('POST /dashboard/reports/:period/refresh', () => {
     });
     const { post } = await setup({ rebuild });
 
-    const first = await post();
-    expect(first.status).toBe(503);
-    await expect(rebuild.mock.results[0].value).rejects.toBeInstanceOf(
-      CacheTimeoutError,
-    );
-    await sleep(LEASE_DELAY_MS + 50);
-    expect(slowLease.values.has(BUILD_LEASE_KEY)).toBe(false);
+    // Only the deadline timers are faked: the HTTP round trip stays real.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      // .then sends the request now; the client is lazy until then.
+      const first = post().then((res) => res);
+      await lease.requested.promise;
+      await vi.advanceTimersByTimeAsync(TIMEOUT_MS);
+      expect((await first).status).toBe(503);
+      await expect(rebuild.mock.results[0].value).rejects.toBeInstanceOf(
+        CacheTimeoutError,
+      );
+      expect(lease.values.has(BUILD_LEASE_KEY)).toBe(false);
 
-    slowLease.slow = false;
-    const second = await post();
-    expect(second.status).toBe(303);
-    expect(second.headers.location).toBe(`${MONTH}?refresh=started`);
-    await done;
+      // The SET NX lands after all; the late-lease hook releases it.
+      lease.release();
+      await lease.removed.promise;
+      expect(lease.values.has(BUILD_LEASE_KEY)).toBe(false);
+      // The first request failed before the cooldown step.
+      expect([...lease.values.keys()].some((k) => k.includes('cooldown'))).toBe(
+        false,
+      );
+
+      lease.gated = false;
+      const second = await post();
+      expect(second.status).toBe(303);
+      expect(second.headers.location).toBe(`${MONTH}?refresh=started`);
+      await done;
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('a done that never settles does not hold the response', async () => {
