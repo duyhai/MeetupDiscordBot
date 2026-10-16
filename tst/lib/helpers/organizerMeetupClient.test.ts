@@ -164,6 +164,8 @@ beforeEach(() => {
   refresh.mockReset();
   alert.mockClear();
   fake.getSelfId.mockReset();
+  // By default the token belongs to the recorded organizer account.
+  fake.getSelfId.mockResolvedValue('468174923');
   vi.mocked(ApplicationCredentialRepository).mockImplementation(
     async () =>
       credentials as unknown as Awaited<
@@ -660,7 +662,7 @@ describe('getOrganizerAccessToken', () => {
     expect(alert).toHaveBeenCalledWith(client, {
       title: 'Meetup organizer credential belongs to a different account',
       description:
-        'The stored Meetup organizer credential is not the shared organizer account set in MEETUP_ORGANIZER_MEMBER_ID. ' +
+        'The stored Meetup organizer credential is not the shared organizer account (the one on record, or MEETUP_ORGANIZER_MEMBER_ID). ' +
         `Renew it at ${BASE_DISCORD_BOT_URL}/dashboard/organizer-login while signed in to Meetup as the shared organizer account.`,
     });
     const shown = JSON.stringify(alert.mock.calls) + fake.logged.join('\n');
@@ -745,12 +747,73 @@ describe('getOrganizerAccessToken', () => {
     expect(fake.logged.join('\n')).toMatch(/LockTimeoutError/);
   });
 
-  it('does not look up the member id when one is stored', async () => {
+  it('checks the account even when a member id is stored', async () => {
+    db.current = stored(60 * MINUTE);
+    fake.getSelfId.mockResolvedValue('999000111');
+
+    // Without a client nothing could be alerted, so no lookup is spent.
+    await getOrganizerAccessToken();
+    expect(fake.getSelfId).not.toHaveBeenCalled();
+
+    await expect(getOrganizerAccessToken({ client })).resolves.toBe(
+      'STORED-ACCESS',
+    );
+    expect(fake.getSelfId).toHaveBeenCalledTimes(1);
+    expect(db.memberId).toBe('468174923'); // the recorded id is kept
+    expect(locked.setMemberId).not.toHaveBeenCalled();
+    expect(alert).toHaveBeenCalledTimes(1);
+    expect(alert.mock.calls[0][1].title).toBe(
+      'Meetup organizer credential belongs to a different account',
+    );
+  });
+
+  it('looks up each distinct access token once', async () => {
     db.current = stored(60 * MINUTE);
 
-    await getOrganizerAccessToken();
+    await getOrganizerAccessToken({ client });
+    await getOrganizerAccessToken({ client });
+    expect(fake.getSelfId).toHaveBeenCalledTimes(1);
 
-    expect(fake.getSelfId).not.toHaveBeenCalled();
+    refresh.mockResolvedValueOnce(fresh(1));
+    await getOrganizerAccessToken({ client, forceRefresh: true });
+    expect(fake.getSelfId).toHaveBeenCalledTimes(2);
+  });
+
+  it('a mismatched account after a refresh posts the wrong-account alert and no recovery', async () => {
+    // e.g. MEETUP_ORGANIZER_REFRESH_TOKEN was seeded from a personal account
+    // while an episode was open.
+    db.current = stored(0);
+    db.failing = true;
+    refresh.mockResolvedValueOnce(fresh(1));
+    fake.getSelfId.mockResolvedValue('999000111');
+
+    await expect(getOrganizerAccessToken({ client })).resolves.toBe(
+      'FRESH-ACCESS-1',
+    );
+
+    expect(alert).toHaveBeenCalledTimes(1);
+    expect(alert.mock.calls[0][1].title).toBe(
+      'Meetup organizer credential belongs to a different account',
+    );
+    const shown = JSON.stringify(alert.mock.calls) + fake.logged.join('\n');
+    expect(shown).not.toContain('999000111');
+    expect(shown).not.toContain('468174923');
+  });
+
+  it('a matching account still posts the recovery', async () => {
+    db.current = stored(0);
+    db.failing = true;
+    refresh.mockResolvedValueOnce(fresh(1));
+
+    await expect(getOrganizerAccessToken({ client })).resolves.toBe(
+      'FRESH-ACCESS-1',
+    );
+
+    expect(fake.getSelfId).toHaveBeenCalledTimes(1);
+    expect(alert).toHaveBeenCalledTimes(1);
+    expect(alert.mock.calls[0][1].title).toBe(
+      'Meetup organizer login restored',
+    );
   });
 
   it('never stores a member id that is not all digits', async () => {
@@ -793,18 +856,22 @@ describe('noteOrganizerCredentialRenewed', () => {
 
     noteOrganizerCredentialRenewed();
 
-    // A renewal with the right account: the stored id is now present, so no
-    // lookup and no stale wrong-account alert.
+    // A renewal with the right account: its new token is checked, matches,
+    // and no stale wrong-account alert follows.
     db.memberId = '468174923';
+    db.current = { ...fresh(5), expiresAt: Date.now() + 60 * MINUTE };
+    fake.getSelfId.mockResolvedValue('468174923');
     await getOrganizerAccessToken({ client });
-    expect(fake.getSelfId).toHaveBeenCalledTimes(1);
+    expect(fake.getSelfId).toHaveBeenCalledTimes(2);
     expect(alert).toHaveBeenCalledTimes(1);
 
     // And a later mismatch is detected and alerted afresh.
     noteOrganizerCredentialRenewed();
     db.memberId = null;
+    db.current = { ...fresh(6), expiresAt: Date.now() + 60 * MINUTE };
+    fake.getSelfId.mockResolvedValue('999000111');
     await getOrganizerAccessToken({ client });
-    expect(fake.getSelfId).toHaveBeenCalledTimes(2);
+    expect(fake.getSelfId).toHaveBeenCalledTimes(3);
     expect(alert).toHaveBeenCalledTimes(2);
   });
 
