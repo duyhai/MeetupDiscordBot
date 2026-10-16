@@ -37,9 +37,11 @@ vi.mock('../../src/lib/helpers/discordLogger.js', () => ({
   logAlert: vi.fn().mockResolvedValue(true),
 }));
 
+const fake = vi.hoisted(() => ({ getSelfId: vi.fn() }));
+
 vi.mock('../../src/lib/client/meetup/gqlClient.js', () => ({
   GqlMeetupClient: class {
-    getSelfId = vi.fn().mockResolvedValue('468174923');
+    getSelfId = fake.getSelfId;
   },
 }));
 
@@ -69,6 +71,8 @@ describe.skipIf(!POSTGRES_AVAILABLE)(
       resetOrganizerTokenStateForTest();
       refresh.mockReset();
       alert.mockClear();
+      fake.getSelfId.mockReset();
+      fake.getSelfId.mockResolvedValue('468174923');
       Configuration.meetup.organizerRefreshToken = 'SEED-REFRESH';
       await observer.query('DELETE FROM oauth_credentials WHERE key = $1', [
         KEY,
@@ -119,6 +123,50 @@ describe.skipIf(!POSTGRES_AVAILABLE)(
       expect(alert).toHaveBeenCalledTimes(2);
       expect(alert.mock.calls[1][1].title).toBe(
         'Meetup organizer login restored',
+      );
+    });
+
+    it('a wrong-account refresh leaves oauth_credentials unchanged', async () => {
+      const before = {
+        accessToken: 'STORED-ACCESS',
+        refreshToken: 'STORED-REFRESH',
+        expiresAt: Date.now() - 1000, // expired: forces a refresh
+      };
+      await repo.put(KEY, before);
+      await observer.query(
+        `INSERT INTO oauth_credential_meta (key, member_id) VALUES ($1, '468174923')`,
+        [KEY],
+      );
+      const rowBefore = (
+        await observer.query<Record<string, unknown>>(
+          'SELECT access_token, refresh_token, expires_at, updated_at FROM oauth_credentials WHERE key = $1',
+          [KEY],
+        )
+      ).rows[0];
+      refresh.mockResolvedValueOnce({
+        accessToken: 'PERSONAL-ACCESS',
+        refreshToken: 'PERSONAL-REFRESH',
+        expiresAt: Date.now() + 3600 * 1000,
+      });
+      fake.getSelfId.mockResolvedValue('999000111');
+
+      await expect(
+        getOrganizerAccessToken({ client }),
+      ).resolves.toBeUndefined();
+
+      const rowAfter = (
+        await observer.query<Record<string, unknown>>(
+          'SELECT access_token, refresh_token, expires_at, updated_at FROM oauth_credentials WHERE key = $1',
+          [KEY],
+        )
+      ).rows[0];
+      expect(rowAfter).toEqual(rowBefore);
+      const meta = await repo.getMeta(KEY);
+      expect(meta.memberId).toBe('468174923');
+      expect(meta.failingSince).not.toBeNull(); // the episode opened
+      expect(alert).toHaveBeenCalledTimes(1);
+      expect(alert.mock.calls[0][1].description).toMatch(
+        /different Meetup account/,
       );
     });
   },
