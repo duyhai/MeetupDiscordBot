@@ -65,47 +65,51 @@ export default defineConfig(
       'import-x/newline-after-import': 'error',
     },
   },
-  // html`` and staticHtml`` live in src/web/html.ts and are used only under
-  // src/web and tst/web (other code has unrelated `html` variables, so the
-  // value-use ban below is scoped there, and importing the tags anywhere
-  // else is refused).
+  // html``, staticHtml`` and staticRaw`` live in src/web/html.ts and are
+  // used only under src/web and tst/web (other code has unrelated `html`
+  // variables, so the value-use ban is scoped there, and reaching the tags
+  // from anywhere else is refused).
   {
     files: ['src/web/**/*.ts', 'tst/web/**/*.ts'],
     rules: {
-      // html`` and staticHtml`` mint SafeHtml only as tagged templates: any
-      // other use of the function as a value (a call, an alias, Reflect.apply,
-      // (0, html)(x), [html][0], H['html']) could hand it a forged strings
-      // array. Allowed: a tagged template's tag, their own declaration, a
-      // type query, and un-aliased import/export specifiers.
+      // The tags mint SafeHtml only as tagged templates: any other use of
+      // the function as a value (a call, an alias, Reflect.apply,
+      // (0, html)(x), [html][0], H['html'], H.html) could hand it a forged
+      // strings array. Allowed: a tagged template's tag, their own
+      // declaration, a type query, and un-aliased imports.
       'no-restricted-syntax': [
         'error',
         {
           selector:
-            'Identifier[name=/^(html|staticHtml)$/]' +
+            'Identifier[name=/^(html|staticHtml|staticRaw)$/]' +
             ':not(TaggedTemplateExpression > Identifier.tag)' +
             ':not(FunctionDeclaration > Identifier.id)' +
             ':not(ImportSpecifier > Identifier)' +
             ':not(ExportSpecifier > Identifier)' +
             ':not(TSTypeQuery > Identifier.exprName)',
           message:
-            'Use html`…` / staticHtml`…` only as a tagged template, never as a value.',
+            'Use html`…` / staticHtml`…` / staticRaw`…` only as a tagged template, never as a value.',
         },
         {
           selector:
-            'MemberExpression[computed=true] > Literal.property[value=/^(html|staticHtml)$/]',
+            'MemberExpression[computed=true] > Literal.property[value=/^(html|staticHtml|staticRaw)$/]',
           message:
-            'Use html`…` / staticHtml`…` only as a tagged template, never as a value.',
+            'Use html`…` / staticHtml`…` / staticRaw`…` only as a tagged template, never as a value.',
         },
-        ...['html', 'staticHtml'].flatMap((name) => [
-          {
-            selector: `ImportSpecifier[imported.name='${name}'][local.name!='${name}']`,
-            message: `Import ${name} under its own name, so lint can see every use.`,
-          },
-          {
-            selector: `ExportSpecifier[local.name='${name}'][exported.name!='${name}']`,
-            message: `Export ${name} under its own name, so lint can see every use.`,
-          },
-        ]),
+        ...['html', 'staticHtml', 'staticRaw'].map((name) => ({
+          selector: `ImportSpecifier[imported.name='${name}'][local.name!='${name}']`,
+          message: `Import ${name} under its own name, so lint can see every use.`,
+        })),
+        {
+          // Only html.ts declares them; nothing re-exports them.
+          selector:
+            'ExportSpecifier[local.name=/^(html|staticHtml|staticRaw)$/]',
+          message: 'Do not re-export the html tags: import them from html.ts.',
+        },
+        {
+          selector: 'ExportAllDeclaration[source.value=/(^|\\/)html\\.js$/]',
+          message: 'Do not re-export html.ts: import from it directly.',
+        },
       ],
     },
   },
@@ -117,9 +121,26 @@ export default defineConfig(
         'error',
         {
           selector:
-            'ImportDeclaration[source.value=/(^|\\/)web\\/html\\.js$/] > ImportSpecifier[imported.name=/^(html|staticHtml)$/]',
+            'ImportDeclaration[source.value=/(^|\\/)web\\/html\\.js$/] > ImportSpecifier[imported.name=/^(html|staticHtml|staticRaw)$/]',
           message:
-            'html`…` / staticHtml`…` are used only under src/web and tst/web, where lint checks every use.',
+            'The html tags are used only under src/web and tst/web, where lint checks every use.',
+        },
+        {
+          selector:
+            'ImportDeclaration[source.value=/(^|\\/)web\\/html\\.js$/] > ImportNamespaceSpecifier',
+          message:
+            'No namespace import of web/html.js outside src/web and tst/web.',
+        },
+        {
+          selector:
+            'ImportExpression[source.value=/(^|\\/)web\\/html(\\.js)?$/]',
+          message:
+            'No dynamic import of web/html.js outside src/web and tst/web.',
+        },
+        {
+          selector:
+            'ExportAllDeclaration[source.value=/(^|\\/)web\\/html\\.js$/]',
+          message: 'Do not re-export web/html.js.',
         },
       ],
     },
