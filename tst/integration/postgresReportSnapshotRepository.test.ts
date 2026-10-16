@@ -12,9 +12,11 @@ import {
   vi,
 } from 'vitest';
 
-import { Period } from '../../src/lib/reports/period.js';
+import { Period, periodKey } from '../../src/lib/reports/period.js';
 import {
   HallOfFamePayload,
+  MemberRef,
+  NoShowCasePayload,
   NoShowPayload,
 } from '../../src/lib/reports/types.js';
 import {
@@ -22,7 +24,10 @@ import {
   ensureDashboardSchema,
 } from '../../src/lib/repositories/dashboardPool.js';
 import {
+  MEMBER_MONTHS_SQL,
   PostgresReportSnapshotRepository,
+  SERIES_DEFAULT_MONTHS,
+  SERIES_MAX_MONTHS,
   SnapshotWrite,
 } from '../../src/lib/repositories/postgresReportSnapshotRepository.js';
 
@@ -60,11 +65,22 @@ function hallOfFame(events: number, period = '2026-09'): HallOfFamePayload {
   };
 }
 
-function noShow(noShows: number): NoShowPayload {
+interface NoShowPeople {
+  cases?: NoShowPayload['cases'];
+  cleared?: NoShowPayload['cleared'];
+  departed?: NoShowPayload['departed'];
+  attendance?: NoShowPayload['attendance'];
+}
+
+function noShow(
+  noShows: number,
+  period = '2026-09',
+  people: NoShowPeople = {},
+): NoShowPayload {
   return {
     version: 1,
     reportType: 'no_show',
-    period: '2026-09',
+    period,
     asOf: '2026-10-01T07:00:00.000Z',
     summary: {
       noShows,
@@ -74,11 +90,57 @@ function noShow(noShows: number): NoShowPayload {
       cleared: 0,
       departed: 0,
     },
-    attendance: { pastEventsWithRsvps: 4, eventsWithNoShow: 1, noShows },
-    cases: [],
-    cleared: [],
-    departed: [],
+    attendance: people.attendance ?? {
+      pastEventsWithRsvps: 4,
+      eventsWithNoShow: 1,
+      noShows,
+    },
+    cases: people.cases ?? [],
+    cleared: people.cleared ?? [],
+    departed: people.departed ?? [],
   };
+}
+
+function member(id: string): MemberRef {
+  return {
+    id,
+    name: `Member ${id}`,
+    memberUrl: `https://www.meetup.com/members/${id}/`,
+  };
+}
+
+function noShowCase(
+  id: string,
+  classification: NoShowCasePayload['classification'] = 'suspension',
+): NoShowCasePayload {
+  return {
+    member: member(id),
+    classification,
+    counted: [],
+    since: { day: '2025-10-01', reason: 'twelve-months' },
+    priorSuspensions: 0,
+    recommendedDays: 30,
+    hostedPastEvent: false,
+  };
+}
+
+function periodOfKey(key: string): Period {
+  const [year, month] = key.split('-').map(Number);
+  return { year, month };
+}
+
+/** A current no-show snapshot for `key` naming the given people. */
+function noShowWrite(
+  key: string,
+  people: NoShowPeople,
+  overrides: Partial<SnapshotWrite> = {},
+): SnapshotWrite {
+  return write({
+    reportType: 'no_show',
+    period: periodOfKey(key),
+    payload: noShow(1, key, people),
+    ...overrides,
+  });
 }
 
 function write(overrides: Partial<SnapshotWrite> = {}): SnapshotWrite {
@@ -184,6 +246,7 @@ function within<T>(promise: Promise<T>, ms: number): Promise<T> {
         builtBy: 'job',
         sourceComplete: true,
         summary: { events: 3, hosts: 1, newHosts: 0 },
+        attendance: null,
       });
       const current = await repo.getCurrent('hall_of_fame', SEPTEMBER);
       expect(current.payload).toEqual(hallOfFame(3));
@@ -601,6 +664,283 @@ function within<T>(promise: Promise<T>, ms: number): Promise<T> {
       expect(history.map((h) => h.id)).toEqual(
         [...history.map((h) => h.id)].sort((a, b) => a - b),
       );
+    });
+
+    describe('summary series, member months and the GIN index', () => {
+      afterEach(() => {
+        vi.restoreAllMocks();
+      });
+
+      /** Column names of every result the repository's queries returned. */
+      async function selectedColumns(spy: {
+        mock: { results: { value: unknown }[] };
+      }): Promise<string[][]> {
+        const results = await Promise.all(
+          spy.mock.results.map(
+            (r) => r.value as Promise<pg.QueryResult<pg.QueryResultRow>>,
+          ),
+        );
+        return results.map((r) => r.fields.map((f) => f.name));
+      }
+
+      it('schema is idempotent with the GIN index', async () => {
+        await ensureDashboardSchema(pool);
+        await ensureDashboardSchema(pool);
+        const indexes = await pool.query<{ indexdef: string }>(
+          `SELECT indexdef FROM pg_indexes
+           WHERE tablename = 'report_snapshots'
+             AND indexname = 'report_snapshots_noshow_payload_idx'`,
+        );
+        expect(indexes.rows).toHaveLength(1);
+        expect(indexes.rows[0].indexdef).toContain('jsonb_path_ops');
+        expect(indexes.rows[0].indexdef).toContain('gin');
+        expect(indexes.rows[0].indexdef).toContain("'no_show'::text");
+        expect(indexes.rows[0].indexdef).toContain('superseded_by IS NULL');
+      });
+
+      it('meta carries the no-show attendance evidence', async () => {
+        const attendance = {
+          pastEventsWithRsvps: 6,
+          eventsWithNoShow: 0,
+          noShows: 0,
+        };
+        const saved = await repo.save(noShowWrite('2026-09', { attendance }));
+        expect(saved.attendance).toEqual(attendance);
+        await repo.save(write());
+        expect(
+          (await repo.getCurrentMeta('no_show', SEPTEMBER)).attendance,
+        ).toEqual(attendance);
+        expect(
+          (await repo.getCurrentMeta('hall_of_fame', SEPTEMBER)).attendance,
+        ).toBeNull();
+        const [summary] = await repo.listSummaries('no_show');
+        expect(summary.attendance).toEqual(attendance);
+      });
+
+      it('listSummarySeries returns the newest months oldest first without payloads', async () => {
+        for (const key of [
+          '2026-05',
+          '2026-06',
+          '2026-07',
+          '2026-08',
+          '2026-09',
+        ]) {
+          // eslint-disable-next-line no-await-in-loop -- ids in month order
+          await repo.save(noShowWrite(key, {}));
+        }
+        // A superseded build and the other type stay out of the series.
+        await repo.save(noShowWrite('2026-09', {}, { mode: 'supersede' }));
+        await repo.save(write());
+        const spy = vi.spyOn(pool, 'query');
+        const series = await repo.listSummarySeries('no_show', { months: 3 });
+        expect(series.map((m) => periodKey(m.period))).toEqual([
+          '2026-07',
+          '2026-08',
+          '2026-09',
+        ]);
+        expect(series[2].id).toBe(6);
+        for (const m of series) {
+          expect(m).not.toHaveProperty('payload');
+          expect(m.attendance).toEqual(noShow(1).attendance);
+        }
+        // Nothing beyond the meta columns leaves the database.
+        expect(await selectedColumns(spy)).toEqual([
+          [
+            'id',
+            'report_type',
+            'period_key',
+            'built_at',
+            'built_by',
+            'source_complete',
+            'summary',
+            'attendance',
+          ],
+        ]);
+      });
+
+      it('listSummarySeries clamps months', async () => {
+        for (const key of ['2026-07', '2026-08', '2026-09']) {
+          // eslint-disable-next-line no-await-in-loop -- ids in month order
+          await repo.save(noShowWrite(key, {}));
+        }
+        const spy = vi.spyOn(pool, 'query');
+        expect(
+          await repo.listSummarySeries('no_show', { months: 0 }),
+        ).toHaveLength(1);
+        expect(
+          await repo.listSummarySeries('no_show', { months: 10_000 }),
+        ).toHaveLength(3);
+        expect(
+          await repo.listSummarySeries('no_show', { months: Number.NaN }),
+        ).toHaveLength(3);
+        expect(await repo.listSummarySeries('no_show')).toHaveLength(3);
+        expect(
+          await repo.listSummarySeries('no_show', { months: 2.9 }),
+        ).toHaveLength(2);
+        expect(spy.mock.calls.map((call) => (call[1] as unknown[])[1])).toEqual(
+          [
+            1,
+            SERIES_MAX_MONTHS,
+            SERIES_DEFAULT_MONTHS,
+            SERIES_DEFAULT_MONTHS,
+            2,
+          ],
+        );
+        expect(SERIES_DEFAULT_MONTHS).toBe(24);
+        expect(SERIES_MAX_MONTHS).toBe(240);
+      });
+
+      it('listMemberNoShowMonths finds the member in cases[].member.id', async () => {
+        await repo.save(
+          noShowWrite('2026-08', {
+            cases: [noShowCase('111', 'warning'), noShowCase('222')],
+          }),
+        );
+        await repo.save(noShowWrite('2026-09', { cases: [noShowCase('222')] }));
+        const spy = vi.spyOn(pool, 'query');
+        const months = await repo.listMemberNoShowMonths('111');
+        expect(months).toEqual([
+          {
+            period: { year: 2026, month: 8 },
+            builtAt: new Date('2026-10-01T08:00:00.000Z'),
+            asOf: '2026-10-01T07:00:00.000Z',
+            noShowCase: noShowCase('111', 'warning'),
+            cleared: false,
+            departed: false,
+          },
+        ]);
+        expect(months[0].noShowCase.member.id).toBe('111');
+        expect(months[0].noShowCase.classification).toBe('warning');
+        // Only the member's own case leaves the database, never the payload.
+        expect(await selectedColumns(spy)).toEqual([
+          [
+            'period_key',
+            'built_at',
+            'as_of',
+            'no_show_case',
+            'cleared',
+            'departed',
+          ],
+        ]);
+        expect(
+          (await repo.listMemberNoShowMonths('222')).map((m) =>
+            periodKey(m.period),
+          ),
+        ).toEqual(['2026-09', '2026-08']);
+      });
+
+      it('matches cleared and departed members, flagged', async () => {
+        await repo.save(
+          noShowWrite('2026-07', {
+            cleared: [
+              { member: member('333'), lastSuspendedDay: '2026-01-05' },
+            ],
+            departed: [member('444')],
+          }),
+        );
+        expect(await repo.listMemberNoShowMonths('333')).toEqual([
+          expect.objectContaining({
+            period: { year: 2026, month: 7 },
+            noShowCase: null,
+            cleared: true,
+            departed: false,
+          }),
+        ]);
+        expect(await repo.listMemberNoShowMonths('444')).toEqual([
+          expect.objectContaining({
+            period: { year: 2026, month: 7 },
+            noShowCase: null,
+            cleared: false,
+            departed: true,
+          }),
+        ]);
+      });
+
+      it('does not match a different id, a prefix, or a numeric id', async () => {
+        await repo.save(noShowWrite('2026-08', { cases: [noShowCase('111')] }));
+        const numeric = noShowCase('999');
+        (numeric.member as unknown as { id: number }).id = 999;
+        await repo.save(noShowWrite('2026-09', { cases: [numeric] }));
+        expect(await repo.listMemberNoShowMonths('11')).toEqual([]);
+        expect(await repo.listMemberNoShowMonths('1111')).toEqual([]);
+        expect(await repo.listMemberNoShowMonths('999')).toEqual([]);
+        expect(await repo.listMemberNoShowMonths('111')).toHaveLength(1);
+      });
+
+      it('ignores superseded rows and Hall of Fame rows', async () => {
+        await repo.save(noShowWrite('2026-08', { cases: [noShowCase('555')] }));
+        await repo.save(noShowWrite('2026-08', {}, { mode: 'supersede' }));
+        // A Hall of Fame payload with the same shape is never searched.
+        await pool.query(
+          `INSERT INTO report_snapshots
+             (report_type, period, built_at, built_by, source_complete, payload)
+           VALUES ('hall_of_fame', '2026-07-01'::date, now(), 'job', true, $1::jsonb)`,
+          [JSON.stringify({ cases: [{ member: { id: '555' } }] })],
+        );
+        expect(await repo.listMemberNoShowMonths('555')).toEqual([]);
+      });
+
+      it('pages newest first', async () => {
+        for (const key of ['2026-07', '2026-08', '2026-09']) {
+          // eslint-disable-next-line no-await-in-loop -- ids in month order
+          await repo.save(noShowWrite(key, { cases: [noShowCase('666')] }));
+        }
+        const keys = (months: { period: Period }[]) =>
+          months.map((m) => periodKey(m.period));
+        expect(
+          keys(await repo.listMemberNoShowMonths('666', { limit: 2 })),
+        ).toEqual(['2026-09', '2026-08']);
+        expect(
+          keys(
+            await repo.listMemberNoShowMonths('666', { offset: 2, limit: 2 }),
+          ),
+        ).toEqual(['2026-07']);
+        expect(
+          keys(await repo.listMemberNoShowMonths('666', { offset: -5 })),
+        ).toEqual(['2026-09', '2026-08', '2026-07']);
+        expect(
+          keys(await repo.listMemberNoShowMonths('666', { limit: 0 })),
+        ).toEqual(['2026-09']);
+      });
+
+      it('refuses a non-digit member id', async () => {
+        const spy = vi.spyOn(pool, 'query');
+        for (const bad of ['1 OR 1=1', '', '12a', '1'.repeat(21), ' 1']) {
+          // eslint-disable-next-line no-await-in-loop -- each is its own case
+          await expect(repo.listMemberNoShowMonths(bad)).rejects.toThrow(
+            RangeError,
+          );
+        }
+        await expect(
+          repo.listMemberNoShowMonths(123 as unknown as string),
+        ).rejects.toThrow(RangeError);
+        expect(spy).not.toHaveBeenCalled();
+      });
+
+      it('the member lookup can use the GIN index', async () => {
+        const client = await pool.connect();
+        try {
+          await client.query('BEGIN');
+          await client.query('SET LOCAL enable_seqscan = off');
+          // On a near-empty table the planner prefers walking the current-row
+          // btree in period order. Dropping it inside this rolled-back
+          // transaction leaves only the GIN index or a (disabled) seq scan.
+          await client.query('DROP INDEX report_snapshots_current_idx');
+          // GENERIC_PLAN (Postgres 16) plans without parameter values, as a
+          // reused prepared statement would: only predicates written as
+          // literals can prove the partial index applies.
+          const explained = await client.query<{ 'QUERY PLAN': unknown }>(
+            `EXPLAIN (GENERIC_PLAN, FORMAT JSON) ${MEMBER_MONTHS_SQL}`,
+          );
+          const plan = JSON.stringify(explained.rows[0]['QUERY PLAN']);
+          expect(plan).toContain('report_snapshots_noshow_payload_idx');
+          expect(plan).toContain('Bitmap Index Scan');
+          expect(plan).not.toContain('Seq Scan');
+        } finally {
+          await client.query('ROLLBACK');
+          client.release();
+        }
+      });
     });
   },
 );

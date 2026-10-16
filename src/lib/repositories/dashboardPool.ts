@@ -37,6 +37,12 @@ CREATE TABLE IF NOT EXISTS dashboard_notices (
   posted_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   PRIMARY KEY (kind, period)
 );
+-- Per-member no-show lookups: payload @> '{"cases":[{"member":{"id":"…"}}]}'
+-- (and the cleared/departed forms). Partial: only current no-show rows are
+-- searched, and queries must state this predicate literally to use it.
+CREATE INDEX IF NOT EXISTS report_snapshots_noshow_payload_idx
+  ON report_snapshots USING GIN (payload jsonb_path_ops)
+  WHERE report_type = 'no_show' AND superseded_by IS NULL;
 `;
 
 /** pg_advisory_xact_lock(int, int) namespace for dashboard locks. */
