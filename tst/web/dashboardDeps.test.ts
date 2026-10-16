@@ -49,6 +49,11 @@ describe('dashboardRouterFromEnv', () => {
     expect(res.status).toBe(503);
     expect(res.headers['cache-control']).toBe('no-store');
     expect(res.text).toContain('not set up yet');
+    expect(res.headers['x-frame-options']).toBe('DENY');
+    expect(res.headers['content-security-policy']).toContain(
+      "frame-ancestors 'none'",
+    );
+    expect(res.headers['x-content-type-options']).toBe('nosniff');
   });
 
   it('refuses a session secret shorter than 32 characters', async () => {

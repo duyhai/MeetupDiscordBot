@@ -560,9 +560,10 @@ describe('routes are gated by construction', () => {
         .map((l) => l.route.path)
         .sort(),
     ).toEqual([...PUBLIC_ROUTE_PATHS].sort());
+    // Security headers first, so the HTTPS redirect's 308 carries them too.
     expect(beforeGate.filter((l) => !l.route).map((l) => l.name)).toEqual([
-      'dashboardHttpsRedirect',
       'securityHeaders',
+      'dashboardHttpsRedirect',
       'urlencodedParser',
     ]);
     // The gate is followed directly by the protected router, and nothing

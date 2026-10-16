@@ -6,7 +6,10 @@ import { Logger } from 'tslog';
 import { BASE_DISCORD_BOT_URL, SERVER_ROLES } from '../constants.js';
 import { LogEntry, logActivity } from '../lib/helpers/discordLogger.js';
 import { ApplicationCache } from '../util/cache.js';
-import { createDashboardRouter } from './dashboardRouter.js';
+import {
+  baseSecurityHeaders,
+  createDashboardRouter,
+} from './dashboardRouter.js';
 import {
   buildDashboardLoginUrl,
   exchangeDashboardCode,
@@ -63,10 +66,7 @@ function notConfiguredRouter(): express.Router {
     const nonce = crypto.randomBytes(16).toString('base64');
     res
       .status(503)
-      .set({
-        'Cache-Control': 'no-store',
-        'Content-Security-Policy': `default-src 'none'; style-src 'nonce-${nonce}'`,
-      })
+      .set(baseSecurityHeaders(nonce))
       .type('html')
       .send(
         layout({

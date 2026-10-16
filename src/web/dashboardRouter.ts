@@ -157,14 +157,12 @@ function fail(res: Response, status: Parameters<typeof errorPage>[0]) {
   send(res, status, errorPage(status, locals(res).nonce));
 }
 
-const securityHeaders: RequestHandler = function securityHeaders(
-  _req,
-  res,
-  next,
-) {
-  const nonce = crypto.randomBytes(16).toString('base64');
-  locals(res).nonce = nonce;
-  res.set({
+/**
+ * Every dashboard response's headers, the not-set-up page included, so no
+ * path can be framed, cached or sniffed.
+ */
+export function baseSecurityHeaders(nonce: string): Record<string, string> {
+  return {
     'Cache-Control': 'no-store',
     Pragma: 'no-cache',
     'Content-Security-Policy':
@@ -179,7 +177,17 @@ const securityHeaders: RequestHandler = function securityHeaders(
     // own requests and still sends no referrer off-site.
     'Referrer-Policy': 'same-origin',
     'X-Robots-Tag': 'noindex, nofollow',
-  });
+  };
+}
+
+const securityHeaders: RequestHandler = function securityHeaders(
+  _req,
+  res,
+  next,
+) {
+  const nonce = crypto.randomBytes(16).toString('base64');
+  locals(res).nonce = nonce;
+  res.set(baseSecurityHeaders(nonce));
   next();
 };
 
@@ -324,18 +332,19 @@ export function createDashboardRouter(deps: DashboardDeps): express.Router {
   // /dashboard/Login is not the login route.
   const router = express.Router({ caseSensitive: true });
 
-  // First, so a plain-HTTP request reads no cookie and writes nothing. The
-  // target comes from the configured origin, never the Host header; only
-  // the path and query are taken from the request.
+  // First: every response, the HTTPS redirect included, carries them. It
+  // reads no cookie and writes nothing.
+  router.use(securityHeaders);
+  // Still before any cookie is read, so a plain-HTTP request reads no cookie
+  // and writes nothing. The target comes from the configured origin, never
+  // the Host header; only the path and query are taken from the request.
   router.use(function dashboardHttpsRedirect(req, res, next) {
     if (!deps.requireHttps || req.secure) {
       next();
       return;
     }
-    res.set('Cache-Control', 'no-store');
     res.redirect(308, httpsRedirectTarget(deps.origin, req.originalUrl));
   });
-  router.use(securityHeaders);
   router.use(express.urlencoded({ extended: false, limit: '16kb' }));
 
   // ---- Public routes: the only ones reachable without a session. ----
