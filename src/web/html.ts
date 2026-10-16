@@ -29,6 +29,12 @@ export type HtmlValue =
 const minted = new WeakSet<object>();
 
 function mintHtml(value: string): SafeHtml {
+  // No fragment may end inside a URL attribute's value: whatever follows it
+  // would land in the URL unchecked.
+  const end = tagState(value);
+  if (end.kind === 'quoted' && isUrlAttr(end.attr)) {
+    throw new UnsafeUrlError(end.attr);
+  }
   const out = Object.freeze({
     value,
     toString: () => value,
@@ -80,13 +86,118 @@ export function escapeHtml(input: string): string {
     .replace(/'/g, '&#39;');
 }
 
+export class UnsafeAttributeError extends Error {
+  constructor(where: string) {
+    super(`html cannot interpolate ${where}`);
+    this.name = 'UnsafeAttributeError';
+  }
+}
+
+/** Attributes whose value is fetched or navigated to: SafeUrl only. */
+const URL_ATTRS = new Set([
+  'href',
+  'src',
+  'action',
+  'formaction',
+  'srcset',
+  'poster',
+  'data',
+  'ping',
+  'background',
+  'cite',
+]);
+
+/** `xlink:href` and the like count as their local name. */
+const isUrlAttr = (name: string) =>
+  URL_ATTRS.has(name.toLowerCase().split(':').pop() ?? '');
+
+/** Where the end of some markup sits, for the next interpolation. */
+type TagState =
+  | { kind: 'text' }
+  | { kind: 'name' } // tag name or attribute-name position
+  | { kind: 'unquoted'; attr: string } // after `attr=`, or inside a bare value
+  | { kind: 'quoted'; attr: string; quote: string; opened: string };
+
+const WS = /[\s]/;
+
 /**
- * The template text before an interpolation ends inside a URL attribute:
- * `href="` (the value starts here), `href="/x/` (partial: refused) or
- * `href=` (unquoted: refused). `xlink:href` counts too, for inline SVG.
+ * Scans from the last `<` to the end of `text`, the way a browser tokenizes
+ * a start tag: tag name, then attributes separated by whitespace or `/`,
+ * each optionally `= value` (double-, single- or unquoted). A quoted `>`
+ * does not end the tag. Escaped text never contains `<`, `>` or quotes, so
+ * only markup this module minted steers the scan. Anything it cannot place
+ * is reported as `name`, which callers refuse (fail closed).
  */
-const URL_ATTR =
-  /[\s:](href|src|action|formaction)\s*=\s*(?:"([^"]*)|'([^']*)|())$/i;
+function tagState(text: string): TagState {
+  const start = text.lastIndexOf('<');
+  if (start === -1) {
+    return { kind: 'text' };
+  }
+  const s = text.slice(start + 1);
+  if (s.startsWith('!')) {
+    // A comment or doctype. Its end decides; a `>` closes it.
+    return s.includes('>') ? { kind: 'text' } : { kind: 'name' };
+  }
+  let i = 0;
+  while (i < s.length && !WS.test(s[i]) && s[i] !== '>' && s[i] !== '/') {
+    i += 1;
+  }
+  for (;;) {
+    while (i < s.length && (WS.test(s[i]) || s[i] === '/')) {
+      i += 1;
+    }
+    if (i >= s.length) {
+      return { kind: 'name' };
+    }
+    if (s[i] === '>') {
+      // The tag closed; text follows. Only the last `<` matters.
+      return { kind: 'text' };
+    }
+    const nameStart = i;
+    while (i < s.length && !WS.test(s[i]) && !'"\'>/='.includes(s[i])) {
+      i += 1;
+    }
+    const attr = s.slice(nameStart, i);
+    if (i === nameStart) {
+      // A stray quote where a name should be.
+      return { kind: 'name' };
+    }
+    let j = i;
+    while (j < s.length && WS.test(s[j])) {
+      j += 1;
+    }
+    if (j >= s.length) {
+      return { kind: 'name' };
+    }
+    if (s[j] !== '=') {
+      // A boolean attribute; the next one starts here.
+      continue;
+    }
+    j += 1;
+    while (j < s.length && WS.test(s[j])) {
+      j += 1;
+    }
+    if (j >= s.length) {
+      return { kind: 'unquoted', attr };
+    }
+    const quote = s[j];
+    if (quote === '"' || quote === "'") {
+      const close = s.indexOf(quote, j + 1);
+      if (close === -1) {
+        return { kind: 'quoted', attr, quote, opened: s.slice(j + 1) };
+      }
+      i = close + 1;
+      continue;
+    }
+    while (j < s.length && !WS.test(s[j]) && s[j] !== '>') {
+      j += 1;
+    }
+    if (j >= s.length) {
+      return { kind: 'unquoted', attr };
+    }
+    i = j;
+  }
+}
 
 /** Template strings arrays already checked; a call site reuses its array. */
 const templates = new WeakSet<object>();
@@ -152,10 +263,12 @@ function render(value: HtmlValue): string {
 }
 
 /**
- * Every interpolation into href, src, action or formaction must be exactly
- * one SafeUrl filling the whole quoted value; anything else (a string, a
- * SafeHtml, undefined, part of a value, an unquoted value) throws
- * UnsafeUrlError, so a javascript: URL cannot be rendered by accident.
+ * Every interpolation into a URL attribute (URL_ATTRS, by local name) must
+ * be exactly one SafeUrl filling the whole quoted value; anything else (a
+ * string, a SafeHtml, undefined, part of a value, an unquoted value) throws
+ * UnsafeUrlError, so a javascript: URL cannot be rendered by accident. An
+ * interpolation in tag- or attribute-name position, or into any unquoted
+ * value, throws UnsafeAttributeError.
  */
 export function html(
   strings: TemplateStringsArray,
@@ -164,26 +277,27 @@ export function html(
   requireTemplate(strings, 'html');
   let out = strings[0];
   values.forEach((value, i) => {
-    const attr = URL_ATTR.exec(strings[i]);
-    if (attr) {
-      const opened = attr[2] ?? attr[3];
-      const after = strings[i + 1];
-      let quote: string | undefined;
-      if (attr[2] !== undefined) {
-        quote = '"';
-      } else if (attr[3] !== undefined) {
-        quote = "'";
-      }
-      if (
-        quote === undefined ||
-        opened !== '' ||
-        !after.startsWith(quote) ||
-        !isSafeUrl(value)
-      ) {
-        throw new UnsafeUrlError(attr[1]);
-      }
+    // The whole output so far, not just this literal: a fragment
+    // interpolated earlier may have opened the tag.
+    const at = tagState(out);
+    const after = strings[i + 1];
+    if (at.kind === 'name') {
+      throw new UnsafeAttributeError('in a tag or attribute name');
     }
-    out += render(value) + strings[i + 1];
+    if (at.kind === 'unquoted') {
+      if (isUrlAttr(at.attr)) {
+        throw new UnsafeUrlError(at.attr);
+      }
+      throw new UnsafeAttributeError(`into unquoted ${at.attr}`);
+    }
+    if (
+      at.kind === 'quoted' &&
+      isUrlAttr(at.attr) &&
+      (at.opened !== '' || !after.startsWith(at.quote) || !isSafeUrl(value))
+    ) {
+      throw new UnsafeUrlError(at.attr);
+    }
+    out += render(value) + after;
   });
   return mintHtml(out);
 }

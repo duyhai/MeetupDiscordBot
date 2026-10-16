@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   SafeHtml,
   SafeUrl,
+  UnsafeAttributeError,
   UnsafeUrlError,
   escapeHtml,
   html,
@@ -342,3 +343,83 @@ describe('calling the tags as plain functions', () => {
   });
 });
 /* eslint-enable no-restricted-syntax */
+
+describe('URL attributes, widened', () => {
+  const plain = 'javascript:alert(1)';
+  const url = localUrl('/dashboard');
+
+  it('finds a URL attribute after a slash or a closing quote', () => {
+    // prettier-ignore
+    expect(() => html`<a/href="${plain}">x</a>`).toThrow(UnsafeUrlError);
+    // prettier-ignore
+    expect(() => html`<a title="x"href="${plain}">x</a>`).toThrow(UnsafeUrlError);
+    // prettier-ignore
+    expect(() => html`<a title='x'href="${plain}">x</a>`).toThrow(UnsafeUrlError);
+    // prettier-ignore
+    expect(() => html`<svg><use xlink:href="${plain}"/></svg>`).toThrow(UnsafeUrlError);
+  });
+
+  it('covers srcset, poster, data, ping, background and cite', () => {
+    for (const make of [
+      () => html`<img srcset="${plain}" />`,
+      () => html`<video poster="${plain}"></video>`,
+      () => html`<object data="${plain}"></object>`,
+      () => html`<a ping="${plain}">x</a>`,
+      () => html`<td background="${plain}"></td>`,
+      () => html`<q cite="${plain}">x</q>`,
+    ]) {
+      expect(make).toThrow(UnsafeUrlError);
+    }
+    expect(html`<img srcset="${url}" />`.value).toBe(
+      '<img srcset="/dashboard" />',
+    );
+  });
+
+  it('data-* attributes are not URL attributes', () => {
+    expect(html`<b data-x="${'y'}">z</b>`.value).toBe('<b data-x="y">z</b>');
+  });
+
+  it('refuses an interpolation in attribute-name position', () => {
+    // prettier-ignore
+    expect(() => html`<a ${'href'}="${url}">x</a>`).toThrow(UnsafeAttributeError);
+    // prettier-ignore
+    expect(() => html`<a title="x" ${'onclick=alert(1)'}>x</a>`).toThrow(UnsafeAttributeError);
+    // prettier-ignore
+    expect(() => html`<input ${'checked'}>`).toThrow(UnsafeAttributeError);
+    // prettier-ignore
+    expect(() => html`<a${'x'}>`).toThrow(UnsafeAttributeError);
+  });
+
+  it('refuses an unquoted value for any attribute', () => {
+    // prettier-ignore
+    expect(() => html`<b title=${'x onmouseover=alert(1)'}>z</b>`).toThrow(UnsafeAttributeError);
+  });
+
+  it('a quoted > does not end the tag', () => {
+    // prettier-ignore
+    expect(() => html`<a title="a > b" href="${plain}">x</a>`).toThrow(UnsafeUrlError);
+  });
+
+  it('text and quoted non-URL values still take strings', () => {
+    expect(html`<p class="${'a'}">${'<b>'}</p>`.value).toBe(
+      '<p class="a">&lt;b&gt;</p>',
+    );
+    expect(html`<p>a > b ${'x'}</p>`.value).toBe('<p>a > b x</p>');
+  });
+
+  it('a fragment cannot leave a URL attribute open', () => {
+    // prettier-ignore
+    expect(() => staticHtml`<a href="`).toThrow(UnsafeUrlError);
+    // prettier-ignore
+    expect(() => html`<a class="b" href="${url}`).toThrow(UnsafeUrlError);
+    // prettier-ignore
+    expect(() => html`<img srcset='`).toThrow(UnsafeUrlError);
+  });
+
+  it('an open fragment in a larger template cannot smuggle a plain string', () => {
+    // Even if a fragment were open, the outer check reads the whole output.
+    const open = staticHtml`<a `;
+    // prettier-ignore
+    expect(() => html`${open}href="${plain}">x</a>`).toThrow(UnsafeUrlError);
+  });
+});
