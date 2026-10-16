@@ -158,7 +158,7 @@ describe('discordLogger', () => {
       });
     });
 
-    it('never lets content ping @everyone, @here, users or unlisted roles', async () => {
+    it('content pings no one but the given roles because allowedMentions parses nothing and lists only those roles', async () => {
       const client = makeClient(sendMock);
       const content =
         '@everyone @here <@123> <@!456> <@&999> ' + `<@&${roles[0]}>`;
@@ -217,6 +217,66 @@ describe('discordLogger', () => {
       expect(logged).toContain('DiscordAPIError');
       expect(logged).toContain('403');
       expect(logged).not.toContain('SECRET-CONTENT-BODY');
+    });
+
+    it('logs the Discord error code and the channel id, never the message', async () => {
+      const failure = Object.assign(
+        new Error('Missing Access: SECRET-CONTENT-BODY'),
+        { name: 'DiscordAPIError', status: 403, code: 50001 },
+      );
+      sendMock.mockRejectedValue(failure);
+      const client = makeClient(sendMock);
+
+      await postRoleNotice(client, BOT_ALERTS_CHANNEL_ID, roles, 'x', {
+        title: 'Report ready',
+      });
+
+      const logged = warnSpy.mock.calls
+        .map((call) => call.map(String).join(' '))
+        .join('\n');
+      expect(logged).toContain('DiscordAPIError[50001] (HTTP 403)');
+      expect(logged).toContain(`to ${BOT_ALERTS_CHANNEL_ID}`);
+      expect(logged).not.toContain('SECRET-CONTENT-BODY');
+    });
+
+    it('logs a short string code but drops a code that could carry text', async () => {
+      const client = makeClient(sendMock);
+      sendMock.mockRejectedValueOnce(
+        Object.assign(new Error('boom SECRET'), { code: 'ECONNRESET' }),
+      );
+      await postRoleNotice(client, BOT_ALERTS_CHANNEL_ID, roles, 'x', {
+        title: 'Report ready',
+      });
+      sendMock.mockRejectedValueOnce(
+        Object.assign(new Error('boom'), {
+          code: 'SECRET-CONTENT-BODY with spaces and a long tail of text',
+        }),
+      );
+      await postRoleNotice(client, BOT_ALERTS_CHANNEL_ID, roles, 'x', {
+        title: 'Report ready',
+      });
+
+      const lines = warnSpy.mock.calls.map((call) =>
+        call.map(String).join(' '),
+      );
+      expect(lines[0]).toContain('Error[ECONNRESET]');
+      expect(lines[1]).toMatch(/: Error$/);
+      expect(lines.join('\n')).not.toContain('SECRET');
+    });
+
+    it('returns false instead of rejecting when roleIds is missing', async () => {
+      const client = makeClient(sendMock);
+      await expect(
+        postRoleNotice(client, BOT_ALERTS_CHANNEL_ID, undefined, 'x', {
+          title: 'Report ready',
+        }),
+      ).resolves.toBe(false);
+      await expect(
+        postRoleNotice(client, BOT_ALERTS_CHANNEL_ID, null, 'x', {
+          title: 'Report ready',
+        }),
+      ).resolves.toBe(false);
+      expect(sendMock).not.toHaveBeenCalled();
     });
 
     it('returns false when the channel fetch fails', async () => {

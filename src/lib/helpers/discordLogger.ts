@@ -27,17 +27,30 @@ interface PostOptions {
 }
 
 /**
- * Only the error's class name and HTTP status: a Discord error message can
- * echo what was sent, and a notice's content must stay out of the log.
+ * Only the error's class name, its code and its HTTP status: a Discord error
+ * message can echo what was sent, and a notice's content must stay out of the
+ * log. The code (e.g. 50001 Missing Access vs 50013 Missing Permissions) is
+ * kept only when it is a number or a short identifier, so it cannot carry text.
  */
 function describeSendError(error: unknown): string {
   if (!(error instanceof Error)) {
     return 'unknown error';
   }
-  const { status } = error as { status?: unknown };
-  return typeof status === 'number'
-    ? `${error.name} (HTTP ${status})`
-    : error.name;
+  const { code, status } = error as { code?: unknown; status?: unknown };
+  const safeCode =
+    typeof code === 'number' ||
+    (typeof code === 'string' && /^[A-Za-z0-9_]{1,32}$/.test(code))
+      ? `[${code}]`
+      : '';
+  const httpStatus = typeof status === 'number' ? ` (HTTP ${status})` : '';
+  return `${error.name}${safeCode}${httpStatus}`;
+}
+
+function logPostFailure(channelId: string, entry: LogEntry, error: unknown) {
+  // Channel ids are all digits, so they are safe to log.
+  logger.warn(
+    `Failed to post log entry "${entry.title}" to ${channelId}: ${describeSendError(error)}`,
+  );
 }
 
 /**
@@ -79,9 +92,7 @@ async function postToChannel(
     });
     return true;
   } catch (error) {
-    logger.warn(
-      `Failed to post log entry "${entry.title}": ${describeSendError(error)}`,
-    );
+    logPostFailure(channelId, entry, error);
     return false;
   }
 }
@@ -136,6 +147,12 @@ export async function postRoleNotice(
   content: string,
   entry: LogEntry,
 ): Promise<boolean> {
+  // A nullish or malformed list must not reject: like every log function,
+  // the notice reports failure instead of throwing at its caller.
+  if (!Array.isArray(roleIds)) {
+    logPostFailure(channelId, entry, new TypeError('roleIds is not an array'));
+    return false;
+  }
   return postToChannel(client, channelId, EMBED_COLORS.info, entry, {
     content,
     allowedMentions: { parse: [], roles: [...roleIds] },
