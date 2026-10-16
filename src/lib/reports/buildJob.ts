@@ -81,8 +81,9 @@ const backoffKey = (p: Period) => `report-build-backoff-${periodKey(p)}`;
 const INFRA_ALERT_AFTER_FAILED_TICKS = 4;
 
 /**
- * Every no-show member of a finished month looks departed: most likely the
- * organizer token cannot see memberships, so the report would be wrong.
+ * Every no-show member of a finished month looks departed, and there are at
+ * least DEPARTED_GUARD_MIN_MEMBERS of them: most likely the organizer token
+ * cannot see memberships, so the report would be wrong.
  */
 export class MembershipsUnreadableError extends Error {
   /** Its text may reach #meetup-bot-alerts. */
@@ -170,6 +171,8 @@ export interface MonthBuildOutcome {
   hallOfFame: HallOfFameSummary;
   noShow: NoShowSummary;
   attendance: AttendanceEvidence;
+  /** A finished month whose no-show members (one or more) all look departed. */
+  allDeparted: boolean;
 }
 
 export interface BuildJobDeps {
@@ -201,6 +204,20 @@ export interface BuildJobDeps {
 
 const seconds = (ms: number) => (ms / 1000).toFixed(1);
 
+/** A finished month is refused only when at least this many no-show members all look departed. */
+export const DEPARTED_GUARD_MIN_MEMBERS = 3;
+
+/** What `buildMonth` needs: no cache, no Discord (the backfill calls it too). */
+export type MonthBuildDeps = Pick<
+  BuildJobDeps,
+  'now' | 'snapshots' | 'fetchMonthReports'
+>;
+
+export interface MonthBuildOptions {
+  /** Backfill only (--allow-all-departed): save a month the guard would refuse, with the note. */
+  allowAllDeparted?: boolean;
+}
+
 /**
  * Reads the month from Meetup, then saves both snapshots. `builtAt` is the
  * start time (when the data was read), so a refresh that starts before the
@@ -208,9 +225,10 @@ const seconds = (ms: number) => (ms / 1000).toFixed(1);
  * any failure; nothing is saved unless the whole read succeeded.
  */
 export async function buildMonth(
-  deps: BuildJobDeps,
+  deps: MonthBuildDeps,
   period: Period,
   builtBy: string,
+  options: MonthBuildOptions = {},
 ): Promise<MonthBuildOutcome> {
   const started = deps.now();
   const finished = isFinished(period, started);
@@ -221,7 +239,14 @@ export async function buildMonth(
     finished ? suspensionCutoff(period) : undefined,
   );
   const { members, departed } = reports.noShow.summary;
-  if (finished && members > 0 && departed === members) {
+  // Membership is read as of now, so a few departures are normal; every one of
+  // three or more is more likely the organizer token not seeing memberships.
+  const allDeparted = finished && members > 0 && departed === members;
+  if (
+    allDeparted &&
+    members >= DEPARTED_GUARD_MIN_MEMBERS &&
+    !options.allowAllDeparted
+  ) {
     throw new MembershipsUnreadableError(period);
   }
   const summaryIsNew = finished
@@ -261,12 +286,13 @@ export async function buildMonth(
     hallOfFame: reports.hallOfFame.summary,
     noShow: reports.noShow.summary,
     attendance: reports.noShow.attendance,
+    allDeparted,
   };
 }
 
 /** Read BEFORE saving: compares against the rows this build replaces. */
 async function finishedSummaryIsNew(
-  deps: BuildJobDeps,
+  deps: MonthBuildDeps,
   period: Period,
   reports: MonthReports,
 ): Promise<boolean> {
@@ -323,6 +349,11 @@ export function buildSummaryEntry(o: MonthBuildOutcome): LogEntry {
     lines.push(
       `Note: no no-shows recorded for ${label} across ${o.attendance.pastEventsWithRsvps} past events with RSVPs; ` +
         'check that attendance was taken.',
+    );
+  }
+  if (o.allDeparted) {
+    lines.push(
+      `Note: all ${o.noShow.members} no-show members have left the group.`,
     );
   }
   return {

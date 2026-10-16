@@ -15,8 +15,11 @@ import {
   buildMonth,
   buildSummaryEntry,
   defaultBuildJobDeps,
+  DEPARTED_GUARD_MIN_MEMBERS,
   describeBuildError,
   maybePostReportReady,
+  MembershipsUnreadableError,
+  MonthBuildDeps,
   REPORT_READY_ENABLED,
   REPORT_READY_ROLE_IDS,
   reportMonthUrl,
@@ -824,6 +827,121 @@ describe('departed guard', () => {
       2,
     );
   });
+
+  const DEPARTED_NOTE = 'have left the group';
+
+  it('refuses three of three departed members', async () => {
+    const h = makeDeps({ reportReadyEnabled: false });
+    h.fetchMonthReports.mockImplementation(withMembers(3, 3));
+    await runBuildTick(h.deps);
+    expect(h.snapshots.rows.filter((r) => isSept(r.period))).toEqual([]);
+    expect(titles(h.alert)).toEqual(['Report build failed: September 2026']);
+  });
+
+  it('saves two of two and notes it', async () => {
+    const h = makeDeps({ reportReadyEnabled: false });
+    h.fetchMonthReports.mockImplementation(withMembers(2, 2));
+    await runBuildTick(h.deps);
+    expect(h.snapshots.rows.filter((r) => isSept(r.period))).toHaveLength(2);
+    expect(titles(h.alert)).toContain('Reports built: September 2026');
+    const notes = descriptions(h.alert).flatMap((d) =>
+      d.split('\n').filter((line) => line.includes(DEPARTED_NOTE)),
+    );
+    expect(notes).toEqual(['Note: all 2 no-show members have left the group.']);
+  });
+
+  it('saves one of one and notes it', async () => {
+    const h = makeDeps({ reportReadyEnabled: false });
+    h.fetchMonthReports.mockImplementation(withMembers(1, 1));
+    await runBuildTick(h.deps);
+    expect(h.snapshots.rows.filter((r) => isSept(r.period))).toHaveLength(2);
+    const notes = descriptions(h.alert).flatMap((d) =>
+      d.split('\n').filter((line) => line.includes(DEPARTED_NOTE)),
+    );
+    expect(notes).toEqual(['Note: all 1 no-show members have left the group.']);
+  });
+
+  it('no departed note when someone stayed', async () => {
+    const h = makeDeps({ reportReadyEnabled: false });
+    h.fetchMonthReports.mockImplementation(withMembers(7, 6));
+    await runBuildTick(h.deps);
+    expect(titles(h.alert)).toContain('Reports built: September 2026');
+    expect(
+      descriptions(h.alert).filter((d) => d.includes(DEPARTED_NOTE)),
+    ).toEqual([]);
+  });
+
+  it('no departed note for a month with no no-show members', async () => {
+    const h = makeDeps({ reportReadyEnabled: false });
+    h.fetchMonthReports.mockImplementation(withMembers(0, 0));
+    const outcome = await buildMonth(h.deps, SEPT, 'job');
+    expect(outcome.allDeparted).toBe(false);
+    expect(buildSummaryEntry(outcome).description).not.toContain(DEPARTED_NOTE);
+  });
+
+  it('allowAllDeparted saves a month the guard would refuse', async () => {
+    const h = makeDeps({ reportReadyEnabled: false });
+    h.fetchMonthReports.mockImplementation(withMembers(5, 5));
+    const outcome = await buildMonth(h.deps, SEPT, 'backfill', {
+      allowAllDeparted: true,
+    });
+    expect(outcome.allDeparted).toBe(true);
+    expect(h.snapshots.rows.filter((r) => isSept(r.period))).toHaveLength(2);
+    expect(buildSummaryEntry(outcome).description).toContain(
+      'Note: all 5 no-show members have left the group.',
+    );
+  });
+
+  it('without allowAllDeparted, buildMonth refuses five of five', async () => {
+    const h = makeDeps({ reportReadyEnabled: false });
+    h.fetchMonthReports.mockImplementation(withMembers(5, 5));
+    await expect(buildMonth(h.deps, SEPT, 'backfill')).rejects.toThrow(
+      MembershipsUnreadableError,
+    );
+    await expect(
+      buildMonth(h.deps, SEPT, 'backfill', { allowAllDeparted: false }),
+    ).rejects.toThrow(MembershipsUnreadableError);
+    expect(h.snapshots.rows).toEqual([]);
+  });
+
+  it('a manual refresh never skips the guard', async () => {
+    const h = makeDeps({ reportReadyEnabled: false });
+    h.fetchMonthReports.mockImplementation(withMembers(5, 5));
+    const result = await requestRebuild(h.deps, SEPT, REQUESTER);
+    expect(result.status).toBe('started');
+    if (result.status === 'started') {
+      expect(await result.done).toEqual({ ok: false });
+    }
+    expect(h.snapshots.rows.filter((r) => isSept(r.period))).toEqual([]);
+    expect(titles(h.alert)).toEqual(['Report build failed: September 2026']);
+  });
+
+  it('builds with only now, snapshots and fetchMonthReports', async () => {
+    const h = makeDeps({ reportReadyEnabled: false });
+    h.fetchMonthReports.mockImplementation(withMembers(2, 2));
+    const deps: MonthBuildDeps = {
+      now: h.deps.now,
+      snapshots: h.deps.snapshots,
+      fetchMonthReports: h.deps.fetchMonthReports,
+    };
+    const outcome = await buildMonth(deps, SEPT, 'backfill');
+    expect(outcome.allDeparted).toBe(true);
+    expect(h.snapshots.rows).toHaveLength(2);
+  });
+
+  it('the guard minimum is three', () => {
+    expect(DEPARTED_GUARD_MIN_MEMBERS).toBe(3);
+  });
+
+  it('the open month never carries the note', async () => {
+    const h = makeDeps({ reportReadyEnabled: false });
+    h.clock.set('2026-10-05T16:15:00Z');
+    h.fetchMonthReports.mockImplementation(withMembers(2, 2, false));
+    const outcome = await buildMonth(h.deps, OCT, 'job');
+    expect(outcome.finished).toBe(false);
+    expect(outcome.allDeparted).toBe(false);
+    expect(buildSummaryEntry(outcome).description).not.toContain(DEPARTED_NOTE);
+  });
 });
 
 describe('attendance note', () => {
@@ -1247,6 +1365,7 @@ describe('buildSummaryEntry', () => {
       departed: 1,
     },
     attendance: { pastEventsWithRsvps: 6, eventsWithNoShow: 5, noShows: 8 },
+    allDeparted: false,
   });
 
   it('only renders a user mention for an all-digit builtBy', () => {
