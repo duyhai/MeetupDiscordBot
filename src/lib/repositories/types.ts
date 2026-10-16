@@ -74,6 +74,14 @@ export interface SuspensionRepository {
   countSuspensionsBefore(memberId: string, before: Date): Promise<number>;
   /** Newest first. Voided records are excluded, as they are from the count. */
   listByMemberId(memberId: string): Promise<SuspensionRecord[]>;
+  /**
+   * Live (non-voided) records for these members, newest first per member;
+   * with `before`, only those with suspended_at < before. One query.
+   */
+  listByMemberIds(
+    memberIds: string[],
+    before?: Date,
+  ): Promise<SuspensionRecord[]>;
   listAll(): Promise<SuspensionRecord[]>;
   /**
    * Marks a record void rather than deleting it: disciplinary history keeps
