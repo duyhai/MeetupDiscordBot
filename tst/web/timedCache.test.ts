@@ -89,6 +89,19 @@ describe('timedCache', () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  it('the deadline timer does not keep the process alive', async () => {
+    const spy = vi.spyOn(globalThis, 'setTimeout');
+    try {
+      const pending = timedCache(hangingCache(), 60_000).get('k');
+      pending.catch(() => undefined);
+      const timer = spy.mock.results.at(-1)?.value as NodeJS.Timeout;
+      expect(timer.hasRef()).toBe(false);
+      clearTimeout(timer);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it('the factory times out a connect that never finishes', async () => {
     vi.useFakeTimers();
     const factory = timedCacheFactory(() => never<KeyValueCache>(), 50);

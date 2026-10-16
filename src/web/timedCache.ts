@@ -26,6 +26,8 @@ function race<T>(op: string, ms: number, pending: Promise<T>): Promise<T> {
   let timer: NodeJS.Timeout | undefined;
   const deadline = new Promise<never>((_resolve, reject) => {
     timer = setTimeout(() => reject(new CacheTimeoutError(op, ms)), ms);
+    // A pending deadline alone never holds the process open (shutdown, tests).
+    timer.unref();
   });
   return Promise.race([pending, deadline]).finally(() => clearTimeout(timer));
 }
