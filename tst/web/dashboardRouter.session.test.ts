@@ -303,6 +303,58 @@ describe('dashboard cache timeouts', () => {
   });
 });
 
+describe('errors after the response started', () => {
+  const PNG_HEAD = Buffer.from([
+    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+  ]);
+
+  it('an error after the response started destroys the socket instead of rendering', async () => {
+    const { req, server } = await makeApp({
+      protectedRoutes: (r) => {
+        r.get('/stream', (async (_req, res) => {
+          res.writeHead(200, { 'Content-Type': 'image/png' });
+          res.write(PNG_HEAD);
+          await new Promise((resolve) => {
+            setImmediate(resolve);
+          });
+          throw new Error('mid-stream');
+        }) as express.RequestHandler);
+      },
+    });
+    const cookie = await signIn(req);
+    fake.logged.length = 0;
+    let reply: Awaited<ReturnType<typeof rawRequest>> | undefined;
+    let failure: unknown;
+    try {
+      reply = await rawRequest(server, 'GET', '/dashboard/stream', {
+        Cookie: cookie,
+      });
+    } catch (error) {
+      failure = error;
+    }
+    if (reply) {
+      // Truncated: one status line, no error page, no final chunk.
+      expect(reply.status).toBe(200);
+      expect(reply.body).not.toContain('Something went wrong');
+      expect(reply.body).not.toContain('HTTP/1.1');
+      expect(reply.body.endsWith('0\r\n\r\n')).toBe(false);
+    } else {
+      expect(String(failure)).toMatch(/ECONNRESET|socket hang up/);
+    }
+    expect(
+      fake.logged.filter((l) =>
+        l.startsWith('Dashboard error after the response started'),
+      ),
+    ).toHaveLength(1);
+    expect(fake.logged.some((l) => l.includes('ERR_HTTP_HEADERS_SENT'))).toBe(
+      false,
+    );
+    expect(fake.logged.some((l) => l.startsWith('Dashboard route error'))).toBe(
+      false,
+    );
+  });
+});
+
 describe('dashboard home organizer status', () => {
   const status = (over: Record<string, unknown> = {}) => ({
     stored: true,

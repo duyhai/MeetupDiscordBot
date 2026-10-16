@@ -9,7 +9,7 @@ import {
   vi,
 } from 'vitest';
 
-import app from '../../src/app.js';
+import app, { appErrorHandler } from '../../src/app.js';
 import { PUBLIC_APP_ORIGIN } from '../../src/constants.js';
 import {
   claimOAuthState,
@@ -284,6 +284,26 @@ describe('staff dashboard mount', () => {
       .set('X-Forwarded-Proto', 'https');
     expect([200, 503]).toContain(res.status);
     expect(res.headers['cache-control']).toBe('no-store');
+  });
+
+  it('sends the framing headers through the real app, configured or not', async () => {
+    for (const path of ['/dashboard', '/dashboard/login', '/dashboard/x']) {
+      // eslint-disable-next-line no-await-in-loop -- one path at a time
+      const res = await http.get(path).set('X-Forwarded-Proto', 'https');
+      expect(res.headers['x-frame-options'], path).toBe('DENY');
+      expect(res.headers['content-security-policy'], path).toContain(
+        "frame-ancestors 'none'",
+      );
+      expect(res.headers['x-content-type-options'], path).toBe('nosniff');
+      expect(res.headers['cache-control'], path).toBe('no-store');
+    }
+  });
+
+  it('the app-level error handler is the exported guarded one', () => {
+    const stack = (
+      app as unknown as { router: { stack: { handle: unknown }[] } }
+    ).router.stack;
+    expect(stack.at(-1)?.handle).toBe(appErrorHandler);
   });
 
   it('trusts exactly one proxy hop, never all of them', () => {

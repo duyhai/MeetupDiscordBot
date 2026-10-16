@@ -576,6 +576,15 @@ export function createDashboardRouter(deps: DashboardDeps): express.Router {
   router.use(dashboardSessionGate as RequestHandler, protectedRouter);
 
   router.use(function dashboardErrorHandler(error, _req, res, _next) {
+    if (res.headersSent) {
+      // A response already under way (e.g. image bytes): no second status
+      // line. The client sees a truncated response.
+      logger.error(
+        `Dashboard error after the response started: ${String(error)}`,
+      );
+      res.destroy();
+      return;
+    }
     // Redis did not answer within the dashboard's deadline (timedCache):
     // the same "try again in a minute" page as a Discord outage.
     if (error instanceof CacheTimeoutError) {

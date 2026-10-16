@@ -194,13 +194,27 @@ app.use((_req, res) => {
 // escapes a handler (e.g. the cache being unreachable) must still land the
 // user on the branded page with a way back to Discord, never on Express's
 // stack-trace page.
-app.use(((error, _req, res, _next) => {
+export const appErrorHandler: ErrorRequestHandler = (
+  error,
+  _req,
+  res,
+  _next,
+) => {
+  if (res.headersSent) {
+    // A response already under way: no second status line.
+    logger.error(
+      `Unhandled route error after the response started: ${String(error)}`,
+    );
+    res.destroy();
+    return;
+  }
   logger.error(`Unhandled OAuth route error: ${String(error)}`);
   void reportOAuthFault({
     title: 'unhandled route error',
     description: `An OAuth route threw before it could report a specific cause: ${String(error)}`,
   });
   res.status(500).send(getAuthLandingPage('error', strings.unexpected));
-}) as ErrorRequestHandler);
+};
+app.use(appErrorHandler);
 
 export default app;
