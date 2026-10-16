@@ -86,6 +86,7 @@ export function dashboardRouterFromEnv(
     logger.warn(`Staff dashboard disabled: ${reason}`);
     return notConfiguredRouter();
   }
+  const organizerDeps = organizerLoginDeps(() => discordClient);
   return createDashboardRouter({
     cache: ApplicationCache,
     checkAccess: discordAccessCheck(() => discordClient),
@@ -106,9 +107,7 @@ export function dashboardRouterFromEnv(
     // Mounted by the router behind the session gate and the unsafe-method
     // (CSRF / Origin / rate-limit) guard.
     protectedRoutes: (router) =>
-      registerOrganizerLoginRoutes(
-        router,
-        organizerLoginDeps(() => discordClient),
-      ),
+      registerOrganizerLoginRoutes(router, organizerDeps),
+    homeStatus: organizerDeps.credentialStatus,
   });
 }

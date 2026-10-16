@@ -30,4 +30,47 @@ describe('dashboard pages', () => {
     );
     expect(errorPage(503, 'n')).toContain('try again in a minute');
   });
+  describe('home organizer login card', () => {
+    const user = { username: 'A', csrfToken: 't' };
+
+    it('home links to the organizer login page', () => {
+      const page = homePage(user, 'n', { kind: 'ok' });
+      expect(page).toContain('Organizer login');
+      expect(page).toContain('<a href="/dashboard/organizer-login">');
+      expect(page).toContain('Welcome');
+    });
+
+    it('home without an organizer status still links to the page', () => {
+      const page = homePage(user, 'n');
+      expect(page).toContain('<a href="/dashboard/organizer-login">');
+      expect(page).not.toContain('Not set up');
+      expect(page).not.toContain('Status unavailable');
+    });
+
+    it('shows OK when no failure is on record', () => {
+      expect(homePage(user, 'n', { kind: 'ok' })).toContain(
+        'OK (no failure on record)',
+      );
+    });
+
+    it('shows the failing-since time in Pacific time', () => {
+      const page = homePage(user, 'n', {
+        kind: 'failing',
+        since: new Date('2026-10-15T20:30:00Z'),
+      });
+      expect(page).toContain('Failing since Oct 15, 2026 1:30 PM Pacific time');
+    });
+
+    it('shows Not set up', () => {
+      expect(homePage(user, 'n', { kind: 'not-set-up' })).toContain(
+        'Not set up',
+      );
+    });
+
+    it('shows Status unavailable', () => {
+      expect(homePage(user, 'n', { kind: 'unavailable' })).toContain(
+        'Status unavailable',
+      );
+    });
+  });
 });

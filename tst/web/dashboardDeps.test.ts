@@ -1,5 +1,5 @@
 import express from 'express';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { BASE_DISCORD_BOT_URL } from '../../src/constants.js';
 import {
@@ -7,8 +7,29 @@ import {
   dashboardOrigin,
   dashboardRouterFromEnv,
 } from '../../src/web/dashboardDeps.js';
-import { protectedRouteList } from '../../src/web/dashboardRouter.js';
+import {
+  createDashboardRouter,
+  protectedRouteList,
+} from '../../src/web/dashboardRouter.js';
+import { organizerLoginDeps } from '../../src/web/organizerLoginDeps.js';
 import { closeServers, serve } from './dashboardHarness.js';
+
+vi.mock('../../src/web/organizerLoginDeps.js', async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import('../../src/web/organizerLoginDeps.js')
+    >();
+  return { ...actual, organizerLoginDeps: vi.fn(actual.organizerLoginDeps) };
+});
+
+vi.mock('../../src/web/dashboardRouter.js', async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import('../../src/web/dashboardRouter.js')>();
+  return {
+    ...actual,
+    createDashboardRouter: vi.fn(actual.createDashboardRouter),
+  };
+});
 
 afterEach(closeServers);
 
@@ -55,6 +76,18 @@ describe('dashboardRouterFromEnv', () => {
         { method: 'get', path: '/organizer-login/complete' },
       ]),
     );
+  });
+
+  it('passes the same organizer deps credentialStatus to the router as homeStatus', () => {
+    vi.mocked(organizerLoginDeps).mockClear();
+    vi.mocked(createDashboardRouter).mockClear();
+    dashboardRouterFromEnv({ DASHBOARD_SESSION_SECRET: 'k'.repeat(48) });
+    expect(organizerLoginDeps).toHaveBeenCalledTimes(1);
+    const deps = vi.mocked(createDashboardRouter).mock.calls[0][0];
+    const built = vi.mocked(organizerLoginDeps).mock.results[0]
+      .value as ReturnType<typeof organizerLoginDeps>;
+    expect(deps.homeStatus).toBeDefined();
+    expect(deps.homeStatus).toBe(built.credentialStatus);
   });
 
   it('redirects plain HTTP to HTTPS when the origin is HTTPS', async () => {
