@@ -35,7 +35,7 @@ vi.mock('../../src/lib/helpers/discordLogger.js', () => ({
 
 vi.mock('../../src/lib/client/meetup/gqlClient.js', () => ({
   GqlMeetupClient: class {
-    getUserInfo = vi.fn().mockResolvedValue({ self: { id: '468174923' } });
+    getSelfId = vi.fn().mockResolvedValue('468174923');
   },
 }));
 

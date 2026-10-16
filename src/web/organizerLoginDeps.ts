@@ -91,14 +91,10 @@ export function organizerLoginDeps(
     claimState: claimOAuthState,
     buildAuthUrl: buildMeetupAuthUrl,
     exchangeCode: exchangeMeetupCode,
-    fetchMeetupMemberId: async (accessToken) => {
-      const info = await new GqlMeetupClient(accessToken).getUserInfo();
-      const id: unknown = info?.self?.id;
-      if (typeof id !== 'string') {
-        throw new Error('Meetup returned no member id');
-      }
-      return id;
-    },
+    // Minimal `self { id }` lookup: no profile is fetched or logged, and the
+    // id is refused unless it is all digits.
+    fetchMeetupMemberId: async (accessToken) =>
+      new GqlMeetupClient(accessToken).getSelfId(),
     saveRenewedCredential: async (tokens, memberId) => {
       const recovered = await renewOrganizerCredential(
         await requireStore(),

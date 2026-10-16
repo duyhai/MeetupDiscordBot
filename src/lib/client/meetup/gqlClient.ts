@@ -1,5 +1,5 @@
 import dayjs from 'dayjs';
-import { GraphQLClient } from 'graphql-request';
+import { ClientError, GraphQLClient } from 'graphql-request';
 import { Logger } from 'tslog';
 import Configuration from '../../../configuration.js';
 import {
@@ -24,6 +24,7 @@ import {
   getGroupMemberships,
   getMemberRsvps,
   getSelfPastRsvpCount,
+  getSelfId,
   getSelfPastRsvpEvents,
   getUserHostedEvents,
   getUserInfo,
@@ -151,6 +152,35 @@ export class GqlMeetupClient {
       logger.error(error);
       throw error;
     }
+  }
+
+  /**
+   * The token holder's Meetup member id, all digits. Unlike getUserInfo it
+   * selects only the id, logs no result, and logs a failure by error name
+   * only: a ClientError's message embeds Meetup's response body.
+   */
+  public async getSelfId(): Promise<string> {
+    let result: { self: { id?: unknown } | null } | undefined;
+    try {
+      result = await this.client.request<{ self: { id?: unknown } | null }>(
+        getSelfId,
+      );
+    } catch (error: unknown) {
+      // ClientError's own name is plain "Error"; its status is a number.
+      const what =
+        error instanceof ClientError
+          ? `ClientError HTTP ${String(error.response?.status)}`
+          : error instanceof Error
+            ? error.name
+            : 'unknown error';
+      logger.error(`getSelfId failed: ${what}`);
+      throw error;
+    }
+    const id = result?.self?.id;
+    if (typeof id !== 'string' || !/^[0-9]{1,20}$/.test(id)) {
+      throw new Error('Meetup returned no usable member id');
+    }
+    return id;
   }
 
   public async getUserMembershipInfo() {

@@ -20,7 +20,7 @@ import { ApplicationCredentialRepository } from '../../../src/util/credentialRep
 
 const fake = vi.hoisted(() => ({
   logged: [] as string[],
-  getUserInfo: vi.fn(),
+  getSelfId: vi.fn(),
 }));
 
 vi.mock('tslog', () => {
@@ -53,7 +53,7 @@ vi.mock('../../../src/lib/helpers/discordLogger.js', () => ({
 
 vi.mock('../../../src/lib/client/meetup/gqlClient.js', () => ({
   GqlMeetupClient: class {
-    getUserInfo = fake.getUserInfo;
+    getSelfId = fake.getSelfId;
   },
 }));
 
@@ -163,7 +163,7 @@ beforeEach(() => {
   Configuration.meetup.organizerMemberId = undefined;
   refresh.mockReset();
   alert.mockClear();
-  fake.getUserInfo.mockReset();
+  fake.getSelfId.mockReset();
   vi.mocked(ApplicationCredentialRepository).mockImplementation(
     async () =>
       credentials as unknown as Awaited<
@@ -513,7 +513,7 @@ describe('getOrganizerAccessToken', () => {
   it('records the member id when none is stored', async () => {
     db.current = stored(60 * MINUTE);
     db.memberId = null;
-    fake.getUserInfo.mockResolvedValueOnce({ self: { id: '468174923' } });
+    fake.getSelfId.mockResolvedValueOnce('468174923');
 
     await expect(getOrganizerAccessToken()).resolves.toBe('STORED-ACCESS');
     expect(db.memberId).toBe('468174923');
@@ -525,7 +525,7 @@ describe('getOrganizerAccessToken', () => {
     db.current = stored(60 * MINUTE);
     db.memberId = null;
     Configuration.meetup.organizerMemberId = '468174923';
-    fake.getUserInfo.mockResolvedValueOnce({ self: { id: '468174923' } });
+    fake.getSelfId.mockResolvedValueOnce('468174923');
 
     await expect(getOrganizerAccessToken({ client })).resolves.toBe(
       'STORED-ACCESS',
@@ -538,7 +538,7 @@ describe('getOrganizerAccessToken', () => {
     db.current = stored(60 * MINUTE);
     db.memberId = null;
     Configuration.meetup.organizerMemberId = '468174923';
-    fake.getUserInfo.mockResolvedValue({ self: { id: '999000111' } });
+    fake.getSelfId.mockResolvedValue('999000111');
 
     await expect(getOrganizerAccessToken({ client })).resolves.toBe(
       'STORED-ACCESS',
@@ -568,7 +568,7 @@ describe('getOrganizerAccessToken', () => {
   it('records as observed when no organizer id is configured', async () => {
     db.current = stored(60 * MINUTE);
     db.memberId = null;
-    fake.getUserInfo.mockResolvedValueOnce({ self: { id: '999000111' } });
+    fake.getSelfId.mockResolvedValueOnce('999000111');
 
     await getOrganizerAccessToken({ client });
 
@@ -598,16 +598,16 @@ describe('getOrganizerAccessToken', () => {
     db.current = stored(60 * MINUTE);
     db.memberId = null;
     Configuration.meetup.organizerMemberId = '468174923';
-    fake.getUserInfo.mockResolvedValue({ self: { id: '999000111' } });
+    fake.getSelfId.mockResolvedValue('999000111');
 
     await getOrganizerAccessToken();
     await getOrganizerAccessToken();
-    expect(fake.getUserInfo).toHaveBeenCalledTimes(1);
+    expect(fake.getSelfId).toHaveBeenCalledTimes(1);
     expect(alert).not.toHaveBeenCalled();
 
     await getOrganizerAccessToken({ client });
     await getOrganizerAccessToken({ client });
-    expect(fake.getUserInfo).toHaveBeenCalledTimes(1);
+    expect(fake.getSelfId).toHaveBeenCalledTimes(1);
     expect(alert).toHaveBeenCalledTimes(1);
     expect(alert.mock.calls[0][1].title).toBe(
       'Meetup organizer credential belongs to a different account',
@@ -643,13 +643,13 @@ describe('getOrganizerAccessToken', () => {
 
     await getOrganizerAccessToken();
 
-    expect(fake.getUserInfo).not.toHaveBeenCalled();
+    expect(fake.getSelfId).not.toHaveBeenCalled();
   });
 
   it('never stores a member id that is not all digits', async () => {
     db.current = stored(60 * MINUTE);
     db.memberId = null;
-    fake.getUserInfo.mockResolvedValueOnce({ self: { id: 'abc' } });
+    fake.getSelfId.mockResolvedValueOnce('abc');
 
     await getOrganizerAccessToken();
 
@@ -659,11 +659,11 @@ describe('getOrganizerAccessToken', () => {
   it('member id lookup failure does not fail the token', async () => {
     db.current = stored(60 * MINUTE);
     db.memberId = null;
-    fake.getUserInfo.mockRejectedValueOnce(new Error('meetup down'));
+    fake.getSelfId.mockRejectedValueOnce(new Error('meetup down'));
 
     await expect(getOrganizerAccessToken()).resolves.toBe('STORED-ACCESS');
 
-    fake.getUserInfo.mockResolvedValueOnce({ self: { id: '1' } });
+    fake.getSelfId.mockResolvedValueOnce('1');
     locked.setMemberId.mockRejectedValueOnce(new Error('write failed'));
     await expect(getOrganizerAccessToken()).resolves.toBe('STORED-ACCESS');
   });
@@ -674,14 +674,14 @@ describe('noteOrganizerCredentialRenewed', () => {
     db.current = stored(60 * MINUTE);
     db.memberId = null;
     Configuration.meetup.organizerMemberId = '468174923';
-    fake.getUserInfo.mockResolvedValue({ self: { id: '999000111' } });
+    fake.getSelfId.mockResolvedValue('999000111');
 
     await getOrganizerAccessToken({ client });
     expect(alert).toHaveBeenCalledTimes(1);
 
     // Without a renewal the check and the alert stay spent for this process.
     await getOrganizerAccessToken({ client });
-    expect(fake.getUserInfo).toHaveBeenCalledTimes(1);
+    expect(fake.getSelfId).toHaveBeenCalledTimes(1);
     expect(alert).toHaveBeenCalledTimes(1);
 
     noteOrganizerCredentialRenewed();
@@ -690,14 +690,14 @@ describe('noteOrganizerCredentialRenewed', () => {
     // lookup and no stale wrong-account alert.
     db.memberId = '468174923';
     await getOrganizerAccessToken({ client });
-    expect(fake.getUserInfo).toHaveBeenCalledTimes(1);
+    expect(fake.getSelfId).toHaveBeenCalledTimes(1);
     expect(alert).toHaveBeenCalledTimes(1);
 
     // And a later mismatch is detected and alerted afresh.
     noteOrganizerCredentialRenewed();
     db.memberId = null;
     await getOrganizerAccessToken({ client });
-    expect(fake.getUserInfo).toHaveBeenCalledTimes(2);
+    expect(fake.getSelfId).toHaveBeenCalledTimes(2);
     expect(alert).toHaveBeenCalledTimes(2);
   });
 
@@ -720,14 +720,14 @@ describe('noteOrganizerCredentialRenewed', () => {
     db.current = stored(60 * MINUTE);
     db.memberId = null;
     Configuration.meetup.organizerMemberId = '468174923';
-    const lookup = deferred<{ self: { id: string } }>();
-    fake.getUserInfo.mockReturnValueOnce(lookup.promise);
+    const lookup = deferred<string>();
+    fake.getSelfId.mockReturnValueOnce(lookup.promise);
 
     const stale = getOrganizerAccessToken({ client });
-    await vi.waitFor(() => expect(fake.getUserInfo).toHaveBeenCalled());
+    await vi.waitFor(() => expect(fake.getSelfId).toHaveBeenCalled());
     noteOrganizerCredentialRenewed();
     db.memberId = '468174923';
-    lookup.resolve({ self: { id: '999000111' } });
+    lookup.resolve('999000111');
     await stale;
 
     await getOrganizerAccessToken({ client });

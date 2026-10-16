@@ -232,9 +232,8 @@ async function recordMemberId(
   generation: number,
 ): Promise<void> {
   try {
-    const info = await new GqlMeetupClient(accessToken).getUserInfo();
-    const memberId = info?.self?.id;
-    if (typeof memberId !== 'string' || !MEMBER_ID_PATTERN.test(memberId)) {
+    const memberId = await new GqlMeetupClient(accessToken).getSelfId();
+    if (!MEMBER_ID_PATTERN.test(memberId)) {
       logger.warn('Meetup returned no usable member id for the organizer');
       return;
     }

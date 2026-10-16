@@ -18,6 +18,15 @@ export const getUserInfo = gql`
   ${UserFragment}
 `;
 
+/** The token holder's member id and nothing else: no name or profile. */
+export const getSelfId = gql`
+  query {
+    self {
+      id
+    }
+  }
+`;
+
 export const getUserMembershipInfo = gql`
   query ($urlname: String!) {
     groupByUrlname(urlname: $urlname) {

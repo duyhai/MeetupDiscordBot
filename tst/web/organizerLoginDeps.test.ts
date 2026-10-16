@@ -21,7 +21,7 @@ import {
   organizerLoginDeps,
 } from '../../src/web/organizerLoginDeps.js';
 
-const fake = vi.hoisted(() => ({ getUserInfo: vi.fn() }));
+const fake = vi.hoisted(() => ({ getSelfId: vi.fn() }));
 
 vi.mock('../../src/lib/helpers/discordLogger.js', () => ({
   logAlert: vi.fn().mockResolvedValue(true),
@@ -36,7 +36,7 @@ vi.mock('../../src/lib/helpers/organizerMeetupClient.js', async (original) => ({
 
 vi.mock('../../src/lib/client/meetup/gqlClient.js', () => ({
   GqlMeetupClient: class {
-    getUserInfo = fake.getUserInfo;
+    getSelfId = fake.getSelfId;
   },
 }));
 
@@ -202,12 +202,14 @@ describe('organizerLoginDeps', () => {
   });
 
   it('reads the member id of whoever signed in', async () => {
-    fake.getUserInfo.mockResolvedValueOnce({ self: { id: ORGANIZER_ID } });
+    fake.getSelfId.mockResolvedValueOnce(ORGANIZER_ID);
     await expect(
       organizerLoginDeps(() => client).fetchMeetupMemberId('ACCESS'),
     ).resolves.toBe(ORGANIZER_ID);
 
-    fake.getUserInfo.mockResolvedValueOnce({ self: null });
+    fake.getSelfId.mockRejectedValueOnce(
+      new Error('Meetup returned no usable member id'),
+    );
     await expect(
       organizerLoginDeps(() => client).fetchMeetupMemberId('ACCESS'),
     ).rejects.toThrow();
