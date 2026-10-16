@@ -1,6 +1,7 @@
 import nock from 'nock';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { getGroupEvents } from '../../../src/lib/client/meetup/queries.js';
 import { GqlMeetupClient } from '../../../src/lib/client/meetup/gqlClient.js';
 import { getPaginatedData } from '../../../src/lib/client/meetup/paginationHelper.js';
 import { ApplicationCache } from '../../../src/util/cache.js';
@@ -53,13 +54,19 @@ describe('installMeetupResponder', () => {
     ]);
 
     // e085 is a never-held DRAFT of host 104: only the status filter drops it.
-    const hosted = await client.getGroupEvents(page, { hostId: '104' });
+    const hosted = await client.getGroupEvents(page, {
+      hostId: '104',
+      status: ['PAST', 'DRAFT'],
+    });
     expect(ids(hosted.groupByUrlname.events.edges)).toEqual(['e085', 'e102']);
     const hostedPast = await client.getGroupEvents(page, {
       hostId: '104',
       status: ['PAST', 'ACTIVE'],
     });
-    expect(ids(hostedPast.groupByUrlname.events.edges)).toEqual(['e102']);
+    expect(ids(hostedPast.groupByUrlname.events.edges)).toEqual([
+      'e088',
+      'e102',
+    ]);
   });
 
   it('getGroupEventsCount counts the exact window', async () => {
@@ -187,5 +194,75 @@ describe('installMeetupResponder', () => {
       client.customRequest('{ self { id } }', '{}'),
     ).rejects.toThrow();
     expect(responder.unhandled()).toHaveLength(1);
+  });
+
+  describe('hardening: nothing is answered quietly', () => {
+    it('rejects a member id that is not in the world', async () => {
+      const responder = installMeetupResponder(WORLD_2026);
+
+      await expect(
+        client.getMemberRsvpEvents('999', WORLD_2026.groupId, {
+          rsvpStatus: ['NO_SHOW'],
+          eventStatus: ['PAST'],
+        }),
+      ).rejects.toThrow(/unknown member 999/);
+      expect(responder.failures()).toHaveLength(1);
+    });
+
+    it('rejects an eventStatus other than PAST or UPCOMING', async () => {
+      installMeetupResponder(WORLD_2026);
+
+      await expect(
+        client.getMemberRsvpEvents('202', WORLD_2026.groupId, {
+          rsvpStatus: ['NO_SHOW'],
+          eventStatus: ['CANCELLED' as never],
+        }),
+      ).rejects.toThrow(/unsupported eventStatus "CANCELLED"/);
+    });
+
+    it('rejects unknown top-level variables and unknown RSVP filter keys', async () => {
+      installMeetupResponder(WORLD_2026);
+
+      await expect(
+        client.customRequest(
+          getGroupEvents,
+          JSON.stringify({ urlname: '1-5genasians', first: 1, bogus: 1 }),
+        ),
+      ).rejects.toThrow(/unsupported variable "bogus"/);
+      await expect(
+        client.getEventRsvps('e101', page, {
+          rsvpStatus: ['YES'],
+          extra: 1,
+        } as never),
+      ).rejects.toThrow(/unsupported RSVP filter key "extra"/);
+    });
+
+    it('rejects a request with no status filter', async () => {
+      installMeetupResponder(WORLD_2026);
+
+      await expect(
+        client.getGroupEvents(page, { hostId: '104' }),
+      ).rejects.toThrow(/requires a status filter/);
+      await expect(client.getGroupEventsCount()).rejects.toThrow(
+        /requires a status filter/,
+      );
+      await expect(client.getEventRsvps('e101', page)).rejects.toThrow(
+        /requires an rsvpStatus filter/,
+      );
+    });
+
+    it('records a handler failure on the call', async () => {
+      const responder = installMeetupResponder(WORLD_2026);
+
+      await expect(
+        client.getEventRsvps('nope', page, { rsvpStatus: ['YES'] }),
+      ).rejects.toThrow();
+
+      expect(responder.failures()).toHaveLength(1);
+      expect(responder.calls[0]).toMatchObject({
+        name: 'getEventRsvps',
+        failed: true,
+      });
+    });
   });
 });

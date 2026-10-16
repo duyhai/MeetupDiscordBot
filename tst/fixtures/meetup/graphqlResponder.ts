@@ -52,6 +52,8 @@ export interface RecordedCall {
   name: QueryName | 'unhandled';
   variables: Record<string, unknown>;
   authorization: string | undefined;
+  /** The handler threw: the client received a GraphQL error. */
+  failed?: boolean;
 }
 export interface ResponderOptions {
   /** Caps every page, whatever `first` asks for (forces multi-page walks with small fixtures). Default 100. */
@@ -83,6 +85,42 @@ export const memberUrl = (id: string) =>
   `https://www.meetup.com/members/${id}/`;
 export const eventUrl = (id: string) =>
   `https://www.meetup.com/1-5genasians/events/${id}/`;
+
+const RSVP_FILTER_KEYS = new Set(['rsvpStatus']);
+const MEMBER_RSVP_FILTER_KEYS = new Set([
+  'groupId',
+  'rsvpStatus',
+  'eventStatus',
+]);
+// The top-level variables each query is allowed to receive. A refactor that
+// starts sending something new must update the responder knowingly.
+const VARIABLE_KEYS: Record<QueryName, string[]> = {
+  getGroupEvents: ['urlname', 'first', 'after', 'filter'],
+  getGroupEventsCount: ['urlname', 'filter'],
+  getEventRsvps: ['eventId', 'first', 'after', 'filter'],
+  getUserMembershipInfo: ['urlname'],
+  getMemberRsvps: [
+    'urlname',
+    'memberIds',
+    'first',
+    'after',
+    'filter',
+    'withPaymentInfo',
+  ],
+};
+
+function onlyKeys(
+  what: string,
+  value: object | undefined,
+  allowed: Iterable<string>,
+) {
+  const set = new Set(allowed);
+  Object.keys(value ?? {}).forEach((key) => {
+    if (!set.has(key)) {
+      throw new Error(`unsupported ${what} "${key}"`);
+    }
+  });
+}
 
 const cursorFor = (offset: number) =>
   Buffer.from(`offset:${offset}`).toString('base64');
@@ -163,13 +201,14 @@ export function installMeetupResponder(
     filter: GroupEventFilter | undefined,
   ) => {
     if (!filter) {
-      return true;
+      throw new Error('group events requires a status filter');
     }
-    Object.keys(filter).forEach((key) => {
-      if (!GROUP_FILTER_KEYS.has(key)) {
-        throw new Error(`unsupported group event filter "${key}"`);
-      }
-    });
+    onlyKeys('group event filter', filter, GROUP_FILTER_KEYS);
+    // Every real call (the report window, the new-host count) filters by
+    // status; an unfiltered query would quietly include DRAFT/CANCELLED.
+    if (!filter.status) {
+      throw new Error('group events requires a status filter');
+    }
     const start = Date.parse(e.dateTime);
     if (filter.status && !filter.status.includes(e.status)) {
       return false;
@@ -222,12 +261,14 @@ export function installMeetupResponder(
       if (!event) {
         throw new Error(`unknown event ${String(v.eventId)}`);
       }
-      const statuses = (v.filter as { rsvpStatus?: string[] } | undefined)
-        ?.rsvpStatus;
+      const rsvpFilter = v.filter as { rsvpStatus?: string[] } | undefined;
+      onlyKeys('RSVP filter key', rsvpFilter, RSVP_FILTER_KEYS);
+      const statuses = rsvpFilter?.rsvpStatus;
+      if (!statuses) {
+        throw new Error('event RSVPs requires an rsvpStatus filter');
+      }
       const all = world.rsvps.filter((r) => r.eventId === event.id); // fixture order
-      const matching = statuses
-        ? all.filter((r) => statuses.includes(r.status))
-        : all;
+      const matching = all.filter((r) => statuses.includes(r.status));
       const { slice, pageInfo } = page(matching, v, cap);
       return {
         event: {
@@ -266,10 +307,27 @@ export function installMeetupResponder(
         rsvpStatus: string[];
         eventStatus: ('PAST' | 'UPCOMING')[];
       };
+      onlyKeys('RSVP filter key', filter, MEMBER_RSVP_FILTER_KEYS);
       if (filter.groupId !== world.groupId) {
         throw new Error(`unexpected groupId ${filter.groupId}`);
       }
-      if (world.departedIds.includes(memberId) || !membersById.has(memberId)) {
+      if (!filter.rsvpStatus) {
+        throw new Error('member RSVPs requires an rsvpStatus filter');
+      }
+      filter.eventStatus.forEach((status) => {
+        if (status !== 'PAST' && status !== 'UPCOMING') {
+          throw new Error(`unsupported eventStatus "${String(status)}"`);
+        }
+      });
+      if (v.withPaymentInfo !== undefined && v.withPaymentInfo !== true) {
+        throw new Error('withPaymentInfo is sent only when true');
+      }
+      // Leaving the group is modelled explicitly (departedIds), never by
+      // asking about a stranger.
+      if (!membersById.has(memberId)) {
+        throw new Error(`unknown member ${memberId}`);
+      }
+      if (world.departedIds.includes(memberId)) {
         return {
           groupByUrlname: { id: world.groupId, memberships: { edges: [] } },
         };
@@ -343,10 +401,13 @@ export function installMeetupResponder(
           { errors: [{ message: 'fixture responder: unhandled query' }] },
         ];
       }
-      calls.push({ name, variables, authorization });
+      const call: RecordedCall = { name, variables, authorization };
+      calls.push(call);
       try {
+        onlyKeys('variable', variables, VARIABLE_KEYS[name]);
         return [200, { data: handlers[name](variables) }];
       } catch (error) {
+        call.failed = true;
         return [
           200,
           {
@@ -361,5 +422,7 @@ export function installMeetupResponder(
   return {
     calls,
     unhandled: () => calls.filter((c) => c.name === 'unhandled'),
+    /** Calls whose handler threw (the client saw a GraphQL error). */
+    failures: () => calls.filter((c) => c.failed === true),
   };
 }
