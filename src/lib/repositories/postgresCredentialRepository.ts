@@ -8,13 +8,16 @@ import { Tokens } from '../client/discord/types.js';
 const logger = new Logger({ name: 'PostgresCredentialRepository' });
 
 // A waiter gives up after this long rather than queueing forever behind a
-// stuck holder; comfortably above a 10 s-bounded refresh.
-const LOCK_TIMEOUT_MS = 30_000;
+// stuck holder. A healthy holder can take about 30 s worst case (stored
+// refresh 10 s + seed refresh 10 s + account check 10 s), so this sits above
+// that and below the 45 s idle-in-transaction kill.
+const LOCK_TIMEOUT_MS = 40_000;
 // Postgres kills a holder that goes quiet mid-transaction this long, which
 // releases the lock even if the process holding it is wedged.
 const IDLE_IN_TRANSACTION_TIMEOUT_MS = 45_000;
 // Backstop for pool.connect(): never wait forever for the single connection.
-const CONNECTION_TIMEOUT_MS = 30_000;
+// In-process waiters queue here behind a holder that may take ~30 s.
+const CONNECTION_TIMEOUT_MS = 40_000;
 
 // Marks code running inside a locked transaction. With a one-connection
 // pool, calling back into the repository from there would wait forever for
