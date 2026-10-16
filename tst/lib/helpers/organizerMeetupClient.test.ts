@@ -481,6 +481,32 @@ describe('getOrganizerAccessToken', () => {
       expect(fake.logged.join('\n')).toMatch(/already advanced/);
     });
 
+    it('the retry does not overwrite a newer pair with the same refresh token', async () => {
+      // e.g. Meetup did not rotate, and another process refreshed meanwhile:
+      // same refresh token, newer access token. Its pair wins.
+      db.current = stored(0);
+      refresh.mockResolvedValueOnce(fresh(1));
+      locked.write.mockRejectedValueOnce(new Error('write failed'));
+      const newer = {
+        accessToken: 'NEWER-ACCESS',
+        refreshToken: 'STORED-REFRESH',
+        expiresAt: Date.now() + 60 * MINUTE,
+      };
+      db.beforeLock.push(
+        () => undefined,
+        () => {
+          db.current = newer;
+        },
+      );
+
+      await expect(getOrganizerAccessToken({ client })).resolves.toBe(
+        'FRESH-ACCESS-1',
+      );
+      expect(locked.write).toHaveBeenCalledTimes(1); // only the failed one
+      expect(db.current).toEqual(newer);
+      expect(fake.logged.join('\n')).toMatch(/already advanced/);
+    });
+
     it('a failed COMMIT after refresh is retried once', async () => {
       db.current = stored(0);
       db.commitFails = 1;

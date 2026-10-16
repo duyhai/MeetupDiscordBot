@@ -213,10 +213,11 @@ async function recordEpisode(
   return false;
 }
 
-/** A refreshed pair, and the refresh token stored when the lock was taken. */
+/** A refreshed pair, and the stored pair as read when the lock was taken. */
 interface RefreshedPair {
   tokens: Tokens;
   previousRefreshToken: string | undefined;
+  previousAccessToken: string | undefined;
 }
 
 /**
@@ -377,6 +378,7 @@ async function resolveLocked(
     onRefreshed({
       tokens: refreshed,
       previousRefreshToken: current?.refreshToken,
+      previousAccessToken: current?.accessToken,
     });
 
     // The credential write comes FIRST. Persisting is a separate failure from
@@ -580,7 +582,8 @@ async function reportFailure(
 /**
  * The refreshed pair was not durably stored (the write or the COMMIT
  * failed). Try once more in a fresh locked call, but only if the stored
- * refresh token is still the one this run's transaction read: otherwise
+ * pair (refresh AND access token) is still the one this run's transaction
+ * read: otherwise
  * another process has already advanced the credential, and its pair wins.
  * Logged by outcome and error name only. Never throws.
  */
@@ -592,7 +595,12 @@ async function retryStore(
     const stored = await credentials.withLockedCredential(
       MEETUP_ORGANIZER_CREDENTIAL_KEY,
       async (locked) => {
-        if (locked.current?.refreshToken !== pair.previousRefreshToken) {
+        // Both halves: without rotation another process's newer pair keeps
+        // the same refresh token, and must not be overwritten either.
+        if (
+          locked.current?.refreshToken !== pair.previousRefreshToken ||
+          locked.current?.accessToken !== pair.previousAccessToken
+        ) {
           return false;
         }
         await locked.write(pair.tokens);
