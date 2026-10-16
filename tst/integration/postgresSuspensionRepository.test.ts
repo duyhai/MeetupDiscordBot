@@ -142,7 +142,7 @@ if (!POSTGRES_AVAILABLE) {
       expect(rows).toHaveLength(2);
       expect(rows.map((row) => row.memberId)).toEqual(['m2', 'm1']);
     });
-    it('listByMemberIds returns live records for the given members before the cutoff, in one query', async () => {
+    it('listByMemberIds returns live records for the given members before the cutoff', async () => {
       const day = (iso: string) => new Date(`${iso}T00:00:00Z`);
       await repo.insert({ ...record, suspendedAt: day('2026-09-01') });
       await repo.insert({ ...record, suspendedAt: day('2026-10-01') });

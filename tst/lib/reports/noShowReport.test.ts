@@ -245,8 +245,9 @@ describe('buildNoShowReport', () => {
     );
 
     expect(payload.attendance).toEqual({
-      pastEvents: 2,
-      eventsWithAttendance: 0,
+      pastEventsWithRsvps: 2,
+      eventsWithNoShow: 0,
+      noShows: 0,
     });
   });
 
@@ -287,6 +288,23 @@ describe('buildNoShowReport', () => {
     });
     expect(payload.cases.map((c) => [c.member.id, c.hostedPastEvent])).toEqual([
       ['1', true],
+      ['2', false],
+    ]);
+  });
+
+  it('skips the host check when includeHostFlag is false', async () => {
+    const data = monthData({ s12: ['1', '2'] }, [SEPT_12]);
+    const { client, getGroupEventsCount } = fakeMeetup(
+      { '1': [SEPT_12], '2': [SEPT_12] },
+      { '1': 1, '2': 0 },
+    );
+    const { options: opts } = options([], { includeHostFlag: false });
+
+    const payload = await buildNoShowReport(client, window, data, opts);
+
+    expect(getGroupEventsCount).not.toHaveBeenCalled();
+    expect(payload.cases.map((c) => [c.member.id, c.hostedPastEvent])).toEqual([
+      ['1', false],
       ['2', false],
     ]);
   });

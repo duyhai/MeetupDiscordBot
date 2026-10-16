@@ -48,6 +48,12 @@ export interface NoShowBuildOptions {
   /** Called only when the month has no-shows. */
   resolveGroupId: () => Promise<string>;
   suspensions: SuspensionHistorySource;
+  /**
+   * Look up whether each case has hosted a past event (one Meetup call per
+   * case). Default true; the slash command passes false, as it never shows
+   * the flag. When false, every case has hostedPastEvent: false.
+   */
+  includeHostFlag?: boolean;
 }
 
 /**
@@ -113,7 +119,10 @@ export async function buildNoShowReport(
       historyByMember,
       now: dayjs(options.asOf),
     });
-    const caseIds = result.cases.map((c) => c.member.id);
+    const caseIds =
+      (options.includeHostFlag ?? true)
+        ? result.cases.map((c) => c.member.id)
+        : [];
     const hostedCounts = await mapWithConcurrency(
       caseIds,
       MEETUP_CONCURRENCY,

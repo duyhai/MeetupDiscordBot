@@ -1,6 +1,6 @@
 import { GqlMeetupClient } from '../client/meetup/gqlClient.js';
 import { buildHallOfFameReport } from './hallOfFameReport.js';
-import { fetchMonthData, isAttendanceRecorded } from './meetupMonth.js';
+import { fetchMonthData } from './meetupMonth.js';
 import { SuspensionHistorySource, buildNoShowReport } from './noShowReport.js';
 import { Period } from './period.js';
 import { HallOfFamePayload, NoShowPayload } from './types.js';
@@ -8,7 +8,7 @@ import { HallOfFamePayload, NoShowPayload } from './types.js';
 export interface MonthReports {
   hallOfFame: HallOfFamePayload;
   noShow: NoShowPayload;
-  /** False when past events have RSVPs but none ATTENDED or NO_SHOW. */
+  /** Built from a complete Meetup read; attendance is never inferred. */
   sourceComplete: boolean;
 }
 
@@ -39,6 +39,6 @@ export async function buildMonthReports(
   return {
     hallOfFame,
     noShow,
-    sourceComplete: isAttendanceRecorded(noShow.attendance),
+    sourceComplete: true,
   };
 }

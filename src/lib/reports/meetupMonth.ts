@@ -91,31 +91,50 @@ export async function fetchMonthData(
   };
 }
 
-/** ATTENDED + YES. */
+/**
+ * The Hall of Fame RSVP count: YES, plus ATTENDED if a host ever marks it.
+ * Not a count of who attended (hosts here mark no-shows only); never label
+ * it "attended".
+ */
 export function attendanceCount(rsvps: Rsvp[]): number {
   return rsvps.filter((r) => r.status === 'ATTENDED' || r.status === 'YES')
     .length;
 }
 
+/**
+ * Past (started before asOf), non-cancelled events with a YES RSVP, and the
+ * no-shows on them. ATTENDED is ignored: nothing may rely on it.
+ */
 export function attendanceEvidence(
   data: MonthData,
   asOf: Date,
 ): AttendanceEvidence {
-  const past = data.events.filter(
-    (e) => Date.parse(e.dateTime) < asOf.getTime() && !isCancelledEvent(e),
-  );
+  const noShowCounts = data.events
+    .filter(
+      (e) =>
+        Date.parse(e.dateTime) < asOf.getTime() &&
+        !isCancelledEvent(e) &&
+        (data.rsvps.get(e.id) ?? []).some((r) => r.status === 'YES'),
+    )
+    .map(
+      (e) =>
+        (data.rsvps.get(e.id) ?? []).filter((r) => r.status === 'NO_SHOW')
+          .length,
+    );
   return {
-    pastEvents: past.length,
-    eventsWithAttendance: past.filter((e) =>
-      (data.rsvps.get(e.id) ?? []).some(
-        (r) => r.status === 'ATTENDED' || r.status === 'NO_SHOW',
-      ),
-    ).length,
+    pastEventsWithRsvps: noShowCounts.length,
+    eventsWithNoShow: noShowCounts.filter((count) => count > 0).length,
+    noShows: noShowCounts.reduce((sum, count) => sum + count, 0),
   };
 }
 
-export function isAttendanceRecorded(evidence: AttendanceEvidence): boolean {
-  return evidence.pastEvents === 0 || evidence.eventsWithAttendance > 0;
+/**
+ * True when past events have RSVPs but nobody was marked a no-show. That is
+ * unusual, so check that attendance was taken; it does not make the month
+ * incomplete.
+ */
+export function noShowsMissing(e: AttendanceEvidence): boolean {
+  return e.pastEventsWithRsvps > 0 && e.noShows === 0;
 }
 
 export function windowKey(w: ReportWindow): string {

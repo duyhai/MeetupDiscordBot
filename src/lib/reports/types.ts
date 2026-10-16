@@ -24,7 +24,11 @@ export interface EventRef {
 
 export interface HallOfFameEvent extends EventRef {
   maxTickets: number;
-  /** RSVPs with status ATTENDED or YES when the report was built. */
+  /**
+   * The RSVP count when the report was built: YES, plus ATTENDED if a host
+   * ever marks it. Hosts here mark no-shows only, so this is not a count of
+   * who attended; never label it "attended".
+   */
   attendance: number;
   eventHosts: { member: MemberRef }[];
 }
@@ -48,11 +52,17 @@ export interface HallOfFamePayload {
   hosts: { host: MemberRef; isNew: boolean; events: HallOfFameEvent[] }[];
 }
 
+/**
+ * What the month's no-show marking looks like. ATTENDED plays no part: hosts
+ * here mark no-shows only, so Meetup returns no ATTENDED RSVPs.
+ */
 export interface AttendanceEvidence {
-  /** Non-cancelled events in the month that started before asOf. */
-  pastEvents: number;
-  /** Of those, how many have at least one ATTENDED or NO_SHOW RSVP. */
-  eventsWithAttendance: number;
+  /** Non-cancelled events that started before asOf and have a YES RSVP. */
+  pastEventsWithRsvps: number;
+  /** Of those, how many have at least one NO_SHOW RSVP. */
+  eventsWithNoShow: number;
+  /** NO_SHOW RSVPs on those events. */
+  noShows: number;
 }
 
 export interface NoShowSummary {

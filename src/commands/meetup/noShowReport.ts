@@ -185,6 +185,8 @@ export class MeetupNoShowReportCommands {
             suspensionCutoff: undefined,
             resolveGroupId,
             suspensions: repo,
+            // The report text never shows it; skip one Meetup call per case.
+            includeHostFlag: false,
           },
         );
         if (report.summary.members === 0) {

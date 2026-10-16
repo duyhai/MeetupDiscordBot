@@ -112,7 +112,7 @@ describe('buildMonthReports', () => {
     expect(reports.sourceComplete).toBe(true);
   });
 
-  it('marks a month without attendance incomplete', async () => {
+  it('stores a month with zero no-shows as complete', async () => {
     const events = [
       makeEvent('e1', '2026-09-05T20:00:00Z'),
       makeEvent('e2', '2026-09-12T20:00:00Z'),
@@ -124,24 +124,14 @@ describe('buildMonthReports', () => {
 
     const reports = await build(client);
 
+    // Hosts here mark no-shows only, so a month without any is unusual but
+    // not incomplete: attendance is never inferred.
     expect(reports.noShow.attendance).toEqual({
-      pastEvents: 2,
-      eventsWithAttendance: 0,
+      pastEventsWithRsvps: 2,
+      eventsWithNoShow: 0,
+      noShows: 0,
     });
-    expect(reports.sourceComplete).toBe(false);
-  });
-
-  it('one ATTENDED anywhere makes the month complete', async () => {
-    const events = [
-      makeEvent('e1', '2026-09-05T20:00:00Z'),
-      makeEvent('e2', '2026-09-12T20:00:00Z'),
-    ];
-    const { client } = fakeClient(events, {
-      e1: [rsvp('YES')],
-      e2: [rsvp('YES'), rsvp('ATTENDED', '8')],
-    });
-
-    expect((await build(client)).sourceComplete).toBe(true);
+    expect(reports.sourceComplete).toBe(true);
   });
 
   it('a month with no past events is complete', async () => {
@@ -150,8 +140,9 @@ describe('buildMonthReports', () => {
     const reports = await build(client);
 
     expect(reports.noShow.attendance).toEqual({
-      pastEvents: 0,
-      eventsWithAttendance: 0,
+      pastEventsWithRsvps: 0,
+      eventsWithNoShow: 0,
+      noShows: 0,
     });
     expect(reports.sourceComplete).toBe(true);
   });
