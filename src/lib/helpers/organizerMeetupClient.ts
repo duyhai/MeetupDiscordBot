@@ -524,8 +524,13 @@ async function isStoredTokenWrongAccount(
       await credentials.withLockedCredential(
         MEETUP_ORGANIZER_CREDENTIAL_KEY,
         async (locked) => {
-          // Re-read under the lock: never overwrite an id recorded meanwhile.
-          if (locked.meta.memberId === null) {
+          // Re-read under the lock: never overwrite an id recorded meanwhile,
+          // and record it only for the token that was looked up -- another
+          // process may have replaced the credential during the lookup.
+          if (
+            locked.meta.memberId === null &&
+            locked.current?.accessToken === accessToken
+          ) {
             await locked.setMemberId(memberId);
           }
         },

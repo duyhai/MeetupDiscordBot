@@ -1345,6 +1345,22 @@ describe('getOrganizerAccessToken', () => {
     );
   });
 
+  it('does not record a member id when the stored token changed during the lookup', async () => {
+    db.current = stored(60 * MINUTE);
+    db.memberId = null;
+    // Another process replaces the credential while this one looks up the
+    // old token's account: what was learned belongs to the old token.
+    fake.getSelfId.mockImplementationOnce(async () => {
+      db.current = { ...fresh(9), accessToken: 'REPLACED-ACCESS' };
+      return '999000111';
+    });
+
+    await expect(getOrganizerAccessToken()).resolves.toBe('STORED-ACCESS');
+
+    expect(locked.setMemberId).not.toHaveBeenCalled();
+    expect(db.memberId).toBeNull();
+  });
+
   it('never stores a member id that is not all digits', async () => {
     db.current = stored(60 * MINUTE);
     db.memberId = null;
