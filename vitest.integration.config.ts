@@ -5,7 +5,8 @@ import { defineConfig } from 'vitest/config';
 export default defineConfig({
   test: {
     environment: 'node',
-    // Every test file: no request leaves the machine.
+    // Every test file: HTTP blocked (nock intercepts http/fetch; raw TCP
+    // such as pg and redis is not affected).
     setupFiles: ['tst/setup/blockNetwork.ts'],
     include: ['tst/integration/**/*.test.ts'],
     exclude: ['**/node_modules/**', '**/dist/**'],

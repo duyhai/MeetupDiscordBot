@@ -20,8 +20,8 @@
  * member id in oauth_credential_meta. First use may also create the
  * credential tables if they are missing. It never touches Redis or Discord
  * (no client is created or passed), and must not be run between 18:00 and
- * 19:00 UTC: the daily identity sweep may be refreshing the same rotating
- * token then.
+ * 19:00 UTC: the daily identity sweep may be refreshing the same token then
+ * (Meetup may rotate refresh tokens; not documented, so assume it does).
  *
  * Script output is counts only, never names:
  *

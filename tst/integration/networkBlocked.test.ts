@@ -1,7 +1,10 @@
 import nock from 'nock';
 import { describe, expect, it } from 'vitest';
 
-describe('integration network policy', () => {
+// HTTP blocked (nock intercepts http/fetch; raw TCP such as pg and redis is
+// not affected): the integration suites still reach their throwaway
+// Postgres and Redis.
+describe('integration HTTP policy', () => {
   it('fails an unmocked external request loudly, from nock and not DNS', async () => {
     // .invalid never resolves: a DNS failure would be ENOTFOUND, not this.
     const request = fetch('https://example.invalid/');

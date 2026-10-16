@@ -51,9 +51,10 @@ CREATE TABLE IF NOT EXISTS oauth_credential_meta (
 
 /**
  * Transaction-scoped advisory lock key guarding every write of the organizer
- * credential. Meetup rotates refresh tokens, so two processes refreshing at
- * once (identity sweep, report job, backfill dyno, dashboard renewal) means
- * the second writer persists a token Meetup has already invalidated. Every
+ * credential. Meetup may rotate refresh tokens (not documented; assume it
+ * does), and then two processes refreshing at once (identity sweep, report
+ * job, backfill dyno, dashboard renewal) means the second writer persists a
+ * token Meetup has already invalidated. Every
  * process takes this lock before reading-to-refresh and holds it until the
  * successor is committed, so refreshes are strictly serialized.
  */
@@ -218,6 +219,10 @@ export class PostgresCredentialRepository {
       });
     }
     try {
+      // Two processes running this DDL at once on a fresh database can hit
+      // Postgres's pg_type unique-key race on CREATE TABLE IF NOT EXISTS;
+      // the loser's call rejects, and the retry on its next call finds the
+      // tables already there.
       await this.schemaEnsured;
     } catch (error) {
       // Never cache a rejection: a Postgres blip at boot would otherwise

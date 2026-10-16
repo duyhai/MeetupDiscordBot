@@ -25,8 +25,9 @@ const logger = new Logger({ name: 'organizerMeetupClient' });
 /**
  * A stored access token with more than this left is handed out as is. Every
  * process reads it under the credential lock, so one that another process
- * just refreshed is reused rather than refreshed again (which, with rotating
- * refresh tokens, would race that process for the successor).
+ * just refreshed is reused rather than refreshed again (which, if Meetup
+ * rotates refresh tokens -- not documented; assume it does -- would race that
+ * process for the successor).
  */
 export const ORGANIZER_TOKEN_REUSE_MS = 5 * 60 * 1000;
 
@@ -736,7 +737,8 @@ const inFlight = new Map<string, Promise<string | undefined>>();
 /**
  * A usable organizer access token, or undefined when none can be obtained.
  * Never throws. Every read-to-refresh and write happens under the shared
- * credential lock, so processes refreshing the rotating token serialize.
+ * credential lock, so processes refreshing the (possibly rotating) token
+ * serialize.
  *
  * `client` is used for the once-per-episode alert and the recovery message.
  * Only a call with a client opens or closes a failure episode: without one
