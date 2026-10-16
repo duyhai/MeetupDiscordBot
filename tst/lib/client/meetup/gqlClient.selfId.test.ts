@@ -86,4 +86,17 @@ describe('GqlMeetupClient.getSelfId', () => {
     expect(logged).toContain('ClientError HTTP 401');
     expect(logged).not.toContain('RAW-BODY-SECRET');
   });
+
+  it('gives up after the timeoutMs it was constructed with', async () => {
+    graphqlScope()
+      .delay(500)
+      .reply(200, { data: { self: { id: '468174923' } } });
+
+    const started = Date.now();
+    await expect(
+      new GqlMeetupClient('test-access-token', { timeoutMs: 50 }).getSelfId(),
+    ).rejects.toMatchObject({ name: 'TimeoutError' });
+    expect(Date.now() - started).toBeLessThan(400);
+    expect(fake.logged.join('\n')).toContain('getSelfId failed: TimeoutError');
+  });
 });

@@ -115,13 +115,19 @@ export class MeetupGroupUnreadableError extends Error {
 export class GqlMeetupClient {
   private client: GraphQLClient;
 
-  constructor(accessToken: string) {
+  /**
+   * `timeoutMs` overrides the per-request deadline (default 30 s). The
+   * organizer account check passes a short one: it runs inside the
+   * credential lock, whose idle-in-transaction timeout is 45 s.
+   */
+  constructor(accessToken: string, options: { timeoutMs?: number } = {}) {
+    const timeoutMs = options.timeoutMs ?? GQL_REQUEST_TIMEOUT_MS;
     this.client = new GraphQLClient(Configuration.meetup.endpoint, {
       headers: {
         authorization: `Bearer ${accessToken}`,
       },
       fetch: (url: FetchUrl, init?: FetchInit) =>
-        boundedFetch(url, init, GQL_REQUEST_TIMEOUT_MS),
+        boundedFetch(url, init, timeoutMs),
     });
   }
 
