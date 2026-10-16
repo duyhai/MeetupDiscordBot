@@ -240,10 +240,12 @@ When the host waiver applies, the fee sentence is omitted.
 ## Build job and notifications
 
 - **Schedule.** Runs in-process on the existing 15-minute tick pattern with a
-  Postgres lease (as the identity digest does). Builds the previous month on
-  the 2nd of each month at 16:00 UTC, plus the current month daily, and writes
-  `link_progress_daily`. It never runs during 18:00–19:00 UTC (identity sweep
-  hour).
+  Redis lease (30 minutes). From 16:00 UTC it builds the current month daily,
+  rebuilds the previous month daily on the 2nd–7th (with catch-up if those
+  days were missed), and writes `link_progress_daily`. No month build starts
+  between 17:45 and 19:00 UTC, and the link-progress member pass runs only in
+  hours 16 and 19–23 UTC, so neither overlaps the 17:00 unlinked digest or the
+  18:00 identity sweep.
 - **Manual refresh.** "Refresh from Meetup" on the workspace and report pages
   queues a rebuild of that month (one at a time; refused while one is
   running).
