@@ -5,6 +5,7 @@ import { GUILD_ID, SERVER_ROLES } from '../../src/constants.js';
 import {
   DashboardUnavailableError,
   discordAccessCheck,
+  discordRoleCheck,
   hasDashboardRole,
 } from '../../src/web/roleGate.js';
 
@@ -124,5 +125,49 @@ describe('discordAccessCheck', () => {
     await expect(
       discordAccessCheck(() => undefined)('1'),
     ).rejects.toBeInstanceOf(DashboardUnavailableError);
+  });
+});
+
+describe('discordRoleCheck', () => {
+  const leadership = (getClient: () => unknown) =>
+    discordRoleCheck(getClient as never, SERVER_ROLES.leadership);
+
+  it('fetches the member fresh and admits only the named role', async () => {
+    const fetchMember = vi
+      .fn()
+      .mockResolvedValue(memberWith([SERVER_ROLES.leadership]));
+    const { client, guildsFetch } = clientReturning(fetchMember);
+    await expect(leadership(() => client)('111111111111111111')).resolves.toBe(
+      true,
+    );
+    expect(guildsFetch).toHaveBeenCalledWith(GUILD_ID);
+    expect(fetchMember).toHaveBeenCalledWith({
+      user: '111111111111111111',
+      force: true,
+    });
+  });
+
+  it('refuses a Moderator without the named role', async () => {
+    const { client } = clientReturning(
+      vi.fn().mockResolvedValue(memberWith([SERVER_ROLES.moderator], true)),
+    );
+    await expect(leadership(() => client)('1')).resolves.toBe(false);
+  });
+
+  it('treats Unknown Member as no role', async () => {
+    const { client } = clientReturning(
+      vi.fn().mockRejectedValue(unknownMember()),
+    );
+    await expect(leadership(() => client)('1')).resolves.toBe(false);
+  });
+
+  it('propagates other failures and an unready client', async () => {
+    const { client } = clientReturning(
+      vi.fn().mockRejectedValue(new Error('gateway down')),
+    );
+    await expect(leadership(() => client)('1')).rejects.toThrow('gateway down');
+    await expect(leadership(() => undefined)('1')).rejects.toBeInstanceOf(
+      DashboardUnavailableError,
+    );
   });
 });

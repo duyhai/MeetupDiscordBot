@@ -266,6 +266,26 @@ export function createDashboardRouter(deps: DashboardDeps): express.Router {
   };
 
   /**
+   * The session behind `sid`, unless it is gone or its user was revoked
+   * after it was created. A revoked session is destroyed: it can never come
+   * back, so its cookie is ours to clear.
+   */
+  async function liveSession(
+    sid: string,
+  ): Promise<DashboardSession | undefined> {
+    const store = await sessions();
+    const session = await store.get(sid);
+    if (!session) {
+      return undefined;
+    }
+    if (await store.isRevoked(session)) {
+      await store.destroy(sid);
+      return undefined;
+    }
+    return session;
+  }
+
+  /**
    * Checks the signature on up to MAX_SESSION_COOKIE_CANDIDATES distinct
    * dash_sid values and looks up at most MAX_SESSION_COOKIES of those that
    * verify, so unsigned values planted ahead of ours cannot hide it and a
@@ -291,7 +311,7 @@ export function createDashboardRouter(deps: DashboardDeps): express.Router {
       .slice(0, MAX_SESSION_COOKIES);
     for (const sid of verified) {
       // eslint-disable-next-line no-await-in-loop
-      const session = await (await sessions()).get(sid);
+      const session = await liveSession(sid);
       if (session) {
         return { sid, session };
       }
@@ -455,6 +475,8 @@ export function createDashboardRouter(deps: DashboardDeps): express.Router {
       }
       const store = await sessions();
       if (!allowed) {
+        // Every browser this member signed in from, not just this one.
+        await store.revokeUser(session.userId);
         await store.destroy(sid);
         res.append(
           'Set-Cookie',

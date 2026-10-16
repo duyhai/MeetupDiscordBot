@@ -8,10 +8,15 @@ import {
   protectedRouteList,
 } from '../../src/web/dashboardRouter.js';
 import { FixedWindowLimiter } from '../../src/web/rateLimit.js';
-import { signSessionId } from '../../src/web/session.js';
+import {
+  ROLE_RECHECK_MS,
+  SessionStore,
+  signSessionId,
+} from '../../src/web/session.js';
 import {
   ORIGIN,
   SECRET,
+  USER,
   closeServers,
   makeApp,
   makeDeps,
@@ -127,6 +132,135 @@ describe('dashboard session gate', () => {
       200,
     );
     now = 12 * 60 * 60 * 1000;
+    expect((await req.get('/dashboard').set('Cookie', cookie)).status).toBe(
+      302,
+    );
+  });
+});
+
+describe('dashboard session revocation', () => {
+  const USER_B = { id: '999999999999999999', username: 'Other' };
+  const tokenFrom = (page: string) =>
+    /name="_csrf" value="([^"]+)"/.exec(page)?.[1] ?? '';
+  const clearsSessionCookie = (res: { headers: Record<string, unknown> }) =>
+    ((res.headers['set-cookie'] ?? []) as string[]).some((c) =>
+      /^dash_sid=;/.test(c),
+    );
+
+  it('a revoked session gets 302 on GET and 403 on POST, and its cookie is cleared', async () => {
+    let clock = 1_000;
+    const { req, cache } = await makeApp({ now: () => clock });
+    const old = await signIn(req);
+    const oldToken = tokenFrom(
+      (await req.get('/dashboard').set('Cookie', old)).text,
+    );
+    clock += 1;
+    await new SessionStore(cache, () => clock).revokeUser(USER.id);
+
+    const post = await req
+      .post('/dashboard/logout')
+      .set('Cookie', old)
+      .set('Origin', ORIGIN)
+      .type('form')
+      .send({ _csrf: oldToken });
+    expect(post.status).toBe(403);
+    expect(clearsSessionCookie(post)).toBe(true);
+    const get = await req.get('/dashboard').set('Cookie', old);
+    expect(get.status).toBe(302);
+    expect(get.headers.location).toBe('/dashboard/login');
+
+    clock += 1;
+    const fresh = await signIn(req);
+    const token = tokenFrom(
+      (await req.get('/dashboard').set('Cookie', fresh)).text,
+    );
+    const out = await req
+      .post('/dashboard/logout')
+      .set('Cookie', fresh)
+      .set('Origin', ORIGIN)
+      .type('form')
+      .send({ _csrf: token });
+    expect(out.status).toBe(303);
+  });
+
+  it('a revoked session is destroyed in the store', async () => {
+    let clock = 1_000;
+    const { req, cache } = await makeApp({ now: () => clock });
+    const cookie = await signIn(req);
+    clock += 1;
+    await new SessionStore(cache, () => clock).revokeUser(USER.id);
+    const res = await req.get('/dashboard').set('Cookie', cookie);
+    expect(res.status).toBe(302);
+    expect(clearsSessionCookie(res)).toBe(true);
+    expect(hasSession(cache)).toBe(false);
+  });
+
+  it('a session created after revocation works', async () => {
+    let clock = 1_000;
+    const { req, cache } = await makeApp({ now: () => clock });
+    await new SessionStore(cache, () => clock).revokeUser(USER.id);
+    clock += 1;
+    const cookie = await signIn(req);
+    expect((await req.get('/dashboard').set('Cookie', cookie)).status).toBe(
+      200,
+    );
+  });
+
+  it('revoking user A leaves user B alone', async () => {
+    let clock = 1_000;
+    const fetchIdentity = vi
+      .fn()
+      .mockResolvedValueOnce(USER)
+      .mockResolvedValueOnce(USER_B);
+    const { req, cache } = await makeApp({
+      now: () => clock,
+      oauth: {
+        buildLoginUrl: (s: string) => `https://discord.com/x?state=${s}`,
+        exchangeCode: vi.fn().mockResolvedValue('access'),
+        fetchIdentity,
+      },
+    });
+    const a = await signIn(req);
+    const b = await signIn(req);
+    clock += 1;
+    await new SessionStore(cache, () => clock).revokeUser(USER.id);
+    expect((await req.get('/dashboard').set('Cookie', a)).status).toBe(302);
+    expect((await req.get('/dashboard').set('Cookie', b)).status).toBe(200);
+  });
+
+  it('losing the role at re-check ends every session of that user', async () => {
+    let clock = 1_000;
+    const checkAccess = vi.fn().mockResolvedValue(true);
+    const { req } = await makeApp({ checkAccess, now: () => clock });
+    const c1 = await signIn(req);
+    const c2 = await signIn(req);
+    clock += ROLE_RECHECK_MS;
+    checkAccess.mockResolvedValueOnce(false);
+    const calls = checkAccess.mock.calls.length;
+    expect((await req.get('/dashboard').set('Cookie', c1)).status).toBe(403);
+    expect(checkAccess).toHaveBeenCalledTimes(calls + 1);
+    const second = await req.get('/dashboard').set('Cookie', c2);
+    expect(second.status).toBe(302);
+    expect(second.headers.location).toBe('/dashboard/login');
+    expect(checkAccess).toHaveBeenCalledTimes(calls + 1);
+  });
+
+  it('/login with a revoked session shows the login page instead of redirecting', async () => {
+    let clock = 1_000;
+    const { req, cache } = await makeApp({ now: () => clock });
+    const cookie = await signIn(req);
+    clock += 1;
+    await new SessionStore(cache, () => clock).revokeUser(USER.id);
+    const res = await req.get('/dashboard/login').set('Cookie', cookie);
+    expect(res.status).toBe(200);
+    expect(res.text).toContain('Sign in with Discord');
+  });
+
+  it('an unreadable revocation mark counts as revoked', async () => {
+    const clock = 1_000;
+    const { req, cache } = await makeApp({ now: () => clock });
+    const cookie = await signIn(req);
+    await cache.set(`dashboard-user-valid-after-${USER.id}`, 'garbage');
     expect((await req.get('/dashboard').set('Cookie', cookie)).status).toBe(
       302,
     );
@@ -251,12 +385,18 @@ describe('signed-out requests leave the session cookie alone', () => {
     const { req, cache } = await makeApp();
     const cookie = await signIn(req);
     const get = vi.spyOn(cache, 'get');
+    // Session reads only: a session that is found also reads its user's
+    // revocation mark once.
+    const sessionReads = () =>
+      get.mock.calls.filter(([key]) => key.startsWith('dashboard-session-'))
+        .length;
     // Many copies of one value cost one lookup.
     const copies = Array.from({ length: 50 }, () => cookie).join('; ');
     expect((await req.get('/dashboard').set('Cookie', copies)).status).toBe(
       200,
     );
-    expect(get).toHaveBeenCalledTimes(1);
+    expect(sessionReads()).toBe(1);
+    expect(get).toHaveBeenCalledTimes(2);
     // Validly signed but sessionless values: the real one 4th is not reached.
     const ghosts = ['g1', 'g2', 'g3', 'g4'].map(
       (sid) => `dash_sid=${signSessionId(sid, SECRET)}`,
@@ -266,6 +406,7 @@ describe('signed-out requests leave the session cookie alone', () => {
       .get('/dashboard')
       .set('Cookie', [...ghosts.slice(0, 3), cookie].join('; '));
     expect(fourth.status).toBe(302);
+    expect(sessionReads()).toBe(3);
     expect(get).toHaveBeenCalledTimes(3);
     const third = await req
       .get('/dashboard')

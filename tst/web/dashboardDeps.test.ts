@@ -1,12 +1,15 @@
 import express from 'express';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { BASE_DISCORD_BOT_URL } from '../../src/constants.js';
+import { BASE_DISCORD_BOT_URL, SERVER_ROLES } from '../../src/constants.js';
 import {
   dashboardDisabledReason,
   dashboardOrigin,
+  dashboardPageDeps,
   dashboardRouterFromEnv,
+  setDashboardClient,
 } from '../../src/web/dashboardDeps.js';
+import { DashboardUnavailableError } from '../../src/web/roleGate.js';
 import {
   createDashboardRouter,
   protectedRouteList,
@@ -99,6 +102,56 @@ describe('dashboardRouterFromEnv', () => {
     expect(res.headers.location).toBe(
       'https://meetup-discord-bot.herokuapp.com/dashboard/login',
     );
+  });
+});
+
+describe('dashboardPageDeps', () => {
+  it('registers the sessions page and its revoke action behind the gate', () => {
+    const router = dashboardRouterFromEnv({
+      DASHBOARD_SESSION_SECRET: 'k'.repeat(48),
+    });
+    expect(protectedRouteList(router)).toEqual(
+      expect.arrayContaining([
+        { method: 'get', path: '/sessions' },
+        { method: 'post', path: '/sessions/revoke' },
+      ]),
+    );
+  });
+
+  it('the Leadership check fails closed before Discord is ready', async () => {
+    setDashboardClient(undefined);
+    await expect(
+      dashboardPageDeps().isLeadership('123456789012345678'),
+    ).rejects.toBeInstanceOf(DashboardUnavailableError);
+  });
+
+  it('the Leadership check asks Discord live for the Leadership role only', async () => {
+    const fetchMember = vi.fn().mockResolvedValue({
+      roles: { cache: new Map([[SERVER_ROLES.moderator, {}]]) },
+    });
+    setDashboardClient({
+      guilds: {
+        fetch: vi.fn().mockResolvedValue({ members: { fetch: fetchMember } }),
+      },
+    } as never);
+    try {
+      await expect(
+        dashboardPageDeps().isLeadership('123456789012345678'),
+      ).resolves.toBe(false);
+      expect(fetchMember).toHaveBeenCalledWith({
+        user: '123456789012345678',
+        force: true,
+      });
+    } finally {
+      setDashboardClient(undefined);
+    }
+  });
+
+  it('the audit is a no-op without a Discord client', async () => {
+    setDashboardClient(undefined);
+    await expect(
+      dashboardPageDeps().audit({ title: 't', description: 'd' }),
+    ).resolves.toBe(false);
   });
 });
 

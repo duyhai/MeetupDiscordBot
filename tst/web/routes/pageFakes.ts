@@ -4,6 +4,8 @@ import { vi } from 'vitest';
 import { OAuthStateRecord } from '../../../src/lib/client/oauth/state.js';
 import { DashboardPageDeps } from '../../../src/web/routes/dashboardPages.js';
 import { OrganizerLoginDeps } from '../../../src/web/routes/organizerLogin.js';
+import { SessionStore } from '../../../src/web/session.js';
+import { FakeCache } from '../fakeCache.js';
 
 export const PAGE_NOW = new Date('2026-10-05T16:15:00Z');
 
@@ -13,6 +15,12 @@ export function fakePageDeps(
 ): DashboardPageDeps {
   return {
     now: () => PAGE_NOW,
+    sessionStore: () =>
+      Promise.resolve(
+        new SessionStore(new FakeCache(), () => PAGE_NOW.getTime()),
+      ),
+    isLeadership: vi.fn().mockResolvedValue(false),
+    audit: vi.fn().mockResolvedValue(true),
     ...overrides,
   };
 }

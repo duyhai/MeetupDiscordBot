@@ -122,6 +122,8 @@ describe('access matrix', () => {
     expect(labels).toContain('GET /');
     expect(labels).toContain('POST /logout');
     expect(labels).toContain('GET /organizer-login');
+    expect(labels).toContain('GET /sessions');
+    expect(labels).toContain('POST /sessions/revoke');
     expect(UNSAFE.length).toBeGreaterThan(0);
   });
 

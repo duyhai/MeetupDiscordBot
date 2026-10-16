@@ -33,6 +33,7 @@ const NAV = html`<nav class="site">
   <a href="${dashboardPath(DASHBOARD_PATHS.identity)}">Identity changes</a>
   <a href="${dashboardPath(DASHBOARD_PATHS.linkProgress)}">Link progress</a>
   <a href="${dashboardPath(DASHBOARD_PATHS.trends)}">Trends</a>
+  <a href="${DASHBOARD_BASE}/sessions">Sessions</a>
 </nav>`;
 
 /** Fixed text: copies the value of the textarea named by data-copy. Never carries data. */

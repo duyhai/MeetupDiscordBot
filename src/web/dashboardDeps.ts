@@ -3,8 +3,8 @@ import { Client } from 'discord.js';
 import express from 'express';
 import { Logger } from 'tslog';
 
-import { BASE_DISCORD_BOT_URL } from '../constants.js';
-import { logActivity } from '../lib/helpers/discordLogger.js';
+import { BASE_DISCORD_BOT_URL, SERVER_ROLES } from '../constants.js';
+import { LogEntry, logActivity } from '../lib/helpers/discordLogger.js';
 import { ApplicationCache } from '../util/cache.js';
 import { createDashboardRouter } from './dashboardRouter.js';
 import {
@@ -15,11 +15,12 @@ import {
 import { html } from './html.js';
 import { organizerLoginDeps } from './organizerLoginDeps.js';
 import { layout } from './pages.js';
-import { discordAccessCheck } from './roleGate.js';
+import { discordAccessCheck, discordRoleCheck } from './roleGate.js';
 import {
   DashboardPageDeps,
   registerAllProtectedRoutes,
 } from './routes/dashboardPages.js';
+import { SessionStore } from './session.js';
 
 export const MIN_SESSION_SECRET_LENGTH = 32;
 
@@ -80,9 +81,26 @@ function notConfiguredRouter(): express.Router {
   return router;
 }
 
+const auditActivity = async (entry: LogEntry) => {
+  if (!discordClient) {
+    return false;
+  }
+  return logActivity(discordClient, entry);
+};
+
 /** Production page deps. Later tasks add one field each, wired to the repositories' instance(). */
 export function dashboardPageDeps(): DashboardPageDeps {
-  return { now: () => new Date() };
+  return {
+    now: () => new Date(),
+    // The router's cache and clock (Date.now), so a revocation here is the
+    // one the gate reads.
+    sessionStore: async () => new SessionStore(await ApplicationCache()),
+    isLeadership: discordRoleCheck(
+      () => discordClient,
+      SERVER_ROLES.leadership,
+    ),
+    audit: auditActivity,
+  };
 }
 
 export function dashboardRouterFromEnv(
@@ -106,12 +124,7 @@ export function dashboardRouterFromEnv(
     sessionSecret: secret,
     origin: dashboardOrigin(),
     requireHttps: dashboardOrigin().startsWith('https://'),
-    audit: async (entry) => {
-      if (!discordClient) {
-        return false;
-      }
-      return logActivity(discordClient, entry);
-    },
+    audit: auditActivity,
     // Mounted by the router behind the session gate and the unsafe-method
     // (CSRF / Origin / rate-limit) guard.
     protectedRoutes: (router) =>
