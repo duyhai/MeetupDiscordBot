@@ -19,31 +19,36 @@ import {
 import { AttendanceEvidence } from '../lib/reports/types.js';
 import { tz } from '../util/timezone.js';
 import { dashboardLocals } from './dashboardRouter.js';
-import { SafeHtml, html } from './html.js';
+import { SafeHtml, html, localUrl, staticHtml } from './html.js';
 import { discordProfileUrl, discordUserLink } from './links.js';
 import { errorPage, layout } from './pages.js';
 
 const logger = new Logger({ name: 'dashboard' });
 
 const NAV = html`<nav class="site">
-  <a href="${DASHBOARD_BASE}">Home</a>
-  <a href="${dashboardPath(DASHBOARD_PATHS.hallOfFame)}">Hall of Fame</a>
-  <a href="${dashboardPath(DASHBOARD_PATHS.noShowHistory)}">No-show history</a>
-  <a href="${dashboardPath(DASHBOARD_PATHS.suspensions)}">Suspensions</a>
-  <a href="${dashboardPath(DASHBOARD_PATHS.identity)}">Identity changes</a>
-  <a href="${dashboardPath(DASHBOARD_PATHS.linkProgress)}">Link progress</a>
-  <a href="${dashboardPath(DASHBOARD_PATHS.trends)}">Trends</a>
-  <a href="${DASHBOARD_BASE}/sessions">Sessions</a>
+  <a href="${localUrl(DASHBOARD_BASE)}">Home</a>
+  <a href="${localUrl(dashboardPath(DASHBOARD_PATHS.hallOfFame))}"
+    >Hall of Fame</a
+  >
+  <a href="${localUrl(dashboardPath(DASHBOARD_PATHS.noShowHistory))}"
+    >No-show history</a
+  >
+  <a href="${localUrl(dashboardPath(DASHBOARD_PATHS.suspensions))}"
+    >Suspensions</a
+  >
+  <a href="${localUrl(dashboardPath(DASHBOARD_PATHS.identity))}"
+    >Identity changes</a
+  >
+  <a href="${localUrl(dashboardPath(DASHBOARD_PATHS.linkProgress))}"
+    >Link progress</a
+  >
+  <a href="${localUrl(dashboardPath(DASHBOARD_PATHS.trends))}">Trends</a>
+  <a href="${localUrl(`${DASHBOARD_BASE}/sessions`)}">Sessions</a>
 </nav>`;
 
 /** Fixed text: copies the value of the textarea named by data-copy. Never carries data. */
-export const COPY_SCRIPT =
-  "document.querySelectorAll('button[data-copy]').forEach(function(b){" +
-  "b.addEventListener('click',function(){var t=document.getElementById(b.getAttribute('data-copy'));" +
-  'if(!t){return;}t.select();' +
-  "if(!navigator.clipboard){b.textContent='Select the text and copy it';return;}" +
-  "navigator.clipboard.writeText(t.value).then(function(){b.textContent='Copied';}," +
-  "function(){b.textContent='Select the text and copy it';});});});";
+// eslint-disable-next-line @stylistic/max-len -- one line, so the script text is exactly what runs
+export const COPY_SCRIPT = staticHtml`document.querySelectorAll('button[data-copy]').forEach(function(b){b.addEventListener('click',function(){var t=document.getElementById(b.getAttribute('data-copy'));if(!t){return;}t.select();if(!navigator.clipboard){b.textContent='Select the text and copy it';return;}navigator.clipboard.writeText(t.value).then(function(){b.textContent='Copied';},function(){b.textContent='Select the text and copy it';});});});`;
 
 export function dashboardPage(
   res: Response,
@@ -51,7 +56,7 @@ export function dashboardPage(
 ): void {
   const { session, nonce } = dashboardLocals(res);
   // prettier-ignore
-  const script = page.script ? html`<script nonce="${nonce}">${new SafeHtml(COPY_SCRIPT)}</script>` : '';
+  const script = page.script ? html`<script nonce="${nonce}">${COPY_SCRIPT}</script>` : '';
   res
     .status(page.status ?? 200)
     .type('html')

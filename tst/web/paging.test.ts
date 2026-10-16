@@ -67,3 +67,18 @@ describe('paging', () => {
     ).not.toContain('Next');
   });
 });
+
+describe('pageNav paths', () => {
+  it('refuses a path outside the dashboard', () => {
+    expect(() => pageNav('https://evil.example/x', 2, true)).toThrow(
+      RangeError,
+    );
+    expect(() => pageNav('/dashboard/../x', 2, true)).toThrow(RangeError);
+  });
+
+  it('encodes * so the link stays inside the local-path charset', () => {
+    expect(
+      pageNav('/dashboard/identity', 1, true, { member: 'a*b' }).value,
+    ).toContain('href="/dashboard/identity?member=a%2Ab&amp;page=2"');
+  });
+});

@@ -12,7 +12,7 @@ import {
   parseRouteMonth,
   zeroNoShowNote,
 } from '../../src/web/pageKit.js';
-import { html } from '../../src/web/html.js';
+import { html, isSafeHtml } from '../../src/web/html.js';
 
 const NOW = new Date('2026-10-05T16:15:00Z');
 
@@ -126,12 +126,16 @@ describe('pageKit', () => {
     const definition = source.slice(start, end);
     expect(definition).toContain('COPY_SCRIPT');
     expect(definition).not.toContain('${');
-    expect(definition).not.toContain('`');
-    expect(COPY_SCRIPT).toContain('button[data-copy]');
+    // One staticHtml template literal and nothing else.
+    expect(definition).toMatch(
+      /^export const COPY_SCRIPT = staticHtml`[^`]*`;\s*$/,
+    );
+    expect(isSafeHtml(COPY_SCRIPT)).toBe(true);
+    expect(COPY_SCRIPT.value).toContain('button[data-copy]');
   });
 
   it('COPY_SCRIPT falls back when the clipboard API is missing', () => {
-    expect(COPY_SCRIPT).toContain(
+    expect(COPY_SCRIPT.value).toContain(
       "if(!navigator.clipboard){b.textContent='Select the text and copy it';return;}",
     );
   });
@@ -163,8 +167,9 @@ describe('pageKit', () => {
     });
     expect(sent.status).toBe(200);
     expect(sent.body).toContain(
-      `<script nonce="N0NCE">${COPY_SCRIPT}</script>`,
+      `<script nonce="N0NCE">${COPY_SCRIPT.value}</script>`,
     );
     expect(sent.body).toContain('<a href="/dashboard">Home</a>');
+    expect(sent.body).toContain('<a href="/dashboard/sessions">Sessions</a>');
   });
 });

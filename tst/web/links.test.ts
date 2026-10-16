@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
+import { isSafeUrl } from '../../src/web/html.js';
 import {
   discordProfileUrl,
   discordUserLink,
   eventLink,
   meetupProfileUrl,
+  memberHistoryLink,
   memberLink,
 } from '../../src/web/links.js';
 
@@ -17,12 +19,14 @@ describe('links', () => {
     expect(meetupProfileUrl(123)).toBeUndefined();
     expect(meetupProfileUrl('javascript:1')).toBeUndefined();
     expect(meetupProfileUrl('1/../../evil')).toBeUndefined();
-    expect(meetupProfileUrl('123')).toBe('https://www.meetup.com/members/123/');
+    expect(meetupProfileUrl('123')?.href).toBe(
+      'https://www.meetup.com/members/123/',
+    );
   });
 
   it('refuses 21-digit ids', () => {
     expect(meetupProfileUrl('1'.repeat(21))).toBeUndefined();
-    expect(meetupProfileUrl('1'.repeat(20))).toBe(
+    expect(meetupProfileUrl('1'.repeat(20))?.href).toBe(
       `https://www.meetup.com/members/${'1'.repeat(20)}/`,
     );
   });
@@ -32,13 +36,13 @@ describe('links', () => {
     expect(discordProfileUrl('1'.repeat(21))).toBeUndefined();
     expect(discordProfileUrl(123456789012345678)).toBeUndefined();
     expect(discordProfileUrl('12345678901234567a')).toBeUndefined();
-    expect(discordProfileUrl('123456789012345678')).toBe(
+    expect(discordProfileUrl('123456789012345678')?.href).toBe(
       'https://discord.com/users/123456789012345678',
     );
-    expect(discordProfileUrl('1'.repeat(17))).toBe(
+    expect(discordProfileUrl('1'.repeat(17))?.href).toBe(
       `https://discord.com/users/${'1'.repeat(17)}`,
     );
-    expect(discordProfileUrl('1'.repeat(20))).toBe(
+    expect(discordProfileUrl('1'.repeat(20))?.href).toBe(
       `https://discord.com/users/${'1'.repeat(20)}`,
     );
   });
@@ -117,5 +121,21 @@ describe('links', () => {
     expect(discordUserLink('123456789012345678', '<x>').value).toContain(
       '>&lt;x&gt;</a>',
     );
+  });
+});
+
+describe('branded link builders', () => {
+  it('profile URLs are SafeUrls', () => {
+    expect(isSafeUrl(meetupProfileUrl('123'))).toBe(true);
+    expect(isSafeUrl(discordProfileUrl('123456789012345678'))).toBe(true);
+  });
+
+  it('memberHistoryLink is an internal SafeUrl built only from 1-20 digits', () => {
+    const link = memberHistoryLink('123');
+    expect(isSafeUrl(link)).toBe(true);
+    expect(link?.href).toBe('/dashboard/no-show-history/members/123');
+    for (const bad of ['', '12a', '1'.repeat(21), '../x', 5 as unknown]) {
+      expect(memberHistoryLink(bad)).toBeUndefined();
+    }
   });
 });

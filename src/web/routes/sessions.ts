@@ -3,7 +3,7 @@ import { Logger } from 'tslog';
 
 import { LogEntry } from '../../lib/helpers/discordLogger.js';
 import { dashboardLocals } from '../dashboardRouter.js';
-import { html } from '../html.js';
+import { html, localUrl } from '../html.js';
 import { dashboardPage } from '../pageKit.js';
 import type { DashboardPageDeps } from './dashboardPages.js';
 
@@ -65,7 +65,10 @@ export function registerSessionRoutes(
       body: html`<div class="card">
           <h1>Sessions</h1>
           ${noticeFor(req.query.done)}
-          <form method="post" action="/dashboard/sessions/revoke">
+          <form
+            method="post"
+            action="${localUrl(`/dashboard${REVOKE_SESSIONS_PATH}`)}"
+          >
             <input type="hidden" name="_csrf" value="${session.csrfToken}" />
             <input type="hidden" name="userId" value="${session.userId}" />
             <button type="submit">Sign me out everywhere</button>
@@ -77,7 +80,10 @@ export function registerSessionRoutes(
             1.5 Leadership Team only. Removing their Discord role also signs
             them out within 10 minutes.
           </p>
-          <form method="post" action="/dashboard/sessions/revoke">
+          <form
+            method="post"
+            action="${localUrl(`/dashboard${REVOKE_SESSIONS_PATH}`)}"
+          >
             <input type="hidden" name="_csrf" value="${session.csrfToken}" />
             <label
               >Discord user id

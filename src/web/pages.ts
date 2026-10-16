@@ -3,14 +3,14 @@ import dayjs from 'dayjs';
 
 import { DASHBOARD_BASE } from '../lib/reports/dashboardPaths.js';
 import { tz } from '../util/timezone.js';
-import { SafeHtml, html, memberText } from './html.js';
+import { SafeHtml, html, localUrl, memberText, staticHtml } from './html.js';
 
 export interface PageUser {
   username: string;
   csrfToken: string;
 }
 
-const STYLE = `
+const STYLE = staticHtml`
 body{font-family:system-ui,sans-serif;margin:0;color:#1f2328;background:#f6f8fa}
 header{display:flex;justify-content:space-between;align-items:center;padding:12px 24px;background:#5865F2;color:#fff}
 header form{margin:0}
@@ -53,7 +53,7 @@ export function layout({
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow">
 <title>${title} · 1.5 Gen Asians staff</title>
-<style nonce="${nonce}">${new SafeHtml(STYLE)}</style>
+<style nonce="${nonce}">${STYLE}</style>
 </head>
 <body>
 <header><strong>1.5 Gen Asians staff dashboard</strong>${account}</header>
@@ -136,7 +136,7 @@ export function errorPage(
     body: html`<div class="card">
       <h1>${status === 500 ? 'Something went wrong' : 'Unable to continue'}</h1>
       <p>${ERROR_MESSAGES[status]}</p>
-      <p><a href="${DASHBOARD_BASE}">Back to the dashboard</a></p>
+      <p><a href="${localUrl(DASHBOARD_BASE)}">Back to the dashboard</a></p>
     </div>`,
   });
 }

@@ -1,4 +1,4 @@
-import { SafeHtml, html } from './html.js';
+import { SafeHtml, html, pageLink } from './html.js';
 
 export const PAGE_SIZE = 50;
 export const MAX_PAGE = 10_000;
@@ -19,16 +19,9 @@ export function pageNav(
   hasNext: boolean,
   params: Record<string, string | undefined> = {},
 ): SafeHtml {
-  const href = (p: number) => {
-    const query = new URLSearchParams();
-    Object.entries(params).forEach(([k, v]) => {
-      if (v !== undefined && v !== '') {
-        query.set(k, v);
-      }
-    });
-    query.set('page', String(p));
-    return `${path}?${query.toString()}`;
-  };
+  // pageLink refuses any path outside /dashboard, so a caller passing
+  // something else fails loudly instead of rendering it.
+  const href = (p: number) => pageLink(path, { ...params, page: String(p) });
   return html`<nav class="pager">
     ${page > 1 ? html`<a href="${href(page - 1)}">Previous</a>` : ''}
     <span>Page ${page}</span>
