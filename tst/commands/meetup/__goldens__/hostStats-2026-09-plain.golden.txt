@@ -1,0 +1,60 @@
+--- editReply ---
+{
+  "content": "Sit tight! Fetching data."
+}
+--- attachment **Hosting stats for 2026 September**.txt ---
+
+**Hosting stats for 2026 September**
+
+**#1: 3 Ava Host ID: 101**
+    Board Game Night (4/20) 
+    Board Game Night (1/20) 
+    Late Night Karaoke (1/10) 
+**#2: 1 Ben Host ID: 102**
+    Hike at Tiger Mountain (2/12) 
+**#3: 1 Dee New ID: 104** 🆕
+    Hike at Tiger Mountain (2/12) 
+
+**Total: 4**
+
+----- READY TO POST -----
+
+**Hall of Fame — 2026 September**
+
+**#1: Ava Host — 3 events**
+    Board Game Night ×2 (Sep 3, Sep 17)
+    Late Night Karaoke (Sep 30)
+**#2: Ben Host — 1 event**
+    Hike at Tiger Mountain (Sep 12)
+**#3: Dee New — 1 event** 🆕
+    Hike at Tiger Mountain (Sep 12)
+
+New hosts: Dee New (co-hosts: Ben Host)
+
+**Hosts: 3 · Events: 4**
+--- end attachment ---
+--- followUp ---
+{
+  "content": "Check the results in the attachment!",
+  "ephemeral": true,
+  "files": [
+    "**Hosting stats for 2026 September**.txt"
+  ]
+}
+--- moderation log ---
+{
+  "title": "Hosting stats run",
+  "description": "<@999000999> ran /meetup_get_host_event_stats for 2026-9.",
+  "fields": [
+    {
+      "name": "Events",
+      "value": "4",
+      "inline": true
+    },
+    {
+      "name": "Hosts",
+      "value": "3",
+      "inline": true
+    }
+  ]
+}

@@ -1,0 +1,98 @@
+--- editReply ---
+{
+  "content": "Sit tight! Fetching data."
+}
+--- attachment **Hosting stats for 2026**.txt ---
+
+**Hosting stats for 2026**
+
+**#1: 10 [Ava Host](https://www.meetup.com/members/101/) ID: 101**
+    [Valentine Mixer (1/40)](https://www.meetup.com/1-5genasians/events/e090/) February 14, 2026 7:00 PM
+    [Spring Forward Social (3/30)](https://www.meetup.com/1-5genasians/events/e093/) March 8, 2026 7:00 PM
+    [April Fools Run (1/50)](https://www.meetup.com/1-5genasians/events/e095/) April 1, 2026 12:30 AM
+    [Summer Social (3/40)](https://www.meetup.com/1-5genasians/events/e100/) August 15, 2026 7:00 PM
+    [Board Game Night (4/20)](https://www.meetup.com/1-5genasians/events/e101/) September 3, 2026 7:00 PM
+    [Board Game Night (1/20)](https://www.meetup.com/1-5genasians/events/e103/) September 17, 2026 7:00 PM
+    [Late Night Karaoke (1/10)](https://www.meetup.com/1-5genasians/events/e106/) September 30, 2026 10:30 PM
+    [Paid Cooking Class (1/12)](https://www.meetup.com/1-5genasians/events/e108/) October 20, 2026 6:00 PM
+    [Halloween Late Show (1/30)](https://www.meetup.com/1-5genasians/events/e120/) October 31, 2026 11:30 PM
+    [Fall Back Fondue (1/12)](https://www.meetup.com/1-5genasians/events/e122/) November 1, 2026 7:00 PM
+**#2: 6 [Ben Host](https://www.meetup.com/members/102/) ID: 102** 🆕
+    [Leap Night Karaoke (1/10)](https://www.meetup.com/1-5genasians/events/e091/) February 28, 2026 11:30 PM
+    [End of March Trivia (1/16)](https://www.meetup.com/1-5genasians/events/e094/) March 31, 2026 11:30 PM
+    [Hike at Tiger Mountain (2/12)](https://www.meetup.com/1-5genasians/events/e102/) September 12, 2026 9:00 AM
+    [October Kickoff (1/25)](https://www.meetup.com/1-5genasians/events/e107/) October 1, 2026 12:30 AM
+    [Day of the Dead Walk (1/20)](https://www.meetup.com/1-5genasians/events/e121/) November 1, 2026 12:30 AM
+    [December Kickoff (0/25)](https://www.meetup.com/1-5genasians/events/e124/) December 1, 2026 12:30 AM
+**#3: 6 [Cy Host](https://www.meetup.com/members/103/) ID: 103** 🆕
+    [First of March Brunch (2/8)](https://www.meetup.com/1-5genasians/events/e092/) March 1, 2026 12:30 AM
+    [Spring Forward Social (3/30)](https://www.meetup.com/1-5genasians/events/e093/) March 8, 2026 7:00 PM
+    [Summer Social (3/40)](https://www.meetup.com/1-5genasians/events/e100/) August 15, 2026 7:00 PM
+    [Coffee Crawl (2/15)](https://www.meetup.com/1-5genasians/events/e109/) October 8, 2026 6:00 PM
+    [Day of the Dead Walk (1/20)](https://www.meetup.com/1-5genasians/events/e121/) November 1, 2026 12:30 AM
+    [Last Night of November (1/20)](https://www.meetup.com/1-5genasians/events/e123/) November 30, 2026 11:30 PM
+**#4: 1 [Dee New](https://www.meetup.com/members/104/) ID: 104** 🆕
+    [Hike at Tiger Mountain (2/12)](https://www.meetup.com/1-5genasians/events/e102/) September 12, 2026 9:00 AM
+
+**Total: 19**
+
+----- READY TO POST -----
+
+**Hall of Fame — 2026**
+
+**#1: Ava Host — 10 events**
+    Valentine Mixer (Feb 14)
+    Spring Forward Social (Mar 8)
+    April Fools Run (Apr 1)
+    Summer Social (Aug 15)
+    Board Game Night ×2 (Sep 3, Sep 17)
+    Late Night Karaoke (Sep 30)
+    Paid Cooking Class (Oct 20)
+    Halloween Late Show (Oct 31)
+    Fall Back Fondue (Nov 1)
+**#2: Ben Host — 6 events** 🆕
+    Leap Night Karaoke (Feb 28)
+    End of March Trivia (Mar 31)
+    Hike at Tiger Mountain (Sep 12)
+    October Kickoff (Oct 1)
+    Day of the Dead Walk (Nov 1)
+    December Kickoff (Dec 1)
+**#3: Cy Host — 6 events** 🆕
+    First of March Brunch (Mar 1)
+    Spring Forward Social (Mar 8)
+    Summer Social (Aug 15)
+    Coffee Crawl (Oct 8)
+    Day of the Dead Walk (Nov 1)
+    Last Night of November (Nov 30)
+**#4: Dee New — 1 event** 🆕
+    Hike at Tiger Mountain (Sep 12)
+
+New hosts: Ben Host (co-hosts: Dee New, Cy Host); Cy Host (co-hosts: Ava Host, Ben Host); Dee New (co-hosts: Ben Host)
+
+**Hosts: 4 · Events: 19**
+--- end attachment ---
+--- followUp ---
+{
+  "content": "Check the results in the attachment!",
+  "ephemeral": true,
+  "files": [
+    "**Hosting stats for 2026**.txt"
+  ]
+}
+--- moderation log ---
+{
+  "title": "Hosting stats run",
+  "description": "<@999000999> ran /meetup_get_host_event_stats for 2026 (whole year).",
+  "fields": [
+    {
+      "name": "Events",
+      "value": "19",
+      "inline": true
+    },
+    {
+      "name": "Hosts",
+      "value": "4",
+      "inline": true
+    }
+  ]
+}
