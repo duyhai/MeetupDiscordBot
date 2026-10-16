@@ -416,11 +416,11 @@ describe('URL attributes, widened', () => {
     expect(() => html`<img srcset='`).toThrow(UnsafeUrlError);
   });
 
-  it('an open fragment in a larger template cannot smuggle a plain string', () => {
-    // Even if a fragment were open, the outer check reads the whole output.
-    const open = staticHtml`<a `;
+  it('a fragment cannot end inside a tag, so it cannot open one for a later plain string', () => {
     // prettier-ignore
-    expect(() => html`${open}href="${plain}">x</a>`).toThrow(UnsafeUrlError);
+    expect(() => staticHtml`<a `).toThrow(UnsafeAttributeError);
+    // prettier-ignore
+    expect(() => html`<a title="${'x'}`).toThrow(UnsafeAttributeError);
   });
 });
 
@@ -460,5 +460,150 @@ describe('brand checks survive prototype pollution', () => {
     });
     expect(isSafeHtml(markup)).toBe(true);
     expect(isSafeUrl(url)).toBe(true);
+  });
+});
+
+describe('the forward tokenizer', () => {
+  const plain = 'javascript:alert(1)';
+  const url = localUrl('/dashboard');
+
+  it('a quoted < in an earlier value does not hide a later URL attribute (review probe)', () => {
+    // The reviewer's probes. Both are now refused at the title: no SafeHtml
+    // goes into an attribute value. Values are never fed to the scanner, so
+    // their `<` could not restart it anyway.
+    // prettier-ignore
+    expect(() => html`<a title="${memberText('bob')}" href="${plain}">x</a>`).toThrow(UnsafeAttributeError);
+    // prettier-ignore
+    expect(() => html`<a title="${html`<b>x</b>`}" href="${plain}">x</a>`).toThrow(UnsafeAttributeError);
+    // The same shape with the `<` written in the template: only the
+    // quoted-value state keeps the href checked.
+    // prettier-ignore
+    expect(() => html`<a title="</bdi>" href="${plain}">x</a>`).toThrow(UnsafeUrlError);
+    // With a string title the href is what is refused.
+    // prettier-ignore
+    expect(() => html`<a title="${'bob'}" href="${plain}">x</a>`).toThrow(UnsafeUrlError);
+  });
+
+  it('a literal < or comment opener inside a quoted value is just text', () => {
+    // prettier-ignore
+    expect(() => html`<a title="a<b>c" href="${plain}">x</a>`).toThrow(UnsafeUrlError);
+    // prettier-ignore
+    expect(() => html`<a title="<!-->" href="${plain}">x</a>`).toThrow(UnsafeUrlError);
+    // prettier-ignore
+    expect(html`<a title="a<b>c" href="${url}">x</a>`.value).toBe('<a title="a<b>c" href="/dashboard">x</a>');
+  });
+
+  it('SafeHtml is refused in any attribute value; strings are escaped there', () => {
+    // prettier-ignore
+    expect(() => html`<b title="${html`x`}">y</b>`).toThrow(UnsafeAttributeError);
+    // prettier-ignore
+    expect(() => html`<b title="${memberText('x')}">y</b>`).toThrow(UnsafeAttributeError);
+    expect(html`<b title="${'<"x">'}">y</b>`.value).toBe(
+      '<b title="&lt;&quot;x&quot;&gt;">y</b>',
+    );
+  });
+
+  it('nothing is interpolated into script or style raw text', () => {
+    // prettier-ignore
+    expect(() => html`<script>var s="${'x'}"</script>`).toThrow(UnsafeAttributeError);
+    // prettier-ignore
+    expect(() => html`<script>${html`x`}</script>`).toThrow(UnsafeAttributeError);
+    // prettier-ignore
+    expect(() => html`<style>a{color:${'red'}}</style>`).toThrow(UnsafeAttributeError);
+    // prettier-ignore
+    expect(() => html`<SCRIPT >${'x'}</SCRIPT>`).toThrow(UnsafeAttributeError);
+  });
+
+  it('a constant staticHtml body may fill script or style, unless it could close the element', () => {
+    const css = staticHtml`a>b{color:red}`;
+    // prettier-ignore
+    expect(html`<style nonce="${'n'}">${css}</style>`.value).toBe('<style nonce="n">a>b{color:red}</style>');
+    const closing = staticHtml`x</style><b>y</b>`;
+    // prettier-ignore
+    expect(() => html`<style>${closing}</style>`).toThrow(UnsafeAttributeError);
+  });
+
+  it('text after a script element is text again', () => {
+    // prettier-ignore
+    expect(html`<script>if (a<b) {}</script><p>${'<x>'}</p>`.value).toBe('<script>if (a<b) {}</script><p>&lt;x&gt;</p>');
+    // prettier-ignore
+    expect(() => html`<script>"</script><a href="${plain}">x</a>`).toThrow(UnsafeUrlError);
+  });
+
+  it('textarea and title take escaped text but no markup', () => {
+    // prettier-ignore
+    const copy = html`<textarea readonly class="copy">${'<b>&'}</textarea>`;
+    expect(copy.value).toBe(
+      '<textarea readonly class="copy">&lt;b&gt;&amp;</textarea>',
+    );
+    // prettier-ignore
+    expect(html`<title>${'a<b'}</title>`.value).toBe('<title>a&lt;b</title>');
+    // prettier-ignore
+    expect(() => html`<textarea>${html`</textarea><b>x</b>`}</textarea>`).toThrow(UnsafeAttributeError);
+  });
+
+  it('nothing is interpolated inside a comment or an end tag', () => {
+    // prettier-ignore
+    expect(() => html`<!-- ${'x'} -->`).toThrow(UnsafeAttributeError);
+    // prettier-ignore
+    expect(() => html`</p ${'x'}>`).toThrow(UnsafeAttributeError);
+    // prettier-ignore
+    expect(html`<!-- a > b --><p>${'x'}</p>`.value).toBe('<!-- a > b --><p>x</p>');
+    // prettier-ignore
+    expect(html`<!--><p>${'x'}</p>`.value).toBe('<!--><p>x</p>');
+  });
+
+  it('keeps the legitimate forms', () => {
+    // prettier-ignore
+    expect(html`<svg><use xlink:href="${url}"/></svg>`.value).toBe('<svg><use xlink:href="/dashboard"/></svg>');
+    // prettier-ignore
+    const form = html`<form method="post" action="${url}"><input type="hidden" name="_csrf" value="${'t'}" /></form>`;
+    expect(form.value).toContain('action="/dashboard"');
+    const label = 'a "b"';
+    const tip = 't<';
+    // prettier-ignore
+    const chart = html`<svg viewBox="0 0 ${100} ${50}" aria-label="${label}"><rect x="${1}" y="${2}"><title>${tip}</title></rect></svg>`;
+    expect(chart.value).toBe(
+      '<svg viewBox="0 0 100 50" aria-label="a &quot;b&quot;"><rect x="1" y="2"><title>t&lt;</title></rect></svg>',
+    );
+    // prettier-ignore
+    expect(html`<img src="${url}" width="${48}" alt="${'x'}" />`.value).toBe('<img src="/dashboard" width="48" alt="x" />');
+    // prettier-ignore
+    expect(html`<!doctype html><html lang="en"><p>${'x'}</p></html>`.value).toContain('<p>x</p>');
+  });
+
+  it('an invalid escape (undefined cooked string) is a clear error', () => {
+    // eslint-disable-next-line @typescript-eslint/no-implied-eval
+    const build = new Function('tag', 'return tag`<p>\\unicode ${1}</p>`;') as (
+      tag: unknown,
+    ) => SafeHtml;
+    expect(() => build(html)).toThrow(UnsafeAttributeError);
+    expect(() => build(html)).toThrow(/invalid escape/);
+    // eslint-disable-next-line @typescript-eslint/no-implied-eval
+    const plainStatic = new Function('tag', 'return tag`\\xZZ`;') as (
+      tag: unknown,
+    ) => SafeHtml;
+    expect(() => plainStatic(staticHtml)).toThrow(/invalid escape/);
+  });
+
+  it('runs in linear time: 5,000 interpolations stay fast', () => {
+    const v = 'x'.repeat(200);
+    for (const body of [
+      '<p>' + '${v}'.repeat(5000) + '</p>',
+      '<p title="' + '${v}'.repeat(5000) + '">x</p>',
+      '<p>' + '<b class="${v}">${v}</b>'.repeat(2500) + '</p>',
+    ]) {
+      // A real tagged template, built at runtime so it can hold 5,000 holes.
+      // eslint-disable-next-line @typescript-eslint/no-implied-eval
+      const build = new Function('html', 'v', `return html\`${body}\`;`) as (
+        tag: typeof html,
+        value: string,
+      ) => SafeHtml;
+      const started = performance.now();
+      const out = build(html, v);
+      // Generous: a guard against going quadratic again, not a benchmark.
+      expect(performance.now() - started).toBeLessThan(300);
+      expect(out.value.length).toBeGreaterThan(5000 * 200);
+    }
   });
 });

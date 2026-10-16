@@ -30,19 +30,18 @@ export type HtmlValue =
 // lookup that a polluted Object.prototype could answer.
 const mintedHtml = new WeakSet<object>();
 const mintedUrls = new WeakSet<object>();
+/** SafeHtml written as a constant (staticHtml): the only thing a script or style body may take. */
+const mintedStatic = new WeakSet<object>();
 
-function mintHtml(value: string): SafeHtml {
-  // No fragment may end inside a URL attribute's value: whatever follows it
-  // would land in the URL unchecked.
-  const end = tagState(value);
-  if (end.kind === 'quoted' && isUrlAttr(end.attr)) {
-    throw new UnsafeUrlError(end.attr);
-  }
+function mintHtml(value: string, isStatic = false): SafeHtml {
   const out = Object.freeze({
     value,
     toString: () => value,
   }) as unknown as SafeHtml;
   mintedHtml.add(out);
+  if (isStatic) {
+    mintedStatic.add(out);
+  }
   return out;
 }
 
@@ -104,91 +103,332 @@ const URL_ATTRS = new Set([
 const isUrlAttr = (name: string) =>
   URL_ATTRS.has(name.toLowerCase().split(':').pop() ?? '');
 
-/** Where the end of some markup sits, for the next interpolation. */
-type TagState =
-  | { kind: 'text' }
-  | { kind: 'name' } // tag name or attribute-name position
-  | { kind: 'unquoted'; attr: string } // after `attr=`, or inside a bare value
-  | { kind: 'quoted'; attr: string; quote: string; opened: string };
+/**
+ * Elements whose content is not markup. In raw text (script, style and
+ * friends) nothing may be interpolated except a constant staticHtml body;
+ * in RCDATA (textarea, title) escaped text is fine, markup is not.
+ */
+const RAW_TEXT = new Set([
+  'script',
+  'style',
+  'xmp',
+  'iframe',
+  'noembed',
+  'noframes',
+  'noscript',
+]);
+const RCDATA = new Set(['textarea', 'title']);
 
-const WS = /[\s]/;
+type Mode =
+  | 'text'
+  | 'tagOpen' // just after `<`
+  | 'endTagOpen' // just after `</`
+  | 'tagName'
+  | 'markup' // after `<!`, deciding comment or doctype
+  | 'comment'
+  | 'bogus' // `<!doctype …>`, `<?…>`: ends at `>`
+  | 'beforeAttr'
+  | 'attrName'
+  | 'afterAttrName'
+  | 'beforeValue'
+  | 'quoted'
+  | 'unquoted'
+  | 'afterQuoted'
+  | 'raw'; // raw text or RCDATA, until `</tag`
 
 /**
- * Scans from the last `<` to the end of `text`, the way a browser tokenizes
- * a start tag: tag name, then attributes separated by whitespace or `/`,
- * each optionally `= value` (double-, single- or unquoted). A quoted `>`
- * does not end the tag. Escaped text never contains `<`, `>` or quotes, so
- * only markup this module minted steers the scan. Anything it cannot place
- * is reported as `name`, which callers refuse (fail closed).
+ * The HTML tokenizer's state, carried forward from the start of a template
+ * across its literals and the values put between them. Only what the
+ * interpolation rules need is kept.
  */
-function tagState(text: string): TagState {
-  const start = text.lastIndexOf('<');
-  if (start === -1) {
-    return { kind: 'text' };
+interface Scan {
+  mode: Mode;
+  /** The open tag's lower-case name. */
+  tag: string;
+  /** Inside an end tag (`</p …>`). */
+  endTag: boolean;
+  /** The current attribute's name, as written. */
+  attr: string;
+  quote: string;
+  /** Nothing has been written into the quoted value yet. */
+  empty: boolean;
+  /** Raw text: `</tag` matched so far; RCDATA vs raw text. */
+  match: number;
+  rcdata: boolean;
+  /** Comment: `-` just seen; `markup`: what followed `<!`. */
+  dashes: number;
+  seen: string;
+}
+
+const newScan = (): Scan => ({
+  mode: 'text',
+  tag: '',
+  endTag: false,
+  attr: '',
+  quote: '',
+  empty: true,
+  match: 0,
+  rcdata: false,
+  dashes: 0,
+  seen: '',
+});
+
+const isSpace = (ch: string) =>
+  ch === ' ' || ch === '\t' || ch === '\n' || ch === '\r' || ch === '\f';
+const isLetter = (ch: string) => /[A-Za-z]/.test(ch);
+
+/** The `>` that ends a tag: a start tag of a raw-text element opens raw text. */
+function closeTag(st: Scan): void {
+  if (!st.endTag && (RAW_TEXT.has(st.tag) || RCDATA.has(st.tag))) {
+    st.mode = 'raw';
+    st.rcdata = RCDATA.has(st.tag);
+    st.match = 0;
+    return;
   }
-  const s = text.slice(start + 1);
-  if (s.startsWith('!')) {
-    // A comment or doctype. Its end decides; a `>` closes it.
-    return s.includes('>') ? { kind: 'text' } : { kind: 'name' };
-  }
-  let i = 0;
-  while (i < s.length && !WS.test(s[i]) && s[i] !== '>' && s[i] !== '/') {
-    i += 1;
-  }
-  for (;;) {
-    while (i < s.length && (WS.test(s[i]) || s[i] === '/')) {
-      i += 1;
-    }
-    if (i >= s.length) {
-      return { kind: 'name' };
-    }
-    if (s[i] === '>') {
-      // The tag closed; text follows. Only the last `<` matters.
-      return { kind: 'text' };
-    }
-    const nameStart = i;
-    while (i < s.length && !WS.test(s[i]) && !'"\'>/='.includes(s[i])) {
-      i += 1;
-    }
-    const attr = s.slice(nameStart, i);
-    if (i === nameStart) {
-      // A stray quote where a name should be.
-      return { kind: 'name' };
-    }
-    let j = i;
-    while (j < s.length && WS.test(s[j])) {
-      j += 1;
-    }
-    if (j >= s.length) {
-      return { kind: 'name' };
-    }
-    if (s[j] !== '=') {
-      // A boolean attribute; the next one starts here.
-      continue;
-    }
-    j += 1;
-    while (j < s.length && WS.test(s[j])) {
-      j += 1;
-    }
-    if (j >= s.length) {
-      return { kind: 'unquoted', attr };
-    }
-    const quote = s[j];
-    if (quote === '"' || quote === "'") {
-      const close = s.indexOf(quote, j + 1);
-      if (close === -1) {
-        return { kind: 'quoted', attr, quote, opened: s.slice(j + 1) };
+  st.mode = 'text';
+}
+
+function startAttr(st: Scan, ch: string): void {
+  st.mode = 'attrName';
+  st.attr = ch;
+}
+
+/**
+ * One character of the HTML tokenizer (WHATWG 13.2.5, reduced to the states
+ * that decide where an interpolation lands). Forward only: a `<`, `>` or
+ * comment opener inside a quoted value is just part of the value.
+ */
+function step(st: Scan, ch: string): void {
+  switch (st.mode) {
+    case 'text':
+      if (ch === '<') {
+        st.mode = 'tagOpen';
       }
-      i = close + 1;
-      continue;
+      return;
+    case 'tagOpen':
+      if (isLetter(ch)) {
+        st.mode = 'tagName';
+        st.tag = ch.toLowerCase();
+        st.endTag = false;
+      } else if (ch === '/') {
+        st.mode = 'endTagOpen';
+      } else if (ch === '!') {
+        st.mode = 'markup';
+        st.seen = '';
+      } else if (ch === '?') {
+        st.mode = 'bogus';
+      } else if (ch !== '<') {
+        st.mode = 'text';
+      }
+      return;
+    case 'endTagOpen':
+      if (isLetter(ch)) {
+        st.mode = 'tagName';
+        st.tag = ch.toLowerCase();
+        st.endTag = true;
+      } else {
+        st.mode = ch === '>' ? 'text' : 'bogus';
+      }
+      return;
+    case 'tagName':
+      if (isSpace(ch) || ch === '/') {
+        st.mode = 'beforeAttr';
+      } else if (ch === '>') {
+        closeTag(st);
+      } else {
+        st.tag += ch.toLowerCase();
+      }
+      return;
+    case 'markup':
+      st.seen += ch;
+      if (st.seen === '--') {
+        // `<!-->` and `<!--->` close at once, as browsers do.
+        st.mode = 'comment';
+        st.dashes = 2;
+      } else if (st.seen !== '-') {
+        st.mode = ch === '>' ? 'text' : 'bogus';
+      }
+      return;
+    case 'comment':
+      if (ch === '-') {
+        st.dashes += 1;
+      } else if (ch === '>' && st.dashes >= 2) {
+        st.mode = 'text';
+      } else {
+        st.dashes = 0;
+      }
+      return;
+    case 'bogus':
+      if (ch === '>') {
+        st.mode = 'text';
+      }
+      return;
+    case 'beforeAttr':
+      if (ch === '>') {
+        closeTag(st);
+      } else if (!isSpace(ch) && ch !== '/') {
+        startAttr(st, ch);
+      }
+      return;
+    case 'attrName':
+      if (isSpace(ch)) {
+        st.mode = 'afterAttrName';
+      } else if (ch === '/') {
+        st.mode = 'beforeAttr';
+      } else if (ch === '=') {
+        st.mode = 'beforeValue';
+      } else if (ch === '>') {
+        closeTag(st);
+      } else {
+        st.attr += ch;
+      }
+      return;
+    case 'afterAttrName':
+      if (ch === '/') {
+        st.mode = 'beforeAttr';
+      } else if (ch === '=') {
+        st.mode = 'beforeValue';
+      } else if (ch === '>') {
+        closeTag(st);
+      } else if (!isSpace(ch)) {
+        startAttr(st, ch);
+      }
+      return;
+    case 'beforeValue':
+      if (ch === '"' || ch === "'") {
+        st.mode = 'quoted';
+        st.quote = ch;
+        st.empty = true;
+      } else if (ch === '>') {
+        closeTag(st);
+      } else if (!isSpace(ch)) {
+        st.mode = 'unquoted';
+      }
+      return;
+    case 'quoted':
+      if (ch === st.quote) {
+        st.mode = 'afterQuoted';
+      } else {
+        st.empty = false;
+      }
+      return;
+    case 'unquoted':
+      if (isSpace(ch)) {
+        st.mode = 'beforeAttr';
+      } else if (ch === '>') {
+        closeTag(st);
+      }
+      return;
+    case 'afterQuoted':
+      if (isSpace(ch) || ch === '/') {
+        st.mode = 'beforeAttr';
+      } else if (ch === '>') {
+        closeTag(st);
+      } else {
+        startAttr(st, ch);
+      }
+      return;
+    case 'raw': {
+      const target = `</${st.tag}`;
+      if (st.match === target.length) {
+        // `</tag` seen: it ends the element only if the name ends here.
+        if (isSpace(ch) || ch === '/') {
+          st.mode = 'beforeAttr';
+          st.endTag = true;
+          return;
+        }
+        if (ch === '>') {
+          st.mode = 'text';
+          return;
+        }
+        st.match = 0;
+      }
+      if (ch.toLowerCase() === target[st.match]) {
+        st.match += 1;
+      } else {
+        st.match = ch === '<' ? 1 : 0;
+      }
+      return;
     }
-    while (j < s.length && !WS.test(s[j]) && s[j] !== '>') {
-      j += 1;
-    }
-    if (j >= s.length) {
-      return { kind: 'unquoted', attr };
-    }
-    i = j;
+    default:
+      return;
+  }
+}
+
+function feed(st: Scan, text: string): void {
+  for (const ch of text) {
+    step(st, ch);
+  }
+}
+
+/** A minted fragment must end where it began, in text: never inside a tag, comment or raw text. */
+function requireTextEnd(st: Scan): void {
+  if (st.mode === 'text') {
+    return;
+  }
+  if (st.mode === 'quoted' && isUrlAttr(st.attr)) {
+    throw new UnsafeUrlError(st.attr);
+  }
+  throw new UnsafeAttributeError(
+    'here: a fragment must end outside any tag, comment or script',
+  );
+}
+
+function containsSafeHtml(value: HtmlValue): boolean {
+  if (Array.isArray(value)) {
+    return value.some(containsSafeHtml);
+  }
+  return isSafeHtml(value);
+}
+
+/**
+ * Checks one interpolation against the scan state, then advances the state
+ * past it. Escaped text never contains `<`, `>` or quotes, so it leaves the
+ * state alone; a SafeHtml fragment ends in text (requireTextEnd), so in text
+ * it does too.
+ */
+function admit(st: Scan, value: HtmlValue, after: string): void {
+  switch (st.mode) {
+    case 'text':
+      return;
+    case 'quoted':
+      if (isUrlAttr(st.attr)) {
+        if (!st.empty || !after.startsWith(st.quote) || !isSafeUrl(value)) {
+          throw new UnsafeUrlError(st.attr);
+        }
+      } else if (containsSafeHtml(value)) {
+        // Markup inside an attribute value is never what was meant.
+        throw new UnsafeAttributeError(`markup into ${st.attr}`);
+      }
+      st.empty = false;
+      return;
+    case 'beforeValue':
+    case 'unquoted':
+      if (isUrlAttr(st.attr)) {
+        throw new UnsafeUrlError(st.attr);
+      }
+      throw new UnsafeAttributeError(`into unquoted ${st.attr}`);
+    case 'raw':
+      if (st.rcdata) {
+        // Escaped text is fine in a textarea or title; markup is not.
+        if (containsSafeHtml(value)) {
+          throw new UnsafeAttributeError(`markup into <${st.tag}>`);
+        }
+        st.match = 0;
+        return;
+      }
+      // Script and style bodies take only a constant written in this
+      // codebase, and only one that cannot close the element.
+      if (isSafeHtml(value) && mintedStatic.has(value)) {
+        const before = st.mode;
+        feed(st, value.value);
+        if (st.mode === before && st.match === 0) {
+          return;
+        }
+      }
+      throw new UnsafeAttributeError(`into <${st.tag}>`);
+    default:
+      throw new UnsafeAttributeError('in a tag, attribute name or comment');
   }
 }
 
@@ -200,9 +440,15 @@ const templates = new WeakSet<object>();
  * tag: a frozen array whose own `raw` is non-enumerable, non-writable,
  * non-configurable and a frozen array of strings of the same length.
  * Object.assign([evil], { raw }) fails (raw is enumerable), with or without
- * Object.freeze. A caller who rebuilds every one of those properties by hand
- * is not stopped here; the no-restricted-syntax lint rule, which allows these
- * tags only as tagged templates, covers that.
+ * Object.freeze.
+ *
+ * Known limit: a forgery built with Object.defineProperty(arr, 'raw',
+ * { value: Object.freeze([...]) }) and then Object.freeze(arr) has exactly
+ * this shape and passes; no runtime check can tell it from the engine's
+ * array. Only lint stops it: the no-restricted-syntax rules allow html and
+ * staticHtml solely as a tagged template's tag (plus their own declaration
+ * and un-aliased import/export specifiers), so no forged array can reach
+ * them from code that passes `yarn lint`.
  */
 function isTemplateStrings(strings: unknown): strings is TemplateStringsArray {
   if (typeof strings !== 'object' || strings === null) {
@@ -232,9 +478,19 @@ function isTemplateStrings(strings: unknown): strings is TemplateStringsArray {
   return ok;
 }
 
-function requireTemplate(strings: unknown, tag: string): void {
+function requireTemplate(
+  strings: unknown,
+  tag: string,
+): asserts strings is TemplateStringsArray {
   if (!isTemplateStrings(strings)) {
     throw new TypeError(`${tag} must be used as a tagged template`);
+  }
+  // A tagged template with an invalid escape (`\\u{` …) has an undefined
+  // cooked string.
+  if (strings.some((part) => part === undefined)) {
+    throw new UnsafeAttributeError(
+      `${tag} templates with an invalid escape sequence`,
+    );
   }
 }
 
@@ -268,30 +524,18 @@ export function html(
   ...values: HtmlValue[]
 ): SafeHtml {
   requireTemplate(strings, 'html');
+  // One forward scan over the literals, carried across the values: linear
+  // in the template, and a `<` inside a value can never restart it.
+  const st = newScan();
   let out = strings[0];
+  feed(st, strings[0]);
   values.forEach((value, i) => {
-    // The whole output so far, not just this literal: a fragment
-    // interpolated earlier may have opened the tag.
-    const at = tagState(out);
     const after = strings[i + 1];
-    if (at.kind === 'name') {
-      throw new UnsafeAttributeError('in a tag or attribute name');
-    }
-    if (at.kind === 'unquoted') {
-      if (isUrlAttr(at.attr)) {
-        throw new UnsafeUrlError(at.attr);
-      }
-      throw new UnsafeAttributeError(`into unquoted ${at.attr}`);
-    }
-    if (
-      at.kind === 'quoted' &&
-      isUrlAttr(at.attr) &&
-      (at.opened !== '' || !after.startsWith(at.quote) || !isSafeUrl(value))
-    ) {
-      throw new UnsafeUrlError(at.attr);
-    }
+    admit(st, value, after);
     out += render(value) + after;
+    feed(st, after);
   });
+  requireTextEnd(st);
   return mintHtml(out);
 }
 
@@ -304,7 +548,10 @@ export function staticHtml(strings: TemplateStringsArray): SafeHtml {
       'staticHtml takes a template literal without interpolation',
     );
   }
-  return mintHtml(strings[0]);
+  const st = newScan();
+  feed(st, strings[0]);
+  requireTextEnd(st);
+  return mintHtml(strings[0], true);
 }
 
 const LOCAL_PATH =
