@@ -26,7 +26,8 @@ export type DashboardPathTemplate =
   (typeof DASHBOARD_PATHS)[keyof typeof DASHBOARD_PATHS];
 export type MonthPathTemplate =
   | typeof DASHBOARD_PATHS.hallOfFameMonth
-  | typeof DASHBOARD_PATHS.noShowHistoryMonth;
+  | typeof DASHBOARD_PATHS.noShowHistoryMonth
+  | typeof DASHBOARD_PATHS.refresh;
 
 const MEMBER_ID = /^[0-9]{1,20}$/;
 

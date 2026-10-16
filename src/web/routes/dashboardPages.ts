@@ -1,13 +1,25 @@
 import express from 'express';
 
 import { LogEntry } from '../../lib/helpers/discordLogger.js';
+import { PostgresReportSnapshotRepository } from '../../lib/repositories/postgresReportSnapshotRepository.js';
 import { AccessCheck } from '../roleGate.js';
 import { SessionStore } from '../session.js';
 import {
   OrganizerLoginDeps,
   registerOrganizerLoginRoutes,
 } from './organizerLogin.js';
+import { registerHallOfFameRoutes } from './hallOfFame.js';
 import { registerSessionRoutes } from './sessions.js';
+
+/** The snapshot reads the month pages use: never save. */
+export type SnapshotPageReader = Pick<
+  PostgresReportSnapshotRepository,
+  | 'getCurrent'
+  | 'getCurrentMeta'
+  | 'listSummaries'
+  | 'listSummarySeries'
+  | 'listMemberNoShowMonths'
+>;
 
 /** What the read-only pages need. Each getter may reject (no DATABASE_URL, pool down): pages answer 503. */
 export interface DashboardPageDeps {
@@ -18,6 +30,8 @@ export interface DashboardPageDeps {
   isLeadership: AccessCheck;
   /** Activity log; call sites fire and forget. */
   audit: (entry: LogEntry) => Promise<unknown>;
+  /** The report snapshot store. */
+  snapshots: () => Promise<SnapshotPageReader>;
 }
 
 /**
@@ -30,6 +44,7 @@ export function registerDashboardPages(
   deps: DashboardPageDeps,
 ): void {
   registerSessionRoutes(router, deps);
+  registerHallOfFameRoutes(router, deps);
   // Tasks 5-10 add one register…Routes(router, deps) line each.
 }
 

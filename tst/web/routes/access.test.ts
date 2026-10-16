@@ -3,7 +3,6 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { DASHBOARD_BASE } from '../../../src/lib/reports/dashboardPaths.js';
 import {
-  DashboardDeps,
   createDashboardRouter,
   protectedRouteList,
 } from '../../../src/web/dashboardRouter.js';
@@ -18,19 +17,23 @@ import {
   makeDeps,
   signIn,
 } from '../dashboardHarness.js';
-import { fakeOrganizerDeps, fakePageDeps } from './pageFakes.js';
+import { PAGE_NOW, fakeOrganizerDeps, fakePageDeps } from './pageFakes.js';
 
 afterEach(closeServers);
 
-/** The router production builds: the same protectedRoutes hook, fake data. */
-function buildRouter(overrides: Partial<DashboardDeps> = {}) {
-  const { deps } = makeDeps(overrides);
+/**
+ * The router production builds: the same protectedRoutes hook, fake data.
+ * One clock for the router (sessions, role re-check) and the pages, so a
+ * test that advances it moves both.
+ */
+function buildRouter(clock: () => number = () => PAGE_NOW.getTime()) {
+  const { deps } = makeDeps({ now: clock });
   const router = createDashboardRouter({
     ...deps,
     protectedRoutes: (r) =>
       registerAllProtectedRoutes(r, {
         organizer: fakeOrganizerDeps(),
-        pages: fakePageDeps(),
+        pages: fakePageDeps({ now: () => new Date(clock()) }),
       }),
   });
   return { deps, router };
@@ -74,6 +77,17 @@ const EXPECTED_ALLOWED: Record<string, number> = {
   'GET /organizer-login/complete': 400,
 };
 
+/**
+ * What every state-changing route answers to a signed-in POST with a valid
+ * token and an empty form. Required for each one, so a crash (500) or a
+ * rate-limit answer (429) fails rather than passing as "not 403".
+ */
+const EXPECTED_UNSAFE_ALLOWED: Record<string, number> = {
+  'POST /logout': 303,
+  'POST /organizer-login/start': 200,
+  'POST /sessions/revoke': 303,
+};
+
 function concrete(path: string): string {
   return `${DASHBOARD_BASE}${path.replace(
     /:([A-Za-z]+)/g,
@@ -91,8 +105,8 @@ const label = (r: { method: string; path: string }) =>
   `${r.method.toUpperCase()} ${r.path}`;
 
 async function setup() {
-  let clock = Date.parse('2026-10-05T16:15:00Z');
-  const { deps, router } = buildRouter({ now: () => clock });
+  let clock = PAGE_NOW.getTime();
+  const { deps, router } = buildRouter(() => clock);
   const app = express();
   app.set('trust proxy', 1);
   app.use(DASHBOARD_BASE, router);
@@ -124,6 +138,8 @@ describe('access matrix', () => {
     expect(labels).toContain('GET /organizer-login');
     expect(labels).toContain('GET /sessions');
     expect(labels).toContain('POST /sessions/revoke');
+    expect(labels).toContain('GET /hall-of-fame');
+    expect(labels).toContain('GET /hall-of-fame/:period');
     expect(UNSAFE.length).toBeGreaterThan(0);
   });
 
@@ -183,7 +199,7 @@ describe('access matrix', () => {
 
   describe.each(UNSAFE.map((r) => [label(r), r] as const))(
     '%s',
-    (_name, route) => {
+    (name, route) => {
       const path = concrete(route.path);
       const send = (req: Client) => {
         const method = route.method as 'post' | 'put' | 'patch' | 'delete';
@@ -231,7 +247,11 @@ describe('access matrix', () => {
         expect(res.status).toBe(403);
       });
 
-      it('with a token → neither 403 nor 404', async () => {
+      it(`with a token → ${EXPECTED_UNSAFE_ALLOWED[name] ?? '(add an expected status)'}`, async () => {
+        expect(
+          EXPECTED_UNSAFE_ALLOWED[name],
+          'add an expected status',
+        ).toBeDefined();
         const { req } = await setup();
         const cookie = await signIn(req);
         const token = await csrfToken(req, cookie);
@@ -241,7 +261,7 @@ describe('access matrix', () => {
           .set('Sec-Fetch-Site', 'same-origin')
           .type('form')
           .send({ _csrf: token });
-        expect([403, 404]).not.toContain(res.status);
+        expect(res.status).toBe(EXPECTED_UNSAFE_ALLOWED[name]);
       });
     },
   );

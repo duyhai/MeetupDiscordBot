@@ -6,6 +6,7 @@ import { Logger } from 'tslog';
 import { BASE_DISCORD_BOT_URL, SERVER_ROLES } from '../constants.js';
 import { LogEntry, logActivity } from '../lib/helpers/discordLogger.js';
 import { BuildJobDeps, defaultBuildJobDeps } from '../lib/reports/buildJob.js';
+import { PostgresReportSnapshotRepository } from '../lib/repositories/postgresReportSnapshotRepository.js';
 import { ApplicationCache } from '../util/cache.js';
 import {
   baseSecurityHeaders,
@@ -140,6 +141,7 @@ export function dashboardPageDeps(): DashboardPageDeps {
       SERVER_ROLES.leadership,
     ),
     audit: auditActivity,
+    snapshots: () => PostgresReportSnapshotRepository.instance(),
   };
 }
 
