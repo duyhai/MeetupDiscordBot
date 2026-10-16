@@ -153,6 +153,17 @@ describe('Hall of Fame month page', () => {
     expect(res.text).toContain('action="/dashboard/reports/2026-08/refresh"');
   });
 
+  it("a month before the group's first is not found and offers no refresh", async () => {
+    const { get, snapshots } = await setup();
+    const before = await get('/dashboard/hall-of-fame/2013-02');
+    expect(before.status).toBe(404);
+    expect(before.text).not.toContain('/refresh"');
+    expect(snapshots.getCurrent).not.toHaveBeenCalled();
+    const first = await get('/dashboard/hall-of-fame/2013-03');
+    expect(first.status).toBe(200);
+    expect(first.text).toContain('action="/dashboard/reports/2013-03/refresh"');
+  });
+
   it('the refresh form carries the CSRF token and its return page', async () => {
     const { get } = await setup();
     const res = await get(MONTH);

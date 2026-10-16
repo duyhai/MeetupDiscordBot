@@ -33,6 +33,12 @@ describe('pageKit', () => {
     expect(parseRouteMonth(undefined, NOW)).toBeUndefined();
   });
 
+  it("parseRouteMonth refuses months before the group's first (2013-03)", () => {
+    expect(parseRouteMonth('2013-02', NOW)).toBeUndefined();
+    expect(parseRouteMonth('2001-01', NOW)).toBeUndefined();
+    expect(parseRouteMonth('2013-03', NOW)).toEqual({ year: 2013, month: 3 });
+  });
+
   it('parseRouteMonth refuses a future month', () => {
     expect(parseRouteMonth('2026-11', NOW)).toBeUndefined();
     expect(parseRouteMonth('2027-01', NOW)).toBeUndefined();

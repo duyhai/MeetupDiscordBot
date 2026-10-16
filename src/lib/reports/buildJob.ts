@@ -43,6 +43,7 @@ import { withOrganizerMeetup } from './organizerMeetup.js';
 import {
   buildAsOf,
   comparePeriods,
+  GROUP_FIRST_PERIOD,
   isFinished,
   monthLabel,
   Period,
@@ -707,9 +708,9 @@ export async function requestRebuild(
   if (
     !Number.isInteger(period?.year) ||
     !Number.isInteger(period?.month) ||
-    period.year < 2000 ||
     period.month < 1 ||
-    period.month > 12
+    period.month > 12 ||
+    comparePeriods(period, GROUP_FIRST_PERIOD) < 0
   ) {
     return { status: 'bad-month', message: 'That is not a valid month.' };
   }

@@ -1328,6 +1328,8 @@ describe('requestRebuild', () => {
       { year: 2026, month: 13 },
       { year: 2026, month: 9.5 },
       { year: 1999, month: 12 },
+      { year: 2000, month: 1 },
+      { year: 2013, month: 2 },
       { year: 2026.5, month: 9 },
       { year: Number.NaN, month: 9 },
       { year: 2026, month: '9' as unknown as number },
@@ -1342,7 +1344,7 @@ describe('requestRebuild', () => {
     }
     expect(h.cacheSpy).not.toHaveBeenCalled();
     expect(
-      (await requestRebuild(h.deps, { year: 2000, month: 1 }, REQUESTER))
+      (await requestRebuild(h.deps, { year: 2013, month: 3 }, REQUESTER))
         .status,
     ).toBe('started');
   });

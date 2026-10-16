@@ -343,6 +343,21 @@ describe('POST /dashboard/reports/:period/refresh', () => {
     expect(rebuild).not.toHaveBeenCalled();
   });
 
+  it("a month before the group's first is not found; the first month can be refreshed", async () => {
+    const { post, token, rebuild } = await setup();
+    const before = await post('/dashboard/reports/2013-02/refresh', {
+      _csrf: token,
+    });
+    expect(before.status).toBe(404);
+    expect(rebuild).not.toHaveBeenCalled();
+    const first = await post('/dashboard/reports/2013-03/refresh', {
+      _csrf: token,
+    });
+    expect(first.headers.location).toBe(
+      '/dashboard/hall-of-fame/2013-03?refresh=started',
+    );
+  });
+
   it('the current month can be refreshed', async () => {
     const { post, rebuild } = await setup();
     const res = await post('/dashboard/reports/2026-10/refresh');

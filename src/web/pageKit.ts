@@ -9,6 +9,7 @@ import {
 } from '../lib/reports/dashboardPaths.js';
 import { noShowsMissing } from '../lib/reports/meetupMonth.js';
 import {
+  GROUP_FIRST_PERIOD,
   Period,
   comparePeriods,
   isFinished,
@@ -108,13 +109,17 @@ export async function load<T>(
   }
 }
 
-/** A route's :period: parsePeriodKey only, and never after the current Pacific month. */
+/** A route's :period: parsePeriodKey only, never before the group's first month and never after the current Pacific month. */
 export function parseRouteMonth(value: unknown, now: Date): Period | undefined {
   if (typeof value !== 'string') {
     return undefined;
   }
   const period = parsePeriodKey(value);
-  if (period === undefined || comparePeriods(period, periodOf(now)) > 0) {
+  if (
+    period === undefined ||
+    comparePeriods(period, GROUP_FIRST_PERIOD) < 0 ||
+    comparePeriods(period, periodOf(now)) > 0
+  ) {
     return undefined;
   }
   return period;
