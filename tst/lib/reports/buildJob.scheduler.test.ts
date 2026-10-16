@@ -466,7 +466,7 @@ describe('startReportBuildScheduler', () => {
     });
   });
 
-  it('a wedge alert on a new day comes before the failed-tick alert that day', async () => {
+  it("a wedge alert uses up the day's slot, so later failed ticks that day stay silent", async () => {
     const { calls, setIntervalFn } = captureInterval();
     const log = fakeLog();
     const alert = vi.fn((_entry: { title: string; description?: string }) =>
@@ -506,6 +506,67 @@ describe('startReportBuildScheduler', () => {
     }
     expect(makeDepsFn).toHaveBeenCalledTimes(5);
     expect(alert).toHaveBeenCalledTimes(1); // same UTC day: shared
+  });
+
+  it('a hang spanning three UTC days posts once on each day', async () => {
+    const { calls, setIntervalFn } = captureInterval();
+    const log = fakeLog();
+    const alert = vi.fn((_entry: { title: string; description?: string }) =>
+      Promise.resolve(true),
+    );
+    let nowMs = Date.parse('2026-10-05T16:00:00Z');
+    let failing = true;
+    const makeDepsFn = vi.fn(() => {
+      if (failing) {
+        return Promise.reject(new Error('connect ECONNREFUSED 127.0.0.1:5432'));
+      }
+      return new Promise<BuildJobDeps>(() => undefined); // hangs for good
+    });
+    startReportBuildScheduler(client, {
+      env: DB_ENV,
+      makeDeps: makeDepsFn,
+      setIntervalFn,
+      log,
+      alert,
+      now: () => nowMs,
+    });
+    const tickAt = async (iso: string) => {
+      nowMs = Date.parse(iso);
+      calls[0].fn();
+      await settle();
+    };
+    await settle(); // failure 1 at 16:00
+    await tickAt('2026-10-05T16:15:00Z');
+    await tickAt('2026-10-05T16:30:00Z');
+    await tickAt('2026-10-05T16:45:00Z'); // failure 4: day 1's slot
+    expect(alert).toHaveBeenCalledTimes(1);
+    expect(alert.mock.calls[0][0].description).not.toBe(WEDGED_TICK_ALERT);
+
+    failing = false;
+    await tickAt('2026-10-05T17:00:00Z'); // the hang starts
+    await tickAt('2026-10-05T17:45:00Z'); // wedged; day 1 already used
+    await tickAt('2026-10-05T23:45:00Z');
+    expect(alert).toHaveBeenCalledTimes(1);
+
+    await tickAt('2026-10-06T00:00:00Z'); // day 2
+    await tickAt('2026-10-06T12:00:00Z');
+    await tickAt('2026-10-06T23:45:00Z');
+    expect(alert).toHaveBeenCalledTimes(2);
+
+    await tickAt('2026-10-07T00:15:00Z'); // day 3
+    await tickAt('2026-10-07T16:00:00Z');
+    expect(alert).toHaveBeenCalledTimes(3);
+    expect(alert.mock.calls.slice(1).map(([entry]) => entry)).toEqual([
+      { title: FAILING, description: WEDGED_TICK_ALERT },
+      { title: FAILING, description: WEDGED_TICK_ALERT },
+    ]);
+    // The process log still warns once per streak.
+    expect(
+      log.warn.mock.calls.filter(
+        ([m]) => m === 'Report build tick has been running for over 30 minutes',
+      ),
+    ).toHaveLength(1);
+    expect(makeDepsFn).toHaveBeenCalledTimes(5);
   });
 
   it('a failed wedge alert is only logged', async () => {

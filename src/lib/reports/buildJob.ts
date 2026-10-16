@@ -926,11 +926,14 @@ export function startReportBuildScheduler(
       }
       // Past the lease TTL another process may take the lease, and this
       // process stays blocked until the stuck tick ends: say so once.
-      if (!wedgeWarned && now() - tickStartedAt > BUILD_LEASE_TTL_SEC * 1000) {
-        log.warn('Report build tick has been running for over 30 minutes');
-        wedgeWarned = true;
+      if (now() - tickStartedAt > BUILD_LEASE_TTL_SEC * 1000) {
+        if (!wedgeWarned) {
+          log.warn('Report build tick has been running for over 30 minutes');
+          wedgeWarned = true;
+        }
         // A hung tick never reaches recordTick (a Redis drop hangs, it does
         // not throw), so this is the only way the outage reaches Discord.
+        // Tried on every skipped tick: a hang lasting days posts once a day.
         alertOncePerDay(WEDGED_TICK_ALERT).catch(() => undefined);
       }
       return;
