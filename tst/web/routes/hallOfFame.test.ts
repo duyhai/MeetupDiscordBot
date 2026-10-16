@@ -212,6 +212,30 @@ describe('Hall of Fame month page', () => {
     expect(res.status).toBe(503);
   });
 
+  it('503, not 500, when a stored host entry is malformed', async () => {
+    const good = hofPayload().hosts[1];
+    const malformed: unknown[][] = [
+      [null],
+      ['host'],
+      [{ events: [] }],
+      [{ host: null, events: [] }],
+      [{ host: good.host }],
+      [{ host: good.host, events: 'x' }],
+      [{ host: good.host, events: [null] }],
+      [good, { host: good.host, events: {} }],
+    ];
+    for (const hosts of malformed) {
+      // eslint-disable-next-line no-await-in-loop -- one payload at a time, so a failure names it
+      const { get } = await setup([
+        seedRow('hall_of_fame', SEPT, { ...hofPayload(), hosts }),
+      ]);
+      // eslint-disable-next-line no-await-in-loop -- one payload at a time, so a failure names it
+      const res = await get(MONTH);
+      expect(res.status, JSON.stringify(hosts)).toBe(503);
+      expect(res.text).toContain('cannot be loaded right now');
+    }
+  });
+
   it('never says incomplete', async () => {
     const { get } = await setup();
     for (const path of [

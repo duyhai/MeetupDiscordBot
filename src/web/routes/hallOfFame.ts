@@ -38,11 +38,22 @@ export function commandPeriodLabel(period: Period): string {
   return `${period.year} ${monthName}`;
 }
 
+const isObject = (v: unknown): v is Record<string, unknown> =>
+  typeof v === 'object' && v !== null;
+
+/** Each host entry has a host object and an array of event objects, or the page cannot be built. */
+const isHostEntry = (h: unknown): boolean =>
+  isObject(h) &&
+  isObject(h.host) &&
+  Array.isArray(h.events) &&
+  h.events.every(isObject);
+
+/** A stored payload this page can render; anything else is the 503 page, never a 500. */
 const isHallOfFame = (p: unknown): p is HallOfFamePayload =>
-  typeof p === 'object' &&
-  p !== null &&
-  (p as HallOfFamePayload).reportType === 'hall_of_fame' &&
-  Array.isArray((p as HallOfFamePayload).hosts);
+  isObject(p) &&
+  p.reportType === 'hall_of_fame' &&
+  Array.isArray(p.hosts) &&
+  p.hosts.every(isHostEntry);
 
 const count = (value: unknown): number => Number(value) || 0;
 
