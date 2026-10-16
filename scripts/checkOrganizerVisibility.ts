@@ -8,6 +8,7 @@
  *
  *   heroku run -a meetup-discord-bot "node_modules/.bin/tsx scripts/checkOrganizerVisibility.ts -- --event <id>"
  *
+ * --event takes digits only (a Meetup event id); anything else exits 1.
  * Without --event it picks the newest PAST event that is at least 2 days old,
  * within the last 30 days. Prefer --event with an event known to have
  * no-shows: 0 / 0 on an event nobody marked proves nothing. (The original
@@ -45,7 +46,8 @@
  * defence in depth, process.stdout/stderr are muted while main() runs, because
  * the token helper logs through tslog and one of its messages embeds a Meetup
  * response body; only this script's own lines are written, through the saved
- * originals. Unhandled errors outside main() go through reportFatal.
+ * originals. Unhandled errors go through reportFatal, which writes through
+ * the saved original stderr while main() has it muted.
  */
 import dayjs from 'dayjs';
 import { ClientError, GraphQLClient, gql } from 'graphql-request';
@@ -150,7 +152,10 @@ class FilterNotAppliedError extends Error {
 /** Error type only; the HTTP status (a number) for a ClientError. Never a body. */
 export function describeError(error: unknown): string {
   if (error instanceof ClientError) {
-    return `ClientError HTTP ${error.response.status}`;
+    const status: unknown = error.response?.status;
+    return typeof status === 'number'
+      ? `ClientError HTTP ${status}`
+      : 'ClientError';
   }
   return error instanceof Error ? error.name : 'UnknownError';
 }
@@ -222,9 +227,18 @@ async function visibleCount(
     : String(rsvps.edges.length);
 }
 
-/** Writes `fatal: <error type>` and nothing else; for errors outside main(). */
+// The stderr writer main() saved before muting; undefined when not muted.
+let unmutedStderr: typeof process.stderr.write | undefined;
+
+/**
+ * Writes `fatal: <error type>` and nothing else. Goes through the saved
+ * original writer while main() has stderr muted, so a stray rejection
+ * during the run is still reported.
+ */
 export function reportFatal(error: unknown): void {
-  process.stderr.write(`fatal: ${describeError(error)}\n`);
+  // eslint-disable-next-line @typescript-eslint/unbound-method
+  const write = unmutedStderr ?? process.stderr.write;
+  write.call(process.stderr, `fatal: ${describeError(error)}\n`);
 }
 
 /** `--event <digits>` (a bare `--` is ignored); null when absent, false when invalid. */
@@ -254,6 +268,7 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
   };
   const mute = (() => true) as typeof process.stdout.write;
   try {
+    unmutedStderr = originalStderr;
     process.stdout.write = mute;
     process.stderr.write = mute;
 
@@ -326,6 +341,7 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
   } finally {
     process.stdout.write = originalStdout;
     process.stderr.write = originalStderr;
+    unmutedStderr = undefined;
   }
 }
 

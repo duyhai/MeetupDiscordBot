@@ -1,11 +1,16 @@
 import dayjs from 'dayjs';
+import { GraphQLError } from 'graphql';
 import { ClientError } from 'graphql-request';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import Configuration from '../../src/configuration.js';
 import { getOrganizerAccessToken } from '../../src/lib/helpers/organizerMeetupClient.js';
 import { tz } from '../../src/util/timezone.js';
-import { main, reportFatal } from '../../scripts/checkOrganizerVisibility.js';
+import {
+  describeError,
+  main,
+  reportFatal,
+} from '../../scripts/checkOrganizerVisibility.js';
 
 const fake = vi.hoisted(() => ({
   request: vi.fn(),
@@ -292,7 +297,12 @@ describe('checkOrganizerVisibility', () => {
       }
       if ('eventId' in vars) {
         throw new ClientError(
-          { status: 403, errors: [{ message: body }] },
+          {
+            status: 403,
+            headers: new Headers(),
+            body: '',
+            errors: [new GraphQLError(body)],
+          },
           { query: 'q' },
         );
       }
@@ -327,9 +337,48 @@ describe('checkOrganizerVisibility', () => {
     expect(Reflect.get(process.stdout, 'write')).toBe(realStdoutWrite);
   });
 
+  it('a fatal during the run still prints its reason', async () => {
+    serve();
+    let release!: (token: string) => void;
+    vi.mocked(getOrganizerAccessToken).mockReturnValueOnce(
+      new Promise<string>((resolve) => {
+        release = resolve;
+      }),
+    );
+
+    const run = main([]);
+    await vi.waitFor(() => expect(getOrganizerAccessToken).toHaveBeenCalled());
+    // main has muted stderr; a stray rejection's handler must still be heard.
+    reportFatal(new TypeError(`bad ${MEMBER_NAME}`));
+    release('t');
+    await run;
+
+    expect(stderr.join('')).toContain('fatal: TypeError\n');
+    expect(stderr.join('')).not.toContain(MEMBER_NAME);
+  });
+
+  it('describeError does not trust a ClientError to carry a status', () => {
+    const error = new ClientError(
+      {
+        status: 500,
+        headers: new Headers(),
+        body: '',
+        errors: [new GraphQLError('x')],
+      },
+      { query: 'q' },
+    );
+    Reflect.set(error, 'response', undefined);
+    expect(describeError(error)).toBe('ClientError');
+  });
+
   it('reportFatal writes only the error type', () => {
     const error = new ClientError(
-      { status: 500, errors: [{ message: `body ${MEMBER_NAME}` }] },
+      {
+        status: 500,
+        headers: new Headers(),
+        body: '',
+        errors: [new GraphQLError(`body ${MEMBER_NAME}`)],
+      },
       { query: 'q' },
     );
     reportFatal(error);
