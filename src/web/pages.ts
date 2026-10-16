@@ -3,14 +3,14 @@ import dayjs from 'dayjs';
 
 import { DASHBOARD_BASE } from '../lib/reports/dashboardPaths.js';
 import { tz } from '../util/timezone.js';
-import { SafeHtml, html, localUrl, memberText, staticHtml } from './html.js';
+import { SafeHtml, html, localUrl, memberText, staticRaw } from './html.js';
 
 export interface PageUser {
   username: string;
   csrfToken: string;
 }
 
-const STYLE = staticHtml`
+const STYLE = staticRaw`
 body{font-family:system-ui,sans-serif;margin:0;color:#1f2328;background:#f6f8fa}
 header{display:flex;justify-content:space-between;align-items:center;padding:12px 24px;background:#5865F2;color:#fff}
 header form{margin:0}

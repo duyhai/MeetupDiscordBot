@@ -19,7 +19,7 @@ import {
 import { AttendanceEvidence } from '../lib/reports/types.js';
 import { tz } from '../util/timezone.js';
 import { dashboardLocals } from './dashboardRouter.js';
-import { SafeHtml, html, localUrl, staticHtml } from './html.js';
+import { SafeHtml, html, localUrl, staticRaw } from './html.js';
 import { discordProfileUrl, discordUserLink } from './links.js';
 import { errorPage, layout } from './pages.js';
 
@@ -48,7 +48,7 @@ const NAV = html`<nav class="site">
 
 /** Fixed text: copies the value of the textarea named by data-copy. Never carries data. */
 // eslint-disable-next-line @stylistic/max-len -- one line, so the script text is exactly what runs
-export const COPY_SCRIPT = staticHtml`document.querySelectorAll('button[data-copy]').forEach(function(b){b.addEventListener('click',function(){var t=document.getElementById(b.getAttribute('data-copy'));if(!t){return;}t.select();if(!navigator.clipboard){b.textContent='Select the text and copy it';return;}navigator.clipboard.writeText(t.value).then(function(){b.textContent='Copied';},function(){b.textContent='Select the text and copy it';});});});`;
+export const COPY_SCRIPT = staticRaw`document.querySelectorAll('button[data-copy]').forEach(function(b){b.addEventListener('click',function(){var t=document.getElementById(b.getAttribute('data-copy'));if(!t){return;}t.select();if(!navigator.clipboard){b.textContent='Select the text and copy it';return;}navigator.clipboard.writeText(t.value).then(function(){b.textContent='Copied';},function(){b.textContent='Select the text and copy it';});});});`;
 
 export function dashboardPage(
   res: Response,

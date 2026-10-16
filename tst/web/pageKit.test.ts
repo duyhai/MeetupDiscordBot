@@ -126,9 +126,9 @@ describe('pageKit', () => {
     const definition = source.slice(start, end);
     expect(definition).toContain('COPY_SCRIPT');
     expect(definition).not.toContain('${');
-    // One staticHtml template literal and nothing else.
+    // One staticRaw template literal and nothing else.
     expect(definition).toMatch(
-      /^export const COPY_SCRIPT = staticHtml`[^`]*`;\s*$/,
+      /^export const COPY_SCRIPT = staticRaw`[^`]*`;\s*$/,
     );
     expect(isSafeHtml(COPY_SCRIPT)).toBe(true);
     expect(COPY_SCRIPT.value).toContain('button[data-copy]');

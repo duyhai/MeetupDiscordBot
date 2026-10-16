@@ -14,6 +14,7 @@ import {
   pageLink,
   safeHref,
   staticHtml,
+  staticRaw,
 } from '../../src/web/html.js';
 
 /** safeHref's result as text, for comparisons. */
@@ -351,10 +352,11 @@ describe('URL attributes, widened', () => {
   it('finds a URL attribute after a slash or a closing quote', () => {
     // prettier-ignore
     expect(() => html`<a/href="${plain}">x</a>`).toThrow(UnsafeUrlError);
+    // No space between attributes is outside the supported subset.
     // prettier-ignore
-    expect(() => html`<a title="x"href="${plain}">x</a>`).toThrow(UnsafeUrlError);
+    expect(() => html`<a title="x"href="${plain}">x</a>`).toThrow(UnsafeAttributeError);
     // prettier-ignore
-    expect(() => html`<a title='x'href="${plain}">x</a>`).toThrow(UnsafeUrlError);
+    expect(() => html`<a title='x'href="${plain}">x</a>`).toThrow(UnsafeAttributeError);
     // prettier-ignore
     expect(() => html`<svg><use xlink:href="${plain}"/></svg>`).toThrow(UnsafeUrlError);
   });
@@ -514,8 +516,8 @@ describe('the forward tokenizer', () => {
     expect(() => html`<SCRIPT >${'x'}</SCRIPT>`).toThrow(UnsafeAttributeError);
   });
 
-  it('a constant staticHtml body may fill script or style, unless it could close the element', () => {
-    const css = staticHtml`a>b{color:red}`;
+  it('a constant staticRaw body may fill script or style, unless it could close the element', () => {
+    const css = staticRaw`a>b{color:red}`;
     // prettier-ignore
     expect(html`<style nonce="${'n'}">${css}</style>`.value).toBe('<style nonce="n">a>b{color:red}</style>');
     const closing = staticHtml`x</style><b>y</b>`;
@@ -549,8 +551,9 @@ describe('the forward tokenizer', () => {
     expect(() => html`</p ${'x'}>`).toThrow(UnsafeAttributeError);
     // prettier-ignore
     expect(html`<!-- a > b --><p>${'x'}</p>`.value).toBe('<!-- a > b --><p>x</p>');
+    // An abruptly closed comment is outside the subset.
     // prettier-ignore
-    expect(html`<!--><p>${'x'}</p>`.value).toBe('<!--><p>x</p>');
+    expect(() => html`<!--><p>${'x'}</p>`).toThrow(UnsafeAttributeError);
   });
 
   it('keeps the legitimate forms', () => {
@@ -608,4 +611,168 @@ describe('the forward tokenizer', () => {
     }
   });
   /* eslint-enable no-restricted-syntax */
+});
+
+describe('fix round 3: only a supported subset of HTML', () => {
+  const J = 'javascript:alert(1)';
+
+  it('refuses a comment that --!> would close (review probe)', () => {
+    // prettier-ignore
+    expect(() => html`<!-- x --!><a title="-->" href="${J}">x</a>`).toThrow();
+    // prettier-ignore
+    expect(() => html`<!-- a -- b --><p>${'x'}</p>`).toThrow(UnsafeAttributeError);
+    // prettier-ignore
+    expect(() => html`<!--><p>${'x'}</p>`).toThrow(UnsafeAttributeError);
+    // prettier-ignore
+    expect(() => html`<!---><p>${'x'}</p>`).toThrow(UnsafeAttributeError);
+    // prettier-ignore
+    expect(html`<!-- a > b --><p>${'x'}</p>`.value).toBe('<!-- a > b --><p>x</p>');
+  });
+
+  it('refuses style, script and CDATA in foreign content (review probes)', () => {
+    // prettier-ignore
+    expect(() => html`<svg><style><a title="</style>" href="${J}">x</a></style></svg>`).toThrow();
+    // prettier-ignore
+    expect(() => html`<svg><title><a title="</title>" href="${J}">x</a></title></svg>`).toThrow();
+    // prettier-ignore
+    expect(() => html`<math><style><a title="</style>" href="${J}">x</a></style></math>`).toThrow();
+    // prettier-ignore
+    expect(() => html`<svg><![CDATA[><b title=']]><a href="${J}">'>`).toThrow();
+    // prettier-ignore
+    expect(() => html`<svg><script>${'x'}</script></svg>`).toThrow(UnsafeAttributeError);
+  });
+
+  it('refuses a CDATA opener that comes from a constant fragment', () => {
+    expect(() => {
+      // prettier-ignore
+      const open = staticHtml`<svg><![CDATA[>`;
+      // prettier-ignore
+      return html`${open}<b title=']]><a href="${J}">'>`;
+    }).toThrow();
+    expect(() => staticHtml`<![CDATA[x]]>`).toThrow(UnsafeAttributeError);
+  });
+
+  it('a fragment with raw text or a marked-up title is refused inside svg', () => {
+    const styled = html`<b>x</b
+      ><style nonce="${'n'}">
+        ${staticRaw`a{}`}
+      </style>`;
+    // prettier-ignore
+    expect(() => html`<svg>${styled}</svg>`).toThrow(UnsafeAttributeError);
+    const markedTitle = staticHtml`<title><b>x</b></title>`;
+    // prettier-ignore
+    expect(() => html`<svg>${markedTitle}</svg>`).toThrow(UnsafeAttributeError);
+    expect(html`<p>${styled}</p>`.value).toContain('a{}');
+  });
+
+  it('keeps the chart: fragments with text-only titles inside svg', () => {
+    const c = '</title><script>alert(1)</script>';
+    const rect = html`<rect
+      x="${1}"
+      y="${2}"
+      width="${3}"
+      height="${4}"
+      fill="${'#0969da'}"
+      ><title>${c}: ${5}</title></rect
+    >`;
+    const dot = html`<circle cx="${1}" cy="${2}" r="3" fill="${'#000'}" />`;
+    const line = html`<polyline
+      points="${'0,0 1,1'}"
+      fill="none"
+      stroke="${'#000'}"
+      stroke-width="2"
+    />`;
+    const label = html`<text
+      x="${1}"
+      y="${2}"
+      font-size="11"
+      text-anchor="middle"
+      >${c}</text
+    >`;
+    const legend = html`<tspan fill="${'#000'}">■ </tspan><tspan>${c} </tspan>`;
+    // prettier-ignore
+    const chart = html`<svg class="chart" viewBox="0 0 ${640} ${240}" role="img" aria-label="${c}" xmlns="http://www.w3.org/2000/svg">
+      <title>${c}</title>
+      <line x1="${1}" y1="${2}" x2="${3}" y2="${4}" stroke="#8c959f" />
+      ${[rect, dot, line, label]}
+      <text x="${1}" y="${2}" font-size="11">${legend}</text>
+    </svg>`;
+    expect(chart.value).not.toContain('<script>');
+    expect(chart.value).toContain('&lt;/title&gt;&lt;script&gt;');
+  });
+
+  it('an RCDATA end tag cannot be completed by escaped data (review probes)', () => {
+    const userText = 'textarea';
+    // prettier-ignore
+    expect(() => html`<textarea>Hi </${userText}><a href="${J}">x</a></textarea>`).toThrow();
+    // prettier-ignore
+    expect(() => html`<title>A </titl${'e'}><a href="${J}">x</a></title>`).toThrow();
+    // prettier-ignore
+    expect(() => html`<textarea></textarea${' '}><a href="${J}">x</a>`).toThrow();
+    // Ordinary text in a textarea still works.
+    expect(html`<textarea readonly>${'a </textarea> b'}</textarea>`.value).toBe(
+      '<textarea readonly>a &lt;/textarea&gt; b</textarea>',
+    );
+  });
+
+  it('refuses unmodelled literal markup', () => {
+    for (const make of [
+      () => staticHtml`<?xml x?>`,
+      () => staticHtml`<!ELEMENT x>`,
+      () => staticHtml`</ x>`,
+      () => staticHtml`<p>a < b</p>`,
+      () => staticHtml`<plaintext>`,
+      () => staticHtml`<xmp>x</xmp>`,
+      () => staticHtml`<iframe></iframe>`,
+      () => staticHtml`<noscript></noscript>`,
+      () => staticHtml`<p></p><!doctype html>`,
+      () => staticHtml`<svg><p>x</p></svg>`,
+      () => staticHtml`<script>a<!--b</script>`,
+    ]) {
+      expect(make).toThrow(UnsafeAttributeError);
+    }
+    expect(staticHtml`<!DOCTYPE html><p>x</p>`.value).toBe(
+      '<!DOCTYPE html><p>x</p>',
+    );
+  });
+
+  it('only allow-listed attributes take data (onclick probe)', () => {
+    // prettier-ignore
+    expect(() => html`<b onclick="f('${'x'}')">y</b>`).toThrow(UnsafeAttributeError);
+    for (const make of [
+      () => html`<iframe srcdoc="${'x'}"></iframe>`,
+      () => html`<b style="${'color:red'}">y</b>`,
+      () => html`<meta content="${'0;url=javascript:x'}" />`,
+      () => html`<meta http-equiv="${'refresh'}" />`,
+      () => html`<svg><set to="${'x'}" /></svg>`,
+      () => html`<button formtarget="${'x'}">y</button>`,
+      () => html`<b ONMOUSEOVER="${'x'}">y</b>`,
+    ]) {
+      expect(make).toThrow(UnsafeAttributeError);
+    }
+    // prettier-ignore
+    const allowed = html`<b class="${'a'}" id="${'b'}" title="${'c'}" data-copy="${'d'}" aria-label="${'e'}">y</b>`;
+    expect(allowed.value).toContain('aria-label="e"');
+  });
+
+  it('a constant body cannot close its element at any point', () => {
+    // The reviewer's probe: the end tag completes mid-feed.
+    const sneaky = staticHtml`<title></style><img src=x onerror=alert(1)><style></title>`;
+    // prettier-ignore
+    expect(() => html`<style>${sneaky}</style>`).toThrow(UnsafeAttributeError);
+  });
+
+  it('staticRaw mints raw-text constants, checked as raw text', () => {
+    const js = staticRaw`if (a<b) { go(); }`;
+    // prettier-ignore
+    expect(html`<script nonce="${'n'}">${js}</script>`.value).toBe('<script nonce="n">if (a<b) { go(); }</script>');
+    expect(() => staticRaw`x</script>`).toThrow(UnsafeAttributeError);
+    expect(() => staticRaw`x<!--y`).toThrow(UnsafeAttributeError);
+    expect(() => staticRaw`x<`).toThrow(UnsafeAttributeError);
+    // A raw-text constant is not markup, and markup is not a raw-text body.
+    // prettier-ignore
+    expect(() => html`<p>${js}</p>`).toThrow(UnsafeAttributeError);
+    // prettier-ignore
+    expect(() => html`<style>${staticHtml`a{}`}</style>`).toThrow(UnsafeAttributeError);
+  });
 });
