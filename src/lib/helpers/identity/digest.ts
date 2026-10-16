@@ -117,6 +117,19 @@ const PHOTO_LIKE_FIELDS = new Set<IdentityField>([
   'photo',
 ]);
 
+/**
+ * Today's claim (held while a digest run is in progress) and completion keys,
+ * by UTC date. Exported so the report build job can stay out of the sweep's
+ * way without retyping the key names.
+ */
+export function identityDigestClaimKey(day: string): string {
+  return `identity-digest-${day}`;
+}
+
+export function identityDigestDoneKey(day: string): string {
+  return `identity-digest-done-${day}`;
+}
+
 export function shouldRunIdentityDigestNow(now: Date): boolean {
   return now.getUTCHours() === IDENTITY_DIGEST_UTC_HOUR;
 }
@@ -131,7 +144,7 @@ export function shouldRunIdentityDigestNow(now: Date): boolean {
  * never reach Discord, so only the class name is surfaced and the full error
  * goes to the process log.
  */
-function safeErrorSummary(error: unknown): string {
+export function safeErrorSummary(error: unknown): string {
   if (
     error instanceof Error &&
     (error as { organizerSafeMessage?: boolean }).organizerSafeMessage === true
@@ -380,8 +393,8 @@ export async function runIdentityDigestOnce(client: Client): Promise<void> {
   // day back up.
   const cache = await ApplicationCache();
   const today = new Date().toISOString().slice(0, 10);
-  const doneKey = `identity-digest-done-${today}`;
-  const claimKey = `identity-digest-${today}`;
+  const doneKey = identityDigestDoneKey(today);
+  const claimKey = identityDigestClaimKey(today);
 
   // Completion first. Without this the more frequent ticks below would
   // re-sweep and re-post all afternoon once the lease expired.
