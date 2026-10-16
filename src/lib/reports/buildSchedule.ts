@@ -1,4 +1,8 @@
-import { shouldRunIdentityDigestNow } from '../helpers/identity/digest.js';
+import {
+  IDENTITY_DIGEST_UTC_HOUR,
+  shouldRunIdentityDigestNow,
+} from '../helpers/identity/digest.js';
+import { DIGEST_UTC_HOUR } from '../helpers/unlinkedDigest.js';
 import {
   Period,
   periodEnd,
@@ -21,6 +25,40 @@ export const PREVIOUS_MONTH_LAST_DAILY_DAY = 7;
  */
 export function isQuietHour(now: Date): boolean {
   return shouldRunIdentityDigestNow(now);
+}
+
+/** Month builds stop STARTING this many minutes before the identity sweep. */
+export const SWEEP_LEAD_MINUTES = 15;
+
+/**
+ * Whether a month build may start now (job or manual): never from 17:45 UTC
+ * (too close to the 18:00 identity sweep, which makes a full-guild member
+ * pass on an R14-prone dyno) until 19:00 UTC. The job's own 16:00 start is
+ * planDueWork's business, not this rule's.
+ */
+export function canStartMonthBuild(now: Date): boolean {
+  if (isQuietHour(now)) {
+    return false;
+  }
+  return !(
+    now.getUTCHours() === IDENTITY_DIGEST_UTC_HOUR - 1 &&
+    now.getUTCMinutes() >= 60 - SWEEP_LEAD_MINUTES
+  );
+}
+
+/**
+ * Whether link progress (a full-guild member pass) may start now: only in the
+ * build window outside the unlinked digest's hour (17:00) and the identity
+ * sweep's hour (18:00), i.e. 16:00–17:00 and 19:00–24:00 UTC. digest.ts
+ * explains why the full member passes each get their own hour.
+ */
+export function canStartLinkProgress(now: Date): boolean {
+  const hour = now.getUTCHours();
+  return (
+    hour >= BUILD_UTC_HOUR &&
+    hour !== DIGEST_UTC_HOUR &&
+    hour !== IDENTITY_DIGEST_UTC_HOUR
+  );
 }
 
 /** Today's (UTC date) due time: 16:00 UTC. */
@@ -63,7 +101,9 @@ export interface DuePlanInput {
  *   On days 2–7 it is rebuilt daily like the current month; on any later day
  *   it catches up when either type has no build made after the month ended
  *   (bot down on the 2nd–7th, or first deploy mid-month).
- * - Link progress: no row for today's UTC date.
+ * - Link progress: no row for today's UTC date, and only when
+ *   canStartLinkProgress (never 17:00–19:00 UTC).
+ * - No month from 17:45 UTC (canStartMonthBuild).
  */
 export function planDueWork({
   now,
@@ -85,7 +125,8 @@ export function planDueWork({
 
   const items: DueItem[] = [];
   const day = now.getUTCDate();
-  if (day >= 2) {
+  const monthsMayStart = canStartMonthBuild(now);
+  if (monthsMayStart && day >= 2) {
     if (day <= PREVIOUS_MONTH_LAST_DAILY_DAY && anyBuiltBefore(previous, due)) {
       items.push({ kind: 'month', period: previous, reason: 'previous-daily' });
     } else if (anyBuiltBefore(previous, periodEnd(previous))) {
@@ -96,10 +137,10 @@ export function planDueWork({
       });
     }
   }
-  if (anyBuiltBefore(current, due)) {
+  if (monthsMayStart && anyBuiltBefore(current, due)) {
     items.push({ kind: 'month', period: current, reason: 'current' });
   }
-  if (!linkProgressWrittenToday) {
+  if (!linkProgressWrittenToday && canStartLinkProgress(now)) {
     items.push({ kind: 'link-progress', day: utcDay(now) });
   }
   return items;

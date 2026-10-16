@@ -157,6 +157,40 @@ describe('runBuildTick guards', () => {
     expect(h.cache.values.has(LEASE_KEY)).toBe(false);
   });
 
+  it('a tick whose first month runs to 17:46 does not start the second', async () => {
+    const h = makeDeps({ clock: new Clock('2026-10-05T17:30:00Z') });
+    h.fetchMonthReports.mockImplementationOnce((period) => {
+      h.clock.set('2026-10-05T17:46:00Z');
+      return Promise.resolve(monthReports(period));
+    });
+    await runBuildTick(h.deps);
+    expect(fetchedPeriods(h)).toEqual(['2026-9']);
+    expect(h.cache.values.has(LEASE_KEY)).toBe(false);
+  });
+
+  it('a month that ends in hour 17 does not start link progress', async () => {
+    const h = makeDeps({ clock: new Clock('2026-10-05T16:59:00Z') });
+    h.snapshots.seedBoth(SEPT, '2026-10-05T16:05:00Z');
+    h.fetchMonthReports.mockImplementationOnce((period) => {
+      h.clock.set('2026-10-05T17:01:00Z');
+      return Promise.resolve(monthReports(period));
+    });
+    await runBuildTick(h.deps);
+    expect(fetchedPeriods(h)).toEqual(['2026-10']);
+    expect(h.collectLinkProgress).not.toHaveBeenCalled();
+  });
+
+  it('plans with a fresh clock once the lease is held', async () => {
+    // A tick that hung on Redis across midnight must plan for the new day.
+    const h = makeDeps({ clock: new Clock('2026-10-05T23:58:00Z') });
+    h.cacheSpy.mockImplementationOnce(() => {
+      h.clock.set('2026-10-06T16:05:00Z');
+      return Promise.resolve(h.cache);
+    });
+    await runBuildTick(h.deps);
+    expect([...h.linkProgress.days.keys()]).toEqual(['2026-10-06']);
+  });
+
   it('a missing Redis done-key does not rebuild a month Postgres shows as built', async () => {
     const h = makeDeps();
     h.snapshots.seedBoth(SEPT, '2026-10-05T16:05:00Z');
@@ -423,6 +457,25 @@ describe('failure alerts', () => {
     h.fetchMonthReports.mockRejectedValue(new OrganizerTokenUnavailableError());
     await runBuildTick(h.deps);
     expect(descriptions(h.alert)[0]).toContain('/dashboard/organizer-login');
+  });
+
+  it('describeBuildError: a GraphQL error on HTTP 200 shows neither body nor message', () => {
+    const SENTINEL = 'RAW-GQL-SENTINEL-4d2e';
+    const gqlError = new ClientError(
+      {
+        status: 200,
+        headers: new Headers(),
+        body: SENTINEL,
+        errors: [{ message: SENTINEL } as never],
+      },
+      { query: SENTINEL },
+    );
+    expect(describeBuildError(gqlError)).toBe('Meetup GraphQL error');
+    const emptyErrors = new ClientError(
+      { status: 200, headers: new Headers(), body: SENTINEL, errors: [] },
+      { query: '' },
+    );
+    expect(describeBuildError(emptyErrors)).toBe('Meetup API error (HTTP 200)');
   });
 
   it('describeBuildError: status only for ClientError, message only for organizer-safe errors', () => {
@@ -742,6 +795,21 @@ describe('requestRebuild', () => {
     const result = await requestRebuild(h.deps, SEPT, REQUESTER);
     expect(result.status).toBe('busy');
     expect(h.fetchMonthReports).not.toHaveBeenCalled();
+  });
+
+  it('requestRebuild refused from 17:45 UTC, allowed at 17:44', async () => {
+    const h = makeDeps({ clock: new Clock('2026-10-05T17:45:00Z') });
+    const result = await requestRebuild(h.deps, SEPT, REQUESTER);
+    expect(result).toEqual({
+      status: 'quiet-hour',
+      message:
+        'Reports are not rebuilt between 17:45 and 19:00 UTC while the daily identity sweep runs. Try again after 19:00 UTC.',
+    });
+    expect(h.cacheSpy).not.toHaveBeenCalled();
+    h.clock.set('2026-10-05T17:44:59.999Z');
+    expect((await requestRebuild(h.deps, SEPT, REQUESTER)).status).toBe(
+      'started',
+    );
   });
 
   it('requestRebuild refused 18:00–19:00 UTC', async () => {

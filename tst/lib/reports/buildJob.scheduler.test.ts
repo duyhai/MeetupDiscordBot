@@ -36,8 +36,7 @@ describe('runBuildTickSafely', () => {
     expect(log.error).toHaveBeenCalledTimes(1);
     const message = String(log.error.mock.calls[0][0]);
     expect(message.startsWith('Report build tick failed')).toBe(true);
-    expect(message).toContain('TypeError');
-    expect(message).not.toContain('no pool');
+    expect(message).toBe('Report build tick failed: TypeError: no pool');
   });
 
   it('tick swallows and logs errors when the tick itself rejects', async () => {
@@ -52,8 +51,21 @@ describe('runBuildTickSafely', () => {
     expect(harness.cacheSpy).toHaveBeenCalled();
     expect(log.error).toHaveBeenCalledTimes(1);
     const message = String(log.error.mock.calls[0][0]);
-    expect(message.startsWith('Report build tick failed')).toBe(true);
-    expect(message).not.toContain('redis down');
+    expect(message).toBe('Report build tick failed: Error: redis down');
+  });
+
+  it('an infra error message reaches the process log', async () => {
+    const log = fakeLog();
+    const harness = makeDeps();
+    harness.deps.linkProgress.hasDay = () =>
+      Promise.reject(new Error('connect ECONNREFUSED 127.0.0.1:5432'));
+
+    await runBuildTickSafely(() => Promise.resolve(harness.deps), log);
+
+    expect(log.error).toHaveBeenCalledTimes(1);
+    expect(String(log.error.mock.calls[0][0])).toContain(
+      'connect ECONNREFUSED 127.0.0.1:5432',
+    );
   });
 });
 
@@ -68,8 +80,8 @@ describe('startReportBuildScheduler', () => {
 
   it('ticks every 15 minutes and once at start', () => {
     const { calls, setIntervalFn } = captureInterval();
-    const harness = makeDeps();
-    const makeDepsFn = vi.fn(() => Promise.resolve(harness.deps));
+    // Never resolves: nothing from this tick runs after the test ends.
+    const makeDepsFn = vi.fn(() => new Promise<BuildJobDeps>(() => undefined));
 
     startReportBuildScheduler(client, {
       env: DB_ENV,
@@ -124,6 +136,56 @@ describe('startReportBuildScheduler', () => {
     expect(makeDepsFn).toHaveBeenCalledTimes(1);
     expect(log.info).toHaveBeenCalledTimes(1);
     expect(String(log.info.mock.calls[0][0])).toContain('still running');
+  });
+
+  it('warns once per streak when a tick has run longer than the lease TTL', async () => {
+    const { calls, setIntervalFn } = captureInterval();
+    const log = fakeLog();
+    let nowMs = Date.parse('2026-10-05T16:00:00Z');
+    let finish: () => void = () => undefined;
+    let first = true;
+    const makeDepsFn = vi.fn(() => {
+      if (first) {
+        first = false;
+        // The first tick hangs until the test lets it finish (with a failure).
+        return new Promise<BuildJobDeps>((_resolve, reject) => {
+          finish = () => reject(new Error('released'));
+        });
+      }
+      return new Promise<BuildJobDeps>(() => undefined);
+    });
+
+    startReportBuildScheduler(client, {
+      env: DB_ENV,
+      makeDeps: makeDepsFn,
+      setIntervalFn,
+      log,
+      now: () => nowMs,
+    });
+    const WEDGED = 'Report build tick has been running for over 30 minutes';
+    const wedgedWarnings = () =>
+      log.warn.mock.calls.filter(([m]) => m === WEDGED).length;
+
+    nowMs += 15 * 60 * 1000;
+    calls[0].fn(); // 15 min: skipped, not wedged
+    expect(wedgedWarnings()).toBe(0);
+    nowMs += 15 * 60 * 1000;
+    calls[0].fn(); // exactly 30 min: not over the TTL yet
+    expect(wedgedWarnings()).toBe(0);
+    nowMs += 1;
+    calls[0].fn(); // over 30 min: one warning
+    nowMs += 15 * 60 * 1000;
+    calls[0].fn(); // same streak: no second warning
+    expect(wedgedWarnings()).toBe(1);
+
+    // The wedged tick finally ends; a new streak can warn again.
+    finish();
+    await settle();
+    calls[0].fn(); // starts a new (hanging) tick
+    expect(makeDepsFn).toHaveBeenCalledTimes(2);
+    nowMs += 31 * 60 * 1000;
+    calls[0].fn();
+    expect(wedgedWarnings()).toBe(2);
   });
 
   it('runs the next tick once the previous one has finished, even after a failure', async () => {

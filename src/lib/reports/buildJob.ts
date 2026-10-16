@@ -24,11 +24,14 @@ import { PostgresReportSnapshotRepository } from '../repositories/postgresReport
 import { PostgresSuspensionRepository } from '../repositories/postgresSuspensionRepository.js';
 import {
   acquireBuildLease,
+  BUILD_LEASE_TTL_SEC,
   identityDigestInProgress,
   releaseBuildLease,
 } from './buildLease.js';
 import {
   BUILD_UTC_HOUR,
+  canStartLinkProgress,
+  canStartMonthBuild,
   isQuietHour,
   planDueWork,
   snapshotKey,
@@ -96,7 +99,17 @@ export const reportMonthUrl = (period: Period): string =>
  */
 export function describeBuildError(error: unknown): string {
   if (error instanceof ClientError) {
-    const status = (error.response as { status?: unknown } | undefined)?.status;
+    const response = error.response as
+      { status?: unknown; errors?: unknown } | undefined;
+    const status = response?.status;
+    // Meetup reports query errors with HTTP 200; their text can echo input.
+    if (
+      status === 200 &&
+      Array.isArray(response?.errors) &&
+      response.errors.length > 0
+    ) {
+      return 'Meetup GraphQL error';
+    }
     return `Meetup API error (HTTP ${typeof status === 'number' ? status : 'unknown'})`;
   }
   return safeErrorSummary(error);
@@ -399,20 +412,29 @@ export async function runBuildTick(deps: BuildJobDeps): Promise<void> {
     return;
   }
   try {
+    // Re-read the clock: a tick stuck on a Redis outage must not plan (or
+    // pick today's link-progress day) with the time it started at.
+    const planNow = deps.now();
     const plan = planDueWork({
-      now,
-      builtAt: await loadBuiltAt(deps, now),
-      linkProgressWrittenToday: await deps.linkProgress.hasDay(utcDay(now)),
+      now: planNow,
+      builtAt: await loadBuiltAt(deps, planNow),
+      linkProgressWrittenToday: await deps.linkProgress.hasDay(utcDay(planNow)),
     });
     for (const item of plan) {
       const startAt = deps.now();
+      const mayStart =
+        item.kind === 'month'
+          ? canStartMonthBuild(startAt)
+          : canStartLinkProgress(startAt);
       if (
-        isQuietHour(startAt) ||
+        !mayStart ||
         // eslint-disable-next-line no-await-in-loop -- sequential on purpose: one month at a time
         (await identityDigestInProgress(cache, startAt))
       ) {
+        // Items come months first, then link progress, and neither window
+        // reopens before 19:00 UTC, so nothing later in the plan could start.
         logger.info(
-          'Report build stopped early: quiet hour or identity digest',
+          'Report build stopped early: too close to the identity sweep or the digests',
         );
         break;
       }
@@ -537,11 +559,11 @@ export async function requestRebuild(
     return { status: 'bad-month', message: 'That is not a valid month.' };
   }
   const now = deps.now();
-  if (isQuietHour(now)) {
+  if (!canStartMonthBuild(now)) {
     return {
       status: 'quiet-hour',
       message:
-        'Reports are not rebuilt between 18:00 and 19:00 UTC while the daily identity sweep runs. Try again after 19:00 UTC.',
+        'Reports are not rebuilt between 17:45 and 19:00 UTC while the daily identity sweep runs. Try again after 19:00 UTC.',
     };
   }
   if (comparePeriods(period, periodOf(now)) > 0) {
@@ -646,11 +668,6 @@ export const BUILD_TICK_MS = 15 * 60 * 1000;
 
 type SchedulerLog = Pick<Logger<unknown>, 'error' | 'warn' | 'info'>;
 
-/** Only the class name: a tick error may embed a raw Meetup body or a query. */
-function errorName(error: unknown): string {
-  return error instanceof Error ? error.name : 'unknown error';
-}
-
 /** Never rejects: dependency or tick failures are logged. */
 export async function runBuildTickSafely(
   makeDeps: () => Promise<BuildJobDeps>,
@@ -659,7 +676,9 @@ export async function runBuildTickSafely(
   try {
     await runBuildTick(await makeDeps());
   } catch (error) {
-    log.error(`Report build tick failed: ${errorName(error)}`);
+    // Process log only (never Discord): what reaches here is infrastructure
+    // (pg, Redis, the lease), and operators need its text.
+    log.error(`Report build tick failed: ${String(error)}`);
   }
 }
 
@@ -668,6 +687,8 @@ export interface ReportBuildSchedulerOptions {
   makeDeps?: () => Promise<BuildJobDeps>;
   setIntervalFn?: typeof setInterval;
   log?: SchedulerLog;
+  /** Milliseconds since the epoch (tests). */
+  now?: () => number;
 }
 
 /**
@@ -688,8 +709,11 @@ export function startReportBuildScheduler(
     return;
   }
   const makeDeps = options.makeDeps ?? (() => defaultBuildJobDeps(client));
+  const now = options.now ?? Date.now;
   let running = false;
   let skipLogged = false;
+  let tickStartedAt = 0;
+  let wedgeWarned = false;
   const tick = () => {
     if (running) {
       if (!skipLogged) {
@@ -698,10 +722,18 @@ export function startReportBuildScheduler(
         );
         skipLogged = true;
       }
+      // Past the lease TTL another process may take the lease, and this
+      // process stays blocked until the stuck tick ends: say so once.
+      if (!wedgeWarned && now() - tickStartedAt > BUILD_LEASE_TTL_SEC * 1000) {
+        log.warn('Report build tick has been running for over 30 minutes');
+        wedgeWarned = true;
+      }
       return;
     }
     running = true;
     skipLogged = false;
+    wedgeWarned = false;
+    tickStartedAt = now();
     runBuildTickSafely(makeDeps, log)
       .finally(() => {
         running = false;

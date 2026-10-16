@@ -8,7 +8,11 @@ import { HallOfFamePayload, NoShowPayload } from './types.js';
 export interface MonthReports {
   hallOfFame: HallOfFamePayload;
   noShow: NoShowPayload;
-  /** Built from a complete Meetup read; attendance is never inferred. */
+  /**
+   * Always true: since the ATTENDED ruling nothing infers incompleteness from
+   * attendance (hosts mark no-shows only). Kept, with the source_complete
+   * column, for future sources that can be partial.
+   */
   sourceComplete: boolean;
 }
 

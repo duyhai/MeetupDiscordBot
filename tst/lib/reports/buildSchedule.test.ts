@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 
 import {
   BUILD_UTC_HOUR,
+  canStartLinkProgress,
+  canStartMonthBuild,
   DueItem,
   dueTimeToday,
   isQuietHour,
@@ -72,9 +74,67 @@ describe('buildSchedule', () => {
     expect(isQuietHour(new Date('2026-10-05T18:59:59.999Z'))).toBe(true);
     expect(isQuietHour(new Date('2026-10-05T17:59:59.999Z'))).toBe(false);
     expect(isQuietHour(new Date('2026-10-05T19:00:00.000Z'))).toBe(false);
-    // Both edges of the hour plan normally.
-    expect(plan('2026-10-05T17:59:59.999Z', [], false)).not.toEqual([]);
+    // 19:00 plans normally again; the hour before is covered by the
+    // sweep-lead rules tested below.
     expect(plan('2026-10-05T19:00:00.000Z', [], false)).not.toEqual([]);
+  });
+
+  it('17:00 plans no link progress (the unlinked digest hour)', () => {
+    expect(plan('2026-10-05T17:00:00.000Z', [], false)).toEqual([
+      { kind: 'month', period: SEPT, reason: 'previous-daily' },
+      { kind: 'month', period: OCT, reason: 'current' },
+    ]);
+    expect(plan('2026-10-05T16:59:59.999Z', [], false)).toContainEqual({
+      kind: 'link-progress',
+      day: '2026-10-05',
+    });
+    expect(canStartLinkProgress(new Date('2026-10-05T16:59:59.999Z'))).toBe(
+      true,
+    );
+    expect(canStartLinkProgress(new Date('2026-10-05T17:00:00.000Z'))).toBe(
+      false,
+    );
+    expect(canStartLinkProgress(new Date('2026-10-05T18:30:00.000Z'))).toBe(
+      false,
+    );
+    expect(canStartLinkProgress(new Date('2026-10-05T18:59:59.999Z'))).toBe(
+      false,
+    );
+    expect(canStartLinkProgress(new Date('2026-10-05T15:59:59.999Z'))).toBe(
+      false,
+    );
+  });
+
+  it('17:44 can start a month and 17:45 cannot', () => {
+    expect(canStartMonthBuild(new Date('2026-10-05T17:44:59.999Z'))).toBe(true);
+    expect(canStartMonthBuild(new Date('2026-10-05T17:45:00.000Z'))).toBe(
+      false,
+    );
+    expect(canStartMonthBuild(new Date('2026-10-05T18:30:00.000Z'))).toBe(
+      false,
+    );
+    expect(canStartMonthBuild(new Date('2026-10-05T18:59:59.999Z'))).toBe(
+      false,
+    );
+    expect(plan('2026-10-05T17:44:59.999Z', [], false)).toEqual([
+      { kind: 'month', period: SEPT, reason: 'previous-daily' },
+      { kind: 'month', period: OCT, reason: 'current' },
+    ]);
+    expect(plan('2026-10-05T17:45:00.000Z', [], false)).toEqual([]);
+  });
+
+  it('19:00 can do both', () => {
+    const at = new Date('2026-10-05T19:00:00.000Z');
+    expect(canStartMonthBuild(at)).toBe(true);
+    expect(canStartLinkProgress(at)).toBe(true);
+    expect(canStartLinkProgress(new Date('2026-10-05T23:59:59.999Z'))).toBe(
+      true,
+    );
+    expect(plan('2026-10-05T19:00:00.000Z', [], false)).toEqual([
+      { kind: 'month', period: SEPT, reason: 'previous-daily' },
+      { kind: 'month', period: OCT, reason: 'current' },
+      { kind: 'link-progress', day: '2026-10-05' },
+    ]);
   });
 
   it('nothing is due before 16:00 UTC', () => {
