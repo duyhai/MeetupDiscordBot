@@ -106,6 +106,8 @@ export interface LockedCredential {
 export interface CredentialRepositoryOptions {
   /** Test-only override of the lock wait bound. */
   lockTimeoutMs?: number;
+  /** Test-only: the pool's application_name, to find its backend in pg_stat_activity. */
+  applicationName?: string;
 }
 
 interface CredentialRow {
@@ -173,6 +175,7 @@ export class PostgresCredentialRepository {
       connectionString.includes('127.0.0.1');
     this.pool = new pg.Pool({
       connectionString,
+      application_name: options.applicationName,
       // This credential is read once per sweep, not per request -- a single
       // connection is enough and keeps this repository from competing with
       // the member and identity repositories for essential-0's 20 slots.

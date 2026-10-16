@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import { Client } from 'discord.js';
 import pg from 'pg';
 import {
@@ -251,7 +252,22 @@ describe.skipIf(!POSTGRES_AVAILABLE)(
       // Two repository instances, each with its own pool and so its own
       // Postgres session, stand in for two processes.
       const first = PostgresCredentialRepository.createIsolatedForTest();
-      const second = PostgresCredentialRepository.createIsolatedForTest();
+      // Named, so B's own backend can be told from any other lock waiter.
+      const raceB = `race-b-${crypto.randomUUID()}`;
+      const second = PostgresCredentialRepository.createIsolatedForTest({
+        applicationName: raceB,
+      });
+      const bIsQueued = async (): Promise<boolean> => {
+        const { rows } = await observer.query<{ waiting: string }>(
+          `SELECT count(*) AS waiting
+             FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid
+            WHERE l.locktype = 'advisory' AND l.classid = $1 AND l.objid = $2
+              AND l.objsubid = 1 AND NOT l.granted
+              AND a.application_name = $3`,
+          [LOCK_CLASSID, LOCK_OBJID, raceB],
+        );
+        return Number(rows[0].waiting) === 1;
+      };
       try {
         await first.put(KEY, {
           accessToken: 'EXPIRED-ACCESS',
@@ -279,16 +295,13 @@ describe.skipIf(!POSTGRES_AVAILABLE)(
 
         // Process B (a client-less script: a different in-process key, so
         // it does not join A) queues on the advisory lock.
+        // Wait until B's own backend is queued -- or, if nothing serializes
+        // them, until B has refreshed too, so the assertions below say so.
         const b = getOrganizerAccessToken();
+        let sawBQueued = false;
         await vi.waitFor(async () => {
-          const { rows } = await observer.query<{ waiting: string }>(
-            `SELECT count(*) AS waiting FROM pg_locks
-              WHERE locktype = 'advisory' AND classid = $1 AND objid = $2
-                AND objsubid = 1 AND NOT granted`,
-            [LOCK_CLASSID, LOCK_OBJID],
-          );
-          // At least B; the repository suite may queue on the lock too.
-          expect(Number(rows[0].waiting)).toBeGreaterThanOrEqual(1);
+          sawBQueued = await bIsQueued();
+          expect(sawBQueued || refresh.mock.calls.length >= 2).toBe(true);
         });
 
         releaseRefresh({
@@ -296,12 +309,12 @@ describe.skipIf(!POSTGRES_AVAILABLE)(
           refreshToken: 'ROTATED-A',
           expiresAt: Date.now() + 3600 * 1000,
         });
+        const results = await Promise.all([a, b]);
 
-        await expect(Promise.all([a, b])).resolves.toEqual([
-          'ACCESS-A',
-          'ACCESS-A',
-        ]);
+        // The double-refresh check first: it is what the lock prevents.
         expect(refresh).toHaveBeenCalledTimes(1);
+        expect(sawBQueued).toBe(true); // the race really happened
+        expect(results).toEqual(['ACCESS-A', 'ACCESS-A']);
         expect(refresh).toHaveBeenCalledWith('STORED-REFRESH');
         expect((await repo.get(KEY))?.refreshToken).toBe('ROTATED-A');
       } finally {
