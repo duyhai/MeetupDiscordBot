@@ -10,13 +10,18 @@ afterEach(closeServers);
 
 const root = path.resolve(__dirname, '../..');
 
+// Any quoted specifier naming the package or one of its subpaths: static, side-effect,
+// dynamic, multi-line and require forms. Built at runtime so this file's own
+// source does not contain the quoted literal and match itself.
+const quotedSupertest = new RegExp(`['"]${'super' + 'test'}(/[^'"]*)?['"]`);
+
 const tsFilesUnder = (dir: string): string[] =>
   fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
     const full = path.join(dir, entry.name);
     if (entry.isDirectory()) {
       return entry.name === '__goldens__' ? [] : tsFilesUnder(full);
     }
-    return entry.name.endsWith('.ts') ? [full] : [];
+    return /\.(ts|mts|tsx)$/.test(entry.name) ? [full] : [];
   });
 
 describe('loopbackServer', () => {
@@ -36,11 +41,7 @@ describe('loopbackServer', () => {
 
   it('no file under tst/ but loopbackServer.ts imports supertest', () => {
     const importers = tsFilesUnder(path.join(root, 'tst'))
-      .filter((file) =>
-        /from ['"]supertest['"]|require\(['"]supertest['"]\)/.test(
-          fs.readFileSync(file, 'utf8'),
-        ),
-      )
+      .filter((file) => quotedSupertest.test(fs.readFileSync(file, 'utf8')))
       .map((file) => path.relative(root, file).split(path.sep).join('/'));
     expect(importers).toEqual(['tst/setup/loopbackServer.ts']);
   });
