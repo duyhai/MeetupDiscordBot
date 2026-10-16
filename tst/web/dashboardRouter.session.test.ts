@@ -114,6 +114,54 @@ describe('dashboard session gate', () => {
   });
 });
 
+describe('dashboard home organizer status', () => {
+  const status = (over: Record<string, unknown> = {}) => ({
+    stored: true,
+    failingSince: null,
+    ...over,
+  });
+
+  it('home shows the organizer login status from homeStatus', async () => {
+    const { req } = await makeApp({
+      homeStatus: async () => status() as never,
+    });
+    const cookie = await signIn(req);
+    const res = await req.get('/dashboard').set('Cookie', cookie);
+    expect(res.status).toBe(200);
+    expect(res.text).toContain('OK (no failure on record)');
+    expect(res.text).toContain('href="/dashboard/organizer-login"');
+  });
+
+  it('home shows Not set up when there is no credential store', async () => {
+    const { req } = await makeApp({ homeStatus: async () => undefined });
+    const cookie = await signIn(req);
+    const res = await req.get('/dashboard').set('Cookie', cookie);
+    expect(res.text).toContain('Not set up');
+  });
+
+  it('home still answers 200 with "Status unavailable" when homeStatus throws', async () => {
+    const { req } = await makeApp({
+      homeStatus: async () => {
+        throw new Error('db down');
+      },
+    });
+    const cookie = await signIn(req);
+    const res = await req.get('/dashboard').set('Cookie', cookie);
+    expect(res.status).toBe(200);
+    expect(res.text).toContain('Status unavailable');
+    expect(res.text).not.toContain('db down');
+  });
+
+  it('signed-out home still redirects', async () => {
+    const { req } = await makeApp({
+      homeStatus: async () => status() as never,
+    });
+    const res = await req.get('/dashboard');
+    expect(res.status).toBe(302);
+    expect(res.headers.location).toBe('/dashboard/login');
+  });
+});
+
 describe('signed-out requests leave the session cookie alone', () => {
   const clearsSid = (res: { headers: Record<string, unknown> }) =>
     ((res.headers['set-cookie'] ?? []) as string[]).some((c) =>

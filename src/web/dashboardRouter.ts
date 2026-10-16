@@ -18,7 +18,13 @@ import {
   serializeCookie,
 } from './cookies.js';
 import { openOAuthCookie, sealOAuthCookie } from './oauthCookie.js';
-import { errorPage, homePage, loginPage } from './pages.js';
+import {
+  HomeOrganizerStatus,
+  errorPage,
+  homePage,
+  loginPage,
+} from './pages.js';
+import type { OrganizerCredentialStatus } from './routes/organizerLogin.js';
 import { FixedWindowLimiter } from './rateLimit.js';
 import { AccessCheck } from './roleGate.js';
 import {
@@ -84,6 +90,11 @@ export interface DashboardDeps {
    * send the token in the `X-CSRF-Token` header.
    */
   protectedRoutes?: (router: express.Router) => void;
+  /**
+   * The shared organizer login's status for the home page. Read-only; never
+   * returns tokens. Left out, the home page links to the page without a status.
+   */
+  homeStatus?: () => Promise<OrganizerCredentialStatus | undefined>;
 }
 
 interface Locals {
@@ -93,6 +104,29 @@ interface Locals {
 }
 
 const locals = (res: Response) => res.locals as Locals;
+
+async function organizerStatus(
+  deps: DashboardDeps,
+): Promise<HomeOrganizerStatus | undefined> {
+  if (!deps.homeStatus) {
+    return undefined;
+  }
+  try {
+    const status = await deps.homeStatus();
+    if (!status || !status.stored) {
+      return { kind: 'not-set-up' };
+    }
+    return status.failingSince
+      ? { kind: 'failing', since: new Date(status.failingSince) }
+      : { kind: 'ok' };
+  } catch (error) {
+    // The name only: a database error message can carry connection details.
+    logger.warn(
+      `Dashboard home organizer status failed: ${error instanceof Error ? error.name : 'Error'}`,
+    );
+    return { kind: 'unavailable' };
+  }
+}
 
 /**
  * What the session gate leaves for a route registered through
@@ -486,10 +520,10 @@ export function createDashboardRouter(deps: DashboardDeps): express.Router {
     next();
   });
 
-  protectedRouter.get('/', (_req, res) => {
+  protectedRouter.get('/', (async (_req, res) => {
     const { session, nonce } = locals(res);
-    send(res, 200, homePage(session, nonce));
-  });
+    send(res, 200, homePage(session, nonce, await organizerStatus(deps)));
+  }) as RequestHandler);
 
   protectedRouter.post('/logout', (async (_req, res) => {
     // Clear the cookie first, so the browser forgets it even if the store

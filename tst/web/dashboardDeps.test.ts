@@ -1,5 +1,5 @@
 import express from 'express';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { BASE_DISCORD_BOT_URL } from '../../src/constants.js';
 import {
@@ -7,8 +7,17 @@ import {
   dashboardOrigin,
   dashboardRouterFromEnv,
 } from '../../src/web/dashboardDeps.js';
+import { organizerLoginDeps } from '../../src/web/organizerLoginDeps.js';
 import { protectedRouteList } from '../../src/web/dashboardRouter.js';
 import { closeServers, serve } from './dashboardHarness.js';
+
+vi.mock('../../src/web/organizerLoginDeps.js', async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import('../../src/web/organizerLoginDeps.js')
+    >();
+  return { ...actual, organizerLoginDeps: vi.fn(actual.organizerLoginDeps) };
+});
 
 afterEach(closeServers);
 
@@ -55,6 +64,12 @@ describe('dashboardRouterFromEnv', () => {
         { method: 'get', path: '/organizer-login/complete' },
       ]),
     );
+  });
+
+  it('builds the organizer deps once and shares them with the home status', () => {
+    vi.mocked(organizerLoginDeps).mockClear();
+    dashboardRouterFromEnv({ DASHBOARD_SESSION_SECRET: 'k'.repeat(48) });
+    expect(organizerLoginDeps).toHaveBeenCalledTimes(1);
   });
 
   it('redirects plain HTTP to HTTPS when the origin is HTTPS', async () => {

@@ -1,4 +1,7 @@
 // src/web/pages.ts
+import dayjs from 'dayjs';
+
+import { tz } from '../util/timezone.js';
 import { SafeHtml, html, memberText } from './html.js';
 
 export interface PageUser {
@@ -51,15 +54,44 @@ export function layout({
 </html>`.value;
 }
 
-export function homePage(user: PageUser, nonce: string): string {
+/** What the home page says about the shared organizer login. No tokens or ids. */
+export type HomeOrganizerStatus =
+  | { kind: 'ok' }
+  | { kind: 'failing'; since: Date }
+  | { kind: 'not-set-up' }
+  | { kind: 'unavailable' };
+
+function organizerStatusText(status: HomeOrganizerStatus): string {
+  switch (status.kind) {
+    case 'ok':
+      return 'OK (no failure on record)';
+    case 'failing':
+      return `Failing since ${tz(dayjs(status.since)).format('MMM D, YYYY h:mm A')} Pacific time`;
+    case 'not-set-up':
+      return 'Not set up';
+    case 'unavailable':
+      return 'Status unavailable';
+  }
+}
+
+export function homePage(
+  user: PageUser,
+  nonce: string,
+  organizer?: HomeOrganizerStatus,
+): string {
   return layout({
     title: 'Home',
     nonce,
     user,
     body: html`<div class="card">
-      <h1>Welcome</h1>
-      <p>Reports will appear here once the monthly build job is running.</p>
-    </div>`,
+        <h1>Welcome</h1>
+        <p>Reports will appear here once the monthly build job is running.</p>
+      </div>
+      <div class="card">
+        <h2>Organizer login</h2>
+        ${organizer ? html`<p>${organizerStatusText(organizer)}</p>` : ''}
+        <p><a href="/dashboard/organizer-login">Organizer login</a></p>
+      </div>`,
   });
 }
 
