@@ -24,6 +24,9 @@ import {
 } from '../util/credentialRepository.js';
 import { OrganizerLoginDeps } from './routes/organizerLogin.js';
 
+// The renew callback also exchanges the code (10 s) inside one request.
+const RENEW_SELF_ID_TIMEOUT_MS = 10_000;
+
 /**
  * The in-lock guard refused: a different organizer account was recorded
  * after the route checked it. Named so the log tells it from an outage.
@@ -100,9 +103,12 @@ export function organizerLoginDeps(
     buildAuthUrl: buildMeetupAuthUrl,
     exchangeCode: exchangeMeetupCode,
     // Minimal `self { id }` lookup: no profile is fetched or logged, and the
-    // id is refused unless it is all digits.
+    // id is refused unless it is all digits. A 10 s deadline (not the 30 s
+    // default) keeps the renewal nearer Heroku's 30 s router limit.
     fetchMeetupMemberId: async (accessToken) =>
-      new GqlMeetupClient(accessToken).getSelfId(),
+      new GqlMeetupClient(accessToken, {
+        timeoutMs: RENEW_SELF_ID_TIMEOUT_MS,
+      }).getSelfId(),
     saveRenewedCredential: async (tokens, memberId) => {
       const recovered = await renewOrganizerCredential(
         await requireStore(),

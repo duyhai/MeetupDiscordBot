@@ -21,7 +21,11 @@ import {
   organizerLoginDeps,
 } from '../../src/web/organizerLoginDeps.js';
 
-const fake = vi.hoisted(() => ({ getSelfId: vi.fn() }));
+const fake = vi.hoisted(() => ({
+  getSelfId: vi.fn(),
+  /** Constructor arguments of every GqlMeetupClient, in order. */
+  constructed: [] as unknown[][],
+}));
 
 vi.mock('../../src/lib/helpers/discordLogger.js', () => ({
   logAlert: vi.fn().mockResolvedValue(true),
@@ -36,6 +40,10 @@ vi.mock('../../src/lib/helpers/organizerMeetupClient.js', async (original) => ({
 
 vi.mock('../../src/lib/client/meetup/gqlClient.js', () => ({
   GqlMeetupClient: class {
+    constructor(...args: unknown[]) {
+      fake.constructed.push(args);
+    }
+
     getSelfId = fake.getSelfId;
   },
 }));
@@ -89,6 +97,7 @@ const client = {} as Client;
 
 beforeEach(() => {
   events.length = 0;
+  fake.constructed.length = 0;
   db.meta = { memberId: null, failingSince: null };
   db.failing = false;
   vi.clearAllMocks();
@@ -236,5 +245,13 @@ describe('organizerLoginDeps', () => {
     await expect(
       organizerLoginDeps(() => client).fetchMeetupMemberId('ACCESS'),
     ).rejects.toThrow();
+  });
+
+  it('looks the member id up with a 10 s deadline, to stay inside the router limit', async () => {
+    fake.getSelfId.mockResolvedValueOnce(ORGANIZER_ID);
+
+    await organizerLoginDeps(() => client).fetchMeetupMemberId('ACCESS');
+
+    expect(fake.constructed).toEqual([['ACCESS', { timeoutMs: 10_000 }]]);
   });
 });
