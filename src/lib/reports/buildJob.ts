@@ -178,6 +178,14 @@ export interface MonthBuildOutcome {
 export interface BuildJobDeps {
   now(): Date;
   cache(): Promise<KeyValueCache>;
+  /**
+   * A manual rebuild's detached build: the build bookkeeping and the lease
+   * release in its `finally`. The dashboard passes the untimed shared cache
+   * here while `cache` is timed, so a Redis stall at the end of a build
+   * waits instead of leaving the lease held for its 30-minute TTL. Left out,
+   * the build uses `cache` (the daily job).
+   */
+  backgroundCache?(): Promise<KeyValueCache>;
   snapshots: Pick<PostgresReportSnapshotRepository, 'save' | 'getCurrentMeta'>;
   /** claim and release must hit the same instance: release only removes its own claim's marker. */
   notices: Pick<PostgresDashboardNoticeRepository, 'claim' | 'release'>;
@@ -756,15 +764,21 @@ export async function requestRebuild(
     };
   }
   const done = (async (): Promise<RebuildOutcome> => {
+    // The request has been answered; from here nothing should give up on
+    // Redis early, or the lease could outlive the build.
+    let background = cache;
     try {
-      return (await buildAndRecord(deps, cache, period, requestedBy))
+      if (deps.backgroundCache) {
+        background = await deps.backgroundCache();
+      }
+      return (await buildAndRecord(deps, background, period, requestedBy))
         ? { ok: true }
         : { ok: false };
     } catch (error) {
       logger.error(`Manual report rebuild failed: ${String(error)}`);
       return { ok: false };
     } finally {
-      await releaseBuildLease(cache, lease);
+      await releaseBuildLease(background, lease);
     }
   })();
   return { status: 'started', done };

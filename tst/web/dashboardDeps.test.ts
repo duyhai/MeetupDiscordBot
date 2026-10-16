@@ -243,14 +243,21 @@ describe('dashboard cache timeouts', () => {
     expect(inner.values.has(BUILD_LEASE_KEY)).toBe(false);
   });
 
-  it('manual rebuilds use the timed rebuild cache; the build job keeps its own', async () => {
+  it('manual rebuilds time the request phase and run the build on the untimed cache', async () => {
     const jobDeps = { cache: ApplicationCache, now: () => new Date() };
     vi.mocked(defaultBuildJobDeps).mockResolvedValue(jobDeps as never);
     const deps = await manualRebuildDeps({} as never);
     /* eslint-disable @typescript-eslint/unbound-method -- identity checks only */
+    // The request phase (refusal checks, cooldown, lease) is timed ...
     expect(deps.cache).toBe(dashboardRebuildCache);
-    expect(jobDeps.cache).toBe(ApplicationCache);
+    // ... the detached build and its lease release are not.
+    expect(deps.backgroundCache).toBe(ApplicationCache);
     /* eslint-enable @typescript-eslint/unbound-method */
+    // The job's own deps are copied, not changed: the daily job keeps no
+    // background cache and stays on the untimed one (buildJob.test checks
+    // defaultBuildJobDeps' cache by identity).
+    expect(deps).not.toBe(jobDeps);
+    expect(jobDeps).not.toHaveProperty('backgroundCache');
   });
 });
 

@@ -65,3 +65,55 @@ describe('a late build lease', () => {
     }
   });
 });
+
+/** Reads of the lease key stall, like Redis pausing just as the build ends. */
+class StallingReleaseCache extends FakeCache {
+  stall = false;
+
+  override async get(key: string) {
+    if (this.stall && key === BUILD_LEASE_KEY) {
+      await sleep(LEASE_DELAY_MS);
+    }
+    return super.get(key);
+  }
+}
+
+describe('the background build', () => {
+  it('a stall longer than the deadline on the final release still releases the lease once Redis answers', async () => {
+    const inner = new StallingReleaseCache();
+    const h = makeDeps();
+    let finishBuild: () => void = () => undefined;
+    const building = new Promise<void>((resolve) => {
+      finishBuild = resolve;
+    });
+    const { fetchMonthReports } = h;
+    const deps = {
+      ...h.deps,
+      fetchMonthReports: async (
+        ...args: Parameters<typeof fetchMonthReports>
+      ) => {
+        await building;
+        return fetchMonthReports(...args);
+      },
+      // The request phase: timed, as in production.
+      cache: timedCacheFactory(
+        async () => inner,
+        TIMEOUT_MS,
+        releaseLateBuildLease(async () => inner),
+      ),
+      // The detached build: the untimed inner cache.
+      backgroundCache: async () => inner,
+    };
+
+    const started = await requestRebuild(deps, SEPT, REQUESTER);
+    expect(started.status).toBe('started');
+    expect(inner.values.has(BUILD_LEASE_KEY)).toBe(true);
+    // Redis stalls for longer than the dashboard deadline as the build ends.
+    inner.stall = true;
+    finishBuild();
+    if (started.status === 'started') {
+      await expect(started.done).resolves.toEqual({ ok: true });
+    }
+    expect(inner.values.has(BUILD_LEASE_KEY)).toBe(false);
+  });
+});

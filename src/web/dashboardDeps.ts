@@ -106,11 +106,18 @@ export const dashboardRebuildCache = timedCacheFactory(
   releaseLateBuildLease(ApplicationCache),
 );
 
-/** Build job deps for a staff member's refresh: the job's own, with the timed rebuild cache. */
+/**
+ * Build job deps for a staff member's refresh: the job's own, with the timed
+ * rebuild cache for the request phase (refusal checks, cooldown and lease
+ * acquire, with the late-lease release) and the untimed shared cache for the
+ * detached build and its lease release, which wait for Redis as long as it
+ * takes.
+ */
 export async function manualRebuildDeps(client: Client): Promise<BuildJobDeps> {
   return {
     ...(await defaultBuildJobDeps(client)),
     cache: dashboardRebuildCache,
+    backgroundCache: ApplicationCache,
   };
 }
 
