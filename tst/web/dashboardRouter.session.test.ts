@@ -21,6 +21,25 @@ import {
 } from './dashboardHarness.js';
 import { FakeCache } from './fakeCache.js';
 
+const fake = vi.hoisted(() => ({ logged: [] as string[] }));
+
+vi.mock('tslog', () => {
+  const renderOne = (a: unknown) => {
+    return typeof a === 'string' ? a : JSON.stringify(a);
+  };
+  const render = (args: unknown[]) => args.map(renderOne).join(' ');
+  class Logger {
+    debug = (...args: unknown[]) => fake.logged.push(render(args));
+
+    info = (...args: unknown[]) => fake.logged.push(render(args));
+
+    warn = (...args: unknown[]) => fake.logged.push(render(args));
+
+    error = (...args: unknown[]) => fake.logged.push(render(args));
+  }
+  return { Logger };
+});
+
 afterEach(closeServers);
 
 const hasSession = (cache: FakeCache) =>
@@ -140,6 +159,7 @@ describe('dashboard home organizer status', () => {
   });
 
   it('home still answers 200 with "Status unavailable" when homeStatus throws', async () => {
+    fake.logged.length = 0;
     const { req } = await makeApp({
       homeStatus: async () => {
         throw new Error('db down');
@@ -150,6 +170,9 @@ describe('dashboard home organizer status', () => {
     expect(res.status).toBe(200);
     expect(res.text).toContain('Status unavailable');
     expect(res.text).not.toContain('db down');
+    const warning = fake.logged.find((l) => l.includes('organizer status'));
+    expect(warning).toContain('Error');
+    expect(warning).not.toContain('db down');
   });
 
   it('signed-out home still redirects', async () => {

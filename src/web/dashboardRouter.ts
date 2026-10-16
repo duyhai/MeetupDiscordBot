@@ -117,7 +117,7 @@ async function organizerStatus(
       return { kind: 'not-set-up' };
     }
     return status.failingSince
-      ? { kind: 'failing', since: new Date(status.failingSince) }
+      ? { kind: 'failing', since: status.failingSince }
       : { kind: 'ok' };
   } catch (error) {
     // The name only: a database error message can carry connection details.
