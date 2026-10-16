@@ -86,6 +86,7 @@ const EXPECTED_UNSAFE_ALLOWED: Record<string, number> = {
   'POST /logout': 303,
   'POST /organizer-login/start': 200,
   'POST /sessions/revoke': 303,
+  'POST /reports/:period/refresh': 303,
 };
 
 function concrete(path: string): string {
@@ -140,6 +141,7 @@ describe('access matrix', () => {
     expect(labels).toContain('POST /sessions/revoke');
     expect(labels).toContain('GET /hall-of-fame');
     expect(labels).toContain('GET /hall-of-fame/:period');
+    expect(labels).toContain('POST /reports/:period/refresh');
     expect(UNSAFE.length).toBeGreaterThan(0);
   });
 

@@ -19,6 +19,7 @@ import {
 } from '../../../src/lib/repositories/postgresReportSnapshotRepository.js';
 import {
   DashboardPageDeps,
+  PageRebuildResult,
   SnapshotPageReader,
 } from '../../../src/web/routes/dashboardPages.js';
 import { OrganizerLoginDeps } from '../../../src/web/routes/organizerLogin.js';
@@ -206,6 +207,10 @@ export function fakePageDeps(
     isLeadership: vi.fn().mockResolvedValue(false),
     audit: vi.fn().mockResolvedValue(true),
     snapshots: async () => fakeSnapshots(SEED),
+    rebuild: vi.fn(async (): Promise<PageRebuildResult> => ({
+      status: 'started',
+      done: Promise.resolve({ ok: true }),
+    })),
     ...overrides,
   };
 }

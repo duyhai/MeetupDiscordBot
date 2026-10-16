@@ -175,6 +175,57 @@ describe('dashboardPageDeps', () => {
     }
   });
 
+  it('registers the Hall of Fame pages and the refresh action behind the gate', () => {
+    const router = dashboardRouterFromEnv({
+      DASHBOARD_SESSION_SECRET: 'k'.repeat(48),
+    });
+    expect(protectedRouteList(router)).toEqual(
+      expect.arrayContaining([
+        { method: 'get', path: '/hall-of-fame' },
+        { method: 'get', path: '/hall-of-fame/:period' },
+        { method: 'post', path: '/reports/:period/refresh' },
+      ]),
+    );
+  });
+
+  it('a refresh before Discord is ready answers unavailable without building deps', async () => {
+    setDashboardClient(undefined);
+    vi.mocked(defaultBuildJobDeps).mockClear();
+    await expect(
+      dashboardPageDeps().rebuild(
+        { year: 2026, month: 9 },
+        '123456789012345678',
+      ),
+    ).resolves.toMatchObject({ status: 'unavailable' });
+    expect(defaultBuildJobDeps).not.toHaveBeenCalled();
+  });
+
+  it('a refresh goes through requestRebuild on the manual rebuild deps', async () => {
+    const client = { tag: 'client' };
+    setDashboardClient(client as never);
+    try {
+      vi.mocked(defaultBuildJobDeps).mockResolvedValue({
+        cache: ApplicationCache,
+        now: () => new Date(),
+      } as never);
+      // A non-Discord requester is refused before any cache read.
+      await expect(
+        dashboardPageDeps().rebuild({ year: 2026, month: 9 }, 'job'),
+      ).resolves.toMatchObject({ status: 'bad-requester' });
+      expect(defaultBuildJobDeps).toHaveBeenLastCalledWith(client);
+      // A deps failure rejects; the route turns that into refresh=error.
+      vi.mocked(defaultBuildJobDeps).mockRejectedValueOnce(new Error('no db'));
+      await expect(
+        dashboardPageDeps().rebuild(
+          { year: 2026, month: 9 },
+          '123456789012345678',
+        ),
+      ).rejects.toThrow('no db');
+    } finally {
+      setDashboardClient(undefined);
+    }
+  });
+
   it('the audit is a no-op without a Discord client', async () => {
     setDashboardClient(undefined);
     await expect(

@@ -1,10 +1,19 @@
+import express, { RequestHandler } from 'express';
+import { Logger } from 'tslog';
+
 import { RebuildRefusal } from '../../lib/reports/buildJob.js';
 import {
   DASHBOARD_PATHS,
   monthPath,
 } from '../../lib/reports/dashboardPaths.js';
-import { Period } from '../../lib/reports/period.js';
+import { Period, periodKey } from '../../lib/reports/period.js';
+import { dashboardLocals } from '../dashboardRouter.js';
 import { SafeHtml, html, localUrl } from '../html.js';
+import { notFound, parseRouteMonth } from '../pageKit.js';
+import { CacheTimeoutError } from '../timedCache.js';
+import type { DashboardPageDeps } from './dashboardPages.js';
+
+const logger = new Logger({ name: 'dashboard' });
 
 export type RefreshCode = RebuildRefusal | 'started' | 'error' | 'unavailable';
 
@@ -53,4 +62,57 @@ export function refreshForm(
     <input type="hidden" name="return" value="${returnTo}" />
     <button type="submit">Refresh from Meetup</button>
   </form>`;
+}
+
+/**
+ * POST /dashboard/reports/:period/refresh. CSRF, Origin, Sec-Fetch-Site and
+ * the per-user action rate limit are the router's unsafe-method guard, which
+ * runs before this handler; nothing here adds its own.
+ */
+export function registerRefreshRoute(
+  router: express.Router,
+  deps: Pick<DashboardPageDeps, 'now' | 'rebuild'>,
+): void {
+  router.post(DASHBOARD_PATHS.refresh, (async (req, res) => {
+    const period = parseRouteMonth(req.params.period, deps.now());
+    if (period === undefined) {
+      notFound(res);
+      return;
+    }
+    const body = req.body as Record<string, unknown> | undefined;
+    const target =
+      body?.return === 'no-show-history'
+        ? DASHBOARD_PATHS.noShowHistoryMonth
+        : DASHBOARD_PATHS.hallOfFameMonth;
+    const { session } = dashboardLocals(res);
+    let code: RefreshCode;
+    try {
+      const result = await deps.rebuild(period, session.userId);
+      code = isRefreshCode(result.status) ? result.status : 'error';
+      if (result.status === 'started') {
+        const key = periodKey(period);
+        // done never rejects (buildJob's contract); the catch is belt and braces.
+        result.done
+          .then((outcome) =>
+            logger.info(
+              `Dashboard refresh of ${key} finished: ${outcome.ok ? 'saved' : 'failed'}`,
+            ),
+          )
+          .catch(() => undefined);
+      }
+    } catch (error: unknown) {
+      if (error instanceof CacheTimeoutError) {
+        // Redis is not answering: the router's 503, like every other
+        // dashboard request.
+        throw error;
+      }
+      // requestRebuild rejects when the cache or lease read fails before it
+      // can answer.
+      logger.warn(
+        `Dashboard refresh could not start: ${error instanceof Error ? error.name : 'Error'}`,
+      );
+      code = 'error';
+    }
+    res.redirect(303, `${monthPath(target, period)}?refresh=${code}`);
+  }) as RequestHandler);
 }

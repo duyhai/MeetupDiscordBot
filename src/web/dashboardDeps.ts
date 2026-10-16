@@ -5,7 +5,11 @@ import { Logger } from 'tslog';
 
 import { BASE_DISCORD_BOT_URL, SERVER_ROLES } from '../constants.js';
 import { LogEntry, logActivity } from '../lib/helpers/discordLogger.js';
-import { BuildJobDeps, defaultBuildJobDeps } from '../lib/reports/buildJob.js';
+import {
+  BuildJobDeps,
+  defaultBuildJobDeps,
+  requestRebuild,
+} from '../lib/reports/buildJob.js';
 import { PostgresReportSnapshotRepository } from '../lib/repositories/postgresReportSnapshotRepository.js';
 import { ApplicationCache } from '../util/cache.js';
 import {
@@ -142,6 +146,19 @@ export function dashboardPageDeps(): DashboardPageDeps {
     ),
     audit: auditActivity,
     snapshots: () => PostgresReportSnapshotRepository.instance(),
+    // The refresh route: the timed request phase, the late-lease release and
+    // the untimed background build (manualRebuildDeps). A CacheTimeoutError
+    // from here is the route's 503.
+    rebuild: async (period, requestedBy) => {
+      if (!discordClient) {
+        return { status: 'unavailable', message: 'The bot is still starting.' };
+      }
+      return requestRebuild(
+        await manualRebuildDeps(discordClient),
+        period,
+        requestedBy,
+      );
+    },
   };
 }
 
