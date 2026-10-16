@@ -16,7 +16,10 @@ import { html } from './html.js';
 import { organizerLoginDeps } from './organizerLoginDeps.js';
 import { layout } from './pages.js';
 import { discordAccessCheck } from './roleGate.js';
-import { registerOrganizerLoginRoutes } from './routes/organizerLogin.js';
+import {
+  DashboardPageDeps,
+  registerAllProtectedRoutes,
+} from './routes/dashboardPages.js';
 
 export const MIN_SESSION_SECRET_LENGTH = 32;
 
@@ -77,6 +80,11 @@ function notConfiguredRouter(): express.Router {
   return router;
 }
 
+/** Production page deps. Later tasks add one field each, wired to the repositories' instance(). */
+export function dashboardPageDeps(): DashboardPageDeps {
+  return { now: () => new Date() };
+}
+
 export function dashboardRouterFromEnv(
   env: Record<string, string | undefined> = process.env,
 ): express.Router {
@@ -107,7 +115,10 @@ export function dashboardRouterFromEnv(
     // Mounted by the router behind the session gate and the unsafe-method
     // (CSRF / Origin / rate-limit) guard.
     protectedRoutes: (router) =>
-      registerOrganizerLoginRoutes(router, organizerDeps),
+      registerAllProtectedRoutes(router, {
+        organizer: organizerDeps,
+        pages: dashboardPageDeps(),
+      }),
     homeStatus: organizerDeps.credentialStatus,
   });
 }

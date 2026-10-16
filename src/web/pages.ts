@@ -17,6 +17,13 @@ main{max-width:960px;margin:24px auto;padding:0 16px}
 button,.button{font:inherit;padding:6px 14px;border-radius:6px;border:1px solid #d0d7de;
 background:#fff;color:#1f2328;cursor:pointer;text-decoration:none}
 .card{background:#fff;border:1px solid #d0d7de;border-radius:8px;padding:16px;margin-bottom:16px}
+nav.site{display:flex;flex-wrap:wrap;gap:12px;margin-bottom:16px}
+nav.pager{display:flex;gap:12px;align-items:center;margin:12px 0}
+table{border-collapse:collapse;width:100%}th,td{text-align:left;padding:4px 8px;border-bottom:1px solid #d0d7de;vertical-align:top}
+.note{background:#fff8c5;border:1px solid #d4a72c;border-radius:6px;padding:8px}
+.muted{color:#57606a}.badge{font-size:12px;border:1px solid #d0d7de;border-radius:10px;padding:0 6px}
+textarea.copy{width:100%;min-height:240px;font-family:ui-monospace,monospace}
+svg.chart{max-width:100%;height:auto}
 `;
 
 export function layout({
