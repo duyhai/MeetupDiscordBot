@@ -126,6 +126,29 @@ const ERROR_MESSAGES = {
   503: 'The dashboard cannot check your access right now. Please try again in a minute.',
 } as const;
 
+/**
+ * A logout whose server-side delete timed out: the cookie is cleared, but the
+ * session may live on in Redis until it expires. Fixed text only.
+ */
+export function logoutUnconfirmedPage(nonce: string): string {
+  return layout({
+    title: 'Sign-out not confirmed',
+    nonce,
+    body: html`<div class="card">
+      <h1>Sign-out not confirmed</h1>
+      <p>
+        This browser is signed out. The sign-out may not have completed on the
+        server.
+      </p>
+      <p>
+        To be sure, sign in again and use "Sign me out everywhere" on the
+        Sessions page.
+      </p>
+      <p><a href="/dashboard/login">Sign in</a></p>
+    </div>`,
+  });
+}
+
 export function errorPage(
   status: keyof typeof ERROR_MESSAGES,
   nonce: string,

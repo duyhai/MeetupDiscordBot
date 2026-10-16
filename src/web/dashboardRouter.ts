@@ -24,6 +24,7 @@ import {
   errorPage,
   homePage,
   loginPage,
+  logoutUnconfirmedPage,
 } from './pages.js';
 import type { OrganizerCredentialStatus } from './routes/organizerLogin.js';
 import { FixedWindowLimiter } from './rateLimit.js';
@@ -562,7 +563,18 @@ export function createDashboardRouter(deps: DashboardDeps): express.Router {
     // Clear the cookie first, so the browser forgets it even if the store
     // call below fails.
     res.append('Set-Cookie', clearCookie(SESSION_COOKIE, SESSION_COOKIE_PATH));
-    await (await sessions()).destroy(locals(res).sid);
+    try {
+      await (await sessions()).destroy(locals(res).sid);
+    } catch (error: unknown) {
+      if (!(error instanceof CacheTimeoutError)) {
+        throw error;
+      }
+      // The browser forgot the cookie, but the server may still hold the
+      // session: say so, rather than the generic access-check text.
+      logger.warn('Dashboard logout cache timed out');
+      send(res, 503, logoutUnconfirmedPage(locals(res).nonce));
+      return;
+    }
     res.redirect(303, '/dashboard/login');
   }) as RequestHandler);
 

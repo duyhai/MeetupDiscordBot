@@ -269,6 +269,49 @@ describe('dashboard session revocation', () => {
 });
 
 describe('dashboard cache timeouts', () => {
+  it('a logout whose server-side delete times out says so and points to Sign me out everywhere', async () => {
+    const inner = new FakeCache();
+    inner.remove = () => new Promise<never>(() => undefined);
+    const { req } = await makeApp({
+      cache: timedCacheFactory(async () => inner, 50),
+    });
+    const cookie = await signIn(req);
+    const token =
+      /name="_csrf" value="([^"]+)"/.exec(
+        (await req.get('/dashboard').set('Cookie', cookie)).text,
+      )?.[1] ?? '';
+    const res = await req
+      .post('/dashboard/logout')
+      .set('Cookie', cookie)
+      .set('Origin', ORIGIN)
+      .type('form')
+      .send({ _csrf: token });
+    expect(res.status).toBe(503);
+    expect(
+      ((res.headers['set-cookie'] ?? []) as unknown as string[]).some((c) =>
+        c.startsWith('dash_sid=;'),
+      ),
+    ).toBe(true);
+    const text = res.text.replace(/\s+/g, ' ');
+    expect(text).toContain(
+      'The sign-out may not have completed on the server.',
+    );
+    expect(text).toContain('"Sign me out everywhere"');
+    expect(res.text).not.toContain('cannot check your access');
+  });
+
+  it('other cache timeouts keep the generic access text', async () => {
+    const inner = new FakeCache();
+    const { req } = await makeApp({
+      cache: timedCacheFactory(async () => inner, 50),
+    });
+    const cookie = await signIn(req);
+    inner.get = () => new Promise<never>(() => undefined);
+    const res = await req.get('/dashboard').set('Cookie', cookie);
+    expect(res.status).toBe(503);
+    expect(res.text).not.toContain('sign-out may not have completed');
+  });
+
   it('a hung cache answers 503 within the deadline, not a hang', async () => {
     const never = () => new Promise<never>(() => undefined);
     const hangingCache = {
