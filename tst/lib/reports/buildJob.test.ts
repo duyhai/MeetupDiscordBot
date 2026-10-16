@@ -13,6 +13,7 @@ import {
 } from '../../../src/lib/helpers/discordLogger.js';
 import {
   buildMonth,
+  buildSummaryEntry,
   defaultBuildJobDeps,
   describeBuildError,
   maybePostReportReady,
@@ -300,7 +301,7 @@ describe('runBuildTick builds', () => {
     });
     const result = await requestRebuild(h.deps, SEPT, REQUESTER);
     expect(result.status).toBe('started');
-    await (result as { done: Promise<void> }).done;
+    await (result as { done: Promise<{ ok: boolean }> }).done;
     expect(
       h.snapshots.rows.map((r) => [r.builtAt.toISOString(), r.mode]),
     ).toEqual([
@@ -536,7 +537,7 @@ describe('attendance note', () => {
       Promise.resolve(monthReports(period, ZERO)),
     );
     const result = await requestRebuild(h.deps, OCT, REQUESTER);
-    await (result as { done: Promise<void> }).done;
+    await (result as { done: Promise<{ ok: boolean }> }).done;
     expect(titles(h.alert)).toEqual(['Reports built: October 2026']);
     expect(descriptions(h.alert)[0]).not.toContain('no no-shows recorded');
   });
@@ -784,7 +785,9 @@ describe('requestRebuild', () => {
     const result = await requestRebuild(h.deps, SEPT, REQUESTER);
     expect(result.status).toBe('started');
     expect(h.cache.values.get(LEASE_KEY)).toBe('lease-1');
-    await (result as { done: Promise<void> }).done;
+    expect(await (result as { done: Promise<{ ok: boolean }> }).done).toEqual({
+      ok: true,
+    });
     expect(h.snapshots.rows.map((r) => r.builtBy)).toEqual([
       REQUESTER,
       REQUESTER,
@@ -800,10 +803,135 @@ describe('requestRebuild', () => {
     h.fetchMonthReports.mockRejectedValue(new Error('boom'));
     const result = await requestRebuild(h.deps, SEPT, REQUESTER);
     await expect(
-      (result as { done: Promise<void> }).done,
-    ).resolves.toBeUndefined();
+      (result as { done: Promise<{ ok: boolean }> }).done,
+    ).resolves.toEqual({ ok: false });
     expect(titles(h.alert)).toEqual(['Report build failed: September 2026']);
+    const [description] = descriptions(h.alert);
+    expect(description).not.toContain('retries every 15 minutes');
+    expect(description).toContain(
+      'Try the refresh again later; the daily job retries only months that are due.',
+    );
     expect(h.cache.values.has(LEASE_KEY)).toBe(false);
+  });
+
+  it("a failed manual rebuild does not use up the job's daily alert for the month", async () => {
+    const h = makeDeps({ reportReadyEnabled: false });
+    h.fetchMonthReports.mockImplementation(failSeptember);
+    const manual = await requestRebuild(h.deps, SEPT, REQUESTER);
+    await (manual as { done: Promise<{ ok: boolean }> }).done;
+    expect(h.cache.values.has('report-build-alerted-2026-09-2026-10-05')).toBe(
+      false,
+    );
+    h.clock.set('2026-10-05T16:20:00Z');
+    await runBuildTick(h.deps);
+    expect(titles(h.alert)).toEqual([
+      'Report build failed: September 2026',
+      'Report build failed: September 2026',
+    ]);
+    expect(descriptions(h.alert)[1]).toContain('retries every 15 minutes');
+  });
+
+  it('requestRebuild refuses the same month again within 10 minutes', async () => {
+    const h = makeDeps();
+    const first = await requestRebuild(h.deps, SEPT, REQUESTER);
+    expect(first.status).toBe('started');
+    await (first as { done: Promise<{ ok: boolean }> }).done;
+    expect(h.cache.ttls.get('report-rebuild-cooldown-2026-09')).toBe(600);
+
+    h.clock.set('2026-10-05T16:20:00Z');
+    const again = await requestRebuild(h.deps, SEPT, '987654321');
+    expect(again).toEqual({
+      status: 'cooldown',
+      message:
+        'That month was refreshed in the last 10 minutes. Try again in a few minutes.',
+    });
+    expect(h.cache.values.has(LEASE_KEY)).toBe(false);
+    // Another month is not affected.
+    const oct = await requestRebuild(h.deps, OCT, REQUESTER);
+    expect(oct.status).toBe('started');
+    await (oct as { done: Promise<{ ok: boolean }> }).done;
+    expect(h.fetchMonthReports).toHaveBeenCalledTimes(2);
+
+    // After the TTL the key is gone (FakeCache does not expire; simulate it).
+    h.cache.values.delete('report-rebuild-cooldown-2026-09');
+    expect((await requestRebuild(h.deps, SEPT, REQUESTER)).status).toBe(
+      'started',
+    );
+  });
+
+  it('a refused request does not start the cooldown', async () => {
+    const h = makeDeps();
+    h.cache.values.set(LEASE_KEY, 'other');
+    expect((await requestRebuild(h.deps, SEPT, REQUESTER)).status).toBe('busy');
+    h.cache.values.set('identity-digest-2026-10-05', 'x');
+    expect((await requestRebuild(h.deps, SEPT, REQUESTER)).status).toBe(
+      'identity-sweep',
+    );
+    expect(h.cache.values.has('report-rebuild-cooldown-2026-09')).toBe(false);
+  });
+
+  it('requestRebuild refuses a malformed month', async () => {
+    const h = makeDeps();
+    const bad: Period[] = [
+      { year: 2026, month: 0 },
+      { year: 2026, month: 13 },
+      { year: 2026, month: 9.5 },
+      { year: 1999, month: 12 },
+      { year: 2026.5, month: 9 },
+      { year: Number.NaN, month: 9 },
+      { year: 2026, month: '9' as unknown as number },
+    ];
+    for (const period of bad) {
+      // eslint-disable-next-line no-await-in-loop -- one case at a time
+      const result = await requestRebuild(h.deps, period, REQUESTER);
+      expect(result).toEqual({
+        status: 'bad-month',
+        message: 'That is not a valid month.',
+      });
+    }
+    expect(h.cacheSpy).not.toHaveBeenCalled();
+    expect(
+      (await requestRebuild(h.deps, { year: 2000, month: 1 }, REQUESTER))
+        .status,
+    ).toBe('started');
+  });
+});
+
+describe('buildSummaryEntry', () => {
+  const outcome = (builtBy: string) => ({
+    period: SEPT,
+    builtBy,
+    durationMs: 1200,
+    sourceComplete: true,
+    finished: true,
+    hallOfFame: { events: 4, hosts: 3, newHosts: 1 },
+    noShow: {
+      noShows: 8,
+      members: 7,
+      warnings: 2,
+      suspensionCandidates: 3,
+      cleared: 1,
+      departed: 1,
+    },
+    attendance: { pastEventsWithRsvps: 6, eventsWithNoShow: 5, noShows: 8 },
+  });
+
+  it('only renders a user mention for an all-digit builtBy', () => {
+    expect(buildSummaryEntry(outcome('job')).description).toContain(
+      'Built by the daily job.',
+    );
+    expect(buildSummaryEntry(outcome('backfill')).description).toContain(
+      'Built by the backfill.',
+    );
+    expect(buildSummaryEntry(outcome(REQUESTER)).description).toContain(
+      `Built by <@${REQUESTER}>.`,
+    );
+    for (const builtBy of ['@everyone', '<@&912474048775221270>', 'abc', '']) {
+      const description = buildSummaryEntry(outcome(builtBy)).description;
+      expect(description).toContain('Built by a staff member.');
+      expect(description).not.toContain('<@');
+      expect(description).not.toContain('@everyone');
+    }
   });
 });
 

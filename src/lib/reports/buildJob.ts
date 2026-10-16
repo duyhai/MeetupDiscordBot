@@ -64,6 +64,12 @@ const ALERTED_TTL_SEC = 26 * 60 * 60;
 const failingKey = (p: Period) => `report-build-failing-${periodKey(p)}`;
 const alertedKey = (p: Period, day: string) =>
   `report-build-alerted-${periodKey(p)}-${day}`;
+const REBUILD_COOLDOWN_SEC = 10 * 60;
+const rebuildCooldownKey = (p: Period) =>
+  `report-rebuild-cooldown-${periodKey(p)}`;
+/** A Discord user id: what a manual rebuild records as builtBy. */
+const DISCORD_ID = /^[0-9]{1,20}$/;
+const isManual = (builtBy: string) => DISCORD_ID.test(builtBy);
 const linkProgressAlertedKey = (day: string) => `link-progress-alerted-${day}`;
 
 /**
@@ -199,7 +205,10 @@ function builtByText(builtBy: string): string {
   if (builtBy === 'backfill') {
     return 'the backfill';
   }
-  return `<@${builtBy}>`; // in an embed: never pings
+  if (isManual(builtBy)) {
+    return `<@${builtBy}>`; // in an embed: never pings
+  }
+  return 'a staff member'; // never echo anything else into Discord
 }
 
 export function buildSummaryEntry(o: MonthBuildOutcome): LogEntry {
@@ -227,13 +236,15 @@ function failureEntry(
   period: Period,
   durationMs: number,
   error: unknown,
+  manual: boolean,
 ): LogEntry {
   const label = monthLabel(period);
+  const next = manual
+    ? 'Try the refresh again later; the daily job retries only months that are due.'
+    : 'It retries every 15 minutes (never 18:00–19:00 UTC); this alert repeats at most once a day until it works.';
   return {
     title: `Report build failed: ${label}`,
-    description:
-      `Building the ${label} reports failed after ${seconds(durationMs)} s: ${describeBuildError(error)}\n\n` +
-      'It retries every 15 minutes (never 18:00–19:00 UTC); this alert repeats at most once a day until it works.',
+    description: `Building the ${label} reports failed after ${seconds(durationMs)} s: ${describeBuildError(error)}\n\n${next}`,
   };
 }
 
@@ -243,6 +254,7 @@ async function recordFailure(
   period: Period,
   durationMs: number,
   error: unknown,
+  builtBy: string,
 ): Promise<void> {
   try {
     const now = deps.now();
@@ -252,11 +264,18 @@ async function recordFailure(
       now.toISOString(),
       FAILING_TTL_SEC,
     );
+    if (isManual(builtBy)) {
+      // A manual refresh always reports to its requester's team and leaves
+      // the job's once-a-day alert for the month untouched (the per-month
+      // cooldown already limits how often this can post).
+      await deps.alert(failureEntry(period, durationMs, error, true));
+      return;
+    }
     const key = alertedKey(period, utcDay(now));
     if (!(await cache.exclusive_set(key, '1', ALERTED_TTL_SEC))) {
       return; // already alerted today
     }
-    if (!(await deps.alert(failureEntry(period, durationMs, error)))) {
+    if (!(await deps.alert(failureEntry(period, durationMs, error, false)))) {
       await cache.remove(key); // the next tick tries the alert again
     }
   } catch (bookkeepingError) {
@@ -266,13 +285,16 @@ async function recordFailure(
   }
 }
 
-/** Builds one month and does all the alert bookkeeping. Never throws. */
+/**
+ * Builds one month and does all the alert bookkeeping. Never throws; returns
+ * whether the build was saved.
+ */
 async function buildAndRecord(
   deps: BuildJobDeps,
   cache: KeyValueCache,
   period: Period,
   builtBy: string,
-): Promise<void> {
+): Promise<boolean> {
   const startedMs = deps.now().getTime();
   let outcome: MonthBuildOutcome;
   try {
@@ -283,8 +305,8 @@ async function buildAndRecord(
     logger.error(
       `Report build ${periodKey(period)} failed after ${durationMs} ms: ${String(error)}`,
     );
-    await recordFailure(deps, cache, period, durationMs, error);
-    return;
+    await recordFailure(deps, cache, period, durationMs, error, builtBy);
+    return false;
   }
   try {
     if (await cache.get(failingKey(period))) {
@@ -309,6 +331,7 @@ async function buildAndRecord(
   } catch (error) {
     logger.error(`Report build summary failed: ${String(error)}`);
   }
+  return true;
 }
 
 async function writeLinkProgress(
@@ -473,10 +496,20 @@ export async function maybePostReportReady(
 }
 
 export type RebuildRefusal =
-  'quiet-hour' | 'identity-sweep' | 'busy' | 'future-month' | 'bad-requester';
+  | 'quiet-hour'
+  | 'identity-sweep'
+  | 'busy'
+  | 'cooldown'
+  | 'future-month'
+  | 'bad-month'
+  | 'bad-requester';
 
+/** Whether a manual rebuild saved both snapshots. */
+export type RebuildOutcome = { ok: true } | { ok: false };
+
+/** `done` settles when the background build finishes; it never rejects. */
 export type RebuildResult =
-  | { status: 'started'; done: Promise<void> }
+  | { status: 'started'; done: Promise<RebuildOutcome> }
   | { status: RebuildRefusal; message: string };
 
 /**
@@ -488,11 +521,20 @@ export async function requestRebuild(
   period: Period,
   requestedBy: string,
 ): Promise<RebuildResult> {
-  if (!/^[0-9]{1,20}$/.test(requestedBy)) {
+  if (!isManual(requestedBy)) {
     return {
       status: 'bad-requester',
       message: 'Only a signed-in staff member can refresh reports.',
     };
+  }
+  if (
+    !Number.isInteger(period?.year) ||
+    !Number.isInteger(period?.month) ||
+    period.year < 2000 ||
+    period.month < 1 ||
+    period.month > 12
+  ) {
+    return { status: 'bad-month', message: 'That is not a valid month.' };
   }
   const now = deps.now();
   if (isQuietHour(now)) {
@@ -523,9 +565,35 @@ export async function requestRebuild(
       message: 'A report build is already running. Try again when it finishes.',
     };
   }
-  const done = (async () => {
+  // Taken only once every other check passed, so a refused request never
+  // starts the cooldown.
+  let cooling: boolean;
+  try {
+    cooling = !(await cache.exclusive_set(
+      rebuildCooldownKey(period),
+      requestedBy,
+      REBUILD_COOLDOWN_SEC,
+    ));
+  } catch (error) {
+    await releaseBuildLease(cache, lease);
+    throw error;
+  }
+  if (cooling) {
+    await releaseBuildLease(cache, lease);
+    return {
+      status: 'cooldown',
+      message:
+        'That month was refreshed in the last 10 minutes. Try again in a few minutes.',
+    };
+  }
+  const done = (async (): Promise<RebuildOutcome> => {
     try {
-      await buildAndRecord(deps, cache, period, requestedBy);
+      return (await buildAndRecord(deps, cache, period, requestedBy))
+        ? { ok: true }
+        : { ok: false };
+    } catch (error) {
+      logger.error(`Manual report rebuild failed: ${String(error)}`);
+      return { ok: false };
     } finally {
       await releaseBuildLease(cache, lease);
     }
