@@ -641,3 +641,74 @@ export async function defaultBuildJobDeps(
     newLeaseValue: () => crypto.randomUUID(),
   };
 }
+
+export const BUILD_TICK_MS = 15 * 60 * 1000;
+
+type SchedulerLog = Pick<Logger<unknown>, 'error' | 'warn' | 'info'>;
+
+/** Only the class name: a tick error may embed a raw Meetup body or a query. */
+function errorName(error: unknown): string {
+  return error instanceof Error ? error.name : 'unknown error';
+}
+
+/** Never rejects: dependency or tick failures are logged. */
+export async function runBuildTickSafely(
+  makeDeps: () => Promise<BuildJobDeps>,
+  log: Pick<Logger<unknown>, 'error'> = logger,
+): Promise<void> {
+  try {
+    await runBuildTick(await makeDeps());
+  } catch (error) {
+    log.error(`Report build tick failed: ${errorName(error)}`);
+  }
+}
+
+export interface ReportBuildSchedulerOptions {
+  env?: Record<string, string | undefined>;
+  makeDeps?: () => Promise<BuildJobDeps>;
+  setIntervalFn?: typeof setInterval;
+  log?: SchedulerLog;
+}
+
+/**
+ * Ticks once now and every 15 minutes; `runBuildTick` decides whether
+ * anything is due. A tick still running when the next one fires is skipped,
+ * so one process never runs two builds at once (the Redis lease covers other
+ * processes). Without DATABASE_URL there is nowhere to save, so it never
+ * starts.
+ */
+export function startReportBuildScheduler(
+  client: Client,
+  options: ReportBuildSchedulerOptions = {},
+): void {
+  const env = options.env ?? process.env;
+  const log = options.log ?? logger;
+  if (!env.DATABASE_URL) {
+    log.warn('Report build job disabled: DATABASE_URL is not set');
+    return;
+  }
+  const makeDeps = options.makeDeps ?? (() => defaultBuildJobDeps(client));
+  let running = false;
+  let skipLogged = false;
+  const tick = () => {
+    if (running) {
+      if (!skipLogged) {
+        log.info(
+          'Report build tick skipped: the previous tick is still running',
+        );
+        skipLogged = true;
+      }
+      return;
+    }
+    running = true;
+    skipLogged = false;
+    runBuildTickSafely(makeDeps, log)
+      .finally(() => {
+        running = false;
+      })
+      // runBuildTickSafely only rejects if logging itself throws.
+      .catch(() => undefined);
+  };
+  tick(); // like the digests: a deploy inside the build window should not wait 15 minutes
+  (options.setIntervalFn ?? setInterval)(tick, BUILD_TICK_MS);
+}
