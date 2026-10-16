@@ -35,11 +35,14 @@ New hosts: Dee New (co-hosts: Ben Host)
 --- end attachment ---
 --- followUp ---
 {
-  "content": "Check the results in the attachment!",
-  "ephemeral": true,
   "files": [
-    "**Hosting stats for 2026 September**.txt"
-  ]
+    {
+      "name": "**Hosting stats for 2026 September**.txt",
+      "body": "\n**Hosting stats for 2026 September**\n\n**#1: 3 Ava Host ID: 101**\n    Board Game Night (4/20) \n    Board Game Night (1/20) \n    Late Night Karaoke (1/10) \n**#2: 1 Ben Host ID: 102**\n    Hike at Tiger Mountain (2/12) \n**#3: 1 Dee New ID: 104** 🆕\n    Hike at Tiger Mountain (2/12) \n\n**Total: 4**\n\n----- READY TO POST -----\n\n**Hall of Fame — 2026 September**\n\n**#1: Ava Host — 3 events**\n    Board Game Night ×2 (Sep 3, Sep 17)\n    Late Night Karaoke (Sep 30)\n**#2: Ben Host — 1 event**\n    Hike at Tiger Mountain (Sep 12)\n**#3: Dee New — 1 event** 🆕\n    Hike at Tiger Mountain (Sep 12)\n\nNew hosts: Dee New (co-hosts: Ben Host)\n\n**Hosts: 3 · Events: 4**"
+    }
+  ],
+  "content": "Check the results in the attachment!",
+  "ephemeral": true
 }
 --- moderation log ---
 {

@@ -31,10 +31,11 @@
     [Coffee Crawl (2/15)](https://www.meetup.com/1-5genasians/events/e109/) October 8, 2026 6:00 PM
     [Day of the Dead Walk (1/20)](https://www.meetup.com/1-5genasians/events/e121/) November 1, 2026 12:30 AM
     [Last Night of November (1/20)](https://www.meetup.com/1-5genasians/events/e123/) November 30, 2026 11:30 PM
-**#4: 1 [Dee New](https://www.meetup.com/members/104/) ID: 104** 🆕
+**#4: 2 [Dee New](https://www.meetup.com/members/104/) ID: 104** 🆕
+    [Stale Active Meetup (0/8)](https://www.meetup.com/1-5genasians/events/e088/) June 10, 2026 7:00 PM
     [Hike at Tiger Mountain (2/12)](https://www.meetup.com/1-5genasians/events/e102/) September 12, 2026 9:00 AM
 
-**Total: 19**
+**Total: 20**
 
 ----- READY TO POST -----
 
@@ -64,20 +65,24 @@
     Coffee Crawl (Oct 8)
     Day of the Dead Walk (Nov 1)
     Last Night of November (Nov 30)
-**#4: Dee New — 1 event** 🆕
+**#4: Dee New — 2 events** 🆕
+    Stale Active Meetup (Jun 10)
     Hike at Tiger Mountain (Sep 12)
 
 New hosts: Ben Host (co-hosts: Dee New, Cy Host); Cy Host (co-hosts: Ava Host, Ben Host); Dee New (co-hosts: Ben Host)
 
-**Hosts: 4 · Events: 19**
+**Hosts: 4 · Events: 20**
 --- end attachment ---
 --- followUp ---
 {
-  "content": "Check the results in the attachment!",
-  "ephemeral": true,
   "files": [
-    "**Hosting stats for 2026**.txt"
-  ]
+    {
+      "name": "**Hosting stats for 2026**.txt",
+      "body": "\n**Hosting stats for 2026**\n\n**#1: 10 [Ava Host](https://www.meetup.com/members/101/) ID: 101**\n    [Valentine Mixer (1/40)](https://www.meetup.com/1-5genasians/events/e090/) February 14, 2026 7:00 PM\n    [Spring Forward Social (3/30)](https://www.meetup.com/1-5genasians/events/e093/) March 8, 2026 7:00 PM\n    [April Fools Run (1/50)](https://www.meetup.com/1-5genasians/events/e095/) April 1, 2026 12:30 AM\n    [Summer Social (3/40)](https://www.meetup.com/1-5genasians/events/e100/) August 15, 2026 7:00 PM\n    [Board Game Night (4/20)](https://www.meetup.com/1-5genasians/events/e101/) September 3, 2026 7:00 PM\n    [Board Game Night (1/20)](https://www.meetup.com/1-5genasians/events/e103/) September 17, 2026 7:00 PM\n    [Late Night Karaoke (1/10)](https://www.meetup.com/1-5genasians/events/e106/) September 30, 2026 10:30 PM\n    [Paid Cooking Class (1/12)](https://www.meetup.com/1-5genasians/events/e108/) October 20, 2026 6:00 PM\n    [Halloween Late Show (1/30)](https://www.meetup.com/1-5genasians/events/e120/) October 31, 2026 11:30 PM\n    [Fall Back Fondue (1/12)](https://www.meetup.com/1-5genasians/events/e122/) November 1, 2026 7:00 PM\n**#2: 6 [Ben Host](https://www.meetup.com/members/102/) ID: 102** 🆕\n    [Leap Night Karaoke (1/10)](https://www.meetup.com/1-5genasians/events/e091/) February 28, 2026 11:30 PM\n    [End of March Trivia (1/16)](https://www.meetup.com/1-5genasians/events/e094/) March 31, 2026 11:30 PM\n    [Hike at Tiger Mountain (2/12)](https://www.meetup.com/1-5genasians/events/e102/) September 12, 2026 9:00 AM\n    [October Kickoff (1/25)](https://www.meetup.com/1-5genasians/events/e107/) October 1, 2026 12:30 AM\n    [Day of the Dead Walk (1/20)](https://www.meetup.com/1-5genasians/events/e121/) November 1, 2026 12:30 AM\n    [December Kickoff (0/25)](https://www.meetup.com/1-5genasians/events/e124/) December 1, 2026 12:30 AM\n**#3: 6 [Cy Host](https://www.meetup.com/members/103/) ID: 103** 🆕\n    [First of March Brunch (2/8)](https://www.meetup.com/1-5genasians/events/e092/) March 1, 2026 12:30 AM\n    [Spring Forward Social (3/30)](https://www.meetup.com/1-5genasians/events/e093/) March 8, 2026 7:00 PM\n    [Summer Social (3/40)](https://www.meetup.com/1-5genasians/events/e100/) August 15, 2026 7:00 PM\n    [Coffee Crawl (2/15)](https://www.meetup.com/1-5genasians/events/e109/) October 8, 2026 6:00 PM\n    [Day of the Dead Walk (1/20)](https://www.meetup.com/1-5genasians/events/e121/) November 1, 2026 12:30 AM\n    [Last Night of November (1/20)](https://www.meetup.com/1-5genasians/events/e123/) November 30, 2026 11:30 PM\n**#4: 2 [Dee New](https://www.meetup.com/members/104/) ID: 104** 🆕\n    [Stale Active Meetup (0/8)](https://www.meetup.com/1-5genasians/events/e088/) June 10, 2026 7:00 PM\n    [Hike at Tiger Mountain (2/12)](https://www.meetup.com/1-5genasians/events/e102/) September 12, 2026 9:00 AM\n\n**Total: 20**\n\n----- READY TO POST -----\n\n**Hall of Fame — 2026**\n\n**#1: Ava Host — 10 events**\n    Valentine Mixer (Feb 14)\n    Spring Forward Social (Mar 8)\n    April Fools Run (Apr 1)\n    Summer Social (Aug 15)\n    Board Game Night ×2 (Sep 3, Sep 17)\n    Late Night Karaoke (Sep 30)\n    Paid Cooking Class (Oct 20)\n    Halloween Late Show (Oct 31)\n    Fall Back Fondue (Nov 1)\n**#2: Ben Host — 6 events** 🆕\n    Leap Night Karaoke (Feb 28)\n    End of March Trivia (Mar 31)\n    Hike at Tiger Mountain (Sep 12)\n    October Kickoff (Oct 1)\n    Day of the Dead Walk (Nov 1)\n    December Kickoff (Dec 1)\n**#3: Cy Host — 6 events** 🆕\n    First of March Brunch (Mar 1)\n    Spring Forward Social (Mar 8)\n    Summer Social (Aug 15)\n    Coffee Crawl (Oct 8)\n    Day of the Dead Walk (Nov 1)\n    Last Night of November (Nov 30)\n**#4: Dee New — 2 events** 🆕\n    Stale Active Meetup (Jun 10)\n    Hike at Tiger Mountain (Sep 12)\n\nNew hosts: Ben Host (co-hosts: Dee New, Cy Host); Cy Host (co-hosts: Ava Host, Ben Host); Dee New (co-hosts: Ben Host)\n\n**Hosts: 4 · Events: 20**"
+    }
+  ],
+  "content": "Check the results in the attachment!",
+  "ephemeral": true
 }
 --- moderation log ---
 {
@@ -86,7 +91,7 @@ New hosts: Ben Host (co-hosts: Dee New, Cy Host); Cy Host (co-hosts: Ava Host, B
   "fields": [
     {
       "name": "Events",
-      "value": "19",
+      "value": "20",
       "inline": true
     },
     {

@@ -77,13 +77,18 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  // Cleanup first, so a failed expectation below cannot leak fake timers or
+  // interceptors into the next test.
+  nock.cleanAll();
+  vi.useRealTimers();
   expect(responder.unhandled()).toEqual([]);
+  // A handler error would reach the code as a GraphQL error; a later
+  // try/catch or allSettled must not be able to hide one.
+  expect(responder.failures()).toEqual([]);
   expect(responder.calls.length).toBeGreaterThan(0);
   responder.calls.forEach((call) => {
     expect(call.authorization).toBe(`Bearer ${USER_TOKEN}`);
   });
-  nock.cleanAll();
-  vi.useRealTimers();
 });
 
 // Only Date is faked: undici and nock need the real timers.
@@ -212,6 +217,21 @@ describe('/meetup_get_host_event_stats goldens', () => {
     expect(file.data).not.toContain('🆕');
     await expect(transcript(recorder)).toMatchFileSnapshot(
       './__goldens__/hostStats-2026-11.golden.txt',
+    );
+  });
+
+  it('host stats, July 2026 has no events', async () => {
+    freezeAt('2026-08-05T17:00:00Z');
+
+    await hostStats(2026, 7);
+
+    expect(attachment().data).toContain('**Total: 0**');
+    expect(logEntry().fields).toEqual([
+      { name: 'Events', value: '0', inline: true },
+      { name: 'Hosts', value: '0', inline: true },
+    ]);
+    await expect(transcript(recorder)).toMatchFileSnapshot(
+      './__goldens__/hostStats-2026-07.golden.txt',
     );
   });
 

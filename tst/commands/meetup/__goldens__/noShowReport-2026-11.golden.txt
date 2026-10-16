@@ -30,11 +30,14 @@ __Suspension candidates (2+ no-shows): 2__
 --- end attachment ---
 --- followUp ---
 {
-  "content": "Report ready — hand this to Melissa. She sends warnings and applies suspensions; record outcomes with /meetup_record_suspension.",
-  "ephemeral": true,
   "files": [
-    "No Show report 2026-11.txt"
-  ]
+    {
+      "name": "No Show report 2026-11.txt",
+      "body": "**No Show report for 2026 November**\n\nCounted: no-shows in the last 12 months, after the member’s most recent suspension.\n\n💵 marks an upcoming RSVP whose event appears to cost money (a fee on Meetup, or payment mentioned in the description). It does not mean the member paid, and an unmarked event is not guaranteed free.\n\n__Warnings (1 no-show): 0__\n\n__Suspension candidates (2+ no-shows): 2__\n\n**[Dana Lee](https://www.meetup.com/members/201/) ID: 201** — 3 no-shows since 2025-12-03 (12 months ago)\n    prior suspensions: 0 → recommended: 30 days\n    no upcoming RSVPs in the group — suspend at any time\n    No-shows counted (3):\n        [End of March Trivia](https://www.meetup.com/1-5genasians/events/e094/) March 31, 2026 11:30 PM\n        [Board Game Night](https://www.meetup.com/1-5genasians/events/e101/) September 3, 2026 7:00 PM\n        [Day of the Dead Walk](https://www.meetup.com/1-5genasians/events/e121/) November 1, 2026 12:30 AM\n**[Kai Ito](https://www.meetup.com/members/215/) ID: 215** — 3 no-shows since 2025-12-03 (12 months ago)\n    prior suspensions: 0 → recommended: 30 days\n    no upcoming RSVPs in the group — suspend at any time\n    No-shows counted (3):\n        [Fall Back Fondue](https://www.meetup.com/1-5genasians/events/e122/) November 1, 2026 7:00 PM\n        [Last Night of November](https://www.meetup.com/1-5genasians/events/e123/) November 30, 2026 11:30 PM\n        [December Kickoff](https://www.meetup.com/1-5genasians/events/e124/) December 1, 2026 12:30 AM"
+    }
+  ],
+  "content": "Report ready — hand this to Melissa. She sends warnings and applies suspensions; record outcomes with /meetup_record_suspension.",
+  "ephemeral": true
 }
 --- attachment suggested_suspensions_2026-11.csv ---
 member_id,member_name,duration_days,suspended_at,notes
@@ -43,11 +46,14 @@ member_id,member_name,duration_days,suspended_at,notes
 --- end attachment ---
 --- followUp ---
 {
-  "content": "Suggested suspensions as an editable CSV. Delete the rows Melissa didn’t act on, fill in `suspended_at` with the day she applied each one, then upload it via /meetup_record_suspension.",
-  "ephemeral": true,
   "files": [
-    "suggested_suspensions_2026-11.csv"
-  ]
+    {
+      "name": "suggested_suspensions_2026-11.csv",
+      "body": "member_id,member_name,duration_days,suspended_at,notes\n\"201\",\"Dana Lee\",\"30\",\"\",\"3 no-shows since 2025-12-03; prior suspensions: 0\"\n\"215\",\"Kai Ito\",\"30\",\"\",\"3 no-shows since 2025-12-03; prior suspensions: 0\""
+    }
+  ],
+  "content": "Suggested suspensions as an editable CSV. Delete the rows Melissa didn’t act on, fill in `suspended_at` with the day she applied each one, then upload it via /meetup_record_suspension.",
+  "ephemeral": true
 }
 --- moderation log ---
 {

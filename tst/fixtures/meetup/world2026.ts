@@ -45,6 +45,36 @@ export const WORLD_2026: MeetupWorld = {
       maxTickets: 10,
       hostIds: ['104'],
     },
+    // Prior events of Cy (103) that never counted as PAST: a CANCELLED one and
+    // an AUTOSCHED copy. Cy stays a new host in March only while the
+    // new-host count filters by status PAST exactly.
+    {
+      id: 'e086',
+      title: 'Cancelled Social',
+      dateTime: '2026-01-25T19:00-08:00',
+      status: 'CANCELLED',
+      maxTickets: 10,
+      hostIds: ['103'],
+    },
+    {
+      id: 'e087',
+      title: 'Auto Scheduled Social',
+      dateTime: '2026-02-02T19:00-08:00',
+      status: 'AUTOSCHED',
+      maxTickets: 10,
+      hostIds: ['103'],
+    },
+    // A stale ACTIVE event of Dee (104) long before September. ACTIVE events
+    // are listed in reports but never make a host non-new, so widening the
+    // new-host status filter to include ACTIVE removes Dee's flag.
+    {
+      id: 'e088',
+      title: 'Stale Active Meetup',
+      dateTime: '2026-06-10T19:00-07:00',
+      status: 'ACTIVE',
+      maxTickets: 8,
+      hostIds: ['104'],
+    },
     {
       id: 'e090',
       title: 'Valentine Mixer',
@@ -279,6 +309,11 @@ export const WORLD_2026: MeetupWorld = {
 export const SUSPENSIONS_2026: FakeSuspension[] = [
   { memberId: '202', suspendedDay: '2026-03-01', durationDays: 30 },
   { memberId: '203', suspendedDay: '2026-09-20', durationDays: 30 },
+  // After the September report month but before the Oct 5 "now": the command
+  // counts every suspension up to now, so Max (217, a Sept 17 no-show) is
+  // "cleared" in the September report. Pins that the commands do not adopt
+  // the snapshot-only cutoff.
+  { memberId: '217', suspendedDay: '2026-10-02', durationDays: 30 },
   // Voided: must never show up in any report.
   {
     memberId: '205',

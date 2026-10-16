@@ -32,11 +32,14 @@
 --- end attachment ---
 --- followUp ---
 {
-  "content": "Check the results in the attachment!",
-  "ephemeral": true,
   "files": [
-    "**Hosting stats for 2026 November**.txt"
-  ]
+    {
+      "name": "**Hosting stats for 2026 November**.txt",
+      "body": "\n**Hosting stats for 2026 November**\n\n**#1: 2 [Cy Host](https://www.meetup.com/members/103/) ID: 103**\n    [Day of the Dead Walk (1/20)](https://www.meetup.com/1-5genasians/events/e121/) November 1, 2026 12:30 AM\n    [Last Night of November (1/20)](https://www.meetup.com/1-5genasians/events/e123/) November 30, 2026 11:30 PM\n**#2: 1 [Ben Host](https://www.meetup.com/members/102/) ID: 102**\n    [Day of the Dead Walk (1/20)](https://www.meetup.com/1-5genasians/events/e121/) November 1, 2026 12:30 AM\n**#3: 1 [Ava Host](https://www.meetup.com/members/101/) ID: 101**\n    [Fall Back Fondue (1/12)](https://www.meetup.com/1-5genasians/events/e122/) November 1, 2026 7:00 PM\n\n**Total: 3**\n\n----- READY TO POST -----\n\n**Hall of Fame — 2026 November**\n\n**#1: Cy Host — 2 events**\n    Day of the Dead Walk (Nov 1)\n    Last Night of November (Nov 30)\n**#2: Ben Host — 1 event**\n    Day of the Dead Walk (Nov 1)\n**#3: Ava Host — 1 event**\n    Fall Back Fondue (Nov 1)\n\n**Hosts: 3 · Events: 3**"
+    }
+  ],
+  "content": "Check the results in the attachment!",
+  "ephemeral": true
 }
 --- moderation log ---
 {

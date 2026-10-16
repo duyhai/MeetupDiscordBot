@@ -1,0 +1,48 @@
+--- editReply ---
+{
+  "content": "Sit tight! Fetching data."
+}
+--- attachment **Hosting stats for 2026 July**.txt ---
+
+**Hosting stats for 2026 July**
+
+
+
+**Total: 0**
+
+----- READY TO POST -----
+
+**Hall of Fame — 2026 July**
+
+
+
+**Hosts: 0 · Events: 0**
+--- end attachment ---
+--- followUp ---
+{
+  "files": [
+    {
+      "name": "**Hosting stats for 2026 July**.txt",
+      "body": "\n**Hosting stats for 2026 July**\n\n\n\n**Total: 0**\n\n----- READY TO POST -----\n\n**Hall of Fame — 2026 July**\n\n\n\n**Hosts: 0 · Events: 0**"
+    }
+  ],
+  "content": "Check the results in the attachment!",
+  "ephemeral": true
+}
+--- moderation log ---
+{
+  "title": "Hosting stats run",
+  "description": "<@999000999> ran /meetup_get_host_event_stats for 2026-7.",
+  "fields": [
+    {
+      "name": "Events",
+      "value": "0",
+      "inline": true
+    },
+    {
+      "name": "Hosts",
+      "value": "0",
+      "inline": true
+    }
+  ]
+}

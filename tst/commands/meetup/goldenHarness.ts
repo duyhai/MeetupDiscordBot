@@ -6,8 +6,8 @@ export type GoldenEvent =
       kind: 'followUp';
       args: {
         content?: string;
-        ephemeral?: boolean;
         files?: { name: string }[];
+        [field: string]: unknown;
       };
     }
   | { kind: 'attachment'; fileName: string; data: string }
@@ -49,16 +49,18 @@ export function fakeInteraction(recorder: GoldenRecorder): CommandInteraction {
   } as unknown as CommandInteraction;
 }
 
-function render(event: GoldenEvent): string {
+function render(event: GoldenEvent, bodies: Map<string, string>): string {
   switch (event.kind) {
     case 'editReply':
       return `--- editReply ---\n${JSON.stringify(event.args, null, 2)}`;
     case 'followUp':
       return `--- followUp ---\n${JSON.stringify(
         {
-          content: event.args.content,
-          ephemeral: event.args.ephemeral,
-          files: event.args.files?.map((file) => file.name),
+          ...event.args,
+          files: event.args.files?.map((file) => ({
+            name: file.name,
+            body: bodies.get(file.name),
+          })),
         },
         null,
         2,
@@ -73,5 +75,11 @@ function render(event: GoldenEvent): string {
 }
 
 export function transcript(recorder: GoldenRecorder): string {
-  return `${recorder.events.map(render).join('\n')}\n`;
+  const bodies = new Map<string, string>();
+  recorder.events.forEach((event) => {
+    if (event.kind === 'attachment') {
+      bodies.set(event.fileName, event.data);
+    }
+  });
+  return `${recorder.events.map((event) => render(event, bodies)).join('\n')}\n`;
 }

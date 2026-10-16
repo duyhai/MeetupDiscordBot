@@ -92,13 +92,18 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  // Cleanup first, so a failed expectation below cannot leak fake timers or
+  // interceptors into the next test.
+  nock.cleanAll();
+  vi.useRealTimers();
   expect(responder.unhandled()).toEqual([]);
+  // A handler error would reach the code as a GraphQL error; a later
+  // try/catch or allSettled must not be able to hide one.
+  expect(responder.failures()).toEqual([]);
   expect(responder.calls.length).toBeGreaterThan(0);
   responder.calls.forEach((call) => {
     expect(call.authorization).toBe(`Bearer ${USER_TOKEN}`);
   });
-  nock.cleanAll();
-  vi.useRealTimers();
 });
 
 // Only Date is faked: undici and nock need the real timers.
@@ -166,7 +171,7 @@ describe('/meetup_run_noshow_report goldens', () => {
         'didn’t act on, fill in `suspended_at` with the day she applied each ' +
         'one, then upload it via /meetup_record_suspension.',
     ]);
-    expect(text.data).toContain('__Warnings (1 no-show): 2__');
+    expect(text.data).toContain('__Warnings (1 no-show): 1__');
     expect(text.data).toContain('__Suspension candidates (2+ no-shows): 3__');
     expect(text.data).toContain('**ACT NOW**');
     expect(text.data).toContain('prior suspensions: 1 → recommended: 60 days');
@@ -174,6 +179,10 @@ describe('/meetup_run_noshow_report goldens', () => {
     expect(text.data).toContain('— 💵 $15 event fee');
     expect(text.data).toContain('— 💵 description mentions payment');
     expect(text.data).toContain('suspended 2026-09-20');
+    // Max was suspended 2026-10-02, after the report month but before today:
+    // the command counts every suspension up to now, so he is cleared.
+    expect(text.data).toContain('ID: 217 — suspended 2026-10-02');
+    expect(text.data).not.toMatch(/\*\*\[Max Ortiz\]/);
     expect(text.data).toContain(
       'no upcoming RSVPs in the group — suspend at any time',
     );
@@ -185,9 +194,9 @@ describe('/meetup_run_noshow_report goldens', () => {
     expect(csv.data).toMatch(/^"202","Eli Park","60","",/m);
     expect(csv.data).toMatch(/^"205","Hana Kim","30","",/m);
     expect(logEntry().fields).toEqual([
-      { name: 'Warnings', value: '2', inline: true },
+      { name: 'Warnings', value: '1', inline: true },
       { name: 'Suspension candidates', value: '3', inline: true },
-      { name: 'No action needed', value: '1', inline: true },
+      { name: 'No action needed', value: '2', inline: true },
       { name: 'No longer in the group', value: '1', inline: true },
     ]);
     await expect(transcript(recorder)).toMatchFileSnapshot(
