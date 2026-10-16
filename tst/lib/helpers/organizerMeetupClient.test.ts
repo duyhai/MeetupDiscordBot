@@ -474,6 +474,97 @@ describe('getOrganizerAccessToken', () => {
     expect(remedies).toHaveLength(2);
   });
 
+  it("a client-less failure does not suppress the next sweep's alert", async () => {
+    db.current = stored(0);
+    refresh.mockRejectedValue(refreshError());
+
+    // A script run (no Discord client) fails first: it logs the remedy but
+    // leaves the episode alone.
+    await expect(getOrganizerAccessToken()).resolves.toBeUndefined();
+    expect(locked.markFailing).not.toHaveBeenCalled();
+    expect(db.failing).toBe(false);
+    expect(
+      fake.logged.filter((line) => line.includes(organizerFailureRemedy())),
+    ).toHaveLength(1);
+
+    // So the sweep that follows still opens the episode and alerts.
+    await expect(getOrganizerAccessToken({ client })).resolves.toBeUndefined();
+    expect(db.failing).toBe(true);
+    expect(alert).toHaveBeenCalledTimes(1);
+    expect(alert.mock.calls[0][1].title).toBe(
+      'Meetup identity monitoring is not running',
+    );
+  });
+
+  it('a client-less success does not consume the recovery post', async () => {
+    db.current = stored(0);
+    db.failing = true;
+    refresh.mockResolvedValueOnce(fresh(1));
+
+    await expect(getOrganizerAccessToken()).resolves.toBe('FRESH-ACCESS-1');
+    expect(locked.clearFailing).not.toHaveBeenCalled();
+    expect(db.failing).toBe(true);
+    expect(db.current?.refreshToken).toBe('FRESH-REFRESH-1');
+
+    // The next refresh with a client closes the episode and says so.
+    db.current = { ...fresh(1), expiresAt: Date.now() };
+    refresh.mockResolvedValueOnce(fresh(2));
+    await expect(getOrganizerAccessToken({ client })).resolves.toBe(
+      'FRESH-ACCESS-2',
+    );
+    expect(db.failing).toBe(false);
+    expect(alert).toHaveBeenCalledTimes(1);
+    expect(alert.mock.calls[0][1].title).toBe(
+      'Meetup organizer login restored',
+    );
+  });
+
+  it('a failed alert post is retried on the next run', async () => {
+    db.current = stored(0);
+    refresh.mockRejectedValue(refreshError());
+    alert.mockResolvedValueOnce(false); // Discord refused the post
+
+    await expect(getOrganizerAccessToken({ client })).resolves.toBeUndefined();
+    expect(alert).toHaveBeenCalledTimes(1);
+    // Re-opened: the episode is not left marked as alerted.
+    expect(db.failing).toBe(false);
+    expect(fake.logged.join('\n')).toMatch(/alert could not be posted/);
+
+    await expect(getOrganizerAccessToken({ client })).resolves.toBeUndefined();
+    expect(alert).toHaveBeenCalledTimes(2);
+    expect(alert.mock.calls[1][1].title).toBe(
+      'Meetup identity monitoring is not running',
+    );
+    expect(db.failing).toBe(true);
+
+    // Posted now, so the episode stays open and quiet.
+    await getOrganizerAccessToken({ client });
+    expect(alert).toHaveBeenCalledTimes(2);
+  });
+
+  it('a failed recovery post is retried on the next refresh', async () => {
+    db.current = stored(0);
+    db.failing = true;
+    refresh.mockResolvedValueOnce(fresh(1));
+    alert.mockResolvedValueOnce(false);
+
+    await expect(getOrganizerAccessToken({ client })).resolves.toBe(
+      'FRESH-ACCESS-1',
+    );
+    expect(alert).toHaveBeenCalledTimes(1);
+    expect(db.failing).toBe(true); // re-marked, so the post is owed still
+    expect(fake.logged.join('\n')).toMatch(/recovery could not be posted/);
+
+    db.current = { ...fresh(1), expiresAt: Date.now() };
+    refresh.mockResolvedValueOnce(fresh(2));
+    await getOrganizerAccessToken({ client });
+    expect(alert).toHaveBeenCalledTimes(2);
+    expect(alert.mock.calls[1][1].title).toBe(
+      'Meetup organizer login restored',
+    );
+    expect(db.failing).toBe(false);
+  });
+
   it('swallows a failure to record the episode', async () => {
     db.current = stored(0);
     refresh.mockRejectedValue(refreshError());

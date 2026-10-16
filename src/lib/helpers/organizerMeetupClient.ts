@@ -109,6 +109,7 @@ async function resolveLocked(
   forceRefresh: boolean,
   refusedAccessToken: string | undefined,
   onRefreshed: (tokens: Tokens) => void,
+  recordEpisodes: boolean,
 ): Promise<LockedOutcome> {
   const memberIdMissing = locked.meta.memberId === null;
   const { current } = locked;
@@ -165,8 +166,12 @@ async function resolveLocked(
     // aborts the transaction, so the write below fails too and is logged as
     // the persist failure it is -- rather than a write that appeared to
     // succeed and was silently discarded by the aborted COMMIT.
-    // eslint-disable-next-line no-await-in-loop
-    const recovered = await recordEpisode(() => locked.clearFailing(), 'close');
+    // Only a run that can post the recovery message closes the episode: a
+    // client-less one (a script) would close it silently.
+    const recovered =
+      recordEpisodes &&
+      // eslint-disable-next-line no-await-in-loop
+      (await recordEpisode(() => locked.clearFailing(), 'close'));
 
     // Persisting is a SEPARATE failure from refreshing. If Meetup rotates
     // refresh tokens, `refreshed` holds the only valid one; treating a write
@@ -199,19 +204,53 @@ async function resolveLocked(
   return {
     accessToken: undefined,
     recovered: false,
-    episodeStarted: await recordEpisode(() => locked.markFailing(), 'open'),
+    // Likewise only a run that can post the alert opens the episode: a
+    // client-less one would mark it alerted while nobody was told.
+    episodeStarted:
+      recordEpisodes &&
+      (await recordEpisode(() => locked.markFailing(), 'open')),
     memberIdMissing,
   };
 }
 
+/** True iff the alert was posted. Never throws. */
 async function postAlert(
   client: Client,
   entry: { title: string; description: string },
-): Promise<void> {
+): Promise<boolean> {
   try {
-    await logAlert(client, entry);
+    if (await logAlert(client, entry)) {
+      return true;
+    }
+    logger.error(`Could not post "${entry.title}": Discord refused the post`);
   } catch (error: unknown) {
     logger.error(`Could not post "${entry.title}": ${errorName(error)}`);
+  }
+  return false;
+}
+
+/**
+ * An episode post failed after the episode transition committed. Undo the
+ * transition in a short locked call of its own (never from inside the token
+ * transaction), so the next run sees it again and retries the post.
+ */
+async function undoEpisodeTransition(
+  credentials: PostgresCredentialRepository,
+  undo: (locked: LockedCredential) => Promise<boolean>,
+  what: string,
+): Promise<void> {
+  logger.error(
+    `The organizer ${what} could not be posted; re-arming it for the next run`,
+  );
+  try {
+    await credentials.withLockedCredential(
+      MEETUP_ORGANIZER_CREDENTIAL_KEY,
+      undo,
+    );
+  } catch (error: unknown) {
+    logger.error(
+      `Could not re-arm the organizer ${what}, so it will not be retried: ${errorName(error)}`,
+    );
   }
 }
 
@@ -280,9 +319,15 @@ async function resolveOrganizerAccessToken(
     outcome = await credentials.withLockedCredential(
       MEETUP_ORGANIZER_CREDENTIAL_KEY,
       (locked) =>
-        resolveLocked(locked, forceRefresh, refusedAccessToken, (tokens) => {
-          refreshedAccessToken = tokens.accessToken;
-        }),
+        resolveLocked(
+          locked,
+          forceRefresh,
+          refusedAccessToken,
+          (tokens) => {
+            refreshedAccessToken = tokens.accessToken;
+          },
+          client !== undefined,
+        ),
     );
   } catch (error: unknown) {
     if (refreshedAccessToken !== undefined) {
@@ -315,17 +360,32 @@ async function resolveOrganizerAccessToken(
   if (outcome.accessToken === undefined) {
     if (!client) {
       logger.error(organizerFailureRemedy());
-    } else if (outcome.episodeStarted) {
-      await postAlert(client, {
+    } else if (
+      outcome.episodeStarted &&
+      !(await postAlert(client, {
         title: 'Meetup identity monitoring is not running',
         description: organizerFailureRemedy(),
-      });
+      }))
+    ) {
+      await undoEpisodeTransition(
+        credentials,
+        (locked) => locked.clearFailing(),
+        'alert',
+      );
     }
     return undefined;
   }
 
-  if (outcome.recovered && client) {
-    await postAlert(client, ORGANIZER_RESTORED_ALERT);
+  if (
+    outcome.recovered &&
+    client &&
+    !(await postAlert(client, ORGANIZER_RESTORED_ALERT))
+  ) {
+    await undoEpisodeTransition(
+      credentials,
+      (locked) => locked.markFailing(),
+      'recovery',
+    );
   }
   if (outcome.memberIdMissing && !memberIdChecked) {
     await recordMemberId(credentials, outcome.accessToken, generation);
@@ -345,17 +405,22 @@ async function resolveOrganizerAccessToken(
 // One resolution per process at a time, per kind: concurrent callers share
 // it. A forced call never joins an unforced one -- its caller has just seen
 // the token refused, so the reused one would be no help.
-// Joined callers share the first caller's client (there is one Discord client
-// per process) and, for forced calls, the first caller's refusedAccessToken.
-const inFlight = new Map<boolean, Promise<string | undefined>>();
+// It is keyed on whether a client was passed too: a client-less call records
+// no episode, so a caller with a client must never join one. Joined callers
+// share the first caller's client (there is one Discord client per process)
+// and, for forced calls, the first caller's refusedAccessToken.
+const inFlight = new Map<string, Promise<string | undefined>>();
 
 /**
  * A usable organizer access token, or undefined when none can be obtained.
  * Never throws. Every read-to-refresh and write happens under the shared
  * credential lock, so processes refreshing the rotating token serialize.
  *
- * `client` is used for the once-per-episode alert and the recovery message;
- * without one, a failure logs the remedy instead.
+ * `client` is used for the once-per-episode alert and the recovery message.
+ * Only a call with a client opens or closes a failure episode: without one
+ * (a script), a failure logs the remedy and a success says nothing, and the
+ * episode is left for the next call that can post about it. If an episode
+ * post fails, the transition is undone so the next run posts it again.
  */
 export async function getOrganizerAccessToken(
   opts: {
@@ -366,19 +431,20 @@ export async function getOrganizerAccessToken(
   } = {},
 ): Promise<string | undefined> {
   const forceRefresh = opts.forceRefresh ?? false;
-  let pending = inFlight.get(forceRefresh);
+  const key = `${String(forceRefresh)}:${String(opts.client !== undefined)}`;
+  let pending = inFlight.get(key);
   if (pending === undefined) {
     const started: Promise<string | undefined> = resolveOrganizerAccessToken(
       forceRefresh,
       opts.refusedAccessToken,
       opts.client,
     ).finally(() => {
-      if (inFlight.get(forceRefresh) === started) {
-        inFlight.delete(forceRefresh);
+      if (inFlight.get(key) === started) {
+        inFlight.delete(key);
       }
     });
     pending = started;
-    inFlight.set(forceRefresh, pending);
+    inFlight.set(key, pending);
   }
   return pending;
 }
