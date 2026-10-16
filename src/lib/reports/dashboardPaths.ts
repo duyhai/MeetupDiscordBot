@@ -62,8 +62,14 @@ export function memberHistoryPath(memberId: string): string | undefined {
     : undefined;
 }
 
-/** '/dashboard' plus a param-free path constant; a template with a parameter throws. */
-export function dashboardPath(path: DashboardPathTemplate): string {
+/** The path constants without a route parameter. */
+export type ParamFreeDashboardPath = Exclude<
+  DashboardPathTemplate,
+  `${string}:${string}`
+>;
+
+/** '/dashboard' plus a param-free path constant. The type refuses a template with a parameter; so does the runtime check. */
+export function dashboardPath(path: ParamFreeDashboardPath): string {
   if (path.includes(':')) {
     throw new RangeError('dashboardPath takes a path without parameters');
   }

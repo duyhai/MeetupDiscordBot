@@ -10,6 +10,7 @@ import { generateCodeVerifier, generateState } from 'arctic';
 import { Logger } from 'tslog';
 
 import { KeyValueCache } from '../lib/cache/base.js';
+import { DASHBOARD_BASE } from '../lib/reports/dashboardPaths.js';
 import { LogEntry } from '../lib/helpers/discordLogger.js';
 import {
   clearCookie,
@@ -47,7 +48,7 @@ export const PUBLIC_ROUTE_PATHS: readonly string[] = [
   '/auth/callback',
 ];
 const OAUTH_COOKIE_PATH = '/dashboard/auth';
-const SESSION_COOKIE_PATH = '/dashboard';
+const SESSION_COOKIE_PATH = DASHBOARD_BASE;
 const OAUTH_TTL_SEC = 10 * 60;
 /** Most verified dash_sid values looked up in Redis per request. */
 const MAX_SESSION_COOKIES = 3;
@@ -321,7 +322,7 @@ export function createDashboardRouter(deps: DashboardDeps): express.Router {
 
   router.get('/login', (async (req, res) => {
     if ((await readSession(req)).session) {
-      res.redirect(302, '/dashboard');
+      res.redirect(302, DASHBOARD_BASE);
       return;
     }
     send(res, 200, loginPage(locals(res).nonce));
@@ -411,7 +412,7 @@ export function createDashboardRouter(deps: DashboardDeps): express.Router {
       title: 'Dashboard sign-in',
       description: `<@${identity.id}> signed in to the staff dashboard.`,
     });
-    res.redirect(302, '/dashboard');
+    res.redirect(302, DASHBOARD_BASE);
   }) as RequestHandler);
 
   // ---- The gate: a live session whose role check is current. ----
@@ -535,7 +536,10 @@ export function createDashboardRouter(deps: DashboardDeps): express.Router {
 
   deps.protectedRoutes?.(protectedRouter);
 
-  protectedRouter.use((_req, res) => fail(res, 404));
+  // Named so the access matrix can tell it from a use() layer a hook added.
+  protectedRouter.use(function dashboardNotFound(_req, res) {
+    fail(res, 404);
+  });
 
   router.use(dashboardSessionGate as RequestHandler, protectedRouter);
 

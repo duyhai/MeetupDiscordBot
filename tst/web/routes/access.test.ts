@@ -1,6 +1,7 @@
 import express from 'express';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { DASHBOARD_BASE } from '../../../src/lib/reports/dashboardPaths.js';
 import {
   DashboardDeps,
   createDashboardRouter,
@@ -37,7 +38,27 @@ function buildRouter(overrides: Partial<DashboardDeps> = {}) {
 
 // Derived from the router itself, never hand-written: a page added through
 // registerAllProtectedRoutes is in the matrix by construction.
-const ROUTES = protectedRouteList(buildRouter().router);
+const MATRIX_ROUTER = buildRouter().router;
+const ROUTES = protectedRouteList(MATRIX_ROUTER);
+
+/** Express 5 layer shape, read only to find layers protectedRouteList cannot list. */
+interface StackLayer {
+  name: string;
+  route?: unknown;
+  handle: { stack?: StackLayer[] };
+}
+
+/**
+ * The names of the protected router's non-route layers, in order. Anything
+ * mounted with use() inside the hook (a sub-router, a path-scoped handler)
+ * is a non-route layer that protectedRouteList skips, so it shows up here.
+ */
+function protectedUseLayers(router: express.Router): string[] {
+  const outer = (router as unknown as { stack: StackLayer[] }).stack;
+  const gate = outer.findIndex((l) => l.name === 'dashboardSessionGate');
+  const inner = outer[gate + 1]?.handle.stack ?? [];
+  return inner.filter((l) => !l.route).map((l) => l.name);
+}
 const GETS = ROUTES.filter((r) => r.method === 'get');
 const UNSAFE = ROUTES.filter((r) => r.method !== 'get' && r.method !== 'head');
 
@@ -54,13 +75,16 @@ const EXPECTED_ALLOWED: Record<string, number> = {
 };
 
 function concrete(path: string): string {
-  return `/dashboard${path.replace(/:([A-Za-z]+)/g, (_m, name: string) => {
-    const sample = SAMPLE_PARAMS[name];
-    if (sample === undefined) {
-      throw new Error(`add a sample for :${name}`);
-    }
-    return sample;
-  })}`.replace(/\/$/, '');
+  return `${DASHBOARD_BASE}${path.replace(
+    /:([A-Za-z]+)/g,
+    (_m, name: string) => {
+      const sample = SAMPLE_PARAMS[name];
+      if (sample === undefined) {
+        throw new Error(`add a sample for :${name}`);
+      }
+      return sample;
+    },
+  )}`.replace(/\/$/, '');
 }
 
 const label = (r: { method: string; path: string }) =>
@@ -71,7 +95,7 @@ async function setup() {
   const { deps, router } = buildRouter({ now: () => clock });
   const app = express();
   app.set('trust proxy', 1);
-  app.use('/dashboard', router);
+  app.use(DASHBOARD_BASE, router);
   const req = clientFor(await listen(app));
   return {
     deps,
@@ -99,6 +123,16 @@ describe('access matrix', () => {
     expect(labels).toContain('POST /logout');
     expect(labels).toContain('GET /organizer-login');
     expect(UNSAFE.length).toBeGreaterThan(0);
+  });
+
+  it('has no use() layers the route list cannot see', () => {
+    // Only the CSRF / Origin / rate-limit guard first and the 404 fallback
+    // last. A page mounted with router.use(...) would be gated but missing
+    // from the matrix, so any extra layer fails here.
+    expect(protectedUseLayers(MATRIX_ROUTER)).toEqual([
+      'dashboardUnsafeMethodGuard',
+      'dashboardNotFound',
+    ]);
   });
 
   it('has a sample for every route parameter', () => {

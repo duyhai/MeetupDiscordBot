@@ -12,6 +12,7 @@ import {
   consumeOAuthState,
   resolveOAuthState,
 } from './lib/client/oauth/state.js';
+import { DASHBOARD_BASE } from './lib/reports/dashboardPaths.js';
 import { getAuthLandingPage } from './templates/authLanding.js';
 import { ApplicationCache } from './util/cache.js';
 import { allowedRedirectTarget } from './util/redirectTarget.js';
@@ -181,7 +182,7 @@ app.get('/redirect/:url', (req, res) => {
   return res.redirect(307, target.toString());
 });
 
-app.use('/dashboard', dashboardRouterFromEnv());
+app.use(DASHBOARD_BASE, dashboardRouterFromEnv());
 
 // Any stale or mistyped bot URL should still land the user on a page that
 // points back to Discord, never on Express's default 404.

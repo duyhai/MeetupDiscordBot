@@ -1,3 +1,4 @@
+import { Response } from 'express';
 import fs from 'fs';
 import { describe, expect, it } from 'vitest';
 
@@ -5,11 +6,13 @@ import { AttendanceEvidence } from '../../src/lib/reports/types.js';
 import {
   COPY_SCRIPT,
   builtByHtml,
+  dashboardPage,
   pacificDate,
   pacificDateTime,
   parseRouteMonth,
   zeroNoShowNote,
 } from '../../src/web/pageKit.js';
+import { html } from '../../src/web/html.js';
 
 const NOW = new Date('2026-10-05T16:15:00Z');
 
@@ -105,7 +108,7 @@ describe('pageKit', () => {
       expect(out).not.toContain('<a');
       expect(out).not.toContain('<script');
       expect(out).not.toContain(bad);
-      expect(out).toBe('a staff member (profile)');
+      expect(out).toBe('a staff member');
     }
   });
 
@@ -116,10 +119,52 @@ describe('pageKit', () => {
     );
     const start = source.indexOf('export const COPY_SCRIPT');
     expect(start).toBeGreaterThan(-1);
-    const definition = source.slice(start, source.indexOf(';\n', start) + 1);
+    // Up to the next top-level export, so a later line of the definition
+    // cannot hide an interpolation.
+    const end = source.indexOf('\nexport ', start + 1);
+    expect(end).toBeGreaterThan(start);
+    const definition = source.slice(start, end);
     expect(definition).toContain('COPY_SCRIPT');
     expect(definition).not.toContain('${');
     expect(definition).not.toContain('`');
     expect(COPY_SCRIPT).toContain('button[data-copy]');
+  });
+
+  it('COPY_SCRIPT falls back when the clipboard API is missing', () => {
+    expect(COPY_SCRIPT).toContain(
+      "if(!navigator.clipboard){b.textContent='Select the text and copy it';return;}",
+    );
+  });
+
+  it('dashboardPage embeds COPY_SCRIPT verbatim with the nonce', () => {
+    const sent: { status?: number; body?: string } = {};
+    const res = {
+      locals: {
+        nonce: 'N0NCE',
+        sid: 'sid',
+        session: { userId: '1', username: 'Mod', csrfToken: 't' },
+      },
+    } as unknown as Response;
+    Object.assign(res, {
+      status: (code: number) => {
+        sent.status = code;
+        return res;
+      },
+      type: () => res,
+      send: (body: string) => {
+        sent.body = body;
+        return res;
+      },
+    });
+    dashboardPage(res, {
+      title: 'T',
+      body: html`<p>x</p>`,
+      script: true,
+    });
+    expect(sent.status).toBe(200);
+    expect(sent.body).toContain(
+      `<script nonce="N0NCE">${COPY_SCRIPT}</script>`,
+    );
+    expect(sent.body).toContain('<a href="/dashboard">Home</a>');
   });
 });

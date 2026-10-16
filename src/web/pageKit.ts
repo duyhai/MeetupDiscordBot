@@ -3,6 +3,7 @@ import { Response } from 'express';
 import { Logger } from 'tslog';
 
 import {
+  DASHBOARD_BASE,
   DASHBOARD_PATHS,
   dashboardPath,
 } from '../lib/reports/dashboardPaths.js';
@@ -19,13 +20,13 @@ import { AttendanceEvidence } from '../lib/reports/types.js';
 import { tz } from '../util/timezone.js';
 import { dashboardLocals } from './dashboardRouter.js';
 import { SafeHtml, html } from './html.js';
-import { discordUserLink } from './links.js';
+import { discordProfileUrl, discordUserLink } from './links.js';
 import { errorPage, layout } from './pages.js';
 
 const logger = new Logger({ name: 'dashboard' });
 
 const NAV = html`<nav class="site">
-  <a href="/dashboard">Home</a>
+  <a href="${DASHBOARD_BASE}">Home</a>
   <a href="${dashboardPath(DASHBOARD_PATHS.hallOfFame)}">Hall of Fame</a>
   <a href="${dashboardPath(DASHBOARD_PATHS.noShowHistory)}">No-show history</a>
   <a href="${dashboardPath(DASHBOARD_PATHS.suspensions)}">Suspensions</a>
@@ -38,7 +39,9 @@ const NAV = html`<nav class="site">
 export const COPY_SCRIPT =
   "document.querySelectorAll('button[data-copy]').forEach(function(b){" +
   "b.addEventListener('click',function(){var t=document.getElementById(b.getAttribute('data-copy'));" +
-  "if(!t){return;}t.select();navigator.clipboard.writeText(t.value).then(function(){b.textContent='Copied';}," +
+  'if(!t){return;}t.select();' +
+  "if(!navigator.clipboard){b.textContent='Select the text and copy it';return;}" +
+  "navigator.clipboard.writeText(t.value).then(function(){b.textContent='Copied';}," +
   "function(){b.textContent='Select the text and copy it';});});});";
 
 export function dashboardPage(
@@ -46,11 +49,8 @@ export function dashboardPage(
   page: { title: string; body: SafeHtml; status?: number; script?: boolean },
 ): void {
   const { session, nonce } = dashboardLocals(res);
-  const script = page.script
-    ? html`<script nonce="${nonce}">
-        ${new SafeHtml(COPY_SCRIPT)};
-      </script>`
-    : '';
+  // prettier-ignore
+  const script = page.script ? html`<script nonce="${nonce}">${new SafeHtml(COPY_SCRIPT)}</script>` : '';
   res
     .status(page.status ?? 200)
     .type('html')
@@ -129,7 +129,9 @@ export function builtByHtml(builtBy: string): SafeHtml {
   if (builtBy === 'backfill') {
     return html`the backfill`;
   }
-  return html`a staff member (${discordUserLink(builtBy, 'profile')})`;
+  return discordProfileUrl(builtBy)
+    ? html`a staff member (${discordUserLink(builtBy, 'profile')})`
+    : html`a staff member`;
 }
 
 /** Only for finished months: past events had RSVPs, nobody was marked a no-show. Never says "incomplete". */

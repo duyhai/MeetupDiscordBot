@@ -56,10 +56,13 @@ describe('dashboardPaths', () => {
 
   it('dashboardPath refuses a parameterised path', () => {
     expect(dashboardPath(DASHBOARD_PATHS.trends)).toBe('/dashboard/trends');
+    // The type refuses a parameterised template (tsc checks the directive);
+    // the runtime check still throws if a cast slips one through.
+    // @ts-expect-error a template with a parameter is not a dashboardPath
     expect(() => dashboardPath(DASHBOARD_PATHS.hallOfFameMonth)).toThrow(
       RangeError,
     );
-    expect(() => dashboardPath(DASHBOARD_PATHS.identityThumb)).toThrow(
+    expect(() => dashboardPath(DASHBOARD_PATHS.identityThumb as never)).toThrow(
       RangeError,
     );
   });

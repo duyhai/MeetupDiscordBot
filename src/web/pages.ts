@@ -1,6 +1,7 @@
 // src/web/pages.ts
 import dayjs from 'dayjs';
 
+import { DASHBOARD_BASE } from '../lib/reports/dashboardPaths.js';
 import { tz } from '../util/timezone.js';
 import { SafeHtml, html, memberText } from './html.js';
 
@@ -135,7 +136,7 @@ export function errorPage(
     body: html`<div class="card">
       <h1>${status === 500 ? 'Something went wrong' : 'Unable to continue'}</h1>
       <p>${ERROR_MESSAGES[status]}</p>
-      <p><a href="/dashboard">Back to the dashboard</a></p>
+      <p><a href="${DASHBOARD_BASE}">Back to the dashboard</a></p>
     </div>`,
   });
 }
