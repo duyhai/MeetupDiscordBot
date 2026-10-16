@@ -21,9 +21,14 @@ const MEMBER_ID_PATTERN = /^[0-9]{1,20}$/;
  * Everything the "Renew organizer login" routes touch, injectable for tests.
  * Production wiring lives in organizerLoginDeps.ts.
  */
+/** The credential's meta row, and whether a credential is stored at all. */
+export interface OrganizerCredentialStatus extends CredentialMeta {
+  stored: boolean;
+}
+
 export interface OrganizerLoginDeps {
-  /** The credential's meta row; undefined when there is no credential store (no DATABASE_URL). */
-  credentialStatus: () => Promise<CredentialMeta | undefined>;
+  /** Undefined when there is no credential store (no DATABASE_URL). */
+  credentialStatus: () => Promise<OrganizerCredentialStatus | undefined>;
   /** Stored member id, else MEETUP_ORGANIZER_MEMBER_ID, else undefined. */
   expectedMemberId: () => Promise<string | undefined>;
   createState: (discordUserId: string, sessionHash: string) => Promise<string>;
@@ -73,11 +78,15 @@ const PRIVATE_WINDOW_STEPS = html`<ol>
   <li>Close the private window when the dashboard says it is renewed.</li>
 </ol>`;
 
-function statusLine(meta: CredentialMeta): SafeHtml {
+function statusLine(meta: OrganizerCredentialStatus): SafeHtml {
   if (!meta.failingSince) {
-    return html`<p>
-      <strong>Healthy.</strong> No failure of the organizer login is on record.
-    </p>`;
+    // Not "healthy": a stored login that Meetup now refuses has no failure on
+    // record until the next run tries it.
+    return meta.stored
+      ? html`<p><strong>No failure on record.</strong></p>`
+      : html`<p>
+          <strong>No failure on record.</strong> No credential is stored yet.
+        </p>`;
   }
   const since = tz(dayjs(meta.failingSince)).format('MMM D, YYYY h:mm A');
   return html`<p>
@@ -137,7 +146,7 @@ export function registerOrganizerLoginRoutes(
 
   router.get('/organizer-login', (async (_req, res) => {
     const { session } = dashboardLocals(res);
-    let meta: CredentialMeta | undefined;
+    let meta: OrganizerCredentialStatus | undefined;
     try {
       meta = await deps.credentialStatus();
     } catch (error: unknown) {
@@ -180,7 +189,7 @@ export function registerOrganizerLoginRoutes(
   // POST, and Meetup's sign-in may bounce through more than one host.
   router.post('/organizer-login/start', (async (_req, res) => {
     const { session, sid } = dashboardLocals(res);
-    let meta: CredentialMeta | undefined;
+    let meta: OrganizerCredentialStatus | undefined;
     try {
       meta = await deps.credentialStatus();
     } catch (error: unknown) {

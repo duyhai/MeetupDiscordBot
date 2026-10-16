@@ -91,9 +91,11 @@ function organizerDeps(
   const states = fakeStates();
   return {
     states,
-    credentialStatus: vi
-      .fn()
-      .mockResolvedValue({ memberId: ORGANIZER_ID, failingSince: null }),
+    credentialStatus: vi.fn().mockResolvedValue({
+      memberId: ORGANIZER_ID,
+      failingSince: null,
+      stored: true,
+    }),
     expectedMemberId: vi.fn().mockResolvedValue(ORGANIZER_ID),
     createState: states.createState,
     resolveState: states.resolveState,
@@ -614,6 +616,7 @@ describe('organizer login routes', () => {
           memberId: ORGANIZER_ID,
           // 2026-10-14 17:05 UTC = 10:05 AM Pacific (PDT).
           failingSince: new Date('2026-10-14T17:05:00Z'),
+          stored: true,
         }),
       },
       {
@@ -698,14 +701,33 @@ describe('organizer login routes', () => {
     expect(csp).not.toContain('meetup.com');
   });
 
-  it('status page shows a healthy credential', async () => {
+  it('status page says no failure is on record, not that the login is healthy', async () => {
     const { req, cookie } = await setup();
     const res = await req
       .get('/dashboard/organizer-login')
       .set('Cookie', cookie);
     expect(res.status).toBe(200);
-    expect(res.text).toContain('Healthy');
+    expect(res.text).toContain('No failure on record.');
+    expect(res.text).not.toContain('Healthy');
+    expect(res.text).not.toContain('No credential is stored yet.');
     expect(res.text).not.toContain('Failing since');
+  });
+
+  it('status page says when no credential is stored yet', async () => {
+    const { req, cookie } = await setup({
+      credentialStatus: vi.fn().mockResolvedValue({
+        memberId: null,
+        failingSince: null,
+        stored: false,
+      }),
+    });
+    const res = await req
+      .get('/dashboard/organizer-login')
+      .set('Cookie', cookie);
+    expect(res.status).toBe(200);
+    expect(res.text).toContain('No failure on record.');
+    expect(res.text).toContain('No credential is stored yet.');
+    expect(res.text).toContain('action="/dashboard/organizer-login/start"');
   });
 
   it('without a credential store, renewal is unavailable and start answers 503', async () => {

@@ -68,6 +68,7 @@ const locked = {
 };
 const repo = {
   getMeta: vi.fn(async () => db.meta),
+  get: vi.fn(async (): Promise<Tokens | undefined> => undefined),
   withLockedCredential: vi.fn(
     async <T>(key: string, fn: (l: LockedCredential) => Promise<T>) => {
       events.push(`lock ${key}`);
@@ -177,6 +178,27 @@ describe('organizerLoginDeps', () => {
     expect(locked.setMemberId).not.toHaveBeenCalled();
     expect(logAlert).not.toHaveBeenCalled();
     expect(noteOrganizerCredentialRenewed).not.toHaveBeenCalled();
+  });
+
+  it('status reports the meta row and whether a credential is stored, never the tokens', async () => {
+    db.meta = { memberId: ORGANIZER_ID, failingSince: null };
+    const deps = organizerLoginDeps(() => client);
+
+    await expect(deps.credentialStatus()).resolves.toEqual({
+      memberId: ORGANIZER_ID,
+      failingSince: null,
+      stored: false,
+    });
+
+    repo.get.mockResolvedValueOnce(TOKENS);
+    const status = await deps.credentialStatus();
+    expect(status).toEqual({
+      memberId: ORGANIZER_ID,
+      failingSince: null,
+      stored: true,
+    });
+    expect(JSON.stringify(status)).not.toContain('ACCESS');
+    expect(repo.get).toHaveBeenCalledWith(KEY);
   });
 
   it('without a credential store: no status, and saving fails', async () => {

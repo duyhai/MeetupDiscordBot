@@ -76,7 +76,15 @@ export function organizerLoginDeps(
   return {
     credentialStatus: async () => {
       const repo = await ApplicationCredentialRepository();
-      return repo ? repo.getMeta(MEETUP_ORGANIZER_CREDENTIAL_KEY) : undefined;
+      if (!repo) {
+        return undefined;
+      }
+      // getMeta first: it ensures the schema. Only whether a credential
+      // exists leaves here, never the tokens.
+      const meta = await repo.getMeta(MEETUP_ORGANIZER_CREDENTIAL_KEY);
+      const stored =
+        (await repo.get(MEETUP_ORGANIZER_CREDENTIAL_KEY)) !== undefined;
+      return { ...meta, stored };
     },
     // Hai's bootstrap rule: the recorded id, else MEETUP_ORGANIZER_MEMBER_ID,
     // else nothing (the route refuses). An empty config var counts as unset.
