@@ -157,6 +157,15 @@ const client = {} as Client;
 
 const MINUTE = 60 * 1000;
 
+/** Fixed text: no ids, no error. */
+const SAVE_FAILED_ALERT = {
+  title: 'Meetup organizer login could not be saved',
+  description:
+    'A renewed Meetup organizer login was obtained but could not be saved to the database. ' +
+    'Identity monitoring uses it for this run; if the next daily sweep fails, renew it at ' +
+    `${BASE_DISCORD_BOT_URL}/dashboard/organizer-login.`,
+};
+
 const stored = (expiresInMs: number, refreshToken = 'STORED-REFRESH') => ({
   accessToken: 'STORED-ACCESS',
   refreshToken,
@@ -456,9 +465,10 @@ describe('getOrganizerAccessToken', () => {
     // whose write threw too, rolled back.
     expect(db.rolledBack).toBe(1);
     // Postgres aborted the transaction at the failed write, so the episode
-    // is not touched: no recovery message.
+    // is not touched: no recovery message, only the could-not-be-saved one.
     expect(locked.clearFailing).not.toHaveBeenCalled();
-    expect(alert).not.toHaveBeenCalled();
+    expect(alert).toHaveBeenCalledTimes(1);
+    expect(alert).toHaveBeenCalledWith(client, SAVE_FAILED_ALERT);
     expect(fake.logged.join('\n')).toMatch(/refreshed but could NOT be stored/);
     // Only the first candidate: a persist failure is not a refresh failure.
     expect(refresh).toHaveBeenCalledTimes(1);
@@ -560,7 +570,60 @@ describe('getOrganizerAccessToken', () => {
       expect(credentials.withLockedCredential).toHaveBeenCalledTimes(2);
       expect(db.current?.refreshToken).toBe('STORED-REFRESH');
       expect(fake.logged.join('\n')).toMatch(/retry .*failed/i);
+      expect(alert).toHaveBeenCalledTimes(1);
+      expect(alert).toHaveBeenCalledWith(client, SAVE_FAILED_ALERT);
+    });
+
+    it('posts the could-not-be-saved alert when the retry write fails', async () => {
+      db.current = stored(0);
+      refresh.mockResolvedValueOnce(fresh(1));
+      locked.write.mockRejectedValueOnce(new Error('write failed'));
+      locked.write.mockRejectedValueOnce(new Error('write failed'));
+
+      await expect(getOrganizerAccessToken({ client })).resolves.toBe(
+        'FRESH-ACCESS-1',
+      );
+      expect(alert).toHaveBeenCalledTimes(1);
+      expect(alert).toHaveBeenCalledWith(client, SAVE_FAILED_ALERT);
+      // Not an episode: nothing is recorded, and every failure posts.
+      expect(locked.markFailing).not.toHaveBeenCalled();
+      expect(db.failing).toBe(false);
+
+      resetOrganizerTokenStateForTest();
+      refresh.mockResolvedValueOnce(fresh(2));
+      locked.write.mockRejectedValueOnce(new Error('write failed'));
+      locked.write.mockRejectedValueOnce(new Error('write failed'));
+      await getOrganizerAccessToken({ client, forceRefresh: true });
+      expect(alert).toHaveBeenCalledTimes(2);
+    });
+
+    it('no alert when the retry is skipped because another process advanced the pair', async () => {
+      db.current = stored(0);
+      refresh.mockResolvedValueOnce(fresh(1));
+      locked.write.mockRejectedValueOnce(new Error('write failed'));
+      db.beforeLock.push(
+        () => undefined,
+        () => {
+          db.current = { ...fresh(7), refreshToken: 'ADVANCED-ELSEWHERE' };
+        },
+      );
+
+      await expect(getOrganizerAccessToken({ client })).resolves.toBe(
+        'FRESH-ACCESS-1',
+      );
+      expect(fake.logged.join('\n')).toMatch(/already advanced/);
       expect(alert).not.toHaveBeenCalled();
+    });
+
+    it('client-less: a failed retry logs only', async () => {
+      db.current = stored(0);
+      refresh.mockResolvedValueOnce(fresh(1));
+      locked.write.mockRejectedValueOnce(new Error('write failed'));
+      locked.write.mockRejectedValueOnce(new Error('write failed'));
+
+      await expect(getOrganizerAccessToken()).resolves.toBe('FRESH-ACCESS-1');
+      expect(alert).not.toHaveBeenCalled();
+      expect(fake.logged.join('\n')).toMatch(/retry .*failed/i);
     });
 
     it('a bookkeeping failure does not lose the credential write', async () => {
@@ -594,7 +657,10 @@ describe('getOrganizerAccessToken', () => {
       'FRESH-ACCESS-1',
     );
     expect(fake.logged.join('\n')).toMatch(/could NOT be stored/);
-    expect(alert).not.toHaveBeenCalled();
+    // Episode state is unknown, so no episode post: only the one-off
+    // could-not-be-saved alert for the failed retry.
+    expect(alert).toHaveBeenCalledTimes(1);
+    expect(alert).toHaveBeenCalledWith(client, SAVE_FAILED_ALERT);
   });
 
   it('returns undefined when the lock cannot be taken and nothing was refreshed', async () => {

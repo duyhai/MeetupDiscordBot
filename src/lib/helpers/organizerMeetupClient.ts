@@ -57,6 +57,23 @@ export const ORGANIZER_RESTORED_ALERT = {
     'The shared Meetup organizer credential works again; Meetup identity monitoring resumes with the next sweep.',
 };
 
+/**
+ * Posted when a refreshed login could not be saved even on the retry. Fixed
+ * text, no ids. Not an episode: posted every time it happens.
+ */
+export function organizerSaveFailedAlert(): {
+  title: string;
+  description: string;
+} {
+  return {
+    title: 'Meetup organizer login could not be saved',
+    description:
+      'A renewed Meetup organizer login was obtained but could not be saved to the database. ' +
+      'Identity monitoring uses it for this run; if the next daily sweep fails, renew it at ' +
+      `${BASE_DISCORD_BOT_URL}/dashboard/organizer-login.`,
+  };
+}
+
 /** Fixed text: never carries an error, so no Meetup body can reach Discord. */
 export function organizerFailureRemedy(): string {
   return (
@@ -591,11 +608,26 @@ async function reportFailure(
  * read: otherwise
  * another process has already advanced the credential, and its pair wins.
  * Logged by outcome and error name only. Never throws.
+ *
+ * Only a failed retry (write or COMMIT) is a failure: with a client it posts
+ * the one-off could-not-be-saved alert; client-less it logs only. A skip
+ * (another process advanced the pair) is not.
  */
 async function retryStore(
   credentials: PostgresCredentialRepository,
   pair: RefreshedPair,
+  client: Client | undefined,
 ): Promise<void> {
+  if (!(await tryRetryStore(credentials, pair)) && client) {
+    await postAlert(client, organizerSaveFailedAlert());
+  }
+}
+
+/** False iff the retry's write or COMMIT failed. */
+async function tryRetryStore(
+  credentials: PostgresCredentialRepository,
+  pair: RefreshedPair,
+): Promise<boolean> {
   try {
     const stored = await credentials.withLockedCredential(
       MEETUP_ORGANIZER_CREDENTIAL_KEY,
@@ -620,11 +652,13 @@ async function retryStore(
           'process already advanced the stored credential',
       );
     }
+    return true;
   } catch (error: unknown) {
     logger.error(
       'Retry storing the refreshed organizer credential failed; the stored ' +
         `pair may now be stale: ${errorName(error)}`,
     );
+    return false;
   }
 }
 
@@ -660,14 +694,14 @@ async function resolveOrganizerAccessToken(
   } catch (error: unknown) {
     if (refreshedPair !== undefined && credentials) {
       // Refreshed and verified, but the transaction did not commit: same
-      // rule as a failed write. Episode state is unknown, so nothing is
-      // posted.
+      // rule as a failed write. Episode state is unknown, so no episode
+      // post (only the could-not-be-saved alert, if the retry fails too).
       logger.error(
         'Meetup credential refreshed but could NOT be stored (the ' +
           'transaction failed to commit); this run continues on the fresh ' +
           `token and retries the save once: ${errorName(error)}`,
       );
-      await retryStore(credentials, refreshedPair);
+      await retryStore(credentials, refreshedPair, client);
       return refreshedPair.tokens.accessToken;
     }
     // The store or lock failed before any refresh: nothing was obtained and
@@ -697,7 +731,7 @@ async function resolveOrganizerAccessToken(
   }
 
   if (outcome.writeFailed && refreshedPair !== undefined) {
-    await retryStore(credentials, refreshedPair);
+    await retryStore(credentials, refreshedPair, client);
   }
 
   if (outcome.refreshed) {
