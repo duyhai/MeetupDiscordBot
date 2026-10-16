@@ -67,6 +67,30 @@ const AUGUST: Period = { year: 2026, month: 8 };
       expect(await repo.has('report_ready', SEPTEMBER)).toBe(true);
     });
 
+    it('a release from a caller that lost the claim leaves the winner marker', async () => {
+      const winner = new PostgresDashboardNoticeRepository(pool);
+      const loser = new PostgresDashboardNoticeRepository(pool);
+      expect(await winner.claim('report_ready', SEPTEMBER)).toBe(true);
+      expect(await loser.claim('report_ready', SEPTEMBER)).toBe(false);
+      await loser.release('report_ready', SEPTEMBER);
+      expect(await winner.has('report_ready', SEPTEMBER)).toBe(true);
+      // The winner's own release still works.
+      await winner.release('report_ready', SEPTEMBER);
+      expect(await winner.has('report_ready', SEPTEMBER)).toBe(false);
+    });
+
+    it('a stale release after someone else re-claimed deletes nothing', async () => {
+      const first = new PostgresDashboardNoticeRepository(pool);
+      const second = new PostgresDashboardNoticeRepository(pool);
+      expect(await first.claim('report_ready', SEPTEMBER)).toBe(true);
+      // The marker goes away by other means (an operator, or the first
+      // holder's release racing), and another process claims again.
+      await pool.query('DELETE FROM dashboard_notices');
+      expect(await second.claim('report_ready', SEPTEMBER)).toBe(true);
+      await first.release('report_ready', SEPTEMBER);
+      expect(await second.has('report_ready', SEPTEMBER)).toBe(true);
+    });
+
     it('concurrent claims: exactly one wins', async () => {
       const results = await Promise.all(
         Array.from({ length: 5 }, () => repo.claim('report_ready', SEPTEMBER)),

@@ -1,14 +1,26 @@
 import { randomUUID } from 'node:crypto';
 
 import pg from 'pg';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from 'vitest';
 
 import { Period } from '../../src/lib/reports/period.js';
 import {
   HallOfFamePayload,
   NoShowPayload,
 } from '../../src/lib/reports/types.js';
-import { ensureDashboardSchema } from '../../src/lib/repositories/dashboardPool.js';
+import {
+  DASHBOARD_LOCK_CLASS,
+  ensureDashboardSchema,
+} from '../../src/lib/repositories/dashboardPool.js';
 import {
   PostgresReportSnapshotRepository,
   SnapshotWrite,
@@ -82,12 +94,52 @@ function write(overrides: Partial<SnapshotWrite> = {}): SnapshotWrite {
   };
 }
 
-function testPool(max: number, options?: string): pg.Pool {
+function testPool(
+  max: number,
+  options?: string,
+  applicationName?: string,
+): pg.Pool {
   return new pg.Pool({
     connectionString: process.env.DATABASE_URL,
     max,
     options,
+    application_name: applicationName,
   });
+}
+
+const SAVE_LOCK_SQL = 'SELECT pg_advisory_xact_lock($1, hashtext($2))';
+
+/** Polls until `sql` returns a row (a backend reached some state). */
+async function waitForRow<T extends pg.QueryResultRow>(
+  pool: pg.Pool,
+  sql: string,
+  values: unknown[],
+): Promise<T> {
+  const deadline = Date.now() + 5000;
+  for (;;) {
+    // eslint-disable-next-line no-await-in-loop
+    const result = await pool.query<T>(sql, values);
+    if (result.rows[0]) {
+      return result.rows[0];
+    }
+    if (Date.now() > deadline) {
+      throw new Error(`timed out waiting for: ${sql}`);
+    }
+    // eslint-disable-next-line no-await-in-loop
+    await new Promise((resolve) => {
+      setTimeout(resolve, 20);
+    });
+  }
+}
+
+/** Rejects if `promise` has not settled within `ms`. */
+function within<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<never>((_, reject) => {
+      setTimeout(() => reject(new Error(`still pending after ${ms} ms`)), ms);
+    }),
+  ]);
 }
 
 (POSTGRES_AVAILABLE ? describe : describe.skip)(
@@ -291,10 +343,15 @@ function testPool(max: number, options?: string): pg.Pool {
             'report_snapshots',
           ]);
         } finally {
-          // eslint-disable-next-line no-await-in-loop
-          await scoped.end();
-          // eslint-disable-next-line no-await-in-loop
-          await pool.query(`DROP SCHEMA ${schema} CASCADE`);
+          // The schema is dropped first, in its own try, so a failure in
+          // either step cannot leak a schema.
+          try {
+            // eslint-disable-next-line no-await-in-loop
+            await pool.query(`DROP SCHEMA ${schema} CASCADE`);
+          } finally {
+            // eslint-disable-next-line no-await-in-loop
+            await scoped.end();
+          }
         }
       }
     });
@@ -376,6 +433,173 @@ function testPool(max: number, options?: string): pg.Pool {
       expect(await repo.listHistory('no_show', SEPTEMBER)).toHaveLength(2);
       expect((await repo.getCurrent('no_show', SEPTEMBER)).payload).toEqual(
         noShow(3),
+      );
+    });
+
+    describe('connection loss and timeouts', () => {
+      // Its own pool, so the backend under test can be found by name and a
+      // destroyed client never affects the shared pool.
+      const APP = `snapshot-conn-${randomUUID().slice(0, 8)}`;
+      let victimPool: pg.Pool;
+      let victim: PostgresReportSnapshotRepository;
+      let uncaught: ReturnType<typeof vi.fn<(error: Error) => void>>;
+
+      beforeEach(() => {
+        victimPool = testPool(1, undefined, APP);
+        victimPool.on('error', () => undefined);
+        victim = new PostgresReportSnapshotRepository(victimPool);
+        uncaught = vi.fn<(error: Error) => void>();
+        process.on('uncaughtException', uncaught);
+      });
+
+      afterEach(async () => {
+        process.off('uncaughtException', uncaught);
+        await victimPool.end();
+      });
+
+      async function settle(): Promise<void> {
+        // Let any late 'error' event from the dead socket fire.
+        await new Promise((resolve) => {
+          setTimeout(resolve, 200);
+        });
+      }
+
+      it('backend terminated mid-query: the save rejects, nothing is uncaught, the pool recovers', async () => {
+        const holder = await pool.connect();
+        try {
+          await holder.query('BEGIN');
+          await holder.query(SAVE_LOCK_SQL, [
+            DASHBOARD_LOCK_CLASS,
+            'hall_of_fame:2026-09',
+          ]);
+          const saving = victim.save(write());
+          saving.catch(() => undefined);
+          const { pid } = await waitForRow<{ pid: number }>(
+            pool,
+            `SELECT pid FROM pg_stat_activity
+             WHERE application_name = $1 AND wait_event_type = 'Lock'`,
+            [APP],
+          );
+          await pool.query('SELECT pg_terminate_backend($1)', [pid]);
+          await expect(saving).rejects.toThrow();
+        } finally {
+          await holder.query('ROLLBACK');
+          holder.release();
+        }
+        await settle();
+        expect(uncaught).not.toHaveBeenCalled();
+        const later = await victim.save(write());
+        expect(later.id).toBeGreaterThan(0);
+        expect(await rows()).toHaveLength(1);
+      });
+
+      it('backend terminated while idle in transaction: the save rejects, nothing is uncaught, the pool recovers', async () => {
+        // Holds the save between its lock and its first read, so its
+        // session sits idle in the transaction with no query in flight.
+        let openGate: () => void = () => undefined;
+        const gate = new Promise<void>((resolve) => {
+          openGate = resolve;
+        });
+        const realConnect = victimPool.connect.bind(
+          victimPool,
+        ) as () => Promise<pg.PoolClient>;
+        let gated = false;
+        victimPool.connect = (async () => {
+          const client = await realConnect();
+          if (!gated) {
+            gated = true;
+            const realQuery = client.query.bind(client) as (
+              ...args: unknown[]
+            ) => Promise<unknown>;
+            client.query = (async (...args: unknown[]) => {
+              if (
+                typeof args[0] === 'string' &&
+                args[0].includes('SELECT id FROM report_snapshots')
+              ) {
+                await gate;
+              }
+              return realQuery(...args);
+            }) as typeof client.query;
+          }
+          return client;
+        }) as typeof victimPool.connect;
+
+        const saving = victim.save(write());
+        saving.catch(() => undefined);
+        const { pid } = await waitForRow<{ pid: number }>(
+          pool,
+          `SELECT pid FROM pg_stat_activity
+           WHERE application_name = $1 AND state = 'idle in transaction'`,
+          [APP],
+        );
+        await pool.query('SELECT pg_terminate_backend($1)', [pid]);
+        await settle();
+        openGate();
+        await expect(saving).rejects.toThrow();
+        await settle();
+        expect(uncaught).not.toHaveBeenCalled();
+        expect(await rows()).toHaveLength(0);
+        const later = await victim.save(write());
+        expect(later.id).toBeGreaterThan(0);
+      });
+
+      it('a save behind a stalled lock holder fails at its lock_timeout instead of waiting', async () => {
+        const quick = new PostgresReportSnapshotRepository(victimPool, {
+          lockTimeoutMs: 300,
+        });
+        const holder = await pool.connect();
+        try {
+          await holder.query('BEGIN');
+          await holder.query(SAVE_LOCK_SQL, [
+            DASHBOARD_LOCK_CLASS,
+            'hall_of_fame:2026-09',
+          ]);
+          const started = Date.now();
+          await expect(within(quick.save(write()), 5000)).rejects.toThrow(
+            /lock timeout/,
+          );
+          expect(Date.now() - started).toBeLessThan(5000);
+        } finally {
+          await holder.query('ROLLBACK');
+          holder.release();
+        }
+        // The lock is free again: the same repository saves normally.
+        expect((await quick.save(write())).id).toBeGreaterThan(0);
+      });
+
+      it('schema creation behind a stalled schema-lock holder fails at its lock_timeout', async () => {
+        const holder = await pool.connect();
+        try {
+          await holder.query('BEGIN');
+          await holder.query('SELECT pg_advisory_xact_lock($1, $2)', [
+            DASHBOARD_LOCK_CLASS,
+            0,
+          ]);
+          await expect(
+            within(
+              ensureDashboardSchema(victimPool, { lockTimeoutMs: 300 }),
+              5000,
+            ),
+          ).rejects.toThrow(/lock timeout/);
+        } finally {
+          await holder.query('ROLLBACK');
+          holder.release();
+        }
+      });
+    });
+
+    it('listHistory returns at most the newest 100 rows, oldest first', async () => {
+      await repo.save(write());
+      for (let i = 0; i < 104; i += 1) {
+        // eslint-disable-next-line no-await-in-loop -- each supersedes the last
+        await repo.save(write({ mode: 'supersede' }));
+      }
+      const history = await repo.listHistory('hall_of_fame', SEPTEMBER);
+      expect(history).toHaveLength(100);
+      expect(history[0].id).toBe(6);
+      expect(history[99]).toMatchObject({ id: 105, supersededBy: null });
+      expect(history.map((h) => h.id)).toEqual(
+        [...history.map((h) => h.id)].sort((a, b) => a - b),
       );
     });
   },
