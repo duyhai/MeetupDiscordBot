@@ -683,6 +683,21 @@ function within<T>(promise: Promise<T>, ms: number): Promise<T> {
         return results.map((r) => r.fields.map((f) => f.name));
       }
 
+      /** Every node of an EXPLAIN (FORMAT JSON) plan, depth first. */
+      function planNodes(explained: unknown): Record<string, unknown>[] {
+        const nodes: Record<string, unknown>[] = [];
+        const visit = (node: Record<string, unknown>): void => {
+          nodes.push(node);
+          for (const child of (node.Plans as Record<string, unknown>[]) ?? []) {
+            visit(child);
+          }
+        };
+        for (const top of explained as { Plan: Record<string, unknown> }[]) {
+          visit(top.Plan);
+        }
+        return nodes;
+      }
+
       it('schema is idempotent with the GIN index', async () => {
         await ensureDashboardSchema(pool);
         await ensureDashboardSchema(pool);
@@ -932,10 +947,23 @@ function within<T>(promise: Promise<T>, ms: number): Promise<T> {
           const explained = await client.query<{ 'QUERY PLAN': unknown }>(
             `EXPLAIN (GENERIC_PLAN, FORMAT JSON) ${MEMBER_MONTHS_SQL}`,
           );
-          const plan = JSON.stringify(explained.rows[0]['QUERY PLAN']);
-          expect(plan).toContain('report_snapshots_noshow_payload_idx');
-          expect(plan).toContain('Bitmap Index Scan');
-          expect(plan).not.toContain('Seq Scan');
+          const plan = explained.rows[0]['QUERY PLAN'];
+          expect(JSON.stringify(plan)).not.toContain('Seq Scan');
+          // The index must be searched by each containment test. A scan of
+          // the GIN index with no Index Cond only lists the rows its
+          // predicate covers (the planner's fallback when it cannot search
+          // it), which is no better than a scan of every current row.
+          const conditions = planNodes(plan)
+            .filter(
+              (node) =>
+                node['Index Name'] === 'report_snapshots_noshow_payload_idx',
+            )
+            .map((node) => node['Index Cond'] ?? null);
+          expect(conditions.sort()).toEqual([
+            '(payload @> $2)',
+            '(payload @> $3)',
+            '(payload @> $4)',
+          ]);
         } finally {
           await client.query('ROLLBACK');
           client.release();
