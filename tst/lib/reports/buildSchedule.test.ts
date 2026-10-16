@@ -263,7 +263,7 @@ describe('buildSchedule', () => {
     expect(plan('2026-10-05T16:30:00.000Z', [])).toContainEqual(current);
   });
 
-  it('the current month is the Pacific month', () => {
+  it('pins periodOf (the Pacific month) as the current month, not the UTC month', () => {
     // 2026-10-01T16:00Z is 09:00 PDT on October 1st.
     const items = plan('2026-10-01T16:00:00.000Z', [], false);
     expect(items).toEqual([
@@ -275,6 +275,9 @@ describe('buildSchedule', () => {
       { kind: 'month', period: OCT, reason: 'current' },
       { kind: 'link-progress', day: '2026-10-01' },
     ]);
+    // 03:00Z on the UTC 1st is still September 30th in Pacific, and before
+    // 16:00 UTC: nothing is planned.
+    expect(plan('2026-10-01T03:00:00.000Z', [], false)).toEqual([]);
     // Early UTC 2nd is 17:00 PDT on the 1st (before 16:00 UTC: nothing).
     expect(plan('2026-10-02T00:00:00.000Z', [], false)).toEqual([]);
     // December 1st across the PST offset: still December in Pacific.

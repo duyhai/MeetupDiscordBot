@@ -1,4 +1,4 @@
-import { IDENTITY_DIGEST_UTC_HOUR } from '../helpers/identity/digest.js';
+import { shouldRunIdentityDigestNow } from '../helpers/identity/digest.js';
 import {
   Period,
   periodEnd,
@@ -16,11 +16,11 @@ export const BUILD_UTC_HOUR = 16;
 export const PREVIOUS_MONTH_LAST_DAILY_DAY = 7;
 
 /**
- * The identity digest's hour (18:00–19:00 UTC). No build starts in it; the
- * hour is imported from digest.ts so the two cannot drift.
+ * The identity digest's hour (18:00–19:00 UTC). No build starts in it; it
+ * delegates to the digest's own schedule check so the two cannot drift.
  */
 export function isQuietHour(now: Date): boolean {
-  return now.getUTCHours() === IDENTITY_DIGEST_UTC_HOUR;
+  return shouldRunIdentityDigestNow(now);
 }
 
 /** Today's (UTC date) due time: 16:00 UTC. */
