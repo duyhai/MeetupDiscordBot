@@ -122,14 +122,15 @@ const isUrlAttr = (name: string) =>
  * URL attributes are separate and take only a SafeUrl. Names compare in
  * lower case, so SVG's viewBox is `viewbox`.
  */
+// Not here, on purpose: id and name (member data in them clobbers DOM
+// globals and could retarget the copy button's getElementById), type (it
+// changes what script, object and embed load) and method. Nothing
+// interpolates them: they are always literals.
 const DATA_ATTRS = new Set([
   'class',
-  'id',
   'title',
   'alt',
-  'name',
   'value',
-  'type',
   'width',
   'height',
   'viewbox',
@@ -155,7 +156,6 @@ const DATA_ATTRS = new Set([
   'colspan',
   'rowspan',
   'datetime',
-  'method',
   'min',
   'max',
   'step',
@@ -197,7 +197,28 @@ const UNSUPPORTED_TAGS = new Set([
   'noframes',
   'noscript',
   'math',
+  // A base href retargets every relative link; a meta can refresh,
+  // redirect or set a CSP. The page shell's own <meta> lines are allowed
+  // only in a template that starts with the doctype (see tagNamed).
+  'base',
+  'meta',
 ]);
+
+/** The old "in select" parser state drops these tags' meaning; refuse them there. */
+const NOT_IN_SELECT = new Set(['style', 'script', 'title', 'textarea']);
+
+/*
+ * Accepted residuals (reviewed):
+ * - fill / stroke take an escaped string, so `url(#id)` is possible; SVG
+ *   paint references are same-document only and fetch nothing.
+ * - Names are lower-cased with toLowerCase, which also folds some
+ *   non-ASCII letters (the Kelvin sign K becomes k). Browsers fold ASCII
+ *   only, so a folded name here is either refused (stricter) or matches an
+ *   allow-listed name the browser treats as an unknown, inert attribute.
+ * - object, embed, link and form are allowed only as literals; their URL
+ *   attributes (data, src, href, action) still take only a SafeUrl, and
+ *   type is never interpolated.
+ */
 /** Inside <svg>, only these: no style, script, foreignObject, or HTML that breaks out. */
 const SVG_TAGS = new Set([
   'svg',
@@ -274,6 +295,10 @@ interface Scan {
   foreignTitle: boolean;
   /** This markup must not go inside <svg> (see notForeignSafe). */
   foreignUnsafe: boolean;
+  /** The template began with the doctype: the page shell, where <meta> is allowed. */
+  shell: boolean;
+  /** Inside a <select>. */
+  inSelect: boolean;
 }
 
 const newScan = (): Scan => ({
@@ -295,6 +320,8 @@ const newScan = (): Scan => ({
   foreign: 0,
   foreignTitle: false,
   foreignUnsafe: false,
+  shell: false,
+  inSelect: false,
 });
 
 const isSpace = (ch: string) =>
@@ -314,8 +341,11 @@ function tagNamed(st: Scan): void {
     }
     return;
   }
-  if (UNSUPPORTED_TAGS.has(st.tag)) {
+  if (UNSUPPORTED_TAGS.has(st.tag) && !(st.tag === 'meta' && st.shell)) {
     unsupported(`<${st.tag}>`);
+  }
+  if (st.inSelect && NOT_IN_SELECT.has(st.tag)) {
+    unsupported(`<${st.tag}> inside <select>`);
   }
   if (st.foreign > 0 && !SVG_TAGS.has(st.tag)) {
     unsupported(`<${st.tag}> inside <svg>`);
@@ -326,6 +356,9 @@ function tagNamed(st: Scan): void {
 function closeTag(st: Scan): void {
   const { tag } = st;
   st.mode = 'text';
+  if (tag === 'select') {
+    st.inSelect = !st.endTag && !st.selfClosing;
+  }
   if (st.endTag) {
     if (tag === 'svg' && st.foreign > 0) {
       st.foreign -= 1;
@@ -462,6 +495,7 @@ function step(st: Scan, ch: string): void {
           unsupported('a doctype anywhere but the start of the page');
         }
         st.mode = 'doctype';
+        st.shell = true;
       } else if (!'--'.startsWith(st.seen) && !'doctype'.startsWith(lower)) {
         unsupported(`"<!${st.seen}"`);
       }
@@ -499,7 +533,11 @@ function step(st: Scan, ch: string): void {
         closeTag(st);
       } else if (ch === '/') {
         st.selfClosing = true;
-      } else if (!isSpace(ch)) {
+      } else if (isSpace(ch)) {
+        // Self-closing only when `/` is directly followed by `>`: `<svg / >`
+        // opens an svg, as browsers parse it.
+        st.selfClosing = false;
+      } else {
         startAttr(st, ch);
       }
       return;

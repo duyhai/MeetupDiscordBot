@@ -751,7 +751,7 @@ describe('fix round 3: only a supported subset of HTML', () => {
       expect(make).toThrow(UnsafeAttributeError);
     }
     // prettier-ignore
-    const allowed = html`<b class="${'a'}" id="${'b'}" title="${'c'}" data-copy="${'d'}" aria-label="${'e'}">y</b>`;
+    const allowed = html`<b class="${'a'}" title="${'c'}" data-copy="${'d'}" aria-label="${'e'}">y</b>`;
     expect(allowed.value).toContain('aria-label="e"');
   });
 
@@ -774,5 +774,66 @@ describe('fix round 3: only a supported subset of HTML', () => {
     expect(() => html`<p>${js}</p>`).toThrow(UnsafeAttributeError);
     // prettier-ignore
     expect(() => html`<style>${staticHtml`a{}`}</style>`).toThrow(UnsafeAttributeError);
+  });
+});
+
+describe('fix round 4', () => {
+  it('a slash followed by whitespace does not self-close an svg', () => {
+    for (const make of [
+      // prettier-ignore
+      () => html`<svg / ><style>${staticRaw`p{}`}</style>`,
+      // prettier-ignore
+      () => html`<svg x / ><style>${staticRaw`p{}`}</style>`,
+      // prettier-ignore
+      () => html`<svg x="1"/ ><style>${staticRaw`p{}`}</style>`,
+      // prettier-ignore
+      () => html`<svg><svg / ></svg><style>${staticRaw`p{}`}</style>`,
+      // prettier-ignore
+      () => staticHtml`<svg / >`,
+    ]) {
+      expect(make).toThrow(UnsafeAttributeError);
+    }
+    // prettier-ignore
+    expect(html`<svg/><p>${'x'}</p>`.value).toBe('<svg/><p>x</p>');
+  });
+
+  it('method, type, id and name take no data', () => {
+    for (const make of [
+      () => html`<form method="${'get'}"></form>`,
+      () => html`<input type="${'hidden'}" />`,
+      () => html`<script type="${'module'}"></script>`,
+      () => html`<p id="${'copy'}">x</p>`,
+      () => html`<input name="${'action'}" />`,
+    ]) {
+      expect(make).toThrow(UnsafeAttributeError);
+    }
+  });
+
+  it('refuses base and meta outside the page shell', () => {
+    expect(() => staticHtml`<base href="/x">`).toThrow(UnsafeAttributeError);
+    expect(() => staticHtml`<p><meta charset="utf-8"></p>`).toThrow(
+      UnsafeAttributeError,
+    );
+    expect(() => staticHtml`<!doctype html><base href="/x">`).toThrow(
+      UnsafeAttributeError,
+    );
+    // The shell: a template that starts with the doctype may hold meta.
+    // prettier-ignore
+    expect(html`<!doctype html><head><meta charset="utf-8"><title>${'t'}</title></head>`.value).toContain('<meta charset="utf-8">');
+  });
+
+  it('refuses style, script, title and textarea inside a select', () => {
+    for (const make of [
+      () => staticHtml`<select><style></style></select>`,
+      () => staticHtml`<select><script></script></select>`,
+      () => staticHtml`<select><title></title></select>`,
+      () => staticHtml`<select><textarea></textarea></select>`,
+    ]) {
+      expect(make).toThrow(UnsafeAttributeError);
+    }
+    const css = staticRaw`a{}`;
+    // prettier-ignore
+    const form = html`<select class="${'f'}"><option value="${'a'}" selected>${'A'}</option></select><style>${css}</style>`;
+    expect(form.value).toContain('<option value="a" selected>A</option>');
   });
 });
