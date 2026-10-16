@@ -365,6 +365,26 @@ describe('getOrganizerAccessToken', () => {
       expect(triedTokens()).toEqual(['STORED-REFRESH']);
     });
 
+    it('a 400 with no OAuth code never tries the seed', async () => {
+      db.current = stored(0);
+      refresh.mockRejectedValueOnce(rejection(400));
+      refresh.mockResolvedValue(fresh());
+
+      await expect(getOrganizerAccessToken()).resolves.toBeUndefined();
+      expect(triedTokens()).toEqual(['STORED-REFRESH']);
+    });
+
+    it('an AbortError never tries the seed', async () => {
+      db.current = stored(0);
+      refresh.mockRejectedValueOnce(
+        new DOMException('This operation was aborted', 'AbortError'),
+      );
+      refresh.mockResolvedValue(fresh());
+
+      await expect(getOrganizerAccessToken()).resolves.toBeUndefined();
+      expect(triedTokens()).toEqual(['STORED-REFRESH']);
+    });
+
     it('invalid_client never tries the seed', async () => {
       db.current = stored(0);
       refresh.mockRejectedValueOnce(rejection(401, 'invalid_client'));
