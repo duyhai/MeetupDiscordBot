@@ -116,9 +116,9 @@ export class SessionStore {
   }
 
   /**
-   * Re-reads before writing, so a logout that lands while Discord is being
-   * asked about roles is not undone by this write. KeyValueCache has no
-   * SET ... XX; the remaining window is one Redis round trip.
+   * One SET ... XX: a logout (or revocation) that deleted the key before this
+   * write is never undone, and one that lands after it still deletes the key.
+   * There is no read first, so there is no window between check and write.
    */
   async markRoleChecked(
     sid: string,
@@ -132,15 +132,11 @@ export class SessionStore {
       await this.destroy(sid);
       return false;
     }
-    if (!(await this.cache.get(sessionKey(sid)))) {
-      return false;
-    }
-    await this.cache.set(
+    return this.cache.set_existing(
       sessionKey(sid),
       JSON.stringify({ ...session, roleCheckedAt: at }),
       remainingSec,
     );
-    return true;
   }
 
   async destroy(sid: string): Promise<void> {

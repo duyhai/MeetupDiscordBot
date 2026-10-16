@@ -54,4 +54,17 @@ export class InMemoryCache implements KeyValueCache {
     this.cache.storeExpiringItem(key, value, ttlSec ?? ITEM_TTL_SEC);
     return true;
   }
+
+  // Single-threaded: nothing can run between the check and the store.
+  async set_existing(
+    key: string,
+    value: string,
+    ttlSec?: number,
+  ): Promise<boolean> {
+    if (!this.cache.hasItem(key)) {
+      return false;
+    }
+    this.cache.storeExpiringItem(key, value, ttlSec ?? ITEM_TTL_SEC);
+    return true;
+  }
 }

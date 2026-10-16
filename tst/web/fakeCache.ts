@@ -23,6 +23,14 @@ export class FakeCache implements KeyValueCache {
     return true;
   }
 
+  async set_existing(key: string, value: string, ttlSec?: number) {
+    if (!this.values.has(key)) {
+      return false;
+    }
+    await this.set(key, value, ttlSec);
+    return true;
+  }
+
   async remove(key: string) {
     this.values.delete(key);
     this.ttls.delete(key);

@@ -215,6 +215,11 @@ export class ExpiringCache extends FakeCache {
     return super.exclusive_set(key, value, ttlSec);
   }
 
+  override async set_existing(key: string, value: string, ttlSec?: number) {
+    this.expire(key);
+    return super.set_existing(key, value, ttlSec);
+  }
+
   override async remove(key: string) {
     this.expiries.delete(key);
     await super.remove(key);

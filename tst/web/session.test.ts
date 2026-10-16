@@ -9,6 +9,7 @@ import {
   verifySignedSessionId,
 } from '../../src/web/session.js';
 import { openOAuthCookie, sealOAuthCookie } from '../../src/web/oauthCookie.js';
+import { KeyValueCache } from '../../src/lib/cache/base.js';
 import { FakeCache } from './fakeCache.js';
 
 const SECRET = 'x'.repeat(48);
@@ -132,6 +133,62 @@ describe('SessionStore', () => {
     const { sid, session } = await store.create({ userId: '1', username: 'A' });
     await store.destroy(sid);
     await expect(store.markRoleChecked(sid, session)).resolves.toBe(false);
+    expect(cache.values.size).toBe(0);
+  });
+
+  it('markRoleChecked writes with SET XX only', async () => {
+    const cache = new FakeCache();
+    const store = new SessionStore(cache);
+    const { sid, session } = await store.create({ userId: '1', username: 'A' });
+    const calls: string[] = [];
+    const spy: KeyValueCache = {
+      get: async (key) => {
+        calls.push('get');
+        return cache.get(key);
+      },
+      set: async (key, value, ttl) => {
+        calls.push('set');
+        return cache.set(key, value, ttl);
+      },
+      exclusive_set: async (key, value, ttl) => {
+        calls.push('exclusive_set');
+        return cache.exclusive_set(key, value, ttl);
+      },
+      set_existing: async (key, value, ttl) => {
+        calls.push('set_existing');
+        return cache.set_existing(key, value, ttl);
+      },
+      remove: async (key) => {
+        calls.push('remove');
+        return cache.remove(key);
+      },
+    };
+    await expect(
+      new SessionStore(spy).markRoleChecked(sid, session),
+    ).resolves.toBe(true);
+    expect(calls).toEqual(['set_existing']);
+  });
+
+  it('a logout that lands before the write is not undone', async () => {
+    const cache = new FakeCache();
+    const store = new SessionStore(cache);
+    const { sid, session } = await store.create({ userId: '1', username: 'A' });
+    // The logout lands between the gate's decision and the write.
+    const racing: KeyValueCache = {
+      get: async (key) => cache.get(key),
+      set: async (key, value, ttl) => cache.set(key, value, ttl),
+      exclusive_set: async (key, value, ttl) =>
+        cache.exclusive_set(key, value, ttl),
+      set_existing: async (key, value, ttl) => {
+        await store.destroy(sid);
+        return cache.set_existing(key, value, ttl);
+      },
+      remove: async (key) => cache.remove(key),
+    };
+    await expect(
+      new SessionStore(racing).markRoleChecked(sid, session),
+    ).resolves.toBe(false);
+    await expect(store.get(sid)).resolves.toBeUndefined();
     expect(cache.values.size).toBe(0);
   });
 
