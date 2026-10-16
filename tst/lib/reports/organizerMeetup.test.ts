@@ -53,9 +53,12 @@ function fakes(tokens: (string | undefined)[]): Fakes {
 }
 
 describe('withOrganizerMeetup', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
   afterEach(() => {
     nock.cleanAll();
-    vi.clearAllMocks();
   });
 
   it('uses the organizer token from getToken({ client })', async () => {
@@ -73,8 +76,9 @@ describe('withOrganizerMeetup', () => {
 
   it('the default factory builds an uncached client', async () => {
     const endpoint = new URL(Configuration.meetup.endpoint);
-    nock(endpoint.origin)
+    const scope = nock(endpoint.origin)
       .post(endpoint.pathname)
+      .matchHeader('authorization', 'Bearer tok-default')
       .reply(200, {
         data: {
           event: {
@@ -88,6 +92,7 @@ describe('withOrganizerMeetup', () => {
       });
     const meetup = defaultOrganizerMeetupDeps.makeClient('tok-default');
     await meetup.getEventRsvps('e1', { first: 100 });
+    expect(scope.isDone()).toBe(true);
     expect(ApplicationCache).not.toHaveBeenCalled();
   });
 
@@ -137,6 +142,7 @@ describe('withOrganizerMeetup', () => {
       true,
     );
     expect((error as Error).message).toContain('/dashboard/organizer-login');
+    expect((error as Error).message).not.toContain('tok');
     expect(fn).not.toHaveBeenCalled();
     expect(f.makeClient).not.toHaveBeenCalled();
   });
@@ -159,9 +165,5 @@ describe('withOrganizerMeetup', () => {
     await expect(withOrganizerMeetup(discord, fn, f.deps)).rejects.toBe(boom);
     expect(f.getToken).toHaveBeenCalledTimes(1);
     expect(fn).toHaveBeenCalledTimes(1);
-  });
-
-  beforeEach(() => {
-    vi.clearAllMocks();
   });
 });

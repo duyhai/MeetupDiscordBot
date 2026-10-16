@@ -25,11 +25,11 @@ export interface OrganizerMeetupDeps {
   makeClient: (accessToken: string) => GqlMeetupClient;
 }
 
-export const defaultOrganizerMeetupDeps: OrganizerMeetupDeps = {
+export const defaultOrganizerMeetupDeps: OrganizerMeetupDeps = Object.freeze({
   getToken: getOrganizerAccessToken,
-  makeClient: (accessToken) =>
+  makeClient: (accessToken: string) =>
     new GqlMeetupClient(accessToken, { bypassCache: true }),
-};
+});
 
 /**
  * Runs fn with a Meetup client on the shared organizer credential. The token
@@ -37,7 +37,9 @@ export const defaultOrganizerMeetupDeps: OrganizerMeetupDeps = {
  * cross-process lock and alerts once per failure episode itself. A 401 gets
  * one forced refresh (naming the refused token, so a token another process
  * already rotated is reused) and one retry, as runMeetupSweep does; a second
- * failure propagates.
+ * failure propagates. On a 401, fn is re-run from the start, so it must only
+ * read Meetup: it must not write or post anything before its Meetup reads
+ * have finished.
  */
 export async function withOrganizerMeetup<T>(
   client: Client | undefined,
