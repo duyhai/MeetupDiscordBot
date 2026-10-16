@@ -81,7 +81,7 @@ const META_COLUMNS = `id, report_type, to_char(period, 'YYYY-MM') AS period_key,
  * cleared ($3) or departed ($4), newest first; $5 limit, $6 offset. Only the
  * member's own case leaves the database. report_type and superseded_by are
  * literals, not parameters, so the partial GIN index
- * (report_snapshots_noshow_payload_idx) applies; `payload @>` is on the
+ * (report_snapshots_noshow_payload_idx) can apply; `payload @>` is on the
  * column itself, which that index serves.
  */
 export const MEMBER_MONTHS_SQL = `SELECT to_char(period, 'YYYY-MM') AS period_key, built_at, payload->>'asOf' AS as_of,
@@ -118,11 +118,17 @@ interface SnapshotRow {
   superseded_by?: number | null;
 }
 
-function toMeta(row: SnapshotRow): SnapshotMeta {
-  const period = parsePeriodKey(row.period_key);
+function parsedPeriod(key: string, id?: number): Period {
+  const period = parsePeriodKey(key);
   if (period === undefined) {
-    throw new Error(`report_snapshots row ${row.id} has an unreadable period`);
+    const row = id === undefined ? 'row' : `row ${id}`;
+    throw new Error(`report_snapshots ${row} has an unreadable period`);
   }
+  return period;
+}
+
+function toMeta(row: SnapshotRow): SnapshotMeta {
+  const period = parsedPeriod(row.period_key, row.id);
   return {
     id: row.id,
     reportType: row.report_type,
@@ -133,14 +139,6 @@ function toMeta(row: SnapshotRow): SnapshotMeta {
     summary: row.summary,
     attendance: (row.attendance ?? null) as AttendanceEvidence | null,
   };
-}
-
-function parsedPeriod(key: string): Period {
-  const period = parsePeriodKey(key);
-  if (period === undefined) {
-    throw new Error('report_snapshots row has an unreadable period');
-  }
-  return period;
 }
 
 function clampLimit(limit: number | undefined): number {

@@ -965,8 +965,7 @@ function within<T>(promise: Promise<T>, ms: number): Promise<T> {
             '(payload @> $4)',
           ]);
         } finally {
-          await client.query('ROLLBACK');
-          client.release();
+          await client.query('ROLLBACK').finally(() => client.release());
         }
       });
     });
