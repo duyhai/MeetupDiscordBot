@@ -105,7 +105,7 @@ One row per report type, month and build.
 | `report_type` | `hall_of_fame` or `no_show` |
 | `period` | first day of the month (Pacific) |
 | `built_at`, `built_by` | `built_by` = `job`, `backfill`, or a Discord user id for manual refresh |
-| `source_complete` | false when Meetup data for the month looks incomplete (e.g. older months with no no-shows recorded); pages say "incomplete" instead of showing zero |
+| `source_complete` | true when the build read Meetup completely. Attendance is never inferred (ruling 2026-10-16: the organizer account sees NO_SHOW RSVPs, Meetup returns no ATTENDED for this group), so every build so far stores true; a finished month with RSVPs but zero no-shows is stored complete and its build alert adds "check that attendance was taken" |
 | `payload` | JSONB, the report service's result |
 | `superseded_by` | id of a newer build of the same month, or null |
 
@@ -262,8 +262,9 @@ A one-off script (`scripts/backfillReports.ts`), run as a Heroku one-off dyno,
 builds every month from the group's first event to last month. It is
 resumable (skips months that already have a snapshot unless `--force`),
 rate-limited, logs progress to #meetup-bot-alerts every 12 months processed,
-and refuses to start during 18:00–19:00 UTC. Months where Meetup returns no
-attendance data are saved with `source_complete = false`.
+and refuses to start during 17:45–19:00 UTC (the unlinked digest and the
+identity sweep). Months with zero no-shows are saved as complete, like the
+daily job's builds; attendance is never inferred from ATTENDED RSVPs.
 
 ## Failure handling
 
