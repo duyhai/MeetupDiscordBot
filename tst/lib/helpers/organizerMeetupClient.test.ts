@@ -496,6 +496,22 @@ describe('getOrganizerAccessToken', () => {
     );
   });
 
+  it('a call with a client never joins a client-less one', async () => {
+    db.current = stored(0);
+    refresh.mockRejectedValue(refreshError());
+
+    const script = getOrganizerAccessToken();
+    const sweep = getOrganizerAccessToken({ client });
+    await expect(Promise.all([script, sweep])).resolves.toEqual([
+      undefined,
+      undefined,
+    ]);
+
+    expect(credentials.withLockedCredential).toHaveBeenCalledTimes(2);
+    expect(db.failing).toBe(true);
+    expect(alert).toHaveBeenCalledTimes(1);
+  });
+
   it('a client-less success does not consume the recovery post', async () => {
     db.current = stored(0);
     db.failing = true;
