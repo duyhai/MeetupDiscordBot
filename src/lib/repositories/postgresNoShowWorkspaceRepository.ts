@@ -27,6 +27,7 @@ import {
   dashboardPool,
   DashboardTransactionOptions,
   inDashboardTransaction,
+  MEMBER_LOCK_CLASS,
   SCHEMA_LOCK_KEY,
 } from './dashboardPool.js';
 import {
@@ -165,6 +166,7 @@ const MAX_EVENTS_PER_ROW = 10;
 const MAX_EVENT_ROWS = 50;
 const MAX_COUNT_PERIODS = 24;
 const MAX_ROW_ID = 2 ** 31 - 1;
+const DAY_MS = 86_400_000;
 const MEMBER_ID = /^[0-9]{1,20}$/;
 
 interface RowRecord {
@@ -564,7 +566,7 @@ export class PostgresNoShowWorkspaceRepository {
             // Two rows of one member (two months) cannot both suspend at once.
             await client.query(
               'SELECT pg_advisory_xact_lock($1, hashtext($2))',
-              [DASHBOARD_LOCK_CLASS, `suspension:${row.memberId}`],
+              [MEMBER_LOCK_CLASS, `suspension:${row.memberId}`],
             );
           }
           if (req.action === 'record_suspension') {
@@ -572,6 +574,8 @@ export class PostgresNoShowWorkspaceRepository {
             if (
               !(on instanceof Date) ||
               Number.isNaN(on.getTime()) ||
+              // A calendar date is stored as its UTC midnight (parseUtcDateStrict).
+              on.getTime() % DAY_MS !== 0 ||
               on < floor
             ) {
               throw refuse('bad-date');

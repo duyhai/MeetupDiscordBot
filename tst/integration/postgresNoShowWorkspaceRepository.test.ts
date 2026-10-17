@@ -6,6 +6,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { Period } from '../../src/lib/reports/period.js';
 import {
   DASHBOARD_LOCK_CLASS,
+  MEMBER_LOCK_CLASS,
   SCHEMA_LOCK_KEY,
 } from '../../src/lib/repositories/dashboardPool.js';
 import {
@@ -839,6 +840,69 @@ const suspension = (
         return outcome;
       };
 
+      /** Whether some session waits on a member lock (two-int form, MEMBER_LOCK_CLASS). */
+      const memberLockWaiter = async (): Promise<boolean> =>
+        (
+          await pool.query<{ n: number }>(
+            `SELECT count(*)::int AS n FROM pg_locks
+              WHERE locktype = 'advisory' AND NOT granted
+                AND database = (SELECT oid FROM pg_database WHERE datname = current_database())
+                AND classid = $1::int::oid AND objsubid = 2`,
+            [MEMBER_LOCK_CLASS],
+          )
+        ).rows[0].n > 0;
+
+      /**
+       * Runs September's action and starts October's from inside
+       * September's beforeSuspensionInsertForTest hook, where September
+       * already holds the member lock. The hook returns once October is seen
+       * waiting on a member lock, or once October finishes (which it can
+       * only do without the lock). No timing decides the order.
+       */
+      async function octoberInsideSeptembersLock(
+        september: (
+          on: PostgresNoShowWorkspaceRepository,
+        ) => Promise<ActionOutcome>,
+        october: () => Promise<ActionOutcome>,
+      ): Promise<{
+        first: ActionOutcome;
+        second: ActionOutcome;
+        sawWait: boolean;
+      }> {
+        let second: Promise<ActionOutcome> | undefined;
+        let sawWait = false;
+        const ordered = new PostgresNoShowWorkspaceRepository(pool, {
+          beforeSuspensionInsertForTest: async () => {
+            const started = october();
+            second = started;
+            let finished = false;
+            started.then(
+              () => {
+                finished = true;
+              },
+              () => {
+                finished = true;
+              },
+            );
+            const deadline = Date.now() + 5000;
+            while (!finished && Date.now() < deadline) {
+              // eslint-disable-next-line no-await-in-loop -- polling pg_locks
+              if (await memberLockWaiter()) {
+                sawWait = true;
+                return;
+              }
+              // eslint-disable-next-line no-await-in-loop -- as above
+              await sleep(5);
+            }
+          },
+        });
+        const first = await september(ordered);
+        if (second === undefined) {
+          throw new Error('September never reached its insert');
+        }
+        return { first, second: await second, sawWait };
+      }
+
       const seedSuspension = async (memberId = '222', period = SEPTEMBER) => {
         await sync([suspension(memberId)], T1, period.month, period);
         return (await rowOf(period, memberId)).id;
@@ -1012,6 +1076,9 @@ const suspension = (
           new Date(new Date('2026-09-01T00:00:00.000Z').getTime() - 1),
           new Date('nope'),
           undefined,
+          // Not UTC midnight: a Pacific midnight, and one millisecond past.
+          new Date('2026-10-03T07:00:00.000Z'),
+          new Date('2026-10-03T00:00:00.001Z'),
         ]) {
           expect(
             // eslint-disable-next-line no-await-in-loop -- one case at a time
@@ -1312,26 +1379,24 @@ const suspension = (
           const sep = await seedSuspension('222', SEPTEMBER);
           // eslint-disable-next-line no-await-in-loop -- as above
           const oct = await seedSuspension('222', OCTOBER);
-          // September pauses before its insert, holding the lock; October
-          // starts inside that pause.
-          const slow = new PostgresNoShowWorkspaceRepository(pool, {
-            beforeSuspensionInsertForTest: () => sleep(150),
-          });
           // eslint-disable-next-line no-await-in-loop -- as above
-          const [first, second] = await Promise.all([
-            act(
-              sep,
-              'record_suspension',
-              { suspendedOn: day('2026-10-05') },
-              slow,
-            ),
-            sleep(40).then(() =>
+          const { first, second, sawWait } = await octoberInsideSeptembersLock(
+            (on) =>
+              act(
+                sep,
+                'record_suspension',
+                { suspendedOn: day('2026-10-05') },
+                on,
+              ),
+            () =>
               act(oct, 'record_suspension', {
                 suspendedOn: day('2026-11-10'),
                 period: OCTOBER,
               }),
-            ),
-          ]);
+          );
+          expect(sawWait, `run ${run}: October waited on the member lock`).toBe(
+            true,
+          );
           expect(okOf(first).suspension?.durationDays, `run ${run}`).toBe(30);
           // Without the lock October counts no prior and records 30 days.
           expect(okOf(second).suspension?.durationDays, `run ${run}`).toBe(60);
@@ -1397,19 +1462,22 @@ const suspension = (
             const sep = await seedSuspension('222', SEPTEMBER);
             // eslint-disable-next-line no-await-in-loop -- as above
             const oct = await seedSuspension('222', OCTOBER);
-            const slow = new PostgresNoShowWorkspaceRepository(pool, {
-              beforeSuspensionInsertForTest: () => sleep(150),
-            });
             // eslint-disable-next-line no-await-in-loop -- as above
-            const [first, second] = await Promise.all([
-              act(
-                sep,
-                'record_suspension',
-                { suspendedOn: day('2026-10-01') },
-                slow,
-              ),
-              sleep(40).then(() => recordOctober(oct, '2026-10-15')),
-            ]);
+            const race = await octoberInsideSeptembersLock(
+              (on) =>
+                act(
+                  sep,
+                  'record_suspension',
+                  { suspendedOn: day('2026-10-01') },
+                  on,
+                ),
+              () => recordOctober(oct, '2026-10-15'),
+            );
+            const { first, second, sawWait } = race;
+            expect(
+              sawWait,
+              `run ${run}: October waited on the member lock`,
+            ).toBe(true);
             expect(first.ok, `run ${run}`).toBe(true);
             expect(second, `run ${run}`).toEqual({
               ok: false,

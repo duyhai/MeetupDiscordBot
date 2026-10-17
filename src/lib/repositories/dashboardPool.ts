@@ -73,6 +73,13 @@ CREATE INDEX IF NOT EXISTS report_snapshots_noshow_payload_idx
 
 /** pg_advisory_xact_lock(int, int) namespace for dashboard locks. */
 export const DASHBOARD_LOCK_CLASS = 52061;
+/**
+ * pg_advisory_xact_lock(int, int) namespace for per-member locks
+ * (MEMBER_LOCK_CLASS, hashtext('suspension:' || member id)), kept apart from
+ * DASHBOARD_LOCK_CLASS so a member key can never equal a month, report or
+ * schema key.
+ */
+export const MEMBER_LOCK_CLASS = 52062;
 /** (DASHBOARD_LOCK_CLASS, SCHEMA_LOCK_KEY) serializes schema creation. */
 export const SCHEMA_LOCK_KEY = 0;
 
