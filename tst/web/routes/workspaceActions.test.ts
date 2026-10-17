@@ -26,7 +26,9 @@ import { parseRowId, parseWorkspaceMonth } from '../../../src/web/pageKit.js';
 import { FixedWindowLimiter } from '../../../src/web/rateLimit.js';
 import { registerAllProtectedRoutes } from '../../../src/web/routes/dashboardPages.js';
 import {
+  LEADERSHIP_CHECK_DEADLINE_MS,
   WORKSPACE_REFUSAL_POST_WINDOW_MS,
+  WORKSPACE_REQUEST_DEADLINE_MS,
   WORKSPACE_RESULT_MESSAGES,
   workspaceResultNotice,
 } from '../../../src/web/routes/workspaceActions.js';
@@ -47,6 +49,7 @@ import {
 } from './pageFakes.js';
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
   return closeServers();
 });
@@ -731,5 +734,134 @@ describe('workspace route params', () => {
     expect(workspaceRowPath(SEPT, 2 ** 31 - 1)).toBe(
       `/dashboard/no-shows/2026-09/rows/${2 ** 31 - 1}`,
     );
+  });
+});
+
+/** A promise and its resolve, for "the handler has got this far". */
+function reached(): { promise: Promise<void>; resolve: () => void } {
+  let resolve: () => void = () => undefined;
+  const promise = new Promise<void>((r) => {
+    resolve = r;
+  });
+  return { promise, resolve };
+}
+
+const never = <T>() => new Promise<T>(() => undefined);
+
+describe('workspace request deadlines', () => {
+  /** Only the timers the deadlines use: the loopback server's own I/O keeps running. */
+  const fakeTimers = () =>
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+
+  it('an action still running at the deadline redirects as error and logs the class name only', async () => {
+    const warn = vi.spyOn(Logger.prototype, 'warn');
+    const started = reached();
+    const { post } = await setup({
+      perform: () => {
+        started.resolve();
+        return never();
+      },
+    });
+    fakeTimers();
+    let settled = false;
+    const pending = post(ROW, { action: 'mark_sent', version: '1' }).then(
+      (res) => {
+        settled = true;
+        return res;
+      },
+    );
+    await started.promise;
+    await vi.advanceTimersByTimeAsync(WORKSPACE_REQUEST_DEADLINE_MS - 1);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    const res = await pending;
+    expect(res.status).toBe(303);
+    expect(location(res)).toBe(`${MONTH}?result=error`);
+    expect(warn.mock.calls.map((c) => String(c[0]))).toContain(
+      'Dashboard workspace action failed: WorkspaceDeadlineError',
+    );
+  });
+
+  it('a sync still running at the deadline redirects as error', async () => {
+    const warn = vi.spyOn(Logger.prototype, 'warn');
+    const started = reached();
+    const { post } = await setup({
+      sync: () => {
+        started.resolve();
+        return never();
+      },
+    });
+    fakeTimers();
+    const pending = post(SYNC).then((res) => res);
+    await started.promise;
+    await vi.advanceTimersByTimeAsync(WORKSPACE_REQUEST_DEADLINE_MS);
+    const res = await pending;
+    expect(location(res)).toBe(`${MONTH}?result=error`);
+    expect(warn.mock.calls.map((c) => String(c[0]))).toContain(
+      'Dashboard workspace sync failed: WorkspaceDeadlineError',
+    );
+  });
+
+  it('a Leadership check still running at its deadline is refused as Discord unreachable', async () => {
+    const started = reached();
+    const { post, perform, moderationLog, isLeadership } = await setup();
+    isLeadership.mockImplementation(() => {
+      started.resolve();
+      return never();
+    });
+    fakeTimers();
+    let settled = false;
+    const pending = post(ROW, leadershipForm('void')).then((res) => {
+      settled = true;
+      return res;
+    });
+    await started.promise;
+    await vi.advanceTimersByTimeAsync(LEADERSHIP_CHECK_DEADLINE_MS - 1);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    const res = await pending;
+    expect(location(res)).toBe(`${MONTH}?result=leadership-unavailable`);
+    expect(perform).not.toHaveBeenCalled();
+    vi.useRealTimers();
+    await settle();
+    expect(moderationLog).toHaveBeenCalledWith(
+      leadershipRefusalEntry(SEPT, 1, 'void', USER.id, 'discord-unreachable'),
+    );
+  });
+
+  it('a timed-out Leadership check is subject to the refusal post throttle', async () => {
+    const { post, moderationLog, isLeadership } = await setup();
+    isLeadership.mockImplementation(() => never());
+    fakeTimers();
+    for (let i = 0; i < 2; i += 1) {
+      const pending = post(ROW, leadershipForm('void')).then((res) => res);
+      // eslint-disable-next-line no-await-in-loop -- one request at a time
+      await vi.waitFor(() => expect(isLeadership).toHaveBeenCalledTimes(i + 1));
+      // eslint-disable-next-line no-await-in-loop -- one request at a time
+      await vi.advanceTimersByTimeAsync(LEADERSHIP_CHECK_DEADLINE_MS);
+      // eslint-disable-next-line no-await-in-loop -- one request at a time
+      expect(location(await pending)).toBe(
+        `${MONTH}?result=leadership-unavailable`,
+      );
+    }
+    vi.useRealTimers();
+    await settle();
+    expect(moderationLog).toHaveBeenCalledTimes(1);
+  });
+
+  it('a request that finishes in time leaves no deadline timer behind', async () => {
+    const { post } = await setup({ leader: true });
+    fakeTimers();
+    expect(location(await post(ROW, leadershipForm('void')))).toBe(
+      `${MONTH}?result=done`,
+    );
+    expect(location(await post(SYNC))).toBe(`${MONTH}?result=synced`);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('the deadlines leave time inside the 30 s Heroku router timeout', () => {
+    expect(
+      LEADERSHIP_CHECK_DEADLINE_MS + WORKSPACE_REQUEST_DEADLINE_MS,
+    ).toBeLessThan(30_000);
   });
 });

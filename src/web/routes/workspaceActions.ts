@@ -47,6 +47,44 @@ const logger = new Logger({ name: 'dashboard' });
 export const WORKSPACE_REFUSAL_POST_WINDOW_MS = 60_000;
 
 /**
+ * How long an action's service call or a sync may run before the route
+ * answers 'error'. With the Leadership check's deadline it stays inside
+ * Heroku's 30 s router timeout (H12). A call still running is left to
+ * finish or fail unobserved: its transaction commits or rolls back whole,
+ * and a retry after a late commit is refused as stale.
+ */
+export const WORKSPACE_REQUEST_DEADLINE_MS = 20_000;
+
+/** How long the live Leadership check may take; past it, Discord counts as unreachable. */
+export const LEADERSHIP_CHECK_DEADLINE_MS = 5_000;
+
+export class WorkspaceDeadlineError extends Error {
+  constructor(ms: number) {
+    super(`workspace request took over ${ms} ms`);
+    this.name = 'WorkspaceDeadlineError';
+  }
+}
+
+/**
+ * fn's answer, or a WorkspaceDeadlineError after `ms`. The timer is unref'd
+ * and always cleared. Promise.race subscribes to the work, so a rejection
+ * after the deadline is still handled (never an unhandled rejection).
+ */
+async function withDeadline<T>(ms: number, fn: () => Promise<T>): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    const work = fn();
+    const deadline = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => reject(new WorkspaceDeadlineError(ms)), ms);
+      timer.unref();
+    });
+    return await Promise.race([work, deadline]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
  * Every code a workspace POST can send back in `?result=`. 'stale' and
  * 'not-found' are answered in place (409, 404) and never redirect.
  * 'suspension-overlap' is the service's 'already-suspended' without a
@@ -229,7 +267,9 @@ export function registerWorkspaceActionRoutes(
       let why: LeadershipRefusal | undefined;
       try {
         why =
-          (await deps.isLeadership(session.userId)) === true
+          (await withDeadline(LEADERSHIP_CHECK_DEADLINE_MS, () =>
+            deps.isLeadership(session.userId),
+          )) === true
             ? undefined
             : 'not-leadership';
       } catch (error: unknown) {
@@ -269,19 +309,21 @@ export function registerWorkspaceActionRoutes(
     }
     let result: WorkspaceActionResult;
     try {
-      result = await deps.workspaceActions.perform({
-        period,
-        rowId,
-        // Always the session's user, never a form field.
-        actor: session.userId,
-        action,
-        version: field(body, 'version'),
-        note: field(body, 'note'),
-        date: field(body, 'date'),
-        recordId: field(body, 'recordId'),
-        // Set only after this request's own live check passed.
-        ...(leadershipConfirmed && { leadershipConfirmed: true }),
-      });
+      result = await withDeadline(WORKSPACE_REQUEST_DEADLINE_MS, () =>
+        deps.workspaceActions.perform({
+          period,
+          rowId,
+          // Always the session's user, never a form field.
+          actor: session.userId,
+          action,
+          version: field(body, 'version'),
+          note: field(body, 'note'),
+          date: field(body, 'date'),
+          recordId: field(body, 'recordId'),
+          // Set only after this request's own live check passed.
+          ...(leadershipConfirmed && { leadershipConfirmed: true }),
+        }),
+      );
     } catch (error: unknown) {
       logger.warn(
         `Dashboard workspace action failed: ${error instanceof Error ? error.name : 'Error'}`,
@@ -308,7 +350,9 @@ export function registerWorkspaceActionRoutes(
     }
     let code: WorkspaceResultCode;
     try {
-      const synced = await deps.workspaceActions.sync(period);
+      const synced = await withDeadline(WORKSPACE_REQUEST_DEADLINE_MS, () =>
+        deps.workspaceActions.sync(period),
+      );
       code = isResultCode(synced) ? synced : 'error';
     } catch (error: unknown) {
       logger.warn(
