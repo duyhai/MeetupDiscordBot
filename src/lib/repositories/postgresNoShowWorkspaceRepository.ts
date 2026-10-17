@@ -40,7 +40,10 @@ const ACTION_LIST = `'copy_warning','mark_sent','hold','skip','reopen','record_s
  * EXISTS returns before locking anything, but CREATE INDEX IF NOT EXISTS
  * takes a ShareLock on its table (blocking writes) before it notices the
  * index exists, and CREATE TRIGGER needs a table lock, so both are behind
- * catalog checks scoped to current_schema().
+ * catalog checks scoped to current_schema(). CREATE OR REPLACE FUNCTION
+ * takes no table lock, so it runs every boot and a changed body ships.
+ * Schemas are matched by nspname = current_schema(), never by casting the
+ * name to regnamespace (which re-parses it and folds mixed case).
  */
 export const WORKSPACE_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS noshow_workspace_months (
@@ -76,6 +79,10 @@ CREATE TABLE IF NOT EXISTS noshow_workspace_events (
   suspension_record_id INTEGER,
   created_at           TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+-- The audit trail is append-only: UPDATE and DELETE are refused (TRUNCATE,
+-- test-only, is not a row event).
+CREATE OR REPLACE FUNCTION noshow_workspace_events_append_only() RETURNS trigger
+  LANGUAGE plpgsql AS $fn$ BEGIN RAISE EXCEPTION 'noshow_workspace_events is append-only'; END $fn$;
 DO $do$
 BEGIN
   -- One suspension record backs at most one workspace row.
@@ -89,21 +96,11 @@ BEGIN
   IF to_regclass(quote_ident(current_schema()) || '.noshow_workspace_events_row_idx') IS NULL THEN
     CREATE INDEX noshow_workspace_events_row_idx ON noshow_workspace_events (row_id, id);
   END IF;
-  -- The audit trail is append-only: UPDATE and DELETE are refused (TRUNCATE,
-  -- test-only, is not a row event).
-  IF NOT EXISTS (
-    SELECT 1 FROM pg_proc p
-     WHERE p.proname = 'noshow_workspace_events_append_only'
-       AND p.pronamespace = current_schema()::regnamespace
-  ) THEN
-    CREATE FUNCTION noshow_workspace_events_append_only() RETURNS trigger
-      LANGUAGE plpgsql AS $fn$ BEGIN RAISE EXCEPTION 'noshow_workspace_events is append-only'; END $fn$;
-  END IF;
   IF NOT EXISTS (
     SELECT 1 FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid
      WHERE t.tgname = 'noshow_workspace_events_append_only'
        AND c.relname = 'noshow_workspace_events'
-       AND c.relnamespace = current_schema()::regnamespace
+       AND c.relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = current_schema())
   ) THEN
     CREATE TRIGGER noshow_workspace_events_append_only
       BEFORE UPDATE OR DELETE ON noshow_workspace_events
@@ -165,6 +162,17 @@ interface RowRecord {
   updated_at: Date;
   updated_by: string | null;
 }
+
+/** What the sync reads of each existing row. */
+type SyncRowRecord = Pick<
+  RowRecord,
+  | 'id'
+  | 'meetup_member_id'
+  | 'member_name'
+  | 'classification'
+  | 'in_latest_snapshot'
+  | 'status'
+>;
 
 interface MonthRecord {
   period_key: string;
@@ -342,8 +350,9 @@ export class PostgresNoShowWorkspaceRepository {
              snapshot_built_at = EXCLUDED.snapshot_built_at, synced_at = now()`,
           [day, input.snapshotId, input.snapshotBuiltAt],
         );
-        const existing = await client.query<RowRecord>(
-          `SELECT ${ROW_COLUMNS} FROM noshow_workspace_rows WHERE period = $1::date FOR UPDATE`,
+        const existing = await client.query<SyncRowRecord>(
+          `SELECT id, meetup_member_id, member_name, classification, in_latest_snapshot, status
+             FROM noshow_workspace_rows WHERE period = $1::date FOR UPDATE`,
           [day],
         );
         const byMember = new Map(

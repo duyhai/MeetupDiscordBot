@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto';
+
 import pg from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
@@ -11,6 +13,7 @@ import {
   PostgresNoShowWorkspaceRepository,
   WORKSPACE_SCHEMA_SQL,
 } from '../../src/lib/repositories/postgresNoShowWorkspaceRepository.js';
+import { SCHEMA_SQL as SUSPENSION_SCHEMA_SQL } from '../../src/lib/repositories/postgresSuspensionRepository.js';
 import { SyncCase } from '../../src/lib/workspace/types.js';
 import { useIsolatedSchema } from './isolatedSchema.js';
 
@@ -150,19 +153,55 @@ const suspension = (
         );
       });
 
+      /** Which workspace tables exist in current_schema() right now. */
+      const workspaceTables = async (): Promise<string[]> =>
+        (
+          await pool.query<{ table_name: string }>(
+            `SELECT table_name FROM information_schema.tables
+              WHERE table_schema = current_schema() AND table_name LIKE 'noshow_workspace_%'
+              ORDER BY table_name`,
+          )
+        ).rows.map((r) => r.table_name);
+
+      const dropWorkspaceTables = () =>
+        pool.query(
+          'DROP TABLE noshow_workspace_events, noshow_workspace_rows, noshow_workspace_months',
+        );
+
       it('ensures the suspension table before its own, which needs it', async () => {
-        const order: string[] = [];
-        await ensureWorkspaceSchema(pool, async () => {
-          order.push('suspensions');
-        });
-        order.push('workspace');
-        expect(order).toEqual(['suspensions', 'workspace']);
-        // A failing suspension ensure stops the workspace ensure.
-        await expect(
-          ensureWorkspaceSchema(pool, async () => {
-            throw new Error('suspension schema failed');
-          }),
-        ).rejects.toThrow('suspension schema failed');
+        await dropWorkspaceTables();
+        try {
+          // The callback runs before the workspace transaction: none of its
+          // tables exist yet, and suspension_records (the FK target) does.
+          let sawBefore: string[] | undefined;
+          await ensureWorkspaceSchema(pool, async () => {
+            sawBefore = await workspaceTables();
+            const target = await pool.query<{ r: string | null }>(
+              `SELECT to_regclass(quote_ident(current_schema()) || '.suspension_records') AS r`,
+            );
+            expect(target.rows[0].r).not.toBeNull();
+          });
+          expect(sawBefore).toEqual([]);
+          expect(await workspaceTables()).toEqual(WORKSPACE_TABLES);
+        } finally {
+          await ensureWorkspaceSchema(pool);
+        }
+      });
+
+      it('a failing suspension ensure stops the workspace ensure', async () => {
+        await dropWorkspaceTables();
+        try {
+          await expect(
+            ensureWorkspaceSchema(pool, async () => {
+              throw new Error('suspension schema failed');
+            }),
+          ).rejects.toThrow('suspension schema failed');
+          // suspension_records exists here, so a workspace ensure that ran
+          // anyway would have created its tables.
+          expect(await workspaceTables()).toEqual([]);
+        } finally {
+          await ensureWorkspaceSchema(pool);
+        }
       });
 
       it('schema is idempotent', async () => {
@@ -172,7 +211,7 @@ const suspension = (
         const triggers = await pool.query<{ n: number }>(
           `SELECT count(*)::int AS n FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid
             WHERE t.tgname = 'noshow_workspace_events_append_only'
-              AND c.relnamespace = current_schema()::regnamespace`,
+              AND c.relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = current_schema())`,
         );
         expect(triggers.rows[0].n).toBe(1);
         expect(await count('noshow_workspace_rows')).toBe(1);
@@ -196,7 +235,7 @@ const suspension = (
             `SELECT c.relname AS name, l.mode FROM pg_locks l
                JOIN pg_class c ON c.oid = l.relation
               WHERE l.pid = pg_backend_pid()
-                AND c.relnamespace = current_schema()::regnamespace
+                AND c.relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = current_schema())
               ORDER BY 1, 2`,
           );
           return locks.rows.map((r) => `${r.name}:${r.mode}`);
@@ -224,12 +263,55 @@ const suspension = (
           const unguarded = await client.query<{ mode: string }>(
             `SELECT l.mode FROM pg_locks l JOIN pg_class c ON c.oid = l.relation
               WHERE l.pid = pg_backend_pid() AND c.relname = 'noshow_workspace_rows'
-                AND c.relnamespace = current_schema()::regnamespace`,
+                AND c.relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = current_schema())`,
           );
           expect(unguarded.rows.map((r) => r.mode)).toContain('ShareLock');
         } finally {
           await client.query('ROLLBACK');
           client.release();
+        }
+      });
+
+      it('a later boot updates the append-only function body', async () => {
+        await pool.query(
+          `CREATE OR REPLACE FUNCTION noshow_workspace_events_append_only() RETURNS trigger
+             LANGUAGE plpgsql AS $fn$ BEGIN RAISE EXCEPTION 'stale body'; END $fn$`,
+        );
+        await ensureWorkspaceSchema(pool);
+        await sync([warning('111')]);
+        await expect(
+          pool.query('DELETE FROM noshow_workspace_events'),
+        ).rejects.toThrow('noshow_workspace_events is append-only');
+      });
+
+      it('guards match a mixed-case schema name exactly', async () => {
+        // current_schema()::regnamespace re-parses the name as an
+        // identifier, folding "WsMixed_..." to lower case: no such schema.
+        const name = `WsMixed_${randomUUID().replaceAll('-', '').slice(0, 8)}`;
+        const url = new URL(process.env.DATABASE_URL ?? '');
+        url.searchParams.delete('options');
+        const mixed = new pg.Pool({
+          connectionString: url.toString(),
+          options: `-c search_path="${name}"`,
+          max: 2,
+        });
+        try {
+          await pool.query(`CREATE SCHEMA "${name}"`);
+          const ensure = () =>
+            ensureWorkspaceSchema(mixed, () =>
+              mixed.query(SUSPENSION_SCHEMA_SQL),
+            );
+          await ensure();
+          await ensure();
+          const triggers = await mixed.query<{ n: number }>(
+            `SELECT count(*)::int AS n FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid
+              WHERE t.tgname = 'noshow_workspace_events_append_only'
+                AND c.relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = current_schema())`,
+          );
+          expect(triggers.rows[0].n).toBe(1);
+        } finally {
+          await mixed.end();
+          await pool.query(`DROP SCHEMA IF EXISTS "${name}" CASCADE`);
         }
       });
 
