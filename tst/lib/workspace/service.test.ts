@@ -23,6 +23,7 @@ import {
   type ActionOutcome,
   type ActionRequest,
   type SyncOutcome,
+  type WorkspaceMonthState,
   WORKSPACE_ACTIONS,
   type WorkspaceAction,
   type WorkspaceRow,
@@ -577,10 +578,25 @@ describe('syncWorkspace', () => {
       returned: 0,
     }));
     const getCurrent = vi.fn(async () => snapshot as never);
-    const repository = vi.fn(async () => ({ syncFromSnapshot }));
-    const snapshots = vi.fn(async () => ({ getCurrent }));
+    const s = snapshot as { id: number; builtAt: Date } | null;
+    const getCurrentMeta = vi.fn(async () => {
+      return s ? ({ id: s.id, builtAt: s.builtAt } as never) : undefined;
+    });
+    const monthState = vi.fn(
+      async (): Promise<WorkspaceMonthState | undefined> => undefined,
+    );
+    const repository = vi.fn(async () => ({ syncFromSnapshot, monthState }));
+    const snapshots = vi.fn(async () => ({ getCurrent, getCurrentMeta }));
     const deps: WorkspaceSyncDeps = { now: () => now, repository, snapshots };
-    return { deps, syncFromSnapshot, getCurrent, repository, snapshots };
+    return {
+      deps,
+      syncFromSnapshot,
+      getCurrent,
+      getCurrentMeta,
+      monthState,
+      repository,
+      snapshots,
+    };
   }
 
   it('reads the current no-show snapshot and passes its id and built time', async () => {
@@ -620,7 +636,7 @@ describe('syncWorkspace', () => {
       payload: { reportType: 'no_show', cases: [{}] },
     });
     expect(await syncWorkspace(h.deps, SEPT)).toBe('malformed');
-    expect(h.repository).not.toHaveBeenCalled();
+    expect(h.syncFromSnapshot).not.toHaveBeenCalled();
     expect(error).toHaveBeenCalledWith(
       'Workspace sync 2026-09: the stored no-show report is not in the expected shape; nothing synced',
     );
@@ -629,6 +645,51 @@ describe('syncWorkspace', () => {
   it('a month with no report says no-report and never opens the workspace repository', async () => {
     const h = sync(null);
     expect(await syncWorkspace(h.deps, SEPT)).toBe('no-report');
+    expect(h.repository).not.toHaveBeenCalled();
+  });
+
+  it('skips reading the payload when the workspace is already synced from the current build', async () => {
+    const h = sync();
+    h.monthState.mockResolvedValueOnce({
+      period: SEPT,
+      snapshotId: 9,
+      snapshotBuiltAt: new Date('2026-10-02T16:00:00Z'),
+      syncedAt: NOW,
+    });
+    expect(await syncWorkspace(h.deps, SEPT)).toBe('current');
+    expect(h.getCurrentMeta).toHaveBeenCalledWith('no_show', SEPT);
+    expect(h.monthState).toHaveBeenCalledWith(SEPT);
+    expect(h.getCurrent).not.toHaveBeenCalled();
+    expect(h.syncFromSnapshot).not.toHaveBeenCalled();
+  });
+
+  it.each<[string, number, string]>([
+    ['another build', 8, '2026-10-02T16:00:00Z'],
+    ['the open month rebuilt in place', 9, '2026-10-01T16:00:00Z'],
+  ])('reads and syncs when the workspace holds %s', async (_label, id, at) => {
+    const h = sync();
+    h.monthState.mockResolvedValueOnce({
+      period: SEPT,
+      snapshotId: id,
+      snapshotBuiltAt: new Date(at),
+      syncedAt: NOW,
+    });
+    expect(await syncWorkspace(h.deps, SEPT)).toBe('synced');
+    expect(h.getCurrent).toHaveBeenCalledTimes(1);
+    expect(h.syncFromSnapshot).toHaveBeenCalledTimes(1);
+  });
+
+  it('a month never synced reads and syncs', async () => {
+    const h = sync();
+    expect(await syncWorkspace(h.deps, SEPT)).toBe('synced');
+    expect(h.monthState).toHaveBeenCalledWith(SEPT);
+    expect(h.getCurrent).toHaveBeenCalledTimes(1);
+  });
+
+  it('no current build: no-report without reading the payload or opening the workspace', async () => {
+    const h = sync(null);
+    expect(await syncWorkspace(h.deps, SEPT)).toBe('no-report');
+    expect(h.getCurrent).not.toHaveBeenCalled();
     expect(h.repository).not.toHaveBeenCalled();
   });
 

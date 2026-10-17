@@ -300,9 +300,11 @@ export interface WorkspaceSyncDeps {
   now(): Date;
   /** Lazy: the workspace schema is set up only here (PostgresNoShowWorkspaceRepository.instance()). */
   repository(): Promise<
-    Pick<PostgresNoShowWorkspaceRepository, 'syncFromSnapshot'>
+    Pick<PostgresNoShowWorkspaceRepository, 'syncFromSnapshot' | 'monthState'>
   >;
-  snapshots(): Promise<Pick<PostgresReportSnapshotRepository, 'getCurrent'>>;
+  snapshots(): Promise<
+    Pick<PostgresReportSnapshotRepository, 'getCurrent' | 'getCurrentMeta'>
+  >;
 }
 
 /**
@@ -317,7 +319,23 @@ export async function syncWorkspace(
   if (!isWorkspaceMonth(period, deps.now())) {
     return 'not-eligible';
   }
-  const snapshot = await (await deps.snapshots()).getCurrent('no_show', period);
+  const snapshots = await deps.snapshots();
+  // The cheap check first: most ticks find the workspace already synced
+  // from the current build, and the payload is then never read.
+  const meta = await snapshots.getCurrentMeta('no_show', period);
+  if (!meta) {
+    return 'no-report';
+  }
+  const repository = await deps.repository();
+  const state = await repository.monthState(period);
+  if (
+    state !== undefined &&
+    state.snapshotId === meta.id &&
+    state.snapshotBuiltAt.getTime() === meta.builtAt.getTime()
+  ) {
+    return 'current';
+  }
+  const snapshot = await snapshots.getCurrent('no_show', period);
   if (!snapshot) {
     return 'no-report';
   }
@@ -328,9 +346,7 @@ export async function syncWorkspace(
     );
     return 'malformed';
   }
-  const outcome = await (
-    await deps.repository()
-  ).syncFromSnapshot({
+  const outcome = await repository.syncFromSnapshot({
     period,
     snapshotId: snapshot.id,
     snapshotBuiltAt: snapshot.builtAt,

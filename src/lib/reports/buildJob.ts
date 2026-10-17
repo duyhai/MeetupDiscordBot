@@ -695,7 +695,7 @@ export async function runBuildTick(deps: BuildJobDeps): Promise<void> {
       builtAt: await loadBuiltAt(deps, planNow),
       linkProgressWrittenToday: await deps.linkProgress.hasDay(utcDay(planNow)),
     });
-    // Months this tick built, to sync once everything else has run.
+    // Months this tick built: synced before report-ready.
     const builtMonths: Period[] = [];
     for (const item of plan) {
       const startAt = deps.now();
@@ -732,21 +732,23 @@ export async function runBuildTick(deps: BuildJobDeps): Promise<void> {
         await writeLinkProgress(deps, cache, item.day);
       }
     }
-    await maybePostReportReady(deps);
-    // Last, so the builds, link progress and report-ready never wait on it:
-    // the months just built, and the previous and current month on every
-    // tick (a no-op when the workspace is up to date; it is also what sets
-    // up the latest finished month on the first tick after deploy).
-    const current = periodOf(deps.now());
-    const toSync = [...builtMonths];
-    for (const p of [previousPeriod(current), current]) {
-      if (!toSync.some((q) => comparePeriods(p, q) === 0)) {
-        toSync.push(p);
-      }
-    }
-    for (const p of toSync) {
+    // The months just built first, so report-ready links a workspace that
+    // is set up. Each sync waits at most its deadline and never throws, so
+    // report-ready still runs after a failed or hung sync.
+    for (const p of builtMonths) {
       // eslint-disable-next-line no-await-in-loop -- small Postgres syncs, one at a time on a pool of three
       await syncWorkspaceSafely(deps, cache, p);
+    }
+    await maybePostReportReady(deps);
+    // Then the previous and current month on every tick (a no-op when the
+    // workspace is up to date; it is also what sets up the latest finished
+    // month on the first tick after deploy).
+    const current = periodOf(deps.now());
+    for (const p of [previousPeriod(current), current]) {
+      if (!builtMonths.some((q) => comparePeriods(p, q) === 0)) {
+        // eslint-disable-next-line no-await-in-loop -- small Postgres syncs, one at a time on a pool of three
+        await syncWorkspaceSafely(deps, cache, p);
+      }
     }
   } finally {
     await releaseBuildLease(cache, lease);

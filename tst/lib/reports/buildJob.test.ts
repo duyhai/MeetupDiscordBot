@@ -1924,8 +1924,36 @@ describe('workspace sync hooks', () => {
     expect(synced(h)).toEqual(['2026-9']);
   });
 
-  it('report-ready and link progress do not wait for the workspace sync', async () => {
+  it('syncs the months it built before report-ready, the rest after; link progress keeps its place', async () => {
     const h = makeDeps({ clock: new Clock('2026-10-05T16:15:00Z') });
+    const order: string[] = [];
+    h.alert.mockImplementation(async (entry) => {
+      order.push(entry.title);
+      return true;
+    });
+    h.collectLinkProgress.mockImplementation(async () => {
+      order.push('link progress');
+      return { ...LINK };
+    });
+    h.syncWorkspace.mockImplementation(async (period) => {
+      order.push(`sync ${period.month}`);
+      return 'synced';
+    });
+    await runBuildTick(h.deps);
+    expect(order).toEqual([
+      'Reports built: September 2026',
+      'link progress',
+      'sync 9',
+      'sync 10',
+      'Reports ready: September 2026',
+    ]);
+  });
+
+  it('only the current month built: it syncs before report-ready, the previous month after', async () => {
+    const h = makeDeps({ clock: new Clock('2026-10-10T16:15:00Z') });
+    h.snapshots.seedBoth(SEPT, '2026-10-03T16:10:00Z');
+    h.snapshots.seedBoth(OCT, '2026-10-09T16:05:00Z');
+    h.linkProgress.days.set('2026-10-10', LINK);
     const order: string[] = [];
     h.alert.mockImplementation(async (entry) => {
       order.push(entry.title);
@@ -1933,16 +1961,41 @@ describe('workspace sync hooks', () => {
     });
     h.syncWorkspace.mockImplementation(async (period) => {
       order.push(`sync ${period.month}`);
-      expect(h.linkProgress.days.has('2026-10-05')).toBe(true);
-      return 'synced';
+      return 'current';
     });
     await runBuildTick(h.deps);
+    expect(fetchedPeriods(h)).toEqual(['2026-10']);
     expect(order).toEqual([
-      'Reports built: September 2026',
+      'sync 10',
       'Reports ready: September 2026',
       'sync 9',
-      'sync 10',
     ]);
+  });
+
+  it('report-ready still posts when the sync of a built month throws', async () => {
+    const h = makeDeps();
+    h.syncWorkspace.mockRejectedValue(new Error('down'));
+    await runBuildTick(h.deps);
+    expect(ready(h)).toHaveLength(1);
+  });
+
+  it('report-ready still posts, after the deadline, when the sync of a built month hangs', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const h = makeDeps();
+      h.syncWorkspace.mockImplementation(() => new Promise(() => undefined));
+      const tick = runBuildTick(h.deps);
+      await vi.advanceTimersByTimeAsync(WORKSPACE_SYNC_DEADLINE_MS - 1);
+      expect(ready(h)).toHaveLength(0);
+      // September's deadline, then October's.
+      await vi.advanceTimersByTimeAsync(WORKSPACE_SYNC_DEADLINE_MS + 2);
+      await tick;
+      expect(ready(h)).toHaveLength(1);
+      expect(h.syncWorkspace).toHaveBeenCalledTimes(2);
+      expect(h.cache.values.has(LEASE_KEY)).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('a failing workspace sync alerts once a day and does not fail the build or the tick', async () => {
@@ -2128,7 +2181,7 @@ describe('workspace sync hooks', () => {
   it('defaultBuildJobDeps opens the workspace repository only when a sync needs it', async () => {
     const snapshots = {
       save: vi.fn(),
-      getCurrentMeta: vi.fn(),
+      getCurrentMeta: vi.fn(async () => undefined),
       getCurrent: vi.fn(async () => undefined),
     };
     vi.mocked(PostgresReportSnapshotRepository.instance).mockResolvedValue(
@@ -2152,6 +2205,7 @@ describe('workspace sync hooks', () => {
     }));
     vi.mocked(PostgresNoShowWorkspaceRepository.instance).mockResolvedValue({
       syncFromSnapshot,
+      monthState: vi.fn(async () => undefined),
     } as never);
     const deps = await defaultBuildJobDeps({} as Client);
     expect(PostgresNoShowWorkspaceRepository.instance).not.toHaveBeenCalled();
@@ -2164,7 +2218,12 @@ describe('workspace sync hooks', () => {
     const current = periodOf(new Date());
     expect(await deps.syncWorkspace?.(current)).toBe('no-report');
     expect(PostgresNoShowWorkspaceRepository.instance).not.toHaveBeenCalled();
+    expect(snapshots.getCurrent).not.toHaveBeenCalled();
     // A stored report: synced through the workspace repository.
+    snapshots.getCurrentMeta.mockResolvedValueOnce({
+      id: 3,
+      builtAt: new Date('2026-10-02T16:00:00Z'),
+    });
     snapshots.getCurrent.mockResolvedValueOnce({
       id: 3,
       builtAt: new Date('2026-10-02T16:00:00Z'),
@@ -2179,6 +2238,7 @@ describe('workspace sync hooks', () => {
 
   it('a workspace repository that cannot be opened rejects the sync, never the deps', async () => {
     vi.mocked(PostgresReportSnapshotRepository.instance).mockResolvedValue({
+      getCurrentMeta: vi.fn(async () => ({ id: 3, builtAt: new Date() })),
       getCurrent: vi.fn(async () => ({
         id: 3,
         builtAt: new Date(),
