@@ -188,12 +188,12 @@ Actions:
 | Action | Effect |
 |---|---|
 | **Copy warning** | Renders the warning for this member and copies it. Status → `warning_copied`. |
-| **Copy suspension message** | Renders the suspension message and copies it. Changes no status and writes nothing. |
+| **Copy suspension message** | Renders the suspension message and copies it. Changes no status and writes nothing. A suspended or voided card shows no copy box, only a fixed line, even after a rebuild reclassifies it. |
 | **Open on Meetup** | Opens the member's Meetup profile in a new tab; the sender uses Message there while signed in as the organizer account. |
 | **Mark as sent** | Status → `warning_sent`. Records who and when. |
 | **Put on hold** | Status → `on_hold`; a note is required (e.g. "paid for Halloween, revisit after 3rd no-show"). |
-| **Record suspension** | 1.5 Leadership Team only. Confirm step with the suspension date (default today; from the month's first day through today, Pacific). The length is computed by the policy from the member's earlier suspensions. Writes a `suspension_records` row with the command's SQL, carrying the notes; status → `suspended`. Refused if the range overlaps a live suspension of the member (an override may come later). |
-| **Link suspension** | 1.5 Leadership Team only. Links a live suspension recorded outside the workspace (e.g. with `/meetup_record_suspension`) dated in or after the month; status → `suspended`; a record another row already links is never offered. |
+| **Record suspension** | 1.5 Leadership Team only. Confirm step with the suspension date (default today; from the month's first day through today, Pacific). The length and fee are computed by the policy from the member's suspensions dated before the chosen day, and the page reloads them when the date changes. Writes a `suspension_records` row with the command's SQL, carrying the notes; status → `suspended`. Refused if the range overlaps a live suspension of the member (an override may come later). |
+| **Link suspension** | 1.5 Leadership Team only. Links a live suspension recorded outside the workspace (e.g. with `/meetup_record_suspension`) dated in the month (its 1st through its last day); status → `suspended`; a record another row already links is never offered. |
 | **Skip** | Status → `skipped`; note required. |
 | **Void** | 1.5 Leadership Team only. For a recorded suspension: reason required; uses the command's void SQL. |
 | **Notes** | Edit at any time. |
