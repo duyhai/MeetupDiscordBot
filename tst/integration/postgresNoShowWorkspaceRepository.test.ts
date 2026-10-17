@@ -700,18 +700,42 @@ const suspension = (
         expect((await repo.statusCounts([])).size).toBe(0);
       });
 
-      it('statusesByMember maps the month by member id', async () => {
-        await sync([warning('111'), warning('222')]);
+      it("statusesByMember maps the asked members' month by member id, and only those", async () => {
+        await sync([warning('111'), warning('222'), warning('333')]);
         await pool.query(
           `UPDATE noshow_workspace_rows SET status = 'skipped' WHERE meetup_member_id = '222'`,
         );
-        expect(await repo.statusesByMember(SEPTEMBER)).toEqual(
+        expect(
+          await repo.statusesByMember(SEPTEMBER, ['111', '222', '999']),
+        ).toEqual(
           new Map([
             ['111', 'new'],
             ['222', 'skipped'],
           ]),
         );
-        expect((await repo.statusesByMember(OCTOBER)).size).toBe(0);
+        expect(
+          (await repo.statusesByMember(OCTOBER, ['111', '222'])).size,
+        ).toBe(0);
+        // A pool that throws on any query proves nothing was asked.
+        const refusing = new PostgresNoShowWorkspaceRepository({
+          query: () => {
+            throw new Error('no query expected');
+          },
+          connect: () => {
+            throw new Error('no query expected');
+          },
+        } as unknown as pg.Pool);
+        expect((await refusing.statusesByMember(SEPTEMBER, [])).size).toBe(0);
+        expect(
+          (await refusing.statusesByMember(SEPTEMBER, ["1' OR '1'='1", 'x']))
+            .size,
+        ).toBe(0);
+        await expect(
+          refusing.statusesByMember(
+            SEPTEMBER,
+            Array.from({ length: 1001 }, (_, i) => String(i)),
+          ),
+        ).rejects.toThrow(RangeError);
       });
 
       it("statusesForMember lists the member's months, newest first; a non-digit id runs no query", async () => {

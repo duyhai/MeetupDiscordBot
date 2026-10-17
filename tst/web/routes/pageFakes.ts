@@ -658,8 +658,15 @@ export function fakeWorkspace(seed: WorkspaceSeed = WORKSPACE_SEED()) {
         ),
     ),
     statusesByMember: vi.fn(
-      async (period: Period): Promise<Map<string, WorkspaceStatus>> =>
-        new Map(inMonth(period).map((r) => [r.memberId, r.status])),
+      async (
+        period: Period,
+        memberIds: string[],
+      ): Promise<Map<string, WorkspaceStatus>> =>
+        new Map(
+          inMonth(period)
+            .filter((r) => memberIds.includes(r.memberId))
+            .map((r) => [r.memberId, r.status]),
+        ),
     ),
     statusesForMember: vi.fn(
       async (memberId: string): Promise<Map<string, WorkspaceStatus>> =>

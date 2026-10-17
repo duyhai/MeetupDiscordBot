@@ -279,6 +279,8 @@ function clampInt(
 
 /** linkedRecordIds' ids per query (it reads any number, in chunks of this many). */
 const MAX_LINKED_LOOKUP = 1000;
+/** statusesByMember's cap: callers ask for one page of members. */
+const MAX_STATUS_MEMBERS = 1000;
 
 const isRowId = (value: number): boolean =>
   Number.isSafeInteger(value) && value >= 1 && value <= MAX_ROW_ID;
@@ -891,16 +893,33 @@ export class PostgresNoShowWorkspaceRepository {
     return counts;
   }
 
-  /** The month's status per Meetup member id. */
+  /**
+   * The month's status for the given Meetup member ids (one page of a list,
+   * at most MAX_STATUS_MEMBERS), keyed by id. Non-digit ids are dropped;
+   * with none left, no query runs.
+   */
   async statusesByMember(
     period: Period,
+    memberIds: string[],
   ): Promise<Map<string, WorkspaceStatus>> {
+    if (memberIds.length > MAX_STATUS_MEMBERS) {
+      throw new RangeError(
+        `statusesByMember takes at most ${MAX_STATUS_MEMBERS} members`,
+      );
+    }
+    const ids = memberIds.filter(
+      (id) => typeof id === 'string' && MEMBER_ID.test(id),
+    );
+    if (ids.length === 0) {
+      return new Map();
+    }
     const result = await this.pool.query<{
       meetup_member_id: string;
       status: WorkspaceStatus;
     }>(
-      'SELECT meetup_member_id, status FROM noshow_workspace_rows WHERE period = $1::date',
-      [periodDate(period)],
+      `SELECT meetup_member_id, status FROM noshow_workspace_rows
+        WHERE period = $1::date AND meetup_member_id = ANY($2::text[])`,
+      [periodDate(period), ids],
     );
     return new Map(result.rows.map((r) => [r.meetup_member_id, r.status]));
   }

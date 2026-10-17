@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { WorkspaceStatus } from '../../../src/lib/workspace/types.js';
+
 import { DashboardPageDeps } from '../../../src/web/routes/dashboardPages.js';
 import {
   HOME_REPORTS_DEADLINE_MS,
@@ -13,9 +15,11 @@ import {
   fakeLinkProgress,
   fakePageDeps,
   fakeSnapshots,
+  fakeWorkspace,
   hofPayload,
   noShowPayload,
   seedRow,
+  workspaceRow,
 } from './pageFakes.js';
 
 afterEach(closeServers);
@@ -163,6 +167,121 @@ describe('Home report cards', () => {
   });
 });
 
+/** September: 2 new, 1 warning copied, 1 on hold, 3 done (sent, suspended, skipped); October: 1 voided. */
+const workspaceRows = () => {
+  const statuses: WorkspaceStatus[] = [
+    'new',
+    'new',
+    'warning_copied',
+    'on_hold',
+    'warning_sent',
+    'suspended',
+    'skipped',
+  ];
+  return [
+    ...statuses.map((status, i) =>
+      workspaceRow({ id: i + 1, memberId: String(1000 + i), status }),
+    ),
+    // Dropped from the report: never counted.
+    workspaceRow({ id: 20, memberId: '2000', inLatestSnapshot: false }),
+    workspaceRow({ id: 21, period: OCT, memberId: '3000', status: 'voided' }),
+  ];
+};
+
+const seededWorkspace = () =>
+  fakeWorkspace({ rows: workspaceRows(), months: [], events: [] });
+
+describe('Home open workspace items card', () => {
+  it('shows open workspace items for the latest finished and the open month', async () => {
+    const out = await render({ workspace: async () => seededWorkspace() });
+    expect(out).toContain('September 2026</a>: 3 to do, 1 on hold, 3 done');
+    expect(out).toContain('October 2026</a>: 0 to do, 0 on hold, 1 done');
+    expect(out).not.toMatch(/attend|incomplete|<@/i);
+  });
+
+  it('sits first, ahead of the month cards', async () => {
+    const out = await render({ workspace: async () => seededWorkspace() });
+    expect(out.indexOf('No-show workspace')).toBeGreaterThanOrEqual(0);
+    expect(out.indexOf('No-show workspace')).toBeLessThan(
+      out.indexOf('8 no-show RSVPs'),
+    );
+  });
+
+  it('the workspace card links the workspace and each month', async () => {
+    const out = await render({ workspace: async () => seededWorkspace() });
+    expect(out).toContain('href="/dashboard/no-shows"');
+    expect(out).toContain('href="/dashboard/no-shows/2026-09"');
+    expect(out).toContain('href="/dashboard/no-shows/2026-10"');
+  });
+
+  it('reads one aggregate for exactly the two months', async () => {
+    const ws = seededWorkspace();
+    await render({ workspace: async () => ws });
+    expect(ws.statusCounts).toHaveBeenCalledTimes(1);
+    expect(ws.statusCounts).toHaveBeenCalledWith([SEPT, OCT]);
+    expect(ws.listRows).not.toHaveBeenCalled();
+    expect(ws.statusesByMember).not.toHaveBeenCalled();
+  });
+
+  it('a month with no rows shows zeros', async () => {
+    const out = await render({
+      workspace: async () =>
+        fakeWorkspace({ rows: [], months: [], events: [] }),
+    });
+    expect(out).toContain('September 2026</a>: 0 to do, 0 on hold, 0 done');
+    expect(out).toContain('October 2026</a>: 0 to do, 0 on hold, 0 done');
+  });
+
+  it('the workspace card failure degrades alone', async () => {
+    const ws = seededWorkspace();
+    ws.statusCounts.mockRejectedValue(new Error('db down: secret'));
+    const out = await render({ workspace: async () => ws });
+    expect(out.match(/Unavailable right now\./g)).toHaveLength(1);
+    expect(out).not.toContain('secret');
+    expect(out).toContain('8 no-show RSVPs');
+    expect(out).toContain('The October 2026 reports have not been built yet.');
+    expect(out).toContain('identity changes in the last 7 days');
+    expect(out).toContain('Linked 200');
+
+    const lookup = await render({
+      workspace: async () => {
+        throw new Error('no DATABASE_URL');
+      },
+    });
+    expect(lookup.match(/Unavailable right now\./g)).toHaveLength(1);
+    expect(lookup).toContain('8 no-show RSVPs');
+    expect(lookup).toContain('Linked 200');
+  });
+
+  it('a month before the workspace shows no workspace line', async () => {
+    const out = (
+      await renderHomeReports(
+        deps({
+          now: () => new Date('2026-09-10T16:00:00Z'),
+          workspace: async () => seededWorkspace(),
+        }),
+      )
+    ).value.replace(/\s+/g, ' ');
+    expect(out).toContain('September 2026</a>: 3 to do, 1 on hold, 3 done');
+    expect(out).not.toContain('August 2026</a>:');
+    expect(out).not.toContain('/dashboard/no-shows/2026-08');
+  });
+
+  it('before the first workspace month there is no workspace card and no read', async () => {
+    const ws = seededWorkspace();
+    const out = (
+      await renderHomeReports(
+        deps({
+          now: () => new Date('2026-08-10T16:00:00Z'),
+          workspace: async () => ws,
+        }),
+      )
+    ).value;
+    expect(out).not.toContain('No-show workspace');
+    expect(ws.statusCounts).not.toHaveBeenCalled();
+  });
+});
+
 describe('Home report cards, failure isolation and timing', () => {
   it('degrades only the finished-month card when its meta read fails', async () => {
     const snapshots = fakeSnapshots(septRows());
@@ -226,6 +345,85 @@ describe('Home report cards, failure isolation and timing', () => {
       expect(links.listDays).toHaveBeenCalledTimes(1);
       release();
       await pending;
+    });
+
+    it('cards load in parallel: all five reads start before any resolves', async () => {
+      vi.useFakeTimers();
+      const started: string[] = [];
+      let resolved = false;
+      let release: () => void = () => undefined;
+      const gate = new Promise<void>((r) => {
+        release = r;
+      }).then(() => {
+        resolved = true;
+      });
+      const startedBeforeResolve = (name: string) => {
+        if (!resolved) {
+          started.push(name);
+        }
+      };
+      const snapshots = fakeSnapshots(septRows());
+      snapshots.getCurrentMeta.mockImplementation(async (_type, period) => {
+        startedBeforeResolve(`meta ${period.month}`);
+        await gate;
+        return undefined;
+      });
+      const identity = fakeIdentity();
+      identity.countChangesSince.mockImplementation(async () => {
+        startedBeforeResolve('identity');
+        await gate;
+        return 1;
+      });
+      const links = fakeLinkProgress();
+      links.listDays.mockImplementation(async () => {
+        startedBeforeResolve('links');
+        await gate;
+        return [];
+      });
+      const ws = seededWorkspace();
+      ws.statusCounts.mockImplementation(async () => {
+        startedBeforeResolve('workspace');
+        await gate;
+        return new Map();
+      });
+      const pending = renderHomeReports(
+        deps({
+          snapshots: async () => snapshots,
+          identity: async () => identity,
+          linkProgress: async () => links,
+          workspace: async () => ws,
+        }),
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      release();
+      await pending;
+      expect([...new Set(started)].sort()).toEqual([
+        'identity',
+        'links',
+        'meta 10',
+        'meta 9',
+        'workspace',
+      ]);
+    });
+
+    it('the workspace card shares the 5 s deadline', async () => {
+      vi.useFakeTimers();
+      const ws = seededWorkspace();
+      ws.statusCounts.mockReturnValue(new Promise(() => {}));
+      let out = '';
+      const pending = renderHomeReports(
+        deps({ workspace: async () => ws }),
+      ).then((v) => {
+        out = v.value;
+      });
+      await vi.advanceTimersByTimeAsync(HOME_REPORTS_DEADLINE_MS - 1);
+      expect(out).toBe('');
+      await vi.advanceTimersByTimeAsync(1);
+      await pending;
+      expect(out.match(/Unavailable right now\./g)).toHaveLength(1);
+      expect(out).toContain('8 no-show RSVPs');
+      expect(out).toContain('Linked 200');
+      expect(vi.getTimerCount()).toBe(0);
     });
 
     it('answers inside the deadline when one read never settles', async () => {
@@ -294,6 +492,17 @@ describe('Home report cards, failure isolation and timing', () => {
 });
 
 describe('Home page integration', () => {
+  it('the workspace card rejecting still renders the whole Home page', async () => {
+    const ws = seededWorkspace();
+    ws.statusCounts.mockRejectedValue(new Error('down'));
+    const res = await home((() =>
+      renderHomeReports(deps({ workspace: async () => ws }))) as never);
+    expect(res.status).toBe(200);
+    expect(res.text).toContain('Unavailable right now.');
+    expect(res.text).toContain('8 no-show RSVPs');
+    expect(res.text).toContain('Organizer login');
+  });
+
   async function home(homeReports?: () => Promise<never>) {
     const { req } = await makeApp({
       now: () => PAGE_NOW.getTime(),
