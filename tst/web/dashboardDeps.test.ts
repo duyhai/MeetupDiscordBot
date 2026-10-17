@@ -1,12 +1,29 @@
 import express from 'express';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { BASE_DISCORD_BOT_URL } from '../../src/constants.js';
+import { BASE_DISCORD_BOT_URL, SERVER_ROLES } from '../../src/constants.js';
 import {
   dashboardDisabledReason,
   dashboardOrigin,
+  dashboardPageDeps,
+  dashboardRebuildCache,
   dashboardRouterFromEnv,
+  manualRebuildDeps,
+  setDashboardClient,
 } from '../../src/web/dashboardDeps.js';
+import {
+  defaultBuildJobDeps,
+  requestRebuild,
+} from '../../src/lib/reports/buildJob.js';
+import { BUILD_LEASE_KEY } from '../../src/lib/reports/buildLease.js';
+import { ApplicationCache } from '../../src/util/cache.js';
+import { signSessionId } from '../../src/web/session.js';
+import {
+  CacheTimeoutError,
+  DASHBOARD_CACHE_TIMEOUT_MS,
+} from '../../src/web/timedCache.js';
+import { FakeCache } from './fakeCache.js';
+import { DashboardUnavailableError } from '../../src/web/roleGate.js';
 import {
   createDashboardRouter,
   protectedRouteList,
@@ -20,6 +37,22 @@ vi.mock('../../src/web/organizerLoginDeps.js', async (importOriginal) => {
       typeof import('../../src/web/organizerLoginDeps.js')
     >();
   return { ...actual, organizerLoginDeps: vi.fn(actual.organizerLoginDeps) };
+});
+
+vi.mock('../../src/util/cache.js', async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import('../../src/util/cache.js')>();
+  return { ...actual, ApplicationCache: vi.fn(actual.ApplicationCache) };
+});
+
+vi.mock('../../src/lib/reports/buildJob.js', async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import('../../src/lib/reports/buildJob.js')>();
+  return {
+    ...actual,
+    defaultBuildJobDeps: vi.fn(),
+    requestRebuild: vi.fn(actual.requestRebuild),
+  };
 });
 
 vi.mock('../../src/web/dashboardRouter.js', async (importOriginal) => {
@@ -46,6 +79,11 @@ describe('dashboardRouterFromEnv', () => {
     expect(res.status).toBe(503);
     expect(res.headers['cache-control']).toBe('no-store');
     expect(res.text).toContain('not set up yet');
+    expect(res.headers['x-frame-options']).toBe('DENY');
+    expect(res.headers['content-security-policy']).toContain(
+      "frame-ancestors 'none'",
+    );
+    expect(res.headers['x-content-type-options']).toBe('nosniff');
   });
 
   it('refuses a session secret shorter than 32 characters', async () => {
@@ -99,6 +137,243 @@ describe('dashboardRouterFromEnv', () => {
     expect(res.headers.location).toBe(
       'https://meetup-discord-bot.herokuapp.com/dashboard/login',
     );
+  });
+});
+
+describe('dashboardPageDeps', () => {
+  it('registers the sessions page and its revoke action behind the gate', () => {
+    const router = dashboardRouterFromEnv({
+      DASHBOARD_SESSION_SECRET: 'k'.repeat(48),
+    });
+    expect(protectedRouteList(router)).toEqual(
+      expect.arrayContaining([
+        { method: 'get', path: '/sessions' },
+        { method: 'post', path: '/sessions/revoke' },
+      ]),
+    );
+  });
+
+  it('the Leadership check fails closed before Discord is ready', async () => {
+    setDashboardClient(undefined);
+    await expect(
+      dashboardPageDeps().isLeadership('123456789012345678'),
+    ).rejects.toBeInstanceOf(DashboardUnavailableError);
+  });
+
+  it('the Leadership check asks Discord live for the Leadership role only', async () => {
+    const fetchMember = vi.fn().mockResolvedValue({
+      roles: { cache: new Map([[SERVER_ROLES.moderator, {}]]) },
+    });
+    setDashboardClient({
+      guilds: {
+        fetch: vi.fn().mockResolvedValue({ members: { fetch: fetchMember } }),
+      },
+    } as never);
+    try {
+      await expect(
+        dashboardPageDeps().isLeadership('123456789012345678'),
+      ).resolves.toBe(false);
+      expect(fetchMember).toHaveBeenCalledWith({
+        user: '123456789012345678',
+        force: true,
+      });
+    } finally {
+      setDashboardClient(undefined);
+    }
+  });
+
+  it('registers the Hall of Fame pages and the refresh action behind the gate', () => {
+    const router = dashboardRouterFromEnv({
+      DASHBOARD_SESSION_SECRET: 'k'.repeat(48),
+    });
+    expect(protectedRouteList(router)).toEqual(
+      expect.arrayContaining([
+        { method: 'get', path: '/hall-of-fame' },
+        { method: 'get', path: '/hall-of-fame/:period' },
+        { method: 'post', path: '/reports/:period/refresh' },
+      ]),
+    );
+  });
+
+  it('a refresh before Discord is ready answers unavailable without building deps', async () => {
+    setDashboardClient(undefined);
+    vi.mocked(defaultBuildJobDeps).mockClear();
+    await expect(
+      dashboardPageDeps().rebuild(
+        { year: 2026, month: 9 },
+        '123456789012345678',
+      ),
+    ).resolves.toMatchObject({ status: 'unavailable' });
+    expect(defaultBuildJobDeps).not.toHaveBeenCalled();
+  });
+
+  it('a refresh builds the job deps for the ready client, and a deps failure rejects', async () => {
+    const client = { tag: 'client' };
+    setDashboardClient(client as never);
+    try {
+      vi.mocked(defaultBuildJobDeps).mockResolvedValue({
+        cache: ApplicationCache,
+        now: () => new Date(),
+      } as never);
+      // A non-Discord requester is refused before any cache read.
+      await expect(
+        dashboardPageDeps().rebuild({ year: 2026, month: 9 }, 'job'),
+      ).resolves.toMatchObject({ status: 'bad-requester' });
+      expect(defaultBuildJobDeps).toHaveBeenLastCalledWith(client);
+      // A deps failure rejects; the route turns that into refresh=error.
+      vi.mocked(defaultBuildJobDeps).mockRejectedValueOnce(new Error('no db'));
+      await expect(
+        dashboardPageDeps().rebuild(
+          { year: 2026, month: 9 },
+          '123456789012345678',
+        ),
+      ).rejects.toThrow('no db');
+    } finally {
+      setDashboardClient(undefined);
+    }
+  });
+
+  it('the audit is a no-op without a Discord client', async () => {
+    setDashboardClient(undefined);
+    await expect(
+      dashboardPageDeps().audit({ title: 't', description: 'd' }),
+    ).resolves.toBe(false);
+  });
+});
+
+const REQUESTER = '123456789012345678';
+const SEPT = { year: 2026, month: 9 };
+
+describe('dashboard cache timeouts', () => {
+  const never = () => new Promise<never>(() => undefined);
+  const hangingCache = () => ({
+    get: never,
+    set: never,
+    exclusive_set: never,
+    set_existing: never,
+    remove: never,
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.mocked(ApplicationCache).mockReset();
+  });
+
+  it('the production dashboard cache is timed', async () => {
+    vi.mocked(ApplicationCache).mockResolvedValue(hangingCache() as never);
+    const started = Date.now();
+    const res = await (
+      await appWith({ DASHBOARD_SESSION_SECRET: 's'.repeat(48) })
+    )
+      .get('/dashboard/login')
+      .set('X-Forwarded-Proto', 'https')
+      .set('Cookie', `dash_sid=${signSessionId('sid', 's'.repeat(48))}`);
+    expect(res.status).toBe(503);
+    expect(Date.now() - started).toBeLessThan(DASHBOARD_CACHE_TIMEOUT_MS + 500);
+  });
+
+  it('the sessions page store uses the same timed cache', async () => {
+    vi.useFakeTimers();
+    vi.mocked(ApplicationCache).mockResolvedValue(hangingCache() as never);
+    const store = await dashboardPageDeps().sessionStore();
+    const pending = store.revokeUser('123456789012345678');
+    pending.catch(() => undefined);
+    await vi.advanceTimersByTimeAsync(DASHBOARD_CACHE_TIMEOUT_MS);
+    await expect(pending).rejects.toBeInstanceOf(CacheTimeoutError);
+  });
+
+  it('the rebuild cache times out and releases a lease granted late', async () => {
+    vi.useFakeTimers();
+    class LateLease extends FakeCache {
+      override exclusive_set(key: string, value: string, ttl?: number) {
+        return new Promise<boolean>((resolve) => {
+          setTimeout(() => {
+            resolve(super.exclusive_set(key, value, ttl));
+          }, DASHBOARD_CACHE_TIMEOUT_MS + 1_000);
+        });
+      }
+    }
+    const inner = new LateLease();
+    vi.mocked(ApplicationCache).mockResolvedValue(inner as never);
+    const cache = await dashboardRebuildCache();
+    const pending = cache.exclusive_set(BUILD_LEASE_KEY, 'late', 60);
+    pending.catch(() => undefined);
+    await vi.advanceTimersByTimeAsync(DASHBOARD_CACHE_TIMEOUT_MS);
+    await expect(pending).rejects.toBeInstanceOf(CacheTimeoutError);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(inner.values.has(BUILD_LEASE_KEY)).toBe(false);
+  });
+
+  it('a refresh hands requestRebuild the manual rebuild deps (timed request phase, untimed build)', async () => {
+    setDashboardClient({ tag: 'client' } as never);
+    try {
+      vi.mocked(defaultBuildJobDeps).mockResolvedValue({
+        cache: ApplicationCache,
+        now: () => new Date('2026-10-05T16:15:00Z'),
+      } as never);
+      vi.mocked(requestRebuild).mockClear();
+      vi.mocked(requestRebuild).mockResolvedValueOnce({
+        status: 'busy',
+        message: 'm',
+      });
+      await dashboardPageDeps().rebuild(SEPT, REQUESTER);
+      expect(requestRebuild).toHaveBeenCalledTimes(1);
+      const [deps, period, by] = vi.mocked(requestRebuild).mock.calls[0];
+      /* eslint-disable @typescript-eslint/unbound-method -- identity checks only */
+      expect(deps.cache).toBe(dashboardRebuildCache);
+      expect(deps.backgroundCache).toBe(ApplicationCache);
+      /* eslint-enable @typescript-eslint/unbound-method */
+      expect(period).toEqual(SEPT);
+      expect(by).toBe(REQUESTER);
+    } finally {
+      setDashboardClient(undefined);
+    }
+  });
+
+  it('a refresh against a hanging Redis rejects with CacheTimeoutError after the dashboard deadline', async () => {
+    vi.useFakeTimers({ now: new Date('2026-10-05T16:15:00Z') });
+    vi.mocked(ApplicationCache).mockResolvedValue(hangingCache() as never);
+    // The job's own deps use the untimed shared cache, as production does.
+    vi.mocked(defaultBuildJobDeps).mockResolvedValue({
+      cache: ApplicationCache,
+      now: () => new Date(),
+      newLeaseValue: () => 'lease',
+    } as never);
+    setDashboardClient({ tag: 'client' } as never);
+    try {
+      let outcome: unknown = 'pending';
+      dashboardPageDeps()
+        .rebuild(SEPT, REQUESTER)
+        .then(
+          () => {
+            outcome = 'resolved';
+          },
+          (error: unknown) => {
+            outcome = error;
+          },
+        );
+      await vi.advanceTimersByTimeAsync(DASHBOARD_CACHE_TIMEOUT_MS);
+      expect(outcome).toBeInstanceOf(CacheTimeoutError);
+    } finally {
+      setDashboardClient(undefined);
+    }
+  });
+
+  it('manual rebuilds time the request phase and run the build on the untimed cache', async () => {
+    const jobDeps = { cache: ApplicationCache, now: () => new Date() };
+    vi.mocked(defaultBuildJobDeps).mockResolvedValue(jobDeps as never);
+    const deps = await manualRebuildDeps({} as never);
+    /* eslint-disable @typescript-eslint/unbound-method -- identity checks only */
+    // The request phase (refusal checks, cooldown, lease) is timed ...
+    expect(deps.cache).toBe(dashboardRebuildCache);
+    // ... the detached build and its lease release are not.
+    expect(deps.backgroundCache).toBe(ApplicationCache);
+    /* eslint-enable @typescript-eslint/unbound-method */
+    // The job's own deps are copied, not changed: the daily job keeps no
+    // background cache and stays on the untimed one (buildJob.test checks
+    // defaultBuildJobDeps' cache by identity).
+    expect(deps).not.toBe(jobDeps);
+    expect(jobDeps).not.toHaveProperty('backgroundCache');
   });
 });
 

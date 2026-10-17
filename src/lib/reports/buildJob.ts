@@ -36,13 +36,20 @@ import {
   planDueWork,
   snapshotKey,
 } from './buildSchedule.js';
+import { MonthBeforeGroupError, monthPageUrls } from './dashboardPaths.js';
 import { collectLinkProgress, LinkProgressCounts } from './linkProgress.js';
 import { noShowsMissing } from './meetupMonth.js';
 import { buildMonthReports, MonthReports } from './monthReports.js';
-import { withOrganizerMeetup } from './organizerMeetup.js';
+import { SuspensionHistorySource } from './noShowReport.js';
+import {
+  defaultOrganizerMeetupDeps,
+  OrganizerMeetupDeps,
+  withOrganizerMeetup,
+} from './organizerMeetup.js';
 import {
   buildAsOf,
   comparePeriods,
+  GROUP_FIRST_PERIOD,
   isFinished,
   monthLabel,
   Period,
@@ -81,8 +88,9 @@ const backoffKey = (p: Period) => `report-build-backoff-${periodKey(p)}`;
 const INFRA_ALERT_AFTER_FAILED_TICKS = 4;
 
 /**
- * Every no-show member of a finished month looks departed: most likely the
- * organizer token cannot see memberships, so the report would be wrong.
+ * Every no-show member of a finished month looks departed, and there are at
+ * least DEPARTED_GUARD_MIN_MEMBERS of them: most likely the organizer token
+ * cannot see memberships, so the report would be wrong.
  */
 export class MembershipsUnreadableError extends Error {
   /** Its text may reach #meetup-bot-alerts. */
@@ -94,6 +102,19 @@ export class MembershipsUnreadableError extends Error {
         'the organizer account may not be able to see memberships. Nothing was saved.',
     );
     this.name = 'MembershipsUnreadableError';
+  }
+}
+
+/** A month before GROUP_FIRST_PERIOD: buildMonth refuses it before reading anything. */
+export class MonthBeforeGroupBuildError extends RangeError {
+  /** Its text may reach #meetup-bot-alerts. */
+  readonly organizerSafeMessage = true;
+
+  constructor(period: Period) {
+    super(
+      `${monthLabel(period)} is before the group's first month (${monthLabel(GROUP_FIRST_PERIOD)}); nothing was built.`,
+    );
+    this.name = 'MonthBeforeGroupBuildError';
   }
 }
 
@@ -170,11 +191,21 @@ export interface MonthBuildOutcome {
   hallOfFame: HallOfFameSummary;
   noShow: NoShowSummary;
   attendance: AttendanceEvidence;
+  /** A finished month whose no-show members (one or more) all look departed. */
+  allDeparted: boolean;
 }
 
 export interface BuildJobDeps {
   now(): Date;
   cache(): Promise<KeyValueCache>;
+  /**
+   * A manual rebuild's detached build: the build bookkeeping and the lease
+   * release in its `finally`. The dashboard passes the untimed shared cache
+   * here while `cache` is timed, so a Redis stall at the end of a build
+   * waits instead of leaving the lease held for its 30-minute TTL. Left out,
+   * the build uses `cache` (the daily job).
+   */
+  backgroundCache?(): Promise<KeyValueCache>;
   snapshots: Pick<PostgresReportSnapshotRepository, 'save' | 'getCurrentMeta'>;
   /** claim and release must hit the same instance: release only removes its own claim's marker. */
   notices: Pick<PostgresDashboardNoticeRepository, 'claim' | 'release'>;
@@ -201,17 +232,36 @@ export interface BuildJobDeps {
 
 const seconds = (ms: number) => (ms / 1000).toFixed(1);
 
+/** A finished month is refused only when at least this many no-show members all look departed. */
+export const DEPARTED_GUARD_MIN_MEMBERS = 3;
+
+/** What `buildMonth` needs: no cache, no Discord (the backfill calls it too). */
+export type MonthBuildDeps = Pick<
+  BuildJobDeps,
+  'now' | 'snapshots' | 'fetchMonthReports'
+>;
+
+export interface MonthBuildOptions {
+  /** Backfill only (--allow-all-departed): save a month the guard would refuse, with the note. */
+  allowAllDeparted?: boolean;
+}
+
 /**
  * Reads the month from Meetup, then saves both snapshots. `builtAt` is the
  * start time (when the data was read), so a refresh that starts before the
  * month ends and saves after it is not counted as a finished build. Throws on
- * any failure; nothing is saved unless the whole read succeeded.
+ * any failure; nothing is saved unless the whole read succeeded. A month
+ * before the group's first (GROUP_FIRST_PERIOD) is refused before any read.
  */
 export async function buildMonth(
-  deps: BuildJobDeps,
+  deps: MonthBuildDeps,
   period: Period,
   builtBy: string,
+  options: MonthBuildOptions = {},
 ): Promise<MonthBuildOutcome> {
+  if (comparePeriods(period, GROUP_FIRST_PERIOD) < 0) {
+    throw new MonthBeforeGroupBuildError(period);
+  }
   const started = deps.now();
   const finished = isFinished(period, started);
   const asOf = buildAsOf(period, started);
@@ -221,7 +271,14 @@ export async function buildMonth(
     finished ? suspensionCutoff(period) : undefined,
   );
   const { members, departed } = reports.noShow.summary;
-  if (finished && members > 0 && departed === members) {
+  // Membership is read as of now, so a few departures are normal; every one of
+  // three or more is more likely the organizer token not seeing memberships.
+  const allDeparted = finished && members > 0 && departed === members;
+  if (
+    allDeparted &&
+    members >= DEPARTED_GUARD_MIN_MEMBERS &&
+    !options.allowAllDeparted
+  ) {
     throw new MembershipsUnreadableError(period);
   }
   const summaryIsNew = finished
@@ -261,12 +318,13 @@ export async function buildMonth(
     hallOfFame: reports.hallOfFame.summary,
     noShow: reports.noShow.summary,
     attendance: reports.noShow.attendance,
+    allDeparted,
   };
 }
 
 /** Read BEFORE saving: compares against the rows this build replaces. */
 async function finishedSummaryIsNew(
-  deps: BuildJobDeps,
+  deps: MonthBuildDeps,
   period: Period,
   reports: MonthReports,
 ): Promise<boolean> {
@@ -310,6 +368,33 @@ function builtByText(builtBy: string): string {
   return 'a staff member'; // never echo anything else into Discord
 }
 
+/**
+ * Plain links to the month's dashboard pages, for the build alerts. Built
+ * only from PUBLIC_APP_ORIGIN and the build's own month (via monthPageUrls,
+ * which refuses anything parsePeriodKey would and any month before the
+ * group's first), never from payload text. Embeds never ping or unfurl.
+ */
+function monthLinkLines(period: Period): string[] {
+  try {
+    const urls = monthPageUrls(period);
+    return [
+      `Hall of Fame page: ${urls.hallOfFame}`,
+      `No-show history page: ${urls.noShowHistory}`,
+    ];
+  } catch (error) {
+    // The alert still posts, just without links. A month before the group's
+    // first has no pages, which is expected, not an error.
+    if (error instanceof MonthBeforeGroupError) {
+      logger.warn(
+        `Month page links skipped: ${periodKey(period)} is before the group's first month`,
+      );
+    } else {
+      logger.error(`Month page links skipped: ${String(error)}`);
+    }
+    return [];
+  }
+}
+
 export function buildSummaryEntry(o: MonthBuildOutcome): LogEntry {
   const label = monthLabel(o.period);
   const lines = [
@@ -317,12 +402,18 @@ export function buildSummaryEntry(o: MonthBuildOutcome): LogEntry {
     `No-shows: ${o.noShow.noShows} no-show RSVPs; ${o.noShow.warnings} warnings, ${o.noShow.suspensionCandidates} suspension candidates.`,
     `Took ${seconds(o.durationMs)} s. Built by ${builtByText(o.builtBy)}.`,
   ];
+  lines.push(...monthLinkLines(o.period));
   // Hosts mark no-shows only; a finished month with none at all is worth a
   // look, but it is not incomplete and does not hold back report-ready.
   if (o.finished && noShowsMissing(o.attendance)) {
     lines.push(
       `Note: no no-shows recorded for ${label} across ${o.attendance.pastEventsWithRsvps} past events with RSVPs; ` +
         'check that attendance was taken.',
+    );
+  }
+  if (o.allDeparted) {
+    lines.push(
+      `Note: all ${o.noShow.members} no-show members have left the group.`,
     );
   }
   return {
@@ -341,9 +432,12 @@ function failureEntry(
   const next = manual
     ? 'Try the refresh again later; the daily job retries only months that are due.'
     : 'It retries at most once an hour (never 17:45–19:00 UTC); this alert repeats at most once a day until it works.';
+  const links = monthLinkLines(period);
   return {
     title: `Report build failed: ${label}`,
-    description: `Building the ${label} reports failed after ${seconds(durationMs)} s: ${describeBuildError(error)}\n\n${next}`,
+    description:
+      `Building the ${label} reports failed after ${seconds(durationMs)} s: ${describeBuildError(error)}\n\n${next}` +
+      (links.length > 0 ? `\n\n${links.join('\n')}` : ''),
   };
 }
 
@@ -668,9 +762,9 @@ export async function requestRebuild(
   if (
     !Number.isInteger(period?.year) ||
     !Number.isInteger(period?.month) ||
-    period.year < 2000 ||
     period.month < 1 ||
-    period.month > 12
+    period.month > 12 ||
+    comparePeriods(period, GROUP_FIRST_PERIOD) < 0
   ) {
     return { status: 'bad-month', message: 'That is not a valid month.' };
   }
@@ -725,18 +819,51 @@ export async function requestRebuild(
     };
   }
   const done = (async (): Promise<RebuildOutcome> => {
+    // The request has been answered; from here nothing should give up on
+    // Redis early, or the lease could outlive the build.
+    let background = cache;
     try {
-      return (await buildAndRecord(deps, cache, period, requestedBy))
+      if (deps.backgroundCache) {
+        background = await deps.backgroundCache();
+      }
+      return (await buildAndRecord(deps, background, period, requestedBy))
         ? { ok: true }
         : { ok: false };
     } catch (error) {
       logger.error(`Manual report rebuild failed: ${String(error)}`);
       return { ok: false };
     } finally {
-      await releaseBuildLease(cache, lease);
+      await releaseBuildLease(background, lease);
     }
   })();
   return { status: 'started', done };
+}
+
+/**
+ * The only Meetup read path for month builds (job, manual refresh and
+ * backfill): the organizer credential through withOrganizerMeetup (the
+ * uncached client, one forced refresh and retry on a 401). The read is
+ * read-only, so a 401 re-runs it from the start; saves and posts happen
+ * after it returns. `client` is undefined in the backfill, which has no
+ * gateway: the token helper then sends no Discord alerts.
+ */
+export function organizerMonthReports(
+  client: Client | undefined,
+  suspensions: SuspensionHistorySource,
+  organizer: OrganizerMeetupDeps = defaultOrganizerMeetupDeps,
+): BuildJobDeps['fetchMonthReports'] {
+  return (period, asOf, cutoff) =>
+    withOrganizerMeetup(
+      client,
+      (meetupClient) =>
+        buildMonthReports(meetupClient, period, {
+          asOf,
+          suspensionCutoff: cutoff,
+          groupId: Configuration.meetup.groupId,
+          suspensions,
+        }),
+      organizer,
+    );
 }
 
 export async function defaultBuildJobDeps(
@@ -754,17 +881,7 @@ export async function defaultBuildJobDeps(
     snapshots,
     notices, // one instance for claim and release
     linkProgress,
-    // The only Meetup read path: the organizer credential, read-only inside
-    // the wrapper; saves and posts happen after it returns.
-    fetchMonthReports: (period, asOf, cutoff) =>
-      withOrganizerMeetup(client, (meetupClient) =>
-        buildMonthReports(meetupClient, period, {
-          asOf,
-          suspensionCutoff: cutoff,
-          groupId: Configuration.meetup.groupId,
-          suspensions,
-        }),
-      ),
+    fetchMonthReports: organizerMonthReports(client, suspensions),
     collectLinkProgress: () => collectLinkProgress(client),
     alert: (entry) => logAlert(client, entry),
     postRoleNotice: (roleIds, content, entry) =>
@@ -781,6 +898,12 @@ export async function defaultBuildJobDeps(
 }
 
 export const BUILD_TICK_MS = 15 * 60 * 1000;
+
+/** The "Report build job is failing" text for a tick stuck past the lease TTL (fixed: names no error). */
+export const WEDGED_TICK_ALERT =
+  'A report build tick has been running for over 30 minutes and has not finished. ' +
+  'This usually means Redis or Postgres stopped answering (Redis queues commands while it is offline). ' +
+  'No reports are built until it ends; details are in the process log.';
 
 type SchedulerLog = Pick<Logger<unknown>, 'error' | 'warn' | 'info'>;
 
@@ -839,6 +962,26 @@ export function startReportBuildScheduler(
   const alert = options.alert ?? ((entry: LogEntry) => logAlert(client, entry));
   let failedTicks = 0;
   let infraAlertDay: string | undefined;
+  /** One "Report build job is failing" post per UTC day, whatever triggered it. */
+  const alertOncePerDay = async (description: string) => {
+    const day = utcDay(new Date(now()));
+    if (infraAlertDay === day) {
+      return;
+    }
+    infraAlertDay = day; // one attempt a day, posted or not
+    try {
+      const posted = await alert({
+        title: 'Report build job is failing',
+        description,
+      });
+      if (!posted) {
+        log.error('Report build job failure alert was not posted');
+      }
+    } catch (error) {
+      // Process log only: the Discord text is fixed or describeBuildError.
+      log.error(`Report build job failure alert failed: ${String(error)}`);
+    }
+  };
   // Infrastructure failures (pg, Redis, the lease) never reach the month
   // alerts: after an hour of them, say so in Discord once per UTC day.
   const recordTick = async (result: TickResult) => {
@@ -847,24 +990,13 @@ export function startReportBuildScheduler(
       return;
     }
     failedTicks += 1;
-    const day = utcDay(new Date(now()));
-    if (failedTicks < INFRA_ALERT_AFTER_FAILED_TICKS || infraAlertDay === day) {
+    if (failedTicks < INFRA_ALERT_AFTER_FAILED_TICKS) {
       return;
     }
-    infraAlertDay = day; // one attempt a day, posted or not
-    try {
-      const posted = await alert({
-        title: 'Report build job is failing',
-        description:
-          `The report build job has failed ${failedTicks} times in a row: ${describeBuildError(result.error)}\n\n` +
-          'It keeps retrying every 15 minutes; details are in the process log.',
-      });
-      if (!posted) {
-        log.error('Report build job failure alert was not posted');
-      }
-    } catch (error) {
-      log.error(`Report build job failure alert failed: ${String(error)}`);
-    }
+    await alertOncePerDay(
+      `The report build job has failed ${failedTicks} times in a row: ${describeBuildError(result.error)}\n\n` +
+        'It keeps retrying every 15 minutes; details are in the process log.',
+    );
   };
   let running = false;
   let skipLogged = false;
@@ -880,9 +1012,15 @@ export function startReportBuildScheduler(
       }
       // Past the lease TTL another process may take the lease, and this
       // process stays blocked until the stuck tick ends: say so once.
-      if (!wedgeWarned && now() - tickStartedAt > BUILD_LEASE_TTL_SEC * 1000) {
-        log.warn('Report build tick has been running for over 30 minutes');
-        wedgeWarned = true;
+      if (now() - tickStartedAt > BUILD_LEASE_TTL_SEC * 1000) {
+        if (!wedgeWarned) {
+          log.warn('Report build tick has been running for over 30 minutes');
+          wedgeWarned = true;
+        }
+        // A hung tick never reaches recordTick (a Redis drop hangs, it does
+        // not throw), so this is the only way the outage reaches Discord.
+        // Tried on every skipped tick: a hang lasting days posts once a day.
+        alertOncePerDay(WEDGED_TICK_ALERT).catch(() => undefined);
       }
       return;
     }

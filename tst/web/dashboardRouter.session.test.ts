@@ -8,10 +8,16 @@ import {
   protectedRouteList,
 } from '../../src/web/dashboardRouter.js';
 import { FixedWindowLimiter } from '../../src/web/rateLimit.js';
-import { signSessionId } from '../../src/web/session.js';
+import { timedCacheFactory } from '../../src/web/timedCache.js';
+import {
+  ROLE_RECHECK_MS,
+  SessionStore,
+  signSessionId,
+} from '../../src/web/session.js';
 import {
   ORIGIN,
   SECRET,
+  USER,
   closeServers,
   makeApp,
   makeDeps,
@@ -100,6 +106,83 @@ describe('dashboard session gate', () => {
     );
   });
 
+  /** Answers `value` after 300 ms, so concurrent requests overlap the check. */
+  const slowly = (value: boolean) => () =>
+    new Promise<boolean>((resolve) => {
+      setTimeout(() => resolve(value), 300);
+    });
+
+  it('10 concurrent requests at the re-check make one Discord fetch', async () => {
+    let now = 0;
+    const checkAccess = vi.fn().mockResolvedValue(true);
+    const { req } = await makeApp({ checkAccess, now: () => now });
+    const cookie = await signIn(req);
+    const atSignIn = checkAccess.mock.calls.length;
+    now = 10 * 60 * 1000;
+    checkAccess.mockImplementation(slowly(true));
+    const statuses = await Promise.all(
+      Array.from({ length: 10 }, () =>
+        req
+          .get('/dashboard')
+          .set('Cookie', cookie)
+          .then((r) => r.status),
+      ),
+    );
+    expect(statuses).toEqual(Array.from({ length: 10 }, () => 200));
+    expect(checkAccess).toHaveBeenCalledTimes(atSignIn + 1);
+  });
+
+  it('a role lost at a shared re-check ends every waiting request and is audited once', async () => {
+    let now = 0;
+    const checkAccess = vi.fn().mockResolvedValue(true);
+    const { req, deps } = await makeApp({ checkAccess, now: () => now });
+    const cookie = await signIn(req);
+    const otherBrowser = await signIn(req);
+    const atSignIn = checkAccess.mock.calls.length;
+    now = 10 * 60 * 1000;
+    checkAccess.mockImplementation(slowly(false));
+    const statuses = await Promise.all(
+      Array.from({ length: 10 }, () =>
+        req
+          .get('/dashboard')
+          .set('Cookie', cookie)
+          .then((r) => r.status),
+      ),
+    );
+    expect(statuses).toEqual(Array.from({ length: 10 }, () => 403));
+    expect(checkAccess).toHaveBeenCalledTimes(atSignIn + 1);
+    // This browser's session is gone (revokeUser only marks the others).
+    expect((await req.get('/dashboard').set('Cookie', cookie)).status).toBe(
+      302,
+    );
+    const ended = vi
+      .mocked(deps.audit)
+      .mock.calls.filter(([e]) => e.title === 'Dashboard session ended');
+    expect(ended).toHaveLength(1);
+    // The member's other browser was revoked by the shared check: it is
+    // signed out without another Discord fetch.
+    expect(
+      (await req.get('/dashboard').set('Cookie', otherBrowser)).status,
+    ).toBe(302);
+    expect(checkAccess).toHaveBeenCalledTimes(atSignIn + 1);
+  });
+
+  it('a finished re-check is not reused: the next stale request checks again', async () => {
+    let now = 0;
+    const checkAccess = vi.fn().mockResolvedValue(true);
+    const { req } = await makeApp({ checkAccess, now: () => now });
+    const cookie = await signIn(req);
+    const atSignIn = checkAccess.mock.calls.length;
+    now = 10 * 60 * 1000;
+    await req.get('/dashboard').set('Cookie', cookie);
+    now = 21 * 60 * 1000;
+    checkAccess.mockResolvedValue(false);
+    expect((await req.get('/dashboard').set('Cookie', cookie)).status).toBe(
+      403,
+    );
+    expect(checkAccess).toHaveBeenCalledTimes(atSignIn + 2);
+  });
+
   it('keeps the session but answers 503 when Discord is unreachable at re-check', async () => {
     let now = 0;
     const checkAccess = vi.fn().mockResolvedValue(true);
@@ -129,6 +212,265 @@ describe('dashboard session gate', () => {
     now = 12 * 60 * 60 * 1000;
     expect((await req.get('/dashboard').set('Cookie', cookie)).status).toBe(
       302,
+    );
+  });
+});
+
+describe('dashboard session revocation', () => {
+  const USER_B = { id: '999999999999999999', username: 'Other' };
+  const tokenFrom = (page: string) =>
+    /name="_csrf" value="([^"]+)"/.exec(page)?.[1] ?? '';
+  const clearsSessionCookie = (res: { headers: Record<string, unknown> }) =>
+    ((res.headers['set-cookie'] ?? []) as string[]).some((c) =>
+      /^dash_sid=;/.test(c),
+    );
+
+  it('a revoked session gets 302 on GET and 403 on POST, and its cookie is cleared', async () => {
+    let clock = 1_000;
+    const { req, cache } = await makeApp({ now: () => clock });
+    const old = await signIn(req);
+    const oldToken = tokenFrom(
+      (await req.get('/dashboard').set('Cookie', old)).text,
+    );
+    clock += 1;
+    await new SessionStore(cache, () => clock).revokeUser(USER.id);
+
+    const post = await req
+      .post('/dashboard/logout')
+      .set('Cookie', old)
+      .set('Origin', ORIGIN)
+      .type('form')
+      .send({ _csrf: oldToken });
+    expect(post.status).toBe(403);
+    expect(clearsSessionCookie(post)).toBe(true);
+    const get = await req.get('/dashboard').set('Cookie', old);
+    expect(get.status).toBe(302);
+    expect(get.headers.location).toBe('/dashboard/login');
+
+    clock += 1;
+    const fresh = await signIn(req);
+    const token = tokenFrom(
+      (await req.get('/dashboard').set('Cookie', fresh)).text,
+    );
+    const out = await req
+      .post('/dashboard/logout')
+      .set('Cookie', fresh)
+      .set('Origin', ORIGIN)
+      .type('form')
+      .send({ _csrf: token });
+    expect(out.status).toBe(303);
+  });
+
+  it('a revoked session is destroyed in the store', async () => {
+    let clock = 1_000;
+    const { req, cache } = await makeApp({ now: () => clock });
+    const cookie = await signIn(req);
+    clock += 1;
+    await new SessionStore(cache, () => clock).revokeUser(USER.id);
+    const res = await req.get('/dashboard').set('Cookie', cookie);
+    expect(res.status).toBe(302);
+    expect(clearsSessionCookie(res)).toBe(true);
+    expect(hasSession(cache)).toBe(false);
+  });
+
+  it('a session created after revocation works', async () => {
+    let clock = 1_000;
+    const { req, cache } = await makeApp({ now: () => clock });
+    await new SessionStore(cache, () => clock).revokeUser(USER.id);
+    clock += 1;
+    const cookie = await signIn(req);
+    expect((await req.get('/dashboard').set('Cookie', cookie)).status).toBe(
+      200,
+    );
+  });
+
+  it('revoking user A leaves user B alone', async () => {
+    let clock = 1_000;
+    const fetchIdentity = vi
+      .fn()
+      .mockResolvedValueOnce(USER)
+      .mockResolvedValueOnce(USER_B);
+    const { req, cache } = await makeApp({
+      now: () => clock,
+      oauth: {
+        buildLoginUrl: (s: string) => `https://discord.com/x?state=${s}`,
+        exchangeCode: vi.fn().mockResolvedValue('access'),
+        fetchIdentity,
+      },
+    });
+    const a = await signIn(req);
+    const b = await signIn(req);
+    clock += 1;
+    await new SessionStore(cache, () => clock).revokeUser(USER.id);
+    expect((await req.get('/dashboard').set('Cookie', a)).status).toBe(302);
+    expect((await req.get('/dashboard').set('Cookie', b)).status).toBe(200);
+  });
+
+  it('losing the role at re-check ends every session of that user', async () => {
+    let clock = 1_000;
+    const checkAccess = vi.fn().mockResolvedValue(true);
+    const { req } = await makeApp({ checkAccess, now: () => clock });
+    const c1 = await signIn(req);
+    const c2 = await signIn(req);
+    clock += ROLE_RECHECK_MS;
+    checkAccess.mockResolvedValueOnce(false);
+    const calls = checkAccess.mock.calls.length;
+    expect((await req.get('/dashboard').set('Cookie', c1)).status).toBe(403);
+    expect(checkAccess).toHaveBeenCalledTimes(calls + 1);
+    const second = await req.get('/dashboard').set('Cookie', c2);
+    expect(second.status).toBe(302);
+    expect(second.headers.location).toBe('/dashboard/login');
+    expect(checkAccess).toHaveBeenCalledTimes(calls + 1);
+  });
+
+  it('/login with a revoked session shows the login page instead of redirecting', async () => {
+    let clock = 1_000;
+    const { req, cache } = await makeApp({ now: () => clock });
+    const cookie = await signIn(req);
+    clock += 1;
+    await new SessionStore(cache, () => clock).revokeUser(USER.id);
+    const res = await req.get('/dashboard/login').set('Cookie', cookie);
+    expect(res.status).toBe(200);
+    expect(res.text).toContain('Sign in with Discord');
+  });
+
+  it('an unreadable revocation mark counts as revoked', async () => {
+    const clock = 1_000;
+    const { req, cache } = await makeApp({ now: () => clock });
+    const cookie = await signIn(req);
+    await cache.set(`dashboard-user-valid-after-${USER.id}`, 'garbage');
+    expect((await req.get('/dashboard').set('Cookie', cookie)).status).toBe(
+      302,
+    );
+  });
+});
+
+describe('dashboard cache timeouts', () => {
+  it('a logout whose server-side delete times out says so and points to Sign me out everywhere', async () => {
+    const inner = new FakeCache();
+    inner.remove = () => new Promise<never>(() => undefined);
+    const { req } = await makeApp({
+      cache: timedCacheFactory(async () => inner, 50),
+    });
+    const cookie = await signIn(req);
+    const token =
+      /name="_csrf" value="([^"]+)"/.exec(
+        (await req.get('/dashboard').set('Cookie', cookie)).text,
+      )?.[1] ?? '';
+    const res = await req
+      .post('/dashboard/logout')
+      .set('Cookie', cookie)
+      .set('Origin', ORIGIN)
+      .type('form')
+      .send({ _csrf: token });
+    expect(res.status).toBe(503);
+    expect(
+      ((res.headers['set-cookie'] ?? []) as unknown as string[]).some((c) =>
+        c.startsWith('dash_sid=;'),
+      ),
+    ).toBe(true);
+    const text = res.text.replace(/\s+/g, ' ');
+    expect(text).toContain(
+      'The sign-out may not have completed on the server.',
+    );
+    expect(text).toContain('"Sign me out everywhere"');
+    expect(res.text).not.toContain('cannot check your access');
+  });
+
+  it('other cache timeouts keep the generic access text', async () => {
+    const inner = new FakeCache();
+    const { req } = await makeApp({
+      cache: timedCacheFactory(async () => inner, 50),
+    });
+    const cookie = await signIn(req);
+    inner.get = () => new Promise<never>(() => undefined);
+    const res = await req.get('/dashboard').set('Cookie', cookie);
+    expect(res.status).toBe(503);
+    expect(res.text).not.toContain('sign-out may not have completed');
+  });
+
+  it('a hung cache answers 503 within the deadline, not a hang', async () => {
+    const never = () => new Promise<never>(() => undefined);
+    const hangingCache = {
+      get: never,
+      set: never,
+      exclusive_set: never,
+      set_existing: never,
+      remove: never,
+    };
+    const { req } = await makeApp({
+      cache: timedCacheFactory(async () => hangingCache, 50),
+    });
+    const started = Date.now();
+    const res = await req
+      .get('/dashboard')
+      .set('Cookie', `dash_sid=${signSessionId('sid', SECRET)}`);
+    expect(Date.now() - started).toBeLessThan(1_000);
+    expect(res.status).toBe(503);
+    expect(res.text).toContain('Please try again in a minute.');
+    expect(res.headers['cache-control']).toBe('no-store');
+    expect(fake.logged).toContain('Dashboard cache timed out');
+  });
+
+  it('a cache that cannot be reached at all answers 503', async () => {
+    const { req } = await makeApp({
+      cache: timedCacheFactory(() => new Promise<never>(() => undefined), 50),
+    });
+    const res = await req
+      .get('/dashboard/login')
+      .set('Cookie', `dash_sid=${signSessionId('sid', SECRET)}`);
+    expect(res.status).toBe(503);
+  });
+});
+
+describe('errors after the response started', () => {
+  const PNG_HEAD = Buffer.from([
+    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+  ]);
+
+  it('an error after the response started destroys the socket instead of rendering', async () => {
+    const { req, server } = await makeApp({
+      protectedRoutes: (r) => {
+        r.get('/stream', (async (_req, res) => {
+          res.writeHead(200, { 'Content-Type': 'image/png' });
+          res.write(PNG_HEAD);
+          await new Promise((resolve) => {
+            setImmediate(resolve);
+          });
+          throw new Error('mid-stream');
+        }) as express.RequestHandler);
+      },
+    });
+    const cookie = await signIn(req);
+    fake.logged.length = 0;
+    let reply: Awaited<ReturnType<typeof rawRequest>> | undefined;
+    let failure: unknown;
+    try {
+      reply = await rawRequest(server, 'GET', '/dashboard/stream', {
+        Cookie: cookie,
+      });
+    } catch (error) {
+      failure = error;
+    }
+    if (reply) {
+      // Truncated: one status line, no error page, no final chunk.
+      expect(reply.status).toBe(200);
+      expect(reply.body).not.toContain('Something went wrong');
+      expect(reply.body).not.toContain('HTTP/1.1');
+      expect(reply.body.endsWith('0\r\n\r\n')).toBe(false);
+    } else {
+      expect(String(failure)).toMatch(/ECONNRESET|socket hang up/);
+    }
+    expect(
+      fake.logged.filter((l) =>
+        l.startsWith('Dashboard error after the response started'),
+      ),
+    ).toHaveLength(1);
+    expect(fake.logged.some((l) => l.includes('ERR_HTTP_HEADERS_SENT'))).toBe(
+      false,
+    );
+    expect(fake.logged.some((l) => l.startsWith('Dashboard route error'))).toBe(
+      false,
     );
   });
 });
@@ -251,12 +593,18 @@ describe('signed-out requests leave the session cookie alone', () => {
     const { req, cache } = await makeApp();
     const cookie = await signIn(req);
     const get = vi.spyOn(cache, 'get');
+    // Session reads only: a session that is found also reads its user's
+    // revocation mark once.
+    const sessionReads = () =>
+      get.mock.calls.filter(([key]) => key.startsWith('dashboard-session-'))
+        .length;
     // Many copies of one value cost one lookup.
     const copies = Array.from({ length: 50 }, () => cookie).join('; ');
     expect((await req.get('/dashboard').set('Cookie', copies)).status).toBe(
       200,
     );
-    expect(get).toHaveBeenCalledTimes(1);
+    expect(sessionReads()).toBe(1);
+    expect(get).toHaveBeenCalledTimes(2);
     // Validly signed but sessionless values: the real one 4th is not reached.
     const ghosts = ['g1', 'g2', 'g3', 'g4'].map(
       (sid) => `dash_sid=${signSessionId(sid, SECRET)}`,
@@ -266,6 +614,7 @@ describe('signed-out requests leave the session cookie alone', () => {
       .get('/dashboard')
       .set('Cookie', [...ghosts.slice(0, 3), cookie].join('; '));
     expect(fourth.status).toBe(302);
+    expect(sessionReads()).toBe(3);
     expect(get).toHaveBeenCalledTimes(3);
     const third = await req
       .get('/dashboard')
@@ -419,9 +768,10 @@ describe('routes are gated by construction', () => {
         .map((l) => l.route.path)
         .sort(),
     ).toEqual([...PUBLIC_ROUTE_PATHS].sort());
+    // Security headers first, so the HTTPS redirect's 308 carries them too.
     expect(beforeGate.filter((l) => !l.route).map((l) => l.name)).toEqual([
-      'dashboardHttpsRedirect',
       'securityHeaders',
+      'dashboardHttpsRedirect',
       'urlencodedParser',
     ]);
     // The gate is followed directly by the protected router, and nothing

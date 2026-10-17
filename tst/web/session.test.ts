@@ -4,11 +4,14 @@ import { describe, expect, it } from 'vitest';
 import {
   SESSION_TTL_SEC,
   SessionStore,
+  VALID_AFTER_TTL_SEC,
+  validAfterKey,
   safeEqual,
   signSessionId,
   verifySignedSessionId,
 } from '../../src/web/session.js';
 import { openOAuthCookie, sealOAuthCookie } from '../../src/web/oauthCookie.js';
+import { KeyValueCache } from '../../src/lib/cache/base.js';
 import { FakeCache } from './fakeCache.js';
 
 const SECRET = 'x'.repeat(48);
@@ -135,6 +138,62 @@ describe('SessionStore', () => {
     expect(cache.values.size).toBe(0);
   });
 
+  it('markRoleChecked writes with SET XX only', async () => {
+    const cache = new FakeCache();
+    const store = new SessionStore(cache);
+    const { sid, session } = await store.create({ userId: '1', username: 'A' });
+    const calls: string[] = [];
+    const spy: KeyValueCache = {
+      get: async (key) => {
+        calls.push('get');
+        return cache.get(key);
+      },
+      set: async (key, value, ttl) => {
+        calls.push('set');
+        return cache.set(key, value, ttl);
+      },
+      exclusive_set: async (key, value, ttl) => {
+        calls.push('exclusive_set');
+        return cache.exclusive_set(key, value, ttl);
+      },
+      set_existing: async (key, value, ttl) => {
+        calls.push('set_existing');
+        return cache.set_existing(key, value, ttl);
+      },
+      remove: async (key) => {
+        calls.push('remove');
+        return cache.remove(key);
+      },
+    };
+    await expect(
+      new SessionStore(spy).markRoleChecked(sid, session),
+    ).resolves.toBe(true);
+    expect(calls).toEqual(['set_existing']);
+  });
+
+  it('a logout that lands before the write is not undone', async () => {
+    const cache = new FakeCache();
+    const store = new SessionStore(cache);
+    const { sid, session } = await store.create({ userId: '1', username: 'A' });
+    // The logout lands between the gate's decision and the write.
+    const racing: KeyValueCache = {
+      get: async (key) => cache.get(key),
+      set: async (key, value, ttl) => cache.set(key, value, ttl),
+      exclusive_set: async (key, value, ttl) =>
+        cache.exclusive_set(key, value, ttl),
+      set_existing: async (key, value, ttl) => {
+        await store.destroy(sid);
+        return cache.set_existing(key, value, ttl);
+      },
+      remove: async (key) => cache.remove(key),
+    };
+    await expect(
+      new SessionStore(racing).markRoleChecked(sid, session),
+    ).resolves.toBe(false);
+    await expect(store.get(sid)).resolves.toBeUndefined();
+    expect(cache.values.size).toBe(0);
+  });
+
   it('ignores a corrupt or wrong-shaped record', async () => {
     const cache = new FakeCache();
     const store = new SessionStore(cache);
@@ -152,5 +211,77 @@ describe('SessionStore', () => {
     const { sid } = await store.create({ userId: '1', username: 'A' });
     await store.destroy(sid);
     await expect(store.get(sid)).resolves.toBeUndefined();
+  });
+});
+
+describe('SessionStore revocation', () => {
+  const ID = '123456789012345678';
+
+  it('revokeUser marks the user with the TTL of a session plus a minute', async () => {
+    const cache = new FakeCache();
+    await new SessionStore(cache, () => 5_000).revokeUser(ID);
+    expect(VALID_AFTER_TTL_SEC).toBe(SESSION_TTL_SEC + 60);
+    expect(validAfterKey(ID)).toBe(`dashboard-user-valid-after-${ID}`);
+    expect(cache.values.get(validAfterKey(ID))).toBe('5000');
+    expect(cache.ttls.get(validAfterKey(ID))).toBe(VALID_AFTER_TTL_SEC);
+  });
+
+  it('isRevoked: a session created at or before the mark is revoked, one created after is not', async () => {
+    let now = 1_000;
+    const cache = new FakeCache();
+    const store = new SessionStore(cache, () => now);
+    const before = await store.create({ userId: ID, username: 'A' });
+    await expect(store.isRevoked(before.session)).resolves.toBe(false);
+    now = 2_000;
+    await store.revokeUser(ID);
+    now = 2_001;
+    const after = await store.create({ userId: ID, username: 'A' });
+    await expect(store.isRevoked(before.session)).resolves.toBe(true);
+    await expect(store.isRevoked(after.session)).resolves.toBe(false);
+  });
+
+  it('a session created in the same millisecond as the revocation is revoked', async () => {
+    const cache = new FakeCache();
+    const store = new SessionStore(cache, () => 3_000);
+    await store.revokeUser(ID);
+    const { session } = await store.create({ userId: ID, username: 'A' });
+    await expect(store.isRevoked(session)).resolves.toBe(true);
+  });
+
+  it('isRevoked fails closed on a corrupt mark', async () => {
+    const cache = new FakeCache();
+    const store = new SessionStore(cache, () => 1_000);
+    const { session } = await store.create({ userId: ID, username: 'A' });
+    await cache.set(validAfterKey(ID), 'abc');
+    await expect(store.isRevoked(session)).resolves.toBe(true);
+    await cache.set(validAfterKey(ID), '');
+    await expect(store.isRevoked(session)).resolves.toBe(true);
+  });
+
+  it('isRevoked fails closed on a session whose user id is not a Discord id', async () => {
+    const store = new SessionStore(new FakeCache(), () => 1_000);
+    const { session } = await store.create({ userId: '1', username: 'A' });
+    await expect(store.isRevoked(session)).resolves.toBe(true);
+  });
+
+  it('revoking one user leaves another alone', async () => {
+    const cache = new FakeCache();
+    const store = new SessionStore(cache, () => 1_000);
+    const other = await store.create({
+      userId: '999999999999999999',
+      username: 'B',
+    });
+    await store.revokeUser(ID);
+    await expect(store.isRevoked(other.session)).resolves.toBe(false);
+  });
+
+  it('revokeUser refuses a non-Discord id', async () => {
+    const cache = new FakeCache();
+    const store = new SessionStore(cache);
+    for (const bad of ['123', '1'.repeat(21), `${ID} `, '', 'abc']) {
+      // eslint-disable-next-line no-await-in-loop -- one case at a time
+      await expect(store.revokeUser(bad)).rejects.toThrow(RangeError);
+    }
+    expect(cache.values.size).toBe(0);
   });
 });

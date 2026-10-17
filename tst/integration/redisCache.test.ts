@@ -54,4 +54,23 @@ if (!REDIS_AVAILABLE) {
     // exclusive_set must not overwrite the existing value on failure
     expect(await cache.get(key)).toBe('first');
   });
+
+  it('set_existing never creates a key', async () => {
+    const key = `set-existing-missing-${crypto.randomUUID()}`;
+
+    expect(await cache.set_existing(key, 'value', 60)).toBe(false);
+    expect(await cache.get(key)).toBeUndefined();
+  });
+
+  it('set_existing replaces an existing key and its TTL', async () => {
+    const key = `set-existing-present-${crypto.randomUUID()}`;
+    await cache.set(key, 'old', 600);
+
+    expect(await cache.set_existing(key, 'new', 1)).toBe(true);
+    expect(await cache.get(key)).toBe('new');
+    await new Promise((resolve) => {
+      setTimeout(resolve, 1200);
+    });
+    expect(await cache.get(key)).toBeUndefined();
+  });
 });

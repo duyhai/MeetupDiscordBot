@@ -6,6 +6,17 @@ export const SESSION_COOKIE = 'dash_sid';
 export const SESSION_TTL_SEC = 12 * 60 * 60;
 /** Losing the role locks someone out within this long. */
 export const ROLE_RECHECK_MS = 10 * 60 * 1000;
+/**
+ * A revocation mark outlives every session it can end: once it expires, any
+ * session created before it has expired too.
+ */
+export const VALID_AFTER_TTL_SEC = SESSION_TTL_SEC + 60;
+
+const DISCORD_ID = /^[0-9]{17,20}$/;
+
+/** Epoch ms: every session of this user created at or before it is revoked. */
+export const validAfterKey = (userId: string) =>
+  `dashboard-user-valid-after-${userId}`;
 
 export interface DashboardSession {
   userId: string;
@@ -116,9 +127,9 @@ export class SessionStore {
   }
 
   /**
-   * Re-reads before writing, so a logout that lands while Discord is being
-   * asked about roles is not undone by this write. KeyValueCache has no
-   * SET ... XX; the remaining window is one Redis round trip.
+   * One SET ... XX: a logout (or revocation) that deleted the key before this
+   * write is never undone, and one that lands after it still deletes the key.
+   * There is no read first, so there is no window between check and write.
    */
   async markRoleChecked(
     sid: string,
@@ -132,18 +143,48 @@ export class SessionStore {
       await this.destroy(sid);
       return false;
     }
-    if (!(await this.cache.get(sessionKey(sid)))) {
-      return false;
-    }
-    await this.cache.set(
+    return this.cache.set_existing(
       sessionKey(sid),
       JSON.stringify({ ...session, roleCheckedAt: at }),
       remainingSec,
     );
-    return true;
   }
 
   async destroy(sid: string): Promise<void> {
     await this.cache.remove(sessionKey(sid));
+  }
+
+  /**
+   * Ends every session of this user created at or before now, in every
+   * browser. A per-user "valid after" mark rather than a session index:
+   * the cache has no set operations, and one read per request cannot drift
+   * from the session keys.
+   */
+  async revokeUser(userId: string): Promise<void> {
+    if (typeof userId !== 'string' || !DISCORD_ID.test(userId)) {
+      throw new RangeError('userId must be a Discord id');
+    }
+    await this.cache.set(
+      validAfterKey(userId),
+      String(this.now()),
+      VALID_AFTER_TTL_SEC,
+    );
+  }
+
+  /**
+   * True when the user has a mark at or after this session's createdAt.
+   * Fails closed: a mark that does not read as a number, or a session whose
+   * user id is not a Discord id, counts as revoked.
+   */
+  async isRevoked(session: DashboardSession): Promise<boolean> {
+    if (!DISCORD_ID.test(session.userId)) {
+      return true;
+    }
+    const raw = await this.cache.get(validAfterKey(session.userId));
+    if (raw === undefined) {
+      return false;
+    }
+    const after = raw.trim() === '' ? NaN : Number(raw);
+    return !Number.isFinite(after) || session.createdAt <= after;
   }
 }

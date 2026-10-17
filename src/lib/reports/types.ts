@@ -102,13 +102,30 @@ export interface NoShowPayload {
   departed: MemberRef[];
 }
 
+/**
+ * Removes U+0000 only: Postgres JSONB cannot store it, so one member or
+ * event with it in their text would make the whole month's save fail.
+ * Every other character (RTL marks, emoji, other controls) is kept.
+ */
+function stripNul(value: string): string {
+  // A non-string (malformed Meetup data) is copied as before.
+  if (typeof value !== 'string') {
+    return value;
+  }
+  return value.replaceAll('\u0000', '');
+}
+
 /** Copies the three stored fields only, so gender and bios never leak in. */
 export function toMemberRef(member: {
   id: string;
   name: string;
   memberUrl: string;
 }): MemberRef {
-  return { id: member.id, name: member.name, memberUrl: member.memberUrl };
+  return {
+    id: stripNul(member.id),
+    name: stripNul(member.name),
+    memberUrl: stripNul(member.memberUrl),
+  };
 }
 
 /** Copies the four stored fields only, so descriptions and fees never leak in. */
@@ -119,9 +136,9 @@ export function toEventRef(event: {
   dateTime: string;
 }): EventRef {
   return {
-    id: event.id,
-    title: event.title,
-    eventUrl: event.eventUrl,
-    dateTime: event.dateTime,
+    id: stripNul(event.id),
+    title: stripNul(event.title),
+    eventUrl: stripNul(event.eventUrl),
+    dateTime: stripNul(event.dateTime),
   };
 }

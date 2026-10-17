@@ -10,6 +10,7 @@ import { generateCodeVerifier, generateState } from 'arctic';
 import { Logger } from 'tslog';
 
 import { KeyValueCache } from '../lib/cache/base.js';
+import { DASHBOARD_BASE } from '../lib/reports/dashboardPaths.js';
 import { LogEntry } from '../lib/helpers/discordLogger.js';
 import {
   clearCookie,
@@ -17,15 +18,18 @@ import {
   parseCookies,
   serializeCookie,
 } from './cookies.js';
+import type { SafeHtml } from './html.js';
 import { openOAuthCookie, sealOAuthCookie } from './oauthCookie.js';
 import {
   HomeOrganizerStatus,
   errorPage,
   homePage,
   loginPage,
+  logoutUnconfirmedPage,
 } from './pages.js';
 import type { OrganizerCredentialStatus } from './routes/organizerLogin.js';
 import { FixedWindowLimiter } from './rateLimit.js';
+import { CacheTimeoutError } from './timedCache.js';
 import { AccessCheck } from './roleGate.js';
 import {
   DashboardSession,
@@ -47,7 +51,7 @@ export const PUBLIC_ROUTE_PATHS: readonly string[] = [
   '/auth/callback',
 ];
 const OAUTH_COOKIE_PATH = '/dashboard/auth';
-const SESSION_COOKIE_PATH = '/dashboard';
+const SESSION_COOKIE_PATH = DASHBOARD_BASE;
 const OAUTH_TTL_SEC = 10 * 60;
 /** Most verified dash_sid values looked up in Redis per request. */
 const MAX_SESSION_COOKIES = 3;
@@ -95,6 +99,8 @@ export interface DashboardDeps {
    * returns tokens. Left out, the home page links to the page without a status.
    */
   homeStatus?: () => Promise<OrganizerCredentialStatus | undefined>;
+  /** Report cards for the home page. Must not throw; left out, the home page shows the welcome text only. */
+  homeReports?: () => Promise<SafeHtml>;
 }
 
 interface Locals {
@@ -156,14 +162,12 @@ function fail(res: Response, status: Parameters<typeof errorPage>[0]) {
   send(res, status, errorPage(status, locals(res).nonce));
 }
 
-const securityHeaders: RequestHandler = function securityHeaders(
-  _req,
-  res,
-  next,
-) {
-  const nonce = crypto.randomBytes(16).toString('base64');
-  locals(res).nonce = nonce;
-  res.set({
+/**
+ * Every dashboard response's headers, the not-set-up page included, so no
+ * path can be framed, cached or sniffed.
+ */
+export function baseSecurityHeaders(nonce: string): Record<string, string> {
+  return {
     'Cache-Control': 'no-store',
     Pragma: 'no-cache',
     'Content-Security-Policy':
@@ -178,7 +182,17 @@ const securityHeaders: RequestHandler = function securityHeaders(
     // own requests and still sends no referrer off-site.
     'Referrer-Policy': 'same-origin',
     'X-Robots-Tag': 'noindex, nofollow',
-  });
+  };
+}
+
+const securityHeaders: RequestHandler = function securityHeaders(
+  _req,
+  res,
+  next,
+) {
+  const nonce = crypto.randomBytes(16).toString('base64');
+  locals(res).nonce = nonce;
+  res.set(baseSecurityHeaders(nonce));
   next();
 };
 
@@ -265,6 +279,26 @@ export function createDashboardRouter(deps: DashboardDeps): express.Router {
   };
 
   /**
+   * The session behind `sid`, unless it is gone or its user was revoked
+   * after it was created. A revoked session is destroyed: it can never come
+   * back, so its cookie is ours to clear.
+   */
+  async function liveSession(
+    sid: string,
+  ): Promise<DashboardSession | undefined> {
+    const store = await sessions();
+    const session = await store.get(sid);
+    if (!session) {
+      return undefined;
+    }
+    if (await store.isRevoked(session)) {
+      await store.destroy(sid);
+      return undefined;
+    }
+    return session;
+  }
+
+  /**
    * Checks the signature on up to MAX_SESSION_COOKIE_CANDIDATES distinct
    * dash_sid values and looks up at most MAX_SESSION_COOKIES of those that
    * verify, so unsigned values planted ahead of ours cannot hide it and a
@@ -290,7 +324,7 @@ export function createDashboardRouter(deps: DashboardDeps): express.Router {
       .slice(0, MAX_SESSION_COOKIES);
     for (const sid of verified) {
       // eslint-disable-next-line no-await-in-loop
-      const session = await (await sessions()).get(sid);
+      const session = await liveSession(sid);
       if (session) {
         return { sid, session };
       }
@@ -303,25 +337,26 @@ export function createDashboardRouter(deps: DashboardDeps): express.Router {
   // /dashboard/Login is not the login route.
   const router = express.Router({ caseSensitive: true });
 
-  // First, so a plain-HTTP request reads no cookie and writes nothing. The
-  // target comes from the configured origin, never the Host header; only
-  // the path and query are taken from the request.
+  // First: every response, the HTTPS redirect included, carries them. It
+  // reads no cookie and writes nothing.
+  router.use(securityHeaders);
+  // Still before any cookie is read, so a plain-HTTP request reads no cookie
+  // and writes nothing. The target comes from the configured origin, never
+  // the Host header; only the path and query are taken from the request.
   router.use(function dashboardHttpsRedirect(req, res, next) {
     if (!deps.requireHttps || req.secure) {
       next();
       return;
     }
-    res.set('Cache-Control', 'no-store');
     res.redirect(308, httpsRedirectTarget(deps.origin, req.originalUrl));
   });
-  router.use(securityHeaders);
   router.use(express.urlencoded({ extended: false, limit: '16kb' }));
 
   // ---- Public routes: the only ones reachable without a session. ----
 
   router.get('/login', (async (req, res) => {
     if ((await readSession(req)).session) {
-      res.redirect(302, '/dashboard');
+      res.redirect(302, DASHBOARD_BASE);
       return;
     }
     send(res, 200, loginPage(locals(res).nonce));
@@ -411,10 +446,54 @@ export function createDashboardRouter(deps: DashboardDeps): express.Router {
       title: 'Dashboard sign-in',
       description: `<@${identity.id}> signed in to the staff dashboard.`,
     });
-    res.redirect(302, '/dashboard');
+    res.redirect(302, DASHBOARD_BASE);
   }) as RequestHandler);
 
   // ---- The gate: a live session whose role check is current. ----
+
+  /**
+   * One role re-check per member at a time. A page with many lazy thumbnails
+   * reaches the 10-minute mark with many requests at once; they all await
+   * the same Discord fetch, and its result applies to all of them. On a lost
+   * role the revocation (every session of the member) and the audit post
+   * happen once, inside the shared check. Cleared when it settles, so the
+   * next stale request checks again.
+   */
+  const roleChecks = new Map<
+    string,
+    Promise<'allowed' | 'denied' | 'unreachable'>
+  >();
+  const recheckRole = (userId: string) => {
+    const inFlight = roleChecks.get(userId);
+    if (inFlight !== undefined) {
+      return inFlight;
+    }
+    const check = (async (): Promise<'allowed' | 'denied' | 'unreachable'> => {
+      let allowed: boolean;
+      try {
+        allowed = await deps.checkAccess(userId);
+      } catch (error: unknown) {
+        // Fail closed, but keep the session: Discord being down is not the
+        // member losing their role.
+        logger.warn(`Dashboard role re-check failed: ${String(error)}`);
+        return 'unreachable';
+      }
+      if (allowed) {
+        return 'allowed';
+      }
+      // Every browser this member signed in from, not just this one.
+      await (await sessions()).revokeUser(userId);
+      audit({
+        title: 'Dashboard session ended',
+        description: `<@${userId}> no longer holds a dashboard role.`,
+      });
+      return 'denied';
+    })().finally(() => {
+      roleChecks.delete(userId);
+    });
+    roleChecks.set(userId, check);
+    return check;
+  };
 
   const dashboardSessionGate = async function dashboardSessionGate(
     req: Request,
@@ -442,27 +521,20 @@ export function createDashboardRouter(deps: DashboardDeps): express.Router {
       return;
     }
     if (now() - session.roleCheckedAt >= ROLE_RECHECK_MS) {
-      let allowed: boolean;
-      try {
-        allowed = await deps.checkAccess(session.userId);
-      } catch (error: unknown) {
-        // Fail closed, but keep the session: Discord being down is not the
-        // member losing their role.
-        logger.warn(`Dashboard role re-check failed: ${String(error)}`);
+      const outcome = await recheckRole(session.userId);
+      if (outcome === 'unreachable') {
         fail(res, 503);
         return;
       }
       const store = await sessions();
-      if (!allowed) {
+      if (outcome === 'denied') {
+        // recheckRole already revoked every session of this member and
+        // audited it once; this request ends its own.
         await store.destroy(sid);
         res.append(
           'Set-Cookie',
           clearCookie(SESSION_COOKIE, SESSION_COOKIE_PATH),
         );
-        audit({
-          title: 'Dashboard session ended',
-          description: `<@${session.userId}> no longer holds a dashboard role.`,
-        });
         fail(res, 403);
         return;
       }
@@ -522,24 +594,68 @@ export function createDashboardRouter(deps: DashboardDeps): express.Router {
 
   protectedRouter.get('/', (async (_req, res) => {
     const { session, nonce } = locals(res);
-    send(res, 200, homePage(session, nonce, await organizerStatus(deps)));
+    let reports: SafeHtml | undefined;
+    try {
+      reports = deps.homeReports ? await deps.homeReports() : undefined;
+    } catch (error) {
+      logger.warn(
+        `Dashboard home reports failed: ${error instanceof Error ? error.name : 'Error'}`,
+      );
+      // The cards are extra: the welcome and organizer cards still render.
+      reports = undefined;
+    }
+    send(
+      res,
+      200,
+      homePage(session, nonce, await organizerStatus(deps), reports),
+    );
   }) as RequestHandler);
 
   protectedRouter.post('/logout', (async (_req, res) => {
     // Clear the cookie first, so the browser forgets it even if the store
     // call below fails.
     res.append('Set-Cookie', clearCookie(SESSION_COOKIE, SESSION_COOKIE_PATH));
-    await (await sessions()).destroy(locals(res).sid);
+    try {
+      await (await sessions()).destroy(locals(res).sid);
+    } catch (error: unknown) {
+      if (!(error instanceof CacheTimeoutError)) {
+        throw error;
+      }
+      // The browser forgot the cookie, but the server may still hold the
+      // session: say so, rather than the generic access-check text.
+      logger.warn('Dashboard logout cache timed out');
+      send(res, 503, logoutUnconfirmedPage(locals(res).nonce));
+      return;
+    }
     res.redirect(303, '/dashboard/login');
   }) as RequestHandler);
 
   deps.protectedRoutes?.(protectedRouter);
 
-  protectedRouter.use((_req, res) => fail(res, 404));
+  // Named so the access matrix can tell it from a use() layer a hook added.
+  protectedRouter.use(function dashboardNotFound(_req, res) {
+    fail(res, 404);
+  });
 
   router.use(dashboardSessionGate as RequestHandler, protectedRouter);
 
   router.use(function dashboardErrorHandler(error, _req, res, _next) {
+    if (res.headersSent) {
+      // A response already under way (e.g. image bytes): no second status
+      // line. The client sees a truncated response.
+      logger.error(
+        `Dashboard error after the response started: ${String(error)}`,
+      );
+      res.destroy();
+      return;
+    }
+    // Redis did not answer within the dashboard's deadline (timedCache):
+    // the same "try again in a minute" page as a Discord outage.
+    if (error instanceof CacheTimeoutError) {
+      logger.warn('Dashboard cache timed out');
+      fail(res, 503);
+      return;
+    }
     const { status, statusCode } = (error ?? {}) as {
       status?: unknown;
       statusCode?: unknown;

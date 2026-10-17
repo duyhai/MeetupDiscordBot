@@ -46,6 +46,7 @@ const fake = vi.hoisted(() => {
         return Promise.resolve();
       },
       exclusive_set: () => Promise.resolve(true),
+      set_existing: () => Promise.resolve(false),
     },
   };
 });

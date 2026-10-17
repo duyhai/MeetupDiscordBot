@@ -364,7 +364,11 @@ export class GqlMeetupClient {
               });
           }
 
-          logger.info(`getGroupEvents result: ${JSON.stringify(result)}`);
+          // Counts only: the result carries host names and profile URLs.
+          const events = result.groupByUrlname?.events;
+          logger.info(
+            `getGroupEvents page: ${events?.edges?.length ?? 0} events, hasNextPage=${events?.pageInfo?.hasNextPage}`,
+          );
           return result;
         } catch (error) {
           logger.error(error);
@@ -458,7 +462,10 @@ export class GqlMeetupClient {
             GetGroupMembersByIdsResponse,
             GetGroupMembersByIdsInput
           >(getGroupMembersByIds, callbackInput);
-          logger.info(`getGroupMembersByIds result: ${JSON.stringify(result)}`);
+          // Counts only: the result carries member names.
+          logger.info(
+            `getGroupMembersByIds: ${result.groupByUrlname?.memberships?.edges?.length ?? 0} members`,
+          );
           return result.groupByUrlname.memberships.edges.map(
             ({ node }) => node,
           );

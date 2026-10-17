@@ -17,4 +17,10 @@ export interface KeyValueCache {
   remove(key: string): Promise<void>;
   /** `ttlSec` overrides the implementation's default expiry. */
   set(key: string, value: string, ttlSec?: number): Promise<void>;
+  /**
+   * Sets `key` only if it already exists (Redis SET ... XX EX), returning
+   * true iff it existed. Never creates the key, so a write that races a
+   * delete cannot bring the deleted value back.
+   */
+  set_existing(key: string, value: string, ttlSec?: number): Promise<boolean>;
 }

@@ -1,6 +1,13 @@
+import dayjs from 'dayjs';
 import pg from 'pg';
-import { afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { Logger } from 'tslog';
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
+import {
+  isSuspensionActive,
+  pacificToday,
+} from '../../src/lib/helpers/suspensionList.js';
+import { PostgresMemberRepository } from '../../src/lib/repositories/postgresMemberRepository.js';
 import { suspensionHistory } from '../../src/lib/helpers/noShowReport.js';
 import {
   PostgresSuspensionRepository,
@@ -254,6 +261,288 @@ if (!POSTGRES_AVAILABLE) {
         expect(await repo.void(inserted.id, 'mod-1', 'first')).toBeDefined();
         expect(await repo.void(inserted.id, 'mod-2', 'second')).toBeUndefined();
         expect(await repo.void(999999, 'mod-1', 'nope')).toBeUndefined();
+      });
+    });
+
+    describe('listPage', () => {
+      let members: PostgresMemberRepository;
+
+      beforeAll(async () => {
+        // Creates the members table, which belongs to the member repository.
+        members = await PostgresMemberRepository.instance();
+      });
+
+      const at = (day: string) => new Date(`${day}T00:00:00Z`);
+      const seed = async (
+        memberId: string,
+        day: string,
+        durationDays: number,
+        memberName: string | null = null,
+      ) => {
+        const row = await repo.insert({
+          memberId,
+          memberName,
+          suspendedAt: at(day),
+          durationDays,
+          notes: `note ${memberId}`,
+        });
+        if (!row) {
+          throw new Error('seed insert skipped');
+        }
+        return row;
+      };
+      const ids = (rows: { id: number }[]) =>
+        rows.map((r) => r.id).sort((x, y) => x - y);
+      const page = (
+        state: 'active' | 'past' | 'voided',
+        today: string,
+        offset = 0,
+        limit = 50,
+      ) => repo.listPage({ state, today, offset, limit });
+
+      it('active/past split matches /meetup_list_suspensions', async () => {
+        await seed('1001', '2026-09-01', 30); // #a, last day 09-30
+        await seed('1002', '2026-09-02', 30); // #b, last day 10-01
+        await seed('1003', '2026-08-01', 30); // #c, last day 08-30
+        await seed('1004', '2026-10-01', 60); // #d, last day 11-29
+        const all = await repo.listAll();
+        for (const now of [
+          '2026-09-30T12:00:00Z',
+          '2026-10-01T06:59:00Z', // still Sep 30 Pacific
+          '2026-10-01T07:00:00Z', // Oct 1 Pacific
+          '2026-10-02T07:00:00Z',
+        ]) {
+          const today = pacificToday(new Date(now));
+          const command = all.filter((r) => isSuspensionActive(r, dayjs(now)));
+          const commandPast = all.filter(
+            (r) => !isSuspensionActive(r, dayjs(now)),
+          );
+          // eslint-disable-next-line no-await-in-loop -- one instant at a time
+          expect(ids(await page('active', today)), now).toEqual(ids(command));
+          // eslint-disable-next-line no-await-in-loop -- one instant at a time
+          expect(ids(await page('past', today)), now).toEqual(ids(commandPast));
+        }
+      });
+
+      it('parity holds across the 2026-11-01 DST change', async () => {
+        await seed('1101', '2026-10-02', 30); // last day 10-31
+        await seed('1102', '2026-10-03', 30); // last day 11-01
+        await seed('1103', '2026-10-04', 30); // last day 11-02
+        const all = await repo.listAll();
+        for (const now of [
+          '2026-11-01T06:59:00Z', // Oct 31 PDT
+          '2026-11-01T07:00:00Z', // Nov 1 PDT
+          '2026-11-01T08:00:00Z', // still Nov 1
+          '2026-11-02T07:59:00Z', // Nov 1 11:59pm PST
+          '2026-11-02T08:00:00Z', // Nov 2 PST
+        ]) {
+          const today = pacificToday(new Date(now));
+          const command = all.filter((r) => isSuspensionActive(r, dayjs(now)));
+          // eslint-disable-next-line no-await-in-loop -- one instant at a time
+          expect(ids(await page('active', today)), now).toEqual(ids(command));
+          // eslint-disable-next-line no-await-in-loop -- one instant at a time
+          expect((await repo.countByState(today)).active, now).toBe(
+            command.length,
+          );
+        }
+      });
+
+      it('a missing members table: no linked names, one warning without ids', async () => {
+        await seed('8801', '2026-10-01', 30);
+        const pool = (repo as unknown as { pool: pg.Pool }).pool;
+        const realQuery = pool.query.bind(pool) as (
+          ...args: unknown[]
+        ) => Promise<unknown>;
+        const missing = Object.assign(
+          new Error('relation "members" does not exist'),
+          { code: '42P01' },
+        );
+        function fakeQuery(text: unknown, ...rest: unknown[]) {
+          if (typeof text === 'string' && text.includes('FROM members')) {
+            return Promise.reject(missing);
+          }
+          return realQuery(text, ...rest);
+        }
+        const query = vi
+          .spyOn(pool, 'query')
+          // eslint-disable-next-line @typescript-eslint/no-misused-promises -- pool.query's callback overload
+          .mockImplementation(fakeQuery);
+        const warn = vi.spyOn(Logger.prototype, 'warn');
+        try {
+          const rows = await page('active', '2026-10-05');
+          expect(rows.map((r) => r.memberId)).toEqual(['8801']);
+          expect(rows[0]).toMatchObject({
+            linkedName: null,
+            linkedDiscordId: null,
+          });
+          expect(warn).toHaveBeenCalledTimes(1);
+          const logged = JSON.stringify(warn.mock.calls[0]);
+          expect(logged).toContain('members table missing');
+          expect(logged).not.toContain('8801');
+        } finally {
+          warn.mockRestore();
+          query.mockRestore();
+        }
+      });
+
+      it('voided records appear only on the voided tab, newest void first, with reason and who voided', async () => {
+        const live = await seed('2001', '2026-10-01', 30);
+        const first = await seed('2002', '2026-10-01', 30);
+        const second = await seed('2003', '2026-09-01', 30);
+        await repo.void(first.id, '123456789012345678', 'wrong member');
+        await new Promise((resolve) => {
+          setTimeout(resolve, 20);
+        });
+        await repo.void(second.id, '223456789012345678', '<b>typo</b>');
+        const today = '2026-10-05';
+        expect(ids(await page('active', today))).toEqual([live.id]);
+        expect(await page('past', today)).toEqual([]);
+        const voided = await page('voided', today);
+        expect(voided.map((r) => r.id)).toEqual([second.id, first.id]);
+        expect(voided[0]).toMatchObject({
+          voidedBy: '223456789012345678',
+          voidReason: '<b>typo</b>',
+        });
+        expect(voided[0].voidedAt).toBeInstanceOf(Date);
+        expect(voided[1].voidReason).toBe('wrong member');
+        // The command never sees them either.
+        expect(ids(await repo.listAll())).toEqual([live.id]);
+      });
+
+      it('countByState counts each tab', async () => {
+        await seed('3001', '2026-09-01', 30);
+        await seed('3002', '2026-10-01', 30);
+        await seed('3003', '2026-10-02', 30);
+        const v = await seed('3004', '2026-10-03', 30);
+        await repo.void(v.id, '123456789012345678', 'dup');
+        expect(await repo.countByState('2026-10-05')).toEqual({
+          active: 2,
+          past: 1,
+          voided: 1,
+        });
+      });
+
+      it('countByMonth counts live records by month', async () => {
+        await seed('3101', '2026-07-31', 30);
+        await seed('3102', '2026-08-01', 30);
+        await seed('3103', '2026-08-31', 30);
+        await seed('3104', '2026-10-01', 30);
+        const v = await seed('3105', '2026-10-02', 30);
+        await repo.void(v.id, '123456789012345678', 'dup');
+        // From August 1 (UTC midnight, like suspended_at): July is left out,
+        // the voided October record is excluded, and September has no row.
+        expect(await repo.countByMonth(at('2026-08-01'))).toEqual([
+          { month: '2026-08', count: 2 },
+          { month: '2026-10', count: 1 },
+        ]);
+        expect(await repo.countByMonth(at('2026-11-01'))).toEqual([]);
+      });
+
+      it('countByMonth refuses an invalid date, and no query runs', async () => {
+        const pool = (repo as unknown as { pool: pg.Pool }).pool;
+        const query = vi.spyOn(pool, 'query');
+        try {
+          await expect(repo.countByMonth(new Date('nope'))).rejects.toThrow(
+            RangeError,
+          );
+          await expect(
+            repo.countByMonth('2026-01-01' as unknown as Date),
+          ).rejects.toThrow(RangeError);
+          expect(query).not.toHaveBeenCalled();
+        } finally {
+          query.mockRestore();
+        }
+      });
+
+      it('orders like the command: newest suspended first', async () => {
+        const older = await seed('4001', '2026-10-01', 90);
+        const newest = await seed('4002', '2026-10-20', 30);
+        const middle = await seed('4003', '2026-10-10', 30);
+        const command = (await repo.listAll()).map((r) => r.id);
+        const rows = (await page('active', '2026-10-21')).map((r) => r.id);
+        expect(rows).toEqual([newest.id, middle.id, older.id]);
+        expect(rows).toEqual(command);
+      });
+
+      it('linked members add name and Discord id', async () => {
+        await members.upsert({
+          discordUserId: '323456789012345678',
+          meetupId: '5001',
+          meetupName: 'Linked Lin',
+          meetupMemberUrl: null,
+          onboardMethod: 'manual',
+          onboardedBy: null,
+        });
+        try {
+          await seed('5001', '2026-10-01', 30);
+          await seed('5002', '2026-10-01', 30, 'Stored Sam');
+          const rows = await page('active', '2026-10-05');
+          const linked = rows.find((r) => r.memberId === '5001');
+          const unlinked = rows.find((r) => r.memberId === '5002');
+          expect(linked).toMatchObject({
+            memberName: null,
+            linkedName: 'Linked Lin',
+            linkedDiscordId: '323456789012345678',
+            lastDay: '2026-10-30',
+          });
+          expect(unlinked).toMatchObject({
+            memberName: 'Stored Sam',
+            linkedName: null,
+            linkedDiscordId: null,
+          });
+        } finally {
+          await members.remove('323456789012345678');
+        }
+      });
+
+      it('pages with offset and limit; limit capped at 50', async () => {
+        await repo.insertMany(
+          Array.from({ length: 55 }, (_, i) => ({
+            memberId: String(6000 + i),
+            memberName: null,
+            suspendedAt: at('2026-10-01'),
+            durationDays: 30,
+            notes: null,
+          })),
+        );
+        const today = '2026-10-05';
+        expect(await page('active', today, 0, 500)).toHaveLength(50);
+        const first = await page('active', today, 0, 10);
+        const second = await page('active', today, 10, 10);
+        expect(first).toHaveLength(10);
+        expect(second).toHaveLength(10);
+        expect(first.map((r) => r.id)).not.toContain(second[0].id);
+        expect(await page('active', today, 50, 50)).toHaveLength(5);
+        expect(await page('active', today, -5, 0)).toHaveLength(50);
+      });
+
+      it('refuses a bad state or today, and no query runs', async () => {
+        const pool = (repo as unknown as { pool: pg.Pool }).pool;
+        const query = vi.spyOn(pool, 'query');
+        try {
+          await expect(
+            repo.listPage({
+              state: 'active',
+              today: "2026-10-01'; DROP",
+              offset: 0,
+              limit: 50,
+            }),
+          ).rejects.toThrow(RangeError);
+          await expect(
+            repo.listPage({
+              state: 'everything' as 'active',
+              today: '2026-10-01',
+              offset: 0,
+              limit: 50,
+            }),
+          ).rejects.toThrow(RangeError);
+          await expect(repo.countByState('yesterday')).rejects.toThrow(
+            RangeError,
+          );
+          expect(query).not.toHaveBeenCalled();
+        } finally {
+          query.mockRestore();
+        }
       });
     });
 

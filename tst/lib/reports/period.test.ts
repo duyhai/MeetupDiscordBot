@@ -16,11 +16,16 @@ import {
   previousPeriod,
   suspensionCutoff,
   utcDay,
+  GROUP_FIRST_PERIOD,
 } from '../../../src/lib/reports/period.js';
 
 const iso = (d: Date) => d.toISOString();
 
 describe('period', () => {
+  it("the group's first month is March 2013 (founded 2013-03-13)", () => {
+    expect(GROUP_FIRST_PERIOD).toEqual({ year: 2013, month: 3 });
+  });
+
   afterEach(() => {
     vi.useRealTimers();
   });

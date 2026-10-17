@@ -60,4 +60,16 @@ export class RedisCache implements KeyValueCache {
     });
     return result === 'OK';
   }
+
+  async set_existing(
+    key: string,
+    value: string,
+    ttlSec?: number,
+  ): Promise<boolean> {
+    const result = await this.client.set(key, value, {
+      XX: true,
+      EX: ttlSec ?? ITEM_TTL_SEC,
+    });
+    return result === 'OK';
+  }
 }

@@ -12,6 +12,7 @@ import {
   consumeOAuthState,
   resolveOAuthState,
 } from './lib/client/oauth/state.js';
+import { DASHBOARD_BASE } from './lib/reports/dashboardPaths.js';
 import { getAuthLandingPage } from './templates/authLanding.js';
 import { ApplicationCache } from './util/cache.js';
 import { allowedRedirectTarget } from './util/redirectTarget.js';
@@ -181,7 +182,7 @@ app.get('/redirect/:url', (req, res) => {
   return res.redirect(307, target.toString());
 });
 
-app.use('/dashboard', dashboardRouterFromEnv());
+app.use(DASHBOARD_BASE, dashboardRouterFromEnv());
 
 // Any stale or mistyped bot URL should still land the user on a page that
 // points back to Discord, never on Express's default 404.
@@ -193,13 +194,27 @@ app.use((_req, res) => {
 // escapes a handler (e.g. the cache being unreachable) must still land the
 // user on the branded page with a way back to Discord, never on Express's
 // stack-trace page.
-app.use(((error, _req, res, _next) => {
+export const appErrorHandler: ErrorRequestHandler = (
+  error,
+  _req,
+  res,
+  _next,
+) => {
+  if (res.headersSent) {
+    // A response already under way: no second status line.
+    logger.error(
+      `Unhandled route error after the response started: ${String(error)}`,
+    );
+    res.destroy();
+    return;
+  }
   logger.error(`Unhandled OAuth route error: ${String(error)}`);
   void reportOAuthFault({
     title: 'unhandled route error',
     description: `An OAuth route threw before it could report a specific cause: ${String(error)}`,
   });
   res.status(500).send(getAuthLandingPage('error', strings.unexpected));
-}) as ErrorRequestHandler);
+};
+app.use(appErrorHandler);
 
 export default app;

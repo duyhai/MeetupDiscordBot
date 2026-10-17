@@ -5,6 +5,12 @@ import '../../util/timezone.js';
 
 export const GROUP_TIMEZONE = 'America/Los_Angeles';
 
+/**
+ * The group's first month (founded 2013-03-13). Nothing is built or shown
+ * for an earlier month; the backfill starts here by default.
+ */
+export const GROUP_FIRST_PERIOD: Period = { year: 2013, month: 3 };
+
 export interface Period {
   readonly year: number;
   readonly month: number;

@@ -1,8 +1,15 @@
 import nock from 'nock';
-import request from 'supertest';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  describe,
+  expect,
+  it,
+  vi,
+} from 'vitest';
 
-import app from '../../src/app.js';
+import app, { appErrorHandler } from '../../src/app.js';
 import { PUBLIC_APP_ORIGIN } from '../../src/constants.js';
 import {
   claimOAuthState,
@@ -11,6 +18,17 @@ import {
   resolveOAuthState,
 } from '../../src/lib/client/oauth/state.js';
 import { ApplicationCache } from '../../src/util/cache.js';
+import {
+  LoopbackClient,
+  closeServers,
+  serve,
+} from '../setup/loopbackServer.js';
+
+let http: LoopbackClient;
+beforeAll(async () => {
+  http = await serve(app);
+});
+afterAll(closeServers);
 
 // Every request below is a FRESH supertest client with no cookie jar: the
 // chain must work when each hop arrives from a different browser context
@@ -33,12 +51,12 @@ describe('cookie-free OAuth chain', () => {
     const state = await createOAuthState('user-1b');
 
     nockMeetupExchange();
-    const first = await request(app).get(
+    const first = await http.get(
       `/connect/meetup/callback?state=${state}&code=mcode`,
     );
     expect(first.status).toBe(200);
 
-    const replay = await request(app).get(
+    const replay = await http.get(
       `/connect/meetup/callback?state=${state}&code=another-code`,
     );
     expect(replay.status).toBe(400);
@@ -48,16 +66,14 @@ describe('cookie-free OAuth chain', () => {
   it('completes the Meetup chain with a fresh client per hop and no cookies', async () => {
     const state = await createOAuthState('user-1d');
 
-    const meetupAuthorize = await request(app).get(
-      `/connect/meetup?state=${state}`,
-    );
+    const meetupAuthorize = await http.get(`/connect/meetup?state=${state}`);
     expect(meetupAuthorize.status).toBe(302);
     expect(meetupAuthorize.headers.location).toContain(
       'https://secure.meetup.com/oauth2/authorize',
     );
 
     nockMeetupExchange();
-    const meetupCb = await request(app).get(
+    const meetupCb = await http.get(
       `/connect/meetup/callback?state=${state}&code=mcode`,
     );
     expect(meetupCb.status).toBe(200);
@@ -74,7 +90,7 @@ describe('cookie-free OAuth chain', () => {
     const set = vi.spyOn(cache, 'set');
 
     nockMeetupExchange();
-    const meetupCb = await request(app).get(
+    const meetupCb = await http.get(
       `/connect/meetup/callback?state=${state}&code=mcode`,
     );
     expect(meetupCb.status).toBe(200);
@@ -94,7 +110,7 @@ describe('cookie-free OAuth chain', () => {
       '/connect/meetup/callback?state=nope&code=x',
     ]) {
       // eslint-disable-next-line no-await-in-loop
-      const res = await request(app).get(path);
+      const res = await http.get(path);
       expect(res.status).toBe(400);
       expect(res.text).toContain('expired');
     }
@@ -102,7 +118,7 @@ describe('cookie-free OAuth chain', () => {
 
   it('shows the denied page when the provider returns an error', async () => {
     const state = await createOAuthState('user-3');
-    const res = await request(app).get(
+    const res = await http.get(
       `/connect/meetup/callback?state=${state}&error=access_denied`,
     );
     expect(res.status).toBe(400);
@@ -112,7 +128,7 @@ describe('cookie-free OAuth chain', () => {
   it('shows the failure page when the token exchange fails', async () => {
     const state = await createOAuthState('user-4');
     nock('https://secure.meetup.com').post('/oauth2/access').reply(500, {});
-    const res = await request(app).get(
+    const res = await http.get(
       `/connect/meetup/callback?state=${state}&code=bad`,
     );
     expect(res.status).toBe(502);
@@ -125,7 +141,7 @@ describe('cookie-free OAuth chain', () => {
       .spyOn(cache, 'get')
       .mockRejectedValueOnce(new Error('cache down'));
 
-    const res = await request(app).get('/connect/meetup?state=whatever');
+    const res = await http.get('/connect/meetup?state=whatever');
 
     expect(res.status).toBe(500);
     expect(res.text).toContain('discord://-/channels/');
@@ -137,7 +153,7 @@ describe('cookie-free OAuth chain', () => {
     const encoded = Buffer.from('http://localhost:5000/target').toString(
       'base64',
     );
-    const res = await request(app).get(`/redirect/${encoded}?a=1`);
+    const res = await http.get(`/redirect/${encoded}?a=1`);
     expect(res.status).toBe(307);
     expect(res.headers.location).toBe('http://localhost:5000/target?a=1');
   });
@@ -146,7 +162,7 @@ describe('cookie-free OAuth chain', () => {
     `/redirect/${Buffer.from(target).toString('base64')}`;
 
   it('still redirects the production Meetup callback through the trampoline', async () => {
-    const res = await request(app).get(
+    const res = await http.get(
       `${trampoline(`${PUBLIC_APP_ORIGIN}/connect/meetup/callback`)}?code=c&state=s`,
     );
     expect(res.status).toBe(307);
@@ -156,7 +172,7 @@ describe('cookie-free OAuth chain', () => {
   });
 
   it('redirects to a 127.0.0.1 dev target', async () => {
-    const res = await request(app).get(trampoline('http://127.0.0.1:5055/x'));
+    const res = await http.get(trampoline('http://127.0.0.1:5055/x'));
     expect(res.status).toBe(307);
     expect(res.headers.location).toBe('http://127.0.0.1:5055/x');
   });
@@ -171,7 +187,7 @@ describe('cookie-free OAuth chain', () => {
       'https://localhost/',
     ];
     const responses = await Promise.all(
-      targets.map((target) => request(app).get(trampoline(target))),
+      targets.map((target) => http.get(trampoline(target))),
     );
     responses.forEach((res, i) => {
       expect(res.status, targets[i]).toBe(400);
@@ -181,12 +197,12 @@ describe('cookie-free OAuth chain', () => {
   });
 
   it('answers malformed input with 400, not 500', async () => {
-    const res = await request(app).get('/redirect/@@@');
+    const res = await http.get('/redirect/@@@');
     expect(res.status).toBe(400);
   });
 
   it('never shows the default Express 404 for a stale or mistyped URL', async () => {
-    const res = await request(app).get('/');
+    const res = await http.get('/');
     expect(res.status).toBe(404);
     expect(res.text).toContain('discord://-/channels/');
     expect(res.text).not.toContain('<pre>');
@@ -200,7 +216,7 @@ describe('Meetup callback: organizer login renewal', () => {
     const state = await createOrganizerRenewState('user-org-1', HASH);
     const exchange = nockMeetupExchange();
 
-    const res = await request(app).get(
+    const res = await http.get(
       `/connect/meetup/callback?state=${state}&code=mcode&error=access_denied` +
         '&next=https%3A%2F%2Fevil.example&redirect=%2F%2Fevil.example&code_verifier=x&sid=y',
     );
@@ -226,10 +242,10 @@ describe('Meetup callback: organizer login renewal', () => {
   it('forwards only the parameters Meetup actually sent', async () => {
     const state = await createOrganizerRenewState('user-org-2', HASH);
 
-    const withCode = await request(app).get(
+    const withCode = await http.get(
       `/connect/meetup/callback?state=${state}&code=only-code`,
     );
-    const repeated = await request(app).get(
+    const repeated = await http.get(
       `/connect/meetup/callback?state=${state}&code=a&code=b`,
     );
 
@@ -245,7 +261,7 @@ describe('Meetup callback: organizer login renewal', () => {
     const state = await createOAuthState('user-link-1');
     nockMeetupExchange();
 
-    const res = await request(app).get(
+    const res = await http.get(
       `/connect/meetup/callback?state=${state}&code=mcode&next=%2Fdashboard`,
     );
 
@@ -263,11 +279,31 @@ describe('staff dashboard mount', () => {
   it('mounts the dashboard ahead of the generic 404 page', async () => {
     // Heroku's router marks HTTPS; without it a configured dashboard
     // answers 308 to the HTTPS origin.
-    const res = await request(app)
+    const res = await http
       .get('/dashboard/login')
       .set('X-Forwarded-Proto', 'https');
     expect([200, 503]).toContain(res.status);
     expect(res.headers['cache-control']).toBe('no-store');
+  });
+
+  it('sends the framing headers through the real app, configured or not', async () => {
+    for (const path of ['/dashboard', '/dashboard/login', '/dashboard/x']) {
+      // eslint-disable-next-line no-await-in-loop -- one path at a time
+      const res = await http.get(path).set('X-Forwarded-Proto', 'https');
+      expect(res.headers['x-frame-options'], path).toBe('DENY');
+      expect(res.headers['content-security-policy'], path).toContain(
+        "frame-ancestors 'none'",
+      );
+      expect(res.headers['x-content-type-options'], path).toBe('nosniff');
+      expect(res.headers['cache-control'], path).toBe('no-store');
+    }
+  });
+
+  it('the app-level error handler is the exported guarded one', () => {
+    const stack = (
+      app as unknown as { router: { stack: { handle: unknown }[] } }
+    ).router.stack;
+    expect(stack.at(-1)?.handle).toBe(appErrorHandler);
   });
 
   it('trusts exactly one proxy hop, never all of them', () => {

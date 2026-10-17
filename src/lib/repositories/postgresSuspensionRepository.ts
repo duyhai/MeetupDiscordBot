@@ -46,6 +46,78 @@ VALUES ($1, $2, $3, $4, $5)
 ON CONFLICT (member_id, suspended_at) WHERE voided_at IS NULL DO NOTHING
 RETURNING *`;
 
+/** The web dyno's suspension pool (PG_POOL_MAX unset). */
+const DEFAULT_SUSPENSION_POOL_SIZE = 5;
+
+/**
+ * PG_POOL_MAX (an integer 1-10) when set, else 5. Only the backfill dyno
+ * sets it (to 1); it must never be an app config var, or it would shrink the
+ * web dyno's suspension and dashboard pools.
+ */
+export function suspensionPoolSize(
+  env: Record<string, string | undefined> = process.env,
+): number {
+  const requested = Number(env.PG_POOL_MAX);
+  return Number.isInteger(requested) && requested >= 1 && requested <= 10
+    ? requested
+    : DEFAULT_SUSPENSION_POOL_SIZE;
+}
+
+/** The dashboard's three tabs: the command's active/past split of live rows, plus voided rows. */
+export type SuspensionState = 'active' | 'past' | 'voided';
+
+/** One row of the dashboard's suspension records page. */
+export interface SuspensionPageRow extends SuspensionRecord {
+  /** lastSuspendedDay (suspensionList.ts), computed in SQL: 'YYYY-MM-DD'. */
+  lastDay: string;
+  voidedAt: Date | null;
+  /** Discord user id of the moderator who voided it. */
+  voidedBy: string | null;
+  voidReason: string | null;
+  /** From the members table when the Meetup id is linked; null otherwise. */
+  linkedName: string | null;
+  linkedDiscordId: string | null;
+}
+
+/**
+ * The SQL form of lastSuspendedDay (suspensionList.ts): suspended_at is the
+ * UTC midnight of the chosen date, so its UTC date is that date, and the
+ * last day is inclusive.
+ */
+const LAST_DAY = `((suspended_at AT TIME ZONE 'UTC')::date + duration_days - 1)`;
+
+/**
+ * isSuspensionActive in SQL: $1 is pacificToday(now), so the database clock
+ * never decides. Voided rows never reach active or past, as in listAll.
+ */
+const STATE_WHERE: Record<SuspensionState, string> = {
+  active: `voided_at IS NULL AND ${LAST_DAY} >= $1::date`,
+  past: `voided_at IS NULL AND ${LAST_DAY} < $1::date`,
+  // $1 kept so every state takes the same parameter list.
+  voided: 'voided_at IS NOT NULL AND $1::date IS NOT NULL',
+};
+
+/** listAll's order (newest suspended first) for the command's tabs; newest void first for voided. */
+const STATE_ORDER: Record<SuspensionState, string> = {
+  active: 'suspended_at DESC, id DESC',
+  past: 'suspended_at DESC, id DESC',
+  voided: 'voided_at DESC, id DESC',
+};
+
+const DAY = /^\d{4}-\d{2}-\d{2}$/;
+const MAX_PAGE_ROWS = 50;
+
+const STATES: readonly SuspensionState[] = ['active', 'past', 'voided'];
+
+const isState = (value: unknown): value is SuspensionState =>
+  STATES.some((state) => state === value);
+
+/** A whole, non-negative number of rows: junk, negatives and infinities become `fallback`. */
+function wholeCount(value: number, fallback: number): number {
+  const n = Math.trunc(value);
+  return Number.isSafeInteger(n) && n >= 0 ? n : fallback;
+}
+
 interface SuspensionRow {
   id: number;
   member_id: string;
@@ -103,7 +175,7 @@ export class PostgresSuspensionRepository implements SuspensionRepository {
       connectionString.includes('127.0.0.1');
     this.pool = new pg.Pool({
       connectionString,
-      max: 5,
+      max: suspensionPoolSize(),
       ssl: isLocal ? undefined : { rejectUnauthorized: false },
       allowExitOnIdle: true,
     });
@@ -233,6 +305,123 @@ export class PostgresSuspensionRepository implements SuspensionRepository {
       [id, voidedBy, reason],
     );
     return result.rows[0] ? toVoidedRecord(result.rows[0]) : undefined;
+  }
+
+  /**
+   * One page of one dashboard tab, at most 50 rows. `today` is
+   * pacificToday(now): the active/past split is the command's.
+   */
+  async listPage(options: {
+    state: SuspensionState;
+    today: string;
+    offset: number;
+    limit: number;
+  }): Promise<SuspensionPageRow[]> {
+    const { state, today } = options;
+    if (!isState(state) || typeof today !== 'string' || !DAY.test(today)) {
+      throw new RangeError('bad suspension page query');
+    }
+    // 0 or junk is a full page, as in the brief; never more than 50.
+    const limit = Math.min(
+      MAX_PAGE_ROWS,
+      wholeCount(options.limit, MAX_PAGE_ROWS) || MAX_PAGE_ROWS,
+    );
+    const offset = wholeCount(options.offset, 0);
+    const result = await this.pool.query<SuspensionRow & { last_day: string }>(
+      `SELECT *, to_char(${LAST_DAY}, 'YYYY-MM-DD') AS last_day
+         FROM suspension_records
+        WHERE ${STATE_WHERE[state]}
+        ORDER BY ${STATE_ORDER[state]}
+        LIMIT $2 OFFSET $3`,
+      [today, limit, offset],
+    );
+    const linked = await this.linkedMembers([
+      ...new Set(result.rows.map((row) => row.member_id)),
+    ]);
+    return result.rows.map((row) => ({
+      ...toRecord(row),
+      lastDay: row.last_day,
+      voidedAt: row.voided_at,
+      voidedBy: row.voided_by,
+      voidReason: row.void_reason,
+      linkedName: linked.get(row.member_id)?.name ?? null,
+      linkedDiscordId: linked.get(row.member_id)?.discordId ?? null,
+    }));
+  }
+
+  /** Rows per dashboard tab, with listPage's split for the same `today`. */
+  async countByState(today: string): Promise<Record<SuspensionState, number>> {
+    if (typeof today !== 'string' || !DAY.test(today)) {
+      throw new RangeError('today must be YYYY-MM-DD');
+    }
+    const result = await this.pool.query<Record<SuspensionState, number>>(
+      `SELECT count(*) FILTER (WHERE ${STATE_WHERE.active})::int AS active,
+              count(*) FILTER (WHERE ${STATE_WHERE.past})::int AS past,
+              count(*) FILTER (WHERE ${STATE_WHERE.voided})::int AS voided
+         FROM suspension_records`,
+      [today],
+    );
+    const row = result.rows[0];
+    return { active: row.active, past: row.past, voided: row.voided };
+  }
+
+  /**
+   * Live (unvoided) records per UTC month of suspended_at, from `from` on,
+   * oldest first; months with none are absent. suspended_at is UTC midnight
+   * of a calendar date, so the UTC month is the date's month. At most one
+   * row per month (trends asks for 240 months at most).
+   */
+  async countByMonth(from: Date): Promise<{ month: string; count: number }[]> {
+    if (!(from instanceof Date) || Number.isNaN(from.getTime())) {
+      throw new RangeError('from must be a valid Date');
+    }
+    const result = await this.pool.query<{ month: string; count: number }>(
+      `SELECT to_char(date_trunc('month', suspended_at AT TIME ZONE 'UTC'), 'YYYY-MM') AS month,
+              count(*)::int AS count
+         FROM suspension_records
+        WHERE voided_at IS NULL AND suspended_at >= $1
+        GROUP BY 1 ORDER BY 1`,
+      [from],
+    );
+    return result.rows.map((row) => ({ month: row.month, count: row.count }));
+  }
+
+  /**
+   * Names and Discord ids of linked members, for at most one page of ids. The
+   * members table is the member repository's; a database without it yields none.
+   */
+  private async linkedMembers(
+    ids: string[],
+  ): Promise<Map<string, { name: string | null; discordId: string }>> {
+    if (ids.length === 0) {
+      return new Map();
+    }
+    try {
+      const result = await this.pool.query<{
+        meetup_id: string;
+        meetup_name: string | null;
+        discord_user_id: string;
+      }>(
+        `SELECT meetup_id, meetup_name, discord_user_id FROM members
+          WHERE meetup_id = ANY($1::text[])`,
+        [ids],
+      );
+      return new Map(
+        result.rows.map((row) => [
+          row.meetup_id,
+          { name: row.meetup_name, discordId: row.discord_user_id },
+        ]),
+      );
+    } catch (error) {
+      if ((error as { code?: string }).code === '42P01') {
+        // undefined_table. No ids in the message.
+        logger.warn(
+          'members table missing; suspension page shows no linked names',
+        );
+        return new Map();
+      }
+      throw error;
+    }
   }
 
   /** Test-only cleanup, mirroring the member repository's test hooks. */

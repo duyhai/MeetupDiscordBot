@@ -38,8 +38,9 @@
  * invalid --event (fixed reason on stderr); 2 a query failed (stderr names the
  * query and error type, plus the HTTP status for a ClientError; never a body).
  *
- * Why names cannot leak: GqlMeetupClient.getUserInfo and getGroupEvents log
- * full results through tslog, and getGroupEvents/getEventRsvps are cached in
+ * Why names cannot leak: GqlMeetupClient.getUserInfo logs its full result
+ * through tslog (getGroupEvents now logs counts only), and
+ * getGroupEvents/getEventRsvps are cached in
  * Redis under keys that ignore the token (a cached moderator-visible answer
  * would defeat this check, and a cache write is a write). So this script
  * talks to GraphQL directly with minimal queries that select no name. As

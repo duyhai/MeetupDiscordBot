@@ -1,11 +1,17 @@
 import crypto from 'crypto';
 import pg from 'pg';
-import { beforeAll, describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { GUILD_ID } from '../../src/constants.js';
 import { MeetupSnapshot } from '../../src/lib/helpers/identity/meetupSnapshot.js';
 import { identityNameKey } from '../../src/lib/helpers/identity/names.js';
-import { PostgresIdentityRepository } from '../../src/lib/repositories/postgresIdentityRepository.js';
+import {
+  MAX_THUMB_BYTES,
+  PostgresIdentityRepository,
+} from '../../src/lib/repositories/postgresIdentityRepository.js';
+import { registerAllProtectedRoutes } from '../../src/web/routes/dashboardPages.js';
+import { closeServers, makeApp, signIn } from '../web/dashboardHarness.js';
+import { fakeOrganizerDeps, fakePageDeps } from '../web/routes/pageFakes.js';
 import { IdentitySnapshot } from '../../src/lib/repositories/identityTypes.js';
 
 // Exercises BYTEA round-trips, TIMESTAMPTZ ordering and the upsert conflict
@@ -939,6 +945,385 @@ describe.skipIf(!POSTGRES_AVAILABLE)('PostgresIdentityRepository', () => {
 
     it('returns an empty map for no subjects', async () => {
       expect((await repo.listIdentityNames([])).size).toBe(0);
+    });
+  });
+
+  describe('dashboard reads', () => {
+    const poolOf = () => (repo as unknown as { pool: pg.Pool }).pool;
+    /** A fresh all-digit subject id, so a filter isolates this test's rows. */
+    const digits = () =>
+      String(crypto.randomInt(1e9, 9e9)) + String(crypto.randomInt(1e5, 9e5));
+    const PNG = Buffer.from([
+      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0xff, 0x00,
+    ]);
+    const JPEG = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0xfe, 0x00]);
+
+    /** `count` Meetup name changes for one subject, one second apart from `start`; ids ascending. */
+    async function insertMany(
+      subjectId: string,
+      count: number,
+      start: Date,
+      scopeId = MEETUP_SCOPE,
+    ): Promise<string[]> {
+      const result = await poolOf().query<{ id: string }>(
+        `INSERT INTO member_identity_changes
+           (platform, scope_id, subject_id, field, old_value, new_value, source, detected_at)
+         SELECT 'meetup', $1, $2, 'name', 'a' || g, 'b' || g, 'sweep',
+                $3::timestamptz + g * interval '1 second'
+           FROM generate_series(1, $4::int) g
+         ORDER BY g
+         RETURNING id::text AS id`,
+        [scopeId, subjectId, start, count],
+      );
+      return result.rows.map((r) => r.id).sort((a, b) => Number(a) - Number(b));
+    }
+
+    async function recordOne(
+      platform: 'discord' | 'meetup',
+      scopeId: string,
+      subjectId: string,
+      field: 'user_avatar' | 'photo' | 'nickname' | 'name',
+      thumbs?: { oldThumb: Buffer | null; newThumb: Buffer | null },
+    ): Promise<string> {
+      await repo.recordChanges(
+        [{ platform, scopeId, subjectId, field, oldValue: 'o', newValue: 'n' }],
+        'sweep',
+        new Map(
+          thumbs
+            ? [[`${platform}:${scopeId}:${subjectId}:${field}`, thumbs]]
+            : [],
+        ),
+      );
+      const row = await poolOf().query<{ id: string }>(
+        `SELECT max(id)::text AS id FROM member_identity_changes
+          WHERE platform = $1 AND scope_id = $2 AND subject_id = $3`,
+        [platform, scopeId, subjectId],
+      );
+      return row.rows[0].id;
+    }
+
+    it('listChangesPage filters by date, platform, member', async () => {
+      const subject = digits();
+      const other = digits();
+      const base = new Date('2031-03-10T08:00:00Z');
+      await insertMany(subject, 3, base); // +1s, +2s, +3s
+      await insertMany(other, 2, base);
+      const discordId = await recordOne(
+        'discord',
+        DEFAULT_SCOPE,
+        subject,
+        'nickname',
+      );
+
+      const bySubject = await repo.listChangesPage({ subjectId: subject });
+      expect(bySubject.map((r) => r.subjectId)).toEqual([
+        subject,
+        subject,
+        subject,
+        subject,
+      ]);
+      expect(bySubject[0].id).toBe(discordId);
+
+      const meetupOnly = await repo.listChangesPage({
+        subjectId: subject,
+        platform: 'meetup',
+      });
+      expect(meetupOnly).toHaveLength(3);
+      expect(meetupOnly.every((r) => r.platform === 'meetup')).toBe(true);
+      const discordOnly = await repo.listChangesPage({
+        subjectId: subject,
+        platform: 'discord',
+      });
+      expect(discordOnly.map((r) => r.id)).toEqual([discordId]);
+
+      // from inclusive, to exclusive.
+      const window = await repo.listChangesPage({
+        subjectId: subject,
+        platform: 'meetup',
+        from: new Date(base.getTime() + 2000),
+        to: new Date(base.getTime() + 3000),
+      });
+      expect(window.map((r) => r.newValue)).toEqual(['b2']);
+    });
+
+    it('keyset paging is stable', async () => {
+      const subject = digits();
+      const ids = await insertMany(
+        subject,
+        120,
+        new Date('2031-04-01T00:00:00Z'),
+      );
+      const newestFirst = [...ids].reverse();
+      // One row whose detected_at order disagrees with its id order: paging
+      // by time would move it, paging by id must not.
+      await poolOf().query(
+        `UPDATE member_identity_changes SET detected_at = $2 WHERE id = $1::bigint`,
+        [newestFirst[10], new Date('2030-01-01T00:00:00Z')],
+      );
+
+      const page1 = await repo.listChangesPage({
+        subjectId: subject,
+        limit: 50,
+      });
+      expect(page1.map((r) => r.id)).toEqual(newestFirst.slice(0, 50));
+
+      const read2 = () =>
+        repo.listChangesPage({
+          subjectId: subject,
+          beforeId: page1[49].id,
+          limit: 50,
+        });
+      const page2 = await read2();
+      expect(page2.map((r) => r.id)).toEqual(newestFirst.slice(50, 100));
+
+      // A new change between page reads does not shift page 2.
+      await insertMany(subject, 1, new Date('2031-04-02T00:00:00Z'));
+      expect((await read2()).map((r) => r.id)).toEqual(
+        newestFirst.slice(50, 100),
+      );
+
+      const page3 = await repo.listChangesPage({
+        subjectId: subject,
+        beforeId: page2[49].id,
+        limit: 50,
+      });
+      expect(page3.map((r) => r.id)).toEqual(newestFirst.slice(100));
+      expect(page3).toHaveLength(20);
+    });
+
+    it('orders ids as numbers across a digit boundary', async () => {
+      // '9999999999' sorts above '10000000000' as text. Explicit ids far
+      // above the sequence, removed again so later tests never see them.
+      const subject = digits();
+      const ids = ['9999999999', '10000000000'];
+      try {
+        await poolOf().query(
+          `INSERT INTO member_identity_changes
+             (id, platform, scope_id, subject_id, field, old_value, new_value, source)
+           SELECT unnest($1::bigint[]), 'meetup', $2, $3, 'name', 'a', 'b', 'sweep'`,
+          [ids, MEETUP_SCOPE, subject],
+        );
+        const page = await repo.listChangesPage({ subjectId: subject });
+        expect(page.map((r) => r.id)).toEqual(['10000000000', '9999999999']);
+        const older = await repo.listChangesPage({
+          subjectId: subject,
+          beforeId: '10000000000',
+        });
+        expect(older.map((r) => r.id)).toEqual(['9999999999']);
+      } finally {
+        await poolOf().query(
+          'DELETE FROM member_identity_changes WHERE id = ANY($1::bigint[])',
+          [ids],
+        );
+      }
+    });
+
+    it('caps the page at 50 rows', async () => {
+      const subject = digits();
+      await insertMany(subject, 60, new Date('2031-05-01T00:00:00Z'));
+      expect(
+        await repo.listChangesPage({ subjectId: subject, limit: 500 }),
+      ).toHaveLength(50);
+      expect(await repo.listChangesPage({ subjectId: subject })).toHaveLength(
+        50,
+      );
+      expect(
+        await repo.listChangesPage({ subjectId: subject, limit: 0 }),
+      ).toHaveLength(50);
+    });
+
+    it('listChangesPage never selects thumbnail bytes', async () => {
+      const subject = digits();
+      await recordOne('meetup', MEETUP_SCOPE, subject, 'photo', {
+        oldThumb: JPEG,
+        newThumb: null,
+      });
+      const spy = vi.spyOn(poolOf(), 'query');
+      try {
+        const rows = await repo.listChangesPage({ subjectId: subject });
+        const sql = String(spy.mock.calls[0][0]);
+        expect(sql).not.toMatch(/\b(old|new)_thumb\s*(,|AS\b|FROM\b)/i);
+        expect(sql).not.toMatch(/SELECT \*/i);
+        expect(rows).toHaveLength(1);
+        expect(rows[0]).not.toHaveProperty('oldThumb');
+        expect(rows[0]).not.toHaveProperty('newThumb');
+        expect(rows[0].hasOldThumb).toBe(true);
+        expect(rows[0].hasNewThumb).toBe(false);
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    it('applies the scope filter', async () => {
+      const subject = digits();
+      const foreign = await recordOne(
+        'discord',
+        'some-other-guild',
+        subject,
+        'user_avatar',
+        {
+          oldThumb: PNG,
+          newThumb: PNG,
+        },
+      );
+      expect(await repo.listChangesPage({ subjectId: subject })).toEqual([]);
+      expect(await repo.getChangeThumb(foreign, 'old')).toBeUndefined();
+      expect(await repo.getChangeThumb(foreign, 'new')).toBeUndefined();
+    });
+
+    it('getChangeThumb never returns a thumbnail over the size cap, and the route 404s', async () => {
+      const subject = digits();
+      const atCap = Buffer.alloc(MAX_THUMB_BYTES, 0);
+      PNG.copy(atCap);
+      const overCap = Buffer.alloc(MAX_THUMB_BYTES + 1, 0);
+      PNG.copy(overCap);
+      const id = await recordOne('meetup', MEETUP_SCOPE, subject, 'photo', {
+        oldThumb: atCap,
+        newThumb: overCap,
+      });
+      expect((await repo.getChangeThumb(id, 'old'))?.length).toBe(
+        MAX_THUMB_BYTES,
+      );
+      expect(await repo.getChangeThumb(id, 'new')).toBeUndefined();
+
+      // The real route over the real repository.
+      const { req } = await makeApp({
+        protectedRoutes: (r) =>
+          registerAllProtectedRoutes(r, {
+            organizer: fakeOrganizerDeps(),
+            pages: fakePageDeps({ identity: async () => repo }),
+          }),
+      });
+      const cookie = await signIn(req);
+      const over = await req
+        .get(`/dashboard/identity/changes/${id}/thumb/new`)
+        .set('Cookie', cookie);
+      expect(over.status).toBe(404);
+      expect(over.headers['content-type']).toMatch(/^text\/html/);
+      const at = await req
+        .get(`/dashboard/identity/changes/${id}/thumb/old`)
+        .set('Cookie', cookie);
+      expect(at.status).toBe(200);
+      expect(at.headers['content-type']).toBe('image/png');
+      await closeServers();
+    });
+
+    it('getChangeThumb returns one side', async () => {
+      const subject = digits();
+      const id = await recordOne('meetup', MEETUP_SCOPE, subject, 'photo', {
+        oldThumb: JPEG,
+        newThumb: PNG,
+      });
+      expect((await repo.getChangeThumb(id, 'old'))?.equals(JPEG)).toBe(true);
+      expect((await repo.getChangeThumb(id, 'new'))?.equals(PNG)).toBe(true);
+    });
+
+    it('getChangeThumb returns undefined for a text change, an unknown id and an out-of-scope id', async () => {
+      const subject = digits();
+      const text = await recordOne(
+        'discord',
+        DEFAULT_SCOPE,
+        subject,
+        'nickname',
+      );
+      const foreign = await recordOne(
+        'meetup',
+        'another-group',
+        subject,
+        'photo',
+        {
+          oldThumb: JPEG,
+          newThumb: JPEG,
+        },
+      );
+      expect(await repo.getChangeThumb(text, 'old')).toBeUndefined();
+      expect(await repo.getChangeThumb(text, 'new')).toBeUndefined();
+      expect(
+        await repo.getChangeThumb('999999999999999999', 'old'),
+      ).toBeUndefined();
+      expect(await repo.getChangeThumb(foreign, 'old')).toBeUndefined();
+    });
+
+    it('getChangeThumb looks up by change id only', async () => {
+      const subject = digits();
+      const id = await recordOne('meetup', MEETUP_SCOPE, subject, 'photo', {
+        oldThumb: JPEG,
+        newThumb: null,
+      });
+      const spy = vi.spyOn(poolOf(), 'query');
+      try {
+        await repo.getChangeThumb(id, 'old');
+        expect(spy).toHaveBeenCalledTimes(1);
+        const [sql, params] = spy.mock.calls[0] as unknown as [
+          string,
+          unknown[],
+        ];
+        const flat = sql.replace(/\s+/g, ' ');
+        expect(flat).toMatch(
+          /^SELECT CASE WHEN octet_length\(old_thumb\) <= 262144 THEN old_thumb END AS thumb /,
+        );
+        expect(flat).toMatch(
+          / FROM member_identity_changes WHERE id = \$1::bigint AND \(platform, scope_id\) IN /,
+        );
+        expect(sql).not.toContain('subject_id');
+        expect(sql).not.toContain('new_thumb');
+        expect(params).toEqual([id, GUILD_ID, MEETUP_SCOPE]);
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    it('getChangeThumb refuses a bad side or id without querying', async () => {
+      const spy = vi.spyOn(poolOf(), 'query');
+      try {
+        for (const [id, side] of [
+          ['1', 'both'],
+          ['1', 'old_thumb'],
+          ['1a', 'old'],
+          ['-1', 'old'],
+          ['1'.repeat(19), 'old'],
+          ['', 'new'],
+        ]) {
+          // eslint-disable-next-line no-await-in-loop -- one at a time, each must refuse
+          await expect(
+            repo.getChangeThumb(id, side as 'old'),
+          ).rejects.toBeInstanceOf(RangeError);
+        }
+        expect(spy).not.toHaveBeenCalled();
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    it('listChangesPage refuses a bad filter without querying', async () => {
+      const spy = vi.spyOn(poolOf(), 'query');
+      try {
+        for (const filter of [
+          { subjectId: '4a' },
+          { subjectId: '1'.repeat(21) },
+          { beforeId: '1'.repeat(19) },
+          { beforeId: '1 OR 1=1' },
+          { platform: 'x' as 'meetup' },
+        ]) {
+          // eslint-disable-next-line no-await-in-loop -- one at a time, each must refuse
+          await expect(repo.listChangesPage(filter)).rejects.toBeInstanceOf(
+            RangeError,
+          );
+        }
+        expect(spy).not.toHaveBeenCalled();
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    it('countChangesSince counts in scope', async () => {
+      const since = new Date(Date.now() - 1000);
+      const before = await repo.countChangesSince(since);
+      const subject = digits();
+      await recordOne('meetup', MEETUP_SCOPE, subject, 'name');
+      await recordOne('discord', DEFAULT_SCOPE, subject, 'nickname');
+      await recordOne('discord', 'some-other-guild', subject, 'nickname');
+      expect(await repo.countChangesSince(since)).toBe(before + 2);
     });
   });
 });
