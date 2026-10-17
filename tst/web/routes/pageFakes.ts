@@ -649,6 +649,14 @@ export function fakeWorkspace(seed: WorkspaceSeed = WORKSPACE_SEED()) {
         return counts;
       },
     ),
+    linkedRecordIds: vi.fn(
+      async (ids: number[]): Promise<Set<number>> =>
+        new Set(
+          seed.rows
+            .map((r) => r.suspensionRecordId)
+            .filter((id): id is number => id !== null && ids.includes(id)),
+        ),
+    ),
     statusesByMember: vi.fn(
       async (period: Period): Promise<Map<string, WorkspaceStatus>> =>
         new Map(inMonth(period).map((r) => [r.memberId, r.status])),

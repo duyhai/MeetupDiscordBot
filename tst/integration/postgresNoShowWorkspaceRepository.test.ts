@@ -741,6 +741,54 @@ const suspension = (
         expect((await refusing.listRecentEvents([])).size).toBe(0);
       });
 
+      it('linkedRecordIds answers which records back some workspace row, in any month', async () => {
+        await sync([suspension('111')]);
+        await sync([suspension('111')], T2, 9, OCTOBER);
+        const insert = async (day: string) =>
+          (
+            await pool.query<{ id: number }>(
+              `INSERT INTO suspension_records (member_id, member_name, suspended_at, duration_days)
+               VALUES ('111', 'M111', $1::timestamptz, 30) RETURNING id`,
+              [`${day}T00:00:00Z`],
+            )
+          ).rows[0].id;
+        const linkedInOctober = await insert('2026-10-02');
+        const free = await insert('2026-11-15');
+        await pool.query(
+          `UPDATE noshow_workspace_rows SET status = 'suspended', suspension_record_id = $1
+            WHERE meetup_member_id = '111' AND period = '2026-10-01'::date`,
+          [linkedInOctober],
+        );
+        const linked = await repo.linkedRecordIds([
+          linkedInOctober,
+          free,
+          linkedInOctober,
+          0,
+          -1,
+          2 ** 31,
+        ]);
+        expect([...linked]).toEqual([linkedInOctober]);
+        expect((await repo.linkedRecordIds([free])).size).toBe(0);
+      });
+
+      it('linkedRecordIds skips the query for no ids and refuses an unbounded list', async () => {
+        let queries = 0;
+        const counting = new PostgresNoShowWorkspaceRepository({
+          query: async (text: string, values?: unknown[]) => {
+            queries += 1;
+            return pool.query(text, values);
+          },
+        } as unknown as pg.Pool);
+        expect((await counting.linkedRecordIds([])).size).toBe(0);
+        expect((await counting.linkedRecordIds([0, -5])).size).toBe(0);
+        expect(queries).toBe(0);
+        const many = Array.from({ length: 1001 }, (_, i) => i + 1);
+        await expect(counting.linkedRecordIds(many)).rejects.toThrow(
+          RangeError,
+        );
+        expect(queries).toBe(0);
+      });
+
       it('listMonths lists synced months newest first', async () => {
         await sync([warning('111')]);
         await sync([warning('111')], T2, 9, OCTOBER);

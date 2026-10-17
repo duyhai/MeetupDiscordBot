@@ -1,3 +1,4 @@
+import { ClientError } from 'graphql-request';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { KeyValueCache } from '../../../src/lib/cache/base.js';
@@ -480,7 +481,7 @@ describe('organizerFetchMany (the production fetchMany)', () => {
 
   function organizer(getMemberRsvpEvents: Rsvps, token = 'tok') {
     const rsvps = vi.fn(getMemberRsvpEvents);
-    const getToken = vi.fn(async () => token);
+    const getToken = vi.fn(async (_options?: unknown) => token);
     const makeClient = vi.fn(
       () => ({ getMemberRsvpEvents: rsvps }) as unknown as GqlMeetupClient,
     );
@@ -514,13 +515,60 @@ describe('organizerFetchMany (the production fetchMany)', () => {
     );
   });
 
-  it('rejects when Meetup fails, so the loader shows unavailable', async () => {
+  it("one member's Meetup failure leaves only that id out, so only that card is unavailable", async () => {
+    const o = organizer(async (id) => {
+      if (id === '222') {
+        throw new Error('meetup down');
+      }
+      return [event('9', '2026-10-20T02:00:00.000Z')];
+    });
+    const out = await organizerFetchMany(
+      () => undefined,
+      o.deps,
+    )(['111', '222', '333']);
+    expect([...out.keys()]).toEqual(['111', '333']);
+    expect(out.has('222')).toBe(false);
+    const load = createUpcomingLoader({
+      now: () => NOW,
+      cache: async () => new FakeCache(),
+      fetchMany: organizerFetchMany(() => undefined, o.deps),
+    });
+    const entries = await load(['111', '222']);
+    expect(entries.get('111')?.state).toBe('ok');
+    expect(entries.get('222')).toEqual({ state: 'unavailable' });
+  });
+
+  it('a 401 rejects the whole batch, so the organizer client refreshes once and retries', async () => {
+    let calls = 0;
+    const o = organizer(async (id) => {
+      calls += 1;
+      if (calls === 1) {
+        throw new ClientError(
+          { status: 401, headers: new Headers(), body: '' },
+          { query: '' },
+        );
+      }
+      return id === '222' ? undefined : [];
+    });
+    const out = await organizerFetchMany(
+      () => undefined,
+      o.deps,
+    )(['111', '222']);
+    expect(o.getToken).toHaveBeenCalledTimes(2);
+    expect(o.getToken.mock.calls[1][0]).toMatchObject({ forceRefresh: true });
+    expect([...out.keys()]).toEqual(['111', '222']);
+  });
+
+  it('a 401 on the retry rejects', async () => {
     const o = organizer(async () => {
-      throw new Error('meetup down');
+      throw new ClientError(
+        { status: 401, headers: new Headers(), body: '' },
+        { query: '' },
+      );
     });
     await expect(
       organizerFetchMany(() => undefined, o.deps)(['111']),
-    ).rejects.toThrow('meetup down');
+    ).rejects.toBeInstanceOf(ClientError);
   });
 
   it('rejects when there is no organizer login', async () => {

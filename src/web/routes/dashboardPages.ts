@@ -86,6 +86,7 @@ export type WorkspacePageReader = Pick<
   | 'getRow'
   | 'listRecentEvents'
   | 'statusCounts'
+  | 'linkedRecordIds'
   | 'statusesByMember'
   | 'statusesForMember'
 >;

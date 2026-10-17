@@ -277,6 +277,9 @@ function clampInt(
   return Math.min(hi, Math.max(lo, n));
 }
 
+/** linkedRecordIds' bound: one page's members' records dated in or after the month. */
+const MAX_LINKED_LOOKUP = 1000;
+
 const isRowId = (value: number): boolean =>
   Number.isSafeInteger(value) && value >= 1 && value <= MAX_ROW_ID;
 
@@ -832,6 +835,29 @@ export class PostgresNoShowWorkspaceRepository {
       byRow.set(record.row_id, list);
     }
     return byRow;
+  }
+
+  /**
+   * Which of these suspension records back a workspace row, in any month:
+   * those cannot be linked again (UNLINKED_LIVE). At most
+   * MAX_LINKED_LOOKUP distinct ids (a RangeError beyond); no usable id
+   * means no query.
+   */
+  async linkedRecordIds(ids: number[]): Promise<Set<number>> {
+    const usable = [...new Set(ids)].filter(isRowId);
+    if (usable.length > MAX_LINKED_LOOKUP) {
+      throw new RangeError(
+        `linkedRecordIds takes at most ${MAX_LINKED_LOOKUP} ids`,
+      );
+    }
+    if (usable.length === 0) {
+      return new Set();
+    }
+    const result = await this.pool.query<{ suspension_record_id: number }>(
+      'SELECT suspension_record_id FROM noshow_workspace_rows WHERE suspension_record_id = ANY($1::int[])',
+      [usable],
+    );
+    return new Set(result.rows.map((r) => r.suspension_record_id));
   }
 
   /** Status counts per 'YYYY-MM' (at most 24 months), in-report rows only. */

@@ -17,6 +17,11 @@ import {
   DashboardPageDeps,
   registerAllProtectedRoutes,
 } from '../../../src/web/routes/dashboardPages.js';
+import {
+  LEADERSHIP_DISPLAY_CACHE_MAX,
+  LEADERSHIP_DISPLAY_CACHE_MS,
+  LeadershipDisplayCache,
+} from '../../../src/web/routes/workspace.js';
 import { WORKSPACE_RESULT_MESSAGES } from '../../../src/web/routes/workspaceActions.js';
 import { closeServers, makeApp, signIn } from '../dashboardHarness.js';
 import {
@@ -109,18 +114,20 @@ async function setup(options: Options = {}) {
   const susp = fakeSuspensions({}, [], options.records ?? []);
   const upcoming = vi.fn(options.upcoming ?? (async () => new Map()));
   const actions = fakeWorkspaceActions();
-  const isLeadership = vi.fn(async () => {
+  const isLeadership = vi.fn(async (_userId: string) => {
     if (options.leader instanceof Error) {
       throw options.leader;
     }
     return options.leader ?? false;
   });
+  let clock = PAGE_NOW.getTime();
   const { req } = await makeApp({
-    now: () => PAGE_NOW.getTime(),
+    now: () => clock,
     protectedRoutes: (r) =>
       registerAllProtectedRoutes(r, {
         organizer: fakeOrganizerDeps(),
         pages: fakePageDeps({
+          now: () => new Date(clock),
           workspace: async () => ws,
           snapshots: async () => snaps,
           suspensions: async () => susp,
@@ -137,7 +144,10 @@ async function setup(options: Options = {}) {
     const res = await req.get(path).set('Cookie', cookie);
     return { status: res.status, text: flat(res.text), raw: res.text };
   };
-  return { get, ws, snaps, susp, upcoming, actions, isLeadership };
+  const advance = (ms: number) => {
+    clock += ms;
+  };
+  return { get, ws, snaps, susp, upcoming, actions, isLeadership, advance };
 }
 
 /**
@@ -147,6 +157,18 @@ async function setup(options: Options = {}) {
  */
 const flat = (body: string) =>
   body.replace(/\s+/g, ' ').replace(/ ?([<>]) ?/g, '$1');
+
+/** The session's CSRF token, from the sign-out form in the page header. */
+const csrfOf = (body: string) =>
+  /action="\/dashboard\/logout"><input type="hidden" name="_csrf" value="([^"]+)"/.exec(
+    body,
+  )?.[1] ?? 'missing';
+
+/** The sync form's markup. */
+const syncFormOf = (body: string) =>
+  /<form method="post" action="\/dashboard\/no-shows\/2026-09\/sync">[\s\S]*?<\/form>/.exec(
+    body,
+  )?.[0] ?? '';
 
 const unescape = (text: string) =>
   text
@@ -618,6 +640,83 @@ describe('GET /dashboard/no-shows/:period (month cards)', () => {
     );
   });
 
+  it("a record linked to another month's card is not offered for linking", async () => {
+    const elsewhere = suspensionRecord({
+      id: 9,
+      memberId: '2001',
+      suspendedAt: new Date('2026-10-02T00:00:00Z'),
+    });
+    const { get, ws } = await setup({
+      seed: seed([
+        suspensionCardRow(),
+        workspaceRow({
+          id: 20,
+          period: OCT,
+          memberId: '2001',
+          status: 'suspended',
+          suspensionRecordId: 9,
+        }),
+      ]),
+      records: [elsewhere],
+      leader: true,
+    });
+    const res = await get(MONTH);
+    const [card] = cards(res.text);
+    expect(words(card)).not.toContain('Suspended outside the workspace');
+    expect(card).not.toContain('value="link_suspension"');
+    expect(card).not.toContain('name="recordId"');
+    expect(words(card)).toContain("Recorded on another month's card (#9)");
+    expect(ws.linkedRecordIds).toHaveBeenCalledWith([9]);
+  });
+
+  it('a workspace link read failure → 503 page', async () => {
+    const ws = fakeWorkspace(seed());
+    ws.linkedRecordIds.mockRejectedValue(new Error('db down'));
+    const { get } = await setup({
+      records: [
+        suspensionRecord({
+          id: 9,
+          memberId: '2001',
+          suspendedAt: new Date('2026-09-20T00:00:00Z'),
+        }),
+      ],
+      pages: { workspace: async () => ws },
+    });
+    expect((await get(MONTH)).status).toBe(503);
+  });
+
+  it('notes that begin with a newline round-trip through the notes textarea', async () => {
+    const { get } = await setup({
+      seed: seed([warningRow({ notes: '\nfirst line blank' })]),
+    });
+    const res = await get(MONTH);
+    expect(res.status).toBe(200);
+    // The parser drops one newline right after <textarea>: the template's own.
+    expect(res.raw).toContain(
+      '<textarea name="note" rows="3" maxlength="2000">\n\nfirst line blank</textarea>',
+    );
+  });
+
+  it('a second month-page load within 60 s reuses the Leadership answer', async () => {
+    const { get, isLeadership, advance } = await setup({ leader: true });
+    await get(MONTH);
+    await get(MONTH);
+    expect(isLeadership).toHaveBeenCalledTimes(1);
+    advance(LEADERSHIP_DISPLAY_CACHE_MS);
+    const later = await get(MONTH);
+    expect(isLeadership).toHaveBeenCalledTimes(2);
+    expect(later.text).toContain('Record suspension');
+  });
+
+  it('an unreachable Leadership check is not cached', async () => {
+    const { get, isLeadership } = await setup({
+      leader: new Error('discord down'),
+    });
+    await get(MONTH);
+    await get(MONTH);
+    expect(isLeadership).toHaveBeenCalledTimes(2);
+  });
+
   it('a month before 2026-09 → 404, a future month → 404, a junk period → 404', async () => {
     const { get, ws } = await setup();
     for (const path of [
@@ -695,6 +794,9 @@ describe('GET /dashboard/no-shows/:period (month cards)', () => {
     expect(res.text).toMatch(
       /<form method="post" action="\/dashboard\/no-shows\/2026-09\/sync">[\s\S]*?Set up from the stored report<\/button>/,
     );
+    expect(syncFormOf(res.text)).toContain(
+      `<input type="hidden" name="_csrf" value="${csrfOf(res.text)}" />`,
+    );
   });
 
   it('a behind workspace offers an update', async () => {
@@ -710,6 +812,9 @@ describe('GET /dashboard/no-shows/:period (month cards)', () => {
     expect(words(res.text)).toContain('A newer report');
     expect(res.text).toMatch(
       /action="\/dashboard\/no-shows\/2026-09\/sync">[\s\S]*?Update from the stored report<\/button>/,
+    );
+    expect(syncFormOf(res.text)).toContain(
+      `<input type="hidden" name="_csrf" value="${csrfOf(res.text)}" />`,
     );
   });
 
@@ -831,6 +936,15 @@ describe('GET /dashboard/no-shows/:period/rows/:rowId/suspend (confirm)', () => 
     expect(res.text).toContain('href="/dashboard/no-shows/2026-09">Cancel</a>');
   });
 
+  it('the confirm page always asks Discord live, even after a month-page load', async () => {
+    const { get, isLeadership } = await setup({ leader: true });
+    await get(MONTH);
+    expect(isLeadership).toHaveBeenCalledTimes(1);
+    expect((await get(CONFIRM)).status).toBe(200);
+    expect((await get(CONFIRM)).status).toBe(200);
+    expect(isLeadership).toHaveBeenCalledTimes(3);
+  });
+
   it('a Moderator never sees the confirm form', async () => {
     const { get, ws } = await setup({ leader: false });
     const res = await get(CONFIRM);
@@ -931,5 +1045,53 @@ describe('workspace GETs', () => {
     expect(known.text).toContain('Refreshing from Meetup.');
     const leader = await get(`${MONTH}?result=not-leadership`);
     expect(leader.text).toContain('Only the 1.5 Leadership Team can record');
+  });
+});
+
+describe('LeadershipDisplayCache', () => {
+  const at = (ms: number) => () => ms;
+
+  it('keeps leader and not-leader for 60 s, never unreachable', async () => {
+    let now = 0;
+    const cache = new LeadershipDisplayCache(() => now);
+    const ask = vi.fn(
+      async (): Promise<'leader' | 'not-leader' | 'unreachable'> => 'leader',
+    );
+    expect(await cache.get('u', ask)).toBe('leader');
+    expect(await cache.get('u', ask)).toBe('leader');
+    expect(ask).toHaveBeenCalledTimes(1);
+    now = LEADERSHIP_DISPLAY_CACHE_MS - 1;
+    await cache.get('u', ask);
+    expect(ask).toHaveBeenCalledTimes(1);
+    now = LEADERSHIP_DISPLAY_CACHE_MS;
+    await cache.get('u', ask);
+    expect(ask).toHaveBeenCalledTimes(2);
+    const down = vi.fn(
+      async (): Promise<'leader' | 'not-leader' | 'unreachable'> =>
+        'unreachable',
+    );
+    expect(await cache.get('v', down)).toBe('unreachable');
+    expect(await cache.get('v', down)).toBe('unreachable');
+    expect(down).toHaveBeenCalledTimes(2);
+  });
+
+  it('holds at most 200 users, evicting the oldest', async () => {
+    const cache = new LeadershipDisplayCache(at(0));
+    const ask = vi.fn(
+      async (): Promise<'leader' | 'not-leader' | 'unreachable'> =>
+        'not-leader',
+    );
+    for (let i = 0; i <= LEADERSHIP_DISPLAY_CACHE_MAX; i += 1) {
+      // eslint-disable-next-line no-await-in-loop -- one user at a time
+      await cache.get(`u${i}`, ask);
+    }
+    expect(LEADERSHIP_DISPLAY_CACHE_MAX).toBe(200);
+    expect(cache.size).toBe(200);
+    ask.mockClear();
+    await cache.get('u200', ask);
+    await cache.get('u1', ask);
+    expect(ask).not.toHaveBeenCalled();
+    await cache.get('u0', ask);
+    expect(ask).toHaveBeenCalledTimes(1);
   });
 });

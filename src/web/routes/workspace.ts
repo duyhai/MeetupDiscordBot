@@ -137,7 +137,9 @@ interface CardView {
   linked: SuspensionRecordState | undefined;
   upcoming: UpcomingEntry | undefined;
   events: WorkspaceEvent[];
-  /** The session holds the 1.5 Leadership Team role (checked live for this page). */
+  /** Records that already back some workspace row (linkedRecordIds): never offered for linking. */
+  linkedElsewhere: ReadonlySet<number>;
+  /** The session holds the 1.5 Leadership Team role (live, or cached up to 60 s: display only). */
   leader: boolean;
 }
 
@@ -347,13 +349,22 @@ function cardHtml(v: CardView): SafeHtml {
       >${label}
       <textarea name="note" rows="2" maxlength="${max}" required></textarea>
     </label>`;
-  // One line: the textarea's text is exactly the stored notes.
+  // One line: the textarea's text is exactly the stored notes. The parser
+  // drops one newline right after the start tag, so the template writes its
+  // own and notes that begin with a newline keep it.
   // prettier-ignore
-  const notesArea = html`<textarea name="note" rows="3" maxlength="${NOTES_MAX}">${row.notes}</textarea>`;
+  const notesArea = html`<textarea name="note" rows="3" maxlength="${NOTES_MAX}">\n${row.notes}</textarea>`;
   const floor = utcMidnight(periodDate(row.period));
-  const outside = v.records.filter(
+  const unlinked = v.records.filter(
     (r) => r.suspendedAt >= floor && r.id !== row.suspensionRecordId,
   );
+  const outside = unlinked.filter((r) => !v.linkedElsewhere.has(r.id));
+  const elsewhereBody = unlinked
+    .filter((r) => v.linkedElsewhere.has(r.id))
+    .map(
+      (r) =>
+        html`<p class="muted">Recorded on another month's card (#${r.id})</p>`,
+    );
   const outsideBody = outside.map(
     (r) =>
       html`<p class="note">
@@ -391,7 +402,7 @@ function cardHtml(v: CardView): SafeHtml {
           </p>`
     }
     ${caseBody(v)} ${upcomingBody(v.upcoming, v.now)} ${suspensionBody(v)}
-    ${outsideBody} ${messageBody(v, form, actions)}
+    ${outsideBody} ${elsewhereBody} ${messageBody(v, form, actions)}
     ${
       profile
         ? html`<p>
@@ -466,6 +477,54 @@ function leadershipNote(answer: LeadershipAnswer): SafeHtml | '' {
     : '';
 }
 
+/** How long the month page may reuse a user's Leadership answer, for display only. */
+export const LEADERSHIP_DISPLAY_CACHE_MS = 60_000;
+/** At most this many users are remembered; the oldest entry goes first. */
+export const LEADERSHIP_DISPLAY_CACHE_MAX = 200;
+
+/**
+ * Per-user, in-process memory of the live Leadership check, used only to
+ * show or hide the month page's record, link and void controls. Only
+ * 'leader' and 'not-leader' are kept, never 'unreachable'. Never the
+ * authority: the confirm page and every POST ask Discord live.
+ */
+export class LeadershipDisplayCache {
+  private readonly entries = new Map<
+    string,
+    { answer: 'leader' | 'not-leader'; at: number }
+  >();
+
+  constructor(private readonly now: () => number) {}
+
+  get size(): number {
+    return this.entries.size;
+  }
+
+  async get(
+    userId: string,
+    ask: () => Promise<LeadershipAnswer>,
+  ): Promise<LeadershipAnswer> {
+    const hit = this.entries.get(userId);
+    if (hit && this.now() - hit.at < LEADERSHIP_DISPLAY_CACHE_MS) {
+      return hit.answer;
+    }
+    this.entries.delete(userId);
+    const answer = await ask();
+    if (answer !== 'unreachable') {
+      this.entries.set(userId, { answer, at: this.now() });
+      // A Map keeps insertion order, and a refreshed entry was deleted
+      // first: the first keys are the oldest.
+      const excess = this.entries.size - LEADERSHIP_DISPLAY_CACHE_MAX;
+      if (excess > 0) {
+        [...this.entries.keys()]
+          .slice(0, excess)
+          .forEach((key) => this.entries.delete(key));
+      }
+    }
+    return answer;
+  }
+}
+
 function refusedConfirm(res: Response, answer: LeadershipAnswer): void {
   const unreachable = answer === 'unreachable';
   dashboardPage(res, {
@@ -503,6 +562,9 @@ export function registerWorkspaceRoutes(
     | 'isLeadership'
   >,
 ): void {
+  const displayLeadership = new LeadershipDisplayCache(() =>
+    deps.now().getTime(),
+  );
   router.get(DASHBOARD_PATHS.workspace, (async (_req, res) => {
     const now = deps.now();
     const months = workspaceMonths(now).slice(0, LIST_MONTHS);
@@ -568,8 +630,12 @@ export function registerWorkspaceRoutes(
     const page = parsePage(req.query.page);
     const offset = (page - 1) * PAGE_SIZE;
     const { session } = dashboardLocals(res);
-    // In parallel with the reads; it only decides what the cards show.
-    const leadership = leadershipOf(deps.isLeadership, session.userId);
+    // In parallel with the reads; it only decides what the cards show, so
+    // a cached answer (up to 60 s) is enough here. The confirm page and
+    // every POST ask Discord live.
+    const leadership = displayLeadership.get(session.userId, () =>
+      leadershipOf(deps.isLeadership, session.userId),
+    );
     const loaded = await load(res, WHAT, async () => {
       const [ws, snapshots, susp] = await Promise.all([
         deps.workspace(),
@@ -592,15 +658,45 @@ export function registerWorkspaceRoutes(
         susp.listByMemberIds(memberIds),
         susp.listByIds(linkedIds),
       ]);
-      return { state, rows, counts, snapshot, events, records, linked };
+      // Records a card would offer to link: is any already on some row?
+      const floor = utcMidnight(periodDate(period));
+      const candidates = [
+        ...new Set(
+          records
+            .filter((r) => r.suspendedAt >= floor && !linkedIds.includes(r.id))
+            .map((r) => r.id),
+        ),
+      ];
+      const linkedElsewhere =
+        candidates.length > 0
+          ? await ws.linkedRecordIds(candidates)
+          : new Set<number>();
+      return {
+        state,
+        rows,
+        counts,
+        snapshot,
+        events,
+        records,
+        linked,
+        linkedElsewhere,
+      };
     });
     if (!loaded.ok) {
       // Still observed: leadershipOf never rejects.
       await leadership;
       return;
     }
-    const { state, rows, counts, snapshot, events, records, linked } =
-      loaded.value;
+    const {
+      state,
+      rows,
+      counts,
+      snapshot,
+      events,
+      records,
+      linked,
+      linkedElsewhere,
+    } = loaded.value;
     const answer = await leadership;
     const leader = answer === 'leader';
     const asked = rows
@@ -681,6 +777,7 @@ export function registerWorkspaceRoutes(
         linked: linked.find((r) => r.id === row.suspensionRecordId),
         upcoming: upcoming.get(row.memberId),
         events: events.get(row.id) ?? [],
+        linkedElsewhere,
         leader,
       }),
     );

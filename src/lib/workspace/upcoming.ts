@@ -1,5 +1,6 @@
 import dayjs from 'dayjs';
 import type { Client } from 'discord.js';
+import { Logger } from 'tslog';
 
 import Configuration from '../../configuration.js';
 import type { KeyValueCache } from '../cache/base.js';
@@ -16,6 +17,9 @@ import {
   withOrganizerMeetup,
 } from '../reports/organizerMeetup.js';
 import { toEventRef } from '../reports/types.js';
+import { isMeetupUnauthorized } from '../helpers/organizerMeetupClient.js';
+
+const logger = new Logger({ name: 'workspaceUpcoming' });
 
 /**
  * Live upcoming RSVPs for the workspace's suspension cards. Only derived
@@ -238,9 +242,10 @@ export const UPCOMING_FETCH_CONCURRENCY = 5;
  * events, with payment info) through withOrganizerMeetup, as the report job
  * reads Meetup (the uncached organizer client, one forced refresh and a
  * re-run on a 401, which is safe because this only reads). The answer has an
- * entry for every requested id: undefined means the member left the group.
- * Any failure rejects the whole batch, which the loader shows as
- * unavailable and never caches.
+ * entry for every member it could read: undefined means the member left the
+ * group. A member whose read failed is left out, which the loader shows as
+ * unavailable for that card alone and never caches. A 401 (after the one
+ * retry) or a missing organizer login rejects the whole batch.
  */
 export function organizerFetchMany(
   getClient: () => Client | undefined,
@@ -253,15 +258,38 @@ export function organizerFetchMany(
         const lists = await mapWithConcurrency(
           memberIds,
           UPCOMING_FETCH_CONCURRENCY,
-          (id) =>
-            meetup.getMemberRsvpEvents(
-              id,
-              Configuration.meetup.groupId,
-              { rsvpStatus: ['YES'], eventStatus: ['UPCOMING'] },
-              { withPaymentInfo: true },
-            ),
+          async (id) => {
+            try {
+              return {
+                ok: true as const,
+                events: await meetup.getMemberRsvpEvents(
+                  id,
+                  Configuration.meetup.groupId,
+                  { rsvpStatus: ['YES'], eventStatus: ['UPCOMING'] },
+                  { withPaymentInfo: true },
+                ),
+              };
+            } catch (error: unknown) {
+              // A 401 fails the batch, so withOrganizerMeetup refreshes the
+              // token and re-runs it. Anything else costs only this member.
+              if (isMeetupUnauthorized(error)) {
+                throw error;
+              }
+              logger.warn(
+                `Upcoming RSVP read failed for one member: ${error instanceof Error ? error.name : 'Error'}`,
+              );
+              return { ok: false as const };
+            }
+          },
         );
-        return new Map(memberIds.map((id, i) => [id, lists[i]]));
+        const out = new Map<string, EventSummary[] | undefined>();
+        memberIds.forEach((id, i) => {
+          const one = lists[i];
+          if (one.ok) {
+            out.set(id, one.events);
+          }
+        });
+        return out;
       },
       organizer,
     );

@@ -57,12 +57,14 @@ const NAV = html`<nav class="site">
  * Fixed text for the workspace's copy boxes. A button[data-copy-near] copies
  * the textarea inside its [data-copy-box] (found by position: ids are never
  * interpolated); with data-then-submit it submits its form only after the
- * copy succeeded (Copy warning, then status warning_copied). With no
+ * copy succeeded (Copy warning, then status warning_copied), disabling the
+ * button first; clicks while a write is pending are ignored, so a double
+ * click sends once. A Copy warning click never submits natively. With no
  * clipboard, or a refused write, it says to copy by hand, as COPY_SCRIPT
  * does, and submits nothing. No ids, no data.
  */
 // eslint-disable-next-line @stylistic/max-len -- one line, so the script text is exactly what runs
-export const WORKSPACE_SCRIPT = staticRaw`document.querySelectorAll('button[data-copy-near]').forEach(function(b){b.addEventListener('click',function(e){var box=b.closest('[data-copy-box]');var t=box?box.querySelector('textarea'):null;if(!t){return;}var submit=b.hasAttribute('data-then-submit')?b.form:null;if(submit){e.preventDefault();}t.select();if(!navigator.clipboard){b.textContent='Select the text and copy it';return;}navigator.clipboard.writeText(t.value).then(function(){if(submit){submit.submit();}else{b.textContent='Copied';}},function(){b.textContent='Select the text and copy it';});});});`;
+export const WORKSPACE_SCRIPT = staticRaw`document.querySelectorAll('button[data-copy-near]').forEach(function(b){var busy=false;b.addEventListener('click',function(e){var submit=b.hasAttribute('data-then-submit')?b.form:null;if(submit){e.preventDefault();}var box=b.closest('[data-copy-box]');var t=box?box.querySelector('textarea'):null;if(busy||!t){return;}t.select();if(!navigator.clipboard){b.textContent='Select the text and copy it';return;}busy=true;navigator.clipboard.writeText(t.value).then(function(){if(submit){b.disabled=true;submit.submit();}else{busy=false;b.textContent='Copied';}},function(){busy=false;b.textContent='Select the text and copy it';});});});`;
 
 /** Fixed text: copies the value of the textarea named by data-copy. Never carries data. */
 // eslint-disable-next-line @stylistic/max-len -- one line, so the script text is exactly what runs
