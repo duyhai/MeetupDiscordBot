@@ -21,11 +21,21 @@ import {
   SnapshotMeta,
 } from '../../../src/lib/repositories/postgresReportSnapshotRepository.js';
 import {
+  IdentityNames,
+  IdentitySubject,
+  identityNameKey,
+} from '../../../src/lib/helpers/identity/names.js';
+import {
+  IdentityChangeFilter,
+  IdentityChangeListItem,
+} from '../../../src/lib/repositories/postgresIdentityRepository.js';
+import {
   SuspensionPageRow,
   SuspensionState,
 } from '../../../src/lib/repositories/postgresSuspensionRepository.js';
 import {
   DashboardPageDeps,
+  IdentityPageReader,
   PageRebuildResult,
   SnapshotPageReader,
   SuspensionPageReader,
@@ -339,6 +349,82 @@ export function fakeSuspensions(
   } satisfies SuspensionPageReader;
 }
 
+/** A real 1x1 PNG. */
+export const PNG_1X1 = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=',
+  'base64',
+);
+/** A JPEG/JFIF header. */
+export const JPEG_BYTES = Buffer.from([
+  0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0x00,
+]);
+/** A RIFF/WEBP header. */
+export const WEBP_BYTES = Buffer.concat([
+  Buffer.from('RIFF', 'latin1'),
+  Buffer.from([0x1a, 0x00, 0x00, 0x00]),
+  Buffer.from('WEBPVP8 ', 'latin1'),
+  Buffer.alloc(8, 1),
+]);
+
+export const DISCORD_SUBJECT = '123456789012345678';
+
+let changeIds = 0;
+
+/** One identity change list row: a Discord nickname change unless overridden. */
+export function identityChange(
+  overrides: Partial<IdentityChangeListItem> = {},
+): IdentityChangeListItem {
+  changeIds += 1;
+  return {
+    id: String(changeIds),
+    platform: 'discord',
+    scopeId: 'guild',
+    subjectId: DISCORD_SUBJECT,
+    field: 'nickname',
+    oldValue: 'Old Nick',
+    newValue: 'New Nick',
+    detectedAt: new Date('2026-10-02T17:00:00Z'),
+    source: 'sweep',
+    hasOldThumb: false,
+    hasNewThumb: false,
+    ...overrides,
+  };
+}
+
+/**
+ * An in-memory IdentityPageReader. `rows` are returned as listChangesPage's
+ * answer (sliced to the limit); `thumbs` maps `${id}:${side}` to bytes.
+ */
+export function fakeIdentity(
+  rows: IdentityChangeListItem[] = [],
+  thumbs: Record<string, Buffer> = {},
+  names: Record<string, string> = {},
+) {
+  return {
+    listChangesPage: vi.fn(
+      async (filter: IdentityChangeFilter): Promise<IdentityChangeListItem[]> =>
+        rows.slice(0, Math.min(50, filter.limit ?? 50)),
+    ),
+    getChangeThumb: vi.fn(
+      async (id: string, side: 'old' | 'new'): Promise<Buffer | undefined> =>
+        thumbs[`${id}:${side}`],
+    ),
+    countChangesSince: vi.fn(async (_since: Date): Promise<number> => 0),
+    listIdentityNames: vi.fn(
+      async (subjects: IdentitySubject[]): Promise<IdentityNames> => {
+        const out: IdentityNames = new Map();
+        subjects.forEach((s) => {
+          const name = names[s.subjectId];
+          if (name !== undefined) {
+            out.set(identityNameKey(s.platform, s.scopeId, s.subjectId), name);
+          }
+        });
+        return out;
+      },
+    ),
+  } satisfies IdentityPageReader;
+}
+
 /** The default seed: a September 2026 Hall of Fame row. */
 export const SEED: SeedRow[] = [seedRow('hall_of_fame', SEPT, hofPayload())];
 
@@ -369,6 +455,9 @@ export function fakePageDeps(
           }),
         ],
       }),
+    // The access matrix asks for change 1's old thumb: a 1x1 PNG.
+    identity: async () =>
+      fakeIdentity([identityChange({ id: '1' })], { '1:old': PNG_1X1 }),
     rebuild: vi.fn(async (): Promise<PageRebuildResult> => ({
       status: 'started',
       done: Promise.resolve({ ok: true }),

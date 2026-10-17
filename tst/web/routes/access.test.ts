@@ -145,6 +145,8 @@ describe('access matrix', () => {
     expect(labels).toContain('GET /no-show-history/:period');
     expect(labels).toContain('GET /no-show-history/members/:memberId');
     expect(labels).toContain('POST /reports/:period/refresh');
+    expect(labels).toContain('GET /identity');
+    expect(labels).toContain('GET /identity/changes/:id/thumb/:side');
     expect(UNSAFE.length).toBeGreaterThan(0);
   });
 

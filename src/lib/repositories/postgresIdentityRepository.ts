@@ -74,6 +74,34 @@ function scopeClause(next: number): { sql: string; params: string[] } {
   };
 }
 
+/** A Discord or Meetup member id: digits only. */
+const SUBJECT_ID = /^[0-9]{1,20}$/;
+/** A change row id: digits only, and at most 18 so it always fits a bigint. */
+const CHANGE_ID = /^[0-9]{1,18}$/;
+const PAGE_LIMIT = 50;
+
+/** A dashboard list row: metadata plus whether each thumbnail exists, never the bytes. */
+export interface IdentityChangeListItem extends IdentityChangeMetadata {
+  hasOldThumb: boolean;
+  hasNewThumb: boolean;
+}
+
+/** The identity page's filters. Every field is optional; a malformed one is a RangeError, never SQL. */
+export interface IdentityChangeFilter {
+  from?: Date;
+  to?: Date;
+  platform?: IdentityPlatform;
+  /** ^[0-9]{1,20}$ */
+  subjectId?: string;
+  /** ^[0-9]{1,18}$, keyset: only rows with id < beforeId. */
+  beforeId?: string;
+  /** 1..50 (default and anything else: 50). */
+  limit?: number;
+}
+
+const isValidDate = (value: unknown): value is Date =>
+  value instanceof Date && !Number.isNaN(value.getTime());
+
 interface SnapshotRow {
   scope_id: string;
   discord_user_id: string;
@@ -455,6 +483,106 @@ export class PostgresIdentityRepository {
         ],
       );
     }
+  }
+
+  /**
+   * One page of the dashboard's identity changes, newest id first.
+   *
+   * Keyset paging on `id` (a BIGSERIAL), not on detected_at: the order is
+   * total and a change recorded between two page reads lands before page 1,
+   * so it never shifts a later page. Never selects old_thumb/new_thumb: the
+   * IS NOT NULL tests read the null bitmap, not the bytes. Every filter is
+   * a bound parameter.
+   */
+  async listChangesPage(
+    filter: IdentityChangeFilter,
+  ): Promise<IdentityChangeListItem[]> {
+    if (
+      (filter.subjectId !== undefined && !SUBJECT_ID.test(filter.subjectId)) ||
+      (filter.beforeId !== undefined && !CHANGE_ID.test(filter.beforeId)) ||
+      (filter.platform !== undefined &&
+        filter.platform !== 'discord' &&
+        filter.platform !== 'meetup') ||
+      (filter.from !== undefined && !isValidDate(filter.from)) ||
+      (filter.to !== undefined && !isValidDate(filter.to))
+    ) {
+      throw new RangeError('bad identity change filter');
+    }
+    const requested = Math.trunc(filter.limit ?? PAGE_LIMIT);
+    const limit =
+      requested >= 1 && requested <= PAGE_LIMIT ? requested : PAGE_LIMIT;
+    const scope = scopeClause(1);
+    const result = await this.pool.query<
+      MetadataRow & { has_old_thumb: boolean; has_new_thumb: boolean }
+    >(
+      `SELECT id::text AS id, platform, scope_id, subject_id, field,
+              old_value, new_value, detected_at, source,
+              old_thumb IS NOT NULL AS has_old_thumb,
+              new_thumb IS NOT NULL AS has_new_thumb
+         FROM member_identity_changes
+        WHERE ${scope.sql}
+          AND ($3::timestamptz IS NULL OR detected_at >= $3::timestamptz)
+          AND ($4::timestamptz IS NULL OR detected_at < $4::timestamptz)
+          AND ($5::text IS NULL OR platform = $5::text)
+          AND ($6::text IS NULL OR subject_id = $6::text)
+          AND ($7::bigint IS NULL OR member_identity_changes.id < $7::bigint)
+        -- Qualified: a bare "id" here is the id::text output column, which
+        -- sorts '999' above '1077'.
+        ORDER BY member_identity_changes.id DESC
+        LIMIT $8`,
+      [
+        ...scope.params,
+        filter.from ?? null,
+        filter.to ?? null,
+        filter.platform ?? null,
+        filter.subjectId ?? null,
+        filter.beforeId ?? null,
+        limit,
+      ],
+    );
+    return result.rows.map((row) => ({
+      ...toChangeMetadata(row),
+      hasOldThumb: row.has_old_thumb,
+      hasNewThumb: row.has_new_thumb,
+    }));
+  }
+
+  /**
+   * One thumbnail: one column of one change row, looked up by the row's id
+   * alone (never by member), inside the monitored scopes. Undefined when
+   * the row is absent, out of scope, or has no image on that side.
+   */
+  async getChangeThumb(
+    id: string,
+    side: 'old' | 'new',
+  ): Promise<Buffer | undefined> {
+    if (
+      typeof id !== 'string' ||
+      !CHANGE_ID.test(id) ||
+      (side !== 'old' && side !== 'new')
+    ) {
+      throw new RangeError('bad thumbnail request');
+    }
+    // From the closed union, never from request text.
+    const column = side === 'old' ? 'old_thumb' : 'new_thumb';
+    const scope = scopeClause(2);
+    const result = await this.pool.query<{ thumb: Buffer | null }>(
+      `SELECT ${column} AS thumb FROM member_identity_changes
+        WHERE id = $1::bigint AND ${scope.sql}`,
+      [id, ...scope.params],
+    );
+    return result.rows[0]?.thumb ?? undefined;
+  }
+
+  /** Changes detected at or after `since`, in scope. */
+  async countChangesSince(since: Date): Promise<number> {
+    const scope = scopeClause(2);
+    const result = await this.pool.query<{ count: string }>(
+      `SELECT count(*)::text AS count FROM member_identity_changes
+        WHERE detected_at >= $1 AND ${scope.sql}`,
+      [since, ...scope.params],
+    );
+    return Number(result.rows[0].count);
   }
 
   /**

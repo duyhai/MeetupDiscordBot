@@ -11,6 +11,7 @@ import {
   requestRebuild,
 } from '../lib/reports/buildJob.js';
 import { PostgresReportSnapshotRepository } from '../lib/repositories/postgresReportSnapshotRepository.js';
+import { PostgresIdentityRepository } from '../lib/repositories/postgresIdentityRepository.js';
 import { PostgresSuspensionRepository } from '../lib/repositories/postgresSuspensionRepository.js';
 import { ApplicationCache } from '../util/cache.js';
 import {
@@ -161,6 +162,7 @@ export function dashboardPageDeps(): DashboardPageDeps {
       );
     },
     suspensions: () => PostgresSuspensionRepository.instance(),
+    identity: () => PostgresIdentityRepository.instance(),
   };
 }
 

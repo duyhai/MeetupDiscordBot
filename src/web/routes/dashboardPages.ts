@@ -3,6 +3,7 @@ import express from 'express';
 import { LogEntry } from '../../lib/helpers/discordLogger.js';
 import { RebuildResult } from '../../lib/reports/buildJob.js';
 import { Period } from '../../lib/reports/period.js';
+import { PostgresIdentityRepository } from '../../lib/repositories/postgresIdentityRepository.js';
 import { PostgresReportSnapshotRepository } from '../../lib/repositories/postgresReportSnapshotRepository.js';
 import { PostgresSuspensionRepository } from '../../lib/repositories/postgresSuspensionRepository.js';
 import { AccessCheck } from '../roleGate.js';
@@ -12,6 +13,7 @@ import {
   registerOrganizerLoginRoutes,
 } from './organizerLogin.js';
 import { registerHallOfFameRoutes } from './hallOfFame.js';
+import { registerIdentityRoutes } from './identity.js';
 import { registerNoShowHistoryRoutes } from './noShowHistory.js';
 import { registerRefreshRoute } from './refresh.js';
 import { registerSessionRoutes } from './sessions.js';
@@ -33,6 +35,18 @@ export type SuspensionPageReader = Pick<
   'listPage' | 'countByState'
 >;
 
+/**
+ * The identity reads the changes page and thumbnail route use: never record
+ * or delete. countChangesSince is for the home cards (Task 11).
+ */
+export type IdentityPageReader = Pick<
+  PostgresIdentityRepository,
+  | 'listChangesPage'
+  | 'getChangeThumb'
+  | 'countChangesSince'
+  | 'listIdentityNames'
+>;
+
 /** requestRebuild's answer, or 'unavailable' when the bot is not ready to build. */
 export type PageRebuildResult =
   RebuildResult | { status: 'unavailable'; message: string };
@@ -52,6 +66,8 @@ export interface DashboardPageDeps {
   rebuild: (period: Period, requestedBy: string) => Promise<PageRebuildResult>;
   /** The suspension records store. */
   suspensions: () => Promise<SuspensionPageReader>;
+  /** The identity change store (pool of 2, shared with the sweeps). */
+  identity: () => Promise<IdentityPageReader>;
 }
 
 /**
@@ -68,6 +84,7 @@ export function registerDashboardPages(
   registerNoShowHistoryRoutes(router, deps);
   registerRefreshRoute(router, deps);
   registerSuspensionRoutes(router, deps);
+  registerIdentityRoutes(router, deps);
   // Tasks 5-10 add one register…Routes(router, deps) line each.
 }
 
