@@ -95,6 +95,11 @@ describe('dashboardPaths', () => {
 
   it('dashboardPath refuses a parameterised path', () => {
     expect(dashboardPath(DASHBOARD_PATHS.trends)).toBe('/dashboard/trends');
+    // The sessions pages are in the shared table too (nav, forms, redirects).
+    expect(dashboardPath(DASHBOARD_PATHS.sessions)).toBe('/dashboard/sessions');
+    expect(dashboardPath(DASHBOARD_PATHS.revokeSessions)).toBe(
+      '/dashboard/sessions/revoke',
+    );
     // The type refuses a parameterised template (tsc checks the directive);
     // the runtime check still throws if a cast slips one through.
     // @ts-expect-error a template with a parameter is not a dashboardPath

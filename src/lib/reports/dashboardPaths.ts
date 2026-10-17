@@ -26,6 +26,8 @@ export const DASHBOARD_PATHS = {
   linkProgress: '/link-progress',
   trends: '/trends',
   refresh: '/reports/:period/refresh',
+  sessions: '/sessions',
+  revokeSessions: '/sessions/revoke',
 } as const;
 
 export type DashboardPathTemplate =

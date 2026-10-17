@@ -137,7 +137,7 @@ const auditActivity = async (entry: LogEntry) => {
   return logActivity(discordClient, entry);
 };
 
-/** Production page deps. Later tasks add one field each, wired to the repositories' instance(). */
+/** Production page deps, each read wired to its repository's instance(). */
 export function dashboardPageDeps(): DashboardPageDeps {
   return {
     now: () => new Date(),

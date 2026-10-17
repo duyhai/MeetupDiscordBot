@@ -46,7 +46,7 @@ export type LinkProgressPageReader = Pick<
 
 /**
  * The identity reads the changes page and thumbnail route use: never record
- * or delete. countChangesSince is for the home cards (Task 11).
+ * or delete. countChangesSince is for the home page's report cards.
  */
 export type IdentityPageReader = Pick<
   PostgresIdentityRepository,

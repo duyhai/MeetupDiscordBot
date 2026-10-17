@@ -46,7 +46,7 @@ const NAV = html`<nav class="site">
     >Link progress</a
   >
   <a href="${localUrl(dashboardPath(DASHBOARD_PATHS.trends))}">Trends</a>
-  <a href="${localUrl(`${DASHBOARD_BASE}/sessions`)}">Sessions</a>
+  <a href="${localUrl(dashboardPath(DASHBOARD_PATHS.sessions))}">Sessions</a>
 </nav>`;
 
 /** Fixed text: copies the value of the textarea named by data-copy. Never carries data. */

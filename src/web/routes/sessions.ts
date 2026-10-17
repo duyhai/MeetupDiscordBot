@@ -2,6 +2,10 @@ import express, { RequestHandler } from 'express';
 import { Logger } from 'tslog';
 
 import { LogEntry } from '../../lib/helpers/discordLogger.js';
+import {
+  DASHBOARD_PATHS,
+  dashboardPath,
+} from '../../lib/reports/dashboardPaths.js';
 import { dashboardLocals } from '../dashboardRouter.js';
 import { html, localUrl } from '../html.js';
 import { dashboardPage } from '../pageKit.js';
@@ -9,8 +13,8 @@ import type { DashboardPageDeps } from './dashboardPages.js';
 
 const logger = new Logger({ name: 'dashboard' });
 
-export const SESSIONS_PATH = '/sessions';
-export const REVOKE_SESSIONS_PATH = '/sessions/revoke';
+export const SESSIONS_PATH = DASHBOARD_PATHS.sessions;
+export const REVOKE_SESSIONS_PATH = DASHBOARD_PATHS.revokeSessions;
 
 const DISCORD_ID = /^[0-9]{17,20}$/;
 
@@ -33,7 +37,8 @@ function noticeFor(code: unknown) {
   return html`<p class="note">${NOTICES[code as NoticeCode]}</p>`;
 }
 
-const back = (code: NoticeCode) => `/dashboard${SESSIONS_PATH}?done=${code}`;
+const back = (code: NoticeCode) =>
+  `${dashboardPath(SESSIONS_PATH)}?done=${code}`;
 
 /**
  * Sign out everywhere. Any staff member may end their own sessions; ending
@@ -66,7 +71,7 @@ export function registerSessionRoutes(
           ${noticeFor(req.query.done)}
           <form
             method="post"
-            action="${localUrl(`/dashboard${REVOKE_SESSIONS_PATH}`)}"
+            action="${localUrl(dashboardPath(REVOKE_SESSIONS_PATH))}"
           >
             <input type="hidden" name="_csrf" value="${session.csrfToken}" />
             <input type="hidden" name="userId" value="${session.userId}" />
@@ -81,7 +86,7 @@ export function registerSessionRoutes(
           </p>
           <form
             method="post"
-            action="${localUrl(`/dashboard${REVOKE_SESSIONS_PATH}`)}"
+            action="${localUrl(dashboardPath(REVOKE_SESSIONS_PATH))}"
           >
             <input type="hidden" name="_csrf" value="${session.csrfToken}" />
             <label
