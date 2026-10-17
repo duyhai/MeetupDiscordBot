@@ -472,6 +472,14 @@ describe('per-page polish', () => {
     expect(STYLE.value).toMatch(/img\.thumb\{[^}]*max-width:100%/);
   });
 
+  it('member text wraps anywhere, so a long name or note never widens the page', () => {
+    // A note on the confirm page sits in a <p>, outside any table cell or
+    // heading: without this, an unbroken name scrolls the page sideways.
+    expect(STYLE.value).toMatch(
+      /(?:^|\})[^{}]*\bbdi\b[^{}]*\{[^}]*overflow-wrap:anywhere/,
+    );
+  });
+
   it('pager and choice links are 44px targets', () => {
     expect(STYLE.value).toMatch(
       /nav\.pager a,nav\.pager strong,nav\.pager span\{[^}]*min-height:var\(--tap\)/,

@@ -38,7 +38,7 @@ export const STYLE = staticRaw`
 *,*::before,*::after{box-sizing:border-box}
 html{-webkit-text-size-adjust:100%;text-size-adjust:100%}
 body{margin:0;font-family:var(--font);font-size:var(--t-base);line-height:1.5;color:var(--fg);background:var(--bg)}
-h1,h2,h3{overflow-wrap:anywhere}
+h1,h2,h3,bdi{overflow-wrap:anywhere}
 h1{font-size:var(--t-2xl);line-height:1.2;margin:0 0 var(--s3)}
 h2{font-size:var(--t-xl);line-height:1.25;margin:0 0 var(--s3)}
 h3{font-size:var(--t-lg);line-height:1.3;margin:0 0 var(--s2)}
