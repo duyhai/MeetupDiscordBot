@@ -1,0 +1,39 @@
+import {
+  comparePeriods,
+  Period,
+  periodOf,
+  previousPeriod,
+} from '../reports/period.js';
+
+/**
+ * The first month with a workspace: the latest finished month when PR 4
+ * shipped. Older months stay read-only history.
+ */
+export const WORKSPACE_FIRST_PERIOD: Period = { year: 2026, month: 9 };
+const MAX_MONTHS = 240;
+
+/** WORKSPACE_FIRST_PERIOD through the current Pacific month, the open month included. */
+export function isWorkspaceMonth(p: Period | undefined, now: Date): boolean {
+  return (
+    Number.isInteger(p?.year) &&
+    Number.isInteger(p?.month) &&
+    p.month >= 1 &&
+    p.month <= 12 &&
+    comparePeriods(p, WORKSPACE_FIRST_PERIOD) >= 0 &&
+    comparePeriods(p, periodOf(now)) <= 0
+  );
+}
+
+/** Newest first: the current Pacific month back to WORKSPACE_FIRST_PERIOD. */
+export function workspaceMonths(now: Date): Period[] {
+  const months: Period[] = [];
+  for (
+    let p = periodOf(now);
+    comparePeriods(p, WORKSPACE_FIRST_PERIOD) >= 0 &&
+    months.length < MAX_MONTHS;
+    p = previousPeriod(p)
+  ) {
+    months.push(p);
+  }
+  return months;
+}
