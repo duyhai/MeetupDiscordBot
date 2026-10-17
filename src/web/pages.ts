@@ -97,6 +97,7 @@ th,td{text-align:left;padding:var(--s2) var(--s3);border-bottom:1px solid var(--
 overflow-wrap:anywhere}
 th{font-size:var(--t-sm);font-weight:600;color:var(--muted)}
 td ul{margin:var(--s1) 0 0;padding-left:var(--s4)}
+.rank-inline{display:none}
 .table-scroll{overflow-x:auto;max-width:100%;margin:0 0 var(--s3);border:1px solid var(--line);border-radius:8px}
 .table-scroll th,.table-scroll td{white-space:nowrap;overflow-wrap:normal}
 .table-scroll tr:last-child td{border-bottom:0}
@@ -153,10 +154,13 @@ table.stack,table.stack tbody{display:block;width:100%}
 table.stack thead{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
 table.stack tr{display:block;background:var(--raised);border:1px solid var(--line);border-radius:8px;
 padding:var(--s2) var(--s3);margin:0 0 var(--s3)}
-table.stack td{display:table;width:100%;table-layout:fixed;border-collapse:separate;border-spacing:0;border:0;
-padding:var(--s1) 0}
-table.stack td::before{content:attr(data-label);display:table-cell;width:40%;padding-right:var(--s3);
-font-size:var(--t-sm);font-weight:600;color:var(--muted)}
+table.stack td{display:flow-root;border:0;padding:var(--s1) 0 var(--s1) 40%}
+/* The label floats in the cell's 40% left padding (2/3 of the 60% content box). It stays announced: no
+alt text (attr(data-label) / ""), since the thead is hidden here and the label is the only column name readers get. */
+table.stack td::before{content:attr(data-label);float:left;width:calc(66.667% - var(--s3));margin-left:-66.667%;
+padding-right:var(--s3);box-sizing:content-box;font-size:var(--t-sm);font-weight:600;color:var(--muted)}
+table.stack td.rank{display:none}
+.rank-inline{display:inline}
 form.filters label{flex:1 1 100%}
 form.filters input,form.filters select,form.filters button{width:100%}}
 @media (prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;

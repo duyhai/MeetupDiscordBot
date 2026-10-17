@@ -392,7 +392,9 @@ describe('URL attributes, widened', () => {
       for (const make of [
         () => html`<td data-label="${'Month'}">x</td>`,
         () => html`<td data-label="Mo${'nth'}">x</td>`,
-        () => html`<td data-label="${'Month'}">x</td>`,
+        // Single quotes; prettier would rewrite them to double ones.
+        // prettier-ignore
+        () => html`<td data-label='${'Month'}'>x</td>`,
         () => html`<td DATA-LABEL="${'Month'}">x</td>`,
         () => html`<td data-Label="${7}">x</td>`,
       ]) {

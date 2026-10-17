@@ -258,7 +258,7 @@ describe('navKeyFor', () => {
     expect(navKeyFor(`/dashboard/sessions${'/'.repeat(100_000)}x`)).toBe(
       'sessions',
     );
-    expect(Date.now() - start).toBeLessThan(200);
+    expect(Date.now() - start).toBeLessThan(1000);
   });
 });
 

@@ -36,7 +36,7 @@ const CASE_MEMBER = '2000';
  * fixtures that fill every table: both report types, a member history, an
  * image change, and a workspace card for a member in the report.
  */
-function buildRouter() {
+function buildRouter(opts: { outcomesFail?: boolean } = {}) {
   const { deps } = makeDeps({ now: () => PAGE_NOW.getTime() });
   const rows = [
     seedRow('hall_of_fame', SEPT, hofPayload()),
@@ -51,7 +51,43 @@ function buildRouter() {
       cleared: false,
       departed: false,
     },
+    // Before the workspace: an empty outcome cell, still labelled.
+    {
+      period: { year: 2026, month: 8 },
+      builtAt: new Date('2026-09-01T15:00:00Z'),
+      asOf: '2026-09-01T07:00:00.000Z',
+      noShowCase: noShowCase(0),
+      cleared: false,
+      departed: false,
+    },
   ];
+  const workspace = fakeWorkspace({
+    rows: [
+      workspaceRow(),
+      workspaceRow({ id: 2, memberId: CASE_MEMBER }),
+      workspaceRow({
+        id: 3,
+        memberId: '3001',
+        classification: 'warning',
+        status: 'warning_copied',
+      }),
+      workspaceRow({ id: 4, memberId: '3002', status: 'on_hold' }),
+    ],
+    months: [
+      {
+        period: SEPT,
+        snapshotId: 1,
+        snapshotBuiltAt: new Date('2026-10-01T15:00:00Z'),
+        syncedAt: new Date('2026-10-01T16:00:00Z'),
+      },
+    ],
+    events: [],
+  });
+  if (opts.outcomesFail) {
+    // The outcome column's "(unavailable)" state.
+    workspace.statusesForMember.mockRejectedValue(new Error('db down'));
+    workspace.statusesByMember.mockRejectedValue(new Error('db down'));
+  }
   return createDashboardRouter({
     ...deps,
     protectedRoutes: (r) =>
@@ -70,38 +106,16 @@ function buildRouter() {
                 hasNewThumb: true,
               }),
             ]),
-          workspace: async () =>
-            fakeWorkspace({
-              rows: [
-                workspaceRow(),
-                workspaceRow({ id: 2, memberId: CASE_MEMBER }),
-                workspaceRow({
-                  id: 3,
-                  memberId: '3001',
-                  classification: 'warning',
-                  status: 'warning_copied',
-                }),
-                workspaceRow({ id: 4, memberId: '3002', status: 'on_hold' }),
-              ],
-              months: [
-                {
-                  period: SEPT,
-                  snapshotId: 1,
-                  snapshotBuiltAt: new Date('2026-10-01T15:00:00Z'),
-                  syncedAt: new Date('2026-10-01T16:00:00Z'),
-                },
-              ],
-              events: [],
-            }),
+          workspace: async () => workspace,
         }),
       }),
   });
 }
 
-async function setup() {
+async function setup(opts: { outcomesFail?: boolean } = {}) {
   const app = express();
   app.set('trust proxy', 1);
-  app.use(DASHBOARD_BASE, buildRouter());
+  app.use(DASHBOARD_BASE, buildRouter(opts));
   const req = clientFor(await listen(app));
   const cookie = await signIn(req);
   const get = async (path: string) => req.get(path).set('Cookie', cookie);
@@ -172,7 +186,7 @@ function labelProblems(markup: string): string[] {
   const problems: string[] = [];
   [...body.matchAll(/<tr>([\s\S]*?)<\/tr>/g)].forEach((row, r) => {
     const labels = [...row[1].matchAll(/<td([^>]*)>/g)].map(
-      (td) => /^ data-label="([^"]+)"$/.exec(td[1])?.[1],
+      (td) => /(?:^| )data-label="([^"]+)"/.exec(td[1])?.[1],
     );
     if (labels.length !== columns.length) {
       problems.push(
@@ -225,6 +239,61 @@ describe('tables on narrow screens', () => {
     const { get } = await setup();
     const scrolling = tables((await get(path)).text).filter((t) => t.scroll);
     expect(scrolling).toHaveLength(count);
+  });
+
+  it.each([
+    [`/dashboard/no-show-history/members/${CASE_MEMBER}`, 2],
+    ['/dashboard/no-show-history/2026-09', 2],
+  ])(
+    '%s labels the outcome cells when the outcomes are unavailable',
+    async (path, rows) => {
+      const { get } = await setup({ outcomesFail: true });
+      const [t] = tables((await get(path)).text);
+      expect(t.markup).toContain('<th>Outcome (unavailable)</th>');
+      expect(t.markup.match(/<td data-label="Outcome">/g)).toHaveLength(rows);
+      expect(labelProblems(t.markup)).toEqual([]);
+    },
+  );
+
+  it('a member history month before the workspace has a labelled, empty outcome cell', async () => {
+    const { get } = await setup();
+    const [t] = tables(
+      (await get(`/dashboard/no-show-history/members/${CASE_MEMBER}`)).text,
+    );
+    expect(t.markup).toContain('<th>Outcome</th>');
+    expect(t.markup).toContain('<td data-label="Outcome"></td>');
+  });
+
+  it('stacked cells stay in normal flow, so the spaces between inline children survive', () => {
+    // display:table (or table-cell) on the cell makes Blink drop the
+    // whitespace between its inline children: "Member 1History".
+    const rules = [
+      ...STYLE.value.matchAll(/([^{}]*table\.stack td[^{}]*)\{([^}]*)\}/g),
+    ];
+    expect(rules.length).toBeGreaterThan(0);
+    for (const [, selector, body] of rules) {
+      expect(body, selector).not.toMatch(/display:table/);
+    }
+    // The cell is a block formatting context; the label floats in its
+    // left padding, so a two-line label grows the cell instead of
+    // overlapping the next one.
+    expect(STYLE.value).toMatch(/table\.stack td\{[^}]*display:flow-root/);
+    expect(STYLE.value).toMatch(/table\.stack td::before\{[^}]*float:left/);
+  });
+
+  it('the Hall of Fame rank folds into the host cell on phones', async () => {
+    const { get } = await setup();
+    const text = collapse((await get('/dashboard/hall-of-fame/2026-09')).text);
+    expect(text).toContain('<td class="rank" data-label="#">1</td>');
+    expect(text).toMatch(
+      /<td data-label="Host"><span class="rank-inline">1\.<\/span>/,
+    );
+    const narrow =
+      /@media \(max-width:639\.98px\)\{([\s\S]*?)\}\}/.exec(STYLE.value)?.[1] ??
+      '';
+    expect(narrow).toMatch(/table\.stack td\.rank\{display:none\}/);
+    expect(narrow).toMatch(/\.rank-inline\{display:inline\}/);
+    expect(STYLE.value).toMatch(/(?:^|\})\s*\.rank-inline\{display:none\}/);
   });
 
   it('the stylesheet stacks .stack tables below 640px and labels each cell', () => {

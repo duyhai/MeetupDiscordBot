@@ -178,8 +178,9 @@ function monthPage(
         ${rows.map(
           (h, i) =>
             html`<tr>
-              <td data-label="#">${start + i + 1}</td>
+              <td class="rank" data-label="#">${start + i + 1}</td>
               <td data-label="Host">
+                <span class="rank-inline">${start + i + 1}.</span>
                 ${memberLink(h.host)}${
                   h.isNew ? html` <span class="badge ok">New host</span>` : ''
                 }
