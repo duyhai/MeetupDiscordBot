@@ -246,15 +246,6 @@ export interface Harness {
     typeof vi.fn<() => Promise<LinkProgressCounts>>
   >;
   alert: ReturnType<typeof vi.fn<(entry: LogEntry) => Promise<boolean>>>;
-  postRoleNotice: ReturnType<
-    typeof vi.fn<
-      (
-        roleIds: readonly string[],
-        content: string,
-        entry: LogEntry,
-      ) => Promise<boolean>
-    >
-  >;
   cacheSpy: ReturnType<typeof vi.fn<() => Promise<FakeCache>>>;
 }
 
@@ -280,10 +271,6 @@ export function makeDeps(options: HarnessOptions = {}): Harness {
   );
   const collectLinkProgress = vi.fn(() => Promise.resolve({ ...LINK_COUNTS }));
   const alert = vi.fn((_entry: LogEntry) => Promise.resolve(true));
-  const postRoleNotice = vi.fn(
-    (_roleIds: readonly string[], _content: string, _entry: LogEntry) =>
-      Promise.resolve(true),
-  );
   const cacheSpy = vi.fn(() => Promise.resolve(cache));
   const deps: BuildJobDeps = {
     now: () => clock.now(),
@@ -294,7 +281,6 @@ export function makeDeps(options: HarnessOptions = {}): Harness {
     fetchMonthReports,
     collectLinkProgress,
     alert,
-    postRoleNotice,
     reportReadyEnabled: () => options.reportReadyEnabled ?? true,
     newLeaseValue: () => {
       leases += 1;
@@ -311,7 +297,6 @@ export function makeDeps(options: HarnessOptions = {}): Harness {
     fetchMonthReports,
     collectLinkProgress,
     alert,
-    postRoleNotice,
     cacheSpy,
   };
 }

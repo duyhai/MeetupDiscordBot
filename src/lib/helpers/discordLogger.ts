@@ -1,9 +1,4 @@
-import {
-  Client,
-  EmbedBuilder,
-  MessageMentionOptions,
-  TextChannel,
-} from 'discord.js';
+import { Client, EmbedBuilder, TextChannel } from 'discord.js';
 import { Logger } from 'tslog';
 
 import {
@@ -19,11 +14,6 @@ export interface LogEntry {
   description?: string;
   fields?: { inline?: boolean; name: string; value: string }[];
   title: string;
-}
-
-interface PostOptions {
-  allowedMentions: MessageMentionOptions;
-  content?: string;
 }
 
 /**
@@ -66,8 +56,6 @@ async function postToChannel(
   channelId: string,
   color: number,
   entry: LogEntry,
-  // Log entries mention users for readability; by default never ping them.
-  options: PostOptions = { allowedMentions: { parse: [] } },
 ): Promise<boolean> {
   try {
     const channel = await client.channels.fetch(channelId);
@@ -86,9 +74,10 @@ async function postToChannel(
       embed.addFields(field);
     });
     await channel.send({
-      ...(options.content !== undefined && { content: options.content }),
       embeds: [embed],
-      allowedMentions: options.allowedMentions,
+      // Nothing this bot logs ever pings (Hai, 2026-10-16): embeds never
+      // ping, nothing here sends content, and no mention type is parsed.
+      allowedMentions: { parse: [] },
     });
     return true;
   } catch (error) {
@@ -132,29 +121,4 @@ export async function logAlert(
     EMBED_COLORS.alert,
     entry,
   );
-}
-
-/**
- * Posts an embed plus `content` to a channel, letting exactly `roleIds` ping
- * (embeds never ping, so mentions must be in content). Never pings users,
- * @everyone or other roles. Swallows errors like the other log functions;
- * returns whether the post landed.
- */
-export async function postRoleNotice(
-  client: Client,
-  channelId: string,
-  roleIds: string[],
-  content: string,
-  entry: LogEntry,
-): Promise<boolean> {
-  // A nullish or malformed list must not reject: like every log function,
-  // the notice reports failure instead of throwing at its caller.
-  if (!Array.isArray(roleIds)) {
-    logPostFailure(channelId, entry, new TypeError('roleIds is not an array'));
-    return false;
-  }
-  return postToChannel(client, channelId, EMBED_COLORS.info, entry, {
-    content,
-    allowedMentions: { parse: [], roles: [...roleIds] },
-  });
 }

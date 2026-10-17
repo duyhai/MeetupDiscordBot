@@ -5,18 +5,9 @@ import { ClientError } from 'graphql-request';
 import { Logger } from 'tslog';
 
 import Configuration from '../../configuration.js';
-import {
-  BASE_DISCORD_BOT_URL,
-  BOT_ALERTS_CHANNEL_ID,
-  SERVER_ROLES,
-} from '../../constants.js';
 import { ApplicationCache } from '../../util/cache.js';
 import { KeyValueCache } from '../cache/base.js';
-import {
-  LogEntry,
-  logAlert,
-  postRoleNotice,
-} from '../helpers/discordLogger.js';
+import { LogEntry, logAlert } from '../helpers/discordLogger.js';
 import { safeErrorSummary } from '../helpers/identity/digest.js';
 import { PostgresDashboardNoticeRepository } from '../repositories/postgresDashboardNoticeRepository.js';
 import { PostgresLinkProgressRepository } from '../repositories/postgresLinkProgressRepository.js';
@@ -136,19 +127,10 @@ function stableJson(value: unknown): string {
 }
 
 /**
- * The report-ready notice links to the month's dashboard page, which ships in
- * PR 4; that PR flips this in the same change. Deliberately a constant, not
- * a config var.
+ * Task 10 of PR 4 turns this on with the workspace link. Deliberately a
+ * constant, not a config var.
  */
 export const REPORT_READY_ENABLED = false;
-
-export const REPORT_READY_ROLE_IDS: readonly string[] = [
-  SERVER_ROLES.moderator,
-  SERVER_ROLES.leadership,
-];
-
-export const reportMonthUrl = (period: Period): string =>
-  `${BASE_DISCORD_BOT_URL}/dashboard/no-shows/${periodKey(period)}`;
 
 /**
  * What a build failure may say in Discord. A graphql-request ClientError's
@@ -221,11 +203,6 @@ export interface BuildJobDeps {
   ): Promise<MonthReports>;
   collectLinkProgress(): Promise<LinkProgressCounts>;
   alert(entry: LogEntry): Promise<boolean>;
-  postRoleNotice(
-    roleIds: readonly string[],
-    content: string,
-    entry: LogEntry,
-  ): Promise<boolean>;
   reportReadyEnabled(): boolean;
   newLeaseValue(): string;
 }
@@ -659,22 +636,37 @@ export async function runBuildTick(deps: BuildJobDeps): Promise<void> {
   }
 }
 
-export function reportReadyMessage(
+/** A stored summary count: anything but a finite non-negative number is 0. */
+const summaryCount = (summary: unknown, key: string): number => {
+  const n = Number(
+    (summary as Record<string, unknown> | null | undefined)?.[key],
+  );
+  return Number.isFinite(n) && n >= 0 ? n : 0;
+};
+
+/**
+ * The report-ready notice: a plain alert in #meetup-bot-alerts (staff have
+ * notifications on for it). No content, no mentions. Links come from
+ * monthLinkLines: PUBLIC_APP_ORIGIN and the validated month key only.
+ */
+export function reportReadyEntry(
   period: Period,
-  hallOfFame: HallOfFameSummary,
-  noShow: NoShowSummary,
-): { content: string; entry: LogEntry } {
-  const label = monthLabel(period);
-  const url = reportMonthUrl(period);
+  hallOfFame: unknown,
+  noShow: unknown,
+): LogEntry {
+  const warnings = summaryCount(noShow, 'warnings');
+  const candidates = summaryCount(noShow, 'suspensionCandidates');
+  const events = summaryCount(hallOfFame, 'events');
+  const hosts = summaryCount(hallOfFame, 'hosts');
+  const newHosts = summaryCount(hallOfFame, 'newHosts');
+  const lines = [
+    `No-shows: ${warnings} warnings, ${candidates} suspension candidates.`,
+    `Hall of Fame: ${events} events, ${hosts} hosts (${newHosts} new).`,
+    ...monthLinkLines(period),
+  ];
   return {
-    // Role mentions only ping from content; <url> suppresses the link preview.
-    content: `<@&${SERVER_ROLES.moderator}> <@&${SERVER_ROLES.leadership}> The ${label} reports are ready: <${url}>`,
-    entry: {
-      title: `Reports ready: ${label}`,
-      description:
-        `No-shows: ${noShow.warnings} warnings, ${noShow.suspensionCandidates} suspension candidates.\n` +
-        `Hall of Fame: ${hallOfFame.events} events, ${hallOfFame.hosts} hosts (${hallOfFame.newHosts} new).\n${url}`,
-    },
+    title: `Reports ready: ${monthLabel(period)}`,
+    description: lines.join('\n'),
   };
 }
 
@@ -711,12 +703,8 @@ export async function maybePostReportReady(
     if (!(await deps.notices.claim('report_ready', period))) {
       return 'skipped';
     }
-    const { content, entry } = reportReadyMessage(
-      period,
-      hof.summary as HallOfFameSummary,
-      noShow.summary as NoShowSummary,
-    );
-    if (await deps.postRoleNotice(REPORT_READY_ROLE_IDS, content, entry)) {
+    const entry = reportReadyEntry(period, hof.summary, noShow.summary);
+    if (await deps.alert(entry)) {
       return 'posted';
     }
     await deps.notices.release('report_ready', period);
@@ -884,14 +872,6 @@ export async function defaultBuildJobDeps(
     fetchMonthReports: organizerMonthReports(client, suspensions),
     collectLinkProgress: () => collectLinkProgress(client),
     alert: (entry) => logAlert(client, entry),
-    postRoleNotice: (roleIds, content, entry) =>
-      postRoleNotice(
-        client,
-        BOT_ALERTS_CHANNEL_ID,
-        [...roleIds],
-        content,
-        entry,
-      ),
     reportReadyEnabled: () => REPORT_READY_ENABLED,
     newLeaseValue: () => crypto.randomUUID(),
   };

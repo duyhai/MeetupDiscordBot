@@ -5,12 +5,8 @@ import { Client } from 'discord.js';
 import { ClientError } from 'graphql-request';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { BOT_ALERTS_CHANNEL_ID, SERVER_ROLES } from '../../../src/constants.js';
 import { GqlMeetupClient } from '../../../src/lib/client/meetup/gqlClient.js';
-import {
-  logAlert,
-  postRoleNotice,
-} from '../../../src/lib/helpers/discordLogger.js';
+import { logAlert } from '../../../src/lib/helpers/discordLogger.js';
 import {
   buildMonth,
   buildSummaryEntry,
@@ -22,8 +18,7 @@ import {
   MonthBeforeGroupBuildError,
   MonthBuildDeps,
   REPORT_READY_ENABLED,
-  REPORT_READY_ROLE_IDS,
-  reportMonthUrl,
+  reportReadyEntry,
   requestRebuild,
   runBuildTick,
 } from '../../../src/lib/reports/buildJob.js';
@@ -52,6 +47,7 @@ import {
   FakeLinkProgressStore,
   FakeNoticeStore,
   FakeSnapshotStore,
+  Harness,
   makeDeps,
   monthReports,
 } from './buildJobFakes.js';
@@ -75,7 +71,6 @@ vi.mock('../../../src/lib/reports/linkProgress.js', () => ({
 }));
 vi.mock('../../../src/lib/helpers/discordLogger.js', () => ({
   logAlert: vi.fn(),
-  postRoleNotice: vi.fn(),
 }));
 vi.mock(
   '../../../src/lib/repositories/postgresReportSnapshotRepository.js',
@@ -97,11 +92,13 @@ vi.mock(
 const SEPT: Period = { year: 2026, month: 9 };
 const OCT: Period = { year: 2026, month: 10 };
 const LEASE_KEY = 'report-build-claim';
-const MOD = '912474048775221270';
-const LEADERSHIP = '1347289004932075521';
 const REQUESTER = '123456789012345678';
 
 const isSept = (p: Period) => p.year === 2026 && p.month === 9;
+const ready = (h: Harness) =>
+  h.alert.mock.calls
+    .map(([e]) => e)
+    .filter((e) => e.title.startsWith('Reports ready:'));
 const titles = (alert: { mock: { calls: [{ title: string }][] } }) =>
   alert.mock.calls.map(([entry]) => entry.title);
 const descriptions = (alert: {
@@ -390,7 +387,10 @@ describe('runBuildTick builds', () => {
   it('posts a summary for a finished month built by the job', async () => {
     const h = makeDeps();
     await runBuildTick(h.deps);
-    expect(titles(h.alert)).toEqual(['Reports built: September 2026']);
+    expect(titles(h.alert)).toEqual([
+      'Reports built: September 2026',
+      'Reports ready: September 2026', // the job's own build finishes the month
+    ]);
     const [description] = descriptions(h.alert);
     expect(description).toContain('Hall of Fame: 4 events, 3 hosts (1 new).');
     expect(description).toContain(
@@ -457,7 +457,6 @@ describe('failure alerts', () => {
       expect(d).toContain('Meetup API error (HTTP 502)');
     });
     expect(JSON.stringify(h.alert.mock.calls)).not.toContain(SENTINEL);
-    expect(JSON.stringify(h.postRoleNotice.mock.calls)).not.toContain(SENTINEL);
   });
 
   it('an organizer-login failure shows its own message', async () => {
@@ -956,7 +955,10 @@ describe('attendance note', () => {
       Promise.resolve(monthReports(period, isSept(period) ? ZERO : undefined)),
     );
     await runBuildTick(h.deps);
-    expect(titles(h.alert)).toEqual(['Reports built: September 2026']);
+    expect(titles(h.alert)).toEqual([
+      'Reports built: September 2026',
+      'Reports ready: September 2026', // the job's own build finishes the month
+    ]);
     expect(descriptions(h.alert)[0]).toContain(
       'Note: no no-shows recorded for September 2026 across 6 past events with RSVPs; check that attendance was taken.',
     );
@@ -964,7 +966,7 @@ describe('attendance note', () => {
       (r) => r.reportType === 'no_show' && isSept(r.period),
     );
     expect(noShowSave.sourceComplete).toBe(true);
-    expect(h.postRoleNotice).toHaveBeenCalledTimes(1);
+    expect(ready(h)).toHaveLength(1);
   });
 
   it('no note for an open month with no no-shows', async () => {
@@ -990,7 +992,10 @@ describe('attendance note', () => {
       ),
     );
     await runBuildTick(h.deps);
-    expect(titles(h.alert)).toEqual(['Reports built: September 2026']);
+    expect(titles(h.alert)).toEqual([
+      'Reports built: September 2026',
+      'Reports ready: September 2026', // the job's own build finishes the month
+    ]);
     expect(descriptions(h.alert)[0]).not.toContain('no no-shows recorded');
   });
 });
@@ -1021,33 +1026,36 @@ describe('report-ready', () => {
     expect(REPORT_READY_ENABLED).toBe(false);
   });
 
-  it('report-ready mentions both roles in content with allowedMentions limited to them', async () => {
+  it('report-ready is a plain alert with the counts and month links', async () => {
     const h = settled();
     await runBuildTick(h.deps);
     expect(h.fetchMonthReports).not.toHaveBeenCalled();
-    expect(h.postRoleNotice).toHaveBeenCalledTimes(1);
-    const [roleIds, content, entry] = h.postRoleNotice.mock.calls[0];
-    expect(roleIds).toEqual([MOD, LEADERSHIP]);
-    expect(REPORT_READY_ROLE_IDS).toEqual([
-      SERVER_ROLES.moderator,
-      SERVER_ROLES.leadership,
+    expect(ready(h)).toEqual([
+      {
+        title: 'Reports ready: September 2026',
+        description: [
+          'No-shows: 2 warnings, 3 suspension candidates.',
+          'Hall of Fame: 4 events, 3 hosts (1 new).',
+          'Hall of Fame page: https://meetup-discord-bot.herokuapp.com/dashboard/hall-of-fame/2026-09',
+          'No-show history page: https://meetup-discord-bot.herokuapp.com/dashboard/no-show-history/2026-09',
+        ].join('\n'),
+      },
     ]);
-    expect(content).toContain(`<@&${MOD}>`);
-    expect(content).toContain(`<@&${LEADERSHIP}>`);
-    expect(content).toContain(
-      '<https://meetup-discord-bot.herokuapp.com/dashboard/no-shows/2026-09>',
+  });
+
+  it('report-ready never mentions anyone', async () => {
+    const h = settled();
+    await runBuildTick(h.deps);
+    expect(ready(h)).toHaveLength(1);
+    expect(JSON.stringify(h.alert.mock.calls)).not.toMatch(
+      /<@|@everyone|@here/,
     );
-    expect(reportMonthUrl(SEPT)).toBe(
-      'https://meetup-discord-bot.herokuapp.com/dashboard/no-shows/2026-09',
+  });
+
+  it('report-ready counts tolerate a malformed stored summary', () => {
+    expect(reportReadyEntry(SEPT, null, { warnings: 'x' }).description).toMatch(
+      /^No-shows: 0 warnings, 0 suspension candidates\./,
     );
-    expect(entry.title).toBe('Reports ready: September 2026');
-    expect(entry.description).toContain(
-      'No-shows: 2 warnings, 3 suspension candidates.',
-    );
-    expect(entry.description).toContain(
-      'Hall of Fame: 4 events, 3 hosts (1 new).',
-    );
-    expect(h.alert).not.toHaveBeenCalled();
   });
 
   it('report-ready posts once per period across restarts', async () => {
@@ -1060,10 +1068,7 @@ describe('report-ready', () => {
     const second = settled({ notices, snapshots, cache: new FakeCache() });
     second.clock.set('2026-10-10T16:30:00Z');
     await runBuildTick(second.deps);
-    expect(
-      first.postRoleNotice.mock.calls.length +
-        second.postRoleNotice.mock.calls.length,
-    ).toBe(1);
+    expect(ready(first).length + ready(second).length).toBe(1);
   });
 
   it('report-ready for the latest finished month even when the backfill built it', async () => {
@@ -1073,7 +1078,7 @@ describe('report-ready', () => {
     const h = settled({ snapshots });
     await runBuildTick(h.deps);
     expect(h.fetchMonthReports).not.toHaveBeenCalled();
-    expect(h.postRoleNotice).toHaveBeenCalledTimes(1);
+    expect(ready(h)).toHaveLength(1);
   });
 
   it('report-ready waits for a build made after the month ended', async () => {
@@ -1082,7 +1087,7 @@ describe('report-ready', () => {
     await runBuildTick(h.deps);
     expect(fetchedPeriods(h)).toEqual(['2026-10']); // no previous-month build on the 1st
     expect(h.notices.claim).not.toHaveBeenCalled();
-    expect(h.postRoleNotice).not.toHaveBeenCalled();
+    expect(ready(h)).toHaveLength(0);
   });
 
   it('report-ready waits for both rows', async () => {
@@ -1091,25 +1096,25 @@ describe('report-ready', () => {
     snapshots.seed('no_show', SEPT, '2026-09-30T16:10:00Z');
     const h = settled({ snapshots });
     expect(await maybePostReportReady(h.deps)).toBe('skipped');
-    expect(h.postRoleNotice).not.toHaveBeenCalled();
+    expect(ready(h)).toHaveLength(0);
   });
 
   it('failed report-ready post is retried', async () => {
     const h = settled();
-    h.postRoleNotice.mockResolvedValueOnce(false);
+    h.alert.mockResolvedValueOnce(false);
     await runBuildTick(h.deps);
     expect(h.notices.release).toHaveBeenCalledWith('report_ready', SEPT);
     expect(h.notices.markers.size).toBe(0);
 
     h.clock.set('2026-10-10T16:30:00Z');
     await runBuildTick(h.deps);
-    expect(h.postRoleNotice).toHaveBeenCalledTimes(2);
+    expect(ready(h)).toHaveLength(2);
     expect(h.notices.markers.has('report_ready:2026-09')).toBe(true);
   });
 
   it('claim and release go to the same notice store', async () => {
     const h = settled();
-    h.postRoleNotice.mockResolvedValueOnce(false);
+    h.alert.mockResolvedValueOnce(false);
     expect(await maybePostReportReady(h.deps)).toBe('failed');
     expect(h.notices.claim).toHaveBeenCalledTimes(1);
     expect(h.notices.release).toHaveBeenCalledTimes(1);
@@ -1119,7 +1124,7 @@ describe('report-ready', () => {
     const h = settled({ reportReadyEnabled: false });
     await runBuildTick(h.deps);
     expect(h.notices.claim).not.toHaveBeenCalled();
-    expect(h.postRoleNotice).not.toHaveBeenCalled();
+    expect(ready(h)).toHaveLength(0);
   });
 
   it('a store error is reported as failed, not thrown', async () => {
@@ -1246,7 +1251,7 @@ describe('requestRebuild', () => {
     expect(titles(h.alert)).toEqual(['Reports built: September 2026']);
     expect(descriptions(h.alert)[0]).toContain(`<@${REQUESTER}>`);
     expect(h.cache.values.has(LEASE_KEY)).toBe(false);
-    expect(h.postRoleNotice).not.toHaveBeenCalled(); // manual rebuilds never post report-ready
+    expect(ready(h)).toHaveLength(0); // manual rebuilds never post report-ready
   });
 
   it('a failed manual rebuild alerts and releases the lease', async () => {
@@ -1463,14 +1468,7 @@ describe('defaultBuildJobDeps', () => {
     const entry = { title: 't' };
     await deps.alert(entry);
     expect(logAlert).toHaveBeenCalledWith(client, entry);
-    await deps.postRoleNotice(REPORT_READY_ROLE_IDS, 'c', entry);
-    expect(postRoleNotice).toHaveBeenCalledWith(
-      client,
-      BOT_ALERTS_CHANNEL_ID,
-      [MOD, LEADERSHIP],
-      'c',
-      entry,
-    );
+    expect(deps).not.toHaveProperty('postRoleNotice');
     await deps.collectLinkProgress();
     expect(collectLinkProgress).toHaveBeenCalledWith(client);
     expect(deps.newLeaseValue()).not.toBe(deps.newLeaseValue());
@@ -1523,7 +1521,10 @@ describe('month page links', () => {
   it('the build summary links the month pages', async () => {
     const h = makeDeps();
     await runBuildTick(h.deps);
-    expect(titles(h.alert)).toEqual(['Reports built: September 2026']);
+    expect(titles(h.alert)).toEqual([
+      'Reports built: September 2026',
+      'Reports ready: September 2026', // the job's own build finishes the month
+    ]);
     expect(descriptions(h.alert)[0]).toBe(
       [
         'Hall of Fame: 4 events, 3 hosts (1 new).',
@@ -1701,7 +1702,7 @@ describe('month page links', () => {
       'Reports built: September 2026',
       'Report build failed: September 2026',
     ]);
-    expect(h.postRoleNotice).not.toHaveBeenCalled();
+    expect(ready(h)).toHaveLength(0);
     for (const [entry] of h.alert.mock.calls) {
       expect(Object.keys(entry)).toEqual(['title', 'description']);
       expect(entry).not.toHaveProperty('content');
