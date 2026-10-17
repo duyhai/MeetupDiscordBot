@@ -122,12 +122,24 @@ export function formatHallOfFamePost(input: {
   hostStats: HostStatsLike[];
   totalEvents: number;
   newHostIds: Set<string>;
+  /**
+   * How a member is named: rank headers, new hosts and co-hosts. The
+   * default is the Meetup name (the slash command's output). Event titles
+   * never go through it.
+   */
+  nameOf?: (member: PostMember) => string;
 }): string {
-  const { periodLabel, hostStats, totalEvents, newHostIds } = input;
+  const {
+    periodLabel,
+    hostStats,
+    totalEvents,
+    newHostIds,
+    nameOf = (member: PostMember) => member.name,
+  } = input;
   const rankings = hostStats
     .map((stats, index) => {
       const flag = newHostIds.has(stats.host.id) ? ' 🆕' : '';
-      const header = `**#${index + 1}: ${stats.host.name} — ${
+      const header = `**#${index + 1}: ${nameOf(stats.host)} — ${
         stats.events.length
       } event${stats.events.length === 1 ? '' : 's'}**${flag}`;
       const body = collapseByTitle(stats.events)
@@ -147,8 +159,8 @@ export function formatHallOfFamePost(input: {
             const coHostStr =
               coHosts.length === 0
                 ? 'no co-hosts'
-                : `co-hosts: ${coHosts.map((m) => m.name).join(', ')}`;
-            return `${stats.host.name} (${coHostStr})`;
+                : `co-hosts: ${coHosts.map(nameOf).join(', ')}`;
+            return `${nameOf(stats.host)} (${coHostStr})`;
           })
           .join('; ')}`;
 

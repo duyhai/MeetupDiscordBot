@@ -11,6 +11,12 @@ import {
 
 const logger = new Logger({ name: 'PostgresMemberRepository' });
 
+/** A Meetup member id as the dashboard accepts one (links.ts's MEETUP_ID). */
+const MEETUP_ID = /^[0-9]{1,20}$/;
+
+/** At most this many ids per discordIdsByMeetupIds lookup. */
+export const MAX_DISCORD_ID_LOOKUP = 500;
+
 const CREATE_TABLE_SQL = `
 CREATE TABLE IF NOT EXISTS members (
   discord_user_id    TEXT PRIMARY KEY,
@@ -159,6 +165,43 @@ export class PostgresMemberRepository implements MemberRepository {
       [meetupId],
     );
     return result.rows[0] ? toRecord(result.rows[0]) : undefined;
+  }
+
+  /**
+   * meetup id -> stored discord_user_id for the linked ones among
+   * `meetupIds`: deduped, only 1-20 digit ids, at most
+   * MAX_DISCORD_ID_LOOKUP of them (the first ones). The discord id comes
+   * back as stored; callers check it before building a mention. A missing
+   * members table is an empty map and one warning without ids.
+   */
+  async discordIdsByMeetupIds(
+    meetupIds: string[],
+  ): Promise<Map<string, string>> {
+    const ids = [...new Set(meetupIds)]
+      .filter((id) => typeof id === 'string' && MEETUP_ID.test(id))
+      .slice(0, MAX_DISCORD_ID_LOOKUP);
+    if (ids.length === 0) {
+      return new Map();
+    }
+    try {
+      const result = await this.pool.query<{
+        meetup_id: string;
+        discord_user_id: string;
+      }>(
+        'SELECT meetup_id, discord_user_id FROM members WHERE meetup_id = ANY($1::text[])',
+        [ids],
+      );
+      return new Map(
+        result.rows.map((row) => [row.meetup_id, row.discord_user_id]),
+      );
+    } catch (error) {
+      if ((error as { code?: string }).code === '42P01') {
+        // undefined_table. No ids in the message.
+        logger.warn('members table missing; no Discord mentions');
+        return new Map();
+      }
+      throw error;
+    }
   }
 
   async listAll(): Promise<MemberRecord[]> {

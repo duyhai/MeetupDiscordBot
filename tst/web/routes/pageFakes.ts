@@ -38,6 +38,7 @@ import {
   DashboardPageDeps,
   IdentityPageReader,
   LinkProgressPageReader,
+  MemberLinkPageReader,
   PageRebuildResult,
   SnapshotPageReader,
   SuspensionPageReader,
@@ -466,6 +467,23 @@ export function fakeLinkProgress(days: LinkProgressDay[] = linkDays(3)) {
   } satisfies LinkProgressPageReader;
 }
 
+/**
+ * A MemberLinkPageReader over a fixed meetup id -> discord id table. The
+ * stored discord id is returned as is, valid or not, like the repository.
+ */
+export function fakeMemberLinks(links: Record<string, string> = {}) {
+  return {
+    discordIdsByMeetupIds: vi.fn(
+      async (ids: string[]): Promise<Map<string, string>> =>
+        new Map(
+          ids
+            .filter((id) => Object.hasOwn(links, id))
+            .map((id): [string, string] => [id, links[id]]),
+        ),
+    ),
+  } satisfies MemberLinkPageReader;
+}
+
 /** The default seed: a September 2026 Hall of Fame row. */
 export const SEED: SeedRow[] = [seedRow('hall_of_fame', SEPT, hofPayload())];
 
@@ -500,6 +518,7 @@ export function fakePageDeps(
     identity: async () =>
       fakeIdentity([identityChange({ id: '1' })], { '1:old': PNG_1X1 }),
     linkProgress: async () => fakeLinkProgress(),
+    memberLinks: async () => fakeMemberLinks(),
     rebuild: vi.fn(async (): Promise<PageRebuildResult> => ({
       status: 'started',
       done: Promise.resolve({ ok: true }),

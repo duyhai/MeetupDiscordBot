@@ -29,6 +29,14 @@ export function discordProfileUrl(id: unknown): SafeUrl | undefined {
     : undefined;
 }
 
+/**
+ * A Discord user mention for copy text, only from a 17-20 digit id (the
+ * same rule as discordProfileUrl); anything else is undefined.
+ */
+export function discordMention(id: unknown): string | undefined {
+  return typeof id === 'string' && DISCORD_ID.test(id) ? `<@${id}>` : undefined;
+}
+
 const external = (href: SafeUrl, text: SafeHtml) =>
   html`<a href="${href}" rel="noopener noreferrer" target="_blank">${text}</a>`;
 
