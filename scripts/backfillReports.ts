@@ -217,6 +217,9 @@ const REFUSAL_TEXT: Record<BackfillRefusal, string> = {
   'before-group': `--from cannot be earlier than ${periodKey(GROUP_FIRST_PERIOD)}.`,
   'cache-unavailable':
     'Refusing to start: Redis did not answer, so the build lease could not be taken. Run it again later.',
+  'already-running':
+    'Refusing to start: another backfill is running (or one was killed in the last 30 minutes ' +
+    'without releasing its lock). Two runs and the bot would exceed the database connection limit. Try again later.',
 };
 
 export async function main(

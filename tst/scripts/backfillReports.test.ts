@@ -247,6 +247,13 @@ describe('main', () => {
     await expect(main([], env())).rejects.toThrow('pg down');
   });
 
+  it('a second concurrent run is refused with exit 2', async () => {
+    vi.mocked(runBackfill).mockRejectedValueOnce(
+      new BackfillRefusedError('already-running'),
+    );
+    expect(await main([], { ...FULL_ENV })).toBe(2);
+  });
+
   it('never logs in to the gateway', async () => {
     vi.mocked(runBackfill).mockResolvedValue(result());
     expect(await main(['--bogus'], { ...FULL_ENV })).toBe(1);

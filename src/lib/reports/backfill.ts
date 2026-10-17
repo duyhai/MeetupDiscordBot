@@ -14,8 +14,9 @@ import {
 } from './buildJob.js';
 import {
   acquireBuildLease,
+  BUILD_LEASE_KEY,
   identityDigestInProgress,
-  releaseBuildLease,
+  releaseOwnedKey,
 } from './buildLease.js';
 import { canStartMonthBuild } from './buildSchedule.js';
 import { OrganizerTokenUnavailableError } from './organizerMeetup.js';
@@ -47,6 +48,14 @@ export const BACKFILL_LEASE_WAIT_MS = 20 * 60_000;
 export const BACKFILL_DEFAULT_DELAY_MS = 5_000;
 /** Months named per list in the final post; the rest are counted. */
 export const BACKFILL_LIST_LIMIT = 20;
+/** Held for the whole run, so a second backfill cannot start alongside it. */
+export const BACKFILL_RUN_LOCK_KEY = 'report-backfill-run';
+/**
+ * Refreshed before every month, so it only has to outlive one month: the
+ * lease wait (at most BACKFILL_LEASE_WAIT_MS, 20 min) plus one build. A
+ * SIGKILLed run leaves it for at most this long.
+ */
+export const BACKFILL_RUN_LOCK_TTL_SEC = 30 * 60;
 /** Failed months in a row (any cause but the departed guard) that stop the run. */
 export const BACKFILL_MAX_CONSECUTIVE_FAILURES = 3;
 /** Discord's embed description limit is 4096. */
@@ -111,7 +120,11 @@ export interface BackfillResult {
 }
 
 export type BackfillRefusal =
-  'quiet-window' | 'identity-sweep' | 'before-group' | 'cache-unavailable';
+  | 'quiet-window'
+  | 'identity-sweep'
+  | 'before-group'
+  | 'cache-unavailable'
+  | 'already-running';
 
 export class BackfillRefusedError extends Error {
   constructor(readonly reason: BackfillRefusal) {
@@ -423,9 +436,64 @@ export async function runBackfill(
     throw new BackfillRefusedError('quiet-window');
   }
   let cache: KeyValueCache;
-  let sweeping: boolean;
+  const runLock = deps.newLeaseValue();
+  let locked: boolean;
   try {
     cache = await deps.cache();
+    locked = await cache.exclusive_set(
+      BACKFILL_RUN_LOCK_KEY,
+      runLock,
+      BACKFILL_RUN_LOCK_TTL_SEC,
+    );
+  } catch (error) {
+    deps.log.error(`Backfill could not reach Redis: ${backfillLogText(error)}`);
+    throw new BackfillRefusedError('cache-unavailable');
+  }
+  if (!locked) {
+    // Two runs and the bot would pass essential-0's 20 connections.
+    throw new BackfillRefusedError('already-running');
+  }
+  try {
+    return await runLocked(deps, options, first, cache, runLock);
+  } finally {
+    try {
+      if (!(await releaseOwnedKey(cache, BACKFILL_RUN_LOCK_KEY, runLock))) {
+        deps.log.warn('Backfill run lock was no longer ours at release');
+      }
+    } catch (error) {
+      // It expires with its TTL (at most 30 minutes).
+      deps.log.error(
+        `Backfill run lock release failed: ${backfillLogText(error)}`,
+      );
+    }
+  }
+}
+
+/** Keeps the run lock alive for another month; false when it is gone or not ours. */
+async function refreshRunLock(
+  cache: KeyValueCache,
+  runLock: string,
+): Promise<boolean> {
+  if ((await cache.get(BACKFILL_RUN_LOCK_KEY)) !== runLock) {
+    return false;
+  }
+  return cache.set_existing(
+    BACKFILL_RUN_LOCK_KEY,
+    runLock,
+    BACKFILL_RUN_LOCK_TTL_SEC,
+  );
+}
+
+/** runBackfill's body, under the run lock. */
+async function runLocked(
+  deps: BackfillDeps,
+  options: BackfillOptions,
+  first: Period,
+  cache: KeyValueCache,
+  runLock: string,
+): Promise<BackfillResult> {
+  let sweeping: boolean;
+  try {
     sweeping = await identityDigestInProgress(cache, deps.now());
   } catch (error) {
     deps.log.error(`Backfill could not reach Redis: ${backfillLogText(error)}`);
@@ -478,6 +546,20 @@ export async function runBackfill(
   for (const [index, period] of months.entries()) {
     // eslint-disable-next-line no-await-in-loop -- one month at a time, guards re-checked before each
     let stop: BackfillStop | undefined = await checkGuards();
+    if (!stop) {
+      try {
+        // eslint-disable-next-line no-await-in-loop -- one month at a time
+        if (!(await refreshRunLock(cache, runLock))) {
+          deps.log.error('Backfill run lock lost: stopping');
+          stop = 'cache-unavailable';
+        }
+      } catch (error) {
+        deps.log.error(
+          `Backfill run lock refresh failed: ${backfillLogText(error)}`,
+        );
+        stop = 'cache-unavailable';
+      }
+    }
     if (stop) {
       result.stopped = stop;
       break;
@@ -513,11 +595,21 @@ export async function runBackfill(
         result.stopped = leased;
         break;
       }
+      let builtNow = true;
       try {
         // The lease wait may have crossed 17:45 or the sweep's start.
         // eslint-disable-next-line no-await-in-loop -- one month at a time
         stop = await checkGuards();
-        if (!stop) {
+        if (
+          !stop &&
+          !options.force &&
+          // The daily job or a refresh may have built it while we waited.
+          // eslint-disable-next-line no-await-in-loop -- one month at a time
+          (await finishedBuildExists(deps.build, period))
+        ) {
+          result.skipped.push(period);
+          builtNow = false;
+        } else if (!stop) {
           // eslint-disable-next-line no-await-in-loop -- one month at a time
           const outcome = await buildMonth(
             deps.build,
@@ -541,10 +633,28 @@ export async function runBackfill(
         );
         stop = fail(period, error);
       } finally {
-        // eslint-disable-next-line no-await-in-loop -- one month at a time
-        await releaseBuildLease(cache, lease);
+        try {
+          // eslint-disable-next-line no-await-in-loop -- one month at a time
+          if (!(await releaseOwnedKey(cache, BUILD_LEASE_KEY, lease))) {
+            deps.log.warn(
+              'Report build lease was no longer ours at release; left in place',
+            );
+          }
+        } catch (error) {
+          // A lease we cannot release would make the next month wait on
+          // ourselves: stop (exit 3, summary posted), never crash.
+          deps.log.error(
+            `Backfill lease release failed: ${backfillLogText(error)}`,
+          );
+          stop ??= 'cache-unavailable';
+        }
       }
-      if (!stop && options.delayMs > 0 && index < months.length - 1) {
+      if (
+        !stop &&
+        builtNow &&
+        options.delayMs > 0 &&
+        index < months.length - 1
+      ) {
         // eslint-disable-next-line no-await-in-loop -- the rate limit between Meetup reads
         await deps.sleep(options.delayMs);
       }

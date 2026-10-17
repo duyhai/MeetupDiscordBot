@@ -20,6 +20,23 @@ export async function acquireBuildLease(
 }
 
 /**
+ * Removes `key` only if it still holds `value` (get-then-remove; see
+ * releaseBuildLease for why that is accepted). False when it was not ours.
+ * Cache errors propagate, for callers that must notice a failed release.
+ */
+export async function releaseOwnedKey(
+  cache: KeyValueCache,
+  key: string,
+  value: string,
+): Promise<boolean> {
+  if ((await cache.get(key)) !== value) {
+    return false;
+  }
+  await cache.remove(key);
+  return true;
+}
+
+/**
  * Removes the lease only if it still holds our value (withLock's pattern in
  * src/util/lock.ts). If our lease expired and another build took it, theirs
  * is left alone.
@@ -37,13 +54,12 @@ export async function releaseBuildLease(
   value: string,
 ): Promise<boolean> {
   try {
-    if ((await cache.get(BUILD_LEASE_KEY)) !== value) {
+    if (!(await releaseOwnedKey(cache, BUILD_LEASE_KEY, value))) {
       logger.warn(
         'Report build lease was no longer ours at release; left in place',
       );
       return false;
     }
-    await cache.remove(BUILD_LEASE_KEY);
     return true;
   } catch (error) {
     logger.error(`Failed to release the report build lease: ${String(error)}`);

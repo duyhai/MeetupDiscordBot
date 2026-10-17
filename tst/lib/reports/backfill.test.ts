@@ -10,6 +10,8 @@ import {
   BACKFILL_LEASE_WAIT_MS,
   BackfillOptions,
   BACKFILL_MAX_CONSECUTIVE_FAILURES,
+  BACKFILL_RUN_LOCK_KEY,
+  BACKFILL_RUN_LOCK_TTL_SEC,
   BACKFILL_STOP_TEXT,
   BackfillRefusedError,
   BackfillResult,
@@ -217,7 +219,8 @@ describe('time window', () => {
     // 17:00, 17:20 and 17:40 start; the month that would start at 18:00 does not.
     expect(h.fetched()).toEqual(['2026-09', '2026-08', '2026-07']);
     // Checked before the lease too: no lease is taken inside the window.
-    expect(h.leaseCount()).toBe(3);
+    // One value for the run lock, then one lease per month started.
+    expect(h.leaseCount()).toBe(4);
     expect(result.stopped).toBe('quiet-window');
     expect(h.titles()).toEqual([
       'Report backfill started',
@@ -465,7 +468,8 @@ describe('build lease', () => {
       return Promise.resolve(monthReports(period));
     });
     await h.run({ from: { year: 2026, month: 7 } });
-    expect(held).toEqual(['backfill-1', 'backfill-2', 'backfill-3']);
+    // backfill-1 is the run lock's value.
+    expect(held).toEqual(['backfill-2', 'backfill-3', 'backfill-4']);
     expect(h.cache.values.has(BUILD_LEASE_KEY)).toBe(false);
   });
 
@@ -836,5 +840,161 @@ describe('process log details', () => {
     expect(logged).toContain('ClientError: Meetup API error (HTTP 500)');
     expect(logged).not.toContain('SECRET_BODY');
     expect(JSON.stringify(h.post.mock.calls)).not.toContain('SECRET_BODY');
+  });
+});
+
+describe('one run at a time', () => {
+  it('takes the run lock, refreshes it each month and releases it', async () => {
+    expect(BACKFILL_RUN_LOCK_KEY).toBe('report-backfill-run');
+    // Above one month's lease wait (20 min) plus its build.
+    expect(BACKFILL_RUN_LOCK_TTL_SEC).toBe(30 * 60);
+    const h = harness();
+    const seen: { value?: string; ttl?: number }[] = [];
+    h.fetchMonthReports.mockImplementation((period) => {
+      seen.push({
+        value: h.cache.values.get(BACKFILL_RUN_LOCK_KEY),
+        ttl: h.cache.ttls.get(BACKFILL_RUN_LOCK_KEY),
+      });
+      // Time passes during each build; the refresh must push the expiry on.
+      h.clock.set(
+        new Date(h.clock.now().getTime() + 20 * 60_000).toISOString(),
+      );
+      return Promise.resolve(monthReports(period));
+    });
+    const setSpy = vi.spyOn(h.cache, 'set_existing');
+    const result = await h.run({ from: { year: 2026, month: 7 } });
+    // 3 builds of 20 minutes each: 60 minutes, past a 30-minute TTL unless refreshed.
+    expect(result.built).toHaveLength(3);
+    expect(result.stopped).toBeUndefined();
+    expect(new Set(seen.map((x) => x.value)).size).toBe(1);
+    expect(seen[0].value).toBeDefined();
+    expect(seen.every((x) => x.ttl === BACKFILL_RUN_LOCK_TTL_SEC)).toBe(true);
+    expect(
+      setSpy.mock.calls.filter(([k]) => k === BACKFILL_RUN_LOCK_KEY).length,
+    ).toBeGreaterThanOrEqual(3);
+    expect(h.cache.values.has(BACKFILL_RUN_LOCK_KEY)).toBe(false);
+  });
+
+  it('Redis failing to take the run lock refuses as cache-unavailable', async () => {
+    const h = harness();
+    vi.spyOn(h.cache, 'exclusive_set').mockRejectedValue(new Error('timeout'));
+    await expect(h.run()).rejects.toEqual(
+      new BackfillRefusedError('cache-unavailable'),
+    );
+    expect(h.post).not.toHaveBeenCalled();
+  });
+
+  it('refuses a second concurrent run and posts nothing', async () => {
+    const h = harness();
+    await h.cache.set(
+      BACKFILL_RUN_LOCK_KEY,
+      'other-run',
+      BACKFILL_RUN_LOCK_TTL_SEC,
+    );
+    await expect(h.run()).rejects.toEqual(
+      new BackfillRefusedError('already-running'),
+    );
+    expect(h.post).not.toHaveBeenCalled();
+    expect(h.fetchMonthReports).not.toHaveBeenCalled();
+    expect(h.cache.values.get(BACKFILL_RUN_LOCK_KEY)).toBe('other-run');
+  });
+
+  it('a refused start (identity sweep) releases the run lock it took', async () => {
+    const h = harness();
+    await h.cache.set(identityDigestClaimKey('2026-10-16'), '1');
+    await expect(h.run()).rejects.toEqual(
+      new BackfillRefusedError('identity-sweep'),
+    );
+    expect(h.cache.values.has(BACKFILL_RUN_LOCK_KEY)).toBe(false);
+  });
+
+  it('releases the run lock on SIGTERM', async () => {
+    const h = harness();
+    h.fetchMonthReports.mockImplementation((period) => {
+      h.stop.requested = true;
+      return Promise.resolve(monthReports(period));
+    });
+    const result = await h.run();
+    expect(result.stopped).toBe('stopped');
+    expect(h.cache.values.has(BACKFILL_RUN_LOCK_KEY)).toBe(false);
+  });
+
+  it('a lost or unrefreshable run lock stops the run as cache-unavailable', async () => {
+    const h = harness();
+    h.fetchMonthReports.mockImplementationOnce(async (period) => {
+      await h.cache.set(BACKFILL_RUN_LOCK_KEY, 'someone-else', 60);
+      return monthReports(period);
+    });
+    const result = await h.run();
+    expect(result.built.map(key)).toEqual(['2026-09']);
+    expect(result.stopped).toBe('cache-unavailable');
+    // Not ours any more: left alone.
+    expect(h.cache.values.get(BACKFILL_RUN_LOCK_KEY)).toBe('someone-else');
+
+    const failing = harness();
+    failing.fetchMonthReports.mockImplementationOnce((period) => {
+      vi.spyOn(failing.cache, 'set_existing').mockRejectedValue(
+        new Error('timeout'),
+      );
+      return Promise.resolve(monthReports(period));
+    });
+    expect((await failing.run()).stopped).toBe('cache-unavailable');
+    expect(failing.titles()[failing.titles().length - 1]).toBe(
+      'Report backfill stopped',
+    );
+  });
+});
+
+describe('re-check after the lease wait', () => {
+  it('a month built by the job while the backfill waited is skipped, not rebuilt', async () => {
+    const h = harness();
+    const SEPT = { year: 2026, month: 9 };
+    await h.cache.set(BUILD_LEASE_KEY, 'job-lease', 2 * 60);
+    // The job finishes September while the backfill waits for its lease.
+    h.sleep.mockImplementationOnce((ms) => {
+      h.snapshots.seedBoth(SEPT, '2026-10-16T19:31:00Z');
+      h.clock.set(new Date(h.clock.now().getTime() + ms).toISOString());
+      return Promise.resolve();
+    });
+    const result = await h.run({ from: SEPT });
+    expect(h.fetchMonthReports).not.toHaveBeenCalled();
+    expect(result.skipped.map(key)).toEqual(['2026-09']);
+    expect(result.built).toEqual([]);
+    expect(h.cache.values.has(BUILD_LEASE_KEY)).toBe(false);
+  });
+
+  it('--force still rebuilds it', async () => {
+    const h = harness();
+    const SEPT = { year: 2026, month: 9 };
+    h.snapshots.seedBoth(SEPT, '2026-10-16T19:31:00Z');
+    const result = await h.run({ from: SEPT, force: true });
+    expect(result.built.map(key)).toEqual(['2026-09']);
+  });
+});
+
+describe('lease release failure', () => {
+  it('a release that times out stops the run as cache-unavailable and still posts the summary', async () => {
+    // Only the lease release's read times out.
+    const h = harness(undefined, (inner) => ({
+      get: (k: string) => {
+        if (k === BUILD_LEASE_KEY) {
+          return Promise.reject(new Error('cache get timed out after 5000 ms'));
+        }
+        return inner.get(k);
+      },
+      set: (k: string, v: string, t?: number) => inner.set(k, v, t),
+      exclusive_set: (k: string, v: string, t?: number) =>
+        inner.exclusive_set(k, v, t),
+      set_existing: (k: string, v: string, t?: number) =>
+        inner.set_existing(k, v, t),
+      remove: (k: string) => inner.remove(k),
+    }));
+    const result = await h.run();
+    expect(result.built.map(key)).toEqual(['2026-09']);
+    expect(result.stopped).toBe('cache-unavailable');
+    expect(h.titles()[h.titles().length - 1]).toBe('Report backfill stopped');
+    expect(
+      h.finalText().startsWith(BACKFILL_STOP_TEXT['cache-unavailable']),
+    ).toBe(true);
   });
 });
