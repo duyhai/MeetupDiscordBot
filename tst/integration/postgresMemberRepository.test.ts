@@ -1,5 +1,7 @@
 import crypto from 'crypto';
-import { beforeAll, describe, expect, it } from 'vitest';
+import pg from 'pg';
+import { Logger } from 'tslog';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { PostgresMemberRepository } from '../../src/lib/repositories/postgresMemberRepository.js';
 import { MeetupIdConflictError } from '../../src/lib/repositories/types.js';
@@ -88,6 +90,146 @@ const freshMember = () => ({
       await repo.remove(member.discordUserId);
 
       expect(await repo.findByDiscordId(member.discordUserId)).toBeUndefined();
+    });
+
+    describe('discordIdsByMeetupIds', () => {
+      /** A random all-digit id of `length` digits, first digit non-zero. */
+      const digits = (length: number) =>
+        String(crypto.randomInt(1, 10)) +
+        Array.from({ length: length - 1 }, () => crypto.randomInt(0, 10)).join(
+          '',
+        );
+      const linkedMember = (discordUserId = digits(18)) => ({
+        ...freshMember(),
+        discordUserId,
+        meetupId: digits(15),
+      });
+      const poolOf = () => (repo as unknown as { pool: pg.Pool }).pool;
+
+      it('returns links for linked ids only', async () => {
+        const a = await repo.upsert(linkedMember());
+        const b = await repo.upsert(linkedMember());
+        const unlinked = digits(15);
+        const result = await repo.discordIdsByMeetupIds([
+          a.meetupId,
+          unlinked,
+          b.meetupId,
+          a.meetupId,
+        ]);
+        expect(result).toEqual(
+          new Map([
+            [a.meetupId, a.discordUserId],
+            [b.meetupId, b.discordUserId],
+          ]),
+        );
+      });
+
+      it('returns the stored discord id as is; the page decides if it is a mention', async () => {
+        const odd = await repo.upsert(linkedMember(`discord-${digits(6)}`));
+        const result = await repo.discordIdsByMeetupIds([odd.meetupId]);
+        expect(result.get(odd.meetupId)).toBe(odd.discordUserId);
+      });
+
+      it('empty input runs no query', async () => {
+        const query = vi.spyOn(poolOf(), 'query');
+        try {
+          expect(await repo.discordIdsByMeetupIds([])).toEqual(new Map());
+          expect(
+            await repo.discordIdsByMeetupIds(['abc', '', '1'.repeat(21)]),
+          ).toEqual(new Map());
+          expect(query).not.toHaveBeenCalled();
+        } finally {
+          query.mockRestore();
+        }
+      });
+
+      it('filters out ids that are not 1-20 digits, even when such a row exists', async () => {
+        // freshMember's meetup ids are "meetup-<uuid>": linked, but not digits.
+        const notDigits = await repo.upsert(freshMember());
+        const good = await repo.upsert(linkedMember());
+        const query = vi.spyOn(poolOf(), 'query');
+        try {
+          const result = await repo.discordIdsByMeetupIds([
+            notDigits.meetupId,
+            good.meetupId,
+            ' 12',
+            '1'.repeat(21),
+            `${good.meetupId}' OR '1'='1`,
+          ]);
+          expect(result).toEqual(
+            new Map([[good.meetupId, good.discordUserId]]),
+          );
+          expect(query).toHaveBeenCalledTimes(1);
+          expect(query.mock.calls[0][1]).toEqual([[good.meetupId]]);
+        } finally {
+          query.mockRestore();
+        }
+      });
+
+      it('caps the lookup at 500 distinct ids', async () => {
+        const first = await repo.upsert(linkedMember());
+        const last = await repo.upsert(linkedMember());
+        const filler = Array.from({ length: 600 }, (_, i) => String(9e14 + i));
+        const query = vi.spyOn(poolOf(), 'query');
+        try {
+          const result = await repo.discordIdsByMeetupIds([
+            first.meetupId,
+            first.meetupId,
+            ...filler,
+            last.meetupId,
+          ]);
+          expect(query).toHaveBeenCalledTimes(1);
+          const [ids] = query.mock.calls[0][1] as [string[]];
+          expect(ids).toHaveLength(500);
+          expect(new Set(ids).size).toBe(500);
+          expect(ids[0]).toBe(first.meetupId);
+          expect(ids).not.toContain(last.meetupId);
+          expect(result.has(first.meetupId)).toBe(true);
+          expect(result.has(last.meetupId)).toBe(false);
+        } finally {
+          query.mockRestore();
+        }
+      });
+
+      it('a missing members table: an empty map and one warning without ids', async () => {
+        const id = digits(15);
+        const missing = Object.assign(
+          new Error('relation "members" does not exist'),
+          { code: '42P01' },
+        );
+        const query = vi
+          .spyOn(poolOf(), 'query')
+          // eslint-disable-next-line @typescript-eslint/no-misused-promises -- pool.query's callback overload
+          .mockImplementation(() => Promise.reject(missing));
+        const warn = vi.spyOn(Logger.prototype, 'warn');
+        try {
+          expect(await repo.discordIdsByMeetupIds([id])).toEqual(new Map());
+          expect(warn).toHaveBeenCalledTimes(1);
+          const logged = JSON.stringify(warn.mock.calls[0]);
+          expect(logged).toContain('members table missing');
+          expect(logged).not.toContain(id);
+        } finally {
+          warn.mockRestore();
+          query.mockRestore();
+        }
+      });
+
+      it('any other database error is rethrown', async () => {
+        const broken = Object.assign(new Error('connection reset'), {
+          code: '08006',
+        });
+        const query = vi
+          .spyOn(poolOf(), 'query')
+          // eslint-disable-next-line @typescript-eslint/no-misused-promises -- pool.query's callback overload
+          .mockImplementation(() => Promise.reject(broken));
+        try {
+          await expect(
+            repo.discordIdsByMeetupIds([digits(15)]),
+          ).rejects.toThrow('connection reset');
+        } finally {
+          query.mockRestore();
+        }
+      });
     });
 
     it('listAll includes a freshly upserted member', async () => {
