@@ -1,4 +1,5 @@
 import { PUBLIC_APP_ORIGIN } from '../../constants.js';
+import { WORKSPACE_FIRST_PERIOD } from '../workspace/months.js';
 import {
   comparePeriods,
   GROUP_FIRST_PERIOD,
@@ -113,15 +114,30 @@ export function linkableMonthPath(
   }
 }
 
-/** Absolute links for Discord: only PUBLIC_APP_ORIGIN and the validated month key. */
+/**
+ * Absolute links for Discord: only PUBLIC_APP_ORIGIN and the validated month
+ * key. `workspace` is present only for months that have a workspace (from
+ * WORKSPACE_FIRST_PERIOD on); older months link their no-show history only.
+ * No "up to the current month" check: there is no clock here, and builds
+ * exist only for months up to the current one.
+ */
 export function monthPageUrls(period: Period): {
   hallOfFame: string;
   noShowHistory: string;
+  workspace?: string;
 } {
-  return {
+  const urls: {
+    hallOfFame: string;
+    noShowHistory: string;
+    workspace?: string;
+  } = {
     hallOfFame: `${PUBLIC_APP_ORIGIN}${monthPath(DASHBOARD_PATHS.hallOfFameMonth, period)}`,
     noShowHistory: `${PUBLIC_APP_ORIGIN}${monthPath(DASHBOARD_PATHS.noShowHistoryMonth, period)}`,
   };
+  if (comparePeriods(period, WORKSPACE_FIRST_PERIOD) >= 0) {
+    urls.workspace = `${PUBLIC_APP_ORIGIN}${monthPath(DASHBOARD_PATHS.workspaceMonth, period)}`;
+  }
+  return urls;
 }
 
 /** One member's no-show history page, only from an all-digit Meetup id (1-20 digits). */

@@ -1039,8 +1039,8 @@ describe('report-ready', () => {
     return h;
   }
 
-  it('is off in this PR', () => {
-    expect(REPORT_READY_ENABLED).toBe(false);
+  it('is on', () => {
+    expect(REPORT_READY_ENABLED).toBe(true);
   });
 
   it('report-ready is a plain alert with the counts and month links', async () => {
@@ -1053,6 +1053,7 @@ describe('report-ready', () => {
         description: [
           'No-shows: 2 warnings, 3 suspension candidates.',
           'Hall of Fame: 4 events, 3 hosts (1 new).',
+          'No-show workspace: https://meetup-discord-bot.herokuapp.com/dashboard/no-shows/2026-09',
           'Hall of Fame page: https://meetup-discord-bot.herokuapp.com/dashboard/hall-of-fame/2026-09',
           'No-show history page: https://meetup-discord-bot.herokuapp.com/dashboard/no-show-history/2026-09',
         ].join('\n'),
@@ -1561,7 +1562,7 @@ describe('defaultBuildJobDeps', () => {
     expect(deps.snapshots).toBe(snapshots);
     expect(deps.notices).toBe(notices);
     expect(deps.linkProgress).toBe(linkProgress);
-    expect(deps.reportReadyEnabled()).toBe(false);
+    expect(deps.reportReadyEnabled()).toBe(true);
 
     const asOf = new Date('2026-10-01T07:00:00Z');
     const cutoff = new Date('2026-10-01T00:00:00Z');
@@ -1646,8 +1647,10 @@ describe('month page links', () => {
     'Hall of Fame page: https://meetup-discord-bot.herokuapp.com/dashboard/hall-of-fame/2026-09';
   const NO_SHOW_LINK =
     'No-show history page: https://meetup-discord-bot.herokuapp.com/dashboard/no-show-history/2026-09';
+  const WORKSPACE_LINK =
+    'No-show workspace: https://meetup-discord-bot.herokuapp.com/dashboard/no-shows/2026-09';
   const linkLines = (description: string) =>
-    description.split('\n').filter((line) => line.includes(' page: '));
+    description.split('\n').filter((line) => line.includes('https://'));
   const outcome = (period: Period) => ({
     period,
     builtBy: 'job',
@@ -1680,6 +1683,7 @@ describe('month page links', () => {
         'Hall of Fame: 4 events, 3 hosts (1 new).',
         'No-shows: 8 no-show RSVPs; 2 warnings, 3 suspension candidates.',
         'Took 0.0 s. Built by the daily job.',
+        WORKSPACE_LINK,
         HOF_LINK,
         NO_SHOW_LINK,
       ].join('\n'),
@@ -1696,6 +1700,7 @@ describe('month page links', () => {
     const lines = description.split('\n');
     expect(lines.slice(2)).toEqual([
       'Took 1.2 s. Built by the daily job.',
+      WORKSPACE_LINK,
       HOF_LINK,
       NO_SHOW_LINK,
       'Note: no no-shows recorded for September 2026 across 6 past events with RSVPs; check that attendance was taken.',
@@ -1712,7 +1717,7 @@ describe('month page links', () => {
     expect(descriptions(h.alert)[0]).toBe(
       `Building the September 2026 reports failed after 0.0 s: ${describeBuildError(new Error('boom'))}\n\n` +
         'It retries at most once an hour (never 17:45–19:00 UTC); this alert repeats at most once a day until it works.\n\n' +
-        `${HOF_LINK}\n${NO_SHOW_LINK}`,
+        `${WORKSPACE_LINK}\n${HOF_LINK}\n${NO_SHOW_LINK}`,
     );
   });
 
@@ -1723,6 +1728,7 @@ describe('month page links', () => {
     await (result as { done: Promise<{ ok: boolean }> }).done;
     expect(titles(h.alert)).toEqual(['Report build failed: September 2026']);
     expect(linkLines(descriptions(h.alert)[0])).toEqual([
+      WORKSPACE_LINK,
       HOF_LINK,
       NO_SHOW_LINK,
     ]);
@@ -1753,8 +1759,8 @@ describe('month page links', () => {
     const [description] = descriptions(h.alert);
     const lines = description
       .split('\n')
-      .filter((line) => / page: /.test(line));
-    expect(lines).toEqual([HOF_LINK, NO_SHOW_LINK]);
+      .filter((line) => line.includes('https://'));
+    expect(lines).toEqual([WORKSPACE_LINK, HOF_LINK, NO_SHOW_LINK]);
     expect(description.toLowerCase()).not.toContain('evil');
     expect(description).not.toContain('../x');
   });
@@ -1770,7 +1776,11 @@ describe('month page links', () => {
     const result = await requestRebuild(h.deps, SEPT, REQUESTER);
     await (result as { done: Promise<{ ok: boolean }> }).done;
     const [description] = descriptions(h.alert);
-    expect(linkLines(description)).toEqual([HOF_LINK, NO_SHOW_LINK]);
+    expect(linkLines(description)).toEqual([
+      WORKSPACE_LINK,
+      HOF_LINK,
+      NO_SHOW_LINK,
+    ]);
     expect(description).not.toContain('2026-08');
   });
 
@@ -1790,6 +1800,39 @@ describe('month page links', () => {
       expect(entry?.description).not.toContain('2026-13');
       expect(entry?.description).not.toContain('/dashboard/');
     }
+  });
+
+  it('build summaries and failures link the workspace for workspace months only', async () => {
+    const AUG: Period = { year: 2026, month: 8 };
+    const AUG_LINKS = [
+      'Hall of Fame page: https://meetup-discord-bot.herokuapp.com/dashboard/hall-of-fame/2026-08',
+      'No-show history page: https://meetup-discord-bot.herokuapp.com/dashboard/no-show-history/2026-08',
+    ];
+    expect(linkLines(buildSummaryEntry(outcome(SEPT)).description)).toEqual([
+      WORKSPACE_LINK,
+      HOF_LINK,
+      NO_SHOW_LINK,
+    ]);
+
+    // A manual rebuild of August (before the workspace): built, then failed.
+    const built = makeDeps();
+    const ok = await requestRebuild(built.deps, AUG, REQUESTER);
+    await (ok as { done: Promise<{ ok: boolean }> }).done;
+    expect(titles(built.alert)).toEqual(['Reports built: August 2026']);
+    expect(linkLines(descriptions(built.alert)[0])).toEqual(AUG_LINKS);
+
+    const failed = makeDeps();
+    failed.fetchMonthReports.mockRejectedValue(new Error('boom'));
+    const bad = await requestRebuild(failed.deps, AUG, REQUESTER);
+    await (bad as { done: Promise<{ ok: boolean }> }).done;
+    expect(titles(failed.alert)).toEqual(['Report build failed: August 2026']);
+    expect(linkLines(descriptions(failed.alert)[0])).toEqual(AUG_LINKS);
+
+    // Report-ready for August (announced in September) links history, not a workspace.
+    const notice = reportReadyEntry(AUG, {}, {}).description;
+    expect(linkLines(notice)).toEqual(AUG_LINKS);
+    expect(notice).not.toContain('/no-shows/');
+    expect(notice).not.toContain('workspace');
   });
 
   it('a month before the group began gets no links (the dashboard 404s it)', () => {
@@ -1947,6 +1990,29 @@ describe('workspace sync hooks', () => {
       'sync 10',
       'Reports ready: September 2026',
     ]);
+  });
+
+  it("report-ready posts only once its month's workspace sync has finished", async () => {
+    const h = makeDeps({ clock: new Clock('2026-10-05T16:15:00Z') });
+    const finished = new Set<number>();
+    let septemberSyncedWhenPosted: boolean | undefined;
+    h.alert.mockImplementation(async (entry) => {
+      if (entry.title === 'Reports ready: September 2026') {
+        septemberSyncedWhenPosted = finished.has(9);
+      }
+      return true;
+    });
+    h.syncWorkspace.mockImplementation(async (period) => {
+      // A sync that takes a few turns of the event loop.
+      await new Promise((resolve) => {
+        setImmediate(resolve);
+      });
+      finished.add(period.month);
+      return 'synced';
+    });
+    await runBuildTick(h.deps);
+    expect(ready(h)).toHaveLength(1);
+    expect(septemberSyncedWhenPosted).toBe(true);
   });
 
   it('only the current month built: it syncs before report-ready, the previous month after', async () => {

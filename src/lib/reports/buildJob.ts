@@ -156,10 +156,10 @@ function stableJson(value: unknown): string {
 }
 
 /**
- * Task 10 of PR 4 turns this on with the workspace link. Deliberately a
- * constant, not a config var.
+ * On since PR 4. A plain alert (no pings) linking the workspace. Flip to
+ * false to silence it; it is a constant, so that needs a deploy.
  */
-export const REPORT_READY_ENABLED = false;
+export const REPORT_READY_ENABLED = true;
 
 /**
  * What a build failure may say in Discord. A graphql-request ClientError's
@@ -394,7 +394,10 @@ function builtByText(builtBy: string): string {
 function monthLinkLines(period: Period): string[] {
   try {
     const urls = monthPageUrls(period);
+    // The workspace first, since staff act there. Months before the
+    // workspace have none; their no-show history page is the link.
     return [
+      ...(urls.workspace ? [`No-show workspace: ${urls.workspace}`] : []),
       `Hall of Fame page: ${urls.hallOfFame}`,
       `No-show history page: ${urls.noShowHistory}`,
     ];
