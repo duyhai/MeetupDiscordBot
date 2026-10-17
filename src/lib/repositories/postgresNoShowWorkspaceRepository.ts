@@ -637,6 +637,8 @@ export class PostgresNoShowWorkspaceRepository {
             if (overlapping.rowCount > 0) {
               throw refuse('already-suspended');
             }
+            // Runs before the out-of-order check, so tests can plant a same-date
+            // or later record that only the last checks and the insert see.
             await this.options.beforeSuspensionInsertForTest?.();
             // Never backdated before a live record: that record's length
             // was set without counting this one. Strictly later only.

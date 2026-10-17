@@ -117,8 +117,8 @@ export async function leadershipOf(
  * 'not-found' are answered in place (409, 404) and never redirect.
  * 'suspension-overlap' is the service's 'already-suspended' without a
  * record to link; 'out-of-order' goes back to the confirm page, which reads
- * the member's records and sets its earliest date; 'not-leadership' and 'leadership-unavailable' are the
- * live Leadership check's refusals.
+ * the member's records and sets its earliest date; 'not-leadership' and
+ * 'leadership-unavailable' are the live Leadership check's refusals.
  */
 export type WorkspaceResultCode =
   | Exclude<WorkspaceActionCode, 'stale' | 'not-found'>
