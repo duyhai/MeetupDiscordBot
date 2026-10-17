@@ -5,8 +5,12 @@ import { Client } from 'discord.js';
 import { ClientError } from 'graphql-request';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { BOT_ALERTS_CHANNEL_ID } from '../../../src/constants.js';
 import { GqlMeetupClient } from '../../../src/lib/client/meetup/gqlClient.js';
-import { logAlert } from '../../../src/lib/helpers/discordLogger.js';
+import {
+  logAlert,
+  recentEmbedTitles,
+} from '../../../src/lib/helpers/discordLogger.js';
 import {
   buildMonth,
   buildSummaryEntry,
@@ -71,6 +75,7 @@ vi.mock('../../../src/lib/reports/linkProgress.js', () => ({
 }));
 vi.mock('../../../src/lib/helpers/discordLogger.js', () => ({
   logAlert: vi.fn(),
+  recentEmbedTitles: vi.fn(),
 }));
 vi.mock(
   '../../../src/lib/repositories/postgresReportSnapshotRepository.js',
@@ -78,7 +83,12 @@ vi.mock(
 );
 vi.mock(
   '../../../src/lib/repositories/postgresDashboardNoticeRepository.js',
-  () => ({ PostgresDashboardNoticeRepository: { instance: vi.fn() } }),
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import('../../../src/lib/repositories/postgresDashboardNoticeRepository.js')
+    >()),
+    PostgresDashboardNoticeRepository: { instance: vi.fn() },
+  }),
 );
 vi.mock(
   '../../../src/lib/repositories/postgresLinkProgressRepository.js',
@@ -1059,16 +1069,34 @@ describe('report-ready', () => {
   });
 
   it('report-ready posts once per period across restarts', async () => {
-    const notices = new FakeNoticeStore();
+    const clock = new Clock('2026-10-10T16:15:00Z');
+    const notices = new FakeNoticeStore(() => clock.now().getTime());
     const snapshots = new FakeSnapshotStore();
     snapshots.seedBoth(SEPT, '2026-10-03T16:10:00Z');
     snapshots.seedBoth(OCT, '2026-10-10T16:05:00Z');
-    const first = settled({ notices, snapshots });
+    const first = settled({ clock, notices, snapshots });
     await runBuildTick(first.deps);
-    const second = settled({ notices, snapshots, cache: new FakeCache() });
-    second.clock.set('2026-10-10T16:30:00Z');
+    clock.set('2026-10-10T16:30:00Z');
+    const second = settled({
+      clock,
+      notices,
+      snapshots,
+      cache: new FakeCache(),
+    });
     await runBuildTick(second.deps);
-    expect(ready(first).length + ready(second).length).toBe(1);
+    // Past the reclaim window: a posted marker is final, so nothing re-posts.
+    clock.set('2026-10-10T17:01:00Z');
+    const third = settled({
+      clock,
+      notices,
+      snapshots,
+      cache: new FakeCache(),
+    });
+    await runBuildTick(third.deps);
+    expect(
+      ready(first).length + ready(second).length + ready(third).length,
+    ).toBe(1);
+    expect(notices.isPosted('report_ready', SEPT)).toBe(true);
   });
 
   it('report-ready for the latest finished month even when the backfill built it', async () => {
@@ -1104,12 +1132,91 @@ describe('report-ready', () => {
     h.alert.mockResolvedValueOnce(false);
     await runBuildTick(h.deps);
     expect(h.notices.release).toHaveBeenCalledWith('report_ready', SEPT);
-    expect(h.notices.markers.size).toBe(0);
+    expect(h.notices.isPosted('report_ready', SEPT)).toBe(false);
 
     h.clock.set('2026-10-10T16:30:00Z');
     await runBuildTick(h.deps);
     expect(ready(h)).toHaveLength(2);
-    expect(h.notices.markers.has('report_ready:2026-09')).toBe(true);
+    expect(h.notices.isPosted('report_ready', SEPT)).toBe(true);
+  });
+
+  it('report-ready after a crash between claim and post is posted on a later tick', async () => {
+    const h = settled();
+    // The "crashed" process: it claimed and never posted or released.
+    expect(await h.notices.claim('report_ready', SEPT)).toBe('fresh');
+    h.clock.set('2026-10-10T16:30:00Z');
+    await runBuildTick(h.deps);
+    expect(ready(h)).toHaveLength(0); // inside the reclaim window
+    h.clock.set('2026-10-10T16:46:00Z');
+    await runBuildTick(h.deps);
+    expect(ready(h)).toHaveLength(1);
+    expect(h.recentAlertTitles).toHaveBeenCalledTimes(1);
+    expect(h.notices.isPosted('report_ready', SEPT)).toBe(true);
+  });
+
+  it('a retry that finds its notice in the channel marks it posted without posting again', async () => {
+    const h = settled();
+    h.alert.mockResolvedValueOnce(false); // e.g. a timeout on a send that landed
+    h.recentAlertTitles.mockResolvedValue([
+      'Reports built: October 2026',
+      'Reports ready: September 2026',
+    ]);
+    await runBuildTick(h.deps);
+    expect(h.recentAlertTitles).not.toHaveBeenCalled();
+    h.clock.set('2026-10-10T16:30:00Z');
+    await runBuildTick(h.deps);
+    expect(ready(h)).toHaveLength(1); // the "failed" one only
+    expect(h.recentAlertTitles).toHaveBeenCalledTimes(1);
+    expect(h.notices.isPosted('report_ready', SEPT)).toBe(true);
+  });
+
+  it('a retry posts when the channel history cannot be read', async () => {
+    const h = settled();
+    h.alert.mockResolvedValueOnce(false);
+    h.recentAlertTitles.mockResolvedValue(undefined);
+    await runBuildTick(h.deps);
+    h.clock.set('2026-10-10T16:30:00Z');
+    await runBuildTick(h.deps);
+    expect(ready(h)).toHaveLength(2);
+    expect(h.notices.isPosted('report_ready', SEPT)).toBe(true);
+  });
+
+  it('a retry posts when reading the channel history throws', async () => {
+    const h = settled();
+    h.alert.mockResolvedValueOnce(false);
+    h.recentAlertTitles.mockRejectedValue(new Error('discord down'));
+    await runBuildTick(h.deps);
+    h.clock.set('2026-10-10T16:30:00Z');
+    expect(await maybePostReportReady(h.deps)).toBe('posted');
+    expect(ready(h)).toHaveLength(2);
+  });
+
+  it('a retry does not match a different month in the channel', async () => {
+    const h = settled();
+    h.alert.mockResolvedValueOnce(false);
+    h.recentAlertTitles.mockResolvedValue(['Reports ready: August 2026']);
+    await runBuildTick(h.deps);
+    h.clock.set('2026-10-10T16:30:00Z');
+    await runBuildTick(h.deps);
+    expect(ready(h)).toHaveLength(2);
+  });
+
+  it('a fresh claim never reads the channel history', async () => {
+    const h = settled();
+    await runBuildTick(h.deps);
+    expect(ready(h)).toHaveLength(1);
+    expect(h.recentAlertTitles).not.toHaveBeenCalled();
+    expect(h.notices.markPosted).toHaveBeenCalledWith('report_ready', SEPT);
+  });
+
+  it('a markPosted failure after a post does not post again inside the reclaim window', async () => {
+    const h = settled();
+    h.notices.markPosted.mockRejectedValueOnce(new Error('pg down'));
+    expect(await maybePostReportReady(h.deps)).toBe('failed');
+    expect(ready(h)).toHaveLength(1);
+    h.clock.set('2026-10-10T16:30:00Z');
+    await runBuildTick(h.deps);
+    expect(ready(h)).toHaveLength(1);
   });
 
   it('claim and release go to the same notice store', async () => {
@@ -1469,6 +1576,12 @@ describe('defaultBuildJobDeps', () => {
     await deps.alert(entry);
     expect(logAlert).toHaveBeenCalledWith(client, entry);
     expect(deps).not.toHaveProperty('postRoleNotice');
+    vi.mocked(recentEmbedTitles).mockResolvedValue(['x']);
+    expect(await deps.recentAlertTitles()).toEqual(['x']);
+    expect(recentEmbedTitles).toHaveBeenCalledWith(
+      client,
+      BOT_ALERTS_CHANNEL_ID,
+    );
     await deps.collectLinkProgress();
     expect(collectLinkProgress).toHaveBeenCalledWith(client);
     expect(deps.newLeaseValue()).not.toBe(deps.newLeaseValue());

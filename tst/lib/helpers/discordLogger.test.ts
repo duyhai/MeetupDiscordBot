@@ -4,7 +4,7 @@
   @typescript-eslint/no-unsafe-assignment,
   @typescript-eslint/unbound-method
 */
-import { Client, TextChannel } from 'discord.js';
+import { Client, Collection, TextChannel } from 'discord.js';
 import { Logger } from 'tslog';
 import {
   MockInstance,
@@ -25,6 +25,7 @@ import {
   logActivity,
   logAlert,
   logModeration,
+  recentEmbedTitles,
 } from '../../../src/lib/helpers/discordLogger.js';
 
 function makeClient(
@@ -39,6 +40,28 @@ function makeClient(
         ? vi.fn().mockRejectedValue(new Error('fetch failed'))
         : vi.fn().mockResolvedValue(channel),
     },
+  } as unknown as Client;
+}
+
+const BOT_ID = '111111111111111111';
+
+function message(id: string, authorId: string, titles: (string | null)[]) {
+  return {
+    id,
+    author: { id: authorId },
+    embeds: titles.map((title) => ({ title })),
+  };
+}
+
+function historyClient(
+  messagesFetch: ReturnType<typeof vi.fn>,
+  options: { user?: { id: string } | null } = {},
+) {
+  const channel = Object.create(TextChannel.prototype) as TextChannel;
+  (channel as any).messages = { fetch: messagesFetch };
+  return {
+    user: options.user === undefined ? { id: BOT_ID } : options.user,
+    channels: { fetch: vi.fn().mockResolvedValue(channel) },
   } as unknown as Client;
 }
 
@@ -189,6 +212,87 @@ describe('discordLogger', () => {
       expect(lines[0]).toContain('Error[ECONNRESET]');
       expect(lines[1]).toMatch(/: Error$/);
       expect(lines.join('\n')).not.toContain('SECRET');
+    });
+  });
+
+  describe('recentEmbedTitles', () => {
+    let warnSpy: MockInstance<(...args: unknown[]) => unknown>;
+
+    beforeEach(() => {
+      const proto = Logger.prototype as unknown as {
+        warn: (...args: unknown[]) => unknown;
+      };
+      warnSpy = vi.spyOn(proto, 'warn').mockReturnValue(undefined);
+    });
+
+    afterEach(() => {
+      warnSpy.mockRestore();
+    });
+
+    it("recentEmbedTitles returns only this bot's embed titles", async () => {
+      const fetchMessages = vi.fn().mockResolvedValue(
+        new Collection([
+          ['3', message('3', BOT_ID, ['Reports ready: September 2026'])],
+          [
+            '2',
+            message('2', '222222222222222222', ['Reports ready: October 2026']),
+          ],
+          ['1', message('1', BOT_ID, ['Reports built: September 2026', null])],
+        ]),
+      );
+      const client = historyClient(fetchMessages);
+      expect(await recentEmbedTitles(client, BOT_ALERTS_CHANNEL_ID)).toEqual([
+        'Reports ready: September 2026',
+        'Reports built: September 2026',
+      ]);
+      expect(client.channels.fetch).toHaveBeenCalledWith(BOT_ALERTS_CHANNEL_ID);
+      expect(fetchMessages).toHaveBeenCalledWith({ limit: 50 });
+    });
+
+    it('recentEmbedTitles returns undefined when history cannot be read', async () => {
+      const failure = Object.assign(
+        new Error('Missing Access: SECRET-CONTENT-BODY'),
+        { name: 'DiscordAPIError', status: 403, code: 50001 },
+      );
+      const client = historyClient(vi.fn().mockRejectedValue(failure));
+      await expect(
+        recentEmbedTitles(client, BOT_ALERTS_CHANNEL_ID),
+      ).resolves.toBeUndefined();
+      const logged = warnSpy.mock.calls
+        .map((call) => call.map(String).join(' '))
+        .join('\n');
+      expect(logged).toContain('DiscordAPIError[50001] (HTTP 403)');
+      expect(logged).toContain(BOT_ALERTS_CHANNEL_ID);
+      expect(logged).not.toContain('SECRET-CONTENT-BODY');
+    });
+
+    it('recentEmbedTitles returns undefined when the channel fetch fails', async () => {
+      const client = {
+        user: { id: BOT_ID },
+        channels: { fetch: vi.fn().mockRejectedValue(new Error('down')) },
+      } as unknown as Client;
+      await expect(
+        recentEmbedTitles(client, BOT_ALERTS_CHANNEL_ID),
+      ).resolves.toBeUndefined();
+    });
+
+    it('recentEmbedTitles returns undefined before the bot user is known', async () => {
+      const fetchMessages = vi.fn();
+      const client = historyClient(fetchMessages, { user: null });
+      await expect(
+        recentEmbedTitles(client, BOT_ALERTS_CHANNEL_ID),
+      ).resolves.toBeUndefined();
+      expect(fetchMessages).not.toHaveBeenCalled();
+    });
+
+    it('recentEmbedTitles returns undefined for a channel that is not a text channel', async () => {
+      const client = {
+        user: { id: BOT_ID },
+        channels: { fetch: vi.fn().mockResolvedValue({}) },
+      } as unknown as Client;
+      await expect(
+        recentEmbedTitles(client, BOT_ALERTS_CHANNEL_ID),
+      ).resolves.toBeUndefined();
     });
   });
 });

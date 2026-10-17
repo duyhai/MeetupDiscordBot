@@ -122,3 +122,38 @@ export async function logAlert(
     entry,
   );
 }
+
+/**
+ * Titles of the embeds this bot posted among a channel's last `limit`
+ * messages, newest first; undefined when they cannot be read (missing Read
+ * Message History, Discord down, the bot not logged in yet). Discord returns
+ * embeds of the bot's own messages without the MessageContent intent. Never
+ * throws; a failure logs only the error's class, code and status.
+ */
+export async function recentEmbedTitles(
+  client: Client,
+  channelId: string,
+  limit = 50,
+): Promise<string[] | undefined> {
+  try {
+    const self = client.user?.id;
+    if (self === undefined) {
+      return undefined;
+    }
+    const channel = await client.channels.fetch(channelId);
+    if (!(channel instanceof TextChannel)) {
+      return undefined;
+    }
+    const messages = await channel.messages.fetch({ limit });
+    return [...messages.values()]
+      .filter((m) => m.author.id === self)
+      .flatMap((m) => m.embeds.map((e) => e.title))
+      .filter((t): t is string => typeof t === 'string');
+  } catch (error) {
+    // Channel ids are all digits, so they are safe to log.
+    logger.warn(
+      `Could not read recent posts in ${channelId}: ${describeSendError(error)}`,
+    );
+    return undefined;
+  }
+}

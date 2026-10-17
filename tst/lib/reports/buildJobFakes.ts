@@ -15,6 +15,10 @@ import {
   SnapshotMeta,
   SnapshotWrite,
 } from '../../../src/lib/repositories/postgresReportSnapshotRepository.js';
+import {
+  NOTICE_RECLAIM_AFTER_MS,
+  NoticeClaim,
+} from '../../../src/lib/repositories/postgresDashboardNoticeRepository.js';
 import { FakeCache } from '../../web/fakeCache.js';
 
 export const HOF_SUMMARY = { events: 4, hosts: 3, newHosts: 1 };
@@ -127,21 +131,58 @@ export class FakeSnapshotStore {
   }
 }
 
+/**
+ * The notice table's rules on a test clock: a posted marker is final, an
+ * unposted claim older than NOTICE_RECLAIM_AFTER_MS is taken again as a
+ * retry, and a release makes an unposted claim retryable at once.
+ */
 export class FakeNoticeStore {
-  readonly markers = new Set<string>();
+  readonly markers = new Map<
+    string,
+    { claimedAtMs: number; posted: boolean }
+  >();
 
-  readonly claim = vi.fn(async (kind: string, period: Period) => {
-    const key = `${kind}:${periodKey(period)}`;
-    if (this.markers.has(key)) {
+  constructor(private readonly nowMs: () => number = () => Date.now()) {}
+
+  readonly claim = vi.fn(
+    async (kind: string, period: Period): Promise<NoticeClaim> => {
+      const key = `${kind}:${periodKey(period)}`;
+      const now = this.nowMs();
+      const marker = this.markers.get(key);
+      if (marker === undefined) {
+        this.markers.set(key, { claimedAtMs: now, posted: false });
+        return 'fresh';
+      }
+      if (
+        !marker.posted &&
+        marker.claimedAtMs < now - NOTICE_RECLAIM_AFTER_MS
+      ) {
+        marker.claimedAtMs = now;
+        return 'retry';
+      }
+      return false;
+    },
+  );
+
+  readonly release = vi.fn(async (kind: string, period: Period) => {
+    const marker = this.markers.get(`${kind}:${periodKey(period)}`);
+    if (marker !== undefined && !marker.posted) {
+      marker.claimedAtMs = -Infinity;
+    }
+  });
+
+  readonly markPosted = vi.fn(async (kind: string, period: Period) => {
+    const marker = this.markers.get(`${kind}:${periodKey(period)}`);
+    if (marker === undefined) {
       return false;
     }
-    this.markers.add(key);
+    marker.posted = true;
     return true;
   });
 
-  readonly release = vi.fn(async (kind: string, period: Period) => {
-    this.markers.delete(`${kind}:${periodKey(period)}`);
-  });
+  isPosted(kind: string, period: Period): boolean {
+    return this.markers.get(`${kind}:${periodKey(period)}`)?.posted === true;
+  }
 }
 
 export class FakeLinkProgressStore {
@@ -246,6 +287,9 @@ export interface Harness {
     typeof vi.fn<() => Promise<LinkProgressCounts>>
   >;
   alert: ReturnType<typeof vi.fn<(entry: LogEntry) => Promise<boolean>>>;
+  recentAlertTitles: ReturnType<
+    typeof vi.fn<() => Promise<string[] | undefined>>
+  >;
   cacheSpy: ReturnType<typeof vi.fn<() => Promise<FakeCache>>>;
 }
 
@@ -262,7 +306,8 @@ export function makeDeps(options: HarnessOptions = {}): Harness {
   const clock = options.clock ?? new Clock('2026-10-05T16:15:00Z');
   const cache = options.cache ?? new ExpiringCache(clock);
   const snapshots = options.snapshots ?? new FakeSnapshotStore();
-  const notices = options.notices ?? new FakeNoticeStore();
+  const notices =
+    options.notices ?? new FakeNoticeStore(() => clock.now().getTime());
   const linkProgress = options.linkProgress ?? new FakeLinkProgressStore();
   let leases = 0;
   const fetchMonthReports = vi.fn(
@@ -271,6 +316,9 @@ export function makeDeps(options: HarnessOptions = {}): Harness {
   );
   const collectLinkProgress = vi.fn(() => Promise.resolve({ ...LINK_COUNTS }));
   const alert = vi.fn((_entry: LogEntry) => Promise.resolve(true));
+  const recentAlertTitles = vi.fn(
+    async (): Promise<string[] | undefined> => [],
+  );
   const cacheSpy = vi.fn(() => Promise.resolve(cache));
   const deps: BuildJobDeps = {
     now: () => clock.now(),
@@ -281,6 +329,7 @@ export function makeDeps(options: HarnessOptions = {}): Harness {
     fetchMonthReports,
     collectLinkProgress,
     alert,
+    recentAlertTitles,
     reportReadyEnabled: () => options.reportReadyEnabled ?? true,
     newLeaseValue: () => {
       leases += 1;
@@ -297,6 +346,7 @@ export function makeDeps(options: HarnessOptions = {}): Harness {
     fetchMonthReports,
     collectLinkProgress,
     alert,
+    recentAlertTitles,
     cacheSpy,
   };
 }

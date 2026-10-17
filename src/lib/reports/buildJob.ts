@@ -5,9 +5,14 @@ import { ClientError } from 'graphql-request';
 import { Logger } from 'tslog';
 
 import Configuration from '../../configuration.js';
+import { BOT_ALERTS_CHANNEL_ID } from '../../constants.js';
 import { ApplicationCache } from '../../util/cache.js';
 import { KeyValueCache } from '../cache/base.js';
-import { LogEntry, logAlert } from '../helpers/discordLogger.js';
+import {
+  LogEntry,
+  logAlert,
+  recentEmbedTitles,
+} from '../helpers/discordLogger.js';
 import { safeErrorSummary } from '../helpers/identity/digest.js';
 import { PostgresDashboardNoticeRepository } from '../repositories/postgresDashboardNoticeRepository.js';
 import { PostgresLinkProgressRepository } from '../repositories/postgresLinkProgressRepository.js';
@@ -189,8 +194,11 @@ export interface BuildJobDeps {
    */
   backgroundCache?(): Promise<KeyValueCache>;
   snapshots: Pick<PostgresReportSnapshotRepository, 'save' | 'getCurrentMeta'>;
-  /** claim and release must hit the same instance: release only removes its own claim's marker. */
-  notices: Pick<PostgresDashboardNoticeRepository, 'claim' | 'release'>;
+  /** claim, markPosted and release must hit the same instance: the last two touch only its own claim. */
+  notices: Pick<
+    PostgresDashboardNoticeRepository,
+    'claim' | 'release' | 'markPosted'
+  >;
   linkProgress: Pick<PostgresLinkProgressRepository, 'hasDay' | 'upsertDay'>;
   /**
    * Reads Meetup with the organizer credential and builds both payloads.
@@ -203,6 +211,8 @@ export interface BuildJobDeps {
   ): Promise<MonthReports>;
   collectLinkProgress(): Promise<LinkProgressCounts>;
   alert(entry: LogEntry): Promise<boolean>;
+  /** This bot's embed titles among the last 50 alerts; undefined when unreadable. Only read on a retry. */
+  recentAlertTitles(): Promise<string[] | undefined>;
   reportReadyEnabled(): boolean;
   newLeaseValue(): string;
 }
@@ -671,12 +681,22 @@ export function reportReadyEntry(
 }
 
 /**
- * For the latest finished month only, once ever: needs both current snapshots
- * built at or after the month ended (whoever built them: job, manual or
- * backfill) and a complete no-show row. The marker row is inserted before
- * posting (so two processes cannot both post) and deleted if the post fails
- * (so the next tick retries). If that delete itself throws, the marker stays
- * and the month is never announced; logged. The backfill never calls this.
+ * For the latest finished month only: needs both current snapshots built at
+ * or after the month ended (whoever built them: job, manual or backfill) and
+ * a complete no-show row. The backfill never calls this.
+ *
+ * Delivery is at least once, by decision: a duplicate plain alert is
+ * harmless, a month that is never announced is not.
+ * - The marker is claimed before posting, so two processes cannot both post,
+ *   and marked posted once the post lands; a posted marker is final.
+ * - A failed post releases the claim, so the next tick retries.
+ * - A claim left unposted for NOTICE_RECLAIM_AFTER_MS (30 minutes: a crash,
+ *   or a markPosted or release that threw, logged by the catch below) is
+ *   reclaimed by a later tick as a retry.
+ * - A retry first reads this bot's recent embed titles in the channel (a
+ *   timed-out send can still land). If the notice is there, it is marked
+ *   posted without posting. A duplicate is possible only when that read
+ *   fails or the earlier post is more than 50 messages back.
  */
 export async function maybePostReportReady(
   deps: BuildJobDeps,
@@ -700,11 +720,32 @@ export async function maybePostReportReady(
     ) {
       return 'skipped';
     }
-    if (!(await deps.notices.claim('report_ready', period))) {
+    const claim = await deps.notices.claim('report_ready', period);
+    if (!claim) {
       return 'skipped';
     }
     const entry = reportReadyEntry(period, hof.summary, noShow.summary);
+    if (claim === 'retry') {
+      // A crash or a failed post came before: the notice may be in the
+      // channel already (a timed-out send can still land). Unreadable
+      // history posts anyway: a duplicate plain alert beats a missing one.
+      const titles = await deps
+        .recentAlertTitles()
+        .catch((): string[] | undefined => undefined);
+      if (titles?.includes(entry.title)) {
+        await deps.notices.markPosted('report_ready', period);
+        logger.info(
+          `Report-ready for ${periodKey(period)} was already in the channel; marked posted`,
+        );
+        return 'posted';
+      }
+    }
     if (await deps.alert(entry)) {
+      if (!(await deps.notices.markPosted('report_ready', period))) {
+        logger.warn(
+          `Report-ready for ${periodKey(period)} posted, but its marker was taken over; a retry will find the post`,
+        );
+      }
       return 'posted';
     }
     await deps.notices.release('report_ready', period);
@@ -867,11 +908,12 @@ export async function defaultBuildJobDeps(
     now: () => new Date(),
     cache: ApplicationCache,
     snapshots,
-    notices, // one instance for claim and release
+    notices, // one instance for claim, markPosted and release
     linkProgress,
     fetchMonthReports: organizerMonthReports(client, suspensions),
     collectLinkProgress: () => collectLinkProgress(client),
     alert: (entry) => logAlert(client, entry),
+    recentAlertTitles: () => recentEmbedTitles(client, BOT_ALERTS_CHANNEL_ID),
     reportReadyEnabled: () => REPORT_READY_ENABLED,
     newLeaseValue: () => crypto.randomUUID(),
   };

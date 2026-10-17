@@ -29,14 +29,27 @@ CREATE TABLE IF NOT EXISTS link_progress_daily (
   reverify_tagged INTEGER NOT NULL,
   onboarding      INTEGER NOT NULL
 );
--- Durable "report ready already posted" marker: a restart cannot post the
--- notice twice, and a failed post is deleted so the next tick retries.
+-- One report-ready notice per month. claimed_at is when a process took it
+-- (the database clock); posted_at is set only once the post landed. An
+-- unposted claim older than NOTICE_RECLAIM_AFTER_MS is a crash and is taken
+-- again; a failed post moves claimed_at to -infinity so the next tick retries.
 CREATE TABLE IF NOT EXISTS dashboard_notices (
-  kind      TEXT NOT NULL CHECK (kind IN ('report_ready')),
-  period    DATE NOT NULL CHECK (EXTRACT(DAY FROM period) = 1),
-  posted_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  kind       TEXT NOT NULL CHECK (kind IN ('report_ready')),
+  period     DATE NOT NULL CHECK (EXTRACT(DAY FROM period) = 1),
+  claimed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  posted_at  TIMESTAMPTZ,
   PRIMARY KEY (kind, period)
 );
+-- PR 2 tables: posted_at NOT NULL DEFAULT now() held the claim time and
+-- there was no claimed_at. Rows from then count as posted. Every statement
+-- is a no-op on an upgraded table, so this runs on every boot.
+ALTER TABLE dashboard_notices ADD COLUMN IF NOT EXISTS claimed_at TIMESTAMPTZ;
+UPDATE dashboard_notices SET claimed_at = posted_at WHERE claimed_at IS NULL;
+ALTER TABLE dashboard_notices
+  ALTER COLUMN claimed_at SET DEFAULT now(),
+  ALTER COLUMN claimed_at SET NOT NULL,
+  ALTER COLUMN posted_at DROP DEFAULT,
+  ALTER COLUMN posted_at DROP NOT NULL;
 -- Per-member no-show lookups: payload @> '{"cases":[{"member":{"id":"…"}}]}'
 -- (and the cleared/departed forms). Partial: only current no-show rows are
 -- searched, and queries must state this predicate literally to use it.
