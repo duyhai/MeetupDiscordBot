@@ -105,6 +105,19 @@ export class MembershipsUnreadableError extends Error {
   }
 }
 
+/** A month before GROUP_FIRST_PERIOD: buildMonth refuses it before reading anything. */
+export class MonthBeforeGroupBuildError extends RangeError {
+  /** Its text may reach #meetup-bot-alerts. */
+  readonly organizerSafeMessage = true;
+
+  constructor(period: Period) {
+    super(
+      `${monthLabel(period)} is before the group's first month (${monthLabel(GROUP_FIRST_PERIOD)}); nothing was built.`,
+    );
+    this.name = 'MonthBeforeGroupBuildError';
+  }
+}
+
 /** Key-order-insensitive equality of two JSON values (JSONB reorders keys). */
 function stableJson(value: unknown): string {
   if (Array.isArray(value)) {
@@ -237,7 +250,8 @@ export interface MonthBuildOptions {
  * Reads the month from Meetup, then saves both snapshots. `builtAt` is the
  * start time (when the data was read), so a refresh that starts before the
  * month ends and saves after it is not counted as a finished build. Throws on
- * any failure; nothing is saved unless the whole read succeeded.
+ * any failure; nothing is saved unless the whole read succeeded. A month
+ * before the group's first (GROUP_FIRST_PERIOD) is refused before any read.
  */
 export async function buildMonth(
   deps: MonthBuildDeps,
@@ -245,6 +259,9 @@ export async function buildMonth(
   builtBy: string,
   options: MonthBuildOptions = {},
 ): Promise<MonthBuildOutcome> {
+  if (comparePeriods(period, GROUP_FIRST_PERIOD) < 0) {
+    throw new MonthBeforeGroupBuildError(period);
+  }
   const started = deps.now();
   const finished = isFinished(period, started);
   const asOf = buildAsOf(period, started);

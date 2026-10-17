@@ -19,6 +19,7 @@ import {
   describeBuildError,
   maybePostReportReady,
   MembershipsUnreadableError,
+  MonthBeforeGroupBuildError,
   MonthBuildDeps,
   REPORT_READY_ENABLED,
   REPORT_READY_ROLE_IDS,
@@ -1656,20 +1657,36 @@ describe('month page links', () => {
     ]);
   });
 
-  // Pins current behaviour, not a rule: Task 12 is expected to make buildMonth
-  // refuse months before GROUP_FIRST_PERIOD, and the buildMonth assertion
-  // below flips then.
-  it('a month before the group began cannot be requested, but buildMonth itself would build it', async () => {
+  it('a month before the group began can be neither requested nor built', async () => {
     const h = makeDeps();
     expect(
       (await requestRebuild(h.deps, { year: 2013, month: 2 }, REQUESTER))
         .status,
     ).toBe('bad-month');
-    // buildMonth has no floor of its own: only requestRebuild (and the job,
-    // which builds just the current and previous months) keep it out.
-    const built = await buildMonth(h.deps, { year: 2013, month: 2 }, 'job');
-    expect(built.period).toEqual({ year: 2013, month: 2 });
-    expect(linkLines(buildSummaryEntry(built).description)).toEqual([]);
+    // buildMonth has its own floor, so the backfill (or any later caller)
+    // cannot build or save a month before GROUP_FIRST_PERIOD.
+    await expect(
+      buildMonth(h.deps, { year: 2013, month: 2 }, 'backfill'),
+    ).rejects.toBeInstanceOf(MonthBeforeGroupBuildError);
+    await expect(
+      buildMonth(h.deps, { year: 2012, month: 12 }, 'job'),
+    ).rejects.toBeInstanceOf(MonthBeforeGroupBuildError);
+    expect(h.fetchMonthReports).not.toHaveBeenCalled();
+    expect(h.snapshots.rows).toEqual([]);
+    expect(
+      describeBuildError(
+        new MonthBeforeGroupBuildError({ year: 2013, month: 2 }),
+      ),
+    ).toBe(
+      "February 2013 is before the group's first month (March 2013); nothing was built.",
+    );
+    // The first month itself builds.
+    const built = await buildMonth(
+      h.deps,
+      { year: 2013, month: 3 },
+      'backfill',
+    );
+    expect(built.period).toEqual({ year: 2013, month: 3 });
   });
 
   it('alerts stay embeds with no mentions', async () => {
