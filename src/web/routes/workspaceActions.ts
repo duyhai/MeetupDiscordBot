@@ -33,9 +33,18 @@ import {
   parseRowId,
   parseWorkspaceMonth,
 } from '../pageKit.js';
+import { FixedWindowLimiter } from '../rateLimit.js';
 import type { DashboardPageDeps } from './dashboardPages.js';
 
 const logger = new Logger({ name: 'dashboard' });
+
+/**
+ * At most one Leadership refusal post per user per this window, like the
+ * router's refusedAuditLimiter: a Moderator (or a script) repeating a
+ * refused POST cannot flood the moderation log. Every refusal still
+ * answers with its redirect. In-process, so per dyno.
+ */
+export const WORKSPACE_REFUSAL_POST_WINDOW_MS = 60_000;
 
 /**
  * Every code a workspace POST can send back in `?result=`. 'stale' and
@@ -188,6 +197,11 @@ export function registerWorkspaceActionRoutes(
   router: express.Router,
   deps: Pick<DashboardPageDeps, 'now' | 'workspaceActions' | 'isLeadership'>,
 ): void {
+  const refusalPosts = new FixedWindowLimiter(
+    1,
+    WORKSPACE_REFUSAL_POST_WINDOW_MS,
+    () => deps.now().getTime(),
+  );
   router.post(DASHBOARD_PATHS.workspaceRow, (async (req, res) => {
     const now = deps.now();
     const period = parseWorkspaceMonth(req.params.period, now);
@@ -225,11 +239,14 @@ export function registerWorkspaceActionRoutes(
         why = 'discord-unreachable';
       }
       if (why !== undefined) {
-        // Nothing is written: the moderation log is this refusal's only audit.
-        postWithoutWaiting(
-          deps.workspaceActions,
-          leadershipRefusalEntry(period, rowId, action, session.userId, why),
-        );
+        // Nothing is written: the moderation log is this refusal's only
+        // audit, throttled per user.
+        if (refusalPosts.take(session.userId)) {
+          postWithoutWaiting(
+            deps.workspaceActions,
+            leadershipRefusalEntry(period, rowId, action, session.userId, why),
+          );
+        }
         back(
           why === 'not-leadership'
             ? 'not-leadership'

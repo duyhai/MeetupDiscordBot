@@ -26,6 +26,7 @@ import { parseRowId, parseWorkspaceMonth } from '../../../src/web/pageKit.js';
 import { FixedWindowLimiter } from '../../../src/web/rateLimit.js';
 import { registerAllProtectedRoutes } from '../../../src/web/routes/dashboardPages.js';
 import {
+  WORKSPACE_REFUSAL_POST_WINDOW_MS,
   WORKSPACE_RESULT_MESSAGES,
   workspaceResultNotice,
 } from '../../../src/web/routes/workspaceActions.js';
@@ -78,13 +79,15 @@ async function setup(
     }
     return options.leader ?? false;
   });
+  let clock = PAGE_NOW.getTime();
   const { req } = await makeApp({
-    now: () => PAGE_NOW.getTime(),
+    now: () => clock,
     actionLimiter: options.actionLimiter,
     protectedRoutes: (r) =>
       registerAllProtectedRoutes(r, {
         organizer: fakeOrganizerDeps(),
         pages: fakePageDeps({
+          now: () => new Date(clock),
           isLeadership,
           workspaceActions: { perform, sync, moderationLog },
         }),
@@ -107,7 +110,18 @@ async function setup(
       .set('Origin', ORIGIN)
       .type('form')
       .send(`_csrf=${encodeURIComponent(token)}&${body}`);
-  return { req, perform, sync, moderationLog, isLeadership, post, postRaw };
+  return {
+    req,
+    perform,
+    sync,
+    moderationLog,
+    isLeadership,
+    post,
+    postRaw,
+    advance: (ms: number) => {
+      clock += ms;
+    },
+  };
 }
 
 async function tokenOf(req: Client, cookie: string): Promise<string> {
@@ -569,6 +583,35 @@ describe('Leadership-only workspace actions', () => {
     expect(location(res)).toBe(`${MONTH}?result=not-leadership`);
     expect(perform).toHaveBeenCalledTimes(1);
     expect(isLeadership).toHaveBeenCalledTimes(2);
+  });
+
+  it('refusal posts are throttled to one per user per minute; every refusal still redirects', async () => {
+    const { post, perform, moderationLog, advance } = await setup({
+      leader: false,
+    });
+    for (const action of LEADERSHIP_ONLY_ACTIONS) {
+      // eslint-disable-next-line no-await-in-loop -- in order, so the first one is the one posted
+      const res = await post(ROW, leadershipForm(action));
+      expect(location(res), action).toBe(`${MONTH}?result=not-leadership`);
+    }
+    await settle();
+    expect(moderationLog).toHaveBeenCalledTimes(1);
+    expect(moderationLog.mock.calls[0][0]).toEqual(
+      leadershipRefusalEntry(
+        SEPT,
+        1,
+        'record_suspension',
+        USER.id,
+        'not-leadership',
+      ),
+    );
+    advance(WORKSPACE_REFUSAL_POST_WINDOW_MS);
+    expect(location(await post(ROW, leadershipForm('void')))).toBe(
+      `${MONTH}?result=not-leadership`,
+    );
+    await settle();
+    expect(moderationLog).toHaveBeenCalledTimes(2);
+    expect(perform).not.toHaveBeenCalled();
   });
 
   it('a refusal log failure is swallowed: the refusal still answers', async () => {
