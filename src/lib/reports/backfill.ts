@@ -1,4 +1,7 @@
+import { ClientError } from 'graphql-request';
 import { Logger } from 'tslog';
+
+import { BASE_DISCORD_BOT_URL } from '../../constants.js';
 
 import { KeyValueCache } from '../cache/base.js';
 import { LogEntry } from '../helpers/discordLogger.js';
@@ -15,6 +18,7 @@ import {
   releaseBuildLease,
 } from './buildLease.js';
 import { canStartMonthBuild } from './buildSchedule.js';
+import { OrganizerTokenUnavailableError } from './organizerMeetup.js';
 import {
   comparePeriods,
   GROUP_FIRST_PERIOD,
@@ -38,8 +42,14 @@ export const BACKFILL_LEASE_WAIT_MS = 20 * 60_000;
 export const BACKFILL_DEFAULT_DELAY_MS = 5_000;
 /** Months named per list in the final post; the rest are counted. */
 export const BACKFILL_LIST_LIMIT = 20;
+/** Failed months in a row (any cause but the departed guard) that stop the run. */
+export const BACKFILL_MAX_CONSECUTIVE_FAILURES = 3;
 /** Discord's embed description limit is 4096. */
 const DESCRIPTION_LIMIT = 4000;
+/** Each failure reason in the final post is cut to this many characters. */
+const REASON_LIMIT = 200;
+/** Distinct failure reasons listed in the final post; the rest are counted. */
+const REASON_GROUP_LIMIT = 10;
 
 export interface BackfillDeps {
   now(): Date;
@@ -51,6 +61,8 @@ export interface BackfillDeps {
   sleep(ms: number): Promise<void>;
   newLeaseValue(): string;
   log: Pick<Logger<unknown>, 'info' | 'warn' | 'error'>;
+  /** True once SIGTERM/SIGINT arrived: stop before the next month. */
+  stopRequested?(): boolean;
 }
 
 export interface BackfillOptions {
@@ -65,7 +77,13 @@ export interface BackfillOptions {
 }
 
 export type BackfillStop =
-  'quiet-window' | 'identity-sweep' | 'lease-timeout' | 'cache-unavailable';
+  | 'quiet-window'
+  | 'identity-sweep'
+  | 'lease-timeout'
+  | 'cache-unavailable'
+  | 'meetup-unavailable'
+  | 'repeated-failures'
+  | 'stopped';
 
 export interface BackfillFailure {
   period: Period;
@@ -88,7 +106,7 @@ export interface BackfillResult {
 }
 
 export type BackfillRefusal =
-  'quiet-window' | 'identity-sweep' | 'before-group';
+  'quiet-window' | 'identity-sweep' | 'before-group' | 'cache-unavailable';
 
 export class BackfillRefusedError extends Error {
   constructor(readonly reason: BackfillRefusal) {
@@ -97,7 +115,10 @@ export class BackfillRefusedError extends Error {
   }
 }
 
-const STOP_TEXT: Record<BackfillStop, string> = {
+const ORGANIZER_LOGIN_URL = `${BASE_DISCORD_BOT_URL}/dashboard/organizer-login`;
+
+/** Fixed text: the first line of a stopped run's final post. */
+export const BACKFILL_STOP_TEXT: Record<BackfillStop, string> = {
   'quiet-window':
     'Stopped before 17:45 UTC (unlinked digest and identity sweep). Run it again after 19:00 UTC; months already built are skipped.',
   'identity-sweep':
@@ -107,7 +128,57 @@ const STOP_TEXT: Record<BackfillStop, string> = {
   'cache-unavailable':
     'Stopped: Redis did not answer, so the build lease and the identity sweep could not be checked. ' +
     'Run it again later; months already built are skipped.',
+  'meetup-unavailable':
+    'Stopped: Meetup refused the organizer login or asked the backfill to slow down, so it stopped reading. ' +
+    `The organizer login may need renewing at ${ORGANIZER_LOGIN_URL}. ` +
+    'Run it again later; months already built are skipped.',
+  'repeated-failures':
+    `Stopped after ${BACKFILL_MAX_CONSECUTIVE_FAILURES} months in a row failed, so as not to keep reading Meetup. ` +
+    'Check the reasons below, then run it again; months already built are skipped.',
+  stopped:
+    'Stopped: the dyno was asked to stop (a restart or deploy). Run it again; months already built are skipped.',
 };
+
+/**
+ * What a failed month says in Discord: describeBuildError's text, except the
+ * organizer error, whose own text points at an alert the backfill (which has
+ * no Discord client) never posts. Capped at REASON_LIMIT characters.
+ */
+function failureReason(error: unknown): string {
+  const reason =
+    error instanceof OrganizerTokenUnavailableError
+      ? `No usable Meetup organizer login; it may need renewing at ${ORGANIZER_LOGIN_URL}.`
+      : describeBuildError(error);
+  return capReason(reason);
+}
+
+function capReason(reason: string): string {
+  return reason.length > REASON_LIMIT
+    ? `${reason.slice(0, REASON_LIMIT - 1)}…`
+    : reason;
+}
+
+/** Process-log text: the error class and the Discord-safe text, never a Meetup body. */
+function logText(error: unknown): string {
+  let name = 'Error';
+  if (error instanceof Error) {
+    // graphql-request's ClientError keeps the default name 'Error'.
+    name = error.name !== 'Error' ? error.name : error.constructor.name;
+  }
+  return `${name}: ${describeBuildError(error)}`;
+}
+
+/** Retrying would only hit Meetup and the shared organizer token again. */
+function meetupUnavailable(error: unknown): boolean {
+  if (error instanceof OrganizerTokenUnavailableError) {
+    return true;
+  }
+  if (error instanceof ClientError) {
+    const status = (error.response as { status?: unknown } | undefined)?.status;
+    return status === 401 || status === 429;
+  }
+  return false;
+}
 
 /** Newest first: the last finished month back to `first`. */
 export function backfillMonths(first: Period, now: Date): Period[] {
@@ -139,6 +210,9 @@ async function guardStop(
   deps: BackfillDeps,
   cache: KeyValueCache,
 ): Promise<BackfillStop | undefined> {
+  if (deps.stopRequested?.()) {
+    return 'stopped';
+  }
   const at = deps.now();
   if (!canStartMonthBuild(at)) {
     return 'quiet-window';
@@ -154,15 +228,18 @@ async function takeLease(
   cache: KeyValueCache,
   value: string,
   waitMs: number,
-): Promise<boolean> {
+): Promise<'leased' | 'lease-timeout' | 'stopped'> {
   const deadline = deps.now().getTime() + waitMs;
   for (;;) {
     // eslint-disable-next-line no-await-in-loop -- polling the shared lease
     if (await acquireBuildLease(cache, value)) {
-      return true;
+      return 'leased';
     }
     if (deps.now().getTime() >= deadline) {
-      return false;
+      return 'lease-timeout';
+    }
+    if (deps.stopRequested?.()) {
+      return 'stopped';
     }
     deps.log.info(
       'Backfill waiting for the build lease: another report build is running',
@@ -215,42 +292,62 @@ function progressEntry(
   };
 }
 
-function finalEntry(result: BackfillResult): LogEntry {
-  const lines = [`${monthCount(result.months)}: ${counts(result)}.`];
+/** One line per distinct reason, in first-seen (newest month) order. */
+function reasonLines(failures: BackfillFailure[]): string[] {
+  const groups = new Map<string, Period[]>();
+  failures.forEach((f) => {
+    groups.set(f.reason, [...(groups.get(f.reason) ?? []), f.period]);
+  });
+  const lines = [...groups.entries()]
+    .slice(0, REASON_GROUP_LIMIT)
+    .map(([reason, periods]) => {
+      const who =
+        periods.length === 1
+          ? monthLabel(periods[0])
+          : monthCount(periods.length);
+      return `${who}: ${capReason(reason)}`;
+    });
+  if (groups.size > REASON_GROUP_LIMIT) {
+    lines.push(`…and ${groups.size - REASON_GROUP_LIMIT} other reasons`);
+  }
+  return lines;
+}
+
+/**
+ * Most important first, so the 4000-character cap can only cut the failure
+ * lines: the stop reason, the refused all-departed months and their hint,
+ * the counts, then one line per distinct failure reason.
+ */
+export function backfillFinalEntry(result: BackfillResult): LogEntry {
+  const lines: string[] = [];
+  if (result.stopped) {
+    lines.push(BACKFILL_STOP_TEXT[result.stopped], '');
+  }
+  const refused = result.failed.filter((f) => f.allDepartedRefusal);
+  const failures = result.failed.filter((f) => !f.allDepartedRefusal);
+  if (refused.length > 0) {
+    const oldest = refused[refused.length - 1].period;
+    lines.push(
+      `Not saved, because every no-show member (3 or more) has left the group: ${labels(refused.map((f) => f.period))}.`,
+      'Membership is read as of today, so in old months they may really have left. ' +
+        'If recent months look right on the dashboard, save these by running again with ' +
+        `--allow-all-departed --from ${periodKey(oldest)}.`,
+      '',
+    );
+  }
+  lines.push(`${monthCount(result.months)}: ${counts(result)}.`);
   if (result.noNoShows > 0) {
     lines.push(
       `${monthCount(result.noNoShows)} had no no-shows recorded (saved normally).`,
     );
   }
-  const refused = result.failed.filter((f) => f.allDepartedRefusal);
-  const failures = result.failed.filter((f) => !f.allDepartedRefusal);
-  if (failures.length > 0) {
-    lines.push('', 'Failed:');
-    failures.slice(0, BACKFILL_LIST_LIMIT).forEach((f) => {
-      lines.push(`${monthLabel(f.period)}: ${f.reason}`);
-    });
-    if (failures.length > BACKFILL_LIST_LIMIT) {
-      lines.push(`…and ${failures.length - BACKFILL_LIST_LIMIT} more`);
-    }
-  }
-  if (refused.length > 0) {
-    const oldest = refused[refused.length - 1].period;
-    lines.push(
-      '',
-      `Not saved, because every no-show member (3 or more) has left the group: ${labels(refused.map((f) => f.period))}.`,
-      'Membership is read as of today, so in old months they may really have left. ' +
-        'If recent months look right on the dashboard, save these by running again with ' +
-        `--allow-all-departed --from ${periodKey(oldest)}.`,
-    );
-  }
   if (result.allDeparted.length > 0) {
     lines.push(
-      '',
       `Saved with every no-show member gone from the group: ${labels(result.allDeparted)}.`,
     );
   }
-  if (result.stopped) {
-    lines.push('', STOP_TEXT[result.stopped]);
+  if (failures.length > 0) {
+    lines.push('', 'Failed:', ...reasonLines(failures));
   }
   let description = lines.join('\n');
   if (description.length > DESCRIPTION_LIMIT) {
@@ -298,8 +395,16 @@ export async function runBackfill(
   if (!canStartMonthBuild(deps.now())) {
     throw new BackfillRefusedError('quiet-window');
   }
-  const cache = await deps.cache();
-  if (await identityDigestInProgress(cache, deps.now())) {
+  let cache: KeyValueCache;
+  let sweeping: boolean;
+  try {
+    cache = await deps.cache();
+    sweeping = await identityDigestInProgress(cache, deps.now());
+  } catch (error) {
+    deps.log.error(`Backfill could not reach Redis: ${logText(error)}`);
+    throw new BackfillRefusedError('cache-unavailable');
+  }
+  if (sweeping) {
     throw new BackfillRefusedError('identity-sweep');
   }
   const months = backfillMonths(first, deps.now());
@@ -315,17 +420,37 @@ export async function runBackfill(
   const buildOptions: MonthBuildOptions = options.allowAllDeparted
     ? { allowAllDeparted: true }
     : {};
+  /** Guard errors (Redis) fail closed as a stop. */
+  const checkGuards = () =>
+    guardStop(deps, cache).catch((error: unknown) => {
+      deps.log.error(`Backfill guard check failed: ${logText(error)}`);
+      return 'cache-unavailable' as const;
+    });
+  let consecutiveFailures = 0;
+  /** Records a failed month; returns the stop it triggers, if any. */
+  const fail = (period: Period, error: unknown): BackfillStop | undefined => {
+    const allDepartedRefusal = error instanceof MembershipsUnreadableError;
+    result.failed.push({
+      period,
+      reason: failureReason(error),
+      allDepartedRefusal,
+    });
+    if (meetupUnavailable(error)) {
+      return 'meetup-unavailable';
+    }
+    // The departed guard is an expected refusal, not a sign of trouble.
+    if (!allDepartedRefusal) {
+      consecutiveFailures += 1;
+    }
+    return consecutiveFailures >= BACKFILL_MAX_CONSECUTIVE_FAILURES
+      ? 'repeated-failures'
+      : undefined;
+  };
   await post(deps, startEntry(months, options));
   let processed = 0;
   for (const [index, period] of months.entries()) {
-    let stop: BackfillStop | undefined;
-    try {
-      // eslint-disable-next-line no-await-in-loop -- one month at a time, guards re-checked before each
-      stop = await guardStop(deps, cache);
-    } catch (error) {
-      deps.log.error(`Backfill guard check failed: ${String(error)}`);
-      stop = 'cache-unavailable';
-    }
+    // eslint-disable-next-line no-await-in-loop -- one month at a time, guards re-checked before each
+    let stop: BackfillStop | undefined = await checkGuards();
     if (stop) {
       result.stopped = stop;
       break;
@@ -339,39 +464,32 @@ export async function runBackfill(
     } catch (error) {
       // Postgres did not answer: building would fail the same way.
       deps.log.error(
-        `Backfill ${periodKey(period)}: reading its current rows failed: ${String(error)}`,
+        `Backfill ${periodKey(period)}: reading its current rows failed: ${logText(error)}`,
       );
-      result.failed.push({
-        period,
-        reason: describeBuildError(error),
-        allDepartedRefusal: false,
-      });
+      stop = fail(period, error);
       state = 'unreadable';
     }
     if (state === 'skip') {
       result.skipped.push(period);
     } else if (state === 'build') {
       const lease = deps.newLeaseValue();
-      let leased: boolean;
+      let leased: 'leased' | 'lease-timeout' | 'stopped';
       try {
         // eslint-disable-next-line no-await-in-loop -- one month at a time
         leased = await takeLease(deps, cache, lease, options.leaseWaitMs);
       } catch (error) {
-        deps.log.error(`Backfill lease failed: ${String(error)}`);
+        deps.log.error(`Backfill lease failed: ${logText(error)}`);
         result.stopped = 'cache-unavailable';
         break;
       }
-      if (!leased) {
-        result.stopped = 'lease-timeout';
+      if (leased !== 'leased') {
+        result.stopped = leased;
         break;
       }
       try {
         // The lease wait may have crossed 17:45 or the sweep's start.
         // eslint-disable-next-line no-await-in-loop -- one month at a time
-        stop = await guardStop(deps, cache).catch((error: unknown) => {
-          deps.log.error(`Backfill guard check failed: ${String(error)}`);
-          return 'cache-unavailable' as const;
-        });
+        stop = await checkGuards();
         if (!stop) {
           // eslint-disable-next-line no-await-in-loop -- one month at a time
           const outcome = await buildMonth(
@@ -380,6 +498,7 @@ export async function runBackfill(
             'backfill',
             buildOptions,
           );
+          consecutiveFailures = 0;
           result.built.push(period);
           if (outcome.allDeparted) {
             result.allDeparted.push(period);
@@ -389,27 +508,23 @@ export async function runBackfill(
           }
         }
       } catch (error) {
-        // The full error (possibly a Meetup body) goes to the process log only.
+        // Never String(error): a ClientError's text embeds the Meetup body.
         deps.log.error(
-          `Backfill ${periodKey(period)} failed: ${String(error)}`,
+          `Backfill ${periodKey(period)} failed: ${logText(error)}`,
         );
-        result.failed.push({
-          period,
-          reason: describeBuildError(error),
-          allDepartedRefusal: error instanceof MembershipsUnreadableError,
-        });
+        stop = fail(period, error);
       } finally {
         // eslint-disable-next-line no-await-in-loop -- one month at a time
         await releaseBuildLease(cache, lease);
       }
-      if (stop) {
-        result.stopped = stop;
-        break;
-      }
-      if (options.delayMs > 0 && index < months.length - 1) {
+      if (!stop && options.delayMs > 0 && index < months.length - 1) {
         // eslint-disable-next-line no-await-in-loop -- the rate limit between Meetup reads
         await deps.sleep(options.delayMs);
       }
+    }
+    if (stop) {
+      result.stopped = stop;
+      break;
     }
     processed += 1;
     if (processed % BACKFILL_PROGRESS_EVERY === 0) {
@@ -417,6 +532,6 @@ export async function runBackfill(
       await post(deps, progressEntry(result, processed, period));
     }
   }
-  await post(deps, finalEntry(result));
+  await post(deps, backfillFinalEntry(result));
   return result;
 }

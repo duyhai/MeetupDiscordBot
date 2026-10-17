@@ -1,6 +1,7 @@
 import { ClientError } from 'graphql-request';
 import { describe, expect, it, vi } from 'vitest';
 
+import { KeyValueCache } from '../../../src/lib/cache/base.js';
 import { LogEntry } from '../../../src/lib/helpers/discordLogger.js';
 import { identityDigestClaimKey } from '../../../src/lib/helpers/identity/digest.js';
 import {
@@ -8,7 +9,11 @@ import {
   BACKFILL_LEASE_POLL_MS,
   BACKFILL_LEASE_WAIT_MS,
   BackfillOptions,
+  BACKFILL_MAX_CONSECUTIVE_FAILURES,
+  BACKFILL_STOP_TEXT,
   BackfillRefusedError,
+  BackfillResult,
+  backfillFinalEntry,
   backfillMonths,
   runBackfill,
 } from '../../../src/lib/reports/backfill.js';
@@ -17,8 +22,10 @@ import {
   requestRebuild,
 } from '../../../src/lib/reports/buildJob.js';
 import { BUILD_LEASE_KEY } from '../../../src/lib/reports/buildLease.js';
+import { OrganizerTokenUnavailableError } from '../../../src/lib/reports/organizerMeetup.js';
 import {
   GROUP_FIRST_PERIOD,
+  monthLabel,
   Period,
   periodEnd,
   periodKey,
@@ -30,6 +37,7 @@ import {
   makeDeps,
   monthReports,
 } from './buildJobFakes.js';
+import { timedCache } from '../../../src/web/timedCache.js';
 
 // The real buildMonth, wrapped so its options can be inspected.
 vi.mock('../../../src/lib/reports/buildJob.js', async (importOriginal) => {
@@ -43,7 +51,10 @@ vi.mock('../../../src/lib/reports/buildJob.js', async (importOriginal) => {
 const FROM: Period = { year: 2025, month: 9 };
 const key = (p: Period) => periodKey(p);
 
-function harness(iso = '2026-10-16T19:30:00Z') {
+function harness(
+  iso = '2026-10-16T19:30:00Z',
+  wrapCache: (inner: KeyValueCache) => KeyValueCache = (inner) => inner,
+) {
   const clock = new Clock(iso);
   const h = makeDeps({ clock });
   const cache = h.cache as ExpiringCache;
@@ -54,9 +65,11 @@ function harness(iso = '2026-10-16T19:30:00Z') {
   });
   let leases = 0;
   const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+  const stop = { requested: false };
   const deps = {
     now: () => clock.now(),
-    cache: () => Promise.resolve(cache),
+    cache: () => Promise.resolve(wrapCache(cache)),
+    stopRequested: () => stop.requested,
     build: h.deps,
     post,
     sleep,
@@ -95,6 +108,7 @@ function harness(iso = '2026-10-16T19:30:00Z') {
     titles,
     finalText,
     leaseCount,
+    stop,
     fetched,
     savedMonths,
   };
@@ -501,5 +515,250 @@ describe('build lease', () => {
     });
     await h.run({ from: { year: 2026, month: 9 } });
     expect(statuses).toEqual(['busy']);
+  });
+});
+
+const clientError = (status: number) =>
+  new ClientError({ status, body: 'SECRET_BODY' } as never, { query: '' });
+
+describe('circuit breaker', () => {
+  for (const [name, error] of [
+    ['a 429', clientError(429)],
+    ['a 401', clientError(401)],
+    ['no usable organizer token', new OrganizerTokenUnavailableError()],
+  ] as const) {
+    it(`${name} stops the run at once`, async () => {
+      const h = harness();
+      h.fetchMonthReports.mockRejectedValue(error);
+      const result = await h.run();
+      expect(h.fetched()).toEqual(['2026-09']);
+      expect(result.stopped).toBe('meetup-unavailable');
+      expect(h.cache.values.has(BUILD_LEASE_KEY)).toBe(false);
+      expect(h.titles()[h.titles().length - 1]).toBe('Report backfill stopped');
+      expect(
+        h.finalText().startsWith(BACKFILL_STOP_TEXT['meetup-unavailable']),
+      ).toBe(true);
+      expect(h.finalText()).not.toContain('SECRET_BODY');
+    });
+  }
+
+  it('the organizer reason points at the renewal page, not an alert the backfill never posts', async () => {
+    const h = harness();
+    h.fetchMonthReports.mockRejectedValue(new OrganizerTokenUnavailableError());
+    const result = await h.run();
+    expect(result.failed[0].reason).toBe(
+      'No usable Meetup organizer login; it may need renewing at https://meetup-discord-bot.herokuapp.com/dashboard/organizer-login.',
+    );
+    expect(h.finalText()).not.toContain('organizer login alert');
+  });
+
+  it(`${BACKFILL_MAX_CONSECUTIVE_FAILURES} failed months in a row stop the run`, async () => {
+    expect(BACKFILL_MAX_CONSECUTIVE_FAILURES).toBe(3);
+    const h = harness();
+    h.fetchMonthReports.mockRejectedValue(clientError(500));
+    const result = await h.run();
+    expect(h.fetched()).toEqual(['2026-09', '2026-08', '2026-07']);
+    expect(result.stopped).toBe('repeated-failures');
+    expect(
+      h.finalText().startsWith(BACKFILL_STOP_TEXT['repeated-failures']),
+    ).toBe(true);
+  });
+
+  it('a built month resets the count', async () => {
+    const h = harness();
+    // Fail, fail, build, fail, fail, build, ...
+    h.fetchMonthReports.mockImplementation((period) => {
+      if (h.fetchMonthReports.mock.calls.length % 3 === 0) {
+        return Promise.resolve(monthReports(period));
+      }
+      return Promise.reject(clientError(500));
+    });
+    const result = await h.run();
+    expect(result.stopped).toBeUndefined();
+    expect(h.fetched()).toHaveLength(13);
+  });
+
+  it('all-departed refusals do not count as failures', async () => {
+    const h = harness();
+    h.fetchMonthReports.mockImplementation((period) => {
+      const reports = monthReports(period);
+      reports.noShow.summary.members = 4;
+      reports.noShow.summary.departed = 4;
+      return Promise.resolve(reports);
+    });
+    const result = await h.run();
+    expect(result.stopped).toBeUndefined();
+    expect(result.failed).toHaveLength(13);
+    expect(result.failed.every((f) => f.allDepartedRefusal)).toBe(true);
+  });
+
+  it('an unreadable snapshot store stops after 3 months, without reading Meetup', async () => {
+    const h = harness();
+    vi.spyOn(h.snapshots, 'getCurrentMeta').mockRejectedValue(
+      new Error('pg down'),
+    );
+    const result = await h.run();
+    expect(result.stopped).toBe('repeated-failures');
+    expect(result.failed).toHaveLength(3);
+    expect(h.fetchMonthReports).not.toHaveBeenCalled();
+  });
+});
+
+describe('final post', () => {
+  const MONTHS = backfillMonths(
+    { year: 2013, month: 3 },
+    new Date('2026-10-16T19:30:00Z'),
+  );
+  const base = (over: Partial<BackfillResult>): BackfillResult => ({
+    months: MONTHS.length,
+    built: [],
+    skipped: [],
+    failed: [],
+    allDeparted: [],
+    noNoShows: 0,
+    ...over,
+  });
+
+  it('keeps the stop text and the --allow-all-departed hint within 4000 characters', () => {
+    const failed = MONTHS.slice(0, 20).map((period, i) => ({
+      period,
+      reason: `Reason ${i} ${'x'.repeat(400)}`,
+      allDepartedRefusal: false,
+    }));
+    const refused = MONTHS.slice(20, 60).map((period) => ({
+      period,
+      reason: 'refused',
+      allDepartedRefusal: true,
+    }));
+    const entry = backfillFinalEntry(
+      base({
+        failed: [...failed, ...refused],
+        stopped: 'quiet-window',
+        noNoShows: 40,
+      }),
+    );
+    const text = entry.description ?? '';
+    expect(text.length).toBeLessThanOrEqual(4000);
+    expect(text.startsWith(BACKFILL_STOP_TEXT['quiet-window'])).toBe(true);
+    expect(text).toContain(
+      `--allow-all-departed --from ${periodKey(MONTHS[59])}`,
+    );
+    expect(text.indexOf('--allow-all-departed')).toBeLessThan(
+      text.indexOf('Failed:'),
+    );
+    // Each reason is capped.
+    for (const line of text.split('\n').filter((l) => l.includes('Reason '))) {
+      expect(line.length).toBeLessThanOrEqual(230);
+    }
+  });
+
+  it('collapses identical reasons into one line', () => {
+    const failed = MONTHS.slice(0, 143).map((period) => ({
+      period,
+      reason: 'Meetup API error (HTTP 500)',
+      allDepartedRefusal: false,
+    }));
+    failed.push({
+      period: MONTHS[150],
+      reason: 'Other',
+      allDepartedRefusal: false,
+    });
+    const text = backfillFinalEntry(base({ failed })).description ?? '';
+    expect(text).toContain('143 months: Meetup API error (HTTP 500)');
+    expect(text).toContain(`${monthLabel(MONTHS[150])}: Other`);
+    expect(text.split('\n').filter((l) => l.includes('HTTP 500'))).toHaveLength(
+      1,
+    );
+  });
+});
+
+describe('stop requests (SIGTERM)', () => {
+  it('finishes the current month, releases its lease, then stops', async () => {
+    const h = harness();
+    h.fetchMonthReports.mockImplementation((period) => {
+      if (h.fetchMonthReports.mock.calls.length === 2) {
+        h.stop.requested = true; // the signal arrives mid-build
+      }
+      return Promise.resolve(monthReports(period));
+    });
+    const result = await h.run();
+    expect(result.built.map(key)).toEqual(['2026-09', '2026-08']);
+    expect(h.savedMonths()).toEqual(['2026-09', '2026-08']);
+    expect(result.stopped).toBe('stopped');
+    expect(h.cache.values.has(BUILD_LEASE_KEY)).toBe(false);
+    expect(h.titles()[h.titles().length - 1]).toBe('Report backfill stopped');
+    expect(h.finalText().startsWith(BACKFILL_STOP_TEXT.stopped)).toBe(true);
+  });
+
+  it('stops while waiting for the lease', async () => {
+    const h = harness();
+    await h.cache.set(BUILD_LEASE_KEY, 'job-lease');
+    h.sleep.mockImplementation((ms) => {
+      h.stop.requested = true;
+      h.clock.set(new Date(h.clock.now().getTime() + ms).toISOString());
+      return Promise.resolve();
+    });
+    const result = await h.run();
+    expect(result.stopped).toBe('stopped');
+    expect(h.sleep).toHaveBeenCalledTimes(1);
+    expect(h.fetchMonthReports).not.toHaveBeenCalled();
+  });
+});
+
+describe('Redis timeouts', () => {
+  /** get hangs once `down` is set, as node-redis does while offline. */
+  const hanging = (down: { now: boolean }) => (inner: KeyValueCache) =>
+    timedCache(
+      {
+        get: (k: string) => {
+          if (down.now) {
+            return new Promise<undefined>(() => undefined);
+          }
+          return inner.get(k);
+        },
+        set: (k: string, v: string, t?: number) => inner.set(k, v, t),
+        exclusive_set: (k: string, v: string, t?: number) =>
+          inner.exclusive_set(k, v, t),
+        set_existing: (k: string, v: string, t?: number) =>
+          inner.set_existing(k, v, t),
+        remove: (k: string) => inner.remove(k),
+      },
+      20,
+    );
+
+  it('an outage mid-run stops it as cache-unavailable', async () => {
+    const down = { now: false };
+    const h = harness(undefined, hanging(down));
+    h.fetchMonthReports.mockImplementationOnce((period) => {
+      down.now = true;
+      return Promise.resolve(monthReports(period));
+    });
+    const result = await h.run();
+    expect(result.built.map(key)).toEqual(['2026-09']);
+    expect(result.stopped).toBe('cache-unavailable');
+    expect(
+      h.finalText().startsWith(BACKFILL_STOP_TEXT['cache-unavailable']),
+    ).toBe(true);
+  });
+
+  it('an outage at the start refuses as cache-unavailable', async () => {
+    const h = harness(undefined, hanging({ now: true }));
+    await expect(h.run()).rejects.toEqual(
+      new BackfillRefusedError('cache-unavailable'),
+    );
+    expect(h.post).not.toHaveBeenCalled();
+  });
+});
+
+describe('process log', () => {
+  it('logs the error class and describeBuildError text, never the Meetup body', async () => {
+    const h = harness();
+    h.fetchMonthReports.mockRejectedValueOnce(clientError(500));
+    await h.run({ from: { year: 2026, month: 9 } });
+    const lines = h.log.error.mock.calls.map((c) => String(c[0]));
+    expect(lines).toContain(
+      'Backfill 2026-09 failed: ClientError: Meetup API error (HTTP 500)',
+    );
+    expect(lines.join('\n')).not.toContain('SECRET_BODY');
   });
 });
