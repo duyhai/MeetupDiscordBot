@@ -67,7 +67,9 @@ function isRegisteredGet(pathname: string): boolean {
 }
 
 const SEPT = { year: 2026, month: 9 };
-const urls = Object.values(monthPageUrls(SEPT));
+const urls = Object.values(
+  monthPageUrls(SEPT) as unknown as Record<string, string>,
+);
 
 describe('build alert month links', () => {
   it('links exactly the three month pages', () => {

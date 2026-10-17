@@ -772,18 +772,24 @@ const suspension = (
       });
 
       it('linkedRecordIds skips the query for no ids and reads a long list in chunks of 1000', async () => {
-        await sync([suspension('111')]);
-        const linkedId = (
-          await pool.query<{ id: number }>(
-            `INSERT INTO suspension_records (member_id, member_name, suspended_at, duration_days)
-             VALUES ('111', 'M111', '2026-10-02T00:00:00Z'::timestamptz, 30) RETURNING id`,
-          )
-        ).rows[0].id;
-        await pool.query(
-          `UPDATE noshow_workspace_rows SET status = 'suspended', suspension_record_id = $1
-            WHERE meetup_member_id = '111' AND period = '2026-09-01'::date`,
-          [linkedId],
-        );
+        await sync([suspension('111'), suspension('222')]);
+        const link = async (memberId: string) => {
+          const id = (
+            await pool.query<{ id: number }>(
+              `INSERT INTO suspension_records (member_id, member_name, suspended_at, duration_days)
+               VALUES ($1, $2, '2026-10-02T00:00:00Z'::timestamptz, 30) RETURNING id`,
+              [memberId, `M${memberId}`],
+            )
+          ).rows[0].id;
+          await pool.query(
+            `UPDATE noshow_workspace_rows SET status = 'suspended', suspension_record_id = $1
+              WHERE meetup_member_id = $2 AND period = '2026-09-01'::date`,
+            [id, memberId],
+          );
+          return id;
+        };
+        const firstChunkId = await link('111');
+        const lastChunkId = await link('222');
         const sizes: number[] = [];
         const counting = new PostgresNoShowWorkspaceRepository({
           query: async (text: string, values?: unknown[]) => {
@@ -794,15 +800,20 @@ const suspension = (
         expect((await counting.linkedRecordIds([])).size).toBe(0);
         expect((await counting.linkedRecordIds([0, -5])).size).toBe(0);
         expect(sizes).toEqual([]);
-        // 2001 distinct ids (plus a repeat), the linked one in the last chunk.
-        const many = Array.from(
-          { length: 2000 },
-          (_, i) => linkedId + 1000 + i,
-        );
-        many.push(linkedId, linkedId);
+        // 2002 distinct ids (plus a repeat): one linked id at the head (the
+        // first chunk), 2000 unlinked, the other linked id last (the third).
+        const many = [
+          firstChunkId,
+          ...Array.from({ length: 2000 }, (_, i) => lastChunkId + 1000 + i),
+          lastChunkId,
+          firstChunkId,
+        ];
         const linked = await counting.linkedRecordIds(many);
-        expect([...linked]).toEqual([linkedId]);
-        expect(sizes).toEqual([1000, 1000, 1]);
+        expect([...linked].sort((a, b) => a - b)).toEqual([
+          firstChunkId,
+          lastChunkId,
+        ]);
+        expect(sizes).toEqual([1000, 1000, 2]);
       });
 
       it('listMonths lists synced months newest first', async () => {

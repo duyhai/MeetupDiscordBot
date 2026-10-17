@@ -114,6 +114,13 @@ export function linkableMonthPath(
   }
 }
 
+/** A month's dashboard links for Discord; `workspace` only for workspace months. */
+export interface MonthPageUrls {
+  hallOfFame: string;
+  noShowHistory: string;
+  workspace?: string;
+}
+
 /**
  * Absolute links for Discord: only PUBLIC_APP_ORIGIN and the validated month
  * key. `workspace` is present only for months that have a workspace (from
@@ -121,16 +128,8 @@ export function linkableMonthPath(
  * No "up to the current month" check: there is no clock here, and builds
  * exist only for months up to the current one.
  */
-export function monthPageUrls(period: Period): {
-  hallOfFame: string;
-  noShowHistory: string;
-  workspace?: string;
-} {
-  const urls: {
-    hallOfFame: string;
-    noShowHistory: string;
-    workspace?: string;
-  } = {
+export function monthPageUrls(period: Period): MonthPageUrls {
+  const urls: MonthPageUrls = {
     hallOfFame: `${PUBLIC_APP_ORIGIN}${monthPath(DASHBOARD_PATHS.hallOfFameMonth, period)}`,
     noShowHistory: `${PUBLIC_APP_ORIGIN}${monthPath(DASHBOARD_PATHS.noShowHistoryMonth, period)}`,
   };
