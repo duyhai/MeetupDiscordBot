@@ -6,6 +6,7 @@ import {
   Period,
   periodDate,
   periodKey,
+  suspensionCutoff,
 } from '../reports/period.js';
 import { decideTransition, normalizeNote } from '../workspace/transitions.js';
 import {
@@ -309,10 +310,19 @@ const periodFloor = (p: Period): Date =>
 
 /**
  * A live record of member $1 dated in or after the month ($2, periodFloor)
- * that backs no workspace row yet.
+ * that backs no workspace row yet. Only the same-date ON CONFLICT path uses
+ * it bare: that record carries the very date this card's form chose.
  */
 const UNLINKED_LIVE = `s.member_id = $1 AND s.voided_at IS NULL AND s.suspended_at >= $2
   AND NOT EXISTS (SELECT 1 FROM noshow_workspace_rows w WHERE w.suspension_record_id = s.id)`;
+
+/**
+ * UNLINKED_LIVE dated inside the case's month: from $2 (periodFloor) up to
+ * $3 (suspensionCutoff, the next month's first day at UTC midnight), the
+ * stored-date convention at both ends. What a card may link, or be offered
+ * to link: a later month's record is that month's to claim.
+ */
+const UNLINKED_IN_MONTH = `${UNLINKED_LIVE} AND s.suspended_at < $3`;
 
 /**
  * A live record of member $1 whose active range overlaps the new one: the
@@ -518,7 +528,8 @@ export class PostgresNoShowWorkspaceRepository {
    * constants), run on this transaction's client.
    *
    * record_suspension is refused as already-suspended when an unlinked live
-   * record in the month exists (offered to link) or when any live record,
+   * record dated in the month exists (offered to link; a later month's record
+   * never is) or when any live record,
    * linked to another row or not, overlaps the new suspension's days.
    *
    * A refusal writes nothing here, not even an event (the events CHECK has
@@ -560,6 +571,7 @@ export class PostgresNoShowWorkspaceRepository {
             throw refuse(decision.reason);
           }
           const floor = periodFloor(req.period);
+          const cutoff = suspensionCutoff(req.period);
           let recordId = row.suspensionRecordId;
           let suspension: SuspensionRecordState | undefined;
           let linkedExisting = false;
@@ -586,9 +598,9 @@ export class PostgresNoShowWorkspaceRepository {
               throw refuse('bad-date');
             }
             const live = await client.query<{ id: number; suspended_at: Date }>(
-              `SELECT s.id, s.suspended_at FROM suspension_records s WHERE ${UNLINKED_LIVE}
+              `SELECT s.id, s.suspended_at FROM suspension_records s WHERE ${UNLINKED_IN_MONTH}
                 ORDER BY s.suspended_at DESC, s.id DESC LIMIT 1`,
-              [row.memberId, floor],
+              [row.memberId, floor, cutoff],
             );
             if (live.rows[0]) {
               throw refuse('already-suspended', {
@@ -647,8 +659,8 @@ export class PostgresNoShowWorkspaceRepository {
               throw refuse('record-unavailable');
             }
             const rec = await client.query<SuspensionRecordRow>(
-              `SELECT s.* FROM suspension_records s WHERE s.id = $3 AND ${UNLINKED_LIVE} FOR UPDATE`,
-              [row.memberId, floor, id],
+              `SELECT s.* FROM suspension_records s WHERE s.id = $4 AND ${UNLINKED_IN_MONTH} FOR UPDATE`,
+              [row.memberId, floor, cutoff, id],
             );
             if (!rec.rows[0]) {
               throw refuse('record-unavailable');

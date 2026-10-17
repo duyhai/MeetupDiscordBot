@@ -1322,6 +1322,65 @@ const suspension = (
         expect(outcome.suspension?.durationDays).toBe(30);
       });
 
+      describe("only records dated in the case's month", () => {
+        it('September cannot link an October record; October can', async () => {
+          const id = await seedSuspension();
+          const october = await seedSuspension('222', OCTOBER);
+          const later = await insertRecord('222', '2026-10-01');
+          expect(
+            await act(id, 'link_suspension', { linkRecordId: later }),
+          ).toEqual({ ok: false, reason: 'record-unavailable' });
+          expect(await stateOf(id)).toMatchObject({
+            version: 1,
+            status: 'new',
+          });
+          const outcome = okOf(
+            await act(october, 'link_suspension', {
+              linkRecordId: later,
+              period: OCTOBER,
+            }),
+          );
+          expect(outcome.suspension?.id).toBe(later);
+        });
+
+        it('a record dated the last day of the month can be linked', async () => {
+          const id = await seedSuspension();
+          const last = await insertRecord('222', '2026-09-30');
+          expect(
+            okOf(await act(id, 'link_suspension', { linkRecordId: last }))
+              .suspension?.id,
+          ).toBe(last);
+        });
+
+        it('recording in September never offers an October record', async () => {
+          const id = await seedSuspension();
+          await insertRecord('222', '2026-10-02');
+          // Its days overlap the new ones: refused, with nothing to link.
+          expect(
+            await act(id, 'record_suspension', {
+              suspendedOn: day('2026-10-03'),
+            }),
+          ).toEqual({ ok: false, reason: 'already-suspended' });
+          expect(await count('suspension_records')).toBe(1);
+          expect((await stateOf(id)).version).toBe(1);
+        });
+
+        it('a September record is still offered when an October one exists too', async () => {
+          const id = await seedSuspension();
+          const september = await insertRecord('222', '2026-09-12');
+          await insertRecord('222', '2026-10-15');
+          expect(
+            await act(id, 'record_suspension', {
+              suspendedOn: day('2026-10-03'),
+            }),
+          ).toEqual({
+            ok: false,
+            reason: 'already-suspended',
+            existing: { id: september, suspendedAt: day('2026-09-12') },
+          });
+        });
+      });
+
       it('link_suspension links without inserting', async () => {
         const id = await seedSuspension();
         const existing = await insertRecord('222', '2026-09-20');

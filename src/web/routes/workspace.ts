@@ -17,6 +17,7 @@ import {
   monthLabel,
   periodDate,
   periodKey,
+  suspensionCutoff,
 } from '../../lib/reports/period.js';
 import { NoShowCasePayload } from '../../lib/reports/types.js';
 import { SuspensionRecordState } from '../../lib/repositories/postgresSuspensionRepository.js';
@@ -111,6 +112,15 @@ function statusLabel(status: WorkspaceStatus): string {
 
 /** UTC midnight of a YYYY-MM-DD: how suspension dates are stored. */
 const utcMidnight = (day: string): Date => new Date(`${day}T00:00:00.000Z`);
+
+/**
+ * Dated inside the month, in the stored convention at both ends (the 1st
+ * through the last day, UTC midnights): the window the action's
+ * UNLINKED_IN_MONTH links from, so the page offers only what the POST takes.
+ */
+const inMonth = (r: SuspensionRecord, period: Period): boolean =>
+  r.suspendedAt >= utcMidnight(periodDate(period)) &&
+  r.suspendedAt < suspensionCutoff(period);
 
 /** A stored suspension date (UTC midnight) as 'Sep 20, 2026', never shifted a day by the timezone. */
 const recordDay = (value: Date): string =>
@@ -401,9 +411,8 @@ function cardHtml(v: CardView): SafeHtml {
   // own and notes that begin with a newline keep it.
   // prettier-ignore
   const notesArea = html`<textarea name="note" rows="3" maxlength="${NOTES_MAX}">\n${row.notes}</textarea>`;
-  const floor = utcMidnight(periodDate(row.period));
   const unlinked = v.records.filter(
-    (r) => r.suspendedAt >= floor && r.id !== row.suspensionRecordId,
+    (r) => inMonth(r, row.period) && r.id !== row.suspensionRecordId,
   );
   const outside = unlinked.filter((r) => !v.linkedElsewhere.has(r.id));
   const elsewhereBody = unlinked
@@ -706,11 +715,10 @@ export function registerWorkspaceRoutes(
         susp.listByIds(linkedIds),
       ]);
       // Records a card would offer to link: is any already on some row?
-      const floor = utcMidnight(periodDate(period));
       const candidates = [
         ...new Set(
           records
-            .filter((r) => r.suspendedAt >= floor && !linkedIds.includes(r.id))
+            .filter((r) => inMonth(r, period) && !linkedIds.includes(r.id))
             .map((r) => r.id),
         ),
       ];

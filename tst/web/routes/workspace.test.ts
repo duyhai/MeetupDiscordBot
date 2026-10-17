@@ -650,6 +650,60 @@ describe('GET /dashboard/no-shows/:period (month cards)', () => {
     );
   });
 
+  it("only records dated in the card's month are shown or offered for linking", async () => {
+    const { get, ws } = await setup({
+      records: [
+        suspensionRecord({
+          id: 7,
+          memberId: '2001',
+          suspendedAt: new Date('2026-08-31T00:00:00Z'),
+        }),
+        suspensionRecord({
+          id: 8,
+          memberId: '2001',
+          suspendedAt: new Date('2026-09-30T00:00:00Z'),
+        }),
+        suspensionRecord({
+          id: 9,
+          memberId: '2001',
+          suspendedAt: new Date('2026-10-01T00:00:00Z'),
+        }),
+      ],
+      leader: true,
+    });
+    const res = await get(MONTH);
+    const card = cards(res.text)[1];
+    expect(words(card)).toContain(
+      'Suspended outside the workspace on Sep 30, 2026 (#8)',
+    );
+    expect(card).toContain('<input type="hidden" name="recordId" value="8" />');
+    for (const id of ['7', '9']) {
+      expect(card).not.toContain(`(#${id})`);
+      expect(card).not.toContain(`name="recordId" value="${id}"`);
+    }
+    // Only the in-month record is asked about.
+    expect(ws.linkedRecordIds).toHaveBeenCalledWith([8]);
+  });
+
+  it('an October record never reaches the September card, linked elsewhere or not', async () => {
+    const { get, ws } = await setup({
+      records: [
+        suspensionRecord({
+          id: 9,
+          memberId: '2001',
+          suspendedAt: new Date('2026-10-02T00:00:00Z'),
+        }),
+      ],
+      leader: true,
+    });
+    const res = await get(MONTH);
+    const card = cards(res.text)[1];
+    expect(words(card)).not.toContain('Suspended outside the workspace');
+    expect(words(card)).not.toContain("Recorded on another month's card");
+    expect(card).not.toContain('value="link_suspension"');
+    expect(ws.linkedRecordIds).not.toHaveBeenCalled();
+  });
+
   it('a suspension voided outside the workspace shows live', async () => {
     const linked = suspensionRecord({
       id: 12,
@@ -781,10 +835,12 @@ describe('GET /dashboard/no-shows/:period (month cards)', () => {
   });
 
   it("a record linked to another month's card is not offered for linking", async () => {
+    // Dated in September but on October's card (linked before the month
+    // window, or recorded there by hand).
     const elsewhere = suspensionRecord({
       id: 9,
       memberId: '2001',
-      suspendedAt: new Date('2026-10-02T00:00:00Z'),
+      suspendedAt: new Date('2026-09-25T00:00:00Z'),
     });
     const { get, ws } = await setup({
       seed: seed([
