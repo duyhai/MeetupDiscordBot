@@ -1,8 +1,9 @@
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { toEventRef, toMemberRef } from '../../src/lib/reports/types.js';
 import { dashboardPool } from '../../src/lib/repositories/dashboardPool.js';
 import { PostgresReportSnapshotRepository } from '../../src/lib/repositories/postgresReportSnapshotRepository.js';
+import { useIsolatedSchema } from './isolatedSchema.js';
 
 // Requires DATABASE_URL against a throwaway Postgres; skipped otherwise.
 const POSTGRES_AVAILABLE = Boolean(process.env.DATABASE_URL);
@@ -10,8 +11,16 @@ const POSTGRES_AVAILABLE = Boolean(process.env.DATABASE_URL);
 const NUL = String.fromCharCode(0);
 
 describe.skipIf(!POSTGRES_AVAILABLE)('a member name with U+0000', () => {
+  let schema: { drop(): Promise<void> } | undefined;
+
+  // Its own schema: report_snapshots here is not the one other files truncate.
+  beforeAll(async () => {
+    schema = await useIsolatedSchema('nul_test');
+  });
+
   afterAll(async () => {
     await (await dashboardPool()).end();
+    await schema?.drop();
   });
 
   it('saves: the refs strip it before the JSONB write', async () => {
@@ -27,7 +36,6 @@ describe.skipIf(!POSTGRES_AVAILABLE)('a member name with U+0000', () => {
       eventUrl: 'https://www.meetup.com/g/events/901/',
       dateTime: '2013-04-03T19:00-07:00',
     });
-    // An old month no other file writes, and force-new (supersede).
     const meta = await repo.save({
       reportType: 'hall_of_fame',
       period: { year: 2013, month: 4 },

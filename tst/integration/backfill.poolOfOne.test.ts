@@ -1,9 +1,10 @@
 import nock from 'nock';
-import { afterAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { FakeCache } from '../web/fakeCache.js';
 import { installMeetupResponder } from '../fixtures/meetup/graphqlResponder.js';
 import { WORLD_2026 } from '../fixtures/meetup/world2026.js';
+import { useIsolatedSchema } from './isolatedSchema.js';
 
 // Requires DATABASE_URL against a throwaway Postgres; skipped otherwise.
 const POSTGRES_AVAILABLE = Boolean(process.env.DATABASE_URL);
@@ -38,9 +39,18 @@ describe.skipIf(!POSTGRES_AVAILABLE)('backfill with PG_POOL_MAX=1', () => {
   /** The pools this file created, ended so the worker exits cleanly. */
   const pools: { end(): Promise<void> }[] = [];
 
+  let schema: { drop(): Promise<void> } | undefined;
+
+  // Its own schema: its saves cannot race the files that truncate
+  // report_snapshots, and theirs cannot make it skip.
+  beforeAll(async () => {
+    schema = await useIsolatedSchema('backfill_pool');
+  });
+
   afterAll(async () => {
     nock.cleanAll();
     await Promise.all(pools.map((pool) => pool.end()));
+    await schema?.drop();
     if (saved === undefined) {
       delete process.env.PG_POOL_MAX;
     } else {
@@ -99,7 +109,7 @@ describe.skipIf(!POSTGRES_AVAILABLE)('backfill with PG_POOL_MAX=1', () => {
         log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
       },
       {
-        // force: another file's rows for this month must not make it skip.
+        // force: rebuild even if this schema already held the month.
         force: true,
         from: { year: 2026, month: 9 },
         delayMs: 0,
