@@ -1,3 +1,4 @@
+import { EmbedBuilder } from 'discord.js';
 import { Logger } from 'tslog';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -6,15 +7,18 @@ import type { Period } from '../../../src/lib/reports/period.js';
 import type { SuspensionRecordState } from '../../../src/lib/repositories/postgresSuspensionRepository.js';
 import {
   ACTION_TITLES,
+  fitFieldValue,
   leadershipRefusalEntry,
   moderationEntry,
   performWorkspaceAction,
+  REFUSED_WHAT,
   STATUS_LABELS,
   syncWorkspace,
   type WorkspaceActionInput,
   type WorkspaceServiceDeps,
   type WorkspaceSyncDeps,
 } from '../../../src/lib/workspace/service.js';
+import { LEADERSHIP_ONLY_ACTIONS } from '../../../src/lib/workspace/transitions.js';
 import {
   type ActionOutcome,
   type ActionRequest,
@@ -654,5 +658,61 @@ describe('moderationEntry field sizes', () => {
     expect(value.length).toBeLessThanOrEqual(1024);
     expect(value.endsWith('…')).toBe(true);
     expect(/@(?!​)/.test(value.slice(0, -2))).toBe(false);
+  });
+});
+
+describe('field values fit Discord (UTF-16 length)', () => {
+  const lone =
+    /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+
+  it('a long all-emoji note fits one field and builds an embed', () => {
+    const note = '\u{1F600}'.repeat(900);
+    const entry = moderationEntry(
+      SEPT,
+      ok('hold', { event: { ...ok('hold').event, note } }),
+      'hold',
+      ACTOR,
+    );
+    for (const field of entry.fields ?? []) {
+      expect(field.value.length).toBeLessThanOrEqual(1024);
+      expect(lone.test(field.value)).toBe(false);
+    }
+    expect(() =>
+      new EmbedBuilder()
+        .setTitle(entry.title)
+        .addFields(...(entry.fields ?? [])),
+    ).not.toThrow();
+  });
+
+  it('a long emoji name fits too', () => {
+    const entry = moderationEntry(
+      SEPT,
+      ok('copy_warning', { row: row({ memberName: '\u{1F600}'.repeat(600) }) }),
+      'copy_warning',
+      ACTOR,
+    );
+    expect(() =>
+      new EmbedBuilder().addFields(...(entry.fields ?? [])),
+    ).not.toThrow();
+  });
+
+  it('a cut at a surrogate boundary leaves no lone surrogate', () => {
+    // 999 ASCII then an emoji: the cut at 999 units would split the pair.
+    for (const pad of [997, 998, 999, 1000]) {
+      const value = fitFieldValue(
+        `${'a'.repeat(pad)}${'\u{1F600}'.repeat(10)}`,
+      );
+      expect(value.length).toBeLessThanOrEqual(1000);
+      expect(value.endsWith('…')).toBe(true);
+      expect(lone.test(value)).toBe(false);
+    }
+    expect(fitFieldValue('short')).toBe('short');
+    expect(fitFieldValue('x'.repeat(1000))).toBe('x'.repeat(1000));
+  });
+});
+
+describe('REFUSED_WHAT', () => {
+  it('names exactly the Leadership-only actions', () => {
+    expect(Object.keys(REFUSED_WHAT)).toEqual([...LEADERSHIP_ONLY_ACTIONS]);
   });
 });

@@ -101,16 +101,25 @@ export const STATUS_LABELS: Readonly<Record<WorkspaceStatus, string>> = {
 };
 
 /**
- * Member-supplied text for an embed: markdown escaped, then every @, <# and
- * </ defused, then cut to fit a field (escaping can triple a note). A cut
- * can only drop characters from the end, so whatever stays is still escaped.
+ * A field value cut to FIELD_VALUE_MAX UTF-16 code units (what discord.js
+ * validates), ending in "…" when cut. Never splits a surrogate pair, and a
+ * cut only drops characters from the end, so escaped text stays escaped.
  */
+export function fitFieldValue(value: string): string {
+  if (value.length <= FIELD_VALUE_MAX) {
+    return value;
+  }
+  let end = FIELD_VALUE_MAX - 1;
+  const last = value.charCodeAt(end - 1);
+  if (last >= 0xd800 && last <= 0xdbff) {
+    end -= 1; // the cut would leave a high surrogate without its pair
+  }
+  return `${value.slice(0, end)}…`;
+}
+
+/** Member-supplied text for an embed: markdown escaped, then every @, <# and </ defused. */
 function memberText(text: string, maxLength?: number): string {
-  const safe = neutralizeMentions(escapeDiscordText(text, maxLength));
-  const points = Array.from(safe);
-  return points.length > FIELD_VALUE_MAX
-    ? `${points.slice(0, FIELD_VALUE_MAX - 1).join('')}…`
-    : safe;
+  return neutralizeMentions(escapeDiscordText(text, maxLength));
 }
 
 function errorClass(error: unknown): string {
@@ -238,13 +247,16 @@ export function moderationEntry(
   }
   return {
     title: `No-show workspace: ${ACTION_TITLES[action]}`,
+    fields: fields.map((field) => ({
+      ...field,
+      value: fitFieldValue(field.value),
+    })),
     // <@id> in an embed never pings; it names the actor as the commands do.
     description: `<@${actor}> in the ${monthLabel(period)} workspace.${pageLine(period)}`,
-    fields,
   };
 }
 
-const REFUSED_WHAT: Partial<Record<WorkspaceAction, string>> = {
+export const REFUSED_WHAT: Partial<Record<WorkspaceAction, string>> = {
   record_suspension: 'record a suspension',
   link_suspension: 'link a suspension',
   void: 'void a suspension',
