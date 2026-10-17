@@ -1,12 +1,14 @@
 import { Response } from 'express';
 import fs from 'fs';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { AttendanceEvidence } from '../../src/lib/reports/types.js';
 import {
   COPY_SCRIPT,
+  PAGE_LOAD_DEADLINE_MS,
   builtByHtml,
   dashboardPage,
+  load,
   pacificDate,
   pacificDateTime,
   parseRouteMonth,
@@ -185,5 +187,109 @@ describe('pageKit', () => {
     );
     expect(sent.body).toContain('<a href="/dashboard">Home</a>');
     expect(sent.body).toContain('<a href="/dashboard/sessions">Sessions</a>');
+  });
+});
+
+function fakeResponse() {
+  const sent: { status?: number; body?: string; count: number } = { count: 0 };
+  const res = {
+    locals: {
+      nonce: 'N0NCE',
+      sid: 'sid',
+      session: { userId: '1', username: 'Mod', csrfToken: 't' },
+    },
+  } as unknown as Response;
+  Object.assign(res, {
+    status: (code: number) => {
+      sent.status = code;
+      return res;
+    },
+    type: () => res,
+    send: (body: string) => {
+      sent.body = body;
+      sent.count += 1;
+      return res;
+    },
+  });
+  return { res, sent };
+}
+
+describe('load deadline', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("is about 10 seconds, inside Heroku's 30 s router timeout", () => {
+    expect(PAGE_LOAD_DEADLINE_MS).toBe(10_000);
+  });
+
+  it('a read that never settles renders the 503 page at the deadline', async () => {
+    vi.useFakeTimers();
+    const { res, sent } = fakeResponse();
+    const pending = load(
+      res,
+      'The suspension records',
+      () => new Promise(() => undefined),
+    );
+    await vi.advanceTimersByTimeAsync(PAGE_LOAD_DEADLINE_MS - 1);
+    expect(sent.count).toBe(0);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(await pending).toEqual({ ok: false });
+    expect(sent.status).toBe(503);
+    expect(sent.body).toContain(
+      'The suspension records cannot be loaded right now.',
+    );
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('a read that settles in time clears its timer', async () => {
+    vi.useFakeTimers();
+    const { res, sent } = fakeResponse();
+    expect(await load(res, 'X', () => Promise.resolve(42))).toEqual({
+      ok: true,
+      value: 42,
+    });
+    expect(vi.getTimerCount()).toBe(0);
+    expect(sent.count).toBe(0);
+  });
+
+  it('a read that fails after the deadline sends nothing more and is not unhandled', async () => {
+    vi.useFakeTimers();
+    const { res, sent } = fakeResponse();
+    let fail: (error: Error) => void = () => undefined;
+    const pending = load(
+      res,
+      'X',
+      () =>
+        new Promise<never>((_resolve, reject) => {
+          fail = reject;
+        }),
+    );
+    await vi.advanceTimersByTimeAsync(PAGE_LOAD_DEADLINE_MS);
+    expect(await pending).toEqual({ ok: false });
+    fail(new Error('pg finally answered'));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(sent.count).toBe(1);
+  });
+
+  it('unrefs its timer, so it never holds the process open', async () => {
+    const unref = vi.fn();
+    const realSetTimeout = globalThis.setTimeout;
+    const spy = vi.spyOn(globalThis, 'setTimeout').mockImplementation(((
+      fn: () => void,
+      ms: number,
+    ) => {
+      const timer = realSetTimeout(fn, ms);
+      timer.unref = unref.mockReturnValue(timer) as never;
+      return timer;
+    }) as never);
+    const { res } = fakeResponse();
+    await load(res, 'X', () => Promise.resolve(1));
+    expect(spy).toHaveBeenCalledWith(
+      expect.any(Function),
+      PAGE_LOAD_DEADLINE_MS,
+    );
+    expect(unref).toHaveBeenCalled();
+    spy.mockRestore();
   });
 });

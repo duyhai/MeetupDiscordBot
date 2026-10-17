@@ -94,20 +94,52 @@ export function unavailable(res: Response, what: string): void {
   });
 }
 
-/** Runs a data read; on failure logs the error's class name only and renders the 503 page. */
+/**
+ * How long a page's data read may take before the 503 page renders. A
+ * blackholed Postgres would otherwise hold the request in pool.connect past
+ * Heroku's 30 s router timeout (H12). The pools' own connectionTimeoutMillis
+ * stays as it is: they are shared with the identity sweep and the commands.
+ */
+export const PAGE_LOAD_DEADLINE_MS = 10_000;
+
+class PageLoadTimeoutError extends Error {
+  constructor() {
+    super(`page read took over ${PAGE_LOAD_DEADLINE_MS} ms`);
+    this.name = 'PageLoadTimeoutError';
+  }
+}
+
+/**
+ * Runs a data read under PAGE_LOAD_DEADLINE_MS; on failure or timeout logs
+ * the error's class name only and renders the 503 page. A read still
+ * running at the deadline is left to finish (or fail) unobserved.
+ */
 export async function load<T>(
   res: Response,
   what: string,
   fn: () => Promise<T>,
 ): Promise<{ ok: true; value: T } | { ok: false }> {
+  let timer: NodeJS.Timeout | undefined;
   try {
-    return { ok: true, value: await fn() };
+    // Promise.race subscribes to the read, so one that fails after the
+    // deadline is still handled (never an unhandled rejection).
+    const read = fn();
+    const deadline = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(
+        () => reject(new PageLoadTimeoutError()),
+        PAGE_LOAD_DEADLINE_MS,
+      );
+      timer.unref();
+    });
+    return { ok: true, value: await Promise.race([read, deadline]) };
   } catch (error) {
     logger.warn(
       `Dashboard ${what} read failed: ${error instanceof Error ? error.name : 'Error'}`,
     );
     unavailable(res, what);
     return { ok: false };
+  } finally {
+    clearTimeout(timer);
   }
 }
 
