@@ -189,7 +189,8 @@ describe.skipIf(!POSTGRES_AVAILABLE)('PostgresCredentialRepository', () => {
 
     const { rows } = await observer.query<{ column_name: string }>(
       `SELECT column_name FROM information_schema.columns
-        WHERE table_name = 'oauth_credential_meta' ORDER BY column_name`,
+        WHERE table_schema = current_schema()
+          AND table_name = 'oauth_credential_meta' ORDER BY column_name`,
     );
     expect(rows.map((row) => row.column_name)).toEqual([
       'failing_since',
