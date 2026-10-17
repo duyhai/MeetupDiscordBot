@@ -35,17 +35,18 @@ import { refreshForm, refreshNotice } from './refresh.js';
 const WHAT = 'The Hall of Fame report';
 
 /**
- * For the dashboard's copy text only: a zero-width space (U+200B) after the
- * @ of "@everyone", "@here" and every "<@" (user, nickname "<@!" and role
- * "<@&" mentions), so pasting the post into Discord pings nobody. Fixed
- * text has no mentions, so in effect this touches names and titles only.
+ * For the dashboard's copy text only: a zero-width space (U+200B) after
+ * every "@" and after every "<#" and "</", so pasting the post into Discord
+ * pings nobody and links nothing. That covers "@everyone", "@here", "<@…>"
+ * user, nickname and role mentions, and typed "@Name" or "@RoleName" that
+ * the client would turn into a mention, plus channel links and slash
+ * command mentions. The fixed text of formatHallOfFamePost has none of
+ * these (a test checks), so in effect this touches names and titles only.
  * Idempotent. Not in formatHallOfFamePost: the slash command's output (and
  * its goldens) stay byte-identical.
  */
 export function neutralizeMentions(text: string): string {
-  return text
-    .replace(/@(?=everyone|here)/g, '@\u200b')
-    .replace(/<@(?!\u200b)/g, '<@\u200b');
+  return text.replace(/(@|<#|<\/)(?!\u200b)/g, '$1\u200b');
 }
 
 /** '2026 September': the label the slash command uses, so the copy text matches it. */
@@ -118,6 +119,9 @@ function mentionPost(
     host: h.host,
     // String(): a stored payload is not type-checked field by field; this
     // is what the plain text's template literal makes of a non-string.
+    // collapseByTitle groups by the neutralised title, so two titles that
+    // differ only by an existing U+200B after an @ (say "@x" and "@\u200bx")
+    // share one line here but not in the plain box. Accepted: not realistic.
     events: h.events.map((e) => ({
       ...e,
       title: neutralizeMentions(String(e.title)),
@@ -330,6 +334,10 @@ export function registerHallOfFameRoutes(
       parsePage(req.query.page),
     );
     // A failed or slow lookup costs only the mention box: the page is 200.
+    // This is the page's second read in sequence, each under its own
+    // PAGE_LOAD_DEADLINE_MS: about 20 s worst case, under Heroku's 30 s
+    // router timeout. Do not add a third read in sequence; run it in
+    // parallel with this one or not at all.
     const links = await loadOptional('Hall of Fame member links', async () =>
       (await deps.memberLinks()).discordIdsByMeetupIds(peopleInPost(payload)),
     );

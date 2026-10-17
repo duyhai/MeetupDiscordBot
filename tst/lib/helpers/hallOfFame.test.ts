@@ -203,6 +203,18 @@ describe('formatHallOfFamePost', () => {
     expect(new Set(seen)).toEqual(new Set(['a', 'b']));
   });
 
+  it('the fixed template has no @, <# or </: the plain box can be neutralised whole', () => {
+    const { hostStats, totalEvents } = collectHostStats(events);
+    const result = formatHallOfFamePost({
+      periodLabel: '2026 September',
+      hostStats,
+      totalEvents,
+      newHostIds: new Set(['a', 'b']),
+    });
+    expect(result).toContain('New hosts:');
+    expect(result).not.toMatch(/@|<#|<\//);
+  });
+
   it('without nameOf, output is the plain names', () => {
     const { hostStats, totalEvents } = collectHostStats(events);
     const input = {

@@ -136,9 +136,11 @@ describe('Hall of Fame month page', () => {
       includeLinks: false,
     }).split('----- READY TO POST -----\n\n')[1];
     expect(expected).toContain('Hall of Fame — 2026 September');
-    // The page applies neutralizeMentions to the command's text; this
-    // fixture has no mentions, so the copy text is the command's block.
-    expect(neutralizeMentions(expected)).toBe(expected);
+    // The page applies neutralizeMentions to the command's text. This
+    // fixture's "<script>…</script>" host name is the only thing it touches.
+    expect(neutralizeMentions(expected)).toBe(
+      expected.replaceAll('</script>', '</\u200bscript>'),
+    );
     expect(unescape(raw ?? '')).toBe(neutralizeMentions(expected));
   });
 
@@ -183,10 +185,27 @@ describe('Hall of Fame month page', () => {
     expect(neutralizeMentions('@everyone @here <@1> <@!2> <@&3>')).toBe(
       '@\u200beveryone @\u200bhere <@\u200b1> <@\u200b!2> <@\u200b&3>',
     );
-    expect(neutralizeMentions('mail me@example.com, @Ann, 3 @ 5')).toBe(
-      'mail me@example.com, @Ann, 3 @ 5',
-    );
     expect(neutralizeMentions('@\u200beveryone')).toBe('@\u200beveryone');
+  });
+
+  it('neutralizeMentions defuses every @, <# and </, and is idempotent', () => {
+    expect(neutralizeMentions('@Moderator')).toBe('@\u200bModerator');
+    expect(neutralizeMentions('#general-ish <#123>')).toBe(
+      '#general-ish <#\u200b123>',
+    );
+    expect(neutralizeMentions('</ping:1>')).toBe('</\u200bping:1>');
+    expect(neutralizeMentions('mail me@example.com, @Ann, 3 @ 5')).toBe(
+      'mail me@\u200bexample.com, @\u200bAnn, 3 @\u200b 5',
+    );
+    for (const text of [
+      '@everyone @here <@1> <@!2> <@&3>',
+      '@Moderator @RoleName #general-ish <#123> </ping:1>',
+      'a @@ b <#<# c <//',
+    ]) {
+      const once = neutralizeMentions(text);
+      expect(neutralizeMentions(once), text).toBe(once);
+      expect(once, text).not.toMatch(/@(?!\u200b)|<#(?!\u200b)|<\/(?!\u200b)/);
+    }
   });
 
   it('commandPeriodLabel is the command label', () => {
@@ -405,7 +424,7 @@ describe('Hall of Fame months list', () => {
 });
 
 describe('Hall of Fame mention copy text', () => {
-  const ZWSP = '​';
+  const ZWSP = '\u200b';
   const ANN = '111111111111111111';
   const BOB = '22222222222222222222';
   const member = (id: string, name: string): MemberRef => ({
@@ -515,9 +534,37 @@ describe('Hall of Fame mention copy text', () => {
     expect(text).toContain(`<@${ANN}>`);
     expect(text).toContain(`<@${BOB}>`);
     expect(text).not.toContain(`<@${ZWSP}${ANN}>`);
-    const live = [...text.matchAll(/<@[^​]/g)].length;
+    const live = [...text.matchAll(/<@[^\u200b]/g)].length;
     expect(live).toBe(4); // Ann twice, Bob twice
     expect(text).not.toMatch(/@everyone|@here|<@&|<@!/);
+  });
+
+  it('defuses typed @Name, <#channel> and </command> in both boxes; linked mentions stay live', async () => {
+    const payload = mentionPayload();
+    const moderator = member('2003', '@Moderator');
+    const channel = member('2004', '#general-ish <#123>');
+    const command = member('2005', '</ping:1>');
+    payload.hosts[2].host = moderator;
+    payload.hosts[3].host = channel;
+    payload.hosts.push({
+      host: command,
+      isNew: false,
+      events: [event('33', 'Karaoke', [command])],
+    });
+    const res = await page(undefined, payload);
+    const mentions = unescape(textarea(res.text, 'hof-post-mentions') ?? '');
+    const plain = unescape(textarea(res.text, 'hof-post') ?? '');
+    for (const text of [mentions, plain]) {
+      expect(text).toContain(`@${ZWSP}Moderator`);
+      expect(text).toContain(`#general-ish <#${ZWSP}123>`);
+      expect(text).toContain(`</${ZWSP}ping:1>`);
+      expect(text).not.toMatch(/@Moderator|<#123|<\/ping/);
+    }
+    expect(mentions).toContain(`**#1: <@${ANN}> — 1 event**`);
+    expect(mentions).toContain(`<@${BOB}>`);
+    // The plain box has no live @ at all; the mention box only the bot's.
+    expect(plain).not.toMatch(/@(?!\u200b)/);
+    expect([...mentions.matchAll(/@(?!\u200b)/g)]).toHaveLength(4);
   });
 
   it('an invalid stored id appears by name, never as a mention', async () => {
