@@ -114,6 +114,27 @@ function statusLabel(status: WorkspaceStatus): string {
     : 'Unknown';
 }
 
+/**
+ * A status as a badge. The colour is a literal class picked by status:
+ * coral for a card nobody has acted on, blurple for one in progress or
+ * suspended, green for a warning sent, grey for the rest (and anything
+ * unknown).
+ */
+function statusBadge(status: WorkspaceStatus): SafeHtml {
+  const label = statusLabel(status);
+  switch (status) {
+    case 'new':
+      return html`<span class="badge attn">${label}</span>`;
+    case 'warning_copied':
+    case 'suspended':
+      return html`<span class="badge info">${label}</span>`;
+    case 'warning_sent':
+      return html`<span class="badge ok">${label}</span>`;
+    default:
+      return html`<span class="badge neutral">${label}</span>`;
+  }
+}
+
 /** UTC midnight of a YYYY-MM-DD: how suspension dates are stored. */
 const utcMidnight = (day: string): Date => new Date(`${day}T00:00:00.000Z`);
 
@@ -380,7 +401,7 @@ function suspendedMessageBody(v: CardView): SafeHtml {
   }
   const unchecked = c
     ? ''
-    : html`<p class="note">
+    : html`<p class="note attn">
         This member is not in the latest report, so hosting could not be
         checked. If they have hosted, remove the admin fee sentence.
       </p>`;
@@ -506,9 +527,16 @@ function cardHtml(v: CardView): SafeHtml {
     label: string,
     extra: SafeHtml | '' = '',
   ): SafeHtml | '' {
-    return actions.has(action)
-      ? form(action, html`${extra}<button type="submit">${label}</button>`)
-      : '';
+    if (!actions.has(action)) {
+      return '';
+    }
+    // Voiding undoes a suspension: the destructive (coral ghost) button.
+    return action === 'void'
+      ? form(
+          action,
+          html`${extra}<button type="submit" class="danger">${label}</button>`,
+        )
+      : form(action, html`${extra}<button type="submit">${label}</button>`);
   }
   const noteBox = (label: string, max: number) =>
     html`<label
@@ -532,7 +560,7 @@ function cardHtml(v: CardView): SafeHtml {
     );
   const outsideBody = outside.map(
     (r) =>
-      html`<p class="note">
+      html`<p class="note info">
           Suspended outside the workspace on ${recordDay(r.suspendedAt)}
           (#${r.id})
         </p>
@@ -550,19 +578,17 @@ function cardHtml(v: CardView): SafeHtml {
   return html`<div class="card ws-card">
     <h2>
       ${memberLink({ id: row.memberId, name: row.memberName })}
-      <span class="badge"
-        >${
-          row.classification === 'suspension'
-            ? 'Suspension candidate'
-            : 'Warning'
-        }</span
-      >
-      <span class="badge">${statusLabel(row.status)}</span>
+      ${
+        row.classification === 'suspension'
+          ? html`<span class="badge info">Suspension candidate</span>`
+          : html`<span class="badge attn">Warning</span>`
+      }
+      ${statusBadge(row.status)}
     </h2>
     ${
       row.inLatestSnapshot
         ? ''
-        : html`<p class="note">
+        : html`<p class="note attn">
             No longer in the latest report for this month.
           </p>`
     }
@@ -638,7 +664,7 @@ function syncForm(period: Period, csrf: string, label: string): SafeHtml {
 
 function leadershipNote(answer: LeadershipAnswer): SafeHtml | '' {
   return answer === 'unreachable'
-    ? html`<p class="note">${UNREACHABLE_NOTE}</p>`
+    ? html`<p class="note attn">${UNREACHABLE_NOTE}</p>`
     : '';
 }
 
@@ -903,7 +929,7 @@ export function registerWorkspaceRoutes(
       (snapshot.id !== state.snapshotId ||
         snapshot.builtAt.getTime() !== state.snapshotBuiltAt.getTime())
     ) {
-      setUp = html`<p class="note">
+      setUp = html`<p class="note attn">
           A newer report was built after this workspace was set up.
         </p>
         ${syncForm(period, csrf, 'Update from the stored report')}`;
@@ -924,7 +950,7 @@ export function registerWorkspaceRoutes(
         </p>`;
     const unreadable =
       snapshot && !payload
-        ? html`<p class="note">
+        ? html`<p class="note attn">
             The stored report could not be read, so the cards show no messages.
             The build alerts have the details.
           </p>`
@@ -1025,7 +1051,7 @@ export function registerWorkspaceRoutes(
       req.query.result !== 'out-of-order'
         ? ''
         : latest
-          ? html`<p class="note">
+          ? html`<p class="note attn">
               This member already has a suspension dated
               ${recordDay(latest.suspendedAt)}. A new one can't be dated before
               it. Nothing was recorded.

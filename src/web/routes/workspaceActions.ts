@@ -171,11 +171,22 @@ export const WORKSPACE_RESULT_MESSAGES = {
 const isResultCode = (code: unknown): code is WorkspaceResultCode =>
   typeof code === 'string' && Object.hasOwn(WORKSPACE_RESULT_MESSAGES, code);
 
+/** The codes that report something done or already in order: a blurple notice; every other code needs a person (coral). */
+const WORKSPACE_RESULT_INFO: ReadonlySet<WorkspaceResultCode> = new Set([
+  'done',
+  'synced',
+  'current',
+  'older',
+]);
+
 /** Fixed text for a known code; anything else in the query renders nothing (never echoed). */
 export function workspaceResultNotice(code: unknown): SafeHtml | '' {
-  return isResultCode(code)
-    ? html`<p class="note">${WORKSPACE_RESULT_MESSAGES[code]}</p>`
-    : '';
+  if (!isResultCode(code)) {
+    return '';
+  }
+  return WORKSPACE_RESULT_INFO.has(code)
+    ? html`<p class="note info">${WORKSPACE_RESULT_MESSAGES[code]}</p>`
+    : html`<p class="note attn">${WORKSPACE_RESULT_MESSAGES[code]}</p>`;
 }
 
 /** One form field as a string; a missing or repeated field (an array) is undefined. */

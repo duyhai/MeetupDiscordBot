@@ -461,7 +461,7 @@ describe('workspace action routes', () => {
       "This member already has a later suspension. A new one can't be dated before it. Nothing was recorded.",
     );
     expect(String(workspaceResultNotice('out-of-order'))).toBe(
-      `<p class="note">${escapeHtml(WORKSPACE_RESULT_MESSAGES['out-of-order'])}</p>`,
+      `<p class="note attn">${escapeHtml(WORKSPACE_RESULT_MESSAGES['out-of-order'])}</p>`,
     );
     expect(WORKSPACE_RESULT_MESSAGES['out-of-order']).not.toBe(
       WORKSPACE_RESULT_MESSAGES['suspension-overlap'],

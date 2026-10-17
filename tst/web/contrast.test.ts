@@ -1,0 +1,121 @@
+import { describe, expect, it } from 'vitest';
+
+import { STYLE } from '../../src/web/pages.js';
+
+/**
+ * WCAG 2.x contrast for the dashboard's colour tokens, read out of the one
+ * stylesheet, so a token changed below AA fails here.
+ */
+
+type Tokens = Record<string, string>;
+
+function parseTokens(block: string): Tokens {
+  const tokens: Tokens = {};
+  for (const m of block.matchAll(/--([a-z0-9-]+):\s*(#[0-9a-fA-F]{6})\b/g)) {
+    tokens[m[1]] = m[2].toLowerCase();
+  }
+  return tokens;
+}
+
+/** The light tokens (the first :root block) and the dark ones (the :root inside the dark media query). */
+export function themeTokens(css: string): { light: Tokens; dark: Tokens } {
+  const light = /(?:^|\})\s*:root\{([^}]*)\}/.exec(css)?.[1];
+  const dark = /@media \(prefers-color-scheme:\s*dark\)\{:root\{([^}]*)\}/.exec(
+    css,
+  )?.[1];
+  if (!light || !dark) {
+    throw new Error('STYLE has no light :root block or no dark one');
+  }
+  return { light: parseTokens(light), dark: parseTokens(dark) };
+}
+
+function luminance(hex: string): number {
+  const n = parseInt(hex.slice(1), 16);
+  const [r, g, b] = [n >> 16, (n >> 8) & 255, n & 255].map((v) => {
+    const c = v / 255;
+    return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+  });
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+
+export function contrast(a: string, b: string): number {
+  const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x);
+  return (hi + 0.05) / (lo + 0.05);
+}
+
+/** Text on a background: 4.5:1 (normal-size text). */
+const TEXT_PAIRS: [string, string][] = [
+  ...['bg', 'surface', 'raised', 'sel'].map((bg): [string, string] => [
+    'fg',
+    bg,
+  ]),
+  ...['bg', 'surface', 'raised'].map((bg): [string, string] => ['muted', bg]),
+  // Links and ghost buttons, at rest, on hover and as the current tab.
+  ...['bg', 'surface', 'raised', 'sel', 'accent-soft'].map(
+    (bg): [string, string] => ['accent', bg],
+  ),
+  ...['bg', 'surface', 'raised'].map((bg): [string, string] => [
+    'accent-ink',
+    bg,
+  ]),
+  // Primary buttons.
+  ['btn-fg', 'btn'],
+  ['btn-fg', 'btn-hover'],
+  // Coral text: destructive ghost buttons and to-do counts.
+  ...['bg', 'surface', 'raised', 'sel'].map((bg): [string, string] => [
+    'attn',
+    bg,
+  ]),
+  // Badges and notices.
+  ['attn-ink', 'attn-soft'],
+  ['accent-ink', 'accent-soft'],
+  ['ok-ink', 'ok-soft'],
+];
+
+/** Non-text that carries meaning: 3:1 (WCAG 1.4.11). */
+const UI_PAIRS: [string, string][] = [
+  // The focus ring, wherever a control can sit.
+  ...['bg', 'surface', 'raised', 'sel', 'attn-soft', 'accent-soft'].map(
+    (bg): [string, string] => ['focus', bg],
+  ),
+  // Form field borders.
+  ...['bg', 'surface', 'raised'].map((bg): [string, string] => ['field', bg]),
+  // The current tab's marker.
+  ['accent', 'surface'],
+];
+
+const THEMES = themeTokens(STYLE.value);
+
+describe('colour tokens', () => {
+  it('parses the known reference pair (#777 on white is 4.48:1)', () => {
+    expect(contrast('#777777', '#ffffff')).toBeCloseTo(4.48, 2);
+    expect(contrast('#000000', '#ffffff')).toBeCloseTo(21, 5);
+  });
+
+  it('defines the same tokens in light and dark', () => {
+    expect(Object.keys(THEMES.dark).sort()).toEqual(
+      Object.keys(THEMES.light).sort(),
+    );
+    expect(Object.keys(THEMES.light).length).toBeGreaterThan(15);
+  });
+
+  it('switches to the dark scheme with color-scheme: dark', () => {
+    expect(STYLE.value).toMatch(
+      /@media \(prefers-color-scheme:\s*dark\)\{:root\{[^}]*color-scheme:\s*dark/,
+    );
+  });
+
+  describe.each(['light', 'dark'] as const)('%s', (mode) => {
+    const t = THEMES[mode];
+    it.each(TEXT_PAIRS)('text --%s on --%s meets 4.5:1', (fg, bg) => {
+      expect(t[fg], `--${fg}`).toBeDefined();
+      expect(t[bg], `--${bg}`).toBeDefined();
+      expect(contrast(t[fg], t[bg])).toBeGreaterThanOrEqual(4.5);
+    });
+    it.each(UI_PAIRS)('--%s against --%s meets 3:1', (fg, bg) => {
+      expect(t[fg], `--${fg}`).toBeDefined();
+      expect(t[bg], `--${bg}`).toBeDefined();
+      expect(contrast(t[fg], t[bg])).toBeGreaterThanOrEqual(3);
+    });
+  });
+});

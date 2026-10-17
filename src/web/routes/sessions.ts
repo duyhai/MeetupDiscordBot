@@ -34,7 +34,10 @@ function noticeFor(code: unknown) {
   if (typeof code !== 'string' || !Object.hasOwn(NOTICES, code)) {
     return '';
   }
-  return html`<p class="note">${NOTICES[code as NoticeCode]}</p>`;
+  // Done: blurple. A refusal or an outage: coral.
+  return code === 'done'
+    ? html`<p class="note info">${NOTICES.done}</p>`
+    : html`<p class="note attn">${NOTICES[code as NoticeCode]}</p>`;
 }
 
 const back = (code: NoticeCode) =>

@@ -1495,7 +1495,7 @@ describe('workspace GETs', () => {
     expect(suffixed.raw).not.toContain(WORKSPACE_RESULT_MESSAGES.done);
     const known = await get(`${MONTH}?result=done&refresh=started`);
     expect(known.text).toContain(
-      `<p class="note">${WORKSPACE_RESULT_MESSAGES.done}</p>`,
+      `<p class="note info">${WORKSPACE_RESULT_MESSAGES.done}</p>`,
     );
     expect(known.text).toContain('Refreshing from Meetup.');
     const leader = await get(`${MONTH}?result=not-leadership`);

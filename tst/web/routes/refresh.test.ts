@@ -490,11 +490,11 @@ describe('POST /dashboard/reports/:period/refresh', () => {
     expect(res.status).toBe(200);
     expect(res.text).not.toContain('<script>x');
     expect(res.text).not.toContain('&lt;script&gt;x');
-    expect(res.text).not.toContain('class="note"');
+    expect(res.text).not.toContain('class="note');
     const proto = await get(`${MONTH}?refresh=toString`);
-    expect(proto.text).not.toContain('class="note"');
+    expect(proto.text).not.toContain('class="note');
     const repeated = await get(`${MONTH}?refresh=busy&refresh=busy`);
-    expect(repeated.text).not.toContain('class="note"');
+    expect(repeated.text).not.toContain('class="note');
   });
 
   it('a known code shows its fixed text on the month page', async () => {
