@@ -482,6 +482,39 @@ describe('per-page polish', () => {
     );
   });
 
+  it('a form directly in a card is spaced like a paragraph (organizer login)', async () => {
+    const { get } = await setup();
+    const text = collapse((await get('/dashboard/organizer-login')).text);
+    expect(text).toMatch(
+      /<form method="post" action="\/dashboard\/organizer-login\/start">/,
+    );
+    expect(STYLE.value).toMatch(
+      /(?:^|\})\s*\.card>form\{margin:0 0 var\(--s3\)\}/,
+    );
+    // form.filters keeps its own, larger margin: same specificity, later.
+    expect(STYLE.value.indexOf('.card>form{')).toBeLessThan(
+      STYLE.value.indexOf('form.filters{'),
+    );
+  });
+
+  it('workspace note boxes take the full width on phones', async () => {
+    const { get } = await setup();
+    const text = collapse((await get('/dashboard/no-shows/2026-09')).text);
+    // Every label that wraps a textarea is a block field.
+    const wrapping = [
+      ...text.matchAll(/<label([^>]*)>(?:(?!<\/label>).)*<textarea/g),
+    ];
+    expect(wrapping.length).toBeGreaterThan(0);
+    for (const [, attrs] of wrapping) {
+      expect(attrs.trim()).toBe('class="field"');
+    }
+    expect(STYLE.value).toMatch(/(?:^|\})\s*label\.field\{display:block\}/);
+    const narrow =
+      /@media \(max-width:639\.98px\)\{([\s\S]*?)\}\}/.exec(STYLE.value)?.[1] ??
+      '';
+    expect(narrow).toMatch(/\.actions>form:has\(textarea\)\{flex:1 1 100%\}/);
+  });
+
   it('pager and choice links are 44px targets', () => {
     expect(STYLE.value).toMatch(
       /nav\.pager a,nav\.pager strong,nav\.pager span\{[^}]*min-height:var\(--tap\)/,

@@ -43,6 +43,7 @@ h1{font-size:var(--t-2xl);line-height:1.2;margin:0 0 var(--s3)}
 h2{font-size:var(--t-xl);line-height:1.25;margin:0 0 var(--s3)}
 h3{font-size:var(--t-lg);line-height:1.3;margin:0 0 var(--s2)}
 p,ul,ol{margin:0 0 var(--s3)}
+.card>form{margin:0 0 var(--s3)}
 img{max-width:100%;height:auto}
 a{color:var(--accent);text-decoration:underline;text-decoration-thickness:1px;text-underline-offset:2px}
 a:hover{color:var(--accent-ink);text-decoration-thickness:2px}
@@ -87,6 +88,7 @@ input,select,textarea{font:inherit;color:var(--fg);background:var(--surface);bor
 border-radius:8px;padding:var(--s2) var(--s3);max-width:100%}
 input,select{min-height:var(--tap)}
 textarea{display:block;width:100%;min-height:var(--tap);margin-top:var(--s1)}
+label.field{display:block}
 input[type="checkbox"],input[type="radio"]{min-height:0;width:20px;height:20px;accent-color:var(--btn)}
 input:focus-visible,select:focus-visible,textarea:focus-visible{outline-offset:1px}
 ::placeholder{color:var(--muted);opacity:1}
@@ -161,6 +163,7 @@ table.stack td::before{content:attr(data-label);float:left;width:calc(66.667% - 
 padding-right:var(--s3);box-sizing:content-box;font-size:var(--t-sm);font-weight:600;color:var(--muted)}
 table.stack td.rank{display:none}
 .rank-inline{display:inline}
+.actions>form:has(textarea){flex:1 1 100%}
 form.filters label{flex:1 1 100%}
 form.filters input,form.filters select,form.filters button{width:100%}}
 @media (prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;

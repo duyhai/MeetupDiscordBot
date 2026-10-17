@@ -551,7 +551,7 @@ function cardHtml(v: CardView): SafeHtml {
       : form(action, html`${extra}<button type="submit">${label}</button>`);
   }
   const noteBox = (label: string, max: number) =>
-    html`<label
+    html`<label class="field"
       >${label}
       <textarea name="note" rows="2" maxlength="${max}" required></textarea>
     </label>`;
@@ -637,7 +637,7 @@ function cardHtml(v: CardView): SafeHtml {
     </div>
     ${form(
       'edit_notes',
-      html`<label>Notes ${notesArea} </label>
+      html`<label class="field">Notes ${notesArea} </label>
         <button type="submit" class="ghost">Save notes</button>`,
     )}
     <details>
