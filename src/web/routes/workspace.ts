@@ -114,6 +114,27 @@ function statusLabel(status: WorkspaceStatus): string {
     : 'Unknown';
 }
 
+/**
+ * A status as a badge. The colour is a literal class picked by status:
+ * coral for a card nobody has acted on, blurple for one in progress or
+ * suspended, green for a warning sent, grey for the rest (and anything
+ * unknown).
+ */
+export function statusBadge(status: WorkspaceStatus): SafeHtml {
+  const label = statusLabel(status);
+  switch (status) {
+    case 'new':
+      return html`<span class="badge attn">${label}</span>`;
+    case 'warning_copied':
+    case 'suspended':
+      return html`<span class="badge info">${label}</span>`;
+    case 'warning_sent':
+      return html`<span class="badge ok">${label}</span>`;
+    default:
+      return html`<span class="badge neutral">${label}</span>`;
+  }
+}
+
 /** UTC midnight of a YYYY-MM-DD: how suspension dates are stored. */
 const utcMidnight = (day: string): Date => new Date(`${day}T00:00:00.000Z`);
 
@@ -380,7 +401,7 @@ function suspendedMessageBody(v: CardView): SafeHtml {
   }
   const unchecked = c
     ? ''
-    : html`<p class="note">
+    : html`<p class="note attn">
         This member is not in the latest report, so hosting could not be
         checked. If they have hosted, remove the admin fee sentence.
       </p>`;
@@ -475,6 +496,10 @@ function historyBody(events: WorkspaceEvent[]): SafeHtml {
   </ul>`;
 }
 
+/** Actions that park or reopen a card: secondary (ghost) buttons. */
+const SECONDARY_ACTIONS: ReadonlySet<WorkspaceAction> =
+  new Set<WorkspaceAction>(['hold', 'skip', 'reopen']);
+
 /** One member card: a pure function of what the page read for this row. */
 function cardHtml(v: CardView): SafeHtml {
   const { row } = v;
@@ -506,12 +531,27 @@ function cardHtml(v: CardView): SafeHtml {
     label: string,
     extra: SafeHtml | '' = '',
   ): SafeHtml | '' {
-    return actions.has(action)
-      ? form(action, html`${extra}<button type="submit">${label}</button>`)
-      : '';
+    if (!actions.has(action)) {
+      return '';
+    }
+    // Voiding undoes a suspension: the destructive (coral ghost) button.
+    // Parking or reopening a card is secondary: ghost. Marking it sent is
+    // the card's main action: primary.
+    if (action === 'void') {
+      return form(
+        action,
+        html`${extra}<button type="submit" class="danger">${label}</button>`,
+      );
+    }
+    return SECONDARY_ACTIONS.has(action)
+      ? form(
+          action,
+          html`${extra}<button type="submit" class="ghost">${label}</button>`,
+        )
+      : form(action, html`${extra}<button type="submit">${label}</button>`);
   }
   const noteBox = (label: string, max: number) =>
-    html`<label
+    html`<label class="field"
       >${label}
       <textarea name="note" rows="2" maxlength="${max}" required></textarea>
     </label>`;
@@ -532,7 +572,7 @@ function cardHtml(v: CardView): SafeHtml {
     );
   const outsideBody = outside.map(
     (r) =>
-      html`<p class="note">
+      html`<p class="note info">
           Suspended outside the workspace on ${recordDay(r.suspendedAt)}
           (#${r.id})
         </p>
@@ -550,19 +590,17 @@ function cardHtml(v: CardView): SafeHtml {
   return html`<div class="card ws-card">
     <h2>
       ${memberLink({ id: row.memberId, name: row.memberName })}
-      <span class="badge"
-        >${
-          row.classification === 'suspension'
-            ? 'Suspension candidate'
-            : 'Warning'
-        }</span
-      >
-      <span class="badge">${statusLabel(row.status)}</span>
+      ${
+        row.classification === 'suspension'
+          ? html`<span class="badge info">Suspension candidate</span>`
+          : html`<span class="badge attn">Warning</span>`
+      }
+      ${statusBadge(row.status)}
     </h2>
     ${
       row.inLatestSnapshot
         ? ''
-        : html`<p class="note">
+        : html`<p class="note attn">
             No longer in the latest report for this month.
           </p>`
     }
@@ -599,8 +637,8 @@ function cardHtml(v: CardView): SafeHtml {
     </div>
     ${form(
       'edit_notes',
-      html`<label>Notes ${notesArea} </label>
-        <button type="submit">Save notes</button>`,
+      html`<label class="field">Notes ${notesArea} </label>
+        <button type="submit" class="ghost">Save notes</button>`,
     )}
     <details>
       <summary>History</summary>
@@ -616,7 +654,7 @@ const sum = (
 
 /** The months as links, the current one plain text. */
 function monthPicker(period: Period, now: Date): SafeHtml {
-  return html`<nav class="pager">
+  return html`<nav class="pager choices" aria-label="Months">
     ${workspaceMonths(now).map((p) => {
       if (comparePeriods(p, period) === 0) {
         return html`<strong>${monthLabel(p)}</strong>`;
@@ -638,7 +676,7 @@ function syncForm(period: Period, csrf: string, label: string): SafeHtml {
 
 function leadershipNote(answer: LeadershipAnswer): SafeHtml | '' {
   return answer === 'unreachable'
-    ? html`<p class="note">${UNREACHABLE_NOTE}</p>`
+    ? html`<p class="note attn">${UNREACHABLE_NOTE}</p>`
     : '';
 }
 
@@ -751,7 +789,7 @@ export function registerWorkspaceRoutes(
           One card per member with no-shows, from September 2026 on. Older
           months are on the no-show history pages.
         </p>
-        <table>
+        <table class="stack">
           <thead>
             <tr>
               <th>Month</th>
@@ -766,11 +804,13 @@ export function registerWorkspaceRoutes(
               const c = counts.get(periodKey(p));
               const state = stateOf(p);
               return html`<tr>
-                <td>${monthCell(DASHBOARD_PATHS.workspaceMonth, p)}</td>
-                <td>${sum(c, OPEN_STATUSES)}</td>
-                <td>${sum(c, PARKED_STATUSES)}</td>
-                <td>${sum(c, DONE_STATUSES)}</td>
-                <td>
+                <td data-label="Month">
+                  ${monthCell(DASHBOARD_PATHS.workspaceMonth, p)}
+                </td>
+                <td data-label="To do">${sum(c, OPEN_STATUSES)}</td>
+                <td data-label="On hold">${sum(c, PARKED_STATUSES)}</td>
+                <td data-label="Done">${sum(c, DONE_STATUSES)}</td>
+                <td data-label="Set up">
                   ${
                     state
                       ? `Updated ${pacificDateTime(state.syncedAt)}`
@@ -903,7 +943,7 @@ export function registerWorkspaceRoutes(
       (snapshot.id !== state.snapshotId ||
         snapshot.builtAt.getTime() !== state.snapshotBuiltAt.getTime())
     ) {
-      setUp = html`<p class="note">
+      setUp = html`<p class="note attn">
           A newer report was built after this workspace was set up.
         </p>
         ${syncForm(period, csrf, 'Update from the stored report')}`;
@@ -924,7 +964,7 @@ export function registerWorkspaceRoutes(
         </p>`;
     const unreadable =
       snapshot && !payload
-        ? html`<p class="note">
+        ? html`<p class="note attn">
             The stored report could not be read, so the cards show no messages.
             The build alerts have the details.
           </p>`
@@ -1008,7 +1048,7 @@ export function registerWorkspaceRoutes(
             Record suspension —
             ${memberLink({ id: row.memberId, name: row.memberName })}
           </h1>
-          <p>
+          <p class="note attn">
             This card cannot be suspended from here
             (${statusLabel(row.status)}).
           </p>
@@ -1025,7 +1065,7 @@ export function registerWorkspaceRoutes(
       req.query.result !== 'out-of-order'
         ? ''
         : latest
-          ? html`<p class="note">
+          ? html`<p class="note attn">
               This member already has a suspension dated
               ${recordDay(latest.suspendedAt)}. A new one can't be dated before
               it. Nothing was recorded.
@@ -1044,7 +1084,9 @@ export function registerWorkspaceRoutes(
             ${memberLink({ id: row.memberId, name: row.memberName })}
           </h1>
           ${outOfOrder}
-          <p>${onFile}it can't be recorded from here right now.</p>
+          <p class="note attn">
+            ${onFile}it can't be recorded from here right now.
+          </p>
           <p><a href="${back}">Back to the workspace</a></p>
         </div>`,
       });
@@ -1089,7 +1131,9 @@ export function registerWorkspaceRoutes(
               max="${today}"
               required
           /></label>
-          <button type="submit">Show the length for this date</button>
+          <button type="submit" class="ghost">
+            Show the length for this date
+          </button>
         </form>
         <p>
           Their upcoming RSVPs will be removed on Meetup by whoever applies the

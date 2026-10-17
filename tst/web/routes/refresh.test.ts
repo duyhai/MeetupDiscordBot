@@ -490,16 +490,20 @@ describe('POST /dashboard/reports/:period/refresh', () => {
     expect(res.status).toBe(200);
     expect(res.text).not.toContain('<script>x');
     expect(res.text).not.toContain('&lt;script&gt;x');
-    expect(res.text).not.toContain('class="note"');
+    expect(res.text).not.toContain('class="note');
     const proto = await get(`${MONTH}?refresh=toString`);
-    expect(proto.text).not.toContain('class="note"');
+    expect(proto.text).not.toContain('class="note');
     const repeated = await get(`${MONTH}?refresh=busy&refresh=busy`);
-    expect(repeated.text).not.toContain('class="note"');
+    expect(repeated.text).not.toContain('class="note');
   });
 
   it('a known code shows its fixed text on the month page', async () => {
     const { get } = await setup();
     const res = await get(`${MONTH}?refresh=started`);
     expect(res.text).toContain(escapeHtml(REFRESH_MESSAGES.started));
+    // In progress: the blurple notice.
+    expect(res.text).toContain(
+      `<p class="note info">${escapeHtml(REFRESH_MESSAGES.started)}</p>`,
+    );
   });
 });

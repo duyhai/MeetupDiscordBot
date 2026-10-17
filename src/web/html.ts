@@ -174,13 +174,20 @@ const DATA_ATTRS = new Set([
   'nonce',
 ]);
 
-/** aria-* and data-*, but never `data` itself (a URL attribute). */
+/**
+ * data-* attributes that take literals only. data-label is a stacked table
+ * cell's column name, which the stylesheet shows as text: a column name is
+ * written once, in the markup, never taken from data.
+ */
+const LITERAL_DATA_ATTRS = new Set(['data-label']);
+
+/** aria-* and data-*, but never `data` itself (a URL attribute) or a literal-only one. */
 const isDataAttr = (name: string) => {
   const lower = name.toLowerCase();
   return (
     DATA_ATTRS.has(lower) ||
     /^aria-[a-z]+$/.test(lower) ||
-    /^data-[a-z0-9-]+$/.test(lower)
+    (/^data-[a-z0-9-]+$/.test(lower) && !LITERAL_DATA_ATTRS.has(lower))
   );
 };
 
@@ -817,7 +824,8 @@ function render(value: HtmlValue): string {
  *   - URL attributes: exactly one SafeUrl filling the whole quoted value
  *     (UnsafeUrlError otherwise);
  *   - other quoted attributes: an escaped string or number, and only for
- *     the DATA_ATTRS allow-list (aria-*, data-* too); never SafeHtml;
+ *     the DATA_ATTRS allow-list (aria-*, data-* too, but not the literal-only
+ *     data-label); never SafeHtml;
  *   - textarea/title: escaped text, and not while `</tag` is half-written;
  *   - script/style: one staticRaw constant, nothing else;
  *   - anywhere else (names, unquoted values, comments): nothing.

@@ -48,9 +48,13 @@ const isRefreshCode = (code: unknown): code is RefreshCode =>
 
 /** Fixed text for a known code; anything else in the query renders nothing (never echoed). */
 export function refreshNotice(code: unknown): SafeHtml | '' {
-  return isRefreshCode(code)
-    ? html`<p class="note">${REFRESH_MESSAGES[code]}</p>`
-    : '';
+  if (!isRefreshCode(code)) {
+    return '';
+  }
+  // Started: blurple, in progress. Every refusal or failure: coral.
+  return code === 'started'
+    ? html`<p class="note info">${REFRESH_MESSAGES[code]}</p>`
+    : html`<p class="note attn">${REFRESH_MESSAGES[code]}</p>`;
 }
 
 export type RefreshReturn = 'hall-of-fame' | 'no-show-history' | 'workspace';
@@ -66,7 +70,7 @@ export function refreshForm(
   >
     <input type="hidden" name="_csrf" value="${csrfToken}" />
     <input type="hidden" name="return" value="${returnTo}" />
-    <button type="submit">Refresh from Meetup</button>
+    <button type="submit" class="ghost">Refresh from Meetup</button>
   </form>`;
 }
 

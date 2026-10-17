@@ -187,7 +187,9 @@ const cards = (body: string) =>
   body
     .split('<div class="card ws-card">')
     .slice(1)
-    .map((card) => card.split(/<nav class="pager">|<script/)[0]);
+    .map(
+      (card) => card.split(/<nav class="pager" aria-label="Pages">|<script/)[0],
+    );
 
 /** The text of every copy box's textarea, in page order. */
 const copyTexts = (body: string) =>
@@ -1352,6 +1354,10 @@ describe('GET /dashboard/no-shows/:period/rows/:rowId/suspend (confirm)', () => 
         'This member has a suspension on file through Oct 5, 2026. ' +
           "A new one can't overlap it or be dated before it, so it can't be recorded from here right now.",
       );
+      // The blocked line is a coral notice.
+      expect(res.text).toMatch(
+        /<p class="note attn">\s*This member has a suspension on file/,
+      );
       expect(res.text).not.toContain('type="date"');
       expect(res.text).not.toContain('name="action"');
       expect(res.text).not.toContain(
@@ -1429,6 +1435,9 @@ describe('GET /dashboard/no-shows/:period/rows/:rowId/suspend (confirm)', () => 
     expect(words(res.text)).toContain(
       'This card cannot be suspended from here (New)',
     );
+    expect(res.text).toMatch(
+      /<p class="note attn">\s*This card cannot be suspended from here/,
+    );
     expect(res.text).not.toContain('type="date"');
   });
 
@@ -1495,7 +1504,7 @@ describe('workspace GETs', () => {
     expect(suffixed.raw).not.toContain(WORKSPACE_RESULT_MESSAGES.done);
     const known = await get(`${MONTH}?result=done&refresh=started`);
     expect(known.text).toContain(
-      `<p class="note">${WORKSPACE_RESULT_MESSAGES.done}</p>`,
+      `<p class="note info">${WORKSPACE_RESULT_MESSAGES.done}</p>`,
     );
     expect(known.text).toContain('Refreshing from Meetup.');
     const leader = await get(`${MONTH}?result=not-leadership`);

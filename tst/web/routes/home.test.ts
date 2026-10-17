@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { WorkspaceStatus } from '../../../src/lib/workspace/types.js';
 
+import { STYLE } from '../../../src/web/pages.js';
 import { DashboardPageDeps } from '../../../src/web/routes/dashboardPages.js';
 import {
   HOME_REPORTS_DEADLINE_MS,
@@ -205,12 +206,31 @@ const seededWorkspace = () =>
     events: [],
   });
 
+/** A month's three workspace tiles, as the collapsed markup reads them. */
+const tiles = (month: string, todo: number, hold: number, done: number) =>
+  `${month}</a></h3><dl class="stats">` +
+  `<div class="stat todo"><dt>To do</dt><dd>${todo}</dd></div>` +
+  `<div class="stat"><dt>On hold</dt><dd>${hold}</dd></div>` +
+  `<div class="stat done"><dt>Done</dt><dd>${done}</dd></div></dl>`;
+
 describe('Home open workspace items card', () => {
   it('shows open workspace items for the latest finished and the open month', async () => {
     const out = await render({ workspace: async () => seededWorkspace() });
-    expect(out).toContain('September 2026</a>: 3 to do, 1 on hold, 3 done');
-    expect(out).toContain('October 2026</a>: 0 to do, 0 on hold, 1 done');
+    expect(out).toContain(tiles('September 2026', 3, 1, 3));
+    expect(out).toContain(tiles('October 2026', 0, 0, 1));
     expect(out).not.toMatch(/attend|incomplete|<@/i);
+  });
+
+  it('shows each month as three tiles, the to-do number in coral', async () => {
+    const out = await render({ workspace: async () => seededWorkspace() });
+    // Exactly one to-do tile per month, and it is the first tile.
+    expect(out.match(/<div class="stat todo">/g)).toHaveLength(2);
+    expect(
+      out.match(/<dl class="stats"><div class="stat todo">/g),
+    ).toHaveLength(2);
+    // The stylesheet colours the to-do tile's number with the coral token.
+    const rule = /\.stat\.todo dd\{([^}]*)\}/.exec(STYLE.value)?.[1] ?? '';
+    expect(rule).toMatch(/(?:^|;)color:var\(--attn\)(?:;|$)/);
   });
 
   it('sits first, ahead of the month cards', async () => {
@@ -246,8 +266,8 @@ describe('Home open workspace items card', () => {
           events: [],
         }),
     });
-    expect(out).toContain('September 2026</a>: 0 to do, 0 on hold, 0 done');
-    expect(out).toContain('October 2026</a>: 0 to do, 0 on hold, 0 done');
+    expect(out).toContain(tiles('September 2026', 0, 0, 0));
+    expect(out).toContain(tiles('October 2026', 0, 0, 0));
   });
 
   it('a month with no workspace yet says so, never zeros', async () => {
@@ -257,9 +277,11 @@ describe('Home open workspace items card', () => {
       events: [],
     });
     const out = await render({ workspace: async () => ws });
-    expect(out).toContain('September 2026</a>: 3 to do, 1 on hold, 3 done');
-    expect(out).toContain('October 2026</a>: not set up yet');
-    expect(out).not.toContain('October 2026</a>: 0 to do');
+    expect(out).toContain(tiles('September 2026', 3, 1, 3));
+    expect(out).toContain(
+      'October 2026</a></h3><p class="muted">Not set up yet</p>',
+    );
+    expect(out).not.toContain('October 2026</a></h3><dl');
     expect(ws.monthState).toHaveBeenCalledTimes(2);
     expect(ws.listRows).not.toHaveBeenCalled();
   });
@@ -293,9 +315,11 @@ describe('Home open workspace items card', () => {
           workspace: async () => seededWorkspace(),
         }),
       )
-    ).value.replace(/\s+/g, ' ');
-    expect(out).toContain('September 2026</a>: 3 to do, 1 on hold, 3 done');
-    expect(out).not.toContain('August 2026</a>:');
+    ).value
+      .replace(/\s+/g, ' ')
+      .replace(/> </g, '><');
+    expect(out).toContain(tiles('September 2026', 3, 1, 3));
+    expect(out).not.toContain('August 2026</a></h3>');
     expect(out).not.toContain('/dashboard/no-shows/2026-08');
   });
 

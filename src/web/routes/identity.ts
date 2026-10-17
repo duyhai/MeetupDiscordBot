@@ -173,6 +173,7 @@ function thumb(
   // Lazy: the identity pool has two connections, and up to 100 thumbnails
   // per page would otherwise all queue on it at once.
   return html`<img
+    class="thumb"
     src="${localUrl(thumbPath(row.id, side))}"
     width="64"
     height="64"
@@ -200,12 +201,12 @@ function changeRow(
     names.get(identityNameKey(row.platform, row.scopeId, row.subjectId)) ??
     row.subjectId;
   return html`<tr>
-    <td>${pacificDateTime(row.detectedAt)}</td>
-    <td>${PLATFORM_LABELS[row.platform]}</td>
-    <td>${subjectCell(row, name)}${onlyThisMember(row)}</td>
-    <td>${FIELD_LABELS[row.field]}</td>
-    <td>${valueCell(row, 'old')}</td>
-    <td>${valueCell(row, 'new')}</td>
+    <td data-label="Detected (Pacific)">${pacificDateTime(row.detectedAt)}</td>
+    <td data-label="Platform">${PLATFORM_LABELS[row.platform]}</td>
+    <td data-label="Member">${subjectCell(row, name)}${onlyThisMember(row)}</td>
+    <td data-label="Field">${FIELD_LABELS[row.field]}</td>
+    <td data-label="Before">${valueCell(row, 'old')}</td>
+    <td data-label="After">${valueCell(row, 'new')}</td>
   </tr>`;
 }
 
@@ -264,7 +265,9 @@ function pager(q: IdentityQuery, rows: IdentityChangeListItem[]): SafeHtml {
     q.before !== undefined
       ? html`<a href="${pageLink(path, filterParams(q))}">Newest changes</a>`
       : '';
-  return html`<nav class="pager">${newest} ${older}</nav>`;
+  return html`<nav class="pager" aria-label="Older and newer changes">
+    ${newest} ${older}
+  </nav>`;
 }
 
 function changesTable(
@@ -276,7 +279,7 @@ function changesTable(
     return html`<p>No identity changes match these filters.</p>
       ${pager(q, rows)}`;
   }
-  return html`<table>
+  return html`<table class="stack">
       <thead>
         <tr>
           <th>Detected (Pacific)</th>

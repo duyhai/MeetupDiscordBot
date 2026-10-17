@@ -79,6 +79,7 @@ describe('dashboardRouterFromEnv', () => {
     expect(res.status).toBe(503);
     expect(res.headers['cache-control']).toBe('no-store');
     expect(res.text).toContain('not set up yet');
+    expect(res.text).toContain('<h1>Not available</h1>');
     expect(res.headers['x-frame-options']).toBe('DENY');
     expect(res.headers['content-security-policy']).toContain(
       "frame-ancestors 'none'",

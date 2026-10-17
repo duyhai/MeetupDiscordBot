@@ -1,12 +1,19 @@
 import { SafeHtml, html } from './html.js';
 
-/** Fixed series colours. A series colour is used only when it is a hex constant like these. */
+/**
+ * Fixed series colours. A series colour is used only when it is a hex
+ * constant like these. Each meets 3:1 on both --surface values (#ffffff
+ * and #20212b), and the green sits well apart in lightness from the
+ * blurple and the coral, so the first three still differ under common
+ * colour-vision deficiencies. Line series also get a dash pattern each
+ * (see `line`).
+ */
 export const CHART_COLORS: readonly string[] = [
-  '#5865f2',
-  '#d1242f',
-  '#1a7f37',
-  '#9a6700',
-  '#8250df',
+  '#5462ec', // blurple
+  '#d42c3a', // coral
+  '#1ea666', // green
+  '#986600', // amber
+  '#a070f2', // violet
 ];
 
 export interface ChartSeries {
@@ -50,6 +57,50 @@ function size(v: number | undefined, fallback: number): number {
     ? Math.round(v)
     : fallback;
 }
+
+/**
+ * A line series. The dash pattern goes with the series index, four
+ * patterns repeating like the colours; each is a literal, since the html
+ * subset takes no data in stroke-dasharray.
+ */
+function line(si: number, points: string, color: string): SafeHtml {
+  switch (si % 4) {
+    case 1:
+      return html`<polyline
+        points="${points}"
+        fill="none"
+        stroke="${color}"
+        stroke-width="2"
+        stroke-dasharray="8 4"
+      />`;
+    case 2:
+      return html`<polyline
+        points="${points}"
+        fill="none"
+        stroke="${color}"
+        stroke-width="2"
+        stroke-dasharray="2 3"
+      />`;
+    case 3:
+      return html`<polyline
+        points="${points}"
+        fill="none"
+        stroke="${color}"
+        stroke-width="2"
+        stroke-dasharray="10 3 2 3"
+      />`;
+    default:
+      return html`<polyline
+        points="${points}"
+        fill="none"
+        stroke="${color}"
+        stroke-width="2"
+      />`;
+  }
+}
+
+/** Legend glyphs for line series, matching `line`'s dash per index: solid, 8 4, 2 3, 10 3 2 3. */
+const LINE_GLYPHS: readonly string[] = ['━', '╍', '┅', '─·'];
 
 /**
  * Server-drawn SVG under the strict html subset: drawing elements and
@@ -122,12 +173,7 @@ export function chart(input: ChartInput): SafeHtml {
       >`;
     }
     const points = values.map((v, i) => `${fmt(x(i))},${fmt(y(v))}`).join(' ');
-    return html`<polyline
-      points="${points}"
-      fill="none"
-      stroke="${color}"
-      stroke-width="2"
-    />`;
+    return line(si, points, color);
   });
 
   const step = Math.max(1, Math.ceil(n / 12));
@@ -156,12 +202,15 @@ export function chart(input: ChartInput): SafeHtml {
   );
   // The first swatch sits at the text's x; later ones get a gap. dx is a
   // literal: the html subset takes no data there.
+  // A line's swatch draws its dash (see `line`); a bar's is a square. The
+  // glyph is escaped text, not an attribute.
   const legend = input.series.map((s, si) => {
     const color = colorOf(s, si);
+    const glyph = input.kind === 'line' ? LINE_GLYPHS[si % 4] : '■';
     const swatch =
       si === 0
-        ? html`<tspan fill="${color}">■</tspan>`
-        : html`<tspan dx="12" fill="${color}">■</tspan>`;
+        ? html`<tspan fill="${color}">${glyph}</tspan>`
+        : html`<tspan dx="12" fill="${color}">${glyph}</tspan>`;
     return html`${swatch}<tspan dx="4">${s.label}</tspan>`;
   });
 
@@ -186,25 +235,27 @@ export function chart(input: ChartInput): SafeHtml {
     </svg>
     <details>
       <summary>Data</summary>
-      <table>
-        <thead>
-          <tr>
-            <th>${input.categoryLabel ?? 'Month'}</th>
-            ${input.series.map((s) => html`<th>${s.label}</th>`)}
-          </tr>
-        </thead>
-        <tbody>
-          ${input.categories.map(
-            (c, i) =>
-              html`<tr>
-                <td>${c}</td>
-                ${input.series.map(
-                  (s) => html`<td>${clean(s.values[i] ?? 0)}</td>`,
-                )}
-              </tr>`,
-          )}
-        </tbody>
-      </table>
+      <div class="table-scroll">
+        <table>
+          <thead>
+            <tr>
+              <th>${input.categoryLabel ?? 'Month'}</th>
+              ${input.series.map((s) => html`<th>${s.label}</th>`)}
+            </tr>
+          </thead>
+          <tbody>
+            ${input.categories.map(
+              (c, i) =>
+                html`<tr>
+                  <td>${c}</td>
+                  ${input.series.map(
+                    (s) => html`<td>${clean(s.values[i] ?? 0)}</td>`,
+                  )}
+                </tr>`,
+            )}
+          </tbody>
+        </table>
+      </div>
     </details>
   </figure>`;
 }

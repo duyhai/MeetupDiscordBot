@@ -3,10 +3,7 @@ import { Response } from 'express';
 import { Logger } from 'tslog';
 
 import {
-  DASHBOARD_BASE,
-  DASHBOARD_PATHS,
   MonthPathTemplate,
-  dashboardPath,
   linkableMonthPath,
 } from '../lib/reports/dashboardPaths.js';
 import { noShowsMissing } from '../lib/reports/meetupMonth.js';
@@ -25,33 +22,9 @@ import { tz } from '../util/timezone.js';
 import { dashboardLocals } from './dashboardRouter.js';
 import { SafeHtml, html, localUrl, staticRaw } from './html.js';
 import { discordProfileUrl, discordUserLink } from './links.js';
-import { errorPage, layout } from './pages.js';
+import { errorPage, layout, navKeyFor } from './pages.js';
 
 const logger = new Logger({ name: 'dashboard' });
-
-const NAV = html`<nav class="site">
-  <a href="${localUrl(DASHBOARD_BASE)}">Home</a>
-  <a href="${localUrl(dashboardPath(DASHBOARD_PATHS.workspace))}"
-    >No-show workspace</a
-  >
-  <a href="${localUrl(dashboardPath(DASHBOARD_PATHS.hallOfFame))}"
-    >Hall of Fame</a
-  >
-  <a href="${localUrl(dashboardPath(DASHBOARD_PATHS.noShowHistory))}"
-    >No-show history</a
-  >
-  <a href="${localUrl(dashboardPath(DASHBOARD_PATHS.suspensions))}"
-    >Suspensions</a
-  >
-  <a href="${localUrl(dashboardPath(DASHBOARD_PATHS.identity))}"
-    >Identity changes</a
-  >
-  <a href="${localUrl(dashboardPath(DASHBOARD_PATHS.linkProgress))}"
-    >Link progress</a
-  >
-  <a href="${localUrl(dashboardPath(DASHBOARD_PATHS.trends))}">Trends</a>
-  <a href="${localUrl(dashboardPath(DASHBOARD_PATHS.sessions))}">Sessions</a>
-</nav>`;
 
 /**
  * Fixed text for the workspace's copy boxes. A button[data-copy-near] copies
@@ -97,7 +70,9 @@ export function dashboardPage(
         title: page.title,
         nonce,
         user: session,
-        body: html`${NAV}${page.body}${script}`,
+        // The route decides the current tab, by comparison with the nav's own paths.
+        current: navKeyFor(res.req?.originalUrl),
+        body: html`${page.body}${script}`,
       }),
     );
 }
@@ -262,7 +237,7 @@ export function zeroNoShowNote(
   if (!attendance || !isFinished(period, now) || !noShowsMissing(attendance)) {
     return '';
   }
-  return html`<p class="note">
+  return html`<p class="note attn">
     No no-shows were recorded for ${monthLabel(period)} across
     ${attendance.pastEventsWithRsvps} past events with RSVPs. Check that
     attendance was taken.

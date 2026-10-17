@@ -40,7 +40,7 @@ function isDayRow(row: unknown): row is LinkProgressDay {
 
 function rangeNav(current: DayChoice): SafeHtml {
   const path = dashboardPath(DASHBOARD_PATHS.linkProgress);
-  return html`<nav class="pager">
+  return html`<nav class="pager choices" aria-label="Range">
     ${DAY_CHOICES.map((days) => {
       if (days === current) {
         return html`<strong>${days} days</strong>`;
@@ -67,27 +67,29 @@ function daysTable(
     return html`<p>No more days.</p>
       ${pager}`;
   }
-  return html`<table class="days">
-      <thead>
-        <tr>
-          <th>Day</th>
-          <th>Linked</th>
-          <th>Unlinked</th>
-          <th>Onboarding</th>
-        </tr>
-      </thead>
-      <tbody>
-        ${rows.map(
-          (r) =>
-            html`<tr>
-              <td>${r.day}</td>
-              <td>${r.linked}</td>
-              <td>${r.unlinked}</td>
-              <td>${r.onboarding}</td>
-            </tr>`,
-        )}
-      </tbody>
-    </table>
+  return html`<div class="table-scroll">
+      <table class="days">
+        <thead>
+          <tr>
+            <th>Day</th>
+            <th>Linked</th>
+            <th>Unlinked</th>
+            <th>Onboarding</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${rows.map(
+            (r) =>
+              html`<tr>
+                <td>${r.day}</td>
+                <td>${r.linked}</td>
+                <td>${r.unlinked}</td>
+                <td>${r.onboarding}</td>
+              </tr>`,
+          )}
+        </tbody>
+      </table>
+    </div>
     ${pager}`;
 }
 

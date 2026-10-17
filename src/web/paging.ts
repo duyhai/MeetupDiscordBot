@@ -22,7 +22,7 @@ export function pageNav(
   // pageLink refuses any path outside /dashboard, so a caller passing
   // something else fails loudly instead of rendering it.
   const href = (p: number) => pageLink(path, { ...params, page: String(p) });
-  return html`<nav class="pager">
+  return html`<nav class="pager" aria-label="Pages">
     ${page > 1 ? html`<a href="${href(page - 1)}">Previous</a>` : ''}
     <span>Page ${page}</span>
     ${hasNext && page < MAX_PAGE ? html`<a href="${href(page + 1)}">Next</a>` : ''}

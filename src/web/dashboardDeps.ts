@@ -102,6 +102,7 @@ function notConfiguredRouter(): express.Router {
           title: 'Not available',
           nonce,
           body: html`<div class="card">
+            <h1>Not available</h1>
             <p>The staff dashboard is not set up yet.</p>
           </div>`,
         }),

@@ -133,6 +133,46 @@ describe('chart', () => {
     expect(ok).toContain('fill="#123abc"');
   });
 
+  it('gives each line series its own literal dash pattern', () => {
+    const out = render({
+      kind: 'line',
+      series: ['A', 'B', 'C', 'D', 'E'].map((label) => ({
+        label,
+        values: [1, 2],
+      })),
+    });
+    const lines = [...out.matchAll(/<polyline\s[^>]*>/g)].map((m) => m[0]);
+    expect(lines).toHaveLength(5);
+    const dash = (tag: string) =>
+      /\sstroke-dasharray="([^"]+)"/.exec(tag)?.[1] ?? 'solid';
+    const patterns = lines.map(dash);
+    expect(patterns[0]).toBe('solid');
+    expect(new Set(patterns.slice(0, 4)).size).toBe(4);
+    // Patterns repeat with the colours.
+    expect(patterns[4]).toBe(patterns[0]);
+  });
+
+  it('line legends show each series dash; bar legends show a square', () => {
+    const five = ['A', 'B', 'C', 'D', 'E'].map((label) => ({
+      label,
+      values: [1, 2],
+    }));
+    const glyphs = (out: string) =>
+      [
+        ...out.matchAll(/<tspan\b[^>]*\sfill="[^"]+"[^>]*>([^<]*)<\/tspan>/g),
+      ].map((m) => m[1]);
+    expect(glyphs(render({ kind: 'line', series: five }))).toEqual([
+      '━',
+      '╍',
+      '┅',
+      '─·',
+      '━',
+    ]);
+    expect(glyphs(render({ kind: 'bar', series: five }))).toEqual(
+      Array(5).fill('■'),
+    );
+  });
+
   it('empty input says no data', () => {
     expect(render({ categories: [] })).toContain(
       'No data yet for No-shows per month.',

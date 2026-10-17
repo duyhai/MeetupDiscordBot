@@ -224,18 +224,22 @@ describe('sessions page', () => {
     expect((await page('done')).text).toContain(
       'That staff member was signed out everywhere.',
     );
+    // Done: the blurple notice.
+    expect((await page('done')).text).toMatch(
+      /<p class="note info">That staff member was signed out everywhere\./,
+    );
     expect((await page('not-leadership')).text).toContain(
       'Only the 1.5 Leadership Team can sign out another staff member.',
     );
     const unknown = await page('<script>x</script>');
     expect(unknown.status).toBe(200);
-    expect(unknown.text).not.toContain('class="note"');
+    expect(unknown.text).not.toContain('class="note');
     expect(unknown.text).not.toContain('<script>x');
     const proto = await page('toString');
-    expect(proto.text).not.toContain('class="note"');
+    expect(proto.text).not.toContain('class="note');
     // Self-revoke lands on the login page, so there is no 'self' notice.
     const self = await page('self');
-    expect(self.text).not.toContain('class="note"');
+    expect(self.text).not.toContain('class="note');
     expect(self.text).not.toContain('You were signed out everywhere');
   });
 
