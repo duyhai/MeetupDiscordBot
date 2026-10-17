@@ -265,7 +265,9 @@ function pager(q: IdentityQuery, rows: IdentityChangeListItem[]): SafeHtml {
     q.before !== undefined
       ? html`<a href="${pageLink(path, filterParams(q))}">Newest changes</a>`
       : '';
-  return html`<nav class="pager">${newest} ${older}</nav>`;
+  return html`<nav class="pager" aria-label="Older and newer changes">
+    ${newest} ${older}
+  </nav>`;
 }
 
 function changesTable(

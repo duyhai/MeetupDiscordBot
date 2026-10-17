@@ -187,7 +187,9 @@ const cards = (body: string) =>
   body
     .split('<div class="card ws-card">')
     .slice(1)
-    .map((card) => card.split(/<nav class="pager">|<script/)[0]);
+    .map(
+      (card) => card.split(/<nav class="pager" aria-label="Pages">|<script/)[0],
+    );
 
 /** The text of every copy box's textarea, in page order. */
 const copyTexts = (body: string) =>

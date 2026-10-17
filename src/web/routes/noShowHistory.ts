@@ -330,7 +330,7 @@ export function registerNoShowHistoryRoutes(
     const last = metas[metas.length - 1];
     const older =
       metas.length === PAGE_SIZE && last
-        ? html`<nav class="pager">
+        ? html`<nav class="pager" aria-label="Older months">
             <a
               href="${pageLink(dashboardPath(DASHBOARD_PATHS.noShowHistory), {
                 before: periodKey(last.period),

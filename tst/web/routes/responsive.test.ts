@@ -453,7 +453,9 @@ describe('per-page polish', () => {
   it('paging keeps the plain pager', async () => {
     const { get } = await setup();
     const text = collapse((await get('/dashboard/link-progress')).text);
-    expect(text).toContain('<nav class="pager"><span>Page 1</span></nav>');
+    expect(text).toContain(
+      '<nav class="pager" aria-label="Pages"><span>Page 1</span></nav>',
+    );
   });
 
   it('the identity filters use the form layout', () => {

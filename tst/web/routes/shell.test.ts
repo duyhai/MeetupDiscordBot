@@ -12,7 +12,18 @@ import { registerAllProtectedRoutes } from '../../../src/web/routes/dashboardPag
 import { statusBadge } from '../../../src/web/routes/workspace.js';
 import { clientFor } from '../../setup/loopbackServer.js';
 import { closeServers, listen, makeDeps, signIn } from '../dashboardHarness.js';
-import { PAGE_NOW, fakeOrganizerDeps, fakePageDeps } from './pageFakes.js';
+import { PAGE_SIZE } from '../../../src/web/paging.js';
+import {
+  PAGE_NOW,
+  fakeIdentity,
+  fakeOrganizerDeps,
+  fakePageDeps,
+  fakeSnapshots,
+  hofPayload,
+  identityChange,
+  noShowPayload,
+  seedRow,
+} from './pageFakes.js';
 
 afterEach(closeServers);
 
@@ -29,10 +40,41 @@ function buildRouter() {
   });
 }
 
-async function setup() {
+/**
+ * A full page of stored months and of identity changes, so the "older"
+ * pagers on the Hall of Fame, no-show history and identity pages render.
+ */
+function fullPagesRouter() {
+  const { deps } = makeDeps({ now: () => PAGE_NOW.getTime() });
+  const months = Array.from({ length: PAGE_SIZE }, (_, i) => {
+    const d = new Date(Date.UTC(2026, 8 - i, 1));
+    return { year: d.getUTCFullYear(), month: d.getUTCMonth() + 1 };
+  });
+  const rows = months.flatMap((p) => [
+    seedRow('hall_of_fame', p, hofPayload()),
+    seedRow('no_show', p, noShowPayload()),
+  ]);
+  const changes = Array.from({ length: PAGE_SIZE }, (_, i) =>
+    identityChange({ id: String(1000 - i) }),
+  );
+  return createDashboardRouter({
+    ...deps,
+    protectedRoutes: (r) =>
+      registerAllProtectedRoutes(r, {
+        organizer: fakeOrganizerDeps(),
+        pages: fakePageDeps({
+          isLeadership: vi.fn().mockResolvedValue(true),
+          snapshots: async () => fakeSnapshots(rows),
+          identity: async () => fakeIdentity(changes),
+        }),
+      }),
+  });
+}
+
+async function setup(router = buildRouter()) {
   const app = express();
   app.set('trust proxy', 1);
-  app.use(DASHBOARD_BASE, buildRouter());
+  app.use(DASHBOARD_BASE, router);
   const req = clientFor(await listen(app));
   const cookie = await signIn(req);
   const get = async (path: string) => {
@@ -160,6 +202,39 @@ describe('page shell', () => {
     const { text } = await get('/dashboard/organizer-login');
     expect(siteNav(text)).not.toBe('');
     expect(currentItems(text)).toEqual([]);
+  });
+});
+
+describe('nav landmarks', () => {
+  it('every <nav> on every page has an aria-label', async () => {
+    const plain = await setup();
+    const full = await setup(fullPagesRouter());
+    const texts = [
+      ...(await Promise.all(PAGE_PATHS.map(plain.get))),
+      ...(await Promise.all(
+        [
+          '/dashboard/hall-of-fame',
+          '/dashboard/no-show-history',
+          '/dashboard/identity',
+        ].map(full.get),
+      )),
+    ]
+      .filter((res) =>
+        String(res.headers['content-type']).startsWith('text/html'),
+      )
+      .map((res) => res.text);
+    const labels = new Set<string>();
+    for (const text of texts) {
+      for (const [tag] of text.matchAll(/<nav\b[^>]*>/g)) {
+        const label = /\saria-label="([^"]+)"/.exec(tag)?.[1];
+        expect(label, tag).toBeDefined();
+        labels.add(label ?? '');
+      }
+    }
+    // The pagers were rendered, so the check above covered them.
+    for (const label of ['Pages', 'Older and newer changes', 'Older months']) {
+      expect(labels).toContain(label);
+    }
   });
 });
 
