@@ -244,6 +244,12 @@ export function moderationEntry(
   };
 }
 
+const REFUSED_WHAT: Partial<Record<WorkspaceAction, string>> = {
+  record_suspension: 'record a suspension',
+  link_suspension: 'link a suspension',
+  void: 'void a suspension',
+};
+
 /** Why a Leadership-only action was refused before anything was written. */
 export type LeadershipRefusal = 'not-leadership' | 'discord-unreachable';
 
@@ -261,6 +267,7 @@ export function leadershipRefusalEntry(
   why: LeadershipRefusal,
 ): LogEntry {
   const who = DISCORD_ID.test(actor) ? `<@${actor}>` : 'Someone';
+  const what = REFUSED_WHAT[action] ?? 'change a card';
   const card =
     Number.isSafeInteger(rowId) && rowId > 0 ? ` (card ${rowId})` : '';
   const where = `in the ${monthLabel(period)} workspace${card}`;
@@ -269,8 +276,8 @@ export function leadershipRefusalEntry(
       ? `${where} without the 1.5 Leadership Team role`
       : `${where}, but Discord could not confirm their role`;
   return {
-    title: `No-show workspace: ${ACTION_TITLES[action]} refused`,
-    description: `${who} tried this ${reason}. Nothing was changed.${pageLine(period)}`,
+    title: 'No-show workspace: Leadership-only action refused',
+    description: `${who} tried to ${what} ${reason}. Nothing was changed.${pageLine(period)}`,
   };
 }
 

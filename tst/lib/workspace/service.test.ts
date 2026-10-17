@@ -509,7 +509,7 @@ describe('moderationEntry text', () => {
     });
   });
 
-  it('a refused Leadership-only action has its own entry, naming the actor and the card', () => {
+  it('a refused Leadership-only action has its own entry, naming the actor, the action and the card', () => {
     expect(
       leadershipRefusalEntry(
         SEPT,
@@ -519,17 +519,29 @@ describe('moderationEntry text', () => {
         'not-leadership',
       ),
     ).toEqual({
-      title: 'No-show workspace: Suspension recorded refused',
+      title: 'No-show workspace: Leadership-only action refused',
       description:
-        `<@${ACTOR}> tried this in the September 2026 workspace (card 7) ` +
+        `<@${ACTOR}> tried to record a suspension in the September 2026 workspace (card 7) ` +
         `without the 1.5 Leadership Team role. Nothing was changed.\n${PAGE}`,
     });
     expect(
       leadershipRefusalEntry(SEPT, 7, 'void', ACTOR, 'discord-unreachable')
         .description,
     ).toBe(
-      `<@${ACTOR}> tried this in the September 2026 workspace (card 7), ` +
+      `<@${ACTOR}> tried to void a suspension in the September 2026 workspace (card 7), ` +
         `but Discord could not confirm their role. Nothing was changed.\n${PAGE}`,
+    );
+    expect(
+      leadershipRefusalEntry(
+        SEPT,
+        0,
+        'link_suspension',
+        '<@&1>',
+        'not-leadership',
+      ).description,
+    ).toBe(
+      `Someone tried to link a suspension in the September 2026 workspace ` +
+        `without the 1.5 Leadership Team role. Nothing was changed.\n${PAGE}`,
     );
   });
 });
