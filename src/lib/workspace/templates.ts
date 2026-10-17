@@ -25,9 +25,21 @@ export function firstName(memberName: string): string {
   return word ? word : 'there';
 }
 
-/** 'September 3, 2026' in the group's timezone. */
-const pacificDay = (dateTime: string): string =>
-  tz(dayjs(dateTime)).format('MMMM D, YYYY');
+/** 'September 3, 2026' in the group's timezone. Never renders "Invalid Date". */
+const pacificDay = (dateTime: string): string => {
+  const parsed = typeof dateTime === 'string' ? dayjs(dateTime) : undefined;
+  if (!parsed || !parsed.isValid()) {
+    throw new RangeError('dateTime must be a valid date');
+  }
+  return tz(parsed).format('MMMM D, YYYY');
+};
+
+/** Never renders "NaN" days or fees. */
+function checkPrior(prior: number): void {
+  if (!Number.isInteger(prior) || prior < 0) {
+    throw new RangeError('priorSuspensions must be a non-negative integer');
+  }
+}
 
 /** A stored YYYY-MM-DD (UTC midnight convention) as 'October 30, 2026'. */
 const calendarDay = (day: string): string =>
@@ -42,6 +54,7 @@ export function warningMessage(input: {
   priorSuspensions: number;
   hostWaiver: boolean;
 }): string {
+  checkPrior(input.priorSuspensions);
   const days = recommendedSuspensionDays(input.priorSuspensions);
   const penalty = input.hostWaiver
     ? `a ${days}-day suspension from the group.`
@@ -65,6 +78,10 @@ export function suspensionMessage(input: {
   /** YYYY-MM-DD, the first day of the suspension. */
   suspendedOn: string;
 }): string {
+  checkPrior(input.priorSuspensions);
+  if (!Array.isArray(input.counted) || input.counted.length === 0) {
+    throw new RangeError('counted must list at least one no-show');
+  }
   const days = recommendedSuspensionDays(input.priorSuspensions);
   const start = parseUtcDateStrict(input.suspendedOn);
   if (start === undefined) {

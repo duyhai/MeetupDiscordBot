@@ -35,8 +35,6 @@ import { refreshForm, refreshNotice } from './refresh.js';
 
 const WHAT = 'The Hall of Fame report';
 
-export { neutralizeMentions };
-
 /** '2026 September': the label the slash command uses, so the copy text matches it. */
 export function commandPeriodLabel(period: Period): string {
   const [monthName] = monthLabel(period).split(' ');

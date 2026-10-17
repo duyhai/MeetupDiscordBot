@@ -120,14 +120,44 @@ describe('links and plain text', () => {
       counted: [{ title: '@here <@123> <#9> </cmd:1>', dateTime: ev.dateTime }],
     });
     for (const text of [w, s]) {
-      expect(text).not.toMatch(/@(?!​)/);
-      expect(text).not.toMatch(/<#(?!​)/);
-      expect(text).not.toMatch(/<\/(?!​)/);
-      expect(text).toContain('@​everyone'.slice(0, 0) + '@​here');
+      expect(text).not.toMatch(/@(?!\u200b)/);
+      expect(text).not.toMatch(/<#(?!\u200b)/);
+      expect(text).not.toMatch(/<\/(?!\u200b)/);
+      expect(text).toContain('@\u200bhere');
     }
     // The signature and fixed wording carry no mention characters, so nothing else changed.
-    expect(warn().includes('​')).toBe(false);
-    expect(susp().includes('​')).toBe(false);
+    expect(warn().includes('\u200b')).toBe(false);
+    expect(susp().includes('\u200b')).toBe(false);
+  });
+});
+
+describe('input guards', () => {
+  it('refuse an invalid dateTime instead of rendering "Invalid Date"', () => {
+    for (const dateTime of ['', 'not a date', undefined as never]) {
+      expect(() => warn({ event: { title: 'X', dateTime } })).toThrow(
+        RangeError,
+      );
+      expect(() => susp({ counted: [ev, { title: 'X', dateTime }] })).toThrow(
+        RangeError,
+      );
+    }
+  });
+  it('refuse a priorSuspensions that is not a non-negative integer', () => {
+    for (const priorSuspensions of [
+      -1,
+      1.5,
+      NaN,
+      Infinity,
+      '1' as never,
+      undefined as never,
+    ]) {
+      expect(() => warn({ priorSuspensions })).toThrow(RangeError);
+      expect(() => susp({ priorSuspensions })).toThrow(RangeError);
+    }
+  });
+  it('refuse an empty or missing counted list', () => {
+    expect(() => susp({ counted: [] })).toThrow(RangeError);
+    expect(() => susp({ counted: undefined as never })).toThrow(RangeError);
   });
 });
 
