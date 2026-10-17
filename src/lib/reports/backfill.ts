@@ -35,7 +35,12 @@ import { REPORT_TYPES } from './types.js';
 export const BACKFILL_DEFAULT_FROM: Period = GROUP_FIRST_PERIOD;
 /** A progress post after every this many months processed (built, skipped or failed). */
 export const BACKFILL_PROGRESS_EVERY = 12;
-export const BACKFILL_LEASE_POLL_MS = 60_000;
+/**
+ * How often a held lease is retried. Short, because the stop flag is checked
+ * between polls: SIGTERM must reach the final post well before Heroku's
+ * SIGKILL about 30 s later.
+ */
+export const BACKFILL_LEASE_POLL_MS = 5_000;
 /** How long one month waits for another build's lease before the run stops. */
 export const BACKFILL_LEASE_WAIT_MS = 20 * 60_000;
 /** The pause after each month that was read from Meetup (not after skipped ones). */
@@ -136,7 +141,7 @@ export const BACKFILL_STOP_TEXT: Record<BackfillStop, string> = {
     `Stopped after ${BACKFILL_MAX_CONSECUTIVE_FAILURES} months in a row failed, so as not to keep reading Meetup. ` +
     'Check the reasons below, then run it again; months already built are skipped.',
   stopped:
-    'Stopped: the dyno was asked to stop (a restart or deploy). Run it again; months already built are skipped.',
+    'The run was asked to stop (SIGTERM or Ctrl-C). Re-run the same command to continue; months already built are skipped.',
 };
 
 /**
@@ -158,14 +163,27 @@ function capReason(reason: string): string {
     : reason;
 }
 
-/** Process-log text: the error class and the Discord-safe text, never a Meetup body. */
-function logText(error: unknown): string {
-  let name = 'Error';
-  if (error instanceof Error) {
-    // graphql-request's ClientError keeps the default name 'Error'.
-    name = error.name !== 'Error' ? error.name : error.constructor.name;
+/**
+ * Process-log text, so "(details in the process log)" in Discord is true:
+ * the message, a pg `code` when present, and the stack. Except a
+ * graphql-request ClientError, whose message embeds the Meetup response
+ * body: only its HTTP status (describeBuildError's text).
+ */
+export function backfillLogText(error: unknown): string {
+  if (error instanceof ClientError) {
+    return `ClientError: ${describeBuildError(error)}`;
   }
-  return `${name}: ${describeBuildError(error)}`;
+  if (!(error instanceof Error)) {
+    return `Non-error thrown: ${String(error)}`;
+  }
+  const { code } = error as { code?: unknown };
+  const codeText =
+    typeof code === 'string' || typeof code === 'number'
+      ? ` (code ${code})`
+      : '';
+  // The stack's first line is "<name>: <message>".
+  const detail = error.stack ?? `${error.name}: ${error.message}`;
+  return `${detail}${codeText}`;
 }
 
 /** Retrying would only hit Meetup and the shared organizer token again. */
@@ -230,6 +248,7 @@ async function takeLease(
   waitMs: number,
 ): Promise<'leased' | 'lease-timeout' | 'stopped'> {
   const deadline = deps.now().getTime() + waitMs;
+  let waiting = false;
   for (;;) {
     // eslint-disable-next-line no-await-in-loop -- polling the shared lease
     if (await acquireBuildLease(cache, value)) {
@@ -241,9 +260,12 @@ async function takeLease(
     if (deps.stopRequested?.()) {
       return 'stopped';
     }
-    deps.log.info(
-      'Backfill waiting for the build lease: another report build is running',
-    );
+    if (!waiting) {
+      deps.log.info(
+        'Backfill waiting for the build lease: another report build is running',
+      );
+      waiting = true;
+    }
     // eslint-disable-next-line no-await-in-loop -- polling the shared lease
     await deps.sleep(BACKFILL_LEASE_POLL_MS);
   }
@@ -330,7 +352,12 @@ export function backfillFinalEntry(result: BackfillResult): LogEntry {
     lines.push(
       `Not saved, because every no-show member (3 or more) has left the group: ${labels(refused.map((f) => f.period))}.`,
       'Membership is read as of today, so in old months they may really have left. ' +
-        'If recent months look right on the dashboard, save these by running again with ' +
+        // Stopped early: older months were never reached, and the flag would
+        // also save any of them that the guard refuses, unseen.
+        (result.stopped
+          ? 'Only after a run finishes without stopping (this one stopped before reaching older months), ' +
+            'and if recent months look right on the dashboard, save these by running again with '
+          : 'If recent months look right on the dashboard, save these by running again with ') +
         `--allow-all-departed --from ${periodKey(oldest)}.`,
       '',
     );
@@ -401,7 +428,7 @@ export async function runBackfill(
     cache = await deps.cache();
     sweeping = await identityDigestInProgress(cache, deps.now());
   } catch (error) {
-    deps.log.error(`Backfill could not reach Redis: ${logText(error)}`);
+    deps.log.error(`Backfill could not reach Redis: ${backfillLogText(error)}`);
     throw new BackfillRefusedError('cache-unavailable');
   }
   if (sweeping) {
@@ -423,7 +450,7 @@ export async function runBackfill(
   /** Guard errors (Redis) fail closed as a stop. */
   const checkGuards = () =>
     guardStop(deps, cache).catch((error: unknown) => {
-      deps.log.error(`Backfill guard check failed: ${logText(error)}`);
+      deps.log.error(`Backfill guard check failed: ${backfillLogText(error)}`);
       return 'cache-unavailable' as const;
     });
   let consecutiveFailures = 0;
@@ -464,7 +491,7 @@ export async function runBackfill(
     } catch (error) {
       // Postgres did not answer: building would fail the same way.
       deps.log.error(
-        `Backfill ${periodKey(period)}: reading its current rows failed: ${logText(error)}`,
+        `Backfill ${periodKey(period)}: reading its current rows failed: ${backfillLogText(error)}`,
       );
       stop = fail(period, error);
       state = 'unreadable';
@@ -478,7 +505,7 @@ export async function runBackfill(
         // eslint-disable-next-line no-await-in-loop -- one month at a time
         leased = await takeLease(deps, cache, lease, options.leaseWaitMs);
       } catch (error) {
-        deps.log.error(`Backfill lease failed: ${logText(error)}`);
+        deps.log.error(`Backfill lease failed: ${backfillLogText(error)}`);
         result.stopped = 'cache-unavailable';
         break;
       }
@@ -510,7 +537,7 @@ export async function runBackfill(
       } catch (error) {
         // Never String(error): a ClientError's text embeds the Meetup body.
         deps.log.error(
-          `Backfill ${periodKey(period)} failed: ${logText(error)}`,
+          `Backfill ${periodKey(period)} failed: ${backfillLogText(error)}`,
         );
         stop = fail(period, error);
       } finally {

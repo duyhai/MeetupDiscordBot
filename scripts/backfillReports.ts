@@ -50,6 +50,7 @@ import {
   BACKFILL_LEASE_WAIT_MS,
   BackfillRefusal,
   BackfillRefusedError,
+  backfillLogText,
   runBackfill,
 } from '../src/lib/reports/backfill.js';
 import { organizerMonthReports } from '../src/lib/reports/buildJob.js';
@@ -309,9 +310,8 @@ if (
   main().then(
     (code) => process.exit(code),
     (error: unknown) => {
-      logger.error(
-        `Backfill crashed: ${error instanceof Error ? error.name : 'Error'}`,
-      );
+      // Full details (never a Meetup body): backfillLogText.
+      logger.error(`Backfill crashed: ${backfillLogText(error)}`);
       process.exit(1);
     },
   );

@@ -35,9 +35,12 @@ async function poolsOfOne() {
 
 describe.skipIf(!POSTGRES_AVAILABLE)('backfill with PG_POOL_MAX=1', () => {
   const saved = process.env.PG_POOL_MAX;
+  /** The pools this file created, ended so the worker exits cleanly. */
+  const pools: { end(): Promise<void> }[] = [];
 
-  afterAll(() => {
+  afterAll(async () => {
     nock.cleanAll();
+    await Promise.all(pools.map((pool) => pool.end()));
     if (saved === undefined) {
       delete process.env.PG_POOL_MAX;
     } else {
@@ -47,11 +50,14 @@ describe.skipIf(!POSTGRES_AVAILABLE)('backfill with PG_POOL_MAX=1', () => {
 
   it('builds and saves one month through the real build path without a deadlock', async () => {
     const { snapshots, suspensions, dashboard } = await poolsOfOne();
+    const suspensionPool = (
+      suspensions as unknown as {
+        pool: { options: { max: number }; end(): Promise<void> };
+      }
+    ).pool;
+    pools.push(dashboard, suspensionPool);
     expect(dashboard.options.max).toBe(1);
-    expect(
-      (suspensions as unknown as { pool: { options: { max: number } } }).pool
-        .options.max,
-    ).toBe(1);
+    expect(suspensionPool.options.max).toBe(1);
 
     const [{ runBackfill }, { organizerMonthReports }, { GqlMeetupClient }] =
       await Promise.all([

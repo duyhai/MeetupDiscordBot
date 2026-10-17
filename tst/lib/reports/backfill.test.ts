@@ -481,7 +481,9 @@ describe('build lease', () => {
     await h.cache.set(BUILD_LEASE_KEY, 'job-lease', 5 * 60);
     const result = await h.run({ from: { year: 2026, month: 9 } });
     expect(h.sleep.mock.calls).toEqual(
-      Array.from({ length: 5 }, () => [BACKFILL_LEASE_POLL_MS]),
+      Array.from({ length: (5 * 60_000) / BACKFILL_LEASE_POLL_MS }, () => [
+        BACKFILL_LEASE_POLL_MS,
+      ]),
     );
     expect(result.built.map(key)).toEqual(['2026-09']);
   });
@@ -491,7 +493,9 @@ describe('build lease', () => {
     await h.cache.set(BUILD_LEASE_KEY, 'stuck'); // never expires
     const result = await h.run();
     expect(result.stopped).toBe('lease-timeout');
-    expect(h.sleep).toHaveBeenCalledTimes(20);
+    expect(h.sleep).toHaveBeenCalledTimes(
+      BACKFILL_LEASE_WAIT_MS / BACKFILL_LEASE_POLL_MS,
+    );
     expect(h.fetchMonthReports).not.toHaveBeenCalled();
     expect(h.finalText()).toContain('held the build lease for over 20 minutes');
     expect(h.cache.values.get(BUILD_LEASE_KEY)).toBe('stuck');
@@ -700,8 +704,17 @@ describe('stop requests (SIGTERM)', () => {
     });
     const result = await h.run();
     expect(result.stopped).toBe('stopped');
-    expect(h.sleep).toHaveBeenCalledTimes(1);
+    // One step of at most 5 s: well inside Heroku's 30 s before SIGKILL.
+    expect(h.sleep.mock.calls).toEqual([[BACKFILL_LEASE_POLL_MS]]);
+    expect(BACKFILL_LEASE_POLL_MS).toBeLessThanOrEqual(5_000);
     expect(h.fetchMonthReports).not.toHaveBeenCalled();
+    expect(h.titles()[h.titles().length - 1]).toBe('Report backfill stopped');
+  });
+
+  it('the stop text names the signal, not a deploy', () => {
+    expect(BACKFILL_STOP_TEXT.stopped).toBe(
+      'The run was asked to stop (SIGTERM or Ctrl-C). Re-run the same command to continue; months already built are skipped.',
+    );
   });
 });
 
@@ -760,5 +773,68 @@ describe('process log', () => {
       'Backfill 2026-09 failed: ClientError: Meetup API error (HTTP 500)',
     );
     expect(lines.join('\n')).not.toContain('SECRET_BODY');
+  });
+});
+
+describe('the --allow-all-departed hint', () => {
+  const refused = (period: Period) => ({
+    period,
+    reason: 'refused',
+    allDepartedRefusal: true,
+  });
+  const result = (stopped?: BackfillResult['stopped']): BackfillResult => ({
+    months: 13,
+    built: [],
+    skipped: [],
+    failed: [refused({ year: 2026, month: 3 })],
+    allDeparted: [],
+    noNoShows: 0,
+    stopped,
+  });
+
+  it('after a full run, suggests the flag', () => {
+    const text = backfillFinalEntry(result()).description ?? '';
+    expect(text).toContain('--allow-all-departed --from 2026-03');
+    expect(text).not.toContain('Only after a run finishes');
+  });
+
+  it('after an early stop, says to wait for a run that finishes', () => {
+    const text = backfillFinalEntry(result('quiet-window')).description ?? '';
+    expect(text).toContain(
+      'Only after a run finishes without stopping (this one stopped before reaching older months)',
+    );
+    expect(text).toContain('--allow-all-departed --from 2026-03');
+  });
+});
+
+describe('process log details', () => {
+  it('a pg-style error logs its message, code and stack, but posts only the safe text', async () => {
+    const h = harness();
+    const pgError = Object.assign(
+      new Error('relation "report_snapshots" does not exist'),
+      { code: '42P01' },
+    );
+    vi.spyOn(h.snapshots, 'getCurrentMeta').mockRejectedValue(pgError);
+    await h.run({ from: { year: 2026, month: 9 } });
+    const logged = h.log.error.mock.calls.map((c) => String(c[0])).join('\n');
+    expect(logged).toContain('relation "report_snapshots" does not exist');
+    expect(logged).toContain('42P01');
+    expect(logged).toMatch(/\n\s+at /); // the stack
+    const posted = JSON.stringify(h.post.mock.calls);
+    expect(posted).not.toContain('report_snapshots');
+    expect(posted).not.toContain('42P01');
+    expect(h.finalText()).toContain(
+      'September 2026: Error (details in the process log)',
+    );
+  });
+
+  it("a ClientError's body reaches neither the log nor a post", async () => {
+    const h = harness();
+    h.fetchMonthReports.mockRejectedValueOnce(clientError(500));
+    await h.run({ from: { year: 2026, month: 9 } });
+    const logged = h.log.error.mock.calls.map((c) => String(c[0])).join('\n');
+    expect(logged).toContain('ClientError: Meetup API error (HTTP 500)');
+    expect(logged).not.toContain('SECRET_BODY');
+    expect(JSON.stringify(h.post.mock.calls)).not.toContain('SECRET_BODY');
   });
 });
