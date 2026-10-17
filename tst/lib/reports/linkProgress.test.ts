@@ -23,7 +23,7 @@ const member = (
   isBot = false,
 ): LinkProgressMember => ({ id, isBot, roleIds });
 
-const REVERIFY = '999';
+const OTHER_ROLE = '999';
 
 describe('countLinkProgress', () => {
   it('counts linked only among current non-bot members', () => {
@@ -35,7 +35,6 @@ describe('countLinkProgress', () => {
         row('bot', 'm8'), // linked bot
         row('2', null), // mod-onboarded, no Meetup id
       ],
-      undefined,
     );
     expect(counts.linked).toBe(1);
     expect(counts.unlinked).toBe(2);
@@ -45,19 +44,13 @@ describe('countLinkProgress', () => {
     const counts = countLinkProgress(
       [member('1', [SERVER_ROLES.onboarding]), member('2')],
       [],
-      undefined,
     );
     expect(counts).toMatchObject({ unlinked: 1, onboarding: 1 });
   });
 
-  it('counts Reverify-tagged', () => {
-    const members = [
-      member('1', [REVERIFY]),
-      member('2', [REVERIFY]),
-      member('3'),
-    ];
-    expect(countLinkProgress(members, [], REVERIFY).reverifyTagged).toBe(2);
-    expect(countLinkProgress(members, [], undefined).reverifyTagged).toBe(0);
+  it('reverifyTagged is always 0: the Reverify role is gone', () => {
+    const members = [member('1', [OTHER_ROLE]), member('2')];
+    expect(countLinkProgress(members, []).reverifyTagged).toBe(0);
   });
 
   it('unlinked is a non-bot member with no Meetup id and no Onboarding role', () => {
@@ -70,7 +63,7 @@ describe('countLinkProgress', () => {
       member('6'),
     ];
     const rows = [row('1', 'm1'), row('2', null), row('4', 'm4')];
-    expect(countLinkProgress(members, rows, undefined).unlinked).toBe(3);
+    expect(countLinkProgress(members, rows).unlinked).toBe(3);
   });
 });
 
@@ -83,7 +76,7 @@ describe('collectLinkProgress', () => {
       permissions: { has: () => false },
     });
     const page = new Map([
-      ['1', guildMember('1', [REVERIFY])],
+      ['1', guildMember('1', [OTHER_ROLE])],
       ['2', guildMember('2', [])],
       ['3', guildMember('3', [], true)],
     ]);
@@ -92,11 +85,6 @@ describe('collectLinkProgress', () => {
       members: { list: vi.fn().mockResolvedValue(page), fetch: gatewayFetch },
       roles: { fetch: vi.fn() },
     };
-    // roles.fetch result needs Collection#find
-    guild.roles.fetch.mockResolvedValue({
-      find: (fn: (r: { name: string }) => boolean) =>
-        [{ id: REVERIFY, name: 'Reverify' }].find(fn),
-    });
     const guildsFetch = vi.fn().mockResolvedValue(guild);
     const client = { guilds: { fetch: guildsFetch } } as unknown as Client;
 
@@ -110,10 +98,12 @@ describe('collectLinkProgress', () => {
     expect(guildsFetch).toHaveBeenCalledWith(GUILD_ID);
     expect(gatewayFetch).not.toHaveBeenCalled();
     expect(guild.members.list).toHaveBeenCalled();
+    // No Reverify role lookup any more.
+    expect(guild.roles.fetch).not.toHaveBeenCalled();
     expect(counts).toEqual({
       linked: 1,
       unlinked: 1,
-      reverifyTagged: 1,
+      reverifyTagged: 0,
       onboarding: 0,
     });
   });

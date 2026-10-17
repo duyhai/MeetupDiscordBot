@@ -25,8 +25,7 @@ const strings = {
  * channel denies, so granting one to someone still in Onboarding lets them
  * into a private channel before they have verified (happened 2026-10-12).
  * "Verified" is the same test the rest of the bot uses: not holding the
- * Onboarding role. Reverify-tagged members pass until enforcement moves them
- * into Onboarding.
+ * Onboarding role. Any other roles a member holds do not matter.
  */
 export async function addToChannel(
   interaction: CommandInteraction | ButtonInteraction,
