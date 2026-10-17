@@ -16,12 +16,9 @@ const DAY_CHOICES = ['30', '90', '365'] as const;
 type DayChoice = (typeof DAY_CHOICES)[number];
 const DEFAULT_DAYS: DayChoice = '90';
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
-const COUNT_FIELDS = [
-  'linked',
-  'unlinked',
-  'reverifyTagged',
-  'onboarding',
-] as const;
+// reverifyTagged is still stored (0 since the Reverify role was deleted on
+// 2026-10-17) but not shown, so the page neither checks nor renders it.
+const COUNT_FIELDS = ['linked', 'unlinked', 'onboarding'] as const;
 
 /** `?days=` when it is exactly one of the three choices (a plain string), else 90. */
 function parseDays(value: unknown): DayChoice {
@@ -77,7 +74,6 @@ function daysTable(
             <th>Day</th>
             <th>Linked</th>
             <th>Unlinked</th>
-            <th>Reverify-tagged</th>
             <th>Onboarding</th>
           </tr>
         </thead>
@@ -88,7 +84,6 @@ function daysTable(
                 <td>${r.day}</td>
                 <td>${r.linked}</td>
                 <td>${r.unlinked}</td>
-                <td>${r.reverifyTagged}</td>
                 <td>${r.onboarding}</td>
               </tr>`,
           )}
@@ -108,10 +103,6 @@ function progressChart(newestFirst: LinkProgressDay[]): SafeHtml {
     series: [
       { label: 'Linked', values: oldestFirst.map((r) => r.linked) },
       { label: 'Unlinked', values: oldestFirst.map((r) => r.unlinked) },
-      {
-        label: 'Reverify-tagged',
-        values: oldestFirst.map((r) => r.reverifyTagged),
-      },
       { label: 'Onboarding', values: oldestFirst.map((r) => r.onboarding) },
     ],
   });

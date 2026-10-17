@@ -24,9 +24,11 @@ import { runIdentitySweep } from './sweep.js';
 
 const logger = new Logger({ name: 'identityDigest' });
 
-// One hour after the unlinked digest (DIGEST_UTC_HOUR = 17), deliberately.
-// Both digests make a full-guild member pass; sharing an hour meant two
-// concurrent 2,008-member fetches on a dyno with an R14 history.
+// Its own hour, deliberately: the sweep makes a full-guild member pass, and
+// two concurrent 2,008-member fetches on a dyno with an R14 history are what
+// the separation avoids. (The unlinked digest at 17:00 was the other such pass
+// until it was removed on 2026-10-17; report builds and link progress keep
+// clear of this hour too, see buildSchedule.ts.)
 export const IDENTITY_DIGEST_UTC_HOUR = 18; // ≈ 10-11am Pacific
 
 /**

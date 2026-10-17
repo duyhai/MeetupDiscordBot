@@ -124,6 +124,11 @@ Event coverage:
 
 ### 7. Daily unlinked-member digest
 
+> **Superseded (2026-10-17).** The digest was removed after the Reverify
+> cutover moved every remaining unlinked member into Onboarding and the
+> Reverify role was deleted. The staff dashboard's link progress page now
+> shows the linked and unlinked counts. The text below is the original design.
+
 - Runs in-process (dyno is always on). Scheduling must survive Heroku's daily dyno cycling — a naive 24 h `setInterval` from boot may never fire. Instead: an hourly tick checks whether the current UTC hour is the target hour (17:00 UTC ≈ 9–10 am Pacific); if so, it claims the run via the existing cache's `exclusive_set` with a date-keyed key (`unlinked-digest-YYYY-MM-DD`, 12 h TTL is fine since the key encodes the date). Restarts therefore cannot skip or double-post a day.
 - Logic: fetch all guild members → keep humans without the `onboarding` role (i.e. verified) → diff against `members` table → those with **no row or `meetup_id IS NULL`** are "unlinked".
 - Output to alerts channel: total count first, then up to ~50 mentions chunked under the 2000-character message limit, ending "…and N more". No post when the list is empty.

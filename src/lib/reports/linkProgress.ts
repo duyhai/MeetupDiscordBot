@@ -4,35 +4,32 @@ import { GUILD_ID, SERVER_ROLES } from '../../constants.js';
 import { ApplicationMemberRepository } from '../../util/memberRepository.js';
 import {
   fetchAllMembers,
-  findReverifyRole,
-  toCandidate,
-} from '../helpers/reverify.js';
+  MemberSummary,
+  toMemberSummary,
+} from '../helpers/guildMembers.js';
 import { MemberRecord, MemberRepository } from '../repositories/types.js';
 
 export interface LinkProgressCounts {
   linked: number;
   unlinked: number;
+  /** Always 0 now: the Reverify role was deleted on 2026-10-17. Kept so
+   * link_progress_daily rows keep their shape; no page shows it. */
   reverifyTagged: number;
   onboarding: number;
 }
 
-export interface LinkProgressMember {
-  id: string;
-  isBot: boolean;
-  roleIds: string[];
-}
+export type LinkProgressMember = MemberSummary;
 
 /**
  * Counts over current, non-bot guild members only: a member row for someone
- * who left the server is not progress. Definitions match the unlinked digest
- * (collectUnlinkedMemberIds): linked = a row with a Meetup id; unlinked = not
- * linked and not in Onboarding. A linked member who is also in Onboarding is
- * counted in both linked and onboarding; the four numbers are not a partition.
+ * who left the server is not progress. linked = a row with a Meetup id;
+ * unlinked = not linked and not in Onboarding. A linked member who is also in
+ * Onboarding is counted in both linked and onboarding; the numbers are not a
+ * partition. reverifyTagged is always 0 (see LinkProgressCounts).
  */
 export function countLinkProgress(
   members: LinkProgressMember[],
   rows: Pick<MemberRecord, 'discordUserId' | 'meetupId'>[],
-  reverifyRoleId: string | undefined,
 ): LinkProgressCounts {
   const linkedIds = new Set(
     rows.filter((row) => row.meetupId !== null).map((row) => row.discordUserId),
@@ -56,12 +53,6 @@ export function countLinkProgress(
     if (inOnboarding) {
       counts.onboarding += 1;
     }
-    if (
-      reverifyRoleId !== undefined &&
-      member.roleIds.includes(reverifyRoleId)
-    ) {
-      counts.reverifyTagged += 1;
-    }
   }
   return counts;
 }
@@ -78,10 +69,9 @@ export async function collectLinkProgress(
   } = { memberRepository: ApplicationMemberRepository },
 ): Promise<LinkProgressCounts> {
   const guild = await client.guilds.fetch(GUILD_ID);
-  const [members, rows, reverifyRole] = await Promise.all([
-    fetchAllMembers(guild).then((all) => all.map(toCandidate)),
+  const [members, rows] = await Promise.all([
+    fetchAllMembers(guild).then((all) => all.map(toMemberSummary)),
     deps.memberRepository().then((repo) => repo.listAll()),
-    findReverifyRole(guild),
   ]);
-  return countLinkProgress(members, rows, reverifyRole?.id);
+  return countLinkProgress(members, rows);
 }

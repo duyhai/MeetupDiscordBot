@@ -7,7 +7,6 @@ import { IdentityReportCommands } from './meetup/identityReport.js';
 import { MeetupListSuspensionsCommands } from './meetup/listSuspensions.js';
 import { MeetupNoShowReportCommands } from './meetup/noShowReport.js';
 import { MeetupRecordSuspensionCommands } from './meetup/recordSuspension.js';
-import { ReverifyCommands } from './meetup/reverify.js';
 import { MeetupTestGqlCommands } from './meetup/testGQL.js';
 import { UnlinkAccountCommands } from './meetup/unlinkAccount.js';
 import { MeetupVoidSuspensionCommands } from './meetup/voidSuspension.js';
@@ -25,7 +24,6 @@ const Commands = [
   MeetupNoShowCommands,
   MeetupNoShowReportCommands,
   MeetupRecordSuspensionCommands,
-  ReverifyCommands,
   SendMessageCommands,
   MeetupTestGqlCommands,
   UnlinkAccountCommands,

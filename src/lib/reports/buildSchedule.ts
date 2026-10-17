@@ -2,7 +2,6 @@ import {
   IDENTITY_DIGEST_UTC_HOUR,
   shouldRunIdentityDigestNow,
 } from '../helpers/identity/digest.js';
-import { DIGEST_UTC_HOUR } from '../helpers/unlinkedDigest.js';
 import {
   Period,
   periodEnd,
@@ -47,18 +46,13 @@ export function canStartMonthBuild(now: Date): boolean {
 }
 
 /**
- * Whether link progress (a full-guild member pass) may start now: only in the
- * build window outside the unlinked digest's hour (17:00) and the identity
- * sweep's hour (18:00), i.e. 16:00–17:00 and 19:00–24:00 UTC. digest.ts
- * explains why the full member passes each get their own hour.
+ * Whether link progress (a full-guild member pass) may start now: in the
+ * build window under the same sweep rule as a month, i.e. 16:00–17:45 and
+ * 19:00–24:00 UTC. It must not overlap the 18:00 identity sweep's own
+ * full-guild member pass; digest.ts explains why each pass gets its own time.
  */
 export function canStartLinkProgress(now: Date): boolean {
-  const hour = now.getUTCHours();
-  return (
-    hour >= BUILD_UTC_HOUR &&
-    hour !== DIGEST_UTC_HOUR &&
-    hour !== IDENTITY_DIGEST_UTC_HOUR
-  );
+  return now.getUTCHours() >= BUILD_UTC_HOUR && canStartMonthBuild(now);
 }
 
 /** Today's (UTC date) due time: 16:00 UTC. */
@@ -102,8 +96,8 @@ export interface DuePlanInput {
  *   it catches up when either type has no build made after the month ended
  *   (bot down on the 2nd–7th, or first deploy mid-month).
  * - Link progress: no row for today's UTC date, and only when
- *   canStartLinkProgress (never 17:00–19:00 UTC).
- * - No month from 17:45 UTC (canStartMonthBuild).
+ *   canStartLinkProgress.
+ * - Neither a month nor link progress from 17:45 UTC (canStartMonthBuild).
  */
 export function planDueWork({
   now,

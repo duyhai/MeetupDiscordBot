@@ -187,7 +187,9 @@ its own cache key, so a failure in one does not suppress the other.
 
 18:00 rather than the unlinked digest's 17:00: both make a full-guild member
 pass, and running them in the same hour put two concurrent 2,008-member
-fetches on a dyno with an R14 history.
+fetches on a dyno with an R14 history. (The unlinked digest was removed on
+2026-10-17; the identity digest keeps 18:00, and the dashboard's build job
+keeps its member passes out of 17:45–19:00 UTC.)
 
 The claim is taken *before* the sweep and released if any of the work fails,
 so a restart mid-hour neither redoes a discarded full pass nor consumes the
