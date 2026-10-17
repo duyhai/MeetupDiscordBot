@@ -123,10 +123,15 @@ describe('self link', () => {
       expect(call).toHaveLength(1);
       expect(typeof call[0]).toBe('string');
     }
-    expect(guildMember.roles.remove).not.toHaveBeenCalledWith(
-      expect.objectContaining({ id: 'reverify-role' }),
-      expect.anything(),
-    );
+    // No remove call, whatever its arguments, names the Reverify role.
+    const names = (arg: unknown) =>
+      arg === 'reverify-role' ||
+      (typeof arg === 'object' &&
+        arg !== null &&
+        (arg as { id?: unknown }).id === 'reverify-role');
+    for (const call of guildMember.roles.remove.mock.calls as unknown[][]) {
+      expect(call.some(names), JSON.stringify(call)).toBe(false);
+    }
   });
 
   it('still onboards when the link could not be saved', async () => {

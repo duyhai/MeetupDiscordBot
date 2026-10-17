@@ -10,8 +10,8 @@ export interface MemberSummary {
 /**
  * Every guild member, paged over REST. Not guild.members.fetch(): that goes
  * through the gateway's request-guild-members opcode, whose budget is shared
- * with the rest of the connection -- a Reverify preview run followed by
- * confirm:true hit "Request with opcode 8 was rate limited" in production (2026-10-05).
+ * with the rest of the connection -- a full-guild gateway fetch hit "Request
+ * with opcode 8 was rate limited" in production (2026-10-05).
  * REST rate limits are queued by discord.js instead of thrown.
  */
 export async function fetchAllMembers(guild: Guild): Promise<GuildMember[]> {

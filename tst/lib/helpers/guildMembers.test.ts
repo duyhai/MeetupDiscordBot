@@ -24,8 +24,8 @@ describe('fetchAllMembers', () => {
 
   it('pages with REST until a short page, threading the highest id', async () => {
     // REST instead of guild.members.fetch(): the gateway request (opcode 8)
-    // shares a tight budget, and a preview run followed by confirm:true hit
-    // "Request with opcode 8 was rate limited" in production (2026-10-05).
+    // shares a tight budget, and a full-guild gateway fetch hit "Request
+    // with opcode 8 was rate limited" in production (2026-10-05).
     const pageOne = Array.from({ length: 1000 }, (_, i) => String(1000 + i));
     const { guild, calls } = fakeGuild([pageOne, ['3001', '3002']]);
 

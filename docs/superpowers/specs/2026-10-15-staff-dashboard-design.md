@@ -287,8 +287,9 @@ A one-off script (`scripts/backfillReports.ts`), run as a Heroku one-off dyno,
 builds every month from the group's first event to last month. It is
 resumable (skips months that already have a snapshot unless `--force`),
 rate-limited, logs progress to #meetup-bot-alerts every 12 months processed,
-and refuses to start during 17:45–19:00 UTC (the identity sweep). Months with zero no-shows are saved as complete, like the
-daily job's builds; attendance is never inferred from ATTENDED RSVPs.
+and refuses to start during 17:45–19:00 UTC (the identity sweep). Months with
+zero no-shows are saved as complete, like the daily job's builds; attendance
+is never inferred from ATTENDED RSVPs.
 
 ## Failure handling
 
