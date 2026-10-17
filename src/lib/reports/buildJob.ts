@@ -765,7 +765,7 @@ export async function runBuildTick(deps: BuildJobDeps): Promise<void> {
         // Items come months first, then link progress, and neither window
         // reopens before 19:00 UTC, so nothing later in the plan could start.
         logger.info(
-          'Report build stopped early: too close to the identity sweep or the digests',
+          'Report build stopped early: too close to the identity sweep or it is running',
         );
         break;
       }
@@ -1280,6 +1280,6 @@ export function startReportBuildScheduler(
       // runBuildTickSafely only rejects if logging itself throws.
       .catch(() => undefined);
   };
-  tick(); // like the digests: a deploy inside the build window should not wait 15 minutes
+  tick(); // like the identity digest: a deploy inside the build window should not wait 15 minutes
   (options.setIntervalFn ?? setInterval)(tick, BUILD_TICK_MS);
 }

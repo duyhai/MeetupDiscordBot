@@ -13,9 +13,8 @@ import { addToChannel } from '../../../src/lib/helpers/channel.js';
  */
 
 const CHANNEL_ID = 'private-channel';
-// Reverify is found by name in production; any id that isn't Onboarding's
-// stands in for it here.
-const REVERIFY_ROLE_ID = 'reverify-role';
+// Any role that isn't Onboarding's.
+const OTHER_ROLE_ID = 'other-role';
 
 function fakeInteraction(roleIds: string[]) {
   const createOverwrite = vi.fn().mockResolvedValue(undefined);
@@ -78,12 +77,8 @@ describe('addToChannel', () => {
     expect(lastReply(interaction).content).toContain('You have been added');
   });
 
-  it('adds a verified member who is tagged Reverify', async () => {
-    // Reverify only marks who still needs to link; until enforcement moves
-    // them into Onboarding they are members with full access.
-    const { interaction, createOverwrite } = fakeInteraction([
-      REVERIFY_ROLE_ID,
-    ]);
+  it('adds a verified member who holds other roles', async () => {
+    const { interaction, createOverwrite } = fakeInteraction([OTHER_ROLE_ID]);
 
     await addToChannel(interaction, CHANNEL_ID);
 
@@ -92,9 +87,9 @@ describe('addToChannel', () => {
     });
   });
 
-  it('refuses a Reverify member who has been moved into Onboarding', async () => {
+  it('refuses a member in Onboarding whatever other roles they hold', async () => {
     const { interaction, createOverwrite } = fakeInteraction([
-      REVERIFY_ROLE_ID,
+      OTHER_ROLE_ID,
       SERVER_ROLES.onboarding,
     ]);
 

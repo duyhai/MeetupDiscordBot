@@ -191,11 +191,24 @@ describe('runBuildTick guards', () => {
     expect(h.cache.values.has(LEASE_KEY)).toBe(false);
   });
 
-  it('a month that ends in hour 17 does not start link progress', async () => {
+  it('a month that ends at 17:01 still starts link progress', async () => {
     const h = makeDeps({ clock: new Clock('2026-10-05T16:59:00Z') });
     h.snapshots.seedBoth(SEPT, '2026-10-05T16:05:00Z');
     h.fetchMonthReports.mockImplementationOnce((period) => {
       h.clock.set('2026-10-05T17:01:00Z');
+      return Promise.resolve(monthReports(period));
+    });
+    await runBuildTick(h.deps);
+    expect(fetchedPeriods(h)).toEqual(['2026-10']);
+    expect(h.collectLinkProgress).toHaveBeenCalledTimes(1);
+    expect([...h.linkProgress.days.keys()]).toEqual(['2026-10-05']);
+  });
+
+  it('a month that ends at 17:45 does not start link progress', async () => {
+    const h = makeDeps({ clock: new Clock('2026-10-05T17:30:00Z') });
+    h.snapshots.seedBoth(SEPT, '2026-10-05T16:05:00Z');
+    h.fetchMonthReports.mockImplementationOnce((period) => {
+      h.clock.set('2026-10-05T17:45:00Z');
       return Promise.resolve(monthReports(period));
     });
     await runBuildTick(h.deps);

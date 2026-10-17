@@ -1,7 +1,7 @@
 /**
- * "Where have we met?": the events two members both went to. An incentive
- * for the Reverify migration, since right-clicking someone only works once
- * they have linked their Meetup account.
+ * "Where have we met?": the events two members both went to. Built as an
+ * incentive for the Reverify migration (finished 2026-10-17); right-clicking
+ * someone only works once they have linked their Meetup account.
  *
  * Privacy: it starts from the events the person asking went to themselves
  * and checks each one's attendee list, so it only ever shows what they could

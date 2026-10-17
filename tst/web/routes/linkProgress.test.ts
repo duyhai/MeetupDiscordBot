@@ -86,14 +86,33 @@ describe('link progress page', () => {
     expect(text).toContain(
       "Recorded once a day since the dashboard's build job started.",
     );
-    for (const label of [
-      'Linked',
-      'Unlinked',
-      'Reverify-tagged',
-      'Onboarding',
-    ]) {
+    for (const label of ['Linked', 'Unlinked', 'Onboarding']) {
       expect(text).toContain(label);
     }
+  });
+
+  it('shows no Reverify-tagged column or series, though the rows still carry it', async () => {
+    const { get } = await setup([
+      linkDay('2026-10-04', { reverifyTagged: 777 }),
+      linkDay('2026-10-03', { reverifyTagged: 0 }),
+    ]);
+    const res = await get(PAGE);
+    expect(res.status).toBe(200);
+    expect(res.text).not.toMatch(/reverify/i);
+    expect(res.text).not.toContain('777');
+    const svgText = /<svg[\s\S]*?<\/svg>/.exec(res.text)?.[0] ?? '';
+    // Three lines and a three-entry legend: linked, unlinked, onboarding.
+    expect(svgText.match(/<polyline/g)).toHaveLength(3);
+    const legend = [...svgText.matchAll(/<tspan dx="4">([^<]*)<\/tspan>/g)].map(
+      (m) => m[1],
+    );
+    expect(legend).toEqual(['Linked', 'Unlinked', 'Onboarding']);
+    const head = /<table class="days">\s*<thead>([\s\S]*?)<\/thead>/.exec(
+      res.text,
+    )?.[1];
+    expect(
+      [...(head ?? '').matchAll(/<th>([^<]*)<\/th>/g)].map((m) => m[1]),
+    ).toEqual(['Day', 'Linked', 'Unlinked', 'Onboarding']);
   });
 
   it('paginates the table at 50', async () => {

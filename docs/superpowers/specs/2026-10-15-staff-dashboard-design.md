@@ -135,7 +135,9 @@ old → new status, note text). This is the audit trail; it is never edited.
   (`member_identity*`), and Meetup link records are read directly.
 - **Link progress** needs one new small table, `link_progress_daily`
   (`day`, `linked`, `unlinked`, `reverify_tagged`, `onboarding`), written once
-  a day by the build job. History starts the day it ships.
+  a day by the build job. History starts the day it ships. Since the Reverify
+  role was deleted (2026-10-17), `reverify_tagged` is written as 0 and no page
+  shows it; the column is kept so stored history stays readable.
 
 ### What is never stored
 
@@ -160,8 +162,8 @@ All pages are read-only except the workspace.
    browsable grouped list. Copy-ready text for posting.
 6. **Identity changes.** Filter by date, platform, member. Before/after
    thumbnails served one image per request from Postgres.
-7. **Link progress.** Linked vs unlinked over time, Reverify and Onboarding
-   counts.
+7. **Link progress.** Linked vs unlinked over time, and Onboarding counts.
+   (Reverify counts were shown too until the role was deleted on 2026-10-17.)
 8. **Trends.** Charts: no-shows per month, suspensions per month, events and
    distinct hosts per month, new hosts per month, link progress.
 
@@ -261,9 +263,9 @@ suspension from the group.", and the suspension message drops the
   Redis lease (30 minutes). From 16:00 UTC it builds the current month daily,
   rebuilds the previous month daily on the 2nd–7th (with catch-up if those
   days were missed), and writes `link_progress_daily`. No month build starts
-  between 17:45 and 19:00 UTC, and the link-progress member pass runs only in
-  hours 16 and 19–23 UTC, so neither overlaps the 17:00 unlinked digest or the
-  18:00 identity sweep.
+  between 17:45 and 19:00 UTC, and neither does the link-progress member pass,
+  so neither overlaps the 18:00 identity sweep. (Until 2026-10-17 the member
+  pass also kept out of hour 17 for the unlinked digest, since removed.)
 - **Manual refresh.** "Refresh from Meetup" on the workspace and report pages
   queues a rebuild of that month (one at a time; refused while one is
   running). At most 4 manual rebuilds per UTC hour across all staff and
@@ -285,9 +287,9 @@ A one-off script (`scripts/backfillReports.ts`), run as a Heroku one-off dyno,
 builds every month from the group's first event to last month. It is
 resumable (skips months that already have a snapshot unless `--force`),
 rate-limited, logs progress to #meetup-bot-alerts every 12 months processed,
-and refuses to start during 17:45–19:00 UTC (the unlinked digest and the
-identity sweep). Months with zero no-shows are saved as complete, like the
-daily job's builds; attendance is never inferred from ATTENDED RSVPs.
+and refuses to start during 17:45–19:00 UTC (the identity sweep). Months with
+zero no-shows are saved as complete, like the daily job's builds; attendance
+is never inferred from ATTENDED RSVPs.
 
 ## Failure handling
 

@@ -211,7 +211,7 @@ export function restPoster(
 
 const REFUSAL_TEXT: Record<BackfillRefusal, string> = {
   'quiet-window':
-    'Refusing to start between 17:45 and 19:00 UTC (unlinked digest and identity sweep). Run it after 19:00 UTC.',
+    'Refusing to start between 17:45 and 19:00 UTC (the identity sweep). Run it after 19:00 UTC.',
   'identity-sweep':
     'Refusing to start while the identity sweep runs. Run it again in a few minutes.',
   'before-group': `--from cannot be earlier than ${periodKey(GROUP_FIRST_PERIOD)}.`,

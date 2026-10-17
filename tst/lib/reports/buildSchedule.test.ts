@@ -79,30 +79,48 @@ describe('buildSchedule', () => {
     expect(plan('2026-10-05T19:00:00.000Z', [], false)).not.toEqual([]);
   });
 
-  it('17:00 plans no link progress (the unlinked digest hour)', () => {
+  it('link progress may start 16:00–17:45 and 19:00–24:00 UTC, like a month', () => {
+    // Hour 17 is open now that the unlinked digest is gone; 17:45 is the
+    // identity sweep's lead, the same as for a month.
     expect(plan('2026-10-05T17:00:00.000Z', [], false)).toEqual([
       { kind: 'month', period: SEPT, reason: 'previous-daily' },
       { kind: 'month', period: OCT, reason: 'current' },
+      { kind: 'link-progress', day: '2026-10-05' },
     ]);
-    expect(plan('2026-10-05T16:59:59.999Z', [], false)).toContainEqual({
+    expect(plan('2026-10-05T17:44:59.999Z', [], false)).toContainEqual({
       kind: 'link-progress',
       day: '2026-10-05',
     });
-    expect(canStartLinkProgress(new Date('2026-10-05T16:59:59.999Z'))).toBe(
-      true,
-    );
-    expect(canStartLinkProgress(new Date('2026-10-05T17:00:00.000Z'))).toBe(
-      false,
-    );
-    expect(canStartLinkProgress(new Date('2026-10-05T18:30:00.000Z'))).toBe(
-      false,
-    );
-    expect(canStartLinkProgress(new Date('2026-10-05T18:59:59.999Z'))).toBe(
-      false,
-    );
-    expect(canStartLinkProgress(new Date('2026-10-05T15:59:59.999Z'))).toBe(
-      false,
-    );
+    for (const [iso, allowed] of [
+      ['2026-10-05T15:59:59.999Z', false],
+      ['2026-10-05T16:00:00.000Z', true],
+      ['2026-10-05T16:59:59.999Z', true],
+      ['2026-10-05T17:00:00.000Z', true],
+      ['2026-10-05T17:30:00.000Z', true],
+      ['2026-10-05T17:44:59.999Z', true],
+      ['2026-10-05T17:45:00.000Z', false],
+      ['2026-10-05T17:59:59.999Z', false],
+      ['2026-10-05T18:00:00.000Z', false],
+      ['2026-10-05T18:30:00.000Z', false],
+      ['2026-10-05T18:59:59.999Z', false],
+      ['2026-10-05T19:00:00.000Z', true],
+      ['2026-10-05T23:59:59.999Z', true],
+    ] as const) {
+      expect(canStartLinkProgress(new Date(iso)), iso).toBe(allowed);
+      // Link progress never starts when a month may not.
+      expect(canStartMonthBuild(new Date(iso)) || !allowed, iso).toBe(true);
+    }
+  });
+
+  it('link progress is allowed in exactly the hours 16, 17 (to :45) and 19–23 UTC', () => {
+    const open: number[] = [];
+    for (let hour = 0; hour < 24; hour += 1) {
+      const at = new Date(Date.UTC(2026, 9, 5, hour, 0));
+      if (canStartLinkProgress(at)) {
+        open.push(hour);
+      }
+    }
+    expect(open).toEqual([16, 17, 19, 20, 21, 22, 23]);
   });
 
   it('17:44 can start a month and 17:45 cannot', () => {
@@ -119,6 +137,7 @@ describe('buildSchedule', () => {
     expect(plan('2026-10-05T17:44:59.999Z', [], false)).toEqual([
       { kind: 'month', period: SEPT, reason: 'previous-daily' },
       { kind: 'month', period: OCT, reason: 'current' },
+      { kind: 'link-progress', day: '2026-10-05' },
     ]);
     expect(plan('2026-10-05T17:45:00.000Z', [], false)).toEqual([]);
   });

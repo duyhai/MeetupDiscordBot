@@ -138,7 +138,7 @@ const ORGANIZER_LOGIN_URL = `${BASE_DISCORD_BOT_URL}/dashboard/organizer-login`;
 /** Fixed text: the first line of a stopped run's final post. */
 export const BACKFILL_STOP_TEXT: Record<BackfillStop, string> = {
   'quiet-window':
-    'Stopped before 17:45 UTC (unlinked digest and identity sweep). Run it again after 19:00 UTC; months already built are skipped.',
+    'Stopped before 17:45 UTC (too close to the 18:00 identity sweep). Run it again after 19:00 UTC; months already built are skipped.',
   'identity-sweep':
     'Stopped while the identity sweep runs. Run it again after 19:00 UTC; months already built are skipped.',
   'lease-timeout':

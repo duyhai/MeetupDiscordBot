@@ -9,7 +9,6 @@ import app, { setOAuthAlertClient } from './app.js';
 import Configuration from './configuration.js';
 import { startIdentityDigestScheduler } from './lib/helpers/identity/digest.js';
 import { registerMemberLeaveListener } from './lib/helpers/memberLeave.js';
-import { startUnlinkedDigestScheduler } from './lib/helpers/unlinkedDigest.js';
 import { startReportBuildScheduler } from './lib/reports/buildJob.js';
 import { setDashboardClient } from './web/dashboardDeps.js';
 
@@ -53,8 +52,6 @@ client.once('clientReady', async () => {
 
   // init all application commands
   await client.initApplicationCommands();
-
-  startUnlinkedDigestScheduler(client);
 
   startIdentityDigestScheduler(client);
   startReportBuildScheduler(client);
