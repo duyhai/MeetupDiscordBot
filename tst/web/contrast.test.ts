@@ -33,7 +33,7 @@ function luminance(hex: string): number {
   const n = parseInt(hex.slice(1), 16);
   const [r, g, b] = [n >> 16, (n >> 8) & 255, n & 255].map((v) => {
     const c = v / 255;
-    return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+    return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
   });
   return 0.2126 * r + 0.7152 * g + 0.0722 * b;
 }
@@ -102,6 +102,40 @@ describe('colour tokens', () => {
   it('switches to the dark scheme with color-scheme: dark', () => {
     expect(STYLE.value).toMatch(
       /@media \(prefers-color-scheme:\s*dark\)\{:root\{[^}]*color-scheme:\s*dark/,
+    );
+  });
+
+  describe('charts', () => {
+    /** The token a stylesheet rule on `selector` sets `prop` to. */
+    const ruleToken = (selector: string, prop: string) => {
+      const esc = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const rule = new RegExp(`(?:^|[}\\s])${esc}\\{([^}]*)\\}`).exec(
+        STYLE.value,
+      )?.[1];
+      return new RegExp(`${prop}:var\\(--([a-z0-9-]+)\\)`).exec(
+        rule ?? '',
+      )?.[1];
+    };
+
+    it.each(['light', 'dark'] as const)(
+      '%s: chart text is themed and meets 4.5:1 on --surface and --bg',
+      (mode) => {
+        const token = ruleToken('svg.chart text', 'fill');
+        expect(token, 'svg.chart text{fill:var(--…)}').toBeDefined();
+        const t = THEMES[mode];
+        expect(contrast(t[token ?? ''], t.surface)).toBeGreaterThanOrEqual(4.5);
+        expect(contrast(t[token ?? ''], t.bg)).toBeGreaterThanOrEqual(4.5);
+      },
+    );
+
+    it.each(['light', 'dark'] as const)(
+      '%s: the chart axis is themed and meets 3:1 on --surface',
+      (mode) => {
+        const token = ruleToken('svg.chart line', 'stroke');
+        expect(token, 'svg.chart line{stroke:var(--…)}').toBeDefined();
+        const t = THEMES[mode];
+        expect(contrast(t[token ?? ''], t.surface)).toBeGreaterThanOrEqual(3);
+      },
     );
   });
 

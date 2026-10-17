@@ -224,6 +224,10 @@ describe('sessions page', () => {
     expect((await page('done')).text).toContain(
       'That staff member was signed out everywhere.',
     );
+    // Done: the blurple notice.
+    expect((await page('done')).text).toMatch(
+      /<p class="note info">That staff member was signed out everywhere\./,
+    );
     expect((await page('not-leadership')).text).toContain(
       'Only the 1.5 Leadership Team can sign out another staff member.',
     );

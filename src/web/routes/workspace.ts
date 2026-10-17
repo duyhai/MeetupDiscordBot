@@ -120,7 +120,7 @@ function statusLabel(status: WorkspaceStatus): string {
  * suspended, green for a warning sent, grey for the rest (and anything
  * unknown).
  */
-function statusBadge(status: WorkspaceStatus): SafeHtml {
+export function statusBadge(status: WorkspaceStatus): SafeHtml {
   const label = statusLabel(status);
   switch (status) {
     case 'new':

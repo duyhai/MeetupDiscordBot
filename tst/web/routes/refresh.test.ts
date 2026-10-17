@@ -501,5 +501,9 @@ describe('POST /dashboard/reports/:period/refresh', () => {
     const { get } = await setup();
     const res = await get(`${MONTH}?refresh=started`);
     expect(res.text).toContain(escapeHtml(REFRESH_MESSAGES.started));
+    // In progress: the blurple notice.
+    expect(res.text).toContain(
+      `<p class="note info">${escapeHtml(REFRESH_MESSAGES.started)}</p>`,
+    );
   });
 });

@@ -6,7 +6,10 @@ import {
   createDashboardRouter,
   protectedRouteList,
 } from '../../../src/web/dashboardRouter.js';
+import { WorkspaceStatus } from '../../../src/lib/workspace/types.js';
+import { NavKey, navKeyFor } from '../../../src/web/pages.js';
 import { registerAllProtectedRoutes } from '../../../src/web/routes/dashboardPages.js';
+import { statusBadge } from '../../../src/web/routes/workspace.js';
 import { clientFor } from '../../setup/loopbackServer.js';
 import { closeServers, listen, makeDeps, signIn } from '../dashboardHarness.js';
 import { PAGE_NOW, fakeOrganizerDeps, fakePageDeps } from './pageFakes.js';
@@ -53,7 +56,7 @@ const concrete = (path: string) =>
     (_m, name: string) => SAMPLE_PARAMS[name] ?? '',
   )}`.replace(/\/$/, '');
 
-/** Every signed-in GET page the router lists, plus a workspace month's confirm page. */
+/** Every signed-in GET page the router lists (the workspace confirm page among them). */
 const PAGE_PATHS = protectedRouteList(buildRouter())
   .filter((r) => r.method === 'get')
   .map((r) => concrete(r.path));
@@ -227,4 +230,56 @@ describe('status colours', () => {
       }
     },
   );
+});
+
+describe('navKeyFor', () => {
+  it.each([
+    ['/dashboard', 'home'],
+    ['/dashboard/', 'home'],
+    ['/dashboard?x=1', 'home'],
+    ['/dashboard/sessions', 'sessions'],
+    ['/dashboard/sessions/', 'sessions'],
+    ['/dashboard/sessions//', 'sessions'],
+    ['/Dashboard/Sessions', 'sessions'],
+    ['/dashboard/no-shows/2026-09/rows/1', 'workspace'],
+    ['/dashboard/no-showsx', undefined],
+    ['/dashboard/sessionsx/1', undefined],
+    ['/dashboard/organizer-login', undefined],
+    ['/dashboardx', undefined],
+    ['/', undefined],
+    ['', undefined],
+    [undefined, undefined],
+  ] as [string | undefined, NavKey | undefined][])('%s → %s', (path, key) => {
+    expect(navKeyFor(path)).toBe(key);
+  });
+
+  it('stays fast on a long run of slashes', () => {
+    const start = Date.now();
+    expect(navKeyFor(`/dashboard/sessions${'/'.repeat(100_000)}x`)).toBe(
+      'sessions',
+    );
+    expect(Date.now() - start).toBeLessThan(200);
+  });
+});
+
+describe('statusBadge', () => {
+  it.each([
+    ['new', 'attn'],
+    ['warning_copied', 'info'],
+    ['suspended', 'info'],
+    ['warning_sent', 'ok'],
+    ['on_hold', 'neutral'],
+    ['skipped', 'neutral'],
+    ['voided', 'neutral'],
+  ] as const)('%s → badge %s', (status, cls) => {
+    expect(statusBadge(status).value).toMatch(
+      new RegExp(`^<span class="badge ${cls}">[^<]+</span>$`),
+    );
+  });
+
+  it('an unknown stored status is a neutral "Unknown" badge', () => {
+    expect(statusBadge('<b>odd</b>' as WorkspaceStatus).value).toBe(
+      '<span class="badge neutral">Unknown</span>',
+    );
+  });
 });

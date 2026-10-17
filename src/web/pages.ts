@@ -111,6 +111,8 @@ border-left-color:var(--accent)}
 @keyframes note-in{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:none}}
 textarea.copy{min-height:240px;font-family:var(--mono);font-size:var(--t-sm);line-height:1.5;background:var(--raised)}
 svg.chart{max-width:100%;height:auto}
+svg.chart text{fill:var(--muted)}
+svg.chart line{stroke:var(--field)}
 nav.pager{display:flex;flex-wrap:wrap;gap:var(--s1) var(--s2);align-items:center;margin:var(--s3) 0}
 nav.pager a,nav.pager strong{display:inline-flex;align-items:center;min-height:var(--tap);padding:0 var(--s2)}
 .actions{display:flex;flex-wrap:wrap;gap:var(--s2);align-items:flex-start;margin:var(--s3) 0}
@@ -177,7 +179,15 @@ export function navKeyFor(requestPath: string | undefined): NavKey | undefined {
   if (typeof requestPath !== 'string') {
     return undefined;
   }
-  const path = requestPath.split('?')[0].replace(/\/+$/, '');
+  // Express matches routes case-insensitively, so the comparison does too.
+  let path = requestPath.split('?')[0].toLowerCase();
+  // Trailing slashes, stripped in one linear pass (a /\/+$/ replace can go
+  // quadratic on a long run of slashes followed by another character).
+  let end = path.length;
+  while (end > 0 && path[end - 1] === '/') {
+    end -= 1;
+  }
+  path = path.slice(0, end);
   if (path === DASHBOARD_BASE) {
     return 'home';
   }
