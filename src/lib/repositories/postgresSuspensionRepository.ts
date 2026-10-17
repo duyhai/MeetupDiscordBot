@@ -46,6 +46,61 @@ VALUES ($1, $2, $3, $4, $5)
 ON CONFLICT (member_id, suspended_at) WHERE voided_at IS NULL DO NOTHING
 RETURNING *`;
 
+/** The dashboard's three tabs: the command's active/past split of live rows, plus voided rows. */
+export type SuspensionState = 'active' | 'past' | 'voided';
+
+/** One row of the dashboard's suspension records page. */
+export interface SuspensionPageRow extends SuspensionRecord {
+  /** lastSuspendedDay (suspensionList.ts), computed in SQL: 'YYYY-MM-DD'. */
+  lastDay: string;
+  voidedAt: Date | null;
+  /** Discord user id of the moderator who voided it. */
+  voidedBy: string | null;
+  voidReason: string | null;
+  /** From the members table when the Meetup id is linked; null otherwise. */
+  linkedName: string | null;
+  linkedDiscordId: string | null;
+}
+
+/**
+ * The SQL form of lastSuspendedDay (suspensionList.ts): suspended_at is the
+ * UTC midnight of the chosen date, so its UTC date is that date, and the
+ * last day is inclusive.
+ */
+const LAST_DAY = `((suspended_at AT TIME ZONE 'UTC')::date + duration_days - 1)`;
+
+/**
+ * isSuspensionActive in SQL: $1 is pacificToday(now), so the database clock
+ * never decides. Voided rows never reach active or past, as in listAll.
+ */
+const STATE_WHERE: Record<SuspensionState, string> = {
+  active: `voided_at IS NULL AND ${LAST_DAY} >= $1::date`,
+  past: `voided_at IS NULL AND ${LAST_DAY} < $1::date`,
+  // $1 kept so every state takes the same parameter list.
+  voided: 'voided_at IS NOT NULL AND $1::date IS NOT NULL',
+};
+
+/** listAll's order (newest suspended first) for the command's tabs; newest void first for voided. */
+const STATE_ORDER: Record<SuspensionState, string> = {
+  active: 'suspended_at DESC, id DESC',
+  past: 'suspended_at DESC, id DESC',
+  voided: 'voided_at DESC, id DESC',
+};
+
+const DAY = /^\d{4}-\d{2}-\d{2}$/;
+const MAX_PAGE_ROWS = 50;
+
+const STATES: readonly SuspensionState[] = ['active', 'past', 'voided'];
+
+const isState = (value: unknown): value is SuspensionState =>
+  STATES.some((state) => state === value);
+
+/** A whole, non-negative number of rows: junk, negatives and infinities become `fallback`. */
+function wholeCount(value: number, fallback: number): number {
+  const n = Math.trunc(value);
+  return Number.isSafeInteger(n) && n >= 0 ? n : fallback;
+}
+
 interface SuspensionRow {
   id: number;
   member_id: string;
@@ -233,6 +288,98 @@ export class PostgresSuspensionRepository implements SuspensionRepository {
       [id, voidedBy, reason],
     );
     return result.rows[0] ? toVoidedRecord(result.rows[0]) : undefined;
+  }
+
+  /**
+   * One page of one dashboard tab, at most 50 rows. `today` is
+   * pacificToday(now): the active/past split is the command's.
+   */
+  async listPage(options: {
+    state: SuspensionState;
+    today: string;
+    offset: number;
+    limit: number;
+  }): Promise<SuspensionPageRow[]> {
+    const { state, today } = options;
+    if (!isState(state) || typeof today !== 'string' || !DAY.test(today)) {
+      throw new RangeError('bad suspension page query');
+    }
+    // 0 or junk is a full page, as in the brief; never more than 50.
+    const limit = Math.min(
+      MAX_PAGE_ROWS,
+      wholeCount(options.limit, MAX_PAGE_ROWS) || MAX_PAGE_ROWS,
+    );
+    const offset = wholeCount(options.offset, 0);
+    const result = await this.pool.query<SuspensionRow & { last_day: string }>(
+      `SELECT *, to_char(${LAST_DAY}, 'YYYY-MM-DD') AS last_day
+         FROM suspension_records
+        WHERE ${STATE_WHERE[state]}
+        ORDER BY ${STATE_ORDER[state]}
+        LIMIT $2 OFFSET $3`,
+      [today, limit, offset],
+    );
+    const linked = await this.linkedMembers([
+      ...new Set(result.rows.map((row) => row.member_id)),
+    ]);
+    return result.rows.map((row) => ({
+      ...toRecord(row),
+      lastDay: row.last_day,
+      voidedAt: row.voided_at,
+      voidedBy: row.voided_by,
+      voidReason: row.void_reason,
+      linkedName: linked.get(row.member_id)?.name ?? null,
+      linkedDiscordId: linked.get(row.member_id)?.discordId ?? null,
+    }));
+  }
+
+  /** Rows per dashboard tab, with listPage's split for the same `today`. */
+  async countByState(today: string): Promise<Record<SuspensionState, number>> {
+    if (typeof today !== 'string' || !DAY.test(today)) {
+      throw new RangeError('today must be YYYY-MM-DD');
+    }
+    const result = await this.pool.query<Record<SuspensionState, number>>(
+      `SELECT count(*) FILTER (WHERE ${STATE_WHERE.active})::int AS active,
+              count(*) FILTER (WHERE ${STATE_WHERE.past})::int AS past,
+              count(*) FILTER (WHERE voided_at IS NOT NULL)::int AS voided
+         FROM suspension_records`,
+      [today],
+    );
+    const row = result.rows[0];
+    return { active: row.active, past: row.past, voided: row.voided };
+  }
+
+  /**
+   * Names and Discord ids of linked members, for at most one page of ids. The
+   * members table is the member repository's; a database without it yields none.
+   */
+  private async linkedMembers(
+    ids: string[],
+  ): Promise<Map<string, { name: string | null; discordId: string }>> {
+    if (ids.length === 0) {
+      return new Map();
+    }
+    try {
+      const result = await this.pool.query<{
+        meetup_id: string;
+        meetup_name: string | null;
+        discord_user_id: string;
+      }>(
+        `SELECT meetup_id, meetup_name, discord_user_id FROM members
+          WHERE meetup_id = ANY($1::text[])`,
+        [ids],
+      );
+      return new Map(
+        result.rows.map((row) => [
+          row.meetup_id,
+          { name: row.meetup_name, discordId: row.discord_user_id },
+        ]),
+      );
+    } catch (error) {
+      if ((error as { code?: string }).code === '42P01') {
+        return new Map(); // undefined_table
+      }
+      throw error;
+    }
   }
 
   /** Test-only cleanup, mirroring the member repository's test hooks. */

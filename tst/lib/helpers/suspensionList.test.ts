@@ -2,7 +2,12 @@ import dayjs from 'dayjs';
 import { describe, expect, it } from 'vitest';
 
 import { SuspensionRecord } from '../../../src/lib/repositories/types.js';
-import { formatSuspensionList } from '../../../src/lib/helpers/suspensionList.js';
+import {
+  formatSuspensionList,
+  isSuspensionActive,
+  lastSuspendedDay,
+  pacificToday,
+} from '../../../src/lib/helpers/suspensionList.js';
 
 let nextId = 0;
 function record(overrides: Partial<SuspensionRecord> = {}): SuspensionRecord {
@@ -114,5 +119,59 @@ describe('formatSuspensionList name fallback', () => {
     );
     expect(result).toContain('55 (Snapshot Sam)');
     expect(result).not.toContain('Linked Larry');
+  });
+});
+
+describe('suspensionList exports (the dashboard reuses the command rule)', () => {
+  // The boundary fixtures above: Sept 1 + 30 days (last day Sept 30), a
+  // 60-day one (Oct 30) and one that ended Jan 31.
+  const fixtures = [
+    record({ id: 101, memberId: 'edge', durationDays: 30 }),
+    record({ id: 102, memberId: 'act', durationDays: 60 }),
+    record({
+      id: 103,
+      memberId: 'old',
+      suspendedAt: new Date('2026-01-01T00:00:00Z'),
+    }),
+  ];
+  const activeSectionIds = (text: string): number[] => {
+    const section = text.split('__Past')[0];
+    return [...section.matchAll(/- #(\d+) /g)].map((m) => Number(m[1]));
+  };
+
+  it("isSuspensionActive is the formatter's rule", () => {
+    for (const at of [
+      '2026-09-26T00:00:00Z',
+      '2026-10-01T06:30:00Z',
+      '2026-10-01T07:30:00Z',
+      '2026-10-31T06:59:00Z',
+      '2026-10-31T07:00:00Z',
+    ]) {
+      const when = dayjs(at);
+      expect(
+        activeSectionIds(formatSuspensionList(fixtures, when)),
+        at,
+      ).toEqual(
+        fixtures.filter((r) => isSuspensionActive(r, when)).map((r) => r.id),
+      );
+    }
+  });
+
+  it('lastSuspendedDay is inclusive, in UTC calendar days', () => {
+    expect(lastSuspendedDay(fixtures[0])).toBe('2026-09-30');
+    expect(lastSuspendedDay(fixtures[1])).toBe('2026-10-30');
+  });
+
+  it('pacificToday is the Pacific calendar date', () => {
+    expect(pacificToday(new Date('2026-10-01T06:59:00Z'))).toBe('2026-09-30');
+    expect(pacificToday(dayjs('2026-10-01T07:00:00Z'))).toBe('2026-10-01');
+  });
+
+  it('accepts a Date as well as a Dayjs', () => {
+    const at = new Date('2026-10-01T06:30:00Z');
+    expect(isSuspensionActive(fixtures[0], at)).toBe(true);
+    expect(isSuspensionActive(fixtures[0], dayjs('2026-10-01T07:30:00Z'))).toBe(
+      false,
+    );
   });
 });

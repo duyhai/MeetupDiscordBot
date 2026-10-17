@@ -19,20 +19,28 @@ export function utcDateOnly(date: Date | dayjs.Dayjs): string {
  * calendar arithmetic -- adding days in local time can drift across a
  * daylight-saving change.
  */
-function lastSuspendedDay(record: SuspensionRecord): string {
+export function lastSuspendedDay(record: SuspensionRecord): string {
   return dayjs
     .utc(record.suspendedAt)
     .add(record.durationDays - 1, 'day')
     .format('YYYY-MM-DD');
 }
 
+/** Today's calendar date in the group's timezone, 'YYYY-MM-DD'. */
+export function pacificToday(now: dayjs.Dayjs | Date): string {
+  return tz(dayjs(now)).format('YYYY-MM-DD');
+}
+
 /**
  * Active through the whole of its last day in the group's timezone, not
- * until UTC midnight -- which is 5pm Pacific the evening before.
+ * until UTC midnight -- which is 5pm Pacific the evening before. The
+ * dashboard's suspension page uses the same rule (its SQL mirrors it).
  */
-function isActive(record: SuspensionRecord, now: dayjs.Dayjs): boolean {
-  const today = tz(now).format('YYYY-MM-DD');
-  return today <= lastSuspendedDay(record);
+export function isSuspensionActive(
+  record: SuspensionRecord,
+  now: dayjs.Dayjs | Date,
+): boolean {
+  return pacificToday(now) <= lastSuspendedDay(record);
 }
 
 function formatRecord(
@@ -60,8 +68,8 @@ export function formatSuspensionList(
   if (records.length === 0) {
     return 'No suspensions recorded.';
   }
-  const active = records.filter((record) => isActive(record, now));
-  const past = records.filter((record) => !isActive(record, now));
+  const active = records.filter((record) => isSuspensionActive(record, now));
+  const past = records.filter((record) => !isSuspensionActive(record, now));
   const format = (record: SuspensionRecord) =>
     formatRecord(record, fallbackNames);
   const sections = [

@@ -4,6 +4,7 @@ import { LogEntry } from '../../lib/helpers/discordLogger.js';
 import { RebuildResult } from '../../lib/reports/buildJob.js';
 import { Period } from '../../lib/reports/period.js';
 import { PostgresReportSnapshotRepository } from '../../lib/repositories/postgresReportSnapshotRepository.js';
+import { PostgresSuspensionRepository } from '../../lib/repositories/postgresSuspensionRepository.js';
 import { AccessCheck } from '../roleGate.js';
 import { SessionStore } from '../session.js';
 import {
@@ -14,6 +15,7 @@ import { registerHallOfFameRoutes } from './hallOfFame.js';
 import { registerNoShowHistoryRoutes } from './noShowHistory.js';
 import { registerRefreshRoute } from './refresh.js';
 import { registerSessionRoutes } from './sessions.js';
+import { registerSuspensionRoutes } from './suspensions.js';
 
 /** The snapshot reads the month pages use: never save. */
 export type SnapshotPageReader = Pick<
@@ -23,6 +25,12 @@ export type SnapshotPageReader = Pick<
   | 'listSummaries'
   | 'listSummarySeries'
   | 'listMemberNoShowMonths'
+>;
+
+/** The suspension reads the records page uses: never insert or void. Task 10 adds countByMonth. */
+export type SuspensionPageReader = Pick<
+  PostgresSuspensionRepository,
+  'listPage' | 'countByState'
 >;
 
 /** requestRebuild's answer, or 'unavailable' when the bot is not ready to build. */
@@ -42,6 +50,8 @@ export interface DashboardPageDeps {
   snapshots: () => Promise<SnapshotPageReader>;
   /** A staff member's refresh of one month (requestRebuild). May reject. */
   rebuild: (period: Period, requestedBy: string) => Promise<PageRebuildResult>;
+  /** The suspension records store. */
+  suspensions: () => Promise<SuspensionPageReader>;
 }
 
 /**
@@ -57,6 +67,7 @@ export function registerDashboardPages(
   registerHallOfFameRoutes(router, deps);
   registerNoShowHistoryRoutes(router, deps);
   registerRefreshRoute(router, deps);
+  registerSuspensionRoutes(router, deps);
   // Tasks 5-10 add one register…Routes(router, deps) line each.
 }
 

@@ -21,9 +21,14 @@ import {
   SnapshotMeta,
 } from '../../../src/lib/repositories/postgresReportSnapshotRepository.js';
 import {
+  SuspensionPageRow,
+  SuspensionState,
+} from '../../../src/lib/repositories/postgresSuspensionRepository.js';
+import {
   DashboardPageDeps,
   PageRebuildResult,
   SnapshotPageReader,
+  SuspensionPageReader,
 } from '../../../src/web/routes/dashboardPages.js';
 import { OrganizerLoginDeps } from '../../../src/web/routes/organizerLogin.js';
 import { SessionStore } from '../../../src/web/session.js';
@@ -281,6 +286,59 @@ export function noShowPayload(
   };
 }
 
+let suspensionIds = 0;
+
+/** One suspension page row: a live September 1 30-day record unless overridden. */
+export function suspensionRow(
+  overrides: Partial<SuspensionPageRow> = {},
+): SuspensionPageRow {
+  suspensionIds += 1;
+  return {
+    id: suspensionIds,
+    memberId: String(7000 + suspensionIds),
+    memberName: `Suspended ${suspensionIds}`,
+    suspendedAt: new Date('2026-09-01T00:00:00Z'),
+    durationDays: 30,
+    notes: null,
+    createdAt: new Date('2026-09-01T00:00:00Z'),
+    lastDay: '2026-09-30',
+    voidedAt: null,
+    voidedBy: null,
+    voidReason: null,
+    linkedName: null,
+    linkedDiscordId: null,
+    ...overrides,
+  };
+}
+
+/** An in-memory SuspensionPageReader: rows per tab, sliced by offset/limit like the repository. */
+export function fakeSuspensions(
+  rows: Partial<Record<SuspensionState, SuspensionPageRow[]>> = {},
+) {
+  const tab = (state: SuspensionState) => rows[state] ?? [];
+  return {
+    listPage: vi.fn(
+      async (options: {
+        state: SuspensionState;
+        today: string;
+        offset: number;
+        limit: number;
+      }): Promise<SuspensionPageRow[]> =>
+        tab(options.state).slice(
+          options.offset,
+          options.offset + Math.min(50, options.limit),
+        ),
+    ),
+    countByState: vi.fn(
+      async (_today: string): Promise<Record<SuspensionState, number>> => ({
+        active: tab('active').length,
+        past: tab('past').length,
+        voided: tab('voided').length,
+      }),
+    ),
+  } satisfies SuspensionPageReader;
+}
+
 /** The default seed: a September 2026 Hall of Fame row. */
 export const SEED: SeedRow[] = [seedRow('hall_of_fame', SEPT, hofPayload())];
 
@@ -297,6 +355,20 @@ export function fakePageDeps(
     isLeadership: vi.fn().mockResolvedValue(false),
     audit: vi.fn().mockResolvedValue(true),
     snapshots: async () => fakeSnapshots(SEED),
+    suspensions: async () =>
+      fakeSuspensions({
+        active: [suspensionRow()],
+        past: [
+          suspensionRow({ suspendedAt: new Date('2026-08-01T00:00:00Z') }),
+        ],
+        voided: [
+          suspensionRow({
+            voidedAt: new Date('2026-09-02T17:00:00Z'),
+            voidedBy: '123456789012345678',
+            voidReason: 'recorded twice',
+          }),
+        ],
+      }),
     rebuild: vi.fn(async (): Promise<PageRebuildResult> => ({
       status: 'started',
       done: Promise.resolve({ ok: true }),
