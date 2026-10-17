@@ -123,3 +123,9 @@ export const generateOAuthUrl = (
   }
   return url.toString();
 };
+
+// Linked from the no-show warning and suspension messages staff copy into DMs.
+// The policy page is a public Notion page (no login); the appeal form is a public Google Form.
+export const NO_SHOW_POLICY_URL =
+  'https://15genasian.notion.site/1b1176bcb5de453687cd7aa5c0cd239b';
+export const NO_SHOW_APPEAL_URL = 'https://forms.gle/tPiPYQ2DpAVZPL1T9';
