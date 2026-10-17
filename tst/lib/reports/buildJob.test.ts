@@ -18,6 +18,7 @@ import {
   defaultBuildJobDeps,
   DEPARTED_GUARD_MIN_MEMBERS,
   describeBuildError,
+  MANUAL_REBUILDS_PER_HOUR,
   maybePostReportReady,
   MembershipsUnreadableError,
   MonthBeforeGroupBuildError,
@@ -1470,6 +1471,144 @@ describe('requestRebuild', () => {
       (await requestRebuild(h.deps, { year: 2013, month: 3 }, REQUESTER))
         .status,
     ).toBe('started');
+  });
+});
+
+describe('manual refresh budget', () => {
+  const JUN: Period = { year: 2026, month: 6 };
+  const JUL: Period = { year: 2026, month: 7 };
+  const AUG: Period = { year: 2026, month: 8 };
+  const FOUR = [JUN, JUL, AUG, SEPT];
+  const BUDGET_MESSAGE =
+    'Reports were refreshed 4 times in this hour already. ' +
+    'Try again after the top of the hour.';
+  const budgetKeys = (h: Harness) =>
+    [...h.cache.values.keys()].filter((k) =>
+      k.startsWith('report-rebuild-budget-'),
+    );
+
+  /** Starts a manual rebuild and waits for it, so the lease is free again. */
+  async function refresh(h: Harness, period: Period, by = REQUESTER) {
+    const result = await requestRebuild(h.deps, period, by);
+    if (result.status === 'started') {
+      await result.done;
+    }
+    return result;
+  }
+
+  async function useAllFour(h: Harness) {
+    for (const period of FOUR) {
+      // eslint-disable-next-line no-await-in-loop -- one rebuild at a time, as the lease requires
+      expect((await refresh(h, period)).status).toBe('started');
+    }
+  }
+
+  it('requestRebuild refuses a fifth manual refresh in one UTC hour', async () => {
+    expect(MANUAL_REBUILDS_PER_HOUR).toBe(4);
+    const h = makeDeps();
+    await useAllFour(h);
+    h.clock.set('2026-10-05T16:59:59.999Z');
+    expect(await refresh(h, OCT, '987654321')).toEqual({
+      status: 'budget',
+      message: BUDGET_MESSAGE,
+    });
+    expect(h.fetchMonthReports).toHaveBeenCalledTimes(4);
+    expect(budgetKeys(h)).toHaveLength(4);
+    for (const key of budgetKeys(h)) {
+      expect(key).toMatch(/^report-rebuild-budget-2026-10-05T16-[0-3]$/);
+      expect(h.cache.ttls.get(key)).toBe(60 * 60);
+    }
+  });
+
+  it('a refused refresh uses no budget', async () => {
+    const h = makeDeps();
+    // Busy: another build holds the lease.
+    h.cache.values.set(LEASE_KEY, 'other');
+    expect((await refresh(h, OCT)).status).toBe('busy');
+    h.cache.values.delete(LEASE_KEY);
+    // Cooldown: the month was refreshed by someone a moment ago.
+    h.cache.values.set('report-rebuild-cooldown-2026-10', '987654321');
+    expect((await refresh(h, OCT)).status).toBe('cooldown');
+    h.cache.values.delete('report-rebuild-cooldown-2026-10');
+    // Identity sweep and quiet hour.
+    h.cache.values.set('identity-digest-2026-10-05', 'x');
+    expect((await refresh(h, OCT)).status).toBe('identity-sweep');
+    h.cache.values.delete('identity-digest-2026-10-05');
+    expect(budgetKeys(h)).toEqual([]);
+    // All four slots are still free.
+    await useAllFour(h);
+  });
+
+  it('the other refusals come before the budget', async () => {
+    const h = makeDeps({ clock: new Clock('2026-10-05T17:00:00Z') });
+    await useAllFour(h);
+    h.cache.values.set(LEASE_KEY, 'other');
+    expect((await refresh(h, OCT)).status).toBe('busy');
+    h.cache.values.delete(LEASE_KEY);
+    // SEPT was refreshed a moment ago: still cooling, which says more than "budget".
+    expect((await refresh(h, SEPT)).status).toBe('cooldown');
+    expect((await refresh(h, { year: 2026, month: 11 })).status).toBe(
+      'future-month',
+    );
+    h.clock.set('2026-10-05T17:50:00Z');
+    expect((await refresh(h, OCT)).status).toBe('quiet-hour');
+  });
+
+  it('the budget resets at the next UTC hour', async () => {
+    // Half past: the slots' one-hour TTLs are still running at 17:00, so only
+    // the hour in the key frees them.
+    const h = makeDeps({ clock: new Clock('2026-10-05T16:30:00Z') });
+    await useAllFour(h);
+    h.clock.set('2026-10-05T16:59:59.999Z');
+    expect((await refresh(h, OCT)).status).toBe('budget');
+    h.clock.set('2026-10-05T17:00:00Z');
+    expect((await refresh(h, OCT)).status).toBe('started');
+    // A whole new hour: four more (the June–September cooldowns have expired).
+    h.clock.set('2026-10-05T17:20:00Z');
+    expect((await refresh(h, JUN)).status).toBe('started');
+    expect((await refresh(h, JUL)).status).toBe('started');
+    expect((await refresh(h, AUG)).status).toBe('started');
+    expect((await refresh(h, SEPT)).status).toBe('budget');
+  });
+
+  it('a budget refusal leaves no cooldown on the month and no lease', async () => {
+    const h = makeDeps();
+    await useAllFour(h);
+    expect((await refresh(h, OCT)).status).toBe('budget');
+    expect(h.cache.values.has('report-rebuild-cooldown-2026-10')).toBe(false);
+    expect(h.cache.values.has(LEASE_KEY)).toBe(false);
+    expect(h.fetchMonthReports).toHaveBeenCalledTimes(4);
+    // The next hour, the same month starts at once: nothing was left behind.
+    h.clock.set('2026-10-05T17:00:00Z');
+    expect((await refresh(h, OCT)).status).toBe('started');
+  });
+
+  it("the job's own builds use no budget", async () => {
+    const h = makeDeps();
+    await runBuildTick(h.deps);
+    expect(h.fetchMonthReports.mock.calls.length).toBeGreaterThanOrEqual(1);
+    expect(budgetKeys(h)).toEqual([]);
+    expect(h.cache.values.has(LEASE_KEY)).toBe(false);
+    await useAllFour(h);
+  });
+
+  it('a budget read failure releases the lease and the cooldown, then rejects', async () => {
+    class BudgetFails extends ExpiringCache {
+      override async exclusive_set(key: string, value: string, ttl?: number) {
+        if (key.startsWith('report-rebuild-budget-')) {
+          throw new Error('redis down');
+        }
+        return super.exclusive_set(key, value, ttl);
+      }
+    }
+    const clock = new Clock('2026-10-05T16:15:00Z');
+    const h = makeDeps({ clock, cache: new BudgetFails(clock) });
+    await expect(requestRebuild(h.deps, OCT, REQUESTER)).rejects.toThrow(
+      'redis down',
+    );
+    expect(h.cache.values.has(LEASE_KEY)).toBe(false);
+    expect(h.cache.values.has('report-rebuild-cooldown-2026-10')).toBe(false);
+    expect(h.fetchMonthReports).not.toHaveBeenCalled();
   });
 });
 

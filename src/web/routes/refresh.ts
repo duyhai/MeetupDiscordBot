@@ -1,7 +1,10 @@
 import express, { RequestHandler } from 'express';
 import { Logger } from 'tslog';
 
-import { RebuildRefusal } from '../../lib/reports/buildJob.js';
+import {
+  MANUAL_REBUILDS_PER_HOUR,
+  RebuildRefusal,
+} from '../../lib/reports/buildJob.js';
 import {
   DASHBOARD_PATHS,
   MonthPathTemplate,
@@ -33,6 +36,7 @@ export const REFRESH_MESSAGES = {
   'future-month': 'That month has not started yet.',
   'bad-month': 'That is not a valid month.',
   'bad-requester': 'Only a signed-in staff member can refresh reports.',
+  budget: `Reports were refreshed ${MANUAL_REBUILDS_PER_HOUR} times in this hour already. Try again after the top of the hour.`,
   error: 'The refresh could not be started. Please try again later.',
   unavailable: 'Refreshing is unavailable right now. Please try again later.',
 } as const satisfies Record<RefreshCode, string>;

@@ -10,6 +10,12 @@ const logger = new Logger({ name: 'reportBuildLease' });
 
 export const BUILD_LEASE_KEY = 'report-build-claim';
 export const BUILD_LEASE_TTL_SEC = 30 * 60;
+/**
+ * Manual-refresh budget slots: `<prefix><UTC hour>-<slot>`, one key per
+ * slot (buildJob.ts). Here so the dashboard's late-write hook can recognise
+ * them without importing the build job.
+ */
+export const REBUILD_BUDGET_KEY_PREFIX = 'report-rebuild-budget-';
 
 /** Takes the lease with the caller's random value; false when another build holds it. */
 export async function acquireBuildLease(

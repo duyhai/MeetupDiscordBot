@@ -116,6 +116,7 @@ const REFUSALS: RebuildRefusal[] = [
   'future-month',
   'bad-month',
   'bad-requester',
+  'budget',
 ];
 
 describe('POST /dashboard/reports/:period/refresh', () => {
@@ -197,6 +198,45 @@ describe('POST /dashboard/reports/:period/refresh', () => {
       expect(page.text, code).not.toContain('<script>x');
       expect(page.text, code).not.toContain('&lt;script&gt;x');
     }
+  });
+
+  it('budget refusal shows its fixed message', async () => {
+    expect(REFRESH_MESSAGES.budget).toBe(
+      'Reports were refreshed 4 times in this hour already. Try again after the top of the hour.',
+    );
+    const { post, get } = await setup({
+      rebuild: async () => ({ status: 'budget', message: 'ignored' }),
+    });
+    const res = await post();
+    expect(res.headers.location).toBe(`${MONTH}?refresh=budget`);
+    const page = await get(res.headers.location);
+    expect(page.text).toContain(
+      'Reports were refreshed 4 times in this hour already. Try again after the top of the hour.',
+    );
+    expect(page.text).not.toContain('ignored');
+  });
+
+  it('a budget that cannot be read refuses the refresh with fixed text and leaves nothing behind', async () => {
+    class BudgetFails extends FakeCache {
+      override async exclusive_set(key: string, value: string, ttl?: number) {
+        if (key.startsWith('report-rebuild-budget-')) {
+          throw new Error('redis says password=hunter2');
+        }
+        return super.exclusive_set(key, value, ttl);
+      }
+    }
+    const cache = new BudgetFails();
+    const h = makeBuildDeps({ cache });
+    const { post, get } = await setup({
+      rebuild: (period, by) => requestRebuild(h.deps, period, by),
+    });
+    const res = await post();
+    expect(res.headers.location).toBe(`${MONTH}?refresh=error`);
+    const page = await get(res.headers.location);
+    expect(page.text).toContain(escapeHtml(REFRESH_MESSAGES.error));
+    expect(page.text).not.toContain('hunter2');
+    expect(h.fetchMonthReports).not.toHaveBeenCalled();
+    expect([...cache.values.keys()]).toEqual([]);
   });
 
   it('refresh refused while a build runs', async () => {

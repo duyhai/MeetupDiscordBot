@@ -25,6 +25,7 @@ import {
   acquireBuildLease,
   BUILD_LEASE_TTL_SEC,
   identityDigestInProgress,
+  REBUILD_BUDGET_KEY_PREFIX,
   releaseBuildLease,
 } from './buildLease.js';
 import {
@@ -76,6 +77,12 @@ const alertedKey = (p: Period, day: string) =>
 const REBUILD_COOLDOWN_SEC = 10 * 60;
 const rebuildCooldownKey = (p: Period) =>
   `report-rebuild-cooldown-${periodKey(p)}`;
+/** Manual rebuilds across all staff and months per UTC hour. The job's own builds do not count. */
+export const MANUAL_REBUILDS_PER_HOUR = 4;
+const BUDGET_TTL_SEC = 60 * 60;
+/** One key per slot of a UTC hour, e.g. `report-rebuild-budget-2026-10-05T16-0`. */
+const budgetKey = (now: Date, slot: number) =>
+  `${REBUILD_BUDGET_KEY_PREFIX}${now.toISOString().slice(0, 13)}-${slot}`;
 /** A Discord user id: what a manual rebuild records as builtBy. */
 const DISCORD_ID = /^[0-9]{1,20}$/;
 const isManual = (builtBy: string) => DISCORD_ID.test(builtBy);
@@ -916,6 +923,27 @@ export async function maybePostReportReady(
   }
 }
 
+/**
+ * Takes one of this UTC hour's slots; false when all are taken. Cache errors
+ * propagate (the caller then refuses: fail closed). A slot won by a write
+ * that timed out is given back by the dashboard's late-write hook
+ * (releaseLateBuildLease in src/web/timedCache.ts).
+ */
+async function takeRebuildBudget(
+  cache: KeyValueCache,
+  now: Date,
+  requestedBy: string,
+): Promise<boolean> {
+  for (let slot = 0; slot < MANUAL_REBUILDS_PER_HOUR; slot += 1) {
+    const key = budgetKey(now, slot);
+    // eslint-disable-next-line no-await-in-loop -- first free slot wins; at most four tries
+    if (await cache.exclusive_set(key, requestedBy, BUDGET_TTL_SEC)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export type RebuildRefusal =
   | 'quiet-hour'
   | 'identity-sweep'
@@ -923,7 +951,8 @@ export type RebuildRefusal =
   | 'cooldown'
   | 'future-month'
   | 'bad-month'
-  | 'bad-requester';
+  | 'bad-requester'
+  | 'budget';
 
 /** Whether a manual rebuild saved both snapshots. */
 export type RebuildOutcome = { ok: true } | { ok: false };
@@ -1005,6 +1034,24 @@ export async function requestRebuild(
       status: 'cooldown',
       message:
         'That month was refreshed in the last 10 minutes. Try again in a few minutes.',
+    };
+  }
+  // Last, so a request any other check refuses never uses up budget.
+  let budgeted: boolean;
+  try {
+    budgeted = await takeRebuildBudget(cache, now, requestedBy);
+  } catch (error) {
+    await cache.remove(rebuildCooldownKey(period)).catch(() => undefined);
+    await releaseBuildLease(cache, lease);
+    throw error;
+  }
+  if (!budgeted) {
+    // A refused request leaves nothing behind: no cooldown, no lease.
+    await cache.remove(rebuildCooldownKey(period)).catch(() => undefined);
+    await releaseBuildLease(cache, lease);
+    return {
+      status: 'budget',
+      message: `Reports were refreshed ${MANUAL_REBUILDS_PER_HOUR} times in this hour already. Try again after the top of the hour.`,
     };
   }
   const done = (async (): Promise<RebuildOutcome> => {
