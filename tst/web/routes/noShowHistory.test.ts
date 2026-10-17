@@ -689,74 +689,95 @@ describe('no-show history month page: workspace outcomes', () => {
 });
 
 /**
- * Sends a GET on fake timers and steps the clock 250 ms at a time (letting
- * socket I/O run between steps) until the response arrives. Resolves with
- * the response and the fake time it took; gives up just short of the page
- * deadline, so a read held to PAGE_LOAD_DEADLINE_MS never answers here.
+ * Sends a GET whose workspace outcomes read never settles. Once the read has
+ * started (so its deadline timer is set), the fake clock moves to just
+ * before HISTORY_OUTCOMES_DEADLINE_MS, then onto it. After that only socket
+ * I/O is left, so the response is awaited in real time, for at most 3 s: a
+ * read still held to PAGE_LOAD_DEADLINE_MS never answers.
  */
-async function getOnFakeClock(
+async function getWithHangingOutcomes(
   send: () => PromiseLike<{ status: number; text: string }>,
+  readStarted: Promise<void>,
 ) {
-  const STEP = 250;
+  let res: { status: number; text: string } | undefined;
+  let early = false;
+  let settled: Promise<void> = Promise.resolve();
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
   try {
-    let res: { status: number; text: string } | undefined;
-    const settled = Promise.resolve(send()).then((r) => {
+    settled = Promise.resolve(send()).then((r) => {
       res = r;
     });
-    let elapsed = 0;
-    while (res === undefined && elapsed < PAGE_LOAD_DEADLINE_MS - STEP) {
-      // eslint-disable-next-line no-await-in-loop -- let the socket I/O run between clock steps
-      await new Promise<void>((r) => {
-        setImmediate(r);
-      });
-      // eslint-disable-next-line no-await-in-loop -- see above
-      await vi.advanceTimersByTimeAsync(STEP);
-      elapsed += STEP;
-    }
-    for (let i = 0; i < 20 && res === undefined; i += 1) {
+    await readStarted;
+    await vi.advanceTimersByTimeAsync(HISTORY_OUTCOMES_DEADLINE_MS - 1);
+    for (let i = 0; i < 20; i += 1) {
       // eslint-disable-next-line no-await-in-loop -- I/O only, the clock stays put
       await new Promise<void>((r) => {
         setImmediate(r);
       });
     }
-    return { res, elapsed, settled };
+    early = res !== undefined;
+    await vi.advanceTimersByTimeAsync(1);
   } finally {
     vi.useRealTimers();
   }
+  await Promise.race([
+    settled,
+    new Promise((r) => {
+      setTimeout(r, 3000);
+    }),
+  ]);
+  return { res, early };
+}
+
+/** A read that never settles, and a promise that resolves once it is called. */
+function hangingRead() {
+  let started: () => void = () => undefined;
+  const readStarted = new Promise<void>((r) => {
+    started = r;
+  });
+  const read = () => {
+    started();
+    return new Promise<never>(() => undefined);
+  };
+  return { read, readStarted };
 }
 
 describe('workspace outcomes read deadline', () => {
-  const never = () => new Promise<never>(() => undefined);
-
   it('is 5 seconds, half the page deadline', () => {
     expect(HISTORY_OUTCOMES_DEADLINE_MS).toBe(5000);
+    expect(PAGE_LOAD_DEADLINE_MS).toBe(10_000);
   });
 
   it('a month page whose outcomes read hangs renders without them after 5 s', async () => {
     const ws = workspaceOf([]);
-    ws.statusesByMember.mockImplementation(never);
+    const { read, readStarted } = hangingRead();
+    ws.statusesByMember.mockImplementation(read);
     const { get } = await setup(undefined, [], { workspace: async () => ws });
-    const { res, elapsed } = await getOnFakeClock(() => get(MONTH));
+    const { res, early } = await getWithHangingOutcomes(
+      () => get(MONTH),
+      readStarted,
+    );
+    expect(early).toBe(false);
     expect(res?.status).toBe(200);
     expect(res?.text).toContain('<th>Outcome (unavailable)</th>');
-    expect(elapsed).toBeGreaterThanOrEqual(HISTORY_OUTCOMES_DEADLINE_MS);
-    expect(elapsed).toBeLessThan(PAGE_LOAD_DEADLINE_MS);
   });
 
   it('a member page whose outcomes read hangs renders without them after 5 s', async () => {
     const ws = workspaceOf([]);
-    ws.statusesForMember.mockImplementation(never);
+    const { read, readStarted } = hangingRead();
+    ws.statusesForMember.mockImplementation(read);
     const { get } = await setup(
       undefined,
       [memberMonth(SEPT, { noShowCase: noShowCase(0) })],
       { workspace: async () => ws },
     );
-    const { res, elapsed } = await getOnFakeClock(() => get(MEMBER));
+    const { res, early } = await getWithHangingOutcomes(
+      () => get(MEMBER),
+      readStarted,
+    );
+    expect(early).toBe(false);
     expect(res?.status).toBe(200);
     expect(res?.text).toContain('<th>Outcome (unavailable)</th>');
-    expect(elapsed).toBeGreaterThanOrEqual(HISTORY_OUTCOMES_DEADLINE_MS);
-    expect(elapsed).toBeLessThan(PAGE_LOAD_DEADLINE_MS);
   });
 });
 
