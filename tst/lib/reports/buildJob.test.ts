@@ -33,6 +33,7 @@ import {
 import { collectLinkProgress } from '../../../src/lib/reports/linkProgress.js';
 import { buildMonthReports } from '../../../src/lib/reports/monthReports.js';
 import {
+  defaultOrganizerMeetupDeps,
   OrganizerTokenUnavailableError,
   withOrganizerMeetup,
 } from '../../../src/lib/reports/organizerMeetup.js';
@@ -1445,9 +1446,11 @@ describe('defaultBuildJobDeps', () => {
     const asOf = new Date('2026-10-01T07:00:00Z');
     const cutoff = new Date('2026-10-01T00:00:00Z');
     expect(await deps.fetchMonthReports(SEPT, asOf, cutoff)).toBe(reports);
+    // Through the shared factory: the uncached organizer client.
     expect(withOrganizerMeetup).toHaveBeenCalledWith(
       client,
       expect.any(Function),
+      defaultOrganizerMeetupDeps,
     );
     expect(buildMonthReports).toHaveBeenCalledWith(meetupClient, SEPT, {
       asOf,

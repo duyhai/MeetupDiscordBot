@@ -40,7 +40,12 @@ import { MonthBeforeGroupError, monthPageUrls } from './dashboardPaths.js';
 import { collectLinkProgress, LinkProgressCounts } from './linkProgress.js';
 import { noShowsMissing } from './meetupMonth.js';
 import { buildMonthReports, MonthReports } from './monthReports.js';
-import { withOrganizerMeetup } from './organizerMeetup.js';
+import { SuspensionHistorySource } from './noShowReport.js';
+import {
+  defaultOrganizerMeetupDeps,
+  OrganizerMeetupDeps,
+  withOrganizerMeetup,
+} from './organizerMeetup.js';
 import {
   buildAsOf,
   comparePeriods,
@@ -817,6 +822,33 @@ export async function requestRebuild(
   return { status: 'started', done };
 }
 
+/**
+ * The only Meetup read path for month builds (job, manual refresh and
+ * backfill): the organizer credential through withOrganizerMeetup (the
+ * uncached client, one forced refresh and retry on a 401). The read is
+ * read-only, so a 401 re-runs it from the start; saves and posts happen
+ * after it returns. `client` is undefined in the backfill, which has no
+ * gateway: the token helper then sends no Discord alerts.
+ */
+export function organizerMonthReports(
+  client: Client | undefined,
+  suspensions: SuspensionHistorySource,
+  organizer: OrganizerMeetupDeps = defaultOrganizerMeetupDeps,
+): BuildJobDeps['fetchMonthReports'] {
+  return (period, asOf, cutoff) =>
+    withOrganizerMeetup(
+      client,
+      (meetupClient) =>
+        buildMonthReports(meetupClient, period, {
+          asOf,
+          suspensionCutoff: cutoff,
+          groupId: Configuration.meetup.groupId,
+          suspensions,
+        }),
+      organizer,
+    );
+}
+
 export async function defaultBuildJobDeps(
   client: Client,
 ): Promise<BuildJobDeps> {
@@ -832,17 +864,7 @@ export async function defaultBuildJobDeps(
     snapshots,
     notices, // one instance for claim and release
     linkProgress,
-    // The only Meetup read path: the organizer credential, read-only inside
-    // the wrapper; saves and posts happen after it returns.
-    fetchMonthReports: (period, asOf, cutoff) =>
-      withOrganizerMeetup(client, (meetupClient) =>
-        buildMonthReports(meetupClient, period, {
-          asOf,
-          suspensionCutoff: cutoff,
-          groupId: Configuration.meetup.groupId,
-          suspensions,
-        }),
-      ),
+    fetchMonthReports: organizerMonthReports(client, suspensions),
     collectLinkProgress: () => collectLinkProgress(client),
     alert: (entry) => logAlert(client, entry),
     postRoleNotice: (roleIds, content, entry) =>

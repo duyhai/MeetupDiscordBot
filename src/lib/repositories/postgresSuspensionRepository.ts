@@ -46,6 +46,23 @@ VALUES ($1, $2, $3, $4, $5)
 ON CONFLICT (member_id, suspended_at) WHERE voided_at IS NULL DO NOTHING
 RETURNING *`;
 
+/** The web dyno's suspension pool (PG_POOL_MAX unset). */
+const DEFAULT_SUSPENSION_POOL_SIZE = 5;
+
+/**
+ * PG_POOL_MAX (an integer 1-10) when set, else 5. Only the backfill dyno
+ * sets it (to 1); it must never be an app config var, or it would shrink the
+ * web dyno's suspension and dashboard pools.
+ */
+export function suspensionPoolSize(
+  env: Record<string, string | undefined> = process.env,
+): number {
+  const requested = Number(env.PG_POOL_MAX);
+  return Number.isInteger(requested) && requested >= 1 && requested <= 10
+    ? requested
+    : DEFAULT_SUSPENSION_POOL_SIZE;
+}
+
 /** The dashboard's three tabs: the command's active/past split of live rows, plus voided rows. */
 export type SuspensionState = 'active' | 'past' | 'voided';
 
@@ -158,7 +175,7 @@ export class PostgresSuspensionRepository implements SuspensionRepository {
       connectionString.includes('127.0.0.1');
     this.pool = new pg.Pool({
       connectionString,
-      max: 5,
+      max: suspensionPoolSize(),
       ssl: isLocal ? undefined : { rejectUnauthorized: false },
       allowExitOnIdle: true,
     });
