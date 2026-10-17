@@ -125,6 +125,41 @@ function priorCount(records: SuspensionRecord[], now: Date): number {
   return records.filter((r) => r.suspendedAt < today).length;
 }
 
+/** The suspension a card's message and length line describe. */
+interface CardSuspension {
+  /** True when it is the card's live linked record, not the next one. */
+  recorded: boolean;
+  /** Live records strictly before it: what its length and fee count. */
+  prior: number;
+  days: number;
+  /** YYYY-MM-DD, its first day. */
+  suspendedOn: string;
+}
+
+/**
+ * A card with a live linked record describes that record: its own date and
+ * length, and the fee counted from the live records before it. Otherwise the
+ * next suspension, starting today.
+ */
+function cardSuspension(v: CardView): CardSuspension {
+  const r = v.linked;
+  if (r && r.voidedAt === null) {
+    return {
+      recorded: true,
+      prior: v.records.filter((x) => x.suspendedAt < r.suspendedAt).length,
+      days: r.durationDays,
+      suspendedOn: dayjs.utc(r.suspendedAt).format('YYYY-MM-DD'),
+    };
+  }
+  const prior = priorCount(v.records, v.now);
+  return {
+    recorded: false,
+    prior,
+    days: recommendedSuspensionDays(prior),
+    suspendedOn: pacificToday(v.now),
+  };
+}
+
 interface CardView {
   row: WorkspaceRow;
   csrf: string;
@@ -148,12 +183,11 @@ function caseBody(v: CardView): SafeHtml | '' {
   if (!c) {
     return '';
   }
-  const prior = priorCount(v.records, v.now);
-  const days = recommendedSuspensionDays(prior);
+  const s = cardSuspension(v);
   const fee =
     c.hostedPastEvent === true
       ? 'has hosted, so no admin fee'
-      : `plus a $${feeDollars(prior)} admin fee to rejoin`;
+      : `plus a $${feeDollars(s.prior)} admin fee to rejoin`;
   return html`<p>Counted no-shows: ${c.counted.length}</p>
     <ul>
       ${c.counted.map(
@@ -165,7 +199,9 @@ function caseBody(v: CardView): SafeHtml | '' {
       )}
     </ul>
     <p>
-      Earlier suspensions: ${prior} · Next suspension: ${days} days (${fee})
+      Earlier suspensions: ${s.prior} ·
+      ${s.recorded ? 'This suspension' : 'Next suspension'}: ${s.days} days
+      (${fee})
     </p>`;
 }
 
@@ -237,7 +273,7 @@ function messageBody(
   if (!c || !v.row.inLatestSnapshot) {
     return '';
   }
-  const prior = priorCount(v.records, v.now);
+  const s = cardSuspension(v);
   const hostWaiver = c.hostedPastEvent === true;
   let text: string;
   try {
@@ -246,15 +282,17 @@ function messageBody(
         ? warningMessage({
             memberName: v.row.memberName,
             event: c.counted[0],
-            priorSuspensions: prior,
+            // A warning always speaks of the next suspension.
+            priorSuspensions: priorCount(v.records, v.now),
             hostWaiver,
           })
         : suspensionMessage({
             memberName: v.row.memberName,
             counted: c.counted,
-            priorSuspensions: prior,
+            priorSuspensions: s.prior,
             hostWaiver,
-            suspendedOn: pacificToday(v.now),
+            suspendedOn: s.suspendedOn,
+            ...(s.recorded && { durationDays: s.days }),
           });
   } catch {
     // A stored event without a usable date: no message, never a 500.

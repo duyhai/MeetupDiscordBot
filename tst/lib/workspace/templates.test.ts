@@ -90,6 +90,21 @@ describe('names and dates', () => {
       'After November 29, 2026, you can reapply',
     );
   });
+  it('an explicit durationDays sets the length and the end date, the prior count the fee', () => {
+    const text = susp({
+      suspendedOn: '2026-09-20',
+      durationDays: 30,
+      priorSuspensions: 1,
+    });
+    expect(text).toContain('for 30 days.');
+    expect(text).toContain('After October 19, 2026, you can reapply');
+    expect(text).toContain('$20 admin fee');
+  });
+  it('suspensionMessage refuses a bad durationDays', () => {
+    for (const bad of [0, -30, 1.5, Number.NaN, '30' as never]) {
+      expect(() => susp({ durationDays: bad })).toThrow(RangeError);
+    }
+  });
   it('suspensionMessage refuses a bad date', () => {
     for (const bad of ['2026-02-30', 'tomorrow', '', '2026-1-1']) {
       expect(() => susp({ suspendedOn: bad })).toThrow(RangeError);

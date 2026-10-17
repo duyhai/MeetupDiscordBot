@@ -77,12 +77,24 @@ export function suspensionMessage(input: {
   hostWaiver: boolean;
   /** YYYY-MM-DD, the first day of the suspension. */
   suspendedOn: string;
+  /**
+   * A recorded suspension's own length. Absent: the length the prior count
+   * recommends, for a suspension not recorded yet.
+   */
+  durationDays?: number;
 }): string {
   checkPrior(input.priorSuspensions);
   if (!Array.isArray(input.counted) || input.counted.length === 0) {
     throw new RangeError('counted must list at least one no-show');
   }
-  const days = recommendedSuspensionDays(input.priorSuspensions);
+  if (
+    input.durationDays !== undefined &&
+    (!Number.isInteger(input.durationDays) || input.durationDays <= 0)
+  ) {
+    throw new RangeError('durationDays must be a positive integer');
+  }
+  const days =
+    input.durationDays ?? recommendedSuspensionDays(input.priorSuspensions);
   const start = parseUtcDateStrict(input.suspendedOn);
   if (start === undefined) {
     throw new RangeError('suspendedOn must be YYYY-MM-DD');
