@@ -52,6 +52,14 @@ describe('pageKit', () => {
     expect(pacificDate('2026-09-04T02:00:00Z')).toBe('Sep 3, 2026');
   });
 
+  it('date helpers render nothing for a missing or unreadable value, never "now"', () => {
+    for (const value of [undefined, null, 42, {}, [], '', 'not a date']) {
+      expect(pacificDate(value as never), String(value)).toBe('');
+      expect(pacificDateTime(value as never), String(value)).toBe('');
+    }
+    expect(pacificDateTime(new Date('junk'))).toBe('');
+  });
+
   describe('zeroNoShowNote only for finished months with RSVPs and no no-shows', () => {
     const missing: AttendanceEvidence = {
       pastEventsWithRsvps: 4,

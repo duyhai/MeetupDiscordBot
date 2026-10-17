@@ -51,11 +51,21 @@ const isObject = (v: unknown): v is Record<string, unknown> =>
 const isArrayOf = (v: unknown, each: (x: unknown) => boolean): boolean =>
   Array.isArray(v) && v.every(each);
 
+/** A counted event: its date must be a string, or the page would show a wrong one. */
+const isCountedEvent = (e: unknown): boolean =>
+  isObject(e) && typeof e.dateTime === 'string';
+
+/** Only the two reasons the build writes: an unknown one is not shown as "12 months". */
+const isSince = (s: unknown): boolean =>
+  isObject(s) &&
+  typeof s.day === 'string' &&
+  (s.reason === 'twelve-months' || s.reason === 'last-suspension');
+
 const isCase = (c: unknown): boolean =>
   isObject(c) &&
   isObject(c.member) &&
-  isArrayOf(c.counted, isObject) &&
-  isObject(c.since);
+  isArrayOf(c.counted, isCountedEvent) &&
+  isSince(c.since);
 
 const isCleared = (c: unknown): boolean => isObject(c) && isObject(c.member);
 
@@ -63,6 +73,7 @@ const isCleared = (c: unknown): boolean => isObject(c) && isObject(c.member);
 const isNoShow = (p: unknown): p is NoShowPayload =>
   isObject(p) &&
   p.reportType === 'no_show' &&
+  typeof p.asOf === 'string' &&
   isArrayOf(p.cases, isCase) &&
   isArrayOf(p.cleared, isCleared) &&
   isArrayOf(p.departed, isObject) &&
@@ -109,11 +120,9 @@ function memberCell(member: { id: unknown; name: unknown }): SafeHtml {
 }
 
 function caseRow(c: NoShowCasePayload): SafeHtml {
-  const since = isObject(c.since) ? c.since : { day: '', reason: '' };
-  const reason =
-    since.reason === 'last-suspension'
-      ? SINCE_LABELS['last-suspension']
-      : SINCE_LABELS['twelve-months'];
+  // isNoShow admitted only the two known reasons.
+  const { since } = c;
+  const reason = SINCE_LABELS[since.reason];
   return html`<tr>
     <td>${memberCell(c.member)}</td>
     <td>${classificationLabel(c)}</td>
@@ -127,6 +136,17 @@ function caseRow(c: NoShowCasePayload): SafeHtml {
   </tr>`;
 }
 
+/**
+ * formatNoShowReport's order: every warning, then every suspension
+ * candidate, each group in stored order (filter keeps it stable).
+ */
+function commandOrder(cases: NoShowCasePayload[]): NoShowCasePayload[] {
+  return [
+    ...cases.filter((c) => c.classification !== 'suspension'),
+    ...cases.filter((c) => c.classification === 'suspension'),
+  ];
+}
+
 function casesTable(
   payload: NoShowPayload,
   period: Period,
@@ -136,7 +156,7 @@ function casesTable(
     return html`<p>No member has a no-show case this month.</p>`;
   }
   const start = (page - 1) * PAGE_SIZE;
-  const rows = payload.cases.slice(start, start + PAGE_SIZE);
+  const rows = commandOrder(payload.cases).slice(start, start + PAGE_SIZE);
   return html`<table>
       <thead>
         <tr>
@@ -175,11 +195,13 @@ function shortList<T>(
     ${more > 0 ? html`<p class="muted">and ${more} more</p>` : ''}`;
 }
 
+/** The command's wording: the suspension day, else "older than 12 months". */
 const clearedRow = (c: NoShowPayload['cleared'][number]): SafeHtml => {
   const day = asText(c.lastSuspendedDay);
-  return html`${memberCell(c.member)}${
-    day ? html` <span class="muted">last suspended ${day}</span>` : ''
-  }`;
+  return html`${memberCell(c.member)}
+    <span class="muted"
+      >${day ? `suspended ${day}` : 'older than 12 months'}</span
+    >`;
 };
 
 const departedRow = (m: MemberRef): SafeHtml => memberCell(m);
@@ -196,7 +218,7 @@ function memberStatus(row: MemberNoShowMonth): string {
     labels.push(classificationLabel(row.noShowCase));
   }
   if (row.cleared) {
-    labels.push('Cleared by a suspension');
+    labels.push('No action needed — no-shows no longer count');
   }
   if (row.departed) {
     labels.push('Left the group');
@@ -326,9 +348,13 @@ export function registerNoShowHistoryRoutes(
       notFound(res);
       return;
     }
+    const pager = pageNav(path, page, rows.length === PAGE_SIZE);
     const table =
       rows.length === 0
-        ? html`<p>No stored no-show report mentions this member.</p>`
+        ? page > 1
+          ? html`<p>No more months.</p>
+              ${pager}`
+          : html`<p>No stored no-show report mentions this member.</p>`
         : html`<table>
               <thead>
                 <tr>
@@ -360,7 +386,7 @@ export function registerNoShowHistoryRoutes(
                 })}
               </tbody>
             </table>
-            ${pageNav(path, page, rows.length === PAGE_SIZE)}`;
+            ${pager}`;
     dashboardPage(res, {
       title: 'No-show history for a member',
       body: html`<div class="card">
@@ -432,7 +458,7 @@ export function registerNoShowHistoryRoutes(
           ${casesTable(payload, period, parsePage(req.query.page))}
         </div>
         <div class="card">
-          <h2>Cleared by a suspension</h2>
+          <h2>No action needed — this month's no-shows no longer count</h2>
           ${shortList(payload.cleared, clearedRow, 'Nobody was cleared.')}
         </div>
         <div class="card">

@@ -102,7 +102,11 @@ describe('no-show history month page', () => {
     expect(text).toContain('60 days');
     expect(text).toContain('Has hosted');
     expect(text).toContain('Cleared One');
-    expect(text).toContain('last suspended 2026-08-01');
+    expect(text).toContain('suspended 2026-08-01');
+    expect(text).not.toContain('last suspended');
+    expect(text).toContain(
+      "No action needed — this month's no-shows no longer count",
+    );
     expect(text).toContain('Gone One');
     expect(res.text).toContain(
       'href="/dashboard/no-show-history/members/2001"',
@@ -167,6 +171,45 @@ describe('no-show history month page', () => {
     expect(third.text).not.toContain('members/2099/');
     expect(third.text).not.toContain(`href="${MONTH}?page=4"`);
     expect(third.text).toContain(`href="${MONTH}?page=2"`);
+  });
+
+  it('orders cases like the command: warnings first, then suspension candidates, before paging', async () => {
+    // 60 cases alternating suspension (even i) and warning (odd i).
+    const cases = Array.from({ length: 60 }, (_, i) =>
+      noShowCase(i, { classification: i % 2 === 0 ? 'suspension' : 'warning' }),
+    );
+    const { get } = await setup([
+      seedRow('no_show', SEPT, noShowPayload({ cases })),
+    ]);
+    const ids = (body: string) => {
+      const tbody = /<tbody>([\s\S]*?)<\/tbody>/.exec(body)?.[1] ?? '';
+      return [...tbody.matchAll(/no-show-history\/members\/(\d+)"/g)].map(
+        (m) => Number(m[1]) - 2000,
+      );
+    };
+    const warnings = cases.map((_, i) => i).filter((i) => i % 2 === 1);
+    const suspensions = cases.map((_, i) => i).filter((i) => i % 2 === 0);
+    const expected = [...warnings, ...suspensions];
+    const first = await get(MONTH);
+    expect(ids(first.text)).toEqual(expected.slice(0, 50));
+    const second = await get(`${MONTH}?page=2`);
+    expect(ids(second.text)).toEqual(expected.slice(50));
+  });
+
+  it("cleared members without a suspension day say the command's fallback", async () => {
+    const payload = noShowPayload({
+      cleared: [
+        { member: { id: '6001', name: 'Aged Out', memberUrl: '' } },
+        {
+          member: { id: '6002', name: 'Was Suspended', memberUrl: '' },
+          lastSuspendedDay: '2026-08-01',
+        },
+      ],
+    });
+    const { get } = await setup([seedRow('no_show', SEPT, payload)]);
+    const text = words((await get(MONTH)).text);
+    expect(text).toMatch(/Aged Out History older than 12 months/);
+    expect(text).toMatch(/Was Suspended History suspended 2026-08-01/);
   });
 
   it('caps cleared and departed lists at 50 with a remainder count', async () => {
@@ -284,6 +327,39 @@ describe('no-show history month page', () => {
       { ...good, cleared: {} },
       { ...good, departed: [null] },
       { ...good, departed: 'x' },
+      { ...good, asOf: undefined },
+      { ...good, asOf: 42 },
+      { ...good, asOf: null },
+      {
+        ...good,
+        cases: [
+          {
+            ...good.cases[0],
+            counted: [{ ...good.cases[0].counted[0], dateTime: 42 }],
+          },
+        ],
+      },
+      {
+        ...good,
+        cases: [
+          {
+            ...good.cases[0],
+            counted: [{ ...good.cases[0].counted[0], dateTime: undefined }],
+          },
+        ],
+      },
+      {
+        ...good,
+        cases: [
+          { ...good.cases[0], since: { day: '2026-01-01', reason: 'bogus' } },
+        ],
+      },
+      {
+        ...good,
+        cases: [
+          { ...good.cases[0], since: { day: 42, reason: 'twelve-months' } },
+        ],
+      },
     ];
     for (const payload of malformed) {
       // eslint-disable-next-line no-await-in-loop -- one payload at a time, so a failure names it
@@ -392,7 +468,7 @@ describe('no-show history member page', () => {
     expect(res.text).toContain('href="/dashboard/no-show-history/2026-07"');
     const text = words(res.text);
     expect(text).toContain('Warning');
-    expect(text).toContain('Cleared by a suspension');
+    expect(text).toContain('No action needed — no-shows no longer count');
     expect(text).toContain('As of Oct 1, 2026 12:00 AM');
     expect(res.text).toContain('<bdi>Pat &lt;i&gt;</bdi>');
     expect(res.text).toContain('href="https://www.meetup.com/members/123456/"');
@@ -414,6 +490,19 @@ describe('no-show history member page', () => {
     expect(words(empty.text)).toContain(
       'No stored no-show report mentions this member.',
     );
+  });
+
+  it('past the last page shows the pager and "No more months.", not "never mentioned"', async () => {
+    const { get } = await setup();
+    const res = await get(`${MEMBER}?page=3`);
+    expect(res.status).toBe(200);
+    const text = words(res.text);
+    expect(text).toContain('No more months.');
+    expect(text).not.toContain(
+      'No stored no-show report mentions this member.',
+    );
+    expect(res.text).toContain(`href="${MEMBER}?page=2"`);
+    expect(res.text).not.toContain(`href="${MEMBER}?page=4"`);
   });
 
   it('member id must be digits', async () => {

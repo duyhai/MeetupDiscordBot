@@ -127,11 +127,23 @@ export function parseRouteMonth(value: unknown, now: Date): Period | undefined {
 
 /** 'Sep 3, 2026 7:00 PM' in the group's timezone. */
 export const pacificDateTime = (value: Date | string): string =>
-  tz(dayjs(value)).format('MMM D, YYYY h:mm A');
+  pacificFormat(value, 'MMM D, YYYY h:mm A');
 
 /** 'Sep 3, 2026' in the group's timezone. */
 export const pacificDate = (value: Date | string): string =>
-  tz(dayjs(value)).format('MMM D, YYYY');
+  pacificFormat(value, 'MMM D, YYYY');
+
+/**
+ * Only a non-empty string or a Date that parses: dayjs(undefined) is "now",
+ * so a missing stored date would otherwise render as the current time.
+ */
+function pacificFormat(value: unknown, format: string): string {
+  if (!(value instanceof Date) && (typeof value !== 'string' || value === '')) {
+    return '';
+  }
+  const parsed = dayjs(value);
+  return parsed.isValid() ? tz(parsed).format(format) : '';
+}
 
 export function builtByHtml(builtBy: string): SafeHtml {
   if (builtBy === 'job') {
