@@ -48,9 +48,12 @@ export class MeetupVoidSuspensionCommands {
     interaction: CommandInteraction,
   ) {
     await discordCommandWrapper(interaction, async () => {
+      // The role itself, not Administrator (Hai, 2026-10-17).
       await requireModOrOrganizer(
         interaction,
-        'Only moderators and organizers can void suspensions.',
+        'Only the 1.5 Leadership Team can void suspensions.',
+        ['leadership'],
+        { allowAdmin: false },
       );
       const repo = await PostgresSuspensionRepository.instance();
       const { record, reply } = await voidSuspension(

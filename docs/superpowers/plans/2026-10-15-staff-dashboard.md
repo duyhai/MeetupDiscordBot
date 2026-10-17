@@ -25,8 +25,9 @@
 - Lists paginate at **50** rows. Thumbnails stream one image per request. 512 MB dyno: nothing assembles a whole month or whole table in memory.
 - Never written to Postgres: event descriptions, tokens (other than the existing `oauth_credentials` row), DM content. Raw descriptions are only ever cached in Redis, for at most **12 hours**. A fixed label derived from one (e.g. the `paymentNote` text "description mentions payment") may be stored.
 - Every `href` built from data goes through `safeHref` (only `https://www.meetup.com/…` and `https://discord.com/users/…`). Never interpolate data into unquoted attributes, `<script>` or `<style>`.
-- Build job never runs 18:00–19:00 UTC. Backfill refuses to start 18:00–19:00 UTC.
-- Report-ready notice: role mentions in `content`, `allowedMentions` limited to the Moderator and 1.5 Leadership Team roles.
+- No month build starts 17:45–19:00 UTC; link progress only in hours 16 and 19–23 UTC. The backfill refuses 17:45–19:00 UTC.
+- No role or user pings anywhere in #meetup-bot-alerts (Hai, 2026-10-16): plain embeds, `allowedMentions: { parse: [] }`.
+- Recording, linking and voiding suspensions in the workspace: 1.5 Leadership Team only, checked live against Discord at the moment of the action (Hai, 2026-10-16 and 2026-10-17). Moderators do everything else.
 - All existing slash commands keep working with unchanged output.
 - Tests: unit via `yarn test`; integration via `vitest.integration.config.ts` only against throwaway containers on unusual ports (postgres:16 on `55432`, redis:7 on `56379`), never the dev stack on 5432/6379. Stop colima afterwards if you started it.
 - No production reads or writes, no Discord posts, no Meetup calls with real credentials. Never print tokens or secrets.
@@ -2709,7 +2710,7 @@ Branch `feat/dashboard-2-snapshots`. Starts after PR 2a merges. Full-code addend
 | `src/lib/repositories/postgresLinkProgressRepository.ts` | `link_progress_daily` |
 | `src/lib/reports/linkProgress.ts` | Pure counting from guild members + member links |
 | `src/lib/reports/buildJob.ts` | Due-plan, lease, build, alerts, report-ready notice, scheduler, `requestRebuild` |
-| `src/lib/helpers/discordLogger.ts` (modify) | `postRoleNotice(client, channelId, roleIds, content, entry)`: role mentions in `content` (embeds don't ping), `allowedMentions: { parse: [], roles: roleIds }` |
+| `src/lib/helpers/discordLogger.ts` (modify) | Superseded in PR 4 (no pings): no role-notice helper. The report-ready notice is a plain `logAlert` embed with `allowedMentions: { parse: [] }`, and no log function sends `content`. |
 | `src/lib/repositories/postgresSuspensionRepository.ts` (modify) | `listByMemberIds(ids: string[], before?: Date)`: one `member_id = ANY($1)` query |
 | `src/commands/meetup/getEventStats.ts`, `noShowReport.ts` (modify) | Call the services; output unchanged |
 
@@ -2781,9 +2782,9 @@ CREATE TABLE IF NOT EXISTS dashboard_notices (
 - **Alerts** (#meetup-bot-alerts): one per failing month per day, plus a recovery alert. They include the duration and a safe error summary (the digest's `safeErrorSummary` rule).
 - **Report ready.**
   - Posted to **#meetup-bot-alerts** (`BOT_ALERTS_CHANNEL_ID`, `1537755631602237473`, chosen by Hai 2026-10-15), so there is no new channel constant.
-  - The role mentions for Moderator and 1.5 Leadership Team go in `content`; `allowedMentions: { parse: [], roles: [those two] }`. It carries a link to the month's workspace.
+  - Superseded in PR 4 (no pings): a plain alert embed, no `content`, `allowedMentions: { parse: [] }`. It links the month's workspace, Hall of Fame and no-show history.
   - Posted for the **latest finished month** when no `dashboard_notices` row exists, even if the backfill built that month first. The backfill itself never posts it.
-  - The row is inserted before posting and deleted if the post fails, so the next tick retries.
+  - Superseded in PR 4: the `dashboard_notices` row records a claim time and a post time. The month's workspace is synced before posting. An unposted claim older than 30 minutes, or a failed post, is retried after first checking the channel for the notice, so delivery is at least once.
 
 ## Tasks
 
@@ -2794,8 +2795,8 @@ CREATE TABLE IF NOT EXISTS dashboard_notices (
 | 2.3 | `meetupMonth.ts` + `noShowReport.ts` + `hallOfFameReport.ts`; commands switched over | `tst/lib/reports/noShowReport.test.ts` → `classifies a finished month as of its end, ignoring later suspensions`, `refreshing a finished month after a new suspension still lists the member`, `counts no-shows only up to asOf`, `stores no upcoming RSVPs or descriptions`, `marks a month without attendance incomplete`, `adds prior suspensions to warnings`, `flags members who hosted a past event`; `tst/lib/reports/hallOfFameReport.test.ts` → `counts attendance from one RSVP pass`, `payload is JSON round-trippable` | 2.1 goldens still green (proof of no drift) |
 | 2.4 | `dashboardPool.ts` + snapshot repository | `tst/integration/postgresReportSnapshotRepository.test.ts` → `save then getCurrent`, `current month updates in place`, `finished-month rebuild supersedes and keeps history`, `concurrent saves leave exactly one current row`, `schema is idempotent`, `listSummaries pages without payloads`, `PG_POOL_MAX overrides the pool size` | Throwaway pg :55432 |
 | 2.5 | Link progress (pure + repository) | `tst/lib/reports/linkProgress.test.ts` → `counts linked only among current non-bot members`, `excludes onboarding from unlinked`, `counts Reverify-tagged`; `tst/integration/postgresLinkProgressRepository.test.ts` → `upsert is idempotent per day` | |
-| 2.6 | Build job | `tst/lib/reports/buildJob.test.ts` → `never starts 18:00–19:00 UTC`, `defers while the identity digest claim is held without its done marker`, `previous month rebuilt daily from the 2nd to the 7th after 16:00 UTC`, `current month due once per UTC day after 16:00`, `link progress due once per day`, `a missing Redis done-key does not rebuild a month Postgres shows as built`, `lease release only removes its own claim`, `failure releases the claim and alerts once per day`, `recovery alert after failures`, `report-ready mentions both roles in content with allowedMentions limited to them`, `report-ready posts once per period across restarts`, `report-ready for the latest finished month even when the backfill built it`, `failed report-ready post is retried`, `requestRebuild refuses while a build runs`, `requestRebuild refused 18:00–19:00 UTC` | Mutation-check the due-plan, both guards and the lease |
-| 2.7 | Wire the scheduler into `index.ts`; PR | `tst/lib/reports/buildJob.scheduler.test.ts` → `tick swallows and logs errors` | Draft PR. The bot already posts to #meetup-bot-alerts; the PR notes it also needs Mention @roles there (or the two roles must be mentionable) |
+| 2.6 | Build job | `tst/lib/reports/buildJob.test.ts` → `never starts 18:00–19:00 UTC`, `defers while the identity digest claim is held without its done marker`, `previous month rebuilt daily from the 2nd to the 7th after 16:00 UTC`, `current month due once per UTC day after 16:00`, `link progress due once per day`, `a missing Redis done-key does not rebuild a month Postgres shows as built`, `lease release only removes its own claim`, `failure releases the claim and alerts once per day`, `recovery alert after failures`, `report-ready is a plain alert with allowedMentions { parse: [] }` (was a role-mention test; superseded in PR 4, no pings), `report-ready posts once per period across restarts`, `report-ready for the latest finished month even when the backfill built it`, `failed report-ready post is retried`, `requestRebuild refuses while a build runs`, `requestRebuild refused 18:00–19:00 UTC` | Mutation-check the due-plan, both guards and the lease |
+| 2.7 | Wire the scheduler into `index.ts`; PR | `tst/lib/reports/buildJob.scheduler.test.ts` → `tick swallows and logs errors` | Draft PR. The bot already posts to #meetup-bot-alerts; no mention permission is needed (superseded in PR 4: no pings) |
 
 ---
 
@@ -2838,6 +2839,8 @@ Pages use form POSTs only (no `fetch`), so the CSP needs no `connect-src`. If a 
 
 Branch `feat/dashboard-4-workspace`. Starts after PR 3 merges. Full-code addendum first.
 
+The PR 4 implementation followed a detailed task addendum; where this section and the code differ, the code and the spec win. The corrections that change what this section says are folded in below.
+
 ## Schema
 
 The workspace schema references `suspension_records`, so `ensureWorkspaceSchema()` first awaits `PostgresSuspensionRepository.instance()`, which creates that table.
@@ -2873,12 +2876,15 @@ CREATE INDEX IF NOT EXISTS noshow_workspace_events_row_idx ON noshow_workspace_e
 
 ## Which months get a workspace
 
-Rows are synced from the no-show snapshot only for the latest finished month and for months the job builds from launch onward, never for the whole backfill. Older months stay read-only history (PR 3).
+Rows are synced from the no-show snapshot for every month from `WORKSPACE_FIRST_PERIOD` (2026-09) through the current month, the open month included, never for the whole backfill. Older months stay read-only history (PR 3).
 
 ## Suspensions recorded outside the workspace
 
 - **Date convention:** the suspension date is a Pacific calendar date stored as UTC midnight, exactly as `parseUtcDateStrict` does for `/meetup_record_suspension`.
-- **Before inserting** (inside the action's transaction): look for a live suspension for the member with `suspended_at >= period start`. If one exists, refuse with "already suspended on <date> (#id); link it?" and offer the `link_suspension` action, which sets `suspension_record_id` and status `suspended` without inserting.
+- **Before inserting** (inside the action's transaction): look for a live suspension for the member in the card's link window (`linkWindow`), `<YYYY-MM-01>T00:00:00Z <= suspended_at < <the 1st of the month after next>T00:00:00Z` (UTC midnights, the `suspensionCutoff` convention; Pacific midnight would miss one dated the 1st), that no workspace row links yet. A September case suspended in October can be linked from September's card; once linked, October's card cannot take it (the one-row-per-record unique index is the backstop). The month page lists and offers the same window. The same-date ON CONFLICT link stays outside it. If one exists, refuse and offer the `link_suspension` action, which sets `suspension_record_id` and status `suspended` without inserting. A record another row already links is never offered.
+- **Overlap:** a new suspension whose range overlaps any live suspension of the member, linked or not, is refused and nothing is written. An override may come later.
+- **Out of order (Hai, 2026-10-17):** a new suspension dated before any live suspension of the member (`suspended_at` strictly after the chosen day) is refused as `out-of-order`, carrying the latest such record's id and date, and nothing is written. Check order: bad date, link offer, overlap, then out-of-order as the last check before the insert, so a same-day record that appears after the overlap check still reaches the ON CONFLICT link. The route sends it back to the confirm page with `?result=out-of-order`; that page names the latest live record's date. The confirm page's date `min` is the later of the month's 1st and the day after the last day of the member's live records (`?date=` below it falls back to today); when that is after today it shows a fixed "can't be recorded from here right now" line and no form. The POST stays the authority. Workspace only: the `/meetup_record_suspension` CSV import is also the historical backfill and legitimately records older records after newer ones.
+- **Who:** recording, linking and voiding are for the 1.5 Leadership Team only, checked live against Discord at the moment of the action (so are `/meetup_record_suspension` and `/meetup_void_suspension`, by the role itself: Administrator alone does not admit; Hai, 2026-10-17); if Discord cannot be reached the action is refused. The month page shows those controls from a 60-second cache of that answer, for display only.
 - **Same-date conflict:** an empty `RETURNING` from the `ON CONFLICT … DO NOTHING` insert is treated as that same conflict, and the existing row is linked.
 - **Suspension state renders live:** the page joins `suspension_records` at render time, so a void done with `/meetup_void_suspension` shows immediately.
 
@@ -2887,17 +2893,16 @@ Rows are synced from the no-show snapshot only for the latest finished month and
 | Action | Allowed from | To | Note required | Classification |
 |---|---|---|---|---|
 | `copy_warning` | `new`, `warning_copied` | `warning_copied` | no | warning |
-| `copy_suspension` | any but `suspended` | unchanged | no | suspension |
 | `mark_sent` | `new`, `warning_copied` | `warning_sent` | no | warning |
 | `hold` | `new`, `warning_copied`, `warning_sent` | `on_hold` | yes | any |
 | `skip` | `new`, `warning_copied`, `warning_sent`, `on_hold` | `skipped` | yes | any |
 | `reopen` | `on_hold`, `skipped` | the status before the hold/skip, read from the events log (so `warning_sent` is remembered and the warning can't be sent twice) | no | any |
-| `record_suspension` | `new`, `on_hold`, `voided` | `suspended` | no | suspension |
-| `link_suspension` | `new`, `on_hold`, `voided` | `suspended` | no | suspension |
-| `void` | `suspended` | `voided` | yes (void reason) | suspension |
+| `record_suspension` | `new`, `warning_copied`, `warning_sent`, `on_hold`, `voided` | `suspended` | no | suspension |
+| `link_suspension` | `new`, `warning_copied`, `warning_sent`, `on_hold`, `voided` | `suspended` | no | suspension |
+| `void` | `suspended` | `voided` | yes (void reason) | any |
 | `edit_notes` | any | unchanged | n/a | any |
 
-`reopen` replaces the earlier `release_hold`.
+`reopen` replaces the earlier `release_hold`. "Copy suspension message" is client-only: it changes no status and writes nothing, so it is not an action. `record_suspension`, `link_suspension` and `void` are Leadership-only (`LEADERSHIP_ONLY_ACTIONS`).
 
 ## Tasks
 
@@ -2905,8 +2910,8 @@ Rows are synced from the no-show snapshot only for the latest finished month and
 |---|---|---|---|
 | 4.1 | Schema + repository; suspension insert/void inside the workspace transaction (`insertSuspensionInTx`, `voidSuspensionInTx` exported from `postgresSuspensionRepository.ts`, sharing its SQL) | `tst/integration/postgresNoShowWorkspaceRepository.test.ts` → `creates the suspension table first on a fresh database`, `sync from snapshot is idempotent and keeps edited rows`, `marks rows missing from a rebuild`, `refuses a stale version and writes nothing`, `rolls back the suspension when the workspace update fails`, `refuses when a live suspension after the period start exists and offers to link it`, `same-date ON CONFLICT links the existing row`, `every action writes exactly one event row`, `events are never updated` | |
 | 4.2 | Transitions | `tst/lib/workspace/transitions.test.ts` → full matrix: every (status, action, classification) triple → allowed or refused; `note required for hold, skip, void`, `blank-after-trim note refused`, `reopen restores warning_sent`, `reopen restores new`, `record_suspension allowed from voided` | Mutation-check |
-| 4.3 | Templates | `tst/lib/workspace/templates.test.ts` → `fee doubles: $10, $20, $40`, `days double: 30, 60, 120`, `host waiver omits the fee sentence`, `first name is the first word of the Meetup name, falls back to "there"`, `no-show list uses Pacific dates`, `end_date is suspension date + days`, `links use NO_SHOW_POLICY_URL and NO_SHOW_APPEAL_URL`, `text is plain (escaped only when rendered)` | Templates copied verbatim from the spec. Constants: `NO_SHOW_POLICY_URL = 'https://15genasian.notion.site/1b1176bcb5de453687cd7aa5c0cd239b'`, `NO_SHOW_APPEAL_URL = 'https://forms.gle/tPiPYQ2DpAVZPL1T9'` |
-| 4.4 | Service: actions + moderation log + live upcoming RSVPs / act-by / 💵 | `tst/lib/workspace/service.test.ts` → `record suspension writes the same row /meetup_record_suspension would`, `duration follows 30 × 2^prior as of the chosen date`, `logs each action to the moderation channel naming the actor as <@id>`, `upcoming RSVPs and act-by are computed live and cached ≤12h`, `raw descriptions never reach Postgres`, `Meetup down shows "Meetup unavailable"` | Parity test compares against `recordCsvRows` output for the same member/date |
+| 4.3 | Templates | `tst/lib/workspace/templates.test.ts` → `fee doubles: $10, $20, $40`, `days double: 30, 60, 120`, `host waiver omits the fee sentence`, `first name is the first word of the Meetup name, falls back to "there"`, `no-show list uses Pacific dates`, `end_date is the last suspended day (suspension date + days - 1)`, `links use NO_SHOW_POLICY_URL and NO_SHOW_APPEAL_URL`, `text is plain (escaped only when rendered)` | Templates copied verbatim from the spec. Constants: `NO_SHOW_POLICY_URL = 'https://15genasian.notion.site/1b1176bcb5de453687cd7aa5c0cd239b'`, `NO_SHOW_APPEAL_URL = 'https://forms.gle/tPiPYQ2DpAVZPL1T9'` |
+| 4.4 | Service: actions + moderation log + live upcoming RSVPs / act-by / 💵 | `tst/lib/workspace/service.test.ts` → `record suspension writes the same row /meetup_record_suspension would`, `duration follows 30 × 2^prior as of the chosen date`, `logs each action to the moderation channel naming the actor as <@id>`, `upcoming RSVPs and act-by are computed live and cached ≤6h (derived fields only)`, `raw descriptions never reach Postgres`, `Meetup down shows "Meetup unavailable"` | Parity test compares against `recordCsvRows` output for the same member/date |
 | 4.5 | Routes + page (registered via `protectedRoutes`) | `tst/web/routes/workspace.test.ts` → `every action requires CSRF` (from `protectedRouteList`), `stale version → 409 "someone just updated this, reload"`, `Open on Meetup only for digit ids`, `record suspension needs the confirm step`, `notes are escaped in the card and history`, `copy reads the readonly textarea`, `action rate limit` | Form POSTs only |
 | 4.6 | Outcomes on no-show history (PR 3 page) | `noShowHistory.test.ts` → `shows workspace outcome per member` | |
 | 4.7 | Manual walkthrough + PR | Hai and Stacey walk one month end to end on local data | Draft PR; adds `NO_SHOW_POLICY_URL` / `NO_SHOW_APPEAL_URL` constants |

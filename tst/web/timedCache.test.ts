@@ -196,6 +196,27 @@ describe('releaseLateBuildLease', () => {
     expect(inner.values.get(BUILD_LEASE_KEY)).toBe('another-build');
   });
 
+  it('gives back a refresh-budget slot won after its request timed out, by value', async () => {
+    const inner = new FakeCache();
+    const l = log();
+    const { onLateExclusiveSet } = releaseLateBuildLease(async () => inner, l);
+    const slot = 'report-rebuild-budget-2026-10-05T16-2';
+
+    // The request already failed, so it must not use up the hour's slot.
+    await inner.set(slot, '123456789012345678');
+    onLateExclusiveSet(slot, '123456789012345678');
+    await vi.waitFor(() => expect(inner.values.has(slot)).toBe(false));
+    expect(l.warn).toHaveBeenCalledTimes(1);
+
+    // Someone else's slot is left alone.
+    await inner.set(slot, '987654321');
+    onLateExclusiveSet(slot, '123456789012345678');
+    await new Promise((resolve) => {
+      setTimeout(resolve, 10);
+    });
+    expect(inner.values.get(slot)).toBe('987654321');
+  });
+
   it('logs and never throws when the inner cache cannot be obtained', async () => {
     const l = log();
     const { onLateExclusiveSet } = releaseLateBuildLease(

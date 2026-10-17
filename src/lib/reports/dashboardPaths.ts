@@ -1,4 +1,5 @@
 import { PUBLIC_APP_ORIGIN } from '../../constants.js';
+import { WORKSPACE_FIRST_PERIOD } from '../workspace/months.js';
 import {
   comparePeriods,
   GROUP_FIRST_PERIOD,
@@ -28,6 +29,11 @@ export const DASHBOARD_PATHS = {
   refresh: '/reports/:period/refresh',
   sessions: '/sessions',
   revokeSessions: '/sessions/revoke',
+  workspace: '/no-shows',
+  workspaceMonth: '/no-shows/:period',
+  workspaceRow: '/no-shows/:period/rows/:rowId',
+  workspaceSuspend: '/no-shows/:period/rows/:rowId/suspend',
+  workspaceSync: '/no-shows/:period/sync',
 } as const;
 
 export type DashboardPathTemplate =
@@ -35,7 +41,9 @@ export type DashboardPathTemplate =
 export type MonthPathTemplate =
   | typeof DASHBOARD_PATHS.hallOfFameMonth
   | typeof DASHBOARD_PATHS.noShowHistoryMonth
-  | typeof DASHBOARD_PATHS.refresh;
+  | typeof DASHBOARD_PATHS.refresh
+  | typeof DASHBOARD_PATHS.workspaceMonth
+  | typeof DASHBOARD_PATHS.workspaceSync;
 
 const MEMBER_ID = /^[0-9]{1,20}$/;
 
@@ -68,6 +76,25 @@ export function monthPath(template: MonthPathTemplate, period: Period): string {
   return `${DASHBOARD_BASE}${template.replace(':period', key)}`;
 }
 
+const MAX_ROW_ID = 2 ** 31 - 1;
+
+/**
+ * '/dashboard/no-shows/2026-09/rows/12' (or '.../12/suspend'): monthPath's
+ * checks plus a row id from 1 to 2^31-1 (a Postgres SERIAL). Throws
+ * RangeError. The routes add the workspace range (parseWorkspaceMonth).
+ */
+export function workspaceRowPath(
+  period: Period,
+  rowId: number,
+  suffix?: 'suspend',
+): string {
+  const month = monthPath(DASHBOARD_PATHS.workspaceMonth, period);
+  if (!Number.isSafeInteger(rowId) || rowId < 1 || rowId > MAX_ROW_ID) {
+    throw new RangeError('workspaceRowPath needs a row id from 1 to 2^31-1');
+  }
+  return `${month}/rows/${rowId}${suffix === 'suspend' ? '/suspend' : ''}`;
+}
+
 /**
  * monthPath for a stored row's month: the path, or undefined when monthPath
  * refuses it (before the group's first month, or not a real month), so one
@@ -87,15 +114,29 @@ export function linkableMonthPath(
   }
 }
 
-/** Absolute links for Discord: only PUBLIC_APP_ORIGIN and the validated month key. */
-export function monthPageUrls(period: Period): {
+/** A month's dashboard links for Discord; `workspace` only for workspace months. */
+export interface MonthPageUrls {
   hallOfFame: string;
   noShowHistory: string;
-} {
-  return {
+  workspace?: string;
+}
+
+/**
+ * Absolute links for Discord: only PUBLIC_APP_ORIGIN and the validated month
+ * key. `workspace` is present only for months that have a workspace (from
+ * WORKSPACE_FIRST_PERIOD on); older months link their no-show history only.
+ * No "up to the current month" check: there is no clock here, and builds
+ * exist only for months up to the current one.
+ */
+export function monthPageUrls(period: Period): MonthPageUrls {
+  const urls: MonthPageUrls = {
     hallOfFame: `${PUBLIC_APP_ORIGIN}${monthPath(DASHBOARD_PATHS.hallOfFameMonth, period)}`,
     noShowHistory: `${PUBLIC_APP_ORIGIN}${monthPath(DASHBOARD_PATHS.noShowHistoryMonth, period)}`,
   };
+  if (comparePeriods(period, WORKSPACE_FIRST_PERIOD) >= 0) {
+    urls.workspace = `${PUBLIC_APP_ORIGIN}${monthPath(DASHBOARD_PATHS.workspaceMonth, period)}`;
+  }
+  return urls;
 }
 
 /** One member's no-show history page, only from an all-digit Meetup id (1-20 digits). */

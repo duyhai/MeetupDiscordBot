@@ -182,14 +182,17 @@ export function hasAnyServerRole(member: GuildMember, roles: ServerRoles[]) {
 /**
  * Throws with the given message unless the invoking member is an admin,
  * moderator, or organizer. Widen a command's audience by passing more roles.
+ * `allowAdmin: false` drops the Administrator bypass, so only the roles
+ * admit: the disciplinary commands need the role itself (Hai, 2026-10-17).
  */
 export async function requireModOrOrganizer(
   interaction: CommandInteraction,
   errorMessage: string,
   roles: ServerRoles[] = ['moderator', 'organizer'],
+  { allowAdmin = true }: { allowAdmin?: boolean } = {},
 ) {
   const member = await interaction.guild.members.fetch(interaction.user.id);
-  if (!isAdmin(member) && !hasAnyServerRole(member, roles)) {
+  if (!(allowAdmin && isAdmin(member)) && !hasAnyServerRole(member, roles)) {
     throw new Error(errorMessage);
   }
 }

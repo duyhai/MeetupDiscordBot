@@ -4,7 +4,7 @@
   @typescript-eslint/no-unsafe-assignment,
   @typescript-eslint/unbound-method
 */
-import { Client, TextChannel } from 'discord.js';
+import { Client, Collection, TextChannel } from 'discord.js';
 import { Logger } from 'tslog';
 import {
   MockInstance,
@@ -20,13 +20,12 @@ import {
   BOT_ACTIVITY_LOG_CHANNEL_ID,
   BOT_ALERTS_CHANNEL_ID,
   MODERATION_LOG_CHANNEL_ID,
-  SERVER_ROLES,
 } from '../../../src/constants.js';
 import {
   logActivity,
   logAlert,
   logModeration,
-  postRoleNotice,
+  recentEmbedTitles,
 } from '../../../src/lib/helpers/discordLogger.js';
 
 function makeClient(
@@ -41,6 +40,28 @@ function makeClient(
         ? vi.fn().mockRejectedValue(new Error('fetch failed'))
         : vi.fn().mockResolvedValue(channel),
     },
+  } as unknown as Client;
+}
+
+const BOT_ID = '111111111111111111';
+
+function message(id: string, authorId: string, titles: (string | null)[]) {
+  return {
+    id,
+    author: { id: authorId },
+    embeds: titles.map((title) => ({ title })),
+  };
+}
+
+function historyClient(
+  messagesFetch: ReturnType<typeof vi.fn>,
+  options: { user?: { id: string } | null } = {},
+) {
+  const channel = Object.create(TextChannel.prototype) as TextChannel;
+  (channel as any).messages = { fetch: messagesFetch };
+  return {
+    user: options.user === undefined ? { id: BOT_ID } : options.user,
+    channels: { fetch: vi.fn().mockResolvedValue(channel) },
   } as unknown as Client;
 }
 
@@ -117,9 +138,29 @@ describe('discordLogger', () => {
     const client = makeClient(sendMock);
     await expect(logAlert(client, { title: 'x' })).resolves.toBe(true);
   });
+  it.each([
+    ['logActivity', logActivity],
+    ['logModeration', logModeration],
+    ['logAlert', logAlert],
+  ])(
+    'every log function sends no content and allows no mentions (%s)',
+    async (_name, log) => {
+      const client = makeClient(sendMock);
+      await log(client, { title: 'x', description: '<@123> @everyone' });
+      const payload = sendMock.mock.calls[0][0];
+      expect(payload).not.toHaveProperty('content');
+      expect(payload.allowedMentions).toEqual({ parse: [] });
+    },
+  );
 
-  describe('postRoleNotice', () => {
-    const roles = [SERVER_ROLES.moderator, SERVER_ROLES.leadership];
+  it('exports no role-notice helper', async () => {
+    const exported = Object.keys(
+      await import('../../../src/lib/helpers/discordLogger.js'),
+    );
+    expect(exported).not.toContain('postRoleNotice');
+  });
+
+  describe('send failures', () => {
     let warnSpy: MockInstance<(...args: unknown[]) => unknown>;
 
     beforeEach(() => {
@@ -134,91 +175,6 @@ describe('discordLogger', () => {
       warnSpy.mockRestore();
     });
 
-    it('postRoleNotice mentions roles in content and allows only those roles', async () => {
-      const client = makeClient(sendMock);
-      const fetchMock = client.channels.fetch as ReturnType<typeof vi.fn>;
-      const content = `<@&${roles[0]}> <@&${roles[1]}> September 2026 is ready`;
-
-      await expect(
-        postRoleNotice(client, BOT_ALERTS_CHANNEL_ID, roles, content, {
-          title: 'Report ready',
-          description: 'September 2026',
-        }),
-      ).resolves.toBe(true);
-
-      expect(fetchMock).toHaveBeenCalledWith(BOT_ALERTS_CHANNEL_ID);
-      expect(sendMock).toHaveBeenCalledTimes(1);
-      const payload = sendMock.mock.calls[0][0];
-      expect(payload.content).toBe(content);
-      expect(payload.embeds).toHaveLength(1);
-      expect(payload.embeds[0].data.title).toBe('Report ready');
-      expect(payload.allowedMentions).toEqual({
-        parse: [],
-        roles: ['912474048775221270', '1347289004932075521'],
-      });
-    });
-
-    it('content pings no one but the given roles because allowedMentions parses nothing and lists only those roles', async () => {
-      const client = makeClient(sendMock);
-      const content =
-        '@everyone @here <@123> <@!456> <@&999> ' + `<@&${roles[0]}>`;
-
-      await postRoleNotice(client, BOT_ALERTS_CHANNEL_ID, [roles[0]], content, {
-        title: 'Report ready',
-      });
-
-      const payload = sendMock.mock.calls[0][0];
-      // The content is sent as given; only allowedMentions decides who pings.
-      expect(payload.content).toBe(content);
-      // Exact shape: no parse entries (so no @everyone/@here, users or roles
-      // parsed from content), no users list, and only the one listed role.
-      expect(payload.allowedMentions).toStrictEqual({
-        parse: [],
-        roles: [roles[0]],
-      });
-      expect(payload.allowedMentions.roles).not.toContain('999');
-      expect(payload.allowedMentions).not.toHaveProperty('users');
-      expect(payload.allowedMentions).not.toHaveProperty('repliedUser');
-    });
-
-    it('copies the role list so a later caller mutation cannot widen the ping', async () => {
-      const client = makeClient(sendMock);
-      const given = [roles[0]];
-      await postRoleNotice(client, BOT_ALERTS_CHANNEL_ID, given, 'x', {
-        title: 'Report ready',
-      });
-      given.push('999');
-      expect(sendMock.mock.calls[0][0].allowedMentions.roles).toEqual([
-        roles[0],
-      ]);
-    });
-
-    it('postRoleNotice returns false and swallows a send failure', async () => {
-      const failure = Object.assign(
-        new Error('Missing Permissions: SECRET-CONTENT-BODY'),
-        { name: 'DiscordAPIError', status: 403 },
-      );
-      sendMock.mockRejectedValue(failure);
-      const client = makeClient(sendMock);
-
-      await expect(
-        postRoleNotice(
-          client,
-          BOT_ALERTS_CHANNEL_ID,
-          roles,
-          'SECRET-CONTENT-BODY',
-          { title: 'Report ready', description: 'SECRET-CONTENT-BODY' },
-        ),
-      ).resolves.toBe(false);
-
-      const logged = warnSpy.mock.calls
-        .map((call) => call.map(String).join(' '))
-        .join('\n');
-      expect(logged).toContain('DiscordAPIError');
-      expect(logged).toContain('403');
-      expect(logged).not.toContain('SECRET-CONTENT-BODY');
-    });
-
     it('logs the Discord error code and the channel id, never the message', async () => {
       const failure = Object.assign(
         new Error('Missing Access: SECRET-CONTENT-BODY'),
@@ -227,9 +183,7 @@ describe('discordLogger', () => {
       sendMock.mockRejectedValue(failure);
       const client = makeClient(sendMock);
 
-      await postRoleNotice(client, BOT_ALERTS_CHANNEL_ID, roles, 'x', {
-        title: 'Report ready',
-      });
+      await logAlert(client, { title: 'Report ready' });
 
       const logged = warnSpy.mock.calls
         .map((call) => call.map(String).join(' '))
@@ -244,17 +198,13 @@ describe('discordLogger', () => {
       sendMock.mockRejectedValueOnce(
         Object.assign(new Error('boom SECRET'), { code: 'ECONNRESET' }),
       );
-      await postRoleNotice(client, BOT_ALERTS_CHANNEL_ID, roles, 'x', {
-        title: 'Report ready',
-      });
+      await logAlert(client, { title: 'Report ready' });
       sendMock.mockRejectedValueOnce(
         Object.assign(new Error('boom'), {
           code: 'SECRET-CONTENT-BODY with spaces and a long tail of text',
         }),
       );
-      await postRoleNotice(client, BOT_ALERTS_CHANNEL_ID, roles, 'x', {
-        title: 'Report ready',
-      });
+      await logAlert(client, { title: 'Report ready' });
 
       const lines = warnSpy.mock.calls.map((call) =>
         call.map(String).join(' '),
@@ -263,30 +213,86 @@ describe('discordLogger', () => {
       expect(lines[1]).toMatch(/: Error$/);
       expect(lines.join('\n')).not.toContain('SECRET');
     });
+  });
 
-    it('returns false instead of rejecting when roleIds is missing', async () => {
-      const client = makeClient(sendMock);
-      await expect(
-        postRoleNotice(client, BOT_ALERTS_CHANNEL_ID, undefined, 'x', {
-          title: 'Report ready',
-        }),
-      ).resolves.toBe(false);
-      await expect(
-        postRoleNotice(client, BOT_ALERTS_CHANNEL_ID, null, 'x', {
-          title: 'Report ready',
-        }),
-      ).resolves.toBe(false);
-      expect(sendMock).not.toHaveBeenCalled();
+  describe('recentEmbedTitles', () => {
+    let warnSpy: MockInstance<(...args: unknown[]) => unknown>;
+
+    beforeEach(() => {
+      const proto = Logger.prototype as unknown as {
+        warn: (...args: unknown[]) => unknown;
+      };
+      warnSpy = vi.spyOn(proto, 'warn').mockReturnValue(undefined);
     });
 
-    it('returns false when the channel fetch fails', async () => {
-      const client = makeClient(sendMock, { fetchFails: true });
+    afterEach(() => {
+      warnSpy.mockRestore();
+    });
+
+    it("recentEmbedTitles returns only this bot's embed titles", async () => {
+      const fetchMessages = vi.fn().mockResolvedValue(
+        new Collection([
+          ['3', message('3', BOT_ID, ['Reports ready: September 2026'])],
+          [
+            '2',
+            message('2', '222222222222222222', ['Reports ready: October 2026']),
+          ],
+          ['1', message('1', BOT_ID, ['Reports built: September 2026', null])],
+        ]),
+      );
+      const client = historyClient(fetchMessages);
+      expect(await recentEmbedTitles(client, BOT_ALERTS_CHANNEL_ID)).toEqual([
+        'Reports ready: September 2026',
+        'Reports built: September 2026',
+      ]);
+      expect(client.channels.fetch).toHaveBeenCalledWith(BOT_ALERTS_CHANNEL_ID);
+      expect(fetchMessages).toHaveBeenCalledWith({ limit: 50 });
+    });
+
+    it('recentEmbedTitles returns undefined when history cannot be read', async () => {
+      const failure = Object.assign(
+        new Error('Missing Access: SECRET-CONTENT-BODY'),
+        { name: 'DiscordAPIError', status: 403, code: 50001 },
+      );
+      const client = historyClient(vi.fn().mockRejectedValue(failure));
       await expect(
-        postRoleNotice(client, BOT_ALERTS_CHANNEL_ID, roles, 'x', {
-          title: 'Report ready',
-        }),
-      ).resolves.toBe(false);
-      expect(sendMock).not.toHaveBeenCalled();
+        recentEmbedTitles(client, BOT_ALERTS_CHANNEL_ID),
+      ).resolves.toBeUndefined();
+      const logged = warnSpy.mock.calls
+        .map((call) => call.map(String).join(' '))
+        .join('\n');
+      expect(logged).toContain('DiscordAPIError[50001] (HTTP 403)');
+      expect(logged).toContain(BOT_ALERTS_CHANNEL_ID);
+      expect(logged).not.toContain('SECRET-CONTENT-BODY');
+    });
+
+    it('recentEmbedTitles returns undefined when the channel fetch fails', async () => {
+      const client = {
+        user: { id: BOT_ID },
+        channels: { fetch: vi.fn().mockRejectedValue(new Error('down')) },
+      } as unknown as Client;
+      await expect(
+        recentEmbedTitles(client, BOT_ALERTS_CHANNEL_ID),
+      ).resolves.toBeUndefined();
+    });
+
+    it('recentEmbedTitles returns undefined before the bot user is known', async () => {
+      const fetchMessages = vi.fn();
+      const client = historyClient(fetchMessages, { user: null });
+      await expect(
+        recentEmbedTitles(client, BOT_ALERTS_CHANNEL_ID),
+      ).resolves.toBeUndefined();
+      expect(fetchMessages).not.toHaveBeenCalled();
+    });
+
+    it('recentEmbedTitles returns undefined for a channel that is not a text channel', async () => {
+      const client = {
+        user: { id: BOT_ID },
+        channels: { fetch: vi.fn().mockResolvedValue({}) },
+      } as unknown as Client;
+      await expect(
+        recentEmbedTitles(client, BOT_ALERTS_CHANNEL_ID),
+      ).resolves.toBeUndefined();
     });
   });
 });

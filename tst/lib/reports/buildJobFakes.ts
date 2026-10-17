@@ -15,6 +15,10 @@ import {
   SnapshotMeta,
   SnapshotWrite,
 } from '../../../src/lib/repositories/postgresReportSnapshotRepository.js';
+import {
+  NOTICE_RECLAIM_AFTER_MS,
+  NoticeClaim,
+} from '../../../src/lib/repositories/postgresDashboardNoticeRepository.js';
 import { FakeCache } from '../../web/fakeCache.js';
 
 export const HOF_SUMMARY = { events: 4, hosts: 3, newHosts: 1 };
@@ -127,21 +131,86 @@ export class FakeSnapshotStore {
   }
 }
 
-export class FakeNoticeStore {
-  readonly markers = new Set<string>();
+interface FakeMarker {
+  claimedAtMs: number;
+  posted: boolean;
+  /** Bumped on every claim: which claim is current. */
+  token: number;
+}
 
-  readonly claim = vi.fn(async (kind: string, period: Period) => {
-    const key = `${kind}:${periodKey(period)}`;
-    if (this.markers.has(key)) {
+/**
+ * The notice table's rules on a test clock: a posted marker is final, an
+ * unposted claim older than NOTICE_RECLAIM_AFTER_MS is taken again as a
+ * retry, and a release makes an unposted claim retryable at once. Like the
+ * repository, markPosted and release act only on this caller's current,
+ * unposted claim; `caller()` is another process on the same table.
+ */
+export class FakeNoticeStore {
+  /** This caller's claims: marker key -> the token it got. */
+  private readonly own = new Map<string, number>();
+
+  constructor(
+    private readonly nowMs: () => number = () => Date.now(),
+    readonly markers = new Map<string, FakeMarker>(),
+  ) {}
+
+  /** Another caller (process) sharing these markers and this clock. */
+  caller(): FakeNoticeStore {
+    return new FakeNoticeStore(this.nowMs, this.markers);
+  }
+
+  /** The marker of this caller's current, unposted claim, else undefined. */
+  private ownMarker(key: string): FakeMarker | undefined {
+    const token = this.own.get(key);
+    this.own.delete(key);
+    const marker = this.markers.get(key);
+    return marker !== undefined && !marker.posted && marker.token === token
+      ? marker
+      : undefined;
+  }
+
+  readonly claim = vi.fn(
+    async (kind: string, period: Period): Promise<NoticeClaim> => {
+      const key = `${kind}:${periodKey(period)}`;
+      const now = this.nowMs();
+      const marker = this.markers.get(key);
+      if (marker === undefined) {
+        this.markers.set(key, { claimedAtMs: now, posted: false, token: 1 });
+        this.own.set(key, 1);
+        return 'fresh';
+      }
+      if (
+        !marker.posted &&
+        marker.claimedAtMs < now - NOTICE_RECLAIM_AFTER_MS
+      ) {
+        marker.claimedAtMs = now;
+        marker.token += 1;
+        this.own.set(key, marker.token);
+        return 'retry';
+      }
+      return false;
+    },
+  );
+
+  readonly release = vi.fn(async (kind: string, period: Period) => {
+    const marker = this.ownMarker(`${kind}:${periodKey(period)}`);
+    if (marker !== undefined) {
+      marker.claimedAtMs = -Infinity;
+    }
+  });
+
+  readonly markPosted = vi.fn(async (kind: string, period: Period) => {
+    const marker = this.ownMarker(`${kind}:${periodKey(period)}`);
+    if (marker === undefined) {
       return false;
     }
-    this.markers.add(key);
+    marker.posted = true;
     return true;
   });
 
-  readonly release = vi.fn(async (kind: string, period: Period) => {
-    this.markers.delete(`${kind}:${periodKey(period)}`);
-  });
+  isPosted(kind: string, period: Period): boolean {
+    return this.markers.get(`${kind}:${periodKey(period)}`)?.posted === true;
+  }
 }
 
 export class FakeLinkProgressStore {
@@ -246,16 +315,11 @@ export interface Harness {
     typeof vi.fn<() => Promise<LinkProgressCounts>>
   >;
   alert: ReturnType<typeof vi.fn<(entry: LogEntry) => Promise<boolean>>>;
-  postRoleNotice: ReturnType<
-    typeof vi.fn<
-      (
-        roleIds: readonly string[],
-        content: string,
-        entry: LogEntry,
-      ) => Promise<boolean>
-    >
+  recentAlertTitles: ReturnType<
+    typeof vi.fn<() => Promise<string[] | undefined>>
   >;
   cacheSpy: ReturnType<typeof vi.fn<() => Promise<FakeCache>>>;
+  syncWorkspace: ReturnType<typeof vi.fn<(period: Period) => Promise<unknown>>>;
 }
 
 export interface HarnessOptions {
@@ -271,7 +335,8 @@ export function makeDeps(options: HarnessOptions = {}): Harness {
   const clock = options.clock ?? new Clock('2026-10-05T16:15:00Z');
   const cache = options.cache ?? new ExpiringCache(clock);
   const snapshots = options.snapshots ?? new FakeSnapshotStore();
-  const notices = options.notices ?? new FakeNoticeStore();
+  const notices =
+    options.notices ?? new FakeNoticeStore(() => clock.now().getTime());
   const linkProgress = options.linkProgress ?? new FakeLinkProgressStore();
   let leases = 0;
   const fetchMonthReports = vi.fn(
@@ -280,11 +345,13 @@ export function makeDeps(options: HarnessOptions = {}): Harness {
   );
   const collectLinkProgress = vi.fn(() => Promise.resolve({ ...LINK_COUNTS }));
   const alert = vi.fn((_entry: LogEntry) => Promise.resolve(true));
-  const postRoleNotice = vi.fn(
-    (_roleIds: readonly string[], _content: string, _entry: LogEntry) =>
-      Promise.resolve(true),
+  const recentAlertTitles = vi.fn(
+    async (): Promise<string[] | undefined> => [],
   );
   const cacheSpy = vi.fn(() => Promise.resolve(cache));
+  const syncWorkspace = vi.fn(
+    async (_period: Period): Promise<unknown> => 'synced',
+  );
   const deps: BuildJobDeps = {
     now: () => clock.now(),
     cache: cacheSpy,
@@ -294,12 +361,13 @@ export function makeDeps(options: HarnessOptions = {}): Harness {
     fetchMonthReports,
     collectLinkProgress,
     alert,
-    postRoleNotice,
+    recentAlertTitles,
     reportReadyEnabled: () => options.reportReadyEnabled ?? true,
     newLeaseValue: () => {
       leases += 1;
       return `lease-${leases}`;
     },
+    syncWorkspace,
   };
   return {
     deps,
@@ -311,7 +379,8 @@ export function makeDeps(options: HarnessOptions = {}): Harness {
     fetchMonthReports,
     collectLinkProgress,
     alert,
-    postRoleNotice,
+    recentAlertTitles,
     cacheSpy,
+    syncWorkspace,
   };
 }

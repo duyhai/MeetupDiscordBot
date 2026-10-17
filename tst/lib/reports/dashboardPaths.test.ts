@@ -18,7 +18,26 @@ describe('dashboardPaths', () => {
         'https://meetup-discord-bot.herokuapp.com/dashboard/hall-of-fame/2026-09',
       noShowHistory:
         'https://meetup-discord-bot.herokuapp.com/dashboard/no-show-history/2026-09',
+      workspace:
+        'https://meetup-discord-bot.herokuapp.com/dashboard/no-shows/2026-09',
     });
+  });
+
+  it('monthPageUrls adds the workspace from 2026-09 on', () => {
+    expect(monthPageUrls({ year: 2026, month: 9 }).workspace).toBe(
+      'https://meetup-discord-bot.herokuapp.com/dashboard/no-shows/2026-09',
+    );
+    expect(monthPageUrls({ year: 2027, month: 1 }).workspace).toBe(
+      'https://meetup-discord-bot.herokuapp.com/dashboard/no-shows/2027-01',
+    );
+    const august = monthPageUrls({ year: 2026, month: 8 });
+    expect(august).toEqual({
+      hallOfFame:
+        'https://meetup-discord-bot.herokuapp.com/dashboard/hall-of-fame/2026-08',
+      noShowHistory:
+        'https://meetup-discord-bot.herokuapp.com/dashboard/no-show-history/2026-08',
+    });
+    expect(Object.keys(august)).not.toContain('workspace');
   });
 
   it('pads January', () => {

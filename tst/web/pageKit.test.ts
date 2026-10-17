@@ -6,9 +6,11 @@ import { AttendanceEvidence } from '../../src/lib/reports/types.js';
 import {
   COPY_SCRIPT,
   PAGE_LOAD_DEADLINE_MS,
+  WORKSPACE_SCRIPT,
   builtByHtml,
   dashboardPage,
   load,
+  loadOptional,
   pacificDate,
   pacificDateTime,
   parseRouteMonth,
@@ -126,6 +128,26 @@ describe('pageKit', () => {
       expect(out).not.toContain(bad);
       expect(out).toBe('a staff member');
     }
+  });
+
+  it('WORKSPACE_SCRIPT has no interpolation and finds its textarea by position', () => {
+    const source = fs.readFileSync(
+      new URL('../../src/web/pageKit.ts', import.meta.url),
+      'utf8',
+    );
+    const start = source.indexOf('export const WORKSPACE_SCRIPT');
+    expect(start).toBeGreaterThan(-1);
+    const end = source.indexOf('`;', start);
+    const definition = source.slice(start, end + 2);
+    expect(definition).not.toContain('${');
+    expect(definition).toMatch(
+      /^export const WORKSPACE_SCRIPT = staticRaw`[^`]*`;$/,
+    );
+    expect(isSafeHtml(WORKSPACE_SCRIPT)).toBe(true);
+    expect(WORKSPACE_SCRIPT.value).toContain("closest('[data-copy-box]')");
+    expect(WORKSPACE_SCRIPT.value).not.toContain('getElementById');
+    // The clipboard fallback is COPY_SCRIPT's.
+    expect(WORKSPACE_SCRIPT.value).toContain("'Select the text and copy it'");
   });
 
   it('COPY_SCRIPT has no interpolation', () => {
@@ -270,6 +292,41 @@ describe('load deadline', () => {
     fail(new Error('pg finally answered'));
     await vi.advanceTimersByTimeAsync(0);
     expect(sent.count).toBe(1);
+  });
+
+  it('loadOptional takes a shorter deadline when given one', async () => {
+    vi.useFakeTimers();
+    let settled = false;
+    const pending = loadOptional(
+      'X',
+      () => new Promise(() => undefined),
+      5000,
+    ).then((result) => {
+      settled = true;
+      return result;
+    });
+    await vi.advanceTimersByTimeAsync(4999);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(settled).toBe(true);
+    expect(await pending).toEqual({ ok: false });
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('loadOptional defaults to the page deadline', async () => {
+    vi.useFakeTimers();
+    let settled = false;
+    const pending = loadOptional('X', () => new Promise(() => undefined)).then(
+      (result) => {
+        settled = true;
+        return result;
+      },
+    );
+    await vi.advanceTimersByTimeAsync(PAGE_LOAD_DEADLINE_MS - 1);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(settled).toBe(true);
+    expect(await pending).toEqual({ ok: false });
   });
 
   it('unrefs its timer, so it never holds the process open', async () => {

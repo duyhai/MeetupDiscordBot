@@ -33,7 +33,12 @@ function buildRouter(clock: () => number = () => PAGE_NOW.getTime()) {
     protectedRoutes: (r) =>
       registerAllProtectedRoutes(r, {
         organizer: fakeOrganizerDeps(),
-        pages: fakePageDeps({ now: () => new Date(clock()) }),
+        // A 1.5 Leadership Team member, so the record-suspension confirm
+        // page answers 200; a Moderator's refusal is in workspace.test.ts.
+        pages: fakePageDeps({
+          now: () => new Date(clock()),
+          isLeadership: vi.fn().mockResolvedValue(true),
+        }),
       }),
   });
   return { deps, router };
@@ -70,6 +75,7 @@ const SAMPLE_PARAMS: Record<string, string> = {
   memberId: '123456',
   id: '1',
   side: 'old',
+  rowId: '1',
 };
 
 /** Statuses other than 200 that a signed-in, allowed GET is expected to answer. */
@@ -87,6 +93,9 @@ const EXPECTED_UNSAFE_ALLOWED: Record<string, number> = {
   'POST /organizer-login/start': 200,
   'POST /sessions/revoke': 303,
   'POST /reports/:period/refresh': 303,
+  // An empty form has no action: 'invalid', back to the month.
+  'POST /no-shows/:period/rows/:rowId': 303,
+  'POST /no-shows/:period/sync': 303,
 };
 
 function concrete(path: string): string {
@@ -149,6 +158,11 @@ describe('access matrix', () => {
     expect(labels).toContain('GET /identity/changes/:id/thumb/:side');
     expect(labels).toContain('GET /link-progress');
     expect(labels).toContain('GET /trends');
+    expect(labels).toContain('GET /no-shows');
+    expect(labels).toContain('GET /no-shows/:period');
+    expect(labels).toContain('GET /no-shows/:period/rows/:rowId/suspend');
+    expect(labels).toContain('POST /no-shows/:period/rows/:rowId');
+    expect(labels).toContain('POST /no-shows/:period/sync');
     expect(UNSAFE.length).toBeGreaterThan(0);
   });
 

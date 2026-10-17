@@ -138,7 +138,7 @@ describe('every dashboard response path sends the framing and no-store headers',
       .set('Cookie', cookie)
       .set('Origin', ORIGIN)
       .type('form')
-      .send(`_csrf=${'a'.repeat(17 * 1024)}`);
+      .send(`_csrf=${'a'.repeat(33 * 1024)}`);
     expect(res.status).toBe(400);
     expectFramingHeaders(res, '400');
   });

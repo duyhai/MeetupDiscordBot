@@ -1280,6 +1280,8 @@ git commit -m "Add suspension CSV parser for recording and backfill"
 
 ### Task 7: `/meetup_record_suspension` command
 
+> Later ruling (Hai, 2026-10-17): `/meetup_record_suspension` and `/meetup_void_suspension` are 1.5 Leadership Team only, by the role itself (`requireModOrOrganizer(interaction, msg, ['leadership'], { allowAdmin: false })`). The moderators-and-organizers check in the code below is superseded.
+
 **Files:**
 - Create: `src/commands/meetup/recordSuspension.ts`
 - Modify: `src/commands/index.ts` (register `MeetupRecordSuspensionCommands`)

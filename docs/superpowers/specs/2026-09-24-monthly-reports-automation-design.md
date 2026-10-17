@@ -163,7 +163,9 @@ New Postgres table alongside the existing repositories
 
 **Correcting records: void, never delete.** Disciplinary history keeps its
 audit trail, so a wrong record is voided with
-`/meetup_void_suspension id:<integer> reason:<text>` (mod-only, private
+`/meetup_void_suspension id:<integer> reason:<text>` (1.5 Leadership Team
+only, by the role itself: Moderators, organizers and Administrator alone are
+refused (Hai, 2026-10-17); private
 reply, logged to the staff moderation channel). The `id` is the `#ID` that
 `/meetup_list_suspensions` prints before each record. A voided row stays in
 the table but is invisible everywhere else: it no longer counts as a prior
@@ -183,7 +185,9 @@ full index is dropped and the partial one created under a new name.
 spreadsheet going forward. Its one input is a CSV attachment
 (`ApplicationCommandOptionType.Attachment`; the bot fetches the attachment
 URL and parses it) with rows of
-`member_id, member_name, duration_days, suspended_at, notes`.
+`member_id, member_name, duration_days, suspended_at, notes`. Like
+voiding, it is 1.5 Leadership Team only, by the role itself (Hai,
+2026-10-17).
 
 - **Monthly:** the No Show report emits a suggested-suspensions CSV in this
   format with recommended durations pre-filled. The moderator deletes the

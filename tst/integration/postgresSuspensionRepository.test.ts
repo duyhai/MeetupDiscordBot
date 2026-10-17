@@ -1,7 +1,15 @@
 import dayjs from 'dayjs';
 import pg from 'pg';
 import { Logger } from 'tslog';
-import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  describe,
+  expect,
+  it,
+  vi,
+} from 'vitest';
 
 import {
   isSuspensionActive,
@@ -10,9 +18,13 @@ import {
 import { PostgresMemberRepository } from '../../src/lib/repositories/postgresMemberRepository.js';
 import { suspensionHistory } from '../../src/lib/helpers/noShowReport.js';
 import {
+  ensureSuspensionSchema,
   PostgresSuspensionRepository,
   SCHEMA_SQL,
+  SUSPENSION_SCHEMA_LOCK_KEY,
 } from '../../src/lib/repositories/postgresSuspensionRepository.js';
+import { DASHBOARD_LOCK_CLASS } from '../../src/lib/repositories/dashboardPool.js';
+import { useIsolatedSchema } from './isolatedSchema.js';
 
 // Mirrors tst/integration/postgresMemberRepository.test.ts conventions:
 // requires DATABASE_URL against a real Postgres, skipped otherwise. Locally:
@@ -30,9 +42,17 @@ if (!POSTGRES_AVAILABLE) {
   'PostgresSuspensionRepository',
   () => {
     let repo: PostgresSuspensionRepository;
+    let schema: { drop(): Promise<void> };
 
     beforeAll(async () => {
+      // Before the singleton exists, so its pool lands in the isolated schema.
+      schema = await useIsolatedSchema('suspensions');
       repo = await PostgresSuspensionRepository.instance();
+    });
+
+    afterAll(async () => {
+      await (repo as unknown as { pool: pg.Pool } | undefined)?.pool.end();
+      await schema?.drop();
     });
 
     afterEach(async () => {
@@ -182,6 +202,47 @@ if (!POSTGRES_AVAILABLE) {
       );
 
       expect(await repo.listByMemberIds([])).toEqual([]);
+    });
+
+    it('listByIds returns voided records too, and runs no query for no ids', async () => {
+      const day = (iso: string) => new Date(`${iso}T00:00:00Z`);
+      const live = await repo.insert({
+        ...record,
+        suspendedAt: day('2026-09-01'),
+      });
+      const gone = await repo.insert({
+        ...record,
+        memberId: 'm2',
+        suspendedAt: day('2026-09-15'),
+      });
+      await repo.insert({ ...record, memberId: 'm3' });
+      await repo.void(gone.id, '123456789012345678', 'wrong member');
+
+      const rows = await repo.listByIds([gone.id, live.id, gone.id, -1, 0]);
+      expect(rows.map((r) => r.id)).toEqual([live.id, gone.id]);
+      expect(rows[0]).toMatchObject({
+        memberId: 'm1',
+        voidedAt: null,
+        voidedBy: null,
+        voidReason: null,
+      });
+      expect(rows[1]).toMatchObject({
+        memberId: 'm2',
+        voidedBy: '123456789012345678',
+        voidReason: 'wrong member',
+      });
+      expect(rows[1].voidedAt).toBeInstanceOf(Date);
+      expect(await repo.listByIds([999999])).toEqual([]);
+
+      const pool = (repo as unknown as { pool: pg.Pool }).pool;
+      const query = vi.spyOn(pool, 'query');
+      try {
+        expect(await repo.listByIds([])).toEqual([]);
+        expect(await repo.listByIds([1.5, 2 ** 31])).toEqual([]);
+        expect(query).not.toHaveBeenCalled();
+      } finally {
+        query.mockRestore();
+      }
     });
 
     describe('void', () => {
@@ -543,6 +604,202 @@ if (!POSTGRES_AVAILABLE) {
         } finally {
           query.mockRestore();
         }
+      });
+    });
+
+    describe('schema ensure on boot', () => {
+      const pool = () => (repo as unknown as { pool: pg.Pool }).pool;
+
+      /**
+       * The relation locks SCHEMA_SQL takes on an existing schema, read from
+       * pg_locks inside the transaction (advisory lock, then the SQL), then
+       * rolled back.
+       */
+      async function relationLocksDuringSchema(sql: string): Promise<string[]> {
+        const client = await pool().connect();
+        try {
+          await client.query('BEGIN');
+          await client.query('SELECT pg_advisory_xact_lock($1, $2)', [
+            DASHBOARD_LOCK_CLASS,
+            SUSPENSION_SCHEMA_LOCK_KEY,
+          ]);
+          await client.query(sql);
+          const locks = await client.query<{ name: string; mode: string }>(
+            `SELECT c.relname AS name, l.mode FROM pg_locks l
+               JOIN pg_class c ON c.oid = l.relation
+              WHERE l.pid = pg_backend_pid()
+                AND c.relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = current_schema())
+              ORDER BY 1, 2`,
+          );
+          return locks.rows.map((r) => `${r.name}:${r.mode}`);
+        } finally {
+          await client.query('ROLLBACK');
+          client.release();
+        }
+      }
+
+      it('a second boot holds nothing stronger than AccessShareLock on suspension_records', async () => {
+        await repo.insert(record);
+        await ensureSuspensionSchema(pool());
+        const locks = await relationLocksDuringSchema(SCHEMA_SQL);
+        expect(locks.filter((l) => !l.endsWith(':AccessShareLock'))).toEqual(
+          [],
+        );
+        // Not vacuous: the pre-guard statements take blocking locks even
+        // when every column and index already exists.
+        expect(
+          await relationLocksDuringSchema(
+            `ALTER TABLE suspension_records
+               ADD COLUMN IF NOT EXISTS voided_at   TIMESTAMPTZ,
+               ADD COLUMN IF NOT EXISTS voided_by   TEXT,
+               ADD COLUMN IF NOT EXISTS void_reason TEXT`,
+          ),
+        ).toContain('suspension_records:AccessExclusiveLock');
+        expect(
+          await relationLocksDuringSchema(
+            `CREATE INDEX IF NOT EXISTS suspension_records_member_id_idx
+               ON suspension_records (member_id)`,
+          ),
+        ).toContain('suspension_records:ShareLock');
+        expect((await repo.listByMemberId('m1')).length).toBe(1);
+      });
+
+      it('runs under the schema advisory lock, with a lock timeout', async () => {
+        const holder = await pool().connect();
+        try {
+          await holder.query('BEGIN');
+          await holder.query('SELECT pg_advisory_xact_lock($1, $2)', [
+            DASHBOARD_LOCK_CLASS,
+            SUSPENSION_SCHEMA_LOCK_KEY,
+          ]);
+          await expect(
+            ensureSuspensionSchema(pool(), { lockTimeoutMs: 200 }),
+          ).rejects.toThrow(/lock timeout/);
+        } finally {
+          await holder.query('ROLLBACK');
+          holder.release();
+        }
+        await ensureSuspensionSchema(pool(), { lockTimeoutMs: 200 });
+      });
+    });
+
+    describe('the guarded schema matches the unguarded one it replaced', () => {
+      /** SCHEMA_SQL as it was before the boot guards (Task 5). */
+      const UNGUARDED_SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS suspension_records (
+  id            SERIAL PRIMARY KEY,
+  member_id     TEXT NOT NULL,
+  member_name   TEXT,
+  suspended_at  TIMESTAMPTZ NOT NULL,
+  duration_days INTEGER NOT NULL,
+  notes         TEXT,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+ALTER TABLE suspension_records
+  ADD COLUMN IF NOT EXISTS voided_at   TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS voided_by   TEXT,
+  ADD COLUMN IF NOT EXISTS void_reason TEXT;
+CREATE INDEX IF NOT EXISTS suspension_records_member_id_idx
+  ON suspension_records (member_id);
+DROP INDEX IF EXISTS suspension_records_member_suspended_at_idx;
+CREATE UNIQUE INDEX IF NOT EXISTS suspension_records_live_member_suspended_at_idx
+  ON suspension_records (member_id, suspended_at)
+  WHERE voided_at IS NULL;
+`;
+      /** The part-3 table, before voiding existed. */
+      const PART3_SQL = `
+CREATE TABLE suspension_records (
+  id            SERIAL PRIMARY KEY,
+  member_id     TEXT NOT NULL,
+  member_name   TEXT,
+  suspended_at  TIMESTAMPTZ NOT NULL,
+  duration_days INTEGER NOT NULL,
+  notes         TEXT,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX suspension_records_member_suspended_at_idx
+  ON suspension_records (member_id, suspended_at);
+INSERT INTO suspension_records (member_id, suspended_at, duration_days)
+  VALUES ('m1', '2026-09-01', 30);
+`;
+
+      /** Columns, indexes and constraints of suspension_records in a fresh schema built by `steps`. */
+      async function shapeAfter(steps: string[]): Promise<unknown> {
+        const name = `susp_shape_${Math.random().toString(36).slice(2, 10)}`;
+        const client = new pg.Client({
+          connectionString: process.env.DATABASE_URL,
+        });
+        await client.connect();
+        try {
+          await client.query(`CREATE SCHEMA ${name}`);
+          await client.query(`SET search_path TO ${name}`);
+          for (const step of steps) {
+            // eslint-disable-next-line no-await-in-loop -- in order
+            await client.query(step);
+          }
+          const columns = await client.query(
+            `SELECT column_name, data_type, is_nullable, column_default, ordinal_position
+               FROM information_schema.columns
+              WHERE table_schema = current_schema() AND table_name = 'suspension_records'
+              ORDER BY ordinal_position`,
+          );
+          const indexes = await client.query<{
+            indexname: string;
+            indexdef: string;
+          }>(
+            `SELECT indexname, indexdef FROM pg_indexes
+              WHERE schemaname = current_schema() AND tablename = 'suspension_records'
+              ORDER BY indexname`,
+          );
+          const constraints = await client.query(
+            `SELECT conname, pg_get_constraintdef(c.oid) AS def FROM pg_constraint c
+               JOIN pg_class t ON t.oid = c.conrelid
+              WHERE t.relname = 'suspension_records'
+                AND t.relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = current_schema())
+              ORDER BY conname`,
+          );
+          const rows = await client.query(
+            'SELECT member_id, duration_days, voided_at FROM suspension_records ORDER BY id',
+          );
+          return {
+            columns: columns.rows,
+            // Schema-qualified in indexdef; strip the random name.
+            indexes: indexes.rows.map((r) => ({
+              ...r,
+              indexdef: r.indexdef.replaceAll(`${name}.`, ''),
+            })),
+            constraints: constraints.rows,
+            rows: rows.rows,
+          };
+        } finally {
+          await client.query(`DROP SCHEMA IF EXISTS ${name} CASCADE`);
+          await client.end();
+        }
+      }
+
+      it('on a fresh database', async () => {
+        expect(await shapeAfter([SCHEMA_SQL, SCHEMA_SQL])).toEqual(
+          await shapeAfter([UNGUARDED_SCHEMA_SQL]),
+        );
+      });
+
+      it('upgrading a part-3 table that has rows', async () => {
+        const guarded = await shapeAfter([PART3_SQL, SCHEMA_SQL, SCHEMA_SQL]);
+        expect(guarded).toEqual(
+          await shapeAfter([PART3_SQL, UNGUARDED_SCHEMA_SQL]),
+        );
+        expect((guarded as { rows: unknown[] }).rows).toEqual([
+          { member_id: 'm1', duration_days: 30, voided_at: null },
+        ]);
+      });
+
+      it('upgrading a table that already has the void columns but not the indexes', async () => {
+        const partial = `${PART3_SQL}
+ALTER TABLE suspension_records ADD COLUMN voided_at TIMESTAMPTZ,
+  ADD COLUMN voided_by TEXT, ADD COLUMN void_reason TEXT;`;
+        expect(await shapeAfter([partial, SCHEMA_SQL])).toEqual(
+          await shapeAfter([partial, UNGUARDED_SCHEMA_SQL]),
+        );
       });
     });
 

@@ -4,7 +4,11 @@ import express from 'express';
 import { Logger } from 'tslog';
 
 import { BASE_DISCORD_BOT_URL, SERVER_ROLES } from '../constants.js';
-import { LogEntry, logActivity } from '../lib/helpers/discordLogger.js';
+import {
+  LogEntry,
+  logActivity,
+  logModeration,
+} from '../lib/helpers/discordLogger.js';
 import {
   BuildJobDeps,
   defaultBuildJobDeps,
@@ -14,7 +18,16 @@ import { PostgresReportSnapshotRepository } from '../lib/repositories/postgresRe
 import { PostgresIdentityRepository } from '../lib/repositories/postgresIdentityRepository.js';
 import { PostgresLinkProgressRepository } from '../lib/repositories/postgresLinkProgressRepository.js';
 import { PostgresMemberRepository } from '../lib/repositories/postgresMemberRepository.js';
+import { PostgresNoShowWorkspaceRepository } from '../lib/repositories/postgresNoShowWorkspaceRepository.js';
 import { PostgresSuspensionRepository } from '../lib/repositories/postgresSuspensionRepository.js';
+import {
+  performWorkspaceAction,
+  syncWorkspace,
+} from '../lib/workspace/service.js';
+import {
+  createUpcomingLoader,
+  organizerFetchMany,
+} from '../lib/workspace/upcoming.js';
 import { ApplicationCache } from '../util/cache.js';
 import {
   baseSecurityHeaders,
@@ -131,6 +144,17 @@ export async function manualRebuildDeps(client: Client): Promise<BuildJobDeps> {
   };
 }
 
+/**
+ * Live upcoming RSVPs for the workspace cards. Created once, so its
+ * single-flight map is shared by every request; cached (derived fields only,
+ * 6 h) in the dashboard's timed cache.
+ */
+const upcomingLoader = createUpcomingLoader({
+  now: () => new Date(),
+  cache: dashboardCache,
+  fetchMany: organizerFetchMany(() => discordClient),
+});
+
 const auditActivity = async (entry: LogEntry) => {
   if (!discordClient) {
     return false;
@@ -138,17 +162,26 @@ const auditActivity = async (entry: LogEntry) => {
   return logActivity(discordClient, entry);
 };
 
+/** The moderation log for workspace actions and refusals: embed only, no pings. */
+const workspaceModerationLog = async (entry: LogEntry) => {
+  if (!discordClient) {
+    return false;
+  }
+  return logModeration(discordClient, entry);
+};
+
 /** Production page deps, each read wired to its repository's instance(). */
 export function dashboardPageDeps(): DashboardPageDeps {
+  const isLeadership = discordRoleCheck(
+    () => discordClient,
+    SERVER_ROLES.leadership,
+  );
   return {
     now: () => new Date(),
     // The router's cache and clock (Date.now), so a revocation here is the
     // one the gate reads.
     sessionStore: async () => new SessionStore(await dashboardCache()),
-    isLeadership: discordRoleCheck(
-      () => discordClient,
-      SERVER_ROLES.leadership,
-    ),
+    isLeadership,
     audit: auditActivity,
     snapshots: () => PostgresReportSnapshotRepository.instance(),
     // The refresh route: the timed request phase, the late-lease release and
@@ -168,6 +201,30 @@ export function dashboardPageDeps(): DashboardPageDeps {
     identity: () => PostgresIdentityRepository.instance(),
     linkProgress: () => PostgresLinkProgressRepository.instance(),
     memberLinks: () => PostgresMemberRepository.instance(),
+    workspace: () => PostgresNoShowWorkspaceRepository.instance(),
+    workspaceActions: {
+      perform: (input) =>
+        performWorkspaceAction(
+          {
+            now: () => new Date(),
+            repository: () => PostgresNoShowWorkspaceRepository.instance(),
+            moderationLog: workspaceModerationLog,
+            isLeadership,
+          },
+          input,
+        ),
+      sync: (period) =>
+        syncWorkspace(
+          {
+            now: () => new Date(),
+            repository: () => PostgresNoShowWorkspaceRepository.instance(),
+            snapshots: () => PostgresReportSnapshotRepository.instance(),
+          },
+          period,
+        ),
+      moderationLog: workspaceModerationLog,
+    },
+    upcoming: upcomingLoader,
   };
 }
 

@@ -2,8 +2,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const poolOptions = vi.hoisted(() => [] as { max?: number }[]);
 
-// No database: the repository only needs a pool it can call query on.
+// No database: the repository only needs a pool it can call query on, and
+// a client for the schema transaction.
 vi.mock('pg', () => {
+  const answer = () => Promise.resolve({ rows: [], command: 'COMMIT' });
   class Pool {
     constructor(options: { max?: number }) {
       poolOptions.push(options);
@@ -14,7 +16,16 @@ vi.mock('pg', () => {
     }
 
     query() {
-      return Promise.resolve({ rows: [] });
+      return answer();
+    }
+
+    connect() {
+      return Promise.resolve({
+        query: answer,
+        on() {},
+        removeListener() {},
+        release() {},
+      });
     }
   }
   return { default: { Pool } };

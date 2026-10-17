@@ -3,13 +3,14 @@
 */
 import { Client } from 'discord.js';
 import { ClientError } from 'graphql-request';
+import { Logger } from 'tslog';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { BOT_ALERTS_CHANNEL_ID, SERVER_ROLES } from '../../../src/constants.js';
+import { BOT_ALERTS_CHANNEL_ID } from '../../../src/constants.js';
 import { GqlMeetupClient } from '../../../src/lib/client/meetup/gqlClient.js';
 import {
   logAlert,
-  postRoleNotice,
+  recentEmbedTitles,
 } from '../../../src/lib/helpers/discordLogger.js';
 import {
   buildMonth,
@@ -17,15 +18,17 @@ import {
   defaultBuildJobDeps,
   DEPARTED_GUARD_MIN_MEMBERS,
   describeBuildError,
+  MANUAL_REBUILDS_PER_HOUR,
   maybePostReportReady,
   MembershipsUnreadableError,
   MonthBeforeGroupBuildError,
   MonthBuildDeps,
   REPORT_READY_ENABLED,
-  REPORT_READY_ROLE_IDS,
-  reportMonthUrl,
+  reportReadyEntry,
   requestRebuild,
   runBuildTick,
+  WORKSPACE_MALFORMED_META_DEADLINE_MS,
+  WORKSPACE_SYNC_DEADLINE_MS,
 } from '../../../src/lib/reports/buildJob.js';
 import {
   planDueWork,
@@ -38,10 +41,11 @@ import {
   OrganizerTokenUnavailableError,
   withOrganizerMeetup,
 } from '../../../src/lib/reports/organizerMeetup.js';
-import { Period } from '../../../src/lib/reports/period.js';
+import { Period, periodOf } from '../../../src/lib/reports/period.js';
 import { REPORT_TYPES } from '../../../src/lib/reports/types.js';
 import { PostgresDashboardNoticeRepository } from '../../../src/lib/repositories/postgresDashboardNoticeRepository.js';
 import { PostgresLinkProgressRepository } from '../../../src/lib/repositories/postgresLinkProgressRepository.js';
+import { PostgresNoShowWorkspaceRepository } from '../../../src/lib/repositories/postgresNoShowWorkspaceRepository.js';
 import { PostgresReportSnapshotRepository } from '../../../src/lib/repositories/postgresReportSnapshotRepository.js';
 import { PostgresSuspensionRepository } from '../../../src/lib/repositories/postgresSuspensionRepository.js';
 import { ApplicationCache } from '../../../src/util/cache.js';
@@ -52,6 +56,7 @@ import {
   FakeLinkProgressStore,
   FakeNoticeStore,
   FakeSnapshotStore,
+  Harness,
   makeDeps,
   monthReports,
 } from './buildJobFakes.js';
@@ -75,7 +80,7 @@ vi.mock('../../../src/lib/reports/linkProgress.js', () => ({
 }));
 vi.mock('../../../src/lib/helpers/discordLogger.js', () => ({
   logAlert: vi.fn(),
-  postRoleNotice: vi.fn(),
+  recentEmbedTitles: vi.fn(),
 }));
 vi.mock(
   '../../../src/lib/repositories/postgresReportSnapshotRepository.js',
@@ -83,7 +88,12 @@ vi.mock(
 );
 vi.mock(
   '../../../src/lib/repositories/postgresDashboardNoticeRepository.js',
-  () => ({ PostgresDashboardNoticeRepository: { instance: vi.fn() } }),
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import('../../../src/lib/repositories/postgresDashboardNoticeRepository.js')
+    >()),
+    PostgresDashboardNoticeRepository: { instance: vi.fn() },
+  }),
 );
 vi.mock(
   '../../../src/lib/repositories/postgresLinkProgressRepository.js',
@@ -93,15 +103,21 @@ vi.mock(
   '../../../src/lib/repositories/postgresSuspensionRepository.js',
   () => ({ PostgresSuspensionRepository: { instance: vi.fn() } }),
 );
+vi.mock(
+  '../../../src/lib/repositories/postgresNoShowWorkspaceRepository.js',
+  () => ({ PostgresNoShowWorkspaceRepository: { instance: vi.fn() } }),
+);
 
 const SEPT: Period = { year: 2026, month: 9 };
 const OCT: Period = { year: 2026, month: 10 };
 const LEASE_KEY = 'report-build-claim';
-const MOD = '912474048775221270';
-const LEADERSHIP = '1347289004932075521';
 const REQUESTER = '123456789012345678';
 
 const isSept = (p: Period) => p.year === 2026 && p.month === 9;
+const ready = (h: Harness) =>
+  h.alert.mock.calls
+    .map(([e]) => e)
+    .filter((e) => e.title.startsWith('Reports ready:'));
 const titles = (alert: { mock: { calls: [{ title: string }][] } }) =>
   alert.mock.calls.map(([entry]) => entry.title);
 const descriptions = (alert: {
@@ -390,7 +406,10 @@ describe('runBuildTick builds', () => {
   it('posts a summary for a finished month built by the job', async () => {
     const h = makeDeps();
     await runBuildTick(h.deps);
-    expect(titles(h.alert)).toEqual(['Reports built: September 2026']);
+    expect(titles(h.alert)).toEqual([
+      'Reports built: September 2026',
+      'Reports ready: September 2026', // the job's own build finishes the month
+    ]);
     const [description] = descriptions(h.alert);
     expect(description).toContain('Hall of Fame: 4 events, 3 hosts (1 new).');
     expect(description).toContain(
@@ -457,7 +476,6 @@ describe('failure alerts', () => {
       expect(d).toContain('Meetup API error (HTTP 502)');
     });
     expect(JSON.stringify(h.alert.mock.calls)).not.toContain(SENTINEL);
-    expect(JSON.stringify(h.postRoleNotice.mock.calls)).not.toContain(SENTINEL);
   });
 
   it('an organizer-login failure shows its own message', async () => {
@@ -956,7 +974,10 @@ describe('attendance note', () => {
       Promise.resolve(monthReports(period, isSept(period) ? ZERO : undefined)),
     );
     await runBuildTick(h.deps);
-    expect(titles(h.alert)).toEqual(['Reports built: September 2026']);
+    expect(titles(h.alert)).toEqual([
+      'Reports built: September 2026',
+      'Reports ready: September 2026', // the job's own build finishes the month
+    ]);
     expect(descriptions(h.alert)[0]).toContain(
       'Note: no no-shows recorded for September 2026 across 6 past events with RSVPs; check that attendance was taken.',
     );
@@ -964,7 +985,7 @@ describe('attendance note', () => {
       (r) => r.reportType === 'no_show' && isSept(r.period),
     );
     expect(noShowSave.sourceComplete).toBe(true);
-    expect(h.postRoleNotice).toHaveBeenCalledTimes(1);
+    expect(ready(h)).toHaveLength(1);
   });
 
   it('no note for an open month with no no-shows', async () => {
@@ -990,7 +1011,10 @@ describe('attendance note', () => {
       ),
     );
     await runBuildTick(h.deps);
-    expect(titles(h.alert)).toEqual(['Reports built: September 2026']);
+    expect(titles(h.alert)).toEqual([
+      'Reports built: September 2026',
+      'Reports ready: September 2026', // the job's own build finishes the month
+    ]);
     expect(descriptions(h.alert)[0]).not.toContain('no no-shows recorded');
   });
 });
@@ -1017,53 +1041,72 @@ describe('report-ready', () => {
     return h;
   }
 
-  it('is off in this PR', () => {
-    expect(REPORT_READY_ENABLED).toBe(false);
+  it('is on', () => {
+    expect(REPORT_READY_ENABLED).toBe(true);
   });
 
-  it('report-ready mentions both roles in content with allowedMentions limited to them', async () => {
+  it('report-ready is a plain alert with the counts and month links', async () => {
     const h = settled();
     await runBuildTick(h.deps);
     expect(h.fetchMonthReports).not.toHaveBeenCalled();
-    expect(h.postRoleNotice).toHaveBeenCalledTimes(1);
-    const [roleIds, content, entry] = h.postRoleNotice.mock.calls[0];
-    expect(roleIds).toEqual([MOD, LEADERSHIP]);
-    expect(REPORT_READY_ROLE_IDS).toEqual([
-      SERVER_ROLES.moderator,
-      SERVER_ROLES.leadership,
+    expect(ready(h)).toEqual([
+      {
+        title: 'Reports ready: September 2026',
+        description: [
+          'No-shows: 2 warnings, 3 suspension candidates.',
+          'Hall of Fame: 4 events, 3 hosts (1 new).',
+          'No-show workspace: https://meetup-discord-bot.herokuapp.com/dashboard/no-shows/2026-09',
+          'Hall of Fame page: https://meetup-discord-bot.herokuapp.com/dashboard/hall-of-fame/2026-09',
+          'No-show history page: https://meetup-discord-bot.herokuapp.com/dashboard/no-show-history/2026-09',
+        ].join('\n'),
+      },
     ]);
-    expect(content).toContain(`<@&${MOD}>`);
-    expect(content).toContain(`<@&${LEADERSHIP}>`);
-    expect(content).toContain(
-      '<https://meetup-discord-bot.herokuapp.com/dashboard/no-shows/2026-09>',
+  });
+
+  it('report-ready never mentions anyone', async () => {
+    const h = settled();
+    await runBuildTick(h.deps);
+    expect(ready(h)).toHaveLength(1);
+    expect(JSON.stringify(h.alert.mock.calls)).not.toMatch(
+      /<@|@everyone|@here/,
     );
-    expect(reportMonthUrl(SEPT)).toBe(
-      'https://meetup-discord-bot.herokuapp.com/dashboard/no-shows/2026-09',
+  });
+
+  it('report-ready counts tolerate a malformed stored summary', () => {
+    expect(reportReadyEntry(SEPT, null, { warnings: 'x' }).description).toMatch(
+      /^No-shows: 0 warnings, 0 suspension candidates\./,
     );
-    expect(entry.title).toBe('Reports ready: September 2026');
-    expect(entry.description).toContain(
-      'No-shows: 2 warnings, 3 suspension candidates.',
-    );
-    expect(entry.description).toContain(
-      'Hall of Fame: 4 events, 3 hosts (1 new).',
-    );
-    expect(h.alert).not.toHaveBeenCalled();
   });
 
   it('report-ready posts once per period across restarts', async () => {
-    const notices = new FakeNoticeStore();
+    const clock = new Clock('2026-10-10T16:15:00Z');
+    const notices = new FakeNoticeStore(() => clock.now().getTime());
     const snapshots = new FakeSnapshotStore();
     snapshots.seedBoth(SEPT, '2026-10-03T16:10:00Z');
     snapshots.seedBoth(OCT, '2026-10-10T16:05:00Z');
-    const first = settled({ notices, snapshots });
+    const first = settled({ clock, notices, snapshots });
     await runBuildTick(first.deps);
-    const second = settled({ notices, snapshots, cache: new FakeCache() });
-    second.clock.set('2026-10-10T16:30:00Z');
+    clock.set('2026-10-10T16:30:00Z');
+    const second = settled({
+      clock,
+      notices: notices.caller(),
+      snapshots,
+      cache: new FakeCache(),
+    });
     await runBuildTick(second.deps);
+    // Past the reclaim window: a posted marker is final, so nothing re-posts.
+    clock.set('2026-10-10T17:01:00Z');
+    const third = settled({
+      clock,
+      notices: notices.caller(),
+      snapshots,
+      cache: new FakeCache(),
+    });
+    await runBuildTick(third.deps);
     expect(
-      first.postRoleNotice.mock.calls.length +
-        second.postRoleNotice.mock.calls.length,
+      ready(first).length + ready(second).length + ready(third).length,
     ).toBe(1);
+    expect(notices.isPosted('report_ready', SEPT)).toBe(true);
   });
 
   it('report-ready for the latest finished month even when the backfill built it', async () => {
@@ -1073,7 +1116,7 @@ describe('report-ready', () => {
     const h = settled({ snapshots });
     await runBuildTick(h.deps);
     expect(h.fetchMonthReports).not.toHaveBeenCalled();
-    expect(h.postRoleNotice).toHaveBeenCalledTimes(1);
+    expect(ready(h)).toHaveLength(1);
   });
 
   it('report-ready waits for a build made after the month ended', async () => {
@@ -1082,7 +1125,7 @@ describe('report-ready', () => {
     await runBuildTick(h.deps);
     expect(fetchedPeriods(h)).toEqual(['2026-10']); // no previous-month build on the 1st
     expect(h.notices.claim).not.toHaveBeenCalled();
-    expect(h.postRoleNotice).not.toHaveBeenCalled();
+    expect(ready(h)).toHaveLength(0);
   });
 
   it('report-ready waits for both rows', async () => {
@@ -1091,25 +1134,104 @@ describe('report-ready', () => {
     snapshots.seed('no_show', SEPT, '2026-09-30T16:10:00Z');
     const h = settled({ snapshots });
     expect(await maybePostReportReady(h.deps)).toBe('skipped');
-    expect(h.postRoleNotice).not.toHaveBeenCalled();
+    expect(ready(h)).toHaveLength(0);
   });
 
   it('failed report-ready post is retried', async () => {
     const h = settled();
-    h.postRoleNotice.mockResolvedValueOnce(false);
+    h.alert.mockResolvedValueOnce(false);
     await runBuildTick(h.deps);
     expect(h.notices.release).toHaveBeenCalledWith('report_ready', SEPT);
-    expect(h.notices.markers.size).toBe(0);
+    expect(h.notices.isPosted('report_ready', SEPT)).toBe(false);
 
     h.clock.set('2026-10-10T16:30:00Z');
     await runBuildTick(h.deps);
-    expect(h.postRoleNotice).toHaveBeenCalledTimes(2);
-    expect(h.notices.markers.has('report_ready:2026-09')).toBe(true);
+    expect(ready(h)).toHaveLength(2);
+    expect(h.notices.isPosted('report_ready', SEPT)).toBe(true);
+  });
+
+  it('report-ready after a crash between claim and post is posted on a later tick', async () => {
+    const h = settled();
+    // The "crashed" process: it claimed and never posted or released.
+    expect(await h.notices.claim('report_ready', SEPT)).toBe('fresh');
+    h.clock.set('2026-10-10T16:30:00Z');
+    await runBuildTick(h.deps);
+    expect(ready(h)).toHaveLength(0); // inside the reclaim window
+    h.clock.set('2026-10-10T16:46:00Z');
+    await runBuildTick(h.deps);
+    expect(ready(h)).toHaveLength(1);
+    expect(h.recentAlertTitles).toHaveBeenCalledTimes(1);
+    expect(h.notices.isPosted('report_ready', SEPT)).toBe(true);
+  });
+
+  it('a retry that finds its notice in the channel marks it posted without posting again', async () => {
+    const h = settled();
+    h.alert.mockResolvedValueOnce(false); // e.g. a timeout on a send that landed
+    h.recentAlertTitles.mockResolvedValue([
+      'Reports built: October 2026',
+      'Reports ready: September 2026',
+    ]);
+    await runBuildTick(h.deps);
+    expect(h.recentAlertTitles).not.toHaveBeenCalled();
+    h.clock.set('2026-10-10T16:30:00Z');
+    await runBuildTick(h.deps);
+    expect(ready(h)).toHaveLength(1); // the "failed" one only
+    expect(h.recentAlertTitles).toHaveBeenCalledTimes(1);
+    expect(h.notices.isPosted('report_ready', SEPT)).toBe(true);
+  });
+
+  it('a retry posts when the channel history cannot be read', async () => {
+    const h = settled();
+    h.alert.mockResolvedValueOnce(false);
+    h.recentAlertTitles.mockResolvedValue(undefined);
+    await runBuildTick(h.deps);
+    h.clock.set('2026-10-10T16:30:00Z');
+    await runBuildTick(h.deps);
+    expect(ready(h)).toHaveLength(2);
+    expect(h.notices.isPosted('report_ready', SEPT)).toBe(true);
+  });
+
+  it('a retry posts when reading the channel history throws', async () => {
+    const h = settled();
+    h.alert.mockResolvedValueOnce(false);
+    h.recentAlertTitles.mockRejectedValue(new Error('discord down'));
+    await runBuildTick(h.deps);
+    h.clock.set('2026-10-10T16:30:00Z');
+    expect(await maybePostReportReady(h.deps)).toBe('posted');
+    expect(ready(h)).toHaveLength(2);
+  });
+
+  it('a retry does not match a different month in the channel', async () => {
+    const h = settled();
+    h.alert.mockResolvedValueOnce(false);
+    h.recentAlertTitles.mockResolvedValue(['Reports ready: August 2026']);
+    await runBuildTick(h.deps);
+    h.clock.set('2026-10-10T16:30:00Z');
+    await runBuildTick(h.deps);
+    expect(ready(h)).toHaveLength(2);
+  });
+
+  it('a fresh claim never reads the channel history', async () => {
+    const h = settled();
+    await runBuildTick(h.deps);
+    expect(ready(h)).toHaveLength(1);
+    expect(h.recentAlertTitles).not.toHaveBeenCalled();
+    expect(h.notices.markPosted).toHaveBeenCalledWith('report_ready', SEPT);
+  });
+
+  it('a markPosted failure after a post does not post again inside the reclaim window', async () => {
+    const h = settled();
+    h.notices.markPosted.mockRejectedValueOnce(new Error('pg down'));
+    expect(await maybePostReportReady(h.deps)).toBe('failed');
+    expect(ready(h)).toHaveLength(1);
+    h.clock.set('2026-10-10T16:30:00Z');
+    await runBuildTick(h.deps);
+    expect(ready(h)).toHaveLength(1);
   });
 
   it('claim and release go to the same notice store', async () => {
     const h = settled();
-    h.postRoleNotice.mockResolvedValueOnce(false);
+    h.alert.mockResolvedValueOnce(false);
     expect(await maybePostReportReady(h.deps)).toBe('failed');
     expect(h.notices.claim).toHaveBeenCalledTimes(1);
     expect(h.notices.release).toHaveBeenCalledTimes(1);
@@ -1119,7 +1241,7 @@ describe('report-ready', () => {
     const h = settled({ reportReadyEnabled: false });
     await runBuildTick(h.deps);
     expect(h.notices.claim).not.toHaveBeenCalled();
-    expect(h.postRoleNotice).not.toHaveBeenCalled();
+    expect(ready(h)).toHaveLength(0);
   });
 
   it('a store error is reported as failed, not thrown', async () => {
@@ -1246,7 +1368,7 @@ describe('requestRebuild', () => {
     expect(titles(h.alert)).toEqual(['Reports built: September 2026']);
     expect(descriptions(h.alert)[0]).toContain(`<@${REQUESTER}>`);
     expect(h.cache.values.has(LEASE_KEY)).toBe(false);
-    expect(h.postRoleNotice).not.toHaveBeenCalled(); // manual rebuilds never post report-ready
+    expect(ready(h)).toHaveLength(0); // manual rebuilds never post report-ready
   });
 
   it('a failed manual rebuild alerts and releases the lease', async () => {
@@ -1352,6 +1474,144 @@ describe('requestRebuild', () => {
   });
 });
 
+describe('manual refresh budget', () => {
+  const JUN: Period = { year: 2026, month: 6 };
+  const JUL: Period = { year: 2026, month: 7 };
+  const AUG: Period = { year: 2026, month: 8 };
+  const FOUR = [JUN, JUL, AUG, SEPT];
+  const BUDGET_MESSAGE =
+    'Reports were refreshed 4 times in this hour already. ' +
+    'Try again after the top of the hour.';
+  const budgetKeys = (h: Harness) =>
+    [...h.cache.values.keys()].filter((k) =>
+      k.startsWith('report-rebuild-budget-'),
+    );
+
+  /** Starts a manual rebuild and waits for it, so the lease is free again. */
+  async function refresh(h: Harness, period: Period, by = REQUESTER) {
+    const result = await requestRebuild(h.deps, period, by);
+    if (result.status === 'started') {
+      await result.done;
+    }
+    return result;
+  }
+
+  async function useAllFour(h: Harness) {
+    for (const period of FOUR) {
+      // eslint-disable-next-line no-await-in-loop -- one rebuild at a time, as the lease requires
+      expect((await refresh(h, period)).status).toBe('started');
+    }
+  }
+
+  it('requestRebuild refuses a fifth manual refresh in one UTC hour', async () => {
+    expect(MANUAL_REBUILDS_PER_HOUR).toBe(4);
+    const h = makeDeps();
+    await useAllFour(h);
+    h.clock.set('2026-10-05T16:59:59.999Z');
+    expect(await refresh(h, OCT, '987654321')).toEqual({
+      status: 'budget',
+      message: BUDGET_MESSAGE,
+    });
+    expect(h.fetchMonthReports).toHaveBeenCalledTimes(4);
+    expect(budgetKeys(h)).toHaveLength(4);
+    for (const key of budgetKeys(h)) {
+      expect(key).toMatch(/^report-rebuild-budget-2026-10-05T16-[0-3]$/);
+      expect(h.cache.ttls.get(key)).toBe(60 * 60);
+    }
+  });
+
+  it('a refused refresh uses no budget', async () => {
+    const h = makeDeps();
+    // Busy: another build holds the lease.
+    h.cache.values.set(LEASE_KEY, 'other');
+    expect((await refresh(h, OCT)).status).toBe('busy');
+    h.cache.values.delete(LEASE_KEY);
+    // Cooldown: the month was refreshed by someone a moment ago.
+    h.cache.values.set('report-rebuild-cooldown-2026-10', '987654321');
+    expect((await refresh(h, OCT)).status).toBe('cooldown');
+    h.cache.values.delete('report-rebuild-cooldown-2026-10');
+    // Identity sweep.
+    h.cache.values.set('identity-digest-2026-10-05', 'x');
+    expect((await refresh(h, OCT)).status).toBe('identity-sweep');
+    h.cache.values.delete('identity-digest-2026-10-05');
+    expect(budgetKeys(h)).toEqual([]);
+    // All four slots are still free.
+    await useAllFour(h);
+  });
+
+  it('the other refusals come before the budget', async () => {
+    const h = makeDeps({ clock: new Clock('2026-10-05T17:00:00Z') });
+    await useAllFour(h);
+    h.cache.values.set(LEASE_KEY, 'other');
+    expect((await refresh(h, OCT)).status).toBe('busy');
+    h.cache.values.delete(LEASE_KEY);
+    // SEPT was refreshed a moment ago: still cooling, which says more than "budget".
+    expect((await refresh(h, SEPT)).status).toBe('cooldown');
+    expect((await refresh(h, { year: 2026, month: 11 })).status).toBe(
+      'future-month',
+    );
+    h.clock.set('2026-10-05T17:50:00Z');
+    expect((await refresh(h, OCT)).status).toBe('quiet-hour');
+  });
+
+  it('the budget resets at the next UTC hour', async () => {
+    // Half past: the slots' one-hour TTLs are still running at 17:00, so only
+    // the hour in the key frees them.
+    const h = makeDeps({ clock: new Clock('2026-10-05T16:30:00Z') });
+    await useAllFour(h);
+    h.clock.set('2026-10-05T16:59:59.999Z');
+    expect((await refresh(h, OCT)).status).toBe('budget');
+    h.clock.set('2026-10-05T17:00:00Z');
+    expect((await refresh(h, OCT)).status).toBe('started');
+    // A whole new hour: four more (the June–September cooldowns have expired).
+    h.clock.set('2026-10-05T17:20:00Z');
+    expect((await refresh(h, JUN)).status).toBe('started');
+    expect((await refresh(h, JUL)).status).toBe('started');
+    expect((await refresh(h, AUG)).status).toBe('started');
+    expect((await refresh(h, SEPT)).status).toBe('budget');
+  });
+
+  it('a budget refusal leaves no cooldown on the month and no lease', async () => {
+    const h = makeDeps();
+    await useAllFour(h);
+    expect((await refresh(h, OCT)).status).toBe('budget');
+    expect(h.cache.values.has('report-rebuild-cooldown-2026-10')).toBe(false);
+    expect(h.cache.values.has(LEASE_KEY)).toBe(false);
+    expect(h.fetchMonthReports).toHaveBeenCalledTimes(4);
+    // The next hour, the same month starts at once: nothing was left behind.
+    h.clock.set('2026-10-05T17:00:00Z');
+    expect((await refresh(h, OCT)).status).toBe('started');
+  });
+
+  it("the job's own builds use no budget", async () => {
+    const h = makeDeps();
+    await runBuildTick(h.deps);
+    expect(h.fetchMonthReports.mock.calls.length).toBeGreaterThanOrEqual(1);
+    expect(budgetKeys(h)).toEqual([]);
+    expect(h.cache.values.has(LEASE_KEY)).toBe(false);
+    await useAllFour(h);
+  });
+
+  it('a budget read failure releases the lease and the cooldown, then rejects', async () => {
+    class BudgetFails extends ExpiringCache {
+      override async exclusive_set(key: string, value: string, ttl?: number) {
+        if (key.startsWith('report-rebuild-budget-')) {
+          throw new Error('redis down');
+        }
+        return super.exclusive_set(key, value, ttl);
+      }
+    }
+    const clock = new Clock('2026-10-05T16:15:00Z');
+    const h = makeDeps({ clock, cache: new BudgetFails(clock) });
+    await expect(requestRebuild(h.deps, OCT, REQUESTER)).rejects.toThrow(
+      'redis down',
+    );
+    expect(h.cache.values.has(LEASE_KEY)).toBe(false);
+    expect(h.cache.values.has('report-rebuild-cooldown-2026-10')).toBe(false);
+    expect(h.fetchMonthReports).not.toHaveBeenCalled();
+  });
+});
+
 describe('buildSummaryEntry', () => {
   const outcome = (builtBy: string) => ({
     period: SEPT,
@@ -1442,7 +1702,7 @@ describe('defaultBuildJobDeps', () => {
     expect(deps.snapshots).toBe(snapshots);
     expect(deps.notices).toBe(notices);
     expect(deps.linkProgress).toBe(linkProgress);
-    expect(deps.reportReadyEnabled()).toBe(false);
+    expect(deps.reportReadyEnabled()).toBe(true);
 
     const asOf = new Date('2026-10-01T07:00:00Z');
     const cutoff = new Date('2026-10-01T00:00:00Z');
@@ -1463,13 +1723,12 @@ describe('defaultBuildJobDeps', () => {
     const entry = { title: 't' };
     await deps.alert(entry);
     expect(logAlert).toHaveBeenCalledWith(client, entry);
-    await deps.postRoleNotice(REPORT_READY_ROLE_IDS, 'c', entry);
-    expect(postRoleNotice).toHaveBeenCalledWith(
+    expect(deps).not.toHaveProperty('postRoleNotice');
+    vi.mocked(recentEmbedTitles).mockResolvedValue(['x']);
+    expect(await deps.recentAlertTitles()).toEqual(['x']);
+    expect(recentEmbedTitles).toHaveBeenCalledWith(
       client,
       BOT_ALERTS_CHANNEL_ID,
-      [MOD, LEADERSHIP],
-      'c',
-      entry,
     );
     await deps.collectLinkProgress();
     expect(collectLinkProgress).toHaveBeenCalledWith(client);
@@ -1479,6 +1738,36 @@ describe('defaultBuildJobDeps', () => {
 });
 
 describe('fake store sanity', () => {
+  it("FakeNoticeStore.markPosted succeeds only for the caller's current, unposted claim", async () => {
+    const clock = new Clock('2026-10-10T16:15:00Z');
+    const a = new FakeNoticeStore(() => clock.now().getTime());
+    const b = a.caller(); // another process on the same table
+    // No claim of its own.
+    expect(await b.markPosted('report_ready', SEPT)).toBe(false);
+    expect(await a.claim('report_ready', SEPT)).toBe('fresh');
+    expect(await b.markPosted('report_ready', SEPT)).toBe(false);
+    expect(a.isPosted('report_ready', SEPT)).toBe(false);
+    // b takes over the crashed claim: a's markPosted no longer lands.
+    clock.set('2026-10-10T16:46:00Z');
+    expect(await b.claim('report_ready', SEPT)).toBe('retry');
+    expect(await a.markPosted('report_ready', SEPT)).toBe(false);
+    expect(await b.markPosted('report_ready', SEPT)).toBe(true);
+    expect(a.isPosted('report_ready', SEPT)).toBe(true);
+    // A claim is used once.
+    expect(await b.markPosted('report_ready', SEPT)).toBe(false);
+  });
+
+  it("FakeNoticeStore.release touches only the caller's current claim", async () => {
+    const clock = new Clock('2026-10-10T16:15:00Z');
+    const a = new FakeNoticeStore(() => clock.now().getTime());
+    const b = a.caller();
+    expect(await a.claim('report_ready', SEPT)).toBe('fresh');
+    await b.release('report_ready', SEPT); // not b's claim
+    expect(await b.claim('report_ready', SEPT)).toBe(false);
+    await a.release('report_ready', SEPT);
+    expect(await b.claim('report_ready', SEPT)).toBe('retry');
+  });
+
   it('FakeLinkProgressStore and FakeSnapshotStore behave like the repositories', async () => {
     const store = new FakeLinkProgressStore();
     expect(await store.hasDay('2026-10-05')).toBe(false);
@@ -1498,8 +1787,10 @@ describe('month page links', () => {
     'Hall of Fame page: https://meetup-discord-bot.herokuapp.com/dashboard/hall-of-fame/2026-09';
   const NO_SHOW_LINK =
     'No-show history page: https://meetup-discord-bot.herokuapp.com/dashboard/no-show-history/2026-09';
+  const WORKSPACE_LINK =
+    'No-show workspace: https://meetup-discord-bot.herokuapp.com/dashboard/no-shows/2026-09';
   const linkLines = (description: string) =>
-    description.split('\n').filter((line) => line.includes(' page: '));
+    description.split('\n').filter((line) => line.includes('https://'));
   const outcome = (period: Period) => ({
     period,
     builtBy: 'job',
@@ -1523,12 +1814,16 @@ describe('month page links', () => {
   it('the build summary links the month pages', async () => {
     const h = makeDeps();
     await runBuildTick(h.deps);
-    expect(titles(h.alert)).toEqual(['Reports built: September 2026']);
+    expect(titles(h.alert)).toEqual([
+      'Reports built: September 2026',
+      'Reports ready: September 2026', // the job's own build finishes the month
+    ]);
     expect(descriptions(h.alert)[0]).toBe(
       [
         'Hall of Fame: 4 events, 3 hosts (1 new).',
         'No-shows: 8 no-show RSVPs; 2 warnings, 3 suspension candidates.',
         'Took 0.0 s. Built by the daily job.',
+        WORKSPACE_LINK,
         HOF_LINK,
         NO_SHOW_LINK,
       ].join('\n'),
@@ -1545,6 +1840,7 @@ describe('month page links', () => {
     const lines = description.split('\n');
     expect(lines.slice(2)).toEqual([
       'Took 1.2 s. Built by the daily job.',
+      WORKSPACE_LINK,
       HOF_LINK,
       NO_SHOW_LINK,
       'Note: no no-shows recorded for September 2026 across 6 past events with RSVPs; check that attendance was taken.',
@@ -1561,7 +1857,7 @@ describe('month page links', () => {
     expect(descriptions(h.alert)[0]).toBe(
       `Building the September 2026 reports failed after 0.0 s: ${describeBuildError(new Error('boom'))}\n\n` +
         'It retries at most once an hour (never 17:45–19:00 UTC); this alert repeats at most once a day until it works.\n\n' +
-        `${HOF_LINK}\n${NO_SHOW_LINK}`,
+        `${WORKSPACE_LINK}\n${HOF_LINK}\n${NO_SHOW_LINK}`,
     );
   });
 
@@ -1572,6 +1868,7 @@ describe('month page links', () => {
     await (result as { done: Promise<{ ok: boolean }> }).done;
     expect(titles(h.alert)).toEqual(['Report build failed: September 2026']);
     expect(linkLines(descriptions(h.alert)[0])).toEqual([
+      WORKSPACE_LINK,
       HOF_LINK,
       NO_SHOW_LINK,
     ]);
@@ -1602,8 +1899,8 @@ describe('month page links', () => {
     const [description] = descriptions(h.alert);
     const lines = description
       .split('\n')
-      .filter((line) => / page: /.test(line));
-    expect(lines).toEqual([HOF_LINK, NO_SHOW_LINK]);
+      .filter((line) => line.includes('https://'));
+    expect(lines).toEqual([WORKSPACE_LINK, HOF_LINK, NO_SHOW_LINK]);
     expect(description.toLowerCase()).not.toContain('evil');
     expect(description).not.toContain('../x');
   });
@@ -1619,7 +1916,11 @@ describe('month page links', () => {
     const result = await requestRebuild(h.deps, SEPT, REQUESTER);
     await (result as { done: Promise<{ ok: boolean }> }).done;
     const [description] = descriptions(h.alert);
-    expect(linkLines(description)).toEqual([HOF_LINK, NO_SHOW_LINK]);
+    expect(linkLines(description)).toEqual([
+      WORKSPACE_LINK,
+      HOF_LINK,
+      NO_SHOW_LINK,
+    ]);
     expect(description).not.toContain('2026-08');
   });
 
@@ -1639,6 +1940,39 @@ describe('month page links', () => {
       expect(entry?.description).not.toContain('2026-13');
       expect(entry?.description).not.toContain('/dashboard/');
     }
+  });
+
+  it('build summaries and failures link the workspace for workspace months only', async () => {
+    const AUG: Period = { year: 2026, month: 8 };
+    const AUG_LINKS = [
+      'Hall of Fame page: https://meetup-discord-bot.herokuapp.com/dashboard/hall-of-fame/2026-08',
+      'No-show history page: https://meetup-discord-bot.herokuapp.com/dashboard/no-show-history/2026-08',
+    ];
+    expect(linkLines(buildSummaryEntry(outcome(SEPT)).description)).toEqual([
+      WORKSPACE_LINK,
+      HOF_LINK,
+      NO_SHOW_LINK,
+    ]);
+
+    // A manual rebuild of August (before the workspace): built, then failed.
+    const built = makeDeps();
+    const ok = await requestRebuild(built.deps, AUG, REQUESTER);
+    await (ok as { done: Promise<{ ok: boolean }> }).done;
+    expect(titles(built.alert)).toEqual(['Reports built: August 2026']);
+    expect(linkLines(descriptions(built.alert)[0])).toEqual(AUG_LINKS);
+
+    const failed = makeDeps();
+    failed.fetchMonthReports.mockRejectedValue(new Error('boom'));
+    const bad = await requestRebuild(failed.deps, AUG, REQUESTER);
+    await (bad as { done: Promise<{ ok: boolean }> }).done;
+    expect(titles(failed.alert)).toEqual(['Report build failed: August 2026']);
+    expect(linkLines(descriptions(failed.alert)[0])).toEqual(AUG_LINKS);
+
+    // Report-ready for August (announced in September) links history, not a workspace.
+    const notice = reportReadyEntry(AUG, {}, {}).description;
+    expect(linkLines(notice)).toEqual(AUG_LINKS);
+    expect(notice).not.toContain('/no-shows/');
+    expect(notice).not.toContain('workspace');
   });
 
   it('a month before the group began gets no links (the dashboard 404s it)', () => {
@@ -1701,7 +2035,7 @@ describe('month page links', () => {
       'Reports built: September 2026',
       'Report build failed: September 2026',
     ]);
-    expect(h.postRoleNotice).not.toHaveBeenCalled();
+    expect(ready(h)).toHaveLength(0);
     for (const [entry] of h.alert.mock.calls) {
       expect(Object.keys(entry)).toEqual(['title', 'description']);
       expect(entry).not.toHaveProperty('content');
@@ -1709,5 +2043,566 @@ describe('month page links', () => {
       expect(entry.description).not.toContain('@everyone');
       expect(entry.description).not.toContain('@here');
     }
+  });
+});
+
+describe('workspace sync hooks', () => {
+  const AUG: Period = { year: 2026, month: 8 };
+  const synced = (h: Harness) =>
+    h.syncWorkspace.mock.calls.map(([p]) => `${p.year}-${p.month}`);
+  const workspaceAlerts = (h: Harness) =>
+    titles(h.alert).filter((t) => t.startsWith('No-show workspace'));
+  const LINK = { linked: 1, unlinked: 1, reverifyTagged: 0, onboarding: 0 };
+
+  /** Oct 10: nothing is due; September is finished and built. */
+  function idle() {
+    const h = makeDeps({ clock: new Clock('2026-10-10T16:15:00Z') });
+    h.snapshots.seedBoth(SEPT, '2026-10-03T16:10:00Z');
+    h.snapshots.seedBoth(OCT, '2026-10-10T16:05:00Z');
+    h.linkProgress.days.set('2026-10-10', LINK);
+    return h;
+  }
+
+  it('syncs the workspace after a job build of a workspace month, after its saves', async () => {
+    const h = makeDeps();
+    const savedWhenSynced: number[] = [];
+    h.syncWorkspace.mockImplementation(async (period) => {
+      savedWhenSynced.push(
+        h.snapshots.rows.filter(
+          (r) =>
+            r.period.year === period.year && r.period.month === period.month,
+        ).length,
+      );
+      return 'synced';
+    });
+    await runBuildTick(h.deps);
+    expect(fetchedPeriods(h)).toEqual(['2026-9', '2026-10']);
+    expect(synced(h)).toEqual(['2026-9', '2026-10']);
+    expect(savedWhenSynced).toEqual([2, 2]);
+  });
+
+  it('syncs the latest finished and the open month on every tick, even when nothing is due', async () => {
+    const h = idle();
+    await runBuildTick(h.deps);
+    expect(h.fetchMonthReports).not.toHaveBeenCalled();
+    expect(synced(h)).toEqual(['2026-9', '2026-10']);
+    expect(h.cache.values.has(LEASE_KEY)).toBe(false);
+  });
+
+  it('a tick that does nothing (quiet hour, before 16:00) syncs nothing', async () => {
+    for (const at of ['2026-10-10T18:30:00Z', '2026-10-10T15:59:00Z']) {
+      const h = makeDeps({ clock: new Clock(at) });
+      // eslint-disable-next-line no-await-in-loop -- two independent ticks, one at a time
+      await runBuildTick(h.deps);
+      expect(h.syncWorkspace).not.toHaveBeenCalled();
+    }
+  });
+
+  it("never syncs months before the workspace's first month", async () => {
+    const h = makeDeps({ clock: new Clock('2026-09-10T16:15:00Z') });
+    h.snapshots.seedBoth(AUG, '2026-09-03T16:10:00Z');
+    h.snapshots.seedBoth(SEPT, '2026-09-10T16:05:00Z');
+    h.linkProgress.days.set('2026-09-10', LINK);
+    await runBuildTick(h.deps);
+    expect(synced(h)).toEqual(['2026-9']);
+  });
+
+  it('syncs the months it built before report-ready, the rest after; link progress keeps its place', async () => {
+    const h = makeDeps({ clock: new Clock('2026-10-05T16:15:00Z') });
+    const order: string[] = [];
+    h.alert.mockImplementation(async (entry) => {
+      order.push(entry.title);
+      return true;
+    });
+    h.collectLinkProgress.mockImplementation(async () => {
+      order.push('link progress');
+      return { ...LINK };
+    });
+    h.syncWorkspace.mockImplementation(async (period) => {
+      order.push(`sync ${period.month}`);
+      return 'synced';
+    });
+    await runBuildTick(h.deps);
+    expect(order).toEqual([
+      'Reports built: September 2026',
+      'link progress',
+      'sync 9',
+      'sync 10',
+      'Reports ready: September 2026',
+    ]);
+  });
+
+  /** Oct 17: September was backfilled after it ended (no sync then), October is due. */
+  function backfilledSeptember() {
+    const h = makeDeps({ clock: new Clock('2026-10-17T16:15:00Z') });
+    h.snapshots.seedBoth(SEPT, '2026-10-02T03:00:00Z', {
+      builtBy: 'backfill',
+    });
+    h.linkProgress.days.set('2026-10-17', LINK);
+    return h;
+  }
+
+  it.each([
+    ['this tick built it (Oct 5)', () => makeDeps()],
+    ['it was backfilled and only October is due (Oct 17)', backfilledSeptember],
+  ])(
+    "report-ready posts only once its month's workspace sync has finished: %s",
+    async (_name, harness) => {
+      const h = harness();
+      const finished = new Set<number>();
+      let septemberSyncedWhenPosted: boolean | undefined;
+      h.alert.mockImplementation(async (entry) => {
+        if (entry.title === 'Reports ready: September 2026') {
+          septemberSyncedWhenPosted = finished.has(9);
+        }
+        return true;
+      });
+      h.syncWorkspace.mockImplementation(async (period) => {
+        // A sync that takes a few turns of the event loop.
+        await new Promise((resolve) => {
+          setImmediate(resolve);
+        });
+        finished.add(period.month);
+        return 'synced';
+      });
+      await runBuildTick(h.deps);
+      expect(ready(h)).toHaveLength(1);
+      expect(septemberSyncedWhenPosted).toBe(true);
+      // Each month once: September is not synced again after the notice.
+      expect(synced(h).sort()).toEqual(['2026-10', '2026-9']);
+    },
+  );
+
+  it('a backfilled month whose sync rejects is still announced', async () => {
+    const h = backfilledSeptember();
+    h.syncWorkspace.mockImplementation(async (period) => {
+      if (period.month === 9) {
+        throw new Error('down');
+      }
+      return 'synced';
+    });
+    await runBuildTick(h.deps);
+    expect(fetchedPeriods(h)).toEqual(['2026-10']);
+    expect(ready(h)).toHaveLength(1);
+    expect(synced(h)).toEqual(['2026-10', '2026-9']);
+  });
+
+  it('a backfilled month whose sync hangs is still announced, after at most the deadline', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const h = backfilledSeptember();
+      h.syncWorkspace.mockImplementation(async (period) => {
+        if (period.month === 9) {
+          return new Promise(() => undefined);
+        }
+        return 'synced';
+      });
+      const tick = runBuildTick(h.deps);
+      await vi.advanceTimersByTimeAsync(WORKSPACE_SYNC_DEADLINE_MS - 1);
+      expect(ready(h)).toHaveLength(0);
+      await vi.advanceTimersByTimeAsync(1);
+      await tick;
+      expect(ready(h)).toHaveLength(1);
+      expect(synced(h)).toEqual(['2026-10', '2026-9']);
+      expect(h.cache.values.has(LEASE_KEY)).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('only the current month built: it and then the previous month sync before report-ready', async () => {
+    const h = makeDeps({ clock: new Clock('2026-10-10T16:15:00Z') });
+    h.snapshots.seedBoth(SEPT, '2026-10-03T16:10:00Z');
+    h.snapshots.seedBoth(OCT, '2026-10-09T16:05:00Z');
+    h.linkProgress.days.set('2026-10-10', LINK);
+    const order: string[] = [];
+    h.alert.mockImplementation(async (entry) => {
+      order.push(entry.title);
+      return true;
+    });
+    h.syncWorkspace.mockImplementation(async (period) => {
+      order.push(`sync ${period.month}`);
+      return 'current';
+    });
+    await runBuildTick(h.deps);
+    expect(fetchedPeriods(h)).toEqual(['2026-10']);
+    expect(order).toEqual([
+      'sync 10',
+      'sync 9',
+      'Reports ready: September 2026',
+    ]);
+  });
+
+  it('report-ready still posts when the sync of a built month throws', async () => {
+    const h = makeDeps();
+    h.syncWorkspace.mockRejectedValue(new Error('down'));
+    await runBuildTick(h.deps);
+    expect(ready(h)).toHaveLength(1);
+  });
+
+  it('report-ready still posts, after the deadline, when the sync of a built month hangs', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const h = makeDeps();
+      h.syncWorkspace.mockImplementation(() => new Promise(() => undefined));
+      const tick = runBuildTick(h.deps);
+      await vi.advanceTimersByTimeAsync(WORKSPACE_SYNC_DEADLINE_MS - 1);
+      expect(ready(h)).toHaveLength(0);
+      // September's deadline, then October's.
+      await vi.advanceTimersByTimeAsync(WORKSPACE_SYNC_DEADLINE_MS + 2);
+      await tick;
+      expect(ready(h)).toHaveLength(1);
+      expect(h.syncWorkspace).toHaveBeenCalledTimes(2);
+      expect(h.cache.values.has(LEASE_KEY)).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a failing workspace sync alerts once a day and does not fail the build or the tick', async () => {
+    const h = makeDeps();
+    const error = vi.spyOn(Logger.prototype, 'error');
+    h.syncWorkspace.mockRejectedValue(
+      new TypeError('relation "noshow_workspace_rows" does not exist: secret'),
+    );
+    await expect(runBuildTick(h.deps)).resolves.toBeUndefined();
+    // The builds were saved, link progress written, report-ready posted.
+    expect(h.snapshots.rows).toHaveLength(4);
+    expect(h.linkProgress.days.has('2026-10-05')).toBe(true);
+    expect(ready(h)).toHaveLength(1);
+    expect(workspaceAlerts(h)).toEqual([
+      'No-show workspace not updated: September 2026',
+      'No-show workspace not updated: October 2026',
+    ]);
+    const description = descriptions(h.alert).find((d) =>
+      d.startsWith('The September 2026 workspace'),
+    );
+    expect(description).toBe(
+      'The September 2026 workspace could not be updated from the stored report (TypeError). ' +
+        'It retries after the next build and on every build tick.',
+    );
+    // The process log names the error class only.
+    const logged = error.mock.calls.map((c) => String(c[0])).join('\n');
+    expect(logged).toContain('Workspace sync 2026-09 failed: TypeError');
+    expect(logged).not.toContain('secret');
+    expect(logged).not.toContain('noshow_workspace_rows');
+    expect(h.cache.values.has(LEASE_KEY)).toBe(false);
+
+    // Later the same day: no second alert.
+    h.alert.mockClear();
+    h.clock.set('2026-10-05T16:30:00Z');
+    await runBuildTick(h.deps);
+    expect(h.syncWorkspace.mock.calls.length).toBeGreaterThan(2);
+    expect(workspaceAlerts(h)).toEqual([]);
+
+    // The next day: alerted again.
+    h.alert.mockClear();
+    h.clock.set('2026-10-06T16:15:00Z');
+    await runBuildTick(h.deps);
+    expect(workspaceAlerts(h)).toEqual([
+      'No-show workspace not updated: September 2026',
+      'No-show workspace not updated: October 2026',
+    ]);
+  });
+
+  it('a malformed stored report alerts once a day with a fixed reason, and the notice still posts', async () => {
+    const h = idle();
+    h.syncWorkspace.mockImplementation(async (period) => {
+      return isSept(period) ? 'malformed' : 'current';
+    });
+    await runBuildTick(h.deps);
+    expect(ready(h)).toHaveLength(1);
+    expect(workspaceAlerts(h)).toEqual([
+      'No-show workspace not updated: September 2026',
+    ]);
+    expect(
+      descriptions(h.alert).find((d) => d.startsWith('The September 2026')),
+    ).toBe(
+      'The September 2026 workspace could not be updated from the stored report ' +
+        '(the stored no-show report is not in the expected shape). ' +
+        'It retries after the next build and on every build tick.',
+    );
+
+    // Later the same day: no second alert.
+    h.alert.mockClear();
+    h.clock.set('2026-10-10T16:30:00Z');
+    await runBuildTick(h.deps);
+    expect(workspaceAlerts(h)).toEqual([]);
+  });
+
+  it('a malformed outcome whose meta read hangs gives up after a short deadline, silently', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const h = idle();
+      const meta = vi.spyOn(h.snapshots, 'getCurrentMeta');
+      h.syncWorkspace.mockImplementation(async (period) => {
+        if (!isSept(period)) {
+          return 'current';
+        }
+        // The malformed path's own meta read never settles.
+        meta.mockImplementationOnce(() => new Promise(() => undefined));
+        return 'malformed';
+      });
+      let done = false;
+      const tick = runBuildTick(h.deps).then(() => {
+        done = true;
+      });
+      await vi.advanceTimersByTimeAsync(
+        WORKSPACE_MALFORMED_META_DEADLINE_MS - 1,
+      );
+      expect(done).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      await tick;
+      expect(done).toBe(true);
+      expect(workspaceAlerts(h)).toEqual([]);
+      expect(ready(h)).toHaveLength(1);
+      expect(h.cache.values.has(LEASE_KEY)).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a malformed outcome for a month with no current no-show snapshot stays silent', async () => {
+    const h = makeDeps({ clock: new Clock('2026-10-10T16:15:00Z') });
+    // Only Hall of Fame stored for September; October is current.
+    h.snapshots.seed('hall_of_fame', SEPT, '2026-10-03T16:10:00Z');
+    h.snapshots.seedBoth(OCT, '2026-10-10T16:05:00Z');
+    h.linkProgress.days.set('2026-10-10', LINK);
+    h.fetchMonthReports.mockRejectedValue(new Error('not now'));
+    h.syncWorkspace.mockImplementation(async (period) => {
+      return isSept(period) ? 'malformed' : 'current';
+    });
+    await runBuildTick(h.deps);
+    expect(synced(h)).toContain('2026-9');
+    expect(workspaceAlerts(h)).toEqual([]);
+  });
+
+  it("'no-report' stays silent", async () => {
+    const h = idle();
+    h.syncWorkspace.mockImplementation(async (period) => {
+      return isSept(period) ? 'no-report' : 'current';
+    });
+    await runBuildTick(h.deps);
+    expect(synced(h)).toEqual(['2026-9', '2026-10']);
+    expect(workspaceAlerts(h)).toEqual([]);
+  });
+
+  it('a workspace alert that fails to post is retried on the next tick', async () => {
+    const h = idle();
+    h.syncWorkspace.mockImplementation(async (period) => {
+      if (isSept(period)) {
+        throw new Error('down');
+      }
+      return 'current';
+    });
+    let failNext = true;
+    h.alert.mockImplementation(async (entry) => {
+      if (entry.title.startsWith('No-show workspace') && failNext) {
+        failNext = false;
+        return false;
+      }
+      return true;
+    });
+    await runBuildTick(h.deps);
+    expect(workspaceAlerts(h)).toEqual([
+      'No-show workspace not updated: September 2026',
+    ]);
+    expect(failNext).toBe(false);
+    h.alert.mockClear();
+    h.clock.set('2026-10-10T16:30:00Z');
+    await runBuildTick(h.deps);
+    expect(workspaceAlerts(h)).toEqual([
+      'No-show workspace not updated: September 2026',
+    ]);
+  });
+
+  it('an unreadable alert key or a throwing alert never fails the tick', async () => {
+    const h = idle();
+    h.syncWorkspace.mockRejectedValue(new Error('down'));
+    vi.spyOn(h.cache, 'exclusive_set').mockImplementation(async (key) => {
+      if (key.startsWith('workspace-sync-alerted-')) {
+        throw new Error('redis down');
+      }
+      return true;
+    });
+    await expect(runBuildTick(h.deps)).resolves.toBeUndefined();
+    expect(h.syncWorkspace).toHaveBeenCalledTimes(2);
+  });
+
+  it('a hung workspace sync is given up on after its deadline; the tick finishes and releases the lease', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const h = idle();
+      h.syncWorkspace.mockImplementation(() => new Promise(() => undefined));
+      let finished = false;
+      const tick = runBuildTick(h.deps).then(() => {
+        finished = true;
+      });
+      await vi.advanceTimersByTimeAsync(WORKSPACE_SYNC_DEADLINE_MS - 1);
+      expect(finished).toBe(false);
+      await vi.advanceTimersByTimeAsync(WORKSPACE_SYNC_DEADLINE_MS + 1);
+      await tick;
+      expect(finished).toBe(true);
+      expect(workspaceAlerts(h)).toEqual([
+        'No-show workspace not updated: September 2026',
+        'No-show workspace not updated: October 2026',
+      ]);
+      expect(h.cache.values.has(LEASE_KEY)).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('the deadline is at most 30 s', () => {
+    expect(WORKSPACE_SYNC_DEADLINE_MS).toBeGreaterThan(0);
+    expect(WORKSPACE_SYNC_DEADLINE_MS).toBeLessThanOrEqual(30_000);
+  });
+
+  it('manual rebuilds sync too, after the build is saved, and before the lease is released', async () => {
+    const h = makeDeps({ reportReadyEnabled: false });
+    h.syncWorkspace.mockImplementation(async () => {
+      expect(h.snapshots.rows).toHaveLength(2);
+      expect(h.cache.values.has(LEASE_KEY)).toBe(true);
+      return 'synced';
+    });
+    const result = await requestRebuild(h.deps, SEPT, REQUESTER);
+    expect(await (result as { done: Promise<{ ok: boolean }> }).done).toEqual({
+      ok: true,
+    });
+    expect(synced(h)).toEqual(['2026-9']);
+    expect(h.cache.values.has(LEASE_KEY)).toBe(false);
+  });
+
+  it('a manual rebuild of a month before the workspace does not sync it', async () => {
+    const h = makeDeps({ reportReadyEnabled: false });
+    const result = await requestRebuild(h.deps, AUG, REQUESTER);
+    await (result as { done: Promise<{ ok: boolean }> }).done;
+    expect(h.snapshots.rows).toHaveLength(2);
+    expect(h.syncWorkspace).not.toHaveBeenCalled();
+  });
+
+  it('a failed manual rebuild does not sync', async () => {
+    const h = makeDeps({ reportReadyEnabled: false });
+    h.fetchMonthReports.mockImplementation(failSeptember);
+    const result = await requestRebuild(h.deps, SEPT, REQUESTER);
+    expect(await (result as { done: Promise<{ ok: boolean }> }).done).toEqual({
+      ok: false,
+    });
+    expect(h.syncWorkspace).not.toHaveBeenCalled();
+  });
+
+  it('a failing sync does not fail a manual rebuild', async () => {
+    const h = makeDeps({ reportReadyEnabled: false });
+    h.syncWorkspace.mockRejectedValue(new Error('down'));
+    const result = await requestRebuild(h.deps, SEPT, REQUESTER);
+    expect(await (result as { done: Promise<{ ok: boolean }> }).done).toEqual({
+      ok: true,
+    });
+    expect(workspaceAlerts(h)).toEqual([
+      'No-show workspace not updated: September 2026',
+    ]);
+    expect(h.cache.values.has(LEASE_KEY)).toBe(false);
+  });
+
+  it("buildMonth alone (the backfill's path) never syncs", async () => {
+    const h = makeDeps();
+    await buildMonth(h.deps, SEPT, 'backfill');
+    await buildMonth(h.deps, OCT, 'backfill');
+    expect(h.snapshots.rows).toHaveLength(4);
+    expect(h.syncWorkspace).not.toHaveBeenCalled();
+  });
+
+  it('the tick works without a syncWorkspace dep', async () => {
+    const h = makeDeps();
+    delete h.deps.syncWorkspace;
+    await runBuildTick(h.deps);
+    expect(h.snapshots.rows).toHaveLength(4);
+    expect(ready(h)).toHaveLength(1);
+    expect(h.syncWorkspace).not.toHaveBeenCalled();
+  });
+
+  it('defaultBuildJobDeps opens the workspace repository only when a sync needs it', async () => {
+    const snapshots = {
+      save: vi.fn(),
+      getCurrentMeta: vi.fn(async () => undefined),
+      getCurrent: vi.fn(async () => undefined),
+    };
+    vi.mocked(PostgresReportSnapshotRepository.instance).mockResolvedValue(
+      snapshots as never,
+    );
+    vi.mocked(PostgresDashboardNoticeRepository.instance).mockResolvedValue(
+      {} as never,
+    );
+    vi.mocked(PostgresLinkProgressRepository.instance).mockResolvedValue(
+      {} as never,
+    );
+    vi.mocked(PostgresSuspensionRepository.instance).mockResolvedValue(
+      {} as never,
+    );
+    const syncFromSnapshot = vi.fn(async () => ({
+      status: 'synced' as const,
+      created: 0,
+      reclassified: 0,
+      dropped: 0,
+      returned: 0,
+    }));
+    vi.mocked(PostgresNoShowWorkspaceRepository.instance).mockResolvedValue({
+      syncFromSnapshot,
+      monthState: vi.fn(async () => undefined),
+    } as never);
+    const deps = await defaultBuildJobDeps({} as Client);
+    expect(PostgresNoShowWorkspaceRepository.instance).not.toHaveBeenCalled();
+    // Before the workspace: nothing read, nothing opened.
+    expect(await deps.syncWorkspace?.({ year: 2013, month: 3 })).toBe(
+      'not-eligible',
+    );
+    expect(snapshots.getCurrent).not.toHaveBeenCalled();
+    // No report yet: the workspace schema is still not touched.
+    const current = periodOf(new Date());
+    expect(await deps.syncWorkspace?.(current)).toBe('no-report');
+    expect(PostgresNoShowWorkspaceRepository.instance).not.toHaveBeenCalled();
+    expect(snapshots.getCurrent).not.toHaveBeenCalled();
+    // A stored report: synced through the workspace repository.
+    snapshots.getCurrentMeta.mockResolvedValueOnce({
+      id: 3,
+      builtAt: new Date('2026-10-02T16:00:00Z'),
+    });
+    snapshots.getCurrent.mockResolvedValueOnce({
+      id: 3,
+      builtAt: new Date('2026-10-02T16:00:00Z'),
+      payload: { reportType: 'no_show', cases: [] },
+    });
+    expect(await deps.syncWorkspace?.(current)).toBe('synced');
+    expect(PostgresNoShowWorkspaceRepository.instance).toHaveBeenCalledTimes(1);
+    expect(syncFromSnapshot).toHaveBeenCalledWith(
+      expect.objectContaining({ period: current, snapshotId: 3, cases: [] }),
+    );
+  });
+
+  it('a workspace repository that cannot be opened rejects the sync, never the deps', async () => {
+    vi.mocked(PostgresReportSnapshotRepository.instance).mockResolvedValue({
+      getCurrentMeta: vi.fn(async () => ({ id: 3, builtAt: new Date() })),
+      getCurrent: vi.fn(async () => ({
+        id: 3,
+        builtAt: new Date(),
+        payload: { reportType: 'no_show', cases: [] },
+      })),
+    } as never);
+    vi.mocked(PostgresDashboardNoticeRepository.instance).mockResolvedValue(
+      {} as never,
+    );
+    vi.mocked(PostgresLinkProgressRepository.instance).mockResolvedValue(
+      {} as never,
+    );
+    vi.mocked(PostgresSuspensionRepository.instance).mockResolvedValue(
+      {} as never,
+    );
+    vi.mocked(PostgresNoShowWorkspaceRepository.instance).mockRejectedValue(
+      new Error('relation "suspension_records" does not exist'),
+    );
+    const deps = await defaultBuildJobDeps({} as Client);
+    await expect(deps.syncWorkspace?.(periodOf(new Date()))).rejects.toThrow(
+      'suspension_records',
+    );
   });
 });

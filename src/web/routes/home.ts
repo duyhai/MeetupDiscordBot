@@ -8,10 +8,18 @@ import {
 import {
   Period,
   monthLabel,
+  periodKey,
   periodOf,
   previousPeriod,
 } from '../../lib/reports/period.js';
 import { SnapshotMeta } from '../../lib/repositories/postgresReportSnapshotRepository.js';
+import { isWorkspaceMonth } from '../../lib/workspace/months.js';
+import {
+  DONE_STATUSES,
+  OPEN_STATUSES,
+  PARKED_STATUSES,
+  WorkspaceStatus,
+} from '../../lib/workspace/types.js';
 import { SafeHtml, html, localUrl } from '../html.js';
 import { monthCell, pacificDateTime, zeroNoShowNote } from '../pageKit.js';
 import type { DashboardPageDeps } from './dashboardPages.js';
@@ -114,13 +122,57 @@ async function monthCard(
 }
 
 /**
+ * Open workspace items for the latest finished and the open month: one
+ * aggregate (statusCounts) over at most those two months, and each month's
+ * state, never row lists. A month not set up yet says so, like the months
+ * list. Months before the workspace have no line; with none, no card.
+ */
+async function workspaceCard(
+  deps: Pick<DashboardPageDeps, 'workspace'>,
+  months: Period[],
+): Promise<SafeHtml> {
+  if (months.length === 0) {
+    return html``;
+  }
+  const ws = await deps.workspace();
+  const [counts, states] = await Promise.all([
+    ws.statusCounts(months),
+    Promise.all(months.map((p) => ws.monthState(p))),
+  ]);
+  const line = (p: Period, i: number) => {
+    if (!states[i]) {
+      return html`<li>
+        ${monthCell(DASHBOARD_PATHS.workspaceMonth, p)}: not set up yet
+      </li>`;
+    }
+    const c = counts.get(periodKey(p)) ?? {};
+    const sum = (list: readonly WorkspaceStatus[]) =>
+      list.reduce((n, s) => n + num(c, s), 0);
+    return html`<li>
+      ${monthCell(DASHBOARD_PATHS.workspaceMonth, p)}: ${sum(OPEN_STATUSES)} to
+      do, ${sum(PARKED_STATUSES)} on hold, ${sum(DONE_STATUSES)} done
+    </li>`;
+  };
+  return html`<div class="card">
+    <h2>
+      <a href="${localUrl(dashboardPath(DASHBOARD_PATHS.workspace))}"
+        >No-show workspace</a
+      >
+    </h2>
+    <ul>
+      ${months.map(line)}
+    </ul>
+  </div>`;
+}
+
+/**
  * The Home page's report cards. Reads summaries and meta only, never a full
  * payload. Never rejects: each card degrades on its own.
  */
 export async function renderHomeReports(
   deps: Pick<
     DashboardPageDeps,
-    'now' | 'snapshots' | 'identity' | 'linkProgress'
+    'now' | 'snapshots' | 'identity' | 'linkProgress' | 'workspace'
   >,
 ): Promise<SafeHtml> {
   let timer: NodeJS.Timeout | undefined;
@@ -135,49 +187,57 @@ export async function renderHomeReports(
     // One lookup, shared; a rejection reaches each month card's own catch.
     const snapshotsOnce = Promise.resolve().then(() => deps.snapshots());
     snapshotsOnce.catch(() => undefined);
-    const [finishedCard, openCard, identityCard, linkCard] = await Promise.all([
-      card('finished month', deadline, () =>
-        monthCard(snapshotsOnce, finished, now, false),
-      ),
-      card('open month', deadline, () =>
-        monthCard(snapshotsOnce, open, now, true),
-      ),
-      card('identity', deadline, async () => {
-        const identity = await deps.identity();
-        const changes = await identity.countChangesSince(
-          new Date(now.getTime() - 7 * DAY_MS),
-        );
-        return html`<div class="card">
-          <h2>Identity changes</h2>
-          <p>
-            <a href="${localUrl(dashboardPath(DASHBOARD_PATHS.identity))}"
-              >${num({ changes }, 'changes')} identity changes in the last 7
-              days</a
-            >
-          </p>
-        </div>`;
-      }),
-      card('link progress', deadline, async () => {
-        const [day] = await (await deps.linkProgress()).listDays(1);
-        return html`<div class="card">
-          <h2>
-            <a href="${localUrl(dashboardPath(DASHBOARD_PATHS.linkProgress))}"
-              >Link progress</a
-            >
-          </h2>
-          ${
-            day
-              ? html`<p>
-                  Linked ${day.linked}, unlinked ${day.unlinked},
-                  Reverify-tagged ${day.reverifyTagged}, onboarding
-                  ${day.onboarding} on ${day.day}
-                </p>`
-              : html`<p class="muted">No link progress recorded yet.</p>`
-          }
-        </div>`;
-      }),
-    ]);
-    return html`${finishedCard}${openCard}${identityCard}${linkCard}`;
+    const workspaceMonthsShown = [finished, open].filter((p) =>
+      isWorkspaceMonth(p, now),
+    );
+    const [workspace, finishedCard, openCard, identityCard, linkCard] =
+      await Promise.all([
+        card('workspace', deadline, () =>
+          workspaceCard(deps, workspaceMonthsShown),
+        ),
+        card('finished month', deadline, () =>
+          monthCard(snapshotsOnce, finished, now, false),
+        ),
+        card('open month', deadline, () =>
+          monthCard(snapshotsOnce, open, now, true),
+        ),
+        card('identity', deadline, async () => {
+          const identity = await deps.identity();
+          const changes = await identity.countChangesSince(
+            new Date(now.getTime() - 7 * DAY_MS),
+          );
+          return html`<div class="card">
+            <h2>Identity changes</h2>
+            <p>
+              <a href="${localUrl(dashboardPath(DASHBOARD_PATHS.identity))}"
+                >${num({ changes }, 'changes')} identity changes in the last 7
+                days</a
+              >
+            </p>
+          </div>`;
+        }),
+        card('link progress', deadline, async () => {
+          const [day] = await (await deps.linkProgress()).listDays(1);
+          return html`<div class="card">
+            <h2>
+              <a href="${localUrl(dashboardPath(DASHBOARD_PATHS.linkProgress))}"
+                >Link progress</a
+              >
+            </h2>
+            ${
+              day
+                ? html`<p>
+                    Linked ${day.linked}, unlinked ${day.unlinked},
+                    Reverify-tagged ${day.reverifyTagged}, onboarding
+                    ${day.onboarding} on ${day.day}
+                  </p>`
+                : html`<p class="muted">No link progress recorded yet.</p>`
+            }
+          </div>`;
+        }),
+      ]);
+    // The workspace card first: it is what staff act on.
+    return html`${workspace}${finishedCard}${openCard}${identityCard}${linkCard}`;
   } catch (error) {
     logger.warn(
       `Dashboard home reports failed: ${error instanceof Error ? error.name : 'Error'}`,

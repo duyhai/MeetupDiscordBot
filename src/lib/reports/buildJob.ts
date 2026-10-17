@@ -5,27 +5,27 @@ import { ClientError } from 'graphql-request';
 import { Logger } from 'tslog';
 
 import Configuration from '../../configuration.js';
-import {
-  BASE_DISCORD_BOT_URL,
-  BOT_ALERTS_CHANNEL_ID,
-  SERVER_ROLES,
-} from '../../constants.js';
+import { BOT_ALERTS_CHANNEL_ID } from '../../constants.js';
 import { ApplicationCache } from '../../util/cache.js';
 import { KeyValueCache } from '../cache/base.js';
 import {
   LogEntry,
   logAlert,
-  postRoleNotice,
+  recentEmbedTitles,
 } from '../helpers/discordLogger.js';
 import { safeErrorSummary } from '../helpers/identity/digest.js';
 import { PostgresDashboardNoticeRepository } from '../repositories/postgresDashboardNoticeRepository.js';
 import { PostgresLinkProgressRepository } from '../repositories/postgresLinkProgressRepository.js';
+import { PostgresNoShowWorkspaceRepository } from '../repositories/postgresNoShowWorkspaceRepository.js';
 import { PostgresReportSnapshotRepository } from '../repositories/postgresReportSnapshotRepository.js';
 import { PostgresSuspensionRepository } from '../repositories/postgresSuspensionRepository.js';
+import { isWorkspaceMonth } from '../workspace/months.js';
+import { syncWorkspace } from '../workspace/service.js';
 import {
   acquireBuildLease,
   BUILD_LEASE_TTL_SEC,
   identityDigestInProgress,
+  REBUILD_BUDGET_KEY_PREFIX,
   releaseBuildLease,
 } from './buildLease.js';
 import {
@@ -77,6 +77,12 @@ const alertedKey = (p: Period, day: string) =>
 const REBUILD_COOLDOWN_SEC = 10 * 60;
 const rebuildCooldownKey = (p: Period) =>
   `report-rebuild-cooldown-${periodKey(p)}`;
+/** Manual rebuilds across all staff and months per UTC hour. The job's own builds do not count. */
+export const MANUAL_REBUILDS_PER_HOUR = 4;
+const BUDGET_TTL_SEC = 60 * 60;
+/** One key per slot of a UTC hour, e.g. `report-rebuild-budget-2026-10-05T16-0`. */
+const budgetKey = (now: Date, slot: number) =>
+  `${REBUILD_BUDGET_KEY_PREFIX}${now.toISOString().slice(0, 13)}-${slot}`;
 /** A Discord user id: what a manual rebuild records as builtBy. */
 const DISCORD_ID = /^[0-9]{1,20}$/;
 const isManual = (builtBy: string) => DISCORD_ID.test(builtBy);
@@ -86,6 +92,29 @@ const BACKOFF_TTL_SEC = 60 * 60;
 const backoffKey = (p: Period) => `report-build-backoff-${periodKey(p)}`;
 /** Consecutive failed ticks (an hour of them) before the job alerts in Discord. */
 const INFRA_ALERT_AFTER_FAILED_TICKS = 4;
+
+const workspaceSyncAlertedKey = (p: Period, day: string) =>
+  `workspace-sync-alerted-${periodKey(p)}-${day}`;
+/**
+ * How long a build or tick waits for one workspace sync before giving up on
+ * it (the sync itself may still finish). The sync is optional work: a hung
+ * Postgres must not hold the build lease for its 30-minute TTL.
+ */
+export const WORKSPACE_SYNC_DEADLINE_MS = 30_000;
+/** How long the malformed path's meta read may take before the tick moves on (silently). */
+export const WORKSPACE_MALFORMED_META_DEADLINE_MS = 5000;
+
+/** An error's class name, and nothing it carries. */
+function errorName(error: unknown): string {
+  return error instanceof Error ? error.name : 'unknown error';
+}
+
+export class WorkspaceSyncTimeoutError extends Error {
+  constructor() {
+    super('The workspace sync did not finish in time');
+    this.name = 'WorkspaceSyncTimeoutError';
+  }
+}
 
 /**
  * Every no-show member of a finished month looks departed, and there are at
@@ -136,19 +165,10 @@ function stableJson(value: unknown): string {
 }
 
 /**
- * The report-ready notice links to the month's dashboard page, which ships in
- * PR 4; that PR flips this in the same change. Deliberately a constant, not
- * a config var.
+ * On since PR 4. A plain alert (no pings) linking the workspace. Flip to
+ * false to silence it; it is a constant, so that needs a deploy.
  */
-export const REPORT_READY_ENABLED = false;
-
-export const REPORT_READY_ROLE_IDS: readonly string[] = [
-  SERVER_ROLES.moderator,
-  SERVER_ROLES.leadership,
-];
-
-export const reportMonthUrl = (period: Period): string =>
-  `${BASE_DISCORD_BOT_URL}/dashboard/no-shows/${periodKey(period)}`;
+export const REPORT_READY_ENABLED = true;
 
 /**
  * What a build failure may say in Discord. A graphql-request ClientError's
@@ -207,8 +227,11 @@ export interface BuildJobDeps {
    */
   backgroundCache?(): Promise<KeyValueCache>;
   snapshots: Pick<PostgresReportSnapshotRepository, 'save' | 'getCurrentMeta'>;
-  /** claim and release must hit the same instance: release only removes its own claim's marker. */
-  notices: Pick<PostgresDashboardNoticeRepository, 'claim' | 'release'>;
+  /** claim, markPosted and release must hit the same instance: the last two touch only its own claim. */
+  notices: Pick<
+    PostgresDashboardNoticeRepository,
+    'claim' | 'release' | 'markPosted'
+  >;
   linkProgress: Pick<PostgresLinkProgressRepository, 'hasDay' | 'upsertDay'>;
   /**
    * Reads Meetup with the organizer credential and builds both payloads.
@@ -221,13 +244,16 @@ export interface BuildJobDeps {
   ): Promise<MonthReports>;
   collectLinkProgress(): Promise<LinkProgressCounts>;
   alert(entry: LogEntry): Promise<boolean>;
-  postRoleNotice(
-    roleIds: readonly string[],
-    content: string,
-    entry: LogEntry,
-  ): Promise<boolean>;
+  /** This bot's embed titles among the last 50 alerts; undefined when unreadable. Only read on a retry. */
+  recentAlertTitles(): Promise<string[] | undefined>;
   reportReadyEnabled(): boolean;
   newLeaseValue(): string;
+  /**
+   * Copies a workspace month's stored no-show cases into the workspace. May
+   * reject; the job logs and alerts. Optional: the backfill has none, and a
+   * build never depends on it.
+   */
+  syncWorkspace?(period: Period): Promise<unknown>;
 }
 
 const seconds = (ms: number) => (ms / 1000).toFixed(1);
@@ -377,7 +403,10 @@ function builtByText(builtBy: string): string {
 function monthLinkLines(period: Period): string[] {
   try {
     const urls = monthPageUrls(period);
+    // The workspace first, since staff act there. Months before the
+    // workspace have none; their no-show history page is the link.
     return [
+      ...(urls.workspace ? [`No-show workspace: ${urls.workspace}`] : []),
       `Hall of Fame page: ${urls.hallOfFame}`,
       `No-show history page: ${urls.noShowHistory}`,
     ];
@@ -561,6 +590,103 @@ async function writeLinkProgress(
   }
 }
 
+/** The fixed reason shown when the stored no-show report is not one the workspace can read. */
+const MALFORMED_REPORT_REASON =
+  'the stored no-show report is not in the expected shape';
+
+/**
+ * "No-show workspace not updated", at most once a day per month. The reason
+ * is a class name or a fixed text, never payload or error text. Never throws.
+ */
+async function alertWorkspaceNotUpdated(
+  deps: BuildJobDeps,
+  cache: KeyValueCache,
+  period: Period,
+  reason: string,
+): Promise<void> {
+  try {
+    const key = workspaceSyncAlertedKey(period, utcDay(deps.now()));
+    if (await cache.exclusive_set(key, '1', ALERTED_TTL_SEC)) {
+      const label = monthLabel(period);
+      const posted = await deps.alert({
+        title: `No-show workspace not updated: ${label}`,
+        description:
+          `The ${label} workspace could not be updated from the stored report (${reason}). ` +
+          'It retries after the next build and on every build tick.',
+      });
+      if (!posted) {
+        await cache.remove(key);
+      }
+    }
+  } catch (alertError: unknown) {
+    logger.error(`Workspace sync alert failed: ${errorName(alertError)}`);
+  }
+}
+
+/**
+ * Runs the workspace sync for a workspace month. Never throws, and waits at
+ * most WORKSPACE_SYNC_DEADLINE_MS. A failure is logged by its class name and
+ * alerted at most once a day per month; the next build or tick retries. A
+ * 'malformed' outcome for a month with a current no-show snapshot is alerted
+ * the same way, with a fixed reason; 'no-report' stays silent.
+ */
+async function syncWorkspaceSafely(
+  deps: BuildJobDeps,
+  cache: KeyValueCache,
+  period: Period,
+): Promise<void> {
+  if (!deps.syncWorkspace || !isWorkspaceMonth(period, deps.now())) {
+    return;
+  }
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let outcome: unknown;
+  try {
+    const sync = Promise.resolve().then(() => deps.syncWorkspace?.(period));
+    // A sync that settles after the deadline is not reported twice.
+    sync.catch(() => undefined);
+    outcome = await Promise.race([
+      sync,
+      new Promise((_resolve, reject) => {
+        timer = setTimeout(
+          () => reject(new WorkspaceSyncTimeoutError()),
+          WORKSPACE_SYNC_DEADLINE_MS,
+        );
+      }),
+    ]);
+  } catch (error: unknown) {
+    // The class name only: a Postgres error can quote names and values.
+    logger.error(
+      `Workspace sync ${periodKey(period)} failed: ${errorName(error)}`,
+    );
+    await alertWorkspaceNotUpdated(deps, cache, period, errorName(error));
+    return;
+  } finally {
+    clearTimeout(timer);
+  }
+  if (outcome === 'malformed') {
+    let metaTimer: ReturnType<typeof setTimeout> | undefined;
+    const meta = await Promise.race([
+      deps.snapshots.getCurrentMeta('no_show', period),
+      new Promise<undefined>((resolve) => {
+        metaTimer = setTimeout(
+          () => resolve(undefined),
+          WORKSPACE_MALFORMED_META_DEADLINE_MS,
+        );
+      }),
+    ])
+      .catch((): undefined => undefined)
+      .finally(() => clearTimeout(metaTimer));
+    if (meta) {
+      await alertWorkspaceNotUpdated(
+        deps,
+        cache,
+        period,
+        MALFORMED_REPORT_REASON,
+      );
+    }
+  }
+}
+
 /** builtAt of the current rows of the previous and current month (Postgres is the durable fact). */
 async function loadBuiltAt(
   deps: BuildJobDeps,
@@ -623,6 +749,8 @@ export async function runBuildTick(deps: BuildJobDeps): Promise<void> {
       builtAt: await loadBuiltAt(deps, planNow),
       linkProgressWrittenToday: await deps.linkProgress.hasDay(utcDay(planNow)),
     });
+    // Months this tick built: synced before report-ready.
+    const builtMonths: Period[] = [];
     for (const item of plan) {
       const startAt = deps.now();
       const mayStart =
@@ -648,43 +776,94 @@ export async function runBuildTick(deps: BuildJobDeps): Promise<void> {
         );
         continue; // skip, not stop: later items still run
       }
-      // eslint-disable-next-line no-await-in-loop -- sequential on purpose: one month at a time
-      await (item.kind === 'month'
-        ? buildAndRecord(deps, cache, item.period, 'job')
-        : writeLinkProgress(deps, cache, item.day));
+      if (item.kind === 'month') {
+        // eslint-disable-next-line no-await-in-loop -- sequential on purpose: one month at a time
+        if (await buildAndRecord(deps, cache, item.period, 'job')) {
+          builtMonths.push(item.period);
+        }
+      } else {
+        // eslint-disable-next-line no-await-in-loop -- sequential on purpose: one month at a time
+        await writeLinkProgress(deps, cache, item.day);
+      }
+    }
+    // Before report-ready: the months just built, and the previous month
+    // (the one report-ready announces) even when this tick did not build it,
+    // since a backfilled month was never synced. So the notice links a
+    // workspace that is set up. Each sync waits at most its deadline and
+    // never throws, so a failed or hung sync never blocks the notice.
+    const current = periodOf(deps.now());
+    const previous = previousPeriod(current);
+    const builtThisTick = (p: Period) =>
+      builtMonths.some((q) => comparePeriods(p, q) === 0);
+    const beforeReady = builtThisTick(previous)
+      ? builtMonths
+      : [...builtMonths, previous];
+    for (const p of beforeReady) {
+      // eslint-disable-next-line no-await-in-loop -- small Postgres syncs, one at a time on a pool of three
+      await syncWorkspaceSafely(deps, cache, p);
     }
     await maybePostReportReady(deps);
+    // Then the current month on every tick (a no-op when the workspace is
+    // up to date). Each month syncs at most once per tick.
+    if (!builtThisTick(current)) {
+      await syncWorkspaceSafely(deps, cache, current);
+    }
   } finally {
     await releaseBuildLease(cache, lease);
   }
 }
 
-export function reportReadyMessage(
+/** A stored summary count: anything but a finite non-negative number is 0. */
+const summaryCount = (summary: unknown, key: string): number => {
+  const n = Number(
+    (summary as Record<string, unknown> | null | undefined)?.[key],
+  );
+  return Number.isFinite(n) && n >= 0 ? n : 0;
+};
+
+/**
+ * The report-ready notice: a plain alert in #meetup-bot-alerts (staff have
+ * notifications on for it). No content, no mentions. Links come from
+ * monthLinkLines: PUBLIC_APP_ORIGIN and the validated month key only.
+ */
+export function reportReadyEntry(
   period: Period,
-  hallOfFame: HallOfFameSummary,
-  noShow: NoShowSummary,
-): { content: string; entry: LogEntry } {
-  const label = monthLabel(period);
-  const url = reportMonthUrl(period);
+  hallOfFame: unknown,
+  noShow: unknown,
+): LogEntry {
+  const warnings = summaryCount(noShow, 'warnings');
+  const candidates = summaryCount(noShow, 'suspensionCandidates');
+  const events = summaryCount(hallOfFame, 'events');
+  const hosts = summaryCount(hallOfFame, 'hosts');
+  const newHosts = summaryCount(hallOfFame, 'newHosts');
+  const lines = [
+    `No-shows: ${warnings} warnings, ${candidates} suspension candidates.`,
+    `Hall of Fame: ${events} events, ${hosts} hosts (${newHosts} new).`,
+    ...monthLinkLines(period),
+  ];
   return {
-    // Role mentions only ping from content; <url> suppresses the link preview.
-    content: `<@&${SERVER_ROLES.moderator}> <@&${SERVER_ROLES.leadership}> The ${label} reports are ready: <${url}>`,
-    entry: {
-      title: `Reports ready: ${label}`,
-      description:
-        `No-shows: ${noShow.warnings} warnings, ${noShow.suspensionCandidates} suspension candidates.\n` +
-        `Hall of Fame: ${hallOfFame.events} events, ${hallOfFame.hosts} hosts (${hallOfFame.newHosts} new).\n${url}`,
-    },
+    title: `Reports ready: ${monthLabel(period)}`,
+    description: lines.join('\n'),
   };
 }
 
 /**
- * For the latest finished month only, once ever: needs both current snapshots
- * built at or after the month ended (whoever built them: job, manual or
- * backfill) and a complete no-show row. The marker row is inserted before
- * posting (so two processes cannot both post) and deleted if the post fails
- * (so the next tick retries). If that delete itself throws, the marker stays
- * and the month is never announced; logged. The backfill never calls this.
+ * For the latest finished month only: needs both current snapshots built at
+ * or after the month ended (whoever built them: job, manual or backfill) and
+ * a complete no-show row. The backfill never calls this.
+ *
+ * Delivery is at least once, by decision: a duplicate plain alert is
+ * harmless, a month that is never announced is not.
+ * - The marker is claimed before posting, so two processes cannot both post,
+ *   and marked posted once the post lands; a posted marker is final.
+ * - A failed post releases the claim, so the next tick retries.
+ * - A claim left unposted for NOTICE_RECLAIM_AFTER_MS (30 minutes: a crash,
+ *   or a markPosted or release that threw, logged by the catch below) is
+ *   reclaimed by a later tick as a retry.
+ * - A retry first reads this bot's recent embed titles in the channel (a
+ *   timed-out send can still land). If the notice is there, it is marked
+ *   posted without posting. A duplicate is possible only when that read
+ *   fails or the earlier post is more than 50 messages back.
  */
 export async function maybePostReportReady(
   deps: BuildJobDeps,
@@ -708,15 +887,32 @@ export async function maybePostReportReady(
     ) {
       return 'skipped';
     }
-    if (!(await deps.notices.claim('report_ready', period))) {
+    const claim = await deps.notices.claim('report_ready', period);
+    if (!claim) {
       return 'skipped';
     }
-    const { content, entry } = reportReadyMessage(
-      period,
-      hof.summary as HallOfFameSummary,
-      noShow.summary as NoShowSummary,
-    );
-    if (await deps.postRoleNotice(REPORT_READY_ROLE_IDS, content, entry)) {
+    const entry = reportReadyEntry(period, hof.summary, noShow.summary);
+    if (claim === 'retry') {
+      // A crash or a failed post came before: the notice may be in the
+      // channel already (a timed-out send can still land). Unreadable
+      // history posts anyway: a duplicate plain alert beats a missing one.
+      const titles = await deps
+        .recentAlertTitles()
+        .catch((): string[] | undefined => undefined);
+      if (titles?.includes(entry.title)) {
+        await deps.notices.markPosted('report_ready', period);
+        logger.info(
+          `Report-ready for ${periodKey(period)} was already in the channel; marked posted`,
+        );
+        return 'posted';
+      }
+    }
+    if (await deps.alert(entry)) {
+      if (!(await deps.notices.markPosted('report_ready', period))) {
+        logger.warn(
+          `Report-ready for ${periodKey(period)} posted, but its marker was taken over; a retry will find the post`,
+        );
+      }
       return 'posted';
     }
     await deps.notices.release('report_ready', period);
@@ -727,6 +923,27 @@ export async function maybePostReportReady(
   }
 }
 
+/**
+ * Takes one of this UTC hour's slots; false when all are taken. Cache errors
+ * propagate (the caller then refuses: fail closed). A slot won by a write
+ * that timed out is given back by the dashboard's late-write hook
+ * (releaseLateBuildLease in src/web/timedCache.ts).
+ */
+async function takeRebuildBudget(
+  cache: KeyValueCache,
+  now: Date,
+  requestedBy: string,
+): Promise<boolean> {
+  for (let slot = 0; slot < MANUAL_REBUILDS_PER_HOUR; slot += 1) {
+    const key = budgetKey(now, slot);
+    // eslint-disable-next-line no-await-in-loop -- first free slot wins; at most four tries
+    if (await cache.exclusive_set(key, requestedBy, BUDGET_TTL_SEC)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export type RebuildRefusal =
   | 'quiet-hour'
   | 'identity-sweep'
@@ -734,7 +951,8 @@ export type RebuildRefusal =
   | 'cooldown'
   | 'future-month'
   | 'bad-month'
-  | 'bad-requester';
+  | 'bad-requester'
+  | 'budget';
 
 /** Whether a manual rebuild saved both snapshots. */
 export type RebuildOutcome = { ok: true } | { ok: false };
@@ -818,6 +1036,24 @@ export async function requestRebuild(
         'That month was refreshed in the last 10 minutes. Try again in a few minutes.',
     };
   }
+  // Last, so a request any other check refuses never uses up budget.
+  let budgeted: boolean;
+  try {
+    budgeted = await takeRebuildBudget(cache, now, requestedBy);
+  } catch (error) {
+    await cache.remove(rebuildCooldownKey(period)).catch(() => undefined);
+    await releaseBuildLease(cache, lease);
+    throw error;
+  }
+  if (!budgeted) {
+    // A refused request leaves nothing behind: no cooldown, no lease.
+    await cache.remove(rebuildCooldownKey(period)).catch(() => undefined);
+    await releaseBuildLease(cache, lease);
+    return {
+      status: 'budget',
+      message: `Reports were refreshed ${MANUAL_REBUILDS_PER_HOUR} times in this hour already. Try again after the top of the hour.`,
+    };
+  }
   const done = (async (): Promise<RebuildOutcome> => {
     // The request has been answered; from here nothing should give up on
     // Redis early, or the lease could outlive the build.
@@ -826,9 +1062,12 @@ export async function requestRebuild(
       if (deps.backgroundCache) {
         background = await deps.backgroundCache();
       }
-      return (await buildAndRecord(deps, background, period, requestedBy))
-        ? { ok: true }
-        : { ok: false };
+      if (!(await buildAndRecord(deps, background, period, requestedBy))) {
+        return { ok: false };
+      }
+      // After the build's saves and alerts, still under the lease.
+      await syncWorkspaceSafely(deps, background, period);
+      return { ok: true };
     } catch (error) {
       logger.error(`Manual report rebuild failed: ${String(error)}`);
       return { ok: false };
@@ -879,21 +1118,26 @@ export async function defaultBuildJobDeps(
     now: () => new Date(),
     cache: ApplicationCache,
     snapshots,
-    notices, // one instance for claim and release
+    notices, // one instance for claim, markPosted and release
     linkProgress,
     fetchMonthReports: organizerMonthReports(client, suspensions),
     collectLinkProgress: () => collectLinkProgress(client),
     alert: (entry) => logAlert(client, entry),
-    postRoleNotice: (roleIds, content, entry) =>
-      postRoleNotice(
-        client,
-        BOT_ALERTS_CHANNEL_ID,
-        [...roleIds],
-        content,
-        entry,
-      ),
+    recentAlertTitles: () => recentEmbedTitles(client, BOT_ALERTS_CHANNEL_ID),
     reportReadyEnabled: () => REPORT_READY_ENABLED,
     newLeaseValue: () => crypto.randomUUID(),
+    // Lazy: the workspace schema is set up only by the workspace repository's
+    // instance(), on the first sync that needs it, so a workspace or schema
+    // failure never stops building.
+    syncWorkspace: (period) =>
+      syncWorkspace(
+        {
+          now: () => new Date(),
+          repository: () => PostgresNoShowWorkspaceRepository.instance(),
+          snapshots: async () => snapshots,
+        },
+        period,
+      ),
   };
 }
 

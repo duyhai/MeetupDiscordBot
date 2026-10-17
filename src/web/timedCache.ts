@@ -3,7 +3,9 @@ import { Logger } from 'tslog';
 import { KeyValueCache } from '../lib/cache/base.js';
 import {
   BUILD_LEASE_KEY,
+  REBUILD_BUDGET_KEY_PREFIX,
   releaseBuildLease,
+  releaseOwnedKey,
 } from '../lib/reports/buildLease.js';
 
 const logger = new Logger({ name: 'dashboard' });
@@ -92,6 +94,10 @@ export function timedCacheFactory(
  * as the late win is known, through the untimed inner cache, so the release
  * waits for Redis however long that takes. Value-compared, so another
  * build's lease is never touched; releaseBuildLease never throws.
+ *
+ * A refresh-budget slot won late is given back the same way: the request
+ * that took it already failed, and a failed request uses no budget. The
+ * slot key names one slot of one hour, so only that request can hold it.
  */
 export function releaseLateBuildLease(
   getInner: () => Promise<KeyValueCache>,
@@ -99,8 +105,23 @@ export function releaseLateBuildLease(
 ): TimedCacheOptions {
   return {
     onLateExclusiveSet: (key, value) => {
+      if (key.startsWith(REBUILD_BUDGET_KEY_PREFIX)) {
+        // A refresh that failed must not use up one of the hour's slots.
+        log.warn(
+          'Report refresh budget slot was granted after its request timed out; giving it back',
+        );
+        getInner()
+          .then((inner) => releaseOwnedKey(inner, key, value))
+          .catch((error: unknown) =>
+            log.error(
+              `Late refresh budget release failed: ${error instanceof Error ? error.name : 'Error'}`,
+            ),
+          );
+        return;
+      }
       if (key !== BUILD_LEASE_KEY) {
-        // Only the lease; other late writes are harmless (see timedCache).
+        // Only the lease and budget slots; other late writes are harmless
+        // (see timedCache).
         return;
       }
       log.warn(

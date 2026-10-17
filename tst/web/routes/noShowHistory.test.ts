@@ -1,12 +1,16 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+
+import { WorkspaceStatus } from '../../../src/lib/workspace/types.js';
 
 import { Period } from '../../../src/lib/reports/period.js';
 import { NoShowPayload } from '../../../src/lib/reports/types.js';
 import { MemberNoShowMonth } from '../../../src/lib/repositories/postgresReportSnapshotRepository.js';
+import { PAGE_LOAD_DEADLINE_MS } from '../../../src/web/pageKit.js';
 import {
   DashboardPageDeps,
   registerAllProtectedRoutes,
 } from '../../../src/web/routes/dashboardPages.js';
+import { HISTORY_OUTCOMES_DEADLINE_MS } from '../../../src/web/routes/noShowHistory.js';
 import {
   closeServers,
   makeApp,
@@ -20,9 +24,12 @@ import {
   fakeOrganizerDeps,
   fakePageDeps,
   fakeSnapshots,
+  fakeWorkspace,
+  fakeWorkspaceActions,
   noShowCase,
   noShowPayload,
   seedRow,
+  workspaceRow,
 } from './pageFakes.js';
 
 afterEach(closeServers);
@@ -563,5 +570,261 @@ describe('no-show history member page', () => {
     expect(res.text).toContain(`href="${MEMBER}?page=2"`);
     const short = await (await setup(undefined, full.slice(0, 3))).get(MEMBER);
     expect(short.text).not.toContain('?page=2');
+  });
+});
+
+const AUG: Period = { year: 2026, month: 8 };
+const JULY: Period = { year: 2026, month: 7 };
+
+/** A workspace over the given (period, member id, status) rows. */
+const workspaceOf = (rows: [Period, string, string][]) =>
+  fakeWorkspace({
+    rows: rows.map(([period, memberId, status], i) =>
+      workspaceRow({
+        id: i + 1,
+        period,
+        memberId,
+        status: status as WorkspaceStatus,
+      }),
+    ),
+    months: [],
+    events: [],
+  });
+
+/** The cases table's rows (the first tbody), each as its own markup. */
+const caseRows = (body: string) =>
+  (/<tbody>([\s\S]*?)<\/tbody>/.exec(body)?.[1] ?? '').split('<tr>').slice(1);
+
+describe('no-show history month page: workspace outcomes', () => {
+  it('shows workspace outcome per member', async () => {
+    const ws = workspaceOf([
+      [SEPT, '2000', 'warning_sent'],
+      [SEPT, '2001', 'suspended'],
+    ]);
+    const actions = fakeWorkspaceActions();
+    const { get } = await setup(undefined, [], {
+      workspace: async () => ws,
+      workspaceActions: actions,
+    });
+    const res = await get(MONTH);
+    expect(res.status).toBe(200);
+    expect(res.text).toContain('<th>Outcome</th>');
+    const [hostile, second] = caseRows(res.text);
+    expect(hostile).toContain('members/2000/');
+    expect(words(hostile)).toContain('Warning sent');
+    expect(hostile).toContain('href="/dashboard/no-shows/2026-09"');
+    expect(second).toContain('members/2001/');
+    expect(words(second)).toContain('Suspended');
+    // Only this page's members, and reads only.
+    expect(ws.statusesByMember).toHaveBeenCalledWith(SEPT, ['2000', '2001']);
+    expect(actions.perform).not.toHaveBeenCalled();
+    expect(actions.sync).not.toHaveBeenCalled();
+    expect(res.text).not.toMatch(/attendance|incomplete/i);
+  });
+
+  it('a case with no workspace row, or an unknown stored status, shows no status text', async () => {
+    const ws = workspaceOf([[SEPT, '2001', '<script>x</script>']]);
+    const { get } = await setup(undefined, [], { workspace: async () => ws });
+    const res = await get(MONTH);
+    const [hostile, second] = caseRows(res.text);
+    expect(words(hostile)).toMatch(/—$/);
+    expect(hostile).not.toContain('/dashboard/no-shows/');
+    expect(words(second)).toContain('Unknown');
+    expect(res.text).not.toContain('<script>x');
+  });
+
+  it('reads outcomes for the shown page only', async () => {
+    const ws = workspaceOf([]);
+    const { get } = await setup(
+      [seedRow('no_show', SEPT, manyCases(120))],
+      [],
+      { workspace: async () => ws },
+    );
+    await get(`${MONTH}?page=3`);
+    const ids = ws.statusesByMember.mock.calls[0][1];
+    expect(ids).toHaveLength(20);
+    expect(ids).toContain('2119');
+  });
+
+  it('months without a workspace show no outcome column', async () => {
+    // A stray August row must still never be shown.
+    const ws = workspaceOf([[AUG, '2000', 'suspended']]);
+    const { get } = await setup(
+      [seedRow('no_show', AUG, noShowPayload({ period: '2026-08' }))],
+      [],
+      { workspace: async () => ws },
+    );
+    const res = await get('/dashboard/no-show-history/2026-08');
+    expect(res.status).toBe(200);
+    expect(res.text).not.toContain('Outcome');
+    expect(words(res.text)).not.toContain('Suspended');
+    expect(res.text).not.toContain('/dashboard/no-shows/');
+    expect(ws.statusesByMember).not.toHaveBeenCalled();
+  });
+
+  it('outcome read failure still renders the page', async () => {
+    const ws = workspaceOf([[SEPT, '2000', 'warning_sent']]);
+    ws.statusesByMember.mockRejectedValue(new Error('db down: secret'));
+    const { get } = await setup(undefined, [], { workspace: async () => ws });
+    const res = await get(MONTH);
+    expect(res.status).toBe(200);
+    expect(res.text).toContain('<th>Outcome (unavailable)</th>');
+    expect(res.text).not.toContain('secret');
+    expect(words(res.text)).not.toContain('Warning sent');
+    for (const row of caseRows(res.text)) {
+      expect(words(row)).toMatch(/—$/);
+    }
+    // The rest of the page is there.
+    expect(words(res.text)).toContain('Cleared One');
+
+    const lookup = await setup(undefined, [], {
+      workspace: async () => {
+        throw new Error('no DATABASE_URL');
+      },
+    });
+    const res2 = await lookup.get(MONTH);
+    expect(res2.status).toBe(200);
+    expect(res2.text).toContain('<th>Outcome (unavailable)</th>');
+  });
+});
+
+/**
+ * Sends a GET whose workspace outcomes read never settles. Once the read has
+ * started (so its deadline timer is set), the fake clock moves to just
+ * before HISTORY_OUTCOMES_DEADLINE_MS, then onto it. After that only socket
+ * I/O is left, so the response is awaited in real time, for at most 3 s: a
+ * read still held to PAGE_LOAD_DEADLINE_MS never answers.
+ */
+async function getWithHangingOutcomes(
+  send: () => PromiseLike<{ status: number; text: string }>,
+  readStarted: Promise<void>,
+) {
+  let res: { status: number; text: string } | undefined;
+  let early = false;
+  let settled: Promise<void> = Promise.resolve();
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+  try {
+    settled = Promise.resolve(send()).then((r) => {
+      res = r;
+    });
+    await readStarted;
+    await vi.advanceTimersByTimeAsync(HISTORY_OUTCOMES_DEADLINE_MS - 1);
+    for (let i = 0; i < 20; i += 1) {
+      // eslint-disable-next-line no-await-in-loop -- I/O only, the clock stays put
+      await new Promise<void>((r) => {
+        setImmediate(r);
+      });
+    }
+    early = res !== undefined;
+    await vi.advanceTimersByTimeAsync(1);
+  } finally {
+    vi.useRealTimers();
+  }
+  await Promise.race([
+    settled,
+    new Promise((r) => {
+      setTimeout(r, 3000);
+    }),
+  ]);
+  return { res, early };
+}
+
+/** A read that never settles, and a promise that resolves once it is called. */
+function hangingRead() {
+  let started: () => void = () => undefined;
+  const readStarted = new Promise<void>((r) => {
+    started = r;
+  });
+  const read = () => {
+    started();
+    return new Promise<never>(() => undefined);
+  };
+  return { read, readStarted };
+}
+
+describe('workspace outcomes read deadline', () => {
+  it('is 5 seconds, half the page deadline', () => {
+    expect(HISTORY_OUTCOMES_DEADLINE_MS).toBe(5000);
+    expect(PAGE_LOAD_DEADLINE_MS).toBe(10_000);
+  });
+
+  it('a month page whose outcomes read hangs renders without them after 5 s', async () => {
+    const ws = workspaceOf([]);
+    const { read, readStarted } = hangingRead();
+    ws.statusesByMember.mockImplementation(read);
+    const { get } = await setup(undefined, [], { workspace: async () => ws });
+    const { res, early } = await getWithHangingOutcomes(
+      () => get(MONTH),
+      readStarted,
+    );
+    expect(early).toBe(false);
+    expect(res?.status).toBe(200);
+    expect(res?.text).toContain('<th>Outcome (unavailable)</th>');
+  });
+
+  it('a member page whose outcomes read hangs renders without them after 5 s', async () => {
+    const ws = workspaceOf([]);
+    const { read, readStarted } = hangingRead();
+    ws.statusesForMember.mockImplementation(read);
+    const { get } = await setup(
+      undefined,
+      [memberMonth(SEPT, { noShowCase: noShowCase(0) })],
+      { workspace: async () => ws },
+    );
+    const { res, early } = await getWithHangingOutcomes(
+      () => get(MEMBER),
+      readStarted,
+    );
+    expect(early).toBe(false);
+    expect(res?.status).toBe(200);
+    expect(res?.text).toContain('<th>Outcome (unavailable)</th>');
+  });
+});
+
+describe('no-show history member page: workspace outcomes', () => {
+  const months = () => [
+    memberMonth(OCT),
+    memberMonth(SEPT, { noShowCase: noShowCase(0) }),
+    memberMonth(JULY, { cleared: true }),
+  ];
+  /** The member table's row for one month. */
+  const rowFor = (body: string, key: string) =>
+    caseRows(body).find((r) => r.includes(`no-show-history/${key}"`)) ?? '';
+
+  it('member page shows the outcome per month', async () => {
+    // July is before the workspace: a stray row there is never shown.
+    const ws = workspaceOf([
+      [SEPT, '123456', 'on_hold'],
+      [JULY, '123456', 'suspended'],
+    ]);
+    const { get } = await setup(undefined, months(), {
+      workspace: async () => ws,
+    });
+    const res = await get(MEMBER);
+    expect(res.status).toBe(200);
+    expect(res.text).toContain('<th>Outcome</th>');
+    const sept = rowFor(res.text, '2026-09');
+    expect(words(sept)).toContain('On hold');
+    expect(sept).toContain('href="/dashboard/no-shows/2026-09"');
+    expect(words(rowFor(res.text, '2026-10'))).toMatch(/—$/);
+    const july = rowFor(res.text, '2026-07');
+    expect(july).not.toBe('');
+    expect(words(july)).not.toContain('Suspended');
+    expect(july).not.toContain('/dashboard/no-shows/');
+    expect(ws.statusesForMember).toHaveBeenCalledWith('123456');
+    expect(res.text).not.toMatch(/attendance|incomplete/i);
+  });
+
+  it('outcome read failure still renders the member page', async () => {
+    const ws = workspaceOf([[SEPT, '123456', 'on_hold']]);
+    ws.statusesForMember.mockRejectedValue(new Error('down'));
+    const { get } = await setup(undefined, months(), {
+      workspace: async () => ws,
+    });
+    const res = await get(MEMBER);
+    expect(res.status).toBe(200);
+    expect(res.text).toContain('<th>Outcome (unavailable)</th>');
+    expect(words(res.text)).not.toContain('On hold');
+    expect(words(rowFor(res.text, '2026-09'))).toContain('Warning');
   });
 });

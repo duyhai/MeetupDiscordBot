@@ -9,17 +9,29 @@ function markerKey(kind: NoticeKind, period: Period): string {
   return `${kind}:${periodKey(period)}`;
 }
 
+/** An unposted claim older than this is taken to be a crash and is reclaimed. */
+export const NOTICE_RECLAIM_AFTER_MS = 30 * 60 * 1000;
+
 /**
- * Durable "notice already posted" markers: a restart cannot post the same
- * notice twice, and a failed post releases its marker so the next tick retries.
+ * 'fresh': this caller inserted the marker. 'retry': it took over an unposted
+ * claim (crashed or released); the notice may already be in the channel.
+ * false: posted, or someone else holds a live claim.
+ */
+export type NoticeClaim = 'fresh' | 'retry' | false;
+
+/**
+ * Durable report-ready markers: a claim before posting (so two processes
+ * cannot both post), a post time once it landed (final), and reclaim of a
+ * claim that crashed or failed (so a month is never left unannounced).
  */
 export class PostgresDashboardNoticeRepository {
   private static singleton:
     Promise<PostgresDashboardNoticeRepository> | undefined;
 
   /**
-   * posted_at (as Postgres text, microseconds intact) of each marker this
-   * instance inserted, keyed by kind and month: release deletes only those.
+   * claimed_at (as Postgres text, microseconds intact) of each claim this
+   * instance holds, keyed by kind and month: markPosted and release touch
+   * only those.
    */
   private readonly claimed = new Map<string, string>();
 
@@ -41,42 +53,71 @@ export class PostgresDashboardNoticeRepository {
     return this.singleton;
   }
 
-  /** Inserts the marker; true only for the caller that inserted it. */
-  async claim(kind: NoticeKind, period: Period): Promise<boolean> {
-    const result = await this.pool.query<{ posted_at: string }>(
-      `INSERT INTO dashboard_notices (kind, period) VALUES ($1, $2::date)
-       ON CONFLICT (kind, period) DO NOTHING RETURNING posted_at::text AS posted_at`,
-      [kind, periodDate(period)],
+  /**
+   * 'fresh': this caller inserted the marker. 'retry': it took over an
+   * unposted claim that crashed (older than reclaimAfterMs) or whose post
+   * failed (released); the notice may already be in the channel. false:
+   * posted, or someone else holds a live claim. Staleness uses the database
+   * clock, so two dynos agree. Two concurrent reclaims: the second re-checks
+   * the WHERE against the first's new claimed_at and gets no row.
+   */
+  async claim(
+    kind: NoticeKind,
+    period: Period,
+    reclaimAfterMs = NOTICE_RECLAIM_AFTER_MS,
+  ): Promise<NoticeClaim> {
+    const result = await this.pool.query<{
+      claimed_at: string;
+      fresh: boolean;
+    }>(
+      `INSERT INTO dashboard_notices AS n (kind, period) VALUES ($1, $2::date)
+       ON CONFLICT (kind, period) DO UPDATE SET claimed_at = now()
+         WHERE n.posted_at IS NULL
+           AND n.claimed_at < now() - make_interval(secs => $3::double precision / 1000)
+       RETURNING claimed_at::text AS claimed_at, (xmax = 0) AS fresh`,
+      [kind, periodDate(period), reclaimAfterMs],
     );
     if (result.rowCount !== 1) {
       return false;
     }
-    this.claimed.set(markerKey(kind, period), result.rows[0].posted_at);
-    return true;
+    this.claimed.set(markerKey(kind, period), result.rows[0].claimed_at);
+    return result.rows[0].fresh ? 'fresh' : 'retry';
   }
 
-  /**
-   * Deletes the marker this instance's own claim inserted (a failed post), so
-   * the next tick retries. A caller that did not win the claim, or a stale
-   * release after a newer claim, deletes nothing.
-   */
+  /** Records the post for this instance's own claim. False when the claim is gone (reclaimed). */
+  async markPosted(kind: NoticeKind, period: Period): Promise<boolean> {
+    const key = markerKey(kind, period);
+    const claimedAt = this.claimed.get(key);
+    if (claimedAt === undefined) {
+      return false;
+    }
+    const result = await this.pool.query(
+      `UPDATE dashboard_notices SET posted_at = now()
+        WHERE kind = $1 AND period = $2::date AND claimed_at = $3::timestamptz AND posted_at IS NULL`,
+      [kind, periodDate(period), claimedAt],
+    );
+    this.claimed.delete(key);
+    return result.rowCount === 1;
+  }
+
+  /** A failed post: this instance's unposted claim becomes retryable at once. Anyone else's is untouched. */
   async release(kind: NoticeKind, period: Period): Promise<void> {
     const key = markerKey(kind, period);
-    const postedAt = this.claimed.get(key);
-    if (postedAt === undefined) {
+    const claimedAt = this.claimed.get(key);
+    if (claimedAt === undefined) {
       return;
     }
     await this.pool.query(
-      `DELETE FROM dashboard_notices
-       WHERE kind = $1 AND period = $2::date AND posted_at = $3::timestamptz`,
-      [kind, periodDate(period), postedAt],
+      `UPDATE dashboard_notices SET claimed_at = '-infinity'
+        WHERE kind = $1 AND period = $2::date AND claimed_at = $3::timestamptz AND posted_at IS NULL`,
+      [kind, periodDate(period), claimedAt],
     );
     this.claimed.delete(key);
   }
 
-  async has(kind: NoticeKind, period: Period): Promise<boolean> {
+  async isPosted(kind: NoticeKind, period: Period): Promise<boolean> {
     const result = await this.pool.query(
-      'SELECT 1 FROM dashboard_notices WHERE kind = $1 AND period = $2::date',
+      'SELECT 1 FROM dashboard_notices WHERE kind = $1 AND period = $2::date AND posted_at IS NOT NULL',
       [kind, periodDate(period)],
     );
     return result.rowCount === 1;

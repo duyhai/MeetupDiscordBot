@@ -32,8 +32,11 @@ import {
 import { LinkProgressDay } from '../../../src/lib/repositories/postgresLinkProgressRepository.js';
 import {
   SuspensionPageRow,
+  SuspensionRecordState,
   SuspensionState,
 } from '../../../src/lib/repositories/postgresSuspensionRepository.js';
+import { SuspensionRecord } from '../../../src/lib/repositories/types.js';
+import { UpcomingEntry } from '../../../src/lib/workspace/upcoming.js';
 import {
   DashboardPageDeps,
   IdentityPageReader,
@@ -42,7 +45,19 @@ import {
   PageRebuildResult,
   SnapshotPageReader,
   SuspensionPageReader,
+  WorkspaceActions,
+  WorkspacePageReader,
 } from '../../../src/web/routes/dashboardPages.js';
+import {
+  WorkspaceActionResult,
+  WorkspaceSyncCode,
+} from '../../../src/lib/workspace/service.js';
+import {
+  WorkspaceEvent,
+  WorkspaceMonthState,
+  WorkspaceRow,
+  WorkspaceStatus,
+} from '../../../src/lib/workspace/types.js';
 import { OrganizerLoginDeps } from '../../../src/web/routes/organizerLogin.js';
 import { SessionStore } from '../../../src/web/session.js';
 import { FakeCache } from '../fakeCache.js';
@@ -324,13 +339,54 @@ export function suspensionRow(
   };
 }
 
-/** An in-memory SuspensionPageReader: rows per tab, sliced by offset/limit like the repository. */
+/** One suspension record with its void state: a live September 1 30-day record unless overridden. */
+export function suspensionRecord(
+  overrides: Partial<SuspensionRecordState> = {},
+): SuspensionRecordState {
+  suspensionIds += 1;
+  return {
+    id: suspensionIds,
+    memberId: String(7000 + suspensionIds),
+    memberName: `Suspended ${suspensionIds}`,
+    suspendedAt: new Date('2026-09-01T00:00:00Z'),
+    durationDays: 30,
+    notes: null,
+    createdAt: new Date('2026-09-01T00:00:00Z'),
+    voidedAt: null,
+    voidedBy: null,
+    voidReason: null,
+    ...overrides,
+  };
+}
+
+/**
+ * An in-memory SuspensionPageReader: rows per tab, sliced by offset/limit
+ * like the repository. `records` back listByMemberIds (live only, like the
+ * repository) and listByIds (voided included).
+ */
 export function fakeSuspensions(
   rows: Partial<Record<SuspensionState, SuspensionPageRow[]>> = {},
   byMonth: { month: string; count: number }[] = [],
+  records: SuspensionRecordState[] = [],
 ) {
   const tab = (state: SuspensionState) => rows[state] ?? [];
   return {
+    listByMemberIds: vi.fn(
+      async (memberIds: string[], before?: Date): Promise<SuspensionRecord[]> =>
+        records
+          .filter(
+            (r) =>
+              r.voidedAt === null &&
+              memberIds.includes(r.memberId) &&
+              (before === undefined || r.suspendedAt < before),
+          )
+          .map(
+            ({ voidedAt: _a, voidedBy: _b, voidReason: _c, ...live }) => live,
+          ),
+    ),
+    listByIds: vi.fn(async (ids: number[]): Promise<SuspensionRecordState[]> =>
+      records.filter((r) => ids.includes(r.id)),
+    ),
     listPage: vi.fn(
       async (options: {
         state: SuspensionState;
@@ -484,6 +540,157 @@ export function fakeMemberLinks(links: Record<string, string> = {}) {
   } satisfies MemberLinkPageReader;
 }
 
+/** One workspace row: September's suspension case for member 123456, new, version 1, unless overridden. */
+export function workspaceRow(
+  overrides: Partial<WorkspaceRow> = {},
+): WorkspaceRow {
+  return {
+    id: 1,
+    period: SEPT,
+    memberId: '123456',
+    memberName: 'Test Member',
+    classification: 'suspension',
+    status: 'new',
+    notes: '',
+    suspensionRecordId: null,
+    inLatestSnapshot: true,
+    version: 1,
+    updatedAt: new Date('2026-10-01T16:00:00Z'),
+    updatedBy: 'sync',
+    ...overrides,
+  };
+}
+
+export interface WorkspaceSeed {
+  rows: WorkspaceRow[];
+  months: WorkspaceMonthState[];
+  events: WorkspaceEvent[];
+}
+
+/** The default workspace seed: one September row and September's month state. */
+export const WORKSPACE_SEED = (): WorkspaceSeed => ({
+  rows: [workspaceRow()],
+  months: [
+    {
+      period: SEPT,
+      snapshotId: 1,
+      snapshotBuiltAt: new Date('2026-10-01T15:00:00Z'),
+      syncedAt: new Date('2026-10-01T16:00:00Z'),
+    },
+  ],
+  events: [],
+});
+
+const periodMatch = (a: Period, b: Period) =>
+  a.year === b.year && a.month === b.month;
+
+/** An in-memory WorkspacePageReader backed by arrays; every method is a vi.fn. */
+export function fakeWorkspace(seed: WorkspaceSeed = WORKSPACE_SEED()) {
+  const inMonth = (period: Period) =>
+    seed.rows.filter((r) => periodMatch(r.period, period));
+  return {
+    monthState: vi.fn(
+      async (period: Period): Promise<WorkspaceMonthState | undefined> =>
+        seed.months.find((m) => periodMatch(m.period, period)),
+    ),
+    listMonths: vi.fn(async (): Promise<WorkspaceMonthState[]> =>
+      [...seed.months].sort((a, b) => comparePeriods(b.period, a.period)),
+    ),
+    listRows: vi.fn(
+      async (
+        period: Period,
+        page: { offset: number; limit: number },
+      ): Promise<WorkspaceRow[]> =>
+        inMonth(period).slice(
+          page.offset,
+          page.offset + Math.min(50, page.limit),
+        ),
+    ),
+    countRows: vi.fn(
+      async (period: Period): Promise<{ total: number; inLatest: number }> => ({
+        total: inMonth(period).length,
+        inLatest: inMonth(period).filter((r) => r.inLatestSnapshot).length,
+      }),
+    ),
+    getRow: vi.fn(
+      async (
+        period: Period,
+        rowId: number,
+      ): Promise<WorkspaceRow | undefined> =>
+        inMonth(period).find((r) => r.id === rowId),
+    ),
+    listRecentEvents: vi.fn(
+      async (rowIds: number[]): Promise<Map<number, WorkspaceEvent[]>> => {
+        const byRow = new Map<number, WorkspaceEvent[]>();
+        for (const event of seed.events) {
+          if (rowIds.includes(event.rowId)) {
+            byRow.set(event.rowId, [...(byRow.get(event.rowId) ?? []), event]);
+          }
+        }
+        return byRow;
+      },
+    ),
+    statusCounts: vi.fn(
+      async (
+        periods: Period[],
+      ): Promise<Map<string, Partial<Record<WorkspaceStatus, number>>>> => {
+        const counts = new Map<
+          string,
+          Partial<Record<WorkspaceStatus, number>>
+        >();
+        for (const period of periods) {
+          for (const row of inMonth(period).filter((r) => r.inLatestSnapshot)) {
+            const key = periodKey(period);
+            const month = counts.get(key) ?? {};
+            month[row.status] = (month[row.status] ?? 0) + 1;
+            counts.set(key, month);
+          }
+        }
+        return counts;
+      },
+    ),
+    linkedRecordIds: vi.fn(
+      async (ids: number[]): Promise<Set<number>> =>
+        new Set(
+          seed.rows
+            .map((r) => r.suspensionRecordId)
+            .filter((id): id is number => id !== null && ids.includes(id)),
+        ),
+    ),
+    statusesByMember: vi.fn(
+      async (
+        period: Period,
+        memberIds: string[],
+      ): Promise<Map<string, WorkspaceStatus>> =>
+        new Map(
+          inMonth(period)
+            .filter((r) => memberIds.includes(r.memberId))
+            .map((r) => [r.memberId, r.status]),
+        ),
+    ),
+    statusesForMember: vi.fn(
+      async (memberId: string): Promise<Map<string, WorkspaceStatus>> =>
+        new Map(
+          seed.rows
+            .filter((r) => r.memberId === memberId)
+            .sort((a, b) => comparePeriods(b.period, a.period))
+            .map((r) => [periodKey(r.period), r.status]),
+        ),
+    ),
+  } satisfies WorkspacePageReader;
+}
+
+/** Workspace actions that always succeed: perform answers done, sync answers synced. */
+export function fakeWorkspaceActions() {
+  return {
+    perform: vi.fn(async (): Promise<WorkspaceActionResult> => ({
+      code: 'done',
+    })),
+    sync: vi.fn(async (): Promise<WorkspaceSyncCode> => 'synced'),
+    moderationLog: vi.fn(async (): Promise<unknown> => true),
+  } satisfies WorkspaceActions;
+}
+
 /** The default seed: a September 2026 Hall of Fame row. */
 export const SEED: SeedRow[] = [seedRow('hall_of_fame', SEPT, hofPayload())];
 
@@ -519,6 +726,12 @@ export function fakePageDeps(
       fakeIdentity([identityChange({ id: '1' })], { '1:old': PNG_1X1 }),
     linkProgress: async () => fakeLinkProgress(),
     memberLinks: async () => fakeMemberLinks(),
+    workspace: async () => fakeWorkspace(),
+    workspaceActions: fakeWorkspaceActions(),
+    upcoming: vi.fn(
+      async (_memberIds: string[]): Promise<Map<string, UpcomingEntry>> =>
+        new Map(),
+    ),
     rebuild: vi.fn(async (): Promise<PageRebuildResult> => ({
       status: 'started',
       done: Promise.resolve({ ok: true }),

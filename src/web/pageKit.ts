@@ -20,6 +20,7 @@ import {
   periodOf,
 } from '../lib/reports/period.js';
 import { AttendanceEvidence } from '../lib/reports/types.js';
+import { isWorkspaceMonth } from '../lib/workspace/months.js';
 import { tz } from '../util/timezone.js';
 import { dashboardLocals } from './dashboardRouter.js';
 import { SafeHtml, html, localUrl, staticRaw } from './html.js';
@@ -30,6 +31,9 @@ const logger = new Logger({ name: 'dashboard' });
 
 const NAV = html`<nav class="site">
   <a href="${localUrl(DASHBOARD_BASE)}">Home</a>
+  <a href="${localUrl(dashboardPath(DASHBOARD_PATHS.workspace))}"
+    >No-show workspace</a
+  >
   <a href="${localUrl(dashboardPath(DASHBOARD_PATHS.hallOfFame))}"
     >Hall of Fame</a
   >
@@ -49,17 +53,42 @@ const NAV = html`<nav class="site">
   <a href="${localUrl(dashboardPath(DASHBOARD_PATHS.sessions))}">Sessions</a>
 </nav>`;
 
+/**
+ * Fixed text for the workspace's copy boxes. A button[data-copy-near] copies
+ * the textarea inside its [data-copy-box] (found by position: ids are never
+ * interpolated); with data-then-submit it submits its form only after the
+ * copy succeeded (Copy warning, then status warning_copied), disabling the
+ * button first; clicks while a write is pending are ignored, so a double
+ * click sends once. A Copy warning click never submits natively. With no
+ * clipboard, or a refused write, it says to copy by hand, as COPY_SCRIPT
+ * does, and submits nothing. No ids, no data.
+ */
+// eslint-disable-next-line @stylistic/max-len -- one line, so the script text is exactly what runs
+export const WORKSPACE_SCRIPT = staticRaw`document.querySelectorAll('button[data-copy-near]').forEach(function(b){var busy=false;b.addEventListener('click',function(e){var submit=b.hasAttribute('data-then-submit')?b.form:null;if(submit){e.preventDefault();}var box=b.closest('[data-copy-box]');var t=box?box.querySelector('textarea'):null;if(busy||!t){return;}t.select();if(!navigator.clipboard){b.textContent='Select the text and copy it';return;}busy=true;navigator.clipboard.writeText(t.value).then(function(){if(submit){b.disabled=true;submit.submit();}else{busy=false;b.textContent='Copied';}},function(){busy=false;b.textContent='Select the text and copy it';});});});`;
+
 /** Fixed text: copies the value of the textarea named by data-copy. Never carries data. */
 // eslint-disable-next-line @stylistic/max-len -- one line, so the script text is exactly what runs
 export const COPY_SCRIPT = staticRaw`document.querySelectorAll('button[data-copy]').forEach(function(b){b.addEventListener('click',function(){var t=document.getElementById(b.getAttribute('data-copy'));if(!t){return;}t.select();if(!navigator.clipboard){b.textContent='Select the text and copy it';return;}navigator.clipboard.writeText(t.value).then(function(){b.textContent='Copied';},function(){b.textContent='Select the text and copy it';});});});`;
 
 export function dashboardPage(
   res: Response,
-  page: { title: string; body: SafeHtml; status?: number; script?: boolean },
+  page: {
+    title: string;
+    body: SafeHtml;
+    status?: number;
+    /** true: COPY_SCRIPT; 'workspace': WORKSPACE_SCRIPT; each with the page nonce. */
+    script?: boolean | 'workspace';
+  },
 ): void {
   const { session, nonce } = dashboardLocals(res);
+  const scriptBody =
+    page.script === 'workspace'
+      ? WORKSPACE_SCRIPT
+      : page.script === true
+        ? COPY_SCRIPT
+        : undefined;
   // prettier-ignore
-  const script = page.script ? html`<script nonce="${nonce}">${COPY_SCRIPT}</script>` : '';
+  const script = scriptBody ? html`<script nonce="${nonce}">${scriptBody}</script>` : '';
   res
     .status(page.status ?? 200)
     .type('html')
@@ -103,21 +132,23 @@ export function unavailable(res: Response, what: string): void {
 export const PAGE_LOAD_DEADLINE_MS = 10_000;
 
 class PageLoadTimeoutError extends Error {
-  constructor() {
-    super(`page read took over ${PAGE_LOAD_DEADLINE_MS} ms`);
+  constructor(ms: number) {
+    super(`page read took over ${ms} ms`);
     this.name = 'PageLoadTimeoutError';
   }
 }
 
 /**
- * Runs a data read under PAGE_LOAD_DEADLINE_MS; on failure or timeout logs
- * the error's class name only and renders nothing: for a page part that
- * has its own fixed fallback. A read still running at
- * the deadline is left to finish (or fail) unobserved.
+ * Runs a data read under `deadlineMs` (PAGE_LOAD_DEADLINE_MS unless a page
+ * part asks for less); on failure or timeout logs the error's class name
+ * only and renders nothing: for a page part that has its own fixed
+ * fallback. A read still running at the deadline is left to finish (or
+ * fail) unobserved.
  */
 export async function loadOptional<T>(
   what: string,
   fn: () => Promise<T>,
+  deadlineMs: number = PAGE_LOAD_DEADLINE_MS,
 ): Promise<{ ok: true; value: T } | { ok: false }> {
   let timer: NodeJS.Timeout | undefined;
   try {
@@ -126,8 +157,8 @@ export async function loadOptional<T>(
     const read = fn();
     const deadline = new Promise<never>((_resolve, reject) => {
       timer = setTimeout(
-        () => reject(new PageLoadTimeoutError()),
-        PAGE_LOAD_DEADLINE_MS,
+        () => reject(new PageLoadTimeoutError(deadlineMs)),
+        deadlineMs,
       );
       timer.unref();
     });
@@ -169,6 +200,25 @@ export function parseRouteMonth(value: unknown, now: Date): Period | undefined {
     return undefined;
   }
   return period;
+}
+
+/** parseRouteMonth plus the workspace range (WORKSPACE_FIRST_PERIOD through the current Pacific month). */
+export function parseWorkspaceMonth(
+  value: unknown,
+  now: Date,
+): Period | undefined {
+  const period = parseRouteMonth(value, now);
+  return period !== undefined && isWorkspaceMonth(period, now)
+    ? period
+    : undefined;
+}
+
+/** A workspace row id route param: 1-9 digits, no leading zero (so never 0). */
+export function parseRowId(value: unknown): number | undefined {
+  if (typeof value !== 'string' || !/^[1-9][0-9]{0,8}$/.test(value)) {
+    return undefined;
+  }
+  return Number(value);
 }
 
 /** 'Sep 3, 2026 7:00 PM' in the group's timezone. */
