@@ -36,6 +36,7 @@ import {
   planDueWork,
   snapshotKey,
 } from './buildSchedule.js';
+import { monthPageUrls } from './dashboardPaths.js';
 import { collectLinkProgress, LinkProgressCounts } from './linkProgress.js';
 import { noShowsMissing } from './meetupMonth.js';
 import { buildMonthReports, MonthReports } from './monthReports.js';
@@ -345,6 +346,30 @@ function builtByText(builtBy: string): string {
   return 'a staff member'; // never echo anything else into Discord
 }
 
+/**
+ * Plain links to the month's dashboard pages, for the build alerts. Built
+ * only from PUBLIC_APP_ORIGIN and the build's own month (via monthPageUrls,
+ * which refuses anything parsePeriodKey would), never from payload text. A
+ * month before the group's first is not a dashboard page (it 404s), so it
+ * gets no links either. Embeds never ping or unfurl.
+ */
+function monthLinkLines(period: Period): string[] {
+  try {
+    if (comparePeriods(period, GROUP_FIRST_PERIOD) < 0) {
+      return [];
+    }
+    const urls = monthPageUrls(period);
+    return [
+      `Hall of Fame page: ${urls.hallOfFame}`,
+      `No-show history page: ${urls.noShowHistory}`,
+    ];
+  } catch (error) {
+    // The alert still posts, just without links.
+    logger.error(`Month page links skipped: ${String(error)}`);
+    return [];
+  }
+}
+
 export function buildSummaryEntry(o: MonthBuildOutcome): LogEntry {
   const label = monthLabel(o.period);
   const lines = [
@@ -352,6 +377,7 @@ export function buildSummaryEntry(o: MonthBuildOutcome): LogEntry {
     `No-shows: ${o.noShow.noShows} no-show RSVPs; ${o.noShow.warnings} warnings, ${o.noShow.suspensionCandidates} suspension candidates.`,
     `Took ${seconds(o.durationMs)} s. Built by ${builtByText(o.builtBy)}.`,
   ];
+  lines.push(...monthLinkLines(o.period));
   // Hosts mark no-shows only; a finished month with none at all is worth a
   // look, but it is not incomplete and does not hold back report-ready.
   if (o.finished && noShowsMissing(o.attendance)) {
@@ -381,9 +407,12 @@ function failureEntry(
   const next = manual
     ? 'Try the refresh again later; the daily job retries only months that are due.'
     : 'It retries at most once an hour (never 17:45–19:00 UTC); this alert repeats at most once a day until it works.';
+  const links = monthLinkLines(period);
   return {
     title: `Report build failed: ${label}`,
-    description: `Building the ${label} reports failed after ${seconds(durationMs)} s: ${describeBuildError(error)}\n\n${next}`,
+    description:
+      `Building the ${label} reports failed after ${seconds(durationMs)} s: ${describeBuildError(error)}\n\n${next}` +
+      (links.length > 0 ? `\n\n${links.join('\n')}` : ''),
   };
 }
 

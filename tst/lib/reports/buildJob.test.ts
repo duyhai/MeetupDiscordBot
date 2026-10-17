@@ -1487,3 +1487,204 @@ describe('fake store sanity', () => {
     expect(await snaps.getCurrentMeta('hall_of_fame', SEPT)).toBeUndefined();
   });
 });
+
+describe('month page links', () => {
+  // Literal strings, never recomputed from the helper under test.
+  const HOF_LINK =
+    'Hall of Fame page: https://meetup-discord-bot.herokuapp.com/dashboard/hall-of-fame/2026-09';
+  const NO_SHOW_LINK =
+    'No-show history page: https://meetup-discord-bot.herokuapp.com/dashboard/no-show-history/2026-09';
+  const linkLines = (description: string) =>
+    description.split('\n').filter((line) => line.includes(' page: '));
+  const outcome = (period: Period) => ({
+    period,
+    builtBy: 'job',
+    durationMs: 1200,
+    sourceComplete: true,
+    finished: true,
+    summaryIsNew: true,
+    hallOfFame: { events: 4, hosts: 3, newHosts: 1 },
+    noShow: {
+      noShows: 8,
+      members: 7,
+      warnings: 2,
+      suspensionCandidates: 3,
+      cleared: 1,
+      departed: 1,
+    },
+    attendance: { pastEventsWithRsvps: 6, eventsWithNoShow: 5, noShows: 8 },
+    allDeparted: false,
+  });
+
+  it('the build summary links the month pages', async () => {
+    const h = makeDeps();
+    await runBuildTick(h.deps);
+    expect(titles(h.alert)).toEqual(['Reports built: September 2026']);
+    expect(descriptions(h.alert)[0]).toBe(
+      [
+        'Hall of Fame: 4 events, 3 hosts (1 new).',
+        'No-shows: 8 no-show RSVPs; 2 warnings, 3 suspension candidates.',
+        'Took 0.0 s. Built by the daily job.',
+        HOF_LINK,
+        NO_SHOW_LINK,
+      ].join('\n'),
+    );
+  });
+
+  it('the links come before the notes', () => {
+    const description = buildSummaryEntry({
+      ...outcome(SEPT),
+      noShow: { ...outcome(SEPT).noShow, members: 2, departed: 2 },
+      attendance: { pastEventsWithRsvps: 6, eventsWithNoShow: 0, noShows: 0 },
+      allDeparted: true,
+    }).description;
+    const lines = description.split('\n');
+    expect(lines.slice(2)).toEqual([
+      'Took 1.2 s. Built by the daily job.',
+      HOF_LINK,
+      NO_SHOW_LINK,
+      'Note: no no-shows recorded for September 2026 across 6 past events with RSVPs; check that attendance was taken.',
+      'Note: all 2 no-show members have left the group.',
+    ]);
+  });
+
+  it('the failure alert links the month pages', async () => {
+    const h = makeDeps();
+    h.fetchMonthReports.mockImplementation(failSeptember);
+    await runBuildTick(h.deps);
+    expect(titles(h.alert)).toEqual(['Report build failed: September 2026']);
+    // The error text still comes only from describeBuildError.
+    expect(descriptions(h.alert)[0]).toBe(
+      `Building the September 2026 reports failed after 0.0 s: ${describeBuildError(new Error('boom'))}\n\n` +
+        'It retries at most once an hour (never 17:45–19:00 UTC); this alert repeats at most once a day until it works.\n\n' +
+        `${HOF_LINK}\n${NO_SHOW_LINK}`,
+    );
+  });
+
+  it('the manual failure alert links the month pages', async () => {
+    const h = makeDeps();
+    h.fetchMonthReports.mockRejectedValue(new Error('boom'));
+    const result = await requestRebuild(h.deps, SEPT, REQUESTER);
+    await (result as { done: Promise<{ ok: boolean }> }).done;
+    expect(titles(h.alert)).toEqual(['Report build failed: September 2026']);
+    expect(linkLines(descriptions(h.alert)[0])).toEqual([
+      HOF_LINK,
+      NO_SHOW_LINK,
+    ]);
+  });
+
+  it('links carry no Meetup-derived text', async () => {
+    const h = makeDeps();
+    h.fetchMonthReports.mockImplementation((period) => {
+      const reports = monthReports(period);
+      reports.hallOfFame.period = 'EVIL';
+      reports.noShow.period = '../x';
+      reports.hallOfFame.hosts = [
+        {
+          host: {
+            id: '1',
+            name: 'https://evil.example/<x>',
+            memberUrl: 'https://evil.example/<x>',
+          },
+          isNew: true,
+          events: [],
+        },
+      ];
+      return Promise.resolve(reports);
+    });
+    const result = await requestRebuild(h.deps, SEPT, REQUESTER);
+    await (result as { done: Promise<{ ok: boolean }> }).done;
+    expect(titles(h.alert)).toEqual(['Reports built: September 2026']);
+    const [description] = descriptions(h.alert);
+    const lines = description
+      .split('\n')
+      .filter((line) => / page: /.test(line));
+    expect(lines).toEqual([HOF_LINK, NO_SHOW_LINK]);
+    expect(description.toLowerCase()).not.toContain('evil');
+    expect(description).not.toContain('../x');
+  });
+
+  it("links come from the build's period, not the payload", async () => {
+    const h = makeDeps();
+    h.fetchMonthReports.mockImplementation((period) => {
+      const reports = monthReports(period);
+      reports.hallOfFame.period = '2026-08';
+      reports.noShow.period = '2026-08';
+      return Promise.resolve(reports);
+    });
+    const result = await requestRebuild(h.deps, SEPT, REQUESTER);
+    await (result as { done: Promise<{ ok: boolean }> }).done;
+    const [description] = descriptions(h.alert);
+    expect(linkLines(description)).toEqual([HOF_LINK, NO_SHOW_LINK]);
+    expect(description).not.toContain('2026-08');
+  });
+
+  it('an invalid period gets no links and still posts', () => {
+    for (const period of [
+      { year: 2026, month: 13 },
+      { year: 2026, month: 0 },
+      { year: 2026, month: 9.5 },
+      { year: '../x' as unknown as number, month: 9 },
+    ]) {
+      let entry: ReturnType<typeof buildSummaryEntry> | undefined;
+      expect(() => {
+        entry = buildSummaryEntry(outcome(period));
+      }).not.toThrow();
+      expect(entry?.description).toContain('Hall of Fame: 4 events');
+      expect(linkLines(entry?.description ?? '')).toEqual([]);
+      expect(entry?.description).not.toContain('2026-13');
+      expect(entry?.description).not.toContain('/dashboard/');
+    }
+  });
+
+  it('a month before the group began gets no links (the dashboard 404s it)', () => {
+    expect(
+      linkLines(
+        buildSummaryEntry(outcome({ year: 2013, month: 2 })).description,
+      ),
+    ).toEqual([]);
+    expect(
+      linkLines(
+        buildSummaryEntry(outcome({ year: 2013, month: 3 })).description,
+      ),
+    ).toEqual([
+      'Hall of Fame page: https://meetup-discord-bot.herokuapp.com/dashboard/hall-of-fame/2013-03',
+      'No-show history page: https://meetup-discord-bot.herokuapp.com/dashboard/no-show-history/2013-03',
+    ]);
+  });
+
+  it('a month before the group began cannot be requested, but buildMonth itself would build it', async () => {
+    const h = makeDeps();
+    expect(
+      (await requestRebuild(h.deps, { year: 2013, month: 2 }, REQUESTER))
+        .status,
+    ).toBe('bad-month');
+    // buildMonth has no floor of its own: only requestRebuild (and the job,
+    // which builds just the current and previous months) keep it out.
+    const built = await buildMonth(h.deps, { year: 2013, month: 2 }, 'job');
+    expect(built.period).toEqual({ year: 2013, month: 2 });
+    expect(linkLines(buildSummaryEntry(built).description)).toEqual([]);
+  });
+
+  it('alerts stay embeds with no mentions', async () => {
+    const h = makeDeps();
+    const result = await requestRebuild(h.deps, SEPT, REQUESTER);
+    await (result as { done: Promise<{ ok: boolean }> }).done;
+    h.fetchMonthReports.mockImplementation(failSeptember);
+    h.cache.values.delete('report-rebuild-cooldown-2026-09');
+    const failed = await requestRebuild(h.deps, SEPT, REQUESTER);
+    await (failed as { done: Promise<{ ok: boolean }> }).done;
+    expect(titles(h.alert)).toEqual([
+      'Reports built: September 2026',
+      'Report build failed: September 2026',
+    ]);
+    expect(h.postRoleNotice).not.toHaveBeenCalled();
+    for (const [entry] of h.alert.mock.calls) {
+      expect(Object.keys(entry)).toEqual(['title', 'description']);
+      expect(entry).not.toHaveProperty('content');
+      expect(entry.description).not.toContain('<@&');
+      expect(entry.description).not.toContain('@everyone');
+      expect(entry.description).not.toContain('@here');
+    }
+  });
+});
