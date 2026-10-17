@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import { CHART_COLORS } from '../../src/web/charts.js';
 import { STYLE } from '../../src/web/pages.js';
 
 /**
@@ -36,6 +37,12 @@ function luminance(hex: string): number {
     return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
   });
   return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+
+/** CIE L* (0 to 100), the perceived lightness. */
+function lightness(hex: string): number {
+  const y = luminance(hex);
+  return y > 216 / 24389 ? 116 * Math.cbrt(y) - 16 : (24389 / 27) * y;
 }
 
 export function contrast(a: string, b: string): number {
@@ -132,6 +139,25 @@ describe('colour tokens', () => {
         expect(contrast(t[token ?? ''], t.bg)).toBeGreaterThanOrEqual(4.5);
       },
     );
+
+    describe.each(['light', 'dark'] as const)('%s', (mode) => {
+      it.each(CHART_COLORS.map((c, i) => [i + 1, c] as const))(
+        'series %i (%s) meets 3:1 on --surface',
+        (_i, color) => {
+          expect(contrast(color, THEMES[mode].surface)).toBeGreaterThanOrEqual(
+            3,
+          );
+        },
+      );
+    });
+
+    it('keeps series 3 (green) well apart in lightness from series 1 and 2', () => {
+      // Red-green and blue-green deficiencies mostly leave lightness, so
+      // the first three series must not share it.
+      const [blurple, coral, green] = CHART_COLORS.map(lightness);
+      expect(Math.abs(green - blurple)).toBeGreaterThanOrEqual(10);
+      expect(Math.abs(green - coral)).toBeGreaterThanOrEqual(10);
+    });
 
     it.each(['light', 'dark'] as const)(
       '%s: the chart axis is themed and meets 3:1 on --surface',

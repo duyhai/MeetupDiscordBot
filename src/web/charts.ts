@@ -1,12 +1,19 @@
 import { SafeHtml, html } from './html.js';
 
-/** Fixed series colours. A series colour is used only when it is a hex constant like these. */
+/**
+ * Fixed series colours. A series colour is used only when it is a hex
+ * constant like these. Each meets 3:1 on both --surface values (#ffffff
+ * and #20212b), and the green sits well apart in lightness from the
+ * blurple and the coral, so the first three still differ under common
+ * colour-vision deficiencies. Line series also get a dash pattern each
+ * (see `line`).
+ */
 export const CHART_COLORS: readonly string[] = [
-  '#5865f2',
-  '#d1242f',
-  '#1a7f37',
-  '#9a6700',
-  '#8250df',
+  '#5462ec', // blurple
+  '#d42c3a', // coral
+  '#1ea666', // green
+  '#986600', // amber
+  '#a070f2', // violet
 ];
 
 export interface ChartSeries {
@@ -49,6 +56,47 @@ function size(v: number | undefined, fallback: number): number {
   return typeof v === 'number' && Number.isFinite(v) && v >= 100 && v <= 2000
     ? Math.round(v)
     : fallback;
+}
+
+/**
+ * A line series. The dash pattern goes with the series index, four
+ * patterns repeating like the colours; each is a literal, since the html
+ * subset takes no data in stroke-dasharray.
+ */
+function line(si: number, points: string, color: string): SafeHtml {
+  switch (si % 4) {
+    case 1:
+      return html`<polyline
+        points="${points}"
+        fill="none"
+        stroke="${color}"
+        stroke-width="2"
+        stroke-dasharray="8 4"
+      />`;
+    case 2:
+      return html`<polyline
+        points="${points}"
+        fill="none"
+        stroke="${color}"
+        stroke-width="2"
+        stroke-dasharray="2 3"
+      />`;
+    case 3:
+      return html`<polyline
+        points="${points}"
+        fill="none"
+        stroke="${color}"
+        stroke-width="2"
+        stroke-dasharray="10 3 2 3"
+      />`;
+    default:
+      return html`<polyline
+        points="${points}"
+        fill="none"
+        stroke="${color}"
+        stroke-width="2"
+      />`;
+  }
 }
 
 /**
@@ -122,12 +170,7 @@ export function chart(input: ChartInput): SafeHtml {
       >`;
     }
     const points = values.map((v, i) => `${fmt(x(i))},${fmt(y(v))}`).join(' ');
-    return html`<polyline
-      points="${points}"
-      fill="none"
-      stroke="${color}"
-      stroke-width="2"
-    />`;
+    return line(si, points, color);
   });
 
   const step = Math.max(1, Math.ceil(n / 12));

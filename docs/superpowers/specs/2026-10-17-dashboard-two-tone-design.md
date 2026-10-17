@@ -87,6 +87,10 @@ Changes made in Task 1 (2026-10-17):
 
 Fonts are the system stack. Code and copy boxes use the `ui-monospace` stack.
 
+Changes made in Task 3 (2026-10-17):
+- **`CHART_COLORS`.** The old series colours passed 3:1 on both surfaces, but only just (3.05 to 3.47 on dark), and all five sat at the same lightness (L* 46 to 49), so coral and green were hard to tell apart under red-green deficiencies. They are now blurple `#5462ec`, coral `#d42c3a`, green `#1ea666`, amber `#986600` and violet `#a070f2`. Each meets 3:1 on `#ffffff` and on `#20212b`, and the green is at least 12 L* lighter than the blurple and the coral. `tst/web/contrast.test.ts` checks both.
+- **Dashes.** Line series 2, 3 and 4 get literal dash patterns (`8 4`, `2 3`, `10 3 2 3`), so crossing lines differ by more than colour. Bars stay solid: they sit side by side in a fixed order.
+
 ## Decided layout (my calls, made in the approved mockup)
 
 - **Header.** The product name on the left, the account on the right, and the two-tone rule underneath.
