@@ -1354,6 +1354,10 @@ describe('GET /dashboard/no-shows/:period/rows/:rowId/suspend (confirm)', () => 
         'This member has a suspension on file through Oct 5, 2026. ' +
           "A new one can't overlap it or be dated before it, so it can't be recorded from here right now.",
       );
+      // The blocked line is a coral notice.
+      expect(res.text).toMatch(
+        /<p class="note attn">\s*This member has a suspension on file/,
+      );
       expect(res.text).not.toContain('type="date"');
       expect(res.text).not.toContain('name="action"');
       expect(res.text).not.toContain(
@@ -1430,6 +1434,9 @@ describe('GET /dashboard/no-shows/:period/rows/:rowId/suspend (confirm)', () => 
     expect(res.status).toBe(200);
     expect(words(res.text)).toContain(
       'This card cannot be suspended from here (New)',
+    );
+    expect(res.text).toMatch(
+      /<p class="note attn">\s*This card cannot be suspended from here/,
     );
     expect(res.text).not.toContain('type="date"');
   });

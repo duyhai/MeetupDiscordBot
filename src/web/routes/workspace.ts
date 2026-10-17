@@ -1048,7 +1048,7 @@ export function registerWorkspaceRoutes(
             Record suspension —
             ${memberLink({ id: row.memberId, name: row.memberName })}
           </h1>
-          <p>
+          <p class="note attn">
             This card cannot be suspended from here
             (${statusLabel(row.status)}).
           </p>
@@ -1084,7 +1084,9 @@ export function registerWorkspaceRoutes(
             ${memberLink({ id: row.memberId, name: row.memberName })}
           </h1>
           ${outOfOrder}
-          <p>${onFile}it can't be recorded from here right now.</p>
+          <p class="note attn">
+            ${onFile}it can't be recorded from here right now.
+          </p>
           <p><a href="${back}">Back to the workspace</a></p>
         </div>`,
       });
