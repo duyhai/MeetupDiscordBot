@@ -116,7 +116,8 @@ export async function leadershipOf(
  * Every code a workspace POST can send back in `?result=`. 'stale' and
  * 'not-found' are answered in place (409, 404) and never redirect.
  * 'suspension-overlap' is the service's 'already-suspended' without a
- * record to link; 'not-leadership' and 'leadership-unavailable' are the
+ * record to link; 'out-of-order' goes back to the confirm page, which reads
+ * the member's records and sets its earliest date; 'not-leadership' and 'leadership-unavailable' are the
  * live Leadership check's refusals.
  */
 export type WorkspaceResultCode =
@@ -145,6 +146,9 @@ export const WORKSPACE_RESULT_MESSAGES = {
     'This member already has a suspension dated in this month or the next. Link it from the card instead of recording another.',
   'suspension-overlap':
     'This member already has a live suspension covering some of those days. Nothing was recorded.',
+  // The confirm page names the date from the member's own records.
+  'out-of-order':
+    "This member already has a later suspension. A new one can't be dated before it. Nothing was recorded.",
   'record-unavailable':
     "That suspension record cannot be linked or voided here (voided, someone else's, or already on another card).",
   'bad-date':
@@ -365,6 +369,14 @@ export function registerWorkspaceActionRoutes(
     }
     if (result.code === 'not-found') {
       notFound(res);
+      return;
+    }
+    if (result.code === 'out-of-order') {
+      // Only the fixed code: the confirm page finds the record itself.
+      res.redirect(
+        303,
+        `${workspaceRowPath(period, rowId, 'suspend')}?result=out-of-order`,
+      );
       return;
     }
     back(resultCode(result));

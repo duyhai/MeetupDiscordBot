@@ -392,6 +392,7 @@ describe('workspace action routes', () => {
         'leadership-unavailable',
         'already-suspended',
         'suspension-overlap',
+        'out-of-order',
         'error',
         'synced',
         'current',
@@ -435,6 +436,34 @@ describe('workspace action routes', () => {
     const res = await overlap.post(ROW, leadershipForm('record_suspension'));
     expect(location(res)).toBe(`${MONTH}?result=suspension-overlap`);
     expect(WORKSPACE_RESULT_MESSAGES['already-suspended']).not.toBe(
+      WORKSPACE_RESULT_MESSAGES['suspension-overlap'],
+    );
+  });
+
+  it('out-of-order goes back to the confirm page with its fixed code, never the record', async () => {
+    const { post } = await setup({
+      leader: true,
+      perform: async () => ({
+        code: 'out-of-order',
+        later: { id: 52, suspendedAt: new Date('2026-10-15T00:00:00Z') },
+      }),
+    });
+    const res = await post(ROW, leadershipForm('record_suspension'));
+    expect(res.status).toBe(303);
+    // The confirm page reads the member's records itself and sets its min.
+    expect(location(res)).toBe(`${ROW}/suspend?result=out-of-order`);
+    expect(location(res)).not.toContain('52');
+    expect(location(res)).not.toContain('2026-10-15');
+  });
+
+  it('out-of-order has its own fixed message, apart from the overlap', () => {
+    expect(WORKSPACE_RESULT_MESSAGES['out-of-order']).toBe(
+      "This member already has a later suspension. A new one can't be dated before it. Nothing was recorded.",
+    );
+    expect(String(workspaceResultNotice('out-of-order'))).toBe(
+      `<p class="note">${escapeHtml(WORKSPACE_RESULT_MESSAGES['out-of-order'])}</p>`,
+    );
+    expect(WORKSPACE_RESULT_MESSAGES['out-of-order']).not.toBe(
       WORKSPACE_RESULT_MESSAGES['suspension-overlap'],
     );
   });

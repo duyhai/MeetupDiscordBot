@@ -141,7 +141,9 @@ export type ActionRefusalReason =
   | TransitionRefusal
   | 'already-suspended'
   | 'record-unavailable'
-  | 'bad-date';
+  | 'bad-date'
+  /** record_suspension dated before one of the member's live records. */
+  | 'out-of-order';
 
 /** A refusal wrote nothing: not the version bump, not an event. */
 export type ActionOutcome =
@@ -161,4 +163,6 @@ export type ActionOutcome =
       reason: ActionRefusalReason;
       /** already-suspended: the live record the row could link instead. */
       existing?: { id: number; suspendedAt: Date };
+      /** out-of-order: the member's latest live record dated after the chosen day. */
+      later?: { id: number; suspendedAt: Date };
     };

@@ -487,6 +487,23 @@ describe('performWorkspaceAction', () => {
     expect(h.moderationLog).not.toHaveBeenCalled();
   });
 
+  it('an out-of-order refusal carries the later record, has no record to offer, and logs nothing', async () => {
+    const later = { id: 52, suspendedAt: new Date('2026-10-15T00:00:00Z') };
+    const h = service({ ok: false, reason: 'out-of-order', later });
+    const result = await performWorkspaceAction(
+      h.deps,
+      input({
+        action: 'record_suspension',
+        date: '2026-09-15',
+        leadershipConfirmed: true,
+      }),
+    );
+    expect(result).toEqual({ code: 'out-of-order', later });
+    expect('existing' in result).toBe(false);
+    await flush();
+    expect(h.moderationLog).not.toHaveBeenCalled();
+  });
+
   it('a stale refusal of a Leadership action is stale, with nothing logged', async () => {
     const h = service({ ok: false, reason: 'stale' });
     const result = await performWorkspaceAction(

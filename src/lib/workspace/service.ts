@@ -69,6 +69,8 @@ export type WorkspaceActionCode =
 export interface WorkspaceActionResult {
   code: WorkspaceActionCode;
   existing?: { id: number; suspendedAt: Date };
+  /** Only on 'out-of-order': the member's latest live record dated after the chosen day. */
+  later?: { id: number; suspendedAt: Date };
 }
 
 export interface WorkspaceServiceDeps {
@@ -267,9 +269,12 @@ export async function performWorkspaceAction(
     linkRecordId,
   });
   if (outcome.ok === false) {
-    return outcome.existing
-      ? { code: outcome.reason, existing: outcome.existing }
-      : { code: outcome.reason };
+    // A refusal wrote nothing, so, like the overlap, it posts nothing.
+    return {
+      code: outcome.reason,
+      ...(outcome.existing && { existing: outcome.existing }),
+      ...(outcome.later && { later: outcome.later }),
+    };
   }
   // After commit, fire and forget: the events table is the durable audit, and
   // a Discord outage must not turn a recorded action into an error page.

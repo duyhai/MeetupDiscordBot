@@ -1226,9 +1226,23 @@ const suspension = (
         const id = await seedSuspension();
         const other = await seedSuspension('222', OCTOBER);
         await insertRecord('222', '2026-03-01');
-        // Later than the chosen date, already backing the October row, and
-        // clear of the new range whether it is 60 days (right) or 120 (M6).
-        await linkDirectly(other, await insertRecord('222', '2027-03-01'));
+        // A record dated after the chosen day is never left out of a count:
+        // the date is refused as out of order instead (Hai, 2026-10-17).
+        const later = await insertRecord('222', '2027-03-01');
+        await linkDirectly(other, later);
+        expect(
+          await act(id, 'record_suspension', {
+            suspendedOn: day('2026-09-10'),
+          }),
+        ).toEqual({
+          ok: false,
+          reason: 'out-of-order',
+          later: { id: later, suspendedAt: day('2027-03-01') },
+        });
+        await pool.query(
+          `UPDATE suspension_records SET voided_at = now(), voided_by = $2, void_reason = 'x' WHERE id = $1`,
+          [later, MOD_B],
+        );
         const outcome = okOf(
           await act(id, 'record_suspension', {
             suspendedOn: day('2026-09-10'),
@@ -1310,16 +1324,18 @@ const suspension = (
           `UPDATE suspension_records SET voided_at = now(), voided_by = $2, void_reason = 'x' WHERE id = $1`,
           [voided, MOD_B],
         );
-        // After the new 09-20..10-19 range, so it does not overlap.
-        await linkDirectly(october, await insertRecord('222', '2026-10-25'));
+        // In the link window, ended (09-01..09-30) before the new 10-05
+        // range: neither offered nor overlapping, and not later.
+        await linkDirectly(october, await insertRecord('222', '2026-09-01'));
         const outcome = okOf(
           await act(id, 'record_suspension', {
-            suspendedOn: day('2026-09-20'),
+            suspendedOn: day('2026-10-05'),
           }),
         );
         expect(outcome.linkedExisting).toBe(false);
         expect(await count('suspension_records')).toBe(3);
-        expect(outcome.suspension?.durationDays).toBe(30);
+        // The linked record counts; the voided one does not.
+        expect(outcome.suspension?.durationDays).toBe(60);
       });
 
       describe("only records dated from the case's month through the next", () => {
@@ -1399,14 +1415,17 @@ const suspension = (
           expect(
             await act(id, 'link_suspension', { linkRecordId: november }),
           ).toEqual({ ok: false, reason: 'record-unavailable' });
-          // Its days do not overlap Sep 10..Oct 9: September records its own.
-          const outcome = okOf(
+          // Its days do not overlap Sep 10..Oct 9, and it is not offered:
+          // the date is refused only because it is later.
+          expect(
             await act(id, 'record_suspension', {
               suspendedOn: day('2026-09-10'),
             }),
-          );
-          expect(outcome.linkedExisting).toBe(false);
-          expect(outcome.suspension?.id).not.toBe(november);
+          ).toEqual({
+            ok: false,
+            reason: 'out-of-order',
+            later: { id: november, suspendedAt: day('2026-11-01') },
+          });
         });
 
         it.each([
@@ -1520,6 +1539,29 @@ const suspension = (
         expect(outcome.suspension?.id).toBe(inserted);
         expect(await count('suspension_records')).toBe(1);
         expect((await stateOf(id)).suspension_record_id).toBe(inserted);
+      });
+
+      it('same-date ON CONFLICT still links when an earlier record is on file: the same date is not later', async () => {
+        const id = await seedSuspension();
+        // An earlier record, ended before the chosen day: counted, no overlap.
+        await insertRecord('222', '2026-08-01');
+        let inserted: number | undefined;
+        const racing = new PostgresNoShowWorkspaceRepository(pool, {
+          beforeSuspensionInsertForTest: async () => {
+            inserted = await insertRecord('222', '2026-10-03');
+          },
+        });
+        const outcome = okOf(
+          await act(
+            id,
+            'record_suspension',
+            { suspendedOn: day('2026-10-03') },
+            racing,
+          ),
+        );
+        expect(outcome.linkedExisting).toBe(true);
+        expect(outcome.suspension?.id).toBe(inserted);
+        expect(await count('suspension_records')).toBe(2);
       });
 
       it('void voids the linked record with the reason and who', async () => {
@@ -1827,18 +1869,61 @@ const suspension = (
           });
         });
 
-        it('backdating to a range that ends before the later suspension records', async () => {
+        it('backdating before a later suspension is refused as out of order, even with no day in common', async () => {
+          const sep = await seedSuspension('222', SEPTEMBER);
+          const oct = await seedSuspension('222', OCTOBER);
+          const later = okOf(await recordOctober(oct, '2026-10-15'));
+          // 09-01 through 09-30 shares no day with 10-15, but the October
+          // record's length was set without counting it.
+          expect(
+            await act(sep, 'record_suspension', {
+              suspendedOn: day('2026-09-01'),
+            }),
+          ).toEqual({
+            ok: false,
+            reason: 'out-of-order',
+            later: {
+              id: later.suspension?.id,
+              suspendedAt: day('2026-10-15'),
+            },
+          });
+          expect(await count('suspension_records')).toBe(1);
+          expect(await stateOf(sep)).toMatchObject({
+            version: 1,
+            status: 'new',
+          });
+        });
+
+        it('out of order names the latest of several later records', async () => {
+          const sep = await seedSuspension('222', SEPTEMBER);
+          const oct = await seedSuspension('222', OCTOBER);
+          await linkDirectly(oct, await insertRecord('222', '2026-10-15'));
+          // Not on any card, and outside September's link window: never offered.
+          const latest = await insertRecord('222', '2026-12-20');
+          expect(
+            await act(sep, 'record_suspension', {
+              suspendedOn: day('2026-09-01'),
+            }),
+          ).toEqual({
+            ok: false,
+            reason: 'out-of-order',
+            later: { id: latest, suspendedAt: day('2026-12-20') },
+          });
+        });
+
+        it('a voided later record does not make a date out of order', async () => {
           const sep = await seedSuspension('222', SEPTEMBER);
           const oct = await seedSuspension('222', OCTOBER);
           okOf(await recordOctober(oct, '2026-10-15'));
-          // 09-01 through 09-30.
+          okOf(
+            await act(oct, 'void', { note: 'wrong member', period: OCTOBER }),
+          );
           const outcome = okOf(
             await act(sep, 'record_suspension', {
               suspendedOn: day('2026-09-01'),
             }),
           );
           expect(outcome.suspension?.durationDays).toBe(30);
-          expect(await count('suspension_records')).toBe(2);
         });
 
         describe('boundaries', () => {
@@ -1865,11 +1950,14 @@ const suspension = (
             });
           });
 
-          it('a new range ending the day before an existing start: records', async () => {
+          it('a new range ending the day before an existing start: refused as out of order', async () => {
             const sep = await existingOn('2026-10-15');
-            // 09-15 for 30 days: through 10-14.
-            const outcome = okOf(await tryOn(sep, '2026-09-15'));
-            expect(outcome.suspension?.durationDays).toBe(30);
+            // 09-15 for 30 days: through 10-14, no day in common, but earlier.
+            expect(await tryOn(sep, '2026-09-15')).toMatchObject({
+              ok: false,
+              reason: 'out-of-order',
+              later: { suspendedAt: day('2026-10-15') },
+            });
           });
 
           it('a new range ending on an existing start day: refused', async () => {

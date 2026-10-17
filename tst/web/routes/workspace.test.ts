@@ -1165,13 +1165,14 @@ describe('GET /dashboard/no-shows/:period/rows/:rowId/suspend (confirm)', () => 
   });
 
   describe('a chosen date', () => {
-    /** Earlier records: March, and one dated Sep 20 in the month. */
+    /** Earlier records: March, and a 7-day one from Sep 3 (through Sep 9) in the month. */
     const twoRecords = () => [
       prior(),
       suspensionRecord({
         id: 50,
         memberId: '2001',
-        suspendedAt: new Date('2026-09-20T00:00:00Z'),
+        suspendedAt: new Date('2026-09-03T00:00:00Z'),
+        durationDays: 7,
       }),
     ];
     const recordForm = (body: string) =>
@@ -1190,29 +1191,50 @@ describe('GET /dashboard/no-shows/:period/rows/:rowId/suspend (confirm)', () => 
       expect(words(res.text)).toContain('$40 admin fee to rejoin');
     });
 
-    it('a date before the Sep 20 record counts only the earlier one', async () => {
+    it('a chosen date after the latest record ends counts both, and the min is the day after it', async () => {
       const { get } = await setup({ records: twoRecords(), leader: true });
       const res = await get(`${CONFIRM}?date=2026-09-15`);
       expect(res.status).toBe(200);
       expect(words(res.text)).toContain(
-        'Dated the chosen day that is 60 days (1 earlier suspension)',
+        'Dated the chosen day that is 120 days (2 earlier suspensions)',
       );
-      expect(words(res.text)).toContain('$20 admin fee to rejoin');
       expect(words(res.text)).not.toContain('Dated today');
       // The date the length was worked out for is the one recorded.
       expect(recordForm(res.text)).toContain(
         '<input type="hidden" name="date" value="2026-09-15" />',
       );
       expect(dateForm(res.text)).toContain(
-        '<input type="date" name="date" value="2026-09-15" min="2026-09-01" ' +
+        '<input type="date" name="date" value="2026-09-15" min="2026-09-10" ' +
           'max="2026-10-05" required />',
+      );
+      expect(words(unescape(res.raw))).toContain(
+        'This member has a suspension on file through Sep 9, 2026. ' +
+          "A new one can't overlap it or be dated before it, so the earliest date is Sep 10, 2026.",
       );
     });
 
-    it('a record dated the chosen day is not earlier than it', async () => {
+    it.each([
+      ["the latest record's own day", '2026-09-03'],
+      ['its last day', '2026-09-09'],
+      ['between the 1st and the min', '2026-09-01'],
+    ])(
+      'a date before the min (%s) falls back to today',
+      async (_what, date) => {
+        const { get } = await setup({ records: twoRecords(), leader: true });
+        const res = await get(`${CONFIRM}?date=${date}`);
+        expect(words(res.text)).toContain('Dated today that is 120 days');
+        expect(recordForm(res.text)).toContain(
+          '<input type="hidden" name="date" value="2026-10-05" />',
+        );
+      },
+    );
+
+    it('the min itself is taken', async () => {
       const { get } = await setup({ records: twoRecords(), leader: true });
-      const res = await get(`${CONFIRM}?date=2026-09-20`);
-      expect(words(res.text)).toContain('60 days (1 earlier suspension)');
+      const res = await get(`${CONFIRM}?date=2026-09-10`);
+      expect(recordForm(res.text)).toContain(
+        '<input type="hidden" name="date" value="2026-09-10" />',
+      );
     });
 
     it('the date form is a GET back to this page, carrying only the date', async () => {
@@ -1263,6 +1285,109 @@ describe('GET /dashboard/no-shows/:period/rows/:rowId/suspend (confirm)', () => 
       const { get } = await setup({ records: twoRecords(), leader: true });
       const res = await get(`${CONFIRM}?date=2026-10-05`);
       expect(words(res.text)).toContain('Dated today that is 120 days');
+    });
+  });
+
+  describe("the member's live records set the earliest date", () => {
+    const record = (iso: string, durationDays = 30, voided = false) =>
+      suspensionRecord({
+        memberId: '2001',
+        suspendedAt: new Date(`${iso}T00:00:00Z`),
+        durationDays,
+        ...(voided && {
+          voidedAt: new Date('2026-10-01T00:00:00Z'),
+          voidedBy: '1',
+          voidReason: 'x',
+        }),
+      });
+
+    it('records that ended before the 1st leave the min at the 1st, with no line about them', async () => {
+      const { get } = await setup({ records: [prior()], leader: true });
+      const res = await get(CONFIRM);
+      expect(res.text).toContain('min="2026-09-01"');
+      expect(words(unescape(res.raw))).not.toContain('on file through');
+    });
+
+    it('a voided record does not move the min', async () => {
+      const { get } = await setup({
+        records: [record('2026-09-20', 30, true)],
+        leader: true,
+      });
+      const res = await get(CONFIRM);
+      expect(res.text).toContain('min="2026-09-01"');
+    });
+
+    it('the latest last day wins, even from an earlier-dated record', async () => {
+      const { get } = await setup({
+        records: [record('2026-09-02', 20), record('2026-09-05', 7)],
+        leader: true,
+      });
+      // Sep 2 for 20 days runs through Sep 21; Sep 5 for 7 through Sep 11.
+      const res = await get(CONFIRM);
+      expect(res.text).toContain('min="2026-09-22"');
+    });
+
+    it('a min of today still shows the form, dated today', async () => {
+      // Sep 5 for 30 days runs through Oct 4.
+      const { get } = await setup({
+        records: [record('2026-09-05')],
+        leader: true,
+      });
+      const res = await get(CONFIRM);
+      expect(res.text).toContain(
+        '<input type="date" name="date" value="2026-10-05" min="2026-10-05" ' +
+          'max="2026-10-05" required />',
+      );
+    });
+
+    it('a min after today shows a fixed line and no form', async () => {
+      // Sep 6 for 30 days runs through Oct 5, today.
+      const { get } = await setup({
+        records: [record('2026-09-06')],
+        leader: true,
+      });
+      const res = await get(`${CONFIRM}?date=2026-09-15`);
+      expect(res.status).toBe(200);
+      expect(words(unescape(res.raw))).toContain(
+        'This member has a suspension on file through Oct 5, 2026. ' +
+          "A new one can't overlap it or be dated before it, so it can't be recorded from here right now.",
+      );
+      expect(res.text).not.toContain('type="date"');
+      expect(res.text).not.toContain('name="action"');
+      expect(res.text).not.toContain(
+        'method="post" action="/dashboard/no-shows/2026-09/rows/2"',
+      );
+      expect(res.text).toContain(
+        'href="/dashboard/no-shows/2026-09">Back to the workspace</a>',
+      );
+    });
+
+    it('?result=out-of-order names the latest record by its stored date', async () => {
+      const { get } = await setup({
+        records: [prior(), record('2026-09-03', 7)],
+        leader: true,
+      });
+      const res = await get(`${CONFIRM}?result=out-of-order`);
+      expect(words(unescape(res.raw))).toContain(
+        "This member already has a suspension dated Sep 3, 2026. A new one can't be dated before it. Nothing was recorded.",
+      );
+      expect(res.text).toContain('min="2026-09-10"');
+    });
+
+    it('?result=out-of-order with no live record left shows the fixed message', async () => {
+      const { get } = await setup({ records: [], leader: true });
+      const res = await get(`${CONFIRM}?result=out-of-order`);
+      expect(words(unescape(res.raw))).toContain(
+        WORKSPACE_RESULT_MESSAGES['out-of-order'],
+      );
+    });
+
+    it('other result codes are not shown on the confirm page', async () => {
+      const { get } = await setup({ leader: true });
+      const res = await get(`${CONFIRM}?result=done`);
+      expect(words(unescape(res.raw))).not.toContain(
+        WORKSPACE_RESULT_MESSAGES.done,
+      );
     });
   });
 

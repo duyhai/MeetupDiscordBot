@@ -140,21 +140,66 @@ function priorCount(records: SuspensionRecord[], now: Date): number {
 }
 
 /**
+ * The earliest date the confirm page offers: the later of the month's 1st
+ * and the day after the last day of any of the member's live records, so a
+ * shown date is never before a live record (out-of-order) nor inside one
+ * (overlap). `through` is that last day when it sets the min. The POST's
+ * own checks stay the authority.
+ */
+function earliestDay(
+  records: SuspensionRecord[],
+  period: Period,
+): { min: string; through?: string } {
+  const first = periodDate(period);
+  // YYYY-MM-DD sorts as dates: the last is the latest last day.
+  const through = records
+    .map((r) => lastSuspendedDay(r))
+    .sort()
+    .at(-1);
+  if (through === undefined) {
+    return { min: first };
+  }
+  const after = dayjs.utc(through).add(1, 'day').format('YYYY-MM-DD');
+  return after > first ? { min: after, through } : { min: first };
+}
+
+/** The member's latest live record by date, for the out-of-order notice. */
+function latestRecord(
+  records: SuspensionRecord[],
+): SuspensionRecord | undefined {
+  let latest: SuspensionRecord | undefined;
+  for (const r of records) {
+    if (latest === undefined || r.suspendedAt > latest.suspendedAt) {
+      latest = r;
+    }
+  }
+  return latest;
+}
+
+/**
  * The confirm page's suspension date: `?date=` when the record step itself
  * would take it (validateActionFields: YYYY-MM-DD, a real day, from the 1st
- * through today), else today. Always rebuilt from the parsed date, so the
- * query text never reaches the page.
+ * through today) and it is not before `min` (earliestDay), else today.
+ * Always rebuilt from the parsed date, so the query text never reaches the
+ * page.
  */
-function chosenDay(query: unknown, period: Period, now: Date): string {
+function chosenDay(
+  query: unknown,
+  period: Period,
+  now: Date,
+  min: string,
+): string {
   const checked = validateActionFields(
     'record_suspension',
     { version: '1', date: query },
     period,
     now,
   );
-  return checked.ok && checked.fields.suspendedOn
-    ? dayjs.utc(checked.fields.suspendedOn).format('YYYY-MM-DD')
-    : pacificToday(now);
+  const day =
+    checked.ok && checked.fields.suspendedOn
+      ? dayjs.utc(checked.fields.suspendedOn).format('YYYY-MM-DD')
+      : undefined;
+  return day !== undefined && day >= min ? day : pacificToday(now);
 }
 
 /** The suspension a card's message and length line describe. */
@@ -973,7 +1018,39 @@ export function registerWorkspaceRoutes(
       return;
     }
     const today = pacificToday(now);
-    const day = chosenDay(req.query.date, period, now);
+    const { min, through } = earliestDay(records, period);
+    const latest = latestRecord(records);
+    // Only this page's own code; the date is the record's, never the request's.
+    const outOfOrder =
+      req.query.result !== 'out-of-order'
+        ? ''
+        : latest
+          ? html`<p class="note">
+              This member already has a suspension dated
+              ${recordDay(latest.suspendedAt)}. A new one can't be dated before
+              it. Nothing was recorded.
+            </p>`
+          : workspaceResultNotice('out-of-order');
+    const onFile = through
+      ? `This member has a suspension on file through ${recordDay(utcMidnight(through))}. ` +
+        "A new one can't overlap it or be dated before it, so "
+      : '';
+    if (min > today) {
+      dashboardPage(res, {
+        title: 'Record suspension',
+        body: html`<div class="card">
+          <h1>
+            Record suspension —
+            ${memberLink({ id: row.memberId, name: row.memberName })}
+          </h1>
+          ${outOfOrder}
+          <p>${onFile}it can't be recorded from here right now.</p>
+          <p><a href="${back}">Back to the workspace</a></p>
+        </div>`,
+      });
+      return;
+    }
+    const day = chosenDay(req.query.date, period, now, min);
     const prior = priorBefore(records, utcMidnight(day));
     const days = recommendedSuspensionDays(prior);
     const confirmUrl = localUrl(workspaceRowPath(period, row.id, 'suspend'));
@@ -984,6 +1061,14 @@ export function registerWorkspaceRoutes(
           Record suspension —
           ${memberLink({ id: row.memberId, name: row.memberName })}
         </h1>
+        ${outOfOrder}
+        ${
+          through
+            ? html`<p>
+                ${onFile}the earliest date is ${recordDay(utcMidnight(min))}.
+              </p>`
+            : ''
+        }
         <p>
           Length: 30 days × 2 per earlier suspension, counted from the
           suspensions dated before the chosen day.
@@ -1000,7 +1085,7 @@ export function registerWorkspaceRoutes(
               type="date"
               name="date"
               value="${day}"
-              min="${periodDate(period)}"
+              min="${min}"
               max="${today}"
               required
           /></label>

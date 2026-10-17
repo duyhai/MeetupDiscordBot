@@ -301,6 +301,14 @@ const refuse = (
   new ActionRefusal({ ok: false, reason, ...(existing && { existing }) });
 
 /**
+ * The member's ($1) latest live record dated strictly after $2: a record on
+ * the chosen day itself is not later (the same-date ON CONFLICT link).
+ */
+const LATER_LIVE = `SELECT s.id, s.suspended_at FROM suspension_records s
+  WHERE s.member_id = $1 AND s.voided_at IS NULL AND s.suspended_at > $2
+  ORDER BY s.suspended_at DESC, s.id DESC LIMIT 1`;
+
+/**
  * The period floor in the suspended_at convention (UTC midnight of the
  * 1st), not periodStart (Pacific midnight, 07:00 or 08:00 UTC): a record
  * dated the 1st is in the month.
@@ -528,10 +536,15 @@ export class PostgresNoShowWorkspaceRepository {
    * suspension write included. Suspension SQL is the command's (shared
    * constants), run on this transaction's client.
    *
-   * record_suspension is refused as already-suspended when an unlinked live
-   * record dated in the card's link window exists (offered to link) or when
-   * any live record,
-   * linked to another row or not, overlaps the new suspension's days.
+   * record_suspension is refused, in this order, as already-suspended when
+   * an unlinked live record dated in the card's link window exists (offered
+   * to link) or when any live record, linked to another row or not,
+   * overlaps the new suspension's days; then as out-of-order when any live
+   * record is dated after the chosen day (its length was set without
+   * counting this one). Out-of-order is the last check before the insert, so
+   * a record on the same day that appears after the overlap check still
+   * reaches the ON CONFLICT link. The /meetup_record_suspension CSV import
+   * has no such check: it also backfills older records after newer ones.
    *
    * A refusal writes nothing here, not even an event (the events CHECK has
    * no refusal action). Who may act is the caller's check.
@@ -625,6 +638,22 @@ export class PostgresNoShowWorkspaceRepository {
               throw refuse('already-suspended');
             }
             await this.options.beforeSuspensionInsertForTest?.();
+            // Never backdated before a live record: that record's length
+            // was set without counting this one. Strictly later only.
+            const later = await client.query<{
+              id: number;
+              suspended_at: Date;
+            }>(LATER_LIVE, [row.memberId, on]);
+            if (later.rows[0]) {
+              throw new ActionRefusal({
+                ok: false,
+                reason: 'out-of-order',
+                later: {
+                  id: later.rows[0].id,
+                  suspendedAt: later.rows[0].suspended_at,
+                },
+              });
+            }
             const inserted = await insertSuspensionInTx(client, {
               memberId: row.memberId,
               memberName: row.memberName || null,
