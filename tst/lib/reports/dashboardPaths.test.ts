@@ -5,6 +5,7 @@ import {
   dashboardPath,
   memberHistoryPath,
   MonthBeforeGroupError,
+  linkableMonthPath,
   monthPageUrls,
   monthPath,
 } from '../../../src/lib/reports/dashboardPaths.js';
@@ -65,6 +66,18 @@ describe('dashboardPaths', () => {
     expect(monthPath(DASHBOARD_PATHS.refresh, { year: 2013, month: 3 })).toBe(
       '/dashboard/reports/2013-03/refresh',
     );
+  });
+
+  it('linkableMonthPath gives the path, or undefined where monthPath refuses', () => {
+    const t = DASHBOARD_PATHS.noShowHistoryMonth;
+    expect(linkableMonthPath(t, { year: 2026, month: 9 })).toBe(
+      '/dashboard/no-show-history/2026-09',
+    );
+    expect(linkableMonthPath(t, { year: 2013, month: 3 })).toBe(
+      '/dashboard/no-show-history/2013-03',
+    );
+    expect(linkableMonthPath(t, { year: 2013, month: 2 })).toBeUndefined();
+    expect(linkableMonthPath(t, { year: 2026, month: 13 })).toBeUndefined();
   });
 
   it('memberHistoryPath builds only from 1-20 digits', () => {

@@ -14,9 +14,10 @@ import {
 } from '../../lib/reports/period.js';
 import { HallOfFameEvent, HallOfFamePayload } from '../../lib/reports/types.js';
 import { dashboardLocals } from '../dashboardRouter.js';
-import { SafeHtml, html, localUrl, pageLink } from '../html.js';
+import { SafeHtml, html, pageLink } from '../html.js';
 import { eventLink, memberLink } from '../links.js';
 import {
+  monthCell,
   builtByHtml,
   dashboardPage,
   load,
@@ -167,12 +168,7 @@ export function registerHallOfFameRoutes(
                 const s = (meta.summary ?? {}) as Record<string, unknown>;
                 return html`<tr>
                   <td>
-                    <a
-                      href="${localUrl(
-                        monthPath(DASHBOARD_PATHS.hallOfFameMonth, meta.period),
-                      )}"
-                      >${monthLabel(meta.period)}</a
-                    >
+                    ${monthCell(DASHBOARD_PATHS.hallOfFameMonth, meta.period)}
                   </td>
                   <td>${count(s.events)}</td>
                   <td>${count(s.hosts)}</td>

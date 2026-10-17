@@ -417,6 +417,25 @@ describe('no-show history months list', () => {
     expect(res.text).not.toContain('No no-shows recorded');
   });
 
+  it('a stored month before the group began is listed unlinked, not a 500', async () => {
+    const { get } = await setup([
+      seedRow('no_show', SEPT, null, { summary: { noShows: 9 } }),
+      seedRow('no_show', { year: 2013, month: 3 }, null, {
+        summary: { noShows: 1 },
+      }),
+      seedRow('no_show', { year: 2013, month: 2 }, null, {
+        summary: { noShows: 1 },
+      }),
+    ]);
+    const res = await get(LIST);
+    expect(res.status).toBe(200);
+    expect(res.text).toContain('href="/dashboard/no-show-history/2026-09"');
+    expect(res.text).toContain('href="/dashboard/no-show-history/2013-03"');
+    expect(res.text).not.toContain('2013-02');
+    expect(res.text).toMatch(/<td>\s*February 2013\s*<\/td>/);
+    expect(res.text).not.toMatch(/<a[^>]*>\s*February 2013/);
+  });
+
   it('pages with before and links older months only after a full page', async () => {
     const rows = Array.from({ length: 51 }, (_, i) =>
       seedRow(
@@ -476,6 +495,21 @@ describe('no-show history member page', () => {
       offset: 0,
       limit: 50,
     });
+  });
+
+  it('a stored month before the group began is listed unlinked, not a 500', async () => {
+    const { get } = await setup(undefined, [
+      memberMonth(SEPT, { cleared: true }),
+      memberMonth({ year: 2013, month: 3 }, { cleared: true }),
+      memberMonth({ year: 2013, month: 2 }, { cleared: true }),
+    ]);
+    const res = await get(MEMBER);
+    expect(res.status).toBe(200);
+    expect(res.text).toContain('href="/dashboard/no-show-history/2026-09"');
+    expect(res.text).toContain('href="/dashboard/no-show-history/2013-03"');
+    expect(res.text).not.toContain('2013-02');
+    expect(res.text).toMatch(/<td>\s*February 2013\s*<\/td>/);
+    expect(res.text).not.toMatch(/<a[^>]*>\s*February 2013/);
   });
 
   it('names the member by id when no case carries a name, and says when nothing mentions them', async () => {

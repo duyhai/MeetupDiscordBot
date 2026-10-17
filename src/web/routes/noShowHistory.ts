@@ -23,9 +23,10 @@ import {
 } from '../../lib/reports/types.js';
 import { MemberNoShowMonth } from '../../lib/repositories/postgresReportSnapshotRepository.js';
 import { dashboardLocals } from '../dashboardRouter.js';
-import { SafeHtml, html, localUrl, pageLink } from '../html.js';
+import { SafeHtml, html, pageLink } from '../html.js';
 import { eventLink, memberHistoryLink, memberLink } from '../links.js';
 import {
+  monthCell,
   builtByHtml,
   dashboardPage,
   load,
@@ -290,15 +291,7 @@ export function registerNoShowHistoryRoutes(
                   noShowsMissing(att);
                 return html`<tr>
                   <td>
-                    <a
-                      href="${localUrl(
-                        monthPath(
-                          DASHBOARD_PATHS.noShowHistoryMonth,
-                          meta.period,
-                        ),
-                      )}"
-                      >${monthLabel(meta.period)}</a
-                    >
+                    ${monthCell(DASHBOARD_PATHS.noShowHistoryMonth, meta.period)}
                   </td>
                   <td>${count(s.noShows)}</td>
                   <td>${count(s.members)}</td>
@@ -369,15 +362,7 @@ export function registerNoShowHistoryRoutes(
                   const counted = memberCounted(row);
                   return html`<tr>
                     <td>
-                      <a
-                        href="${localUrl(
-                          monthPath(
-                            DASHBOARD_PATHS.noShowHistoryMonth,
-                            row.period,
-                          ),
-                        )}"
-                        >${monthLabel(row.period)}</a
-                      >
+                      ${monthCell(DASHBOARD_PATHS.noShowHistoryMonth, row.period)}
                     </td>
                     <td>${memberStatus(row)}</td>
                     <td>${counted.length > 0 ? countedList(counted) : ''}</td>

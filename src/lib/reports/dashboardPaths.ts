@@ -66,6 +66,25 @@ export function monthPath(template: MonthPathTemplate, period: Period): string {
   return `${DASHBOARD_BASE}${template.replace(':period', key)}`;
 }
 
+/**
+ * monthPath for a stored row's month: the path, or undefined when monthPath
+ * refuses it (before the group's first month, or not a real month), so one
+ * bad row renders unlinked instead of taking down a whole list page.
+ */
+export function linkableMonthPath(
+  template: MonthPathTemplate,
+  period: Period,
+): string | undefined {
+  try {
+    return monthPath(template, period);
+  } catch (error) {
+    if (error instanceof RangeError) {
+      return undefined;
+    }
+    throw error;
+  }
+}
+
 /** Absolute links for Discord: only PUBLIC_APP_ORIGIN and the validated month key. */
 export function monthPageUrls(period: Period): {
   hallOfFame: string;

@@ -281,6 +281,27 @@ describe('Hall of Fame months list', () => {
     expect(res.text).not.toMatch(/incomplete/i);
   });
 
+  it('a stored month before the group began is listed unlinked, not a 500', async () => {
+    const { get } = await setup([
+      seedRow('hall_of_fame', SEPT, null, {
+        summary: { events: 12, hosts: 7, newHosts: 2 },
+      }),
+      seedRow('hall_of_fame', { year: 2013, month: 3 }, null, {
+        summary: { events: 1, hosts: 1, newHosts: 1 },
+      }),
+      seedRow('hall_of_fame', { year: 2013, month: 2 }, null, {
+        summary: { events: 1, hosts: 1, newHosts: 1 },
+      }),
+    ]);
+    const res = await get('/dashboard/hall-of-fame');
+    expect(res.status).toBe(200);
+    expect(res.text).toContain('href="/dashboard/hall-of-fame/2026-09"');
+    expect(res.text).toContain('href="/dashboard/hall-of-fame/2013-03"');
+    expect(res.text).not.toContain('2013-02');
+    expect(res.text).toMatch(/<td>\s*February 2013\s*<\/td>/);
+    expect(res.text).not.toMatch(/<a[^>]*>\s*February 2013/);
+  });
+
   it('months list pages with before and ignores junk', async () => {
     const { get, snapshots } = await setup();
     await get('/dashboard/hall-of-fame?before=2026-05');

@@ -5,7 +5,9 @@ import { Logger } from 'tslog';
 import {
   DASHBOARD_BASE,
   DASHBOARD_PATHS,
+  MonthPathTemplate,
   dashboardPath,
+  linkableMonthPath,
 } from '../lib/reports/dashboardPaths.js';
 import { noShowsMissing } from '../lib/reports/meetupMonth.js';
 import {
@@ -171,4 +173,15 @@ export function zeroNoShowNote(
     ${attendance.pastEventsWithRsvps} past events with RSVPs. Check that
     attendance was taken.
   </p>`;
+}
+
+/** A list row's month: linked to its page, or plain text when the month has no page (see linkableMonthPath). */
+export function monthCell(
+  template: MonthPathTemplate,
+  period: Period,
+): SafeHtml {
+  const path = linkableMonthPath(template, period);
+  return path === undefined
+    ? html`${monthLabel(period)}`
+    : html`<a href="${localUrl(path)}">${monthLabel(period)}</a>`;
 }
