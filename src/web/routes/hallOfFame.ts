@@ -15,12 +15,13 @@ import {
 import { HallOfFameEvent, HallOfFamePayload } from '../../lib/reports/types.js';
 import { dashboardLocals } from '../dashboardRouter.js';
 import { SafeHtml, html, pageLink } from '../html.js';
-import { eventLink, memberLink } from '../links.js';
+import { discordMention, eventLink, memberLink } from '../links.js';
 import {
   monthCell,
   builtByHtml,
   dashboardPage,
   load,
+  loadOptional,
   notFound,
   pacificDate,
   pacificDateTime,
@@ -81,6 +82,93 @@ function eventRow(e: HallOfFameEvent): SafeHtml {
   </li>`;
 }
 
+/**
+ * Everyone the post names, distinct, in first-seen order: the ranked hosts,
+ * then the co-hosts in the "New hosts" section.
+ */
+function peopleInPost(payload: HallOfFamePayload): string[] {
+  const ids = new Set(payload.hosts.map((h) => h.host.id));
+  for (const h of payload.hosts) {
+    if (h.isNew) {
+      for (const e of h.events) {
+        for (const { member } of e.eventHosts ?? []) {
+          ids.add(member.id);
+        }
+      }
+    }
+  }
+  return [...ids];
+}
+
+const newHostIdsOf = (payload: HallOfFamePayload) =>
+  new Set(payload.hosts.filter((h) => h.isNew).map((h) => h.host.id));
+
+/**
+ * The ready-to-post text with a Discord mention for every linked person
+ * (a 17-20 digit stored id only). Neutralised per field, never over the
+ * whole text, so the bot's own mentions stay live: unlinked names and event
+ * titles are Meetup text, and those are the only places a ping could hide.
+ */
+function mentionPost(
+  payload: HallOfFamePayload,
+  period: Period,
+  links: Map<string, string>,
+): { post: string; unlinked: number; people: number } {
+  const hostStats = payload.hosts.map((h) => ({
+    host: h.host,
+    // String(): a stored payload is not type-checked field by field; this
+    // is what the plain text's template literal makes of a non-string.
+    events: h.events.map((e) => ({
+      ...e,
+      title: neutralizeMentions(String(e.title)),
+    })),
+  }));
+  const post = formatHallOfFamePost({
+    periodLabel: commandPeriodLabel(period),
+    hostStats,
+    totalEvents: payload.totalEvents,
+    newHostIds: newHostIdsOf(payload),
+    nameOf: (member) =>
+      discordMention(links.get(member.id)) ??
+      neutralizeMentions(String(member.name)),
+  });
+  const people = peopleInPost(payload);
+  const unlinked = people.filter(
+    (id) => discordMention(links.get(id)) === undefined,
+  ).length;
+  return { post, unlinked, people: people.length };
+}
+
+const MENTIONS_UNAVAILABLE =
+  'Mentions are unavailable right now; use the text above and add mentions by hand.';
+
+/** The second copy box, or its fixed fallback line when the lookup failed. */
+function mentionCard(
+  payload: HallOfFamePayload,
+  period: Period,
+  links: Map<string, string> | undefined,
+): SafeHtml {
+  if (links === undefined) {
+    return html`<div class="card">
+      <h2>Ready to post (with mentions)</h2>
+      <p class="muted">${MENTIONS_UNAVAILABLE}</p>
+    </div>`;
+  }
+  const { post, unlinked, people } = mentionPost(payload, period, links);
+  const note =
+    unlinked === 0
+      ? ''
+      : html`<p class="muted">
+          ${`${unlinked} of ${people} people have no linked Discord account and appear by name.`}
+        </p>`;
+  return html`<div class="card">
+    <h2>Ready to post (with mentions)</h2>
+    <textarea id="hof-post-mentions" class="copy" readonly>${post}</textarea>
+    ${note}
+    <p><button type="button" data-copy="hof-post-mentions">Copy</button></p>
+  </div>`;
+}
+
 function monthPage(
   payload: HallOfFamePayload,
   period: Period,
@@ -128,9 +216,7 @@ function monthPage(
       periodLabel: commandPeriodLabel(period),
       hostStats: payload.hosts,
       totalEvents: payload.totalEvents,
-      newHostIds: new Set(
-        payload.hosts.filter((h) => h.isNew).map((h) => h.host.id),
-      ),
+      newHostIds: newHostIdsOf(payload),
     }),
   );
   return { hosts, post };
@@ -138,7 +224,7 @@ function monthPage(
 
 export function registerHallOfFameRoutes(
   router: express.Router,
-  deps: Pick<DashboardPageDeps, 'now' | 'snapshots'>,
+  deps: Pick<DashboardPageDeps, 'now' | 'snapshots' | 'memberLinks'>,
 ): void {
   router.get(DASHBOARD_PATHS.hallOfFame, (async (req, res) => {
     const before =
@@ -243,6 +329,10 @@ export function registerHallOfFameRoutes(
       period,
       parsePage(req.query.page),
     );
+    // A failed or slow lookup costs only the mention box: the page is 200.
+    const links = await loadOptional('Hall of Fame member links', async () =>
+      (await deps.memberLinks()).discordIdsByMeetupIds(peopleInPost(payload)),
+    );
     dashboardPage(res, {
       title: `Hall of Fame ${label}`,
       script: true,
@@ -268,7 +358,8 @@ export function registerHallOfFameRoutes(
           <h2>Ready to post</h2>
           <textarea id="hof-post" class="copy" readonly>${post}</textarea>
           <p><button type="button" data-copy="hof-post">Copy</button></p>
-        </div>`,
+        </div>
+        ${mentionCard(payload, period, links.ok ? links.value : undefined)}`,
     });
   }) as RequestHandler);
 }

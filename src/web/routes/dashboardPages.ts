@@ -5,6 +5,7 @@ import { RebuildResult } from '../../lib/reports/buildJob.js';
 import { Period } from '../../lib/reports/period.js';
 import { PostgresIdentityRepository } from '../../lib/repositories/postgresIdentityRepository.js';
 import { PostgresLinkProgressRepository } from '../../lib/repositories/postgresLinkProgressRepository.js';
+import { PostgresMemberRepository } from '../../lib/repositories/postgresMemberRepository.js';
 import { PostgresReportSnapshotRepository } from '../../lib/repositories/postgresReportSnapshotRepository.js';
 import { PostgresSuspensionRepository } from '../../lib/repositories/postgresSuspensionRepository.js';
 import { AccessCheck } from '../roleGate.js';
@@ -44,6 +45,12 @@ export type LinkProgressPageReader = Pick<
   'listDays'
 >;
 
+/** The Discord link lookup the Hall of Fame mention text uses: never upsert or remove. */
+export type MemberLinkPageReader = Pick<
+  PostgresMemberRepository,
+  'discordIdsByMeetupIds'
+>;
+
 /**
  * The identity reads the changes page and thumbnail route use: never record
  * or delete. countChangesSince is for the home page's report cards.
@@ -79,6 +86,8 @@ export interface DashboardPageDeps {
   identity: () => Promise<IdentityPageReader>;
   /** The daily link progress counts. */
   linkProgress: () => Promise<LinkProgressPageReader>;
+  /** Meetup id -> Discord id links, for the Hall of Fame mention text. */
+  memberLinks: () => Promise<MemberLinkPageReader>;
 }
 
 /**

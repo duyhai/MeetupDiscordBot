@@ -179,4 +179,40 @@ describe('formatHallOfFamePost', () => {
     expect(post()).toContain('Hosts: 2');
     expect(post()).toContain('Events: 3');
   });
+
+  it('nameOf names every member: rank headers, new hosts and co-hosts; titles are untouched', () => {
+    const { hostStats, totalEvents } = collectHostStats(events);
+    const seen: string[] = [];
+    const result = formatHallOfFamePost({
+      periodLabel: 'September 2026',
+      hostStats,
+      totalEvents,
+      newHostIds: new Set(['a', 'b']),
+      nameOf: (member) => {
+        seen.push(member.id);
+        return `[${member.name}]`;
+      },
+    });
+    expect(result).toContain('#1: [Alice] — 3 events');
+    expect(result).toContain('#2: [Bob] — 1 event');
+    expect(result).toContain(
+      'New hosts: [Alice] (co-hosts: [Bob]); [Bob] (co-hosts: [Alice])',
+    );
+    expect(result).toContain('Trivia Night ×2');
+    expect(result).not.toMatch(/(?<!\[)Alice(?!\])|(?<!\[)Bob(?!\])/);
+    expect(new Set(seen)).toEqual(new Set(['a', 'b']));
+  });
+
+  it('without nameOf, output is the plain names', () => {
+    const { hostStats, totalEvents } = collectHostStats(events);
+    const input = {
+      periodLabel: 'September 2026',
+      hostStats,
+      totalEvents,
+      newHostIds: new Set(['b']),
+    };
+    expect(formatHallOfFamePost(input)).toBe(
+      formatHallOfFamePost({ ...input, nameOf: (m) => m.name }),
+    );
+  });
 });

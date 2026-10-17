@@ -111,11 +111,11 @@ class PageLoadTimeoutError extends Error {
 
 /**
  * Runs a data read under PAGE_LOAD_DEADLINE_MS; on failure or timeout logs
- * the error's class name only and renders the 503 page. A read still
- * running at the deadline is left to finish (or fail) unobserved.
+ * the error's class name only and renders nothing: for a page part that
+ * has its own fixed fallback. A read still running at
+ * the deadline is left to finish (or fail) unobserved.
  */
-export async function load<T>(
-  res: Response,
+export async function loadOptional<T>(
   what: string,
   fn: () => Promise<T>,
 ): Promise<{ ok: true; value: T } | { ok: false }> {
@@ -136,11 +136,23 @@ export async function load<T>(
     logger.warn(
       `Dashboard ${what} read failed: ${error instanceof Error ? error.name : 'Error'}`,
     );
-    unavailable(res, what);
     return { ok: false };
   } finally {
     clearTimeout(timer);
   }
+}
+
+/** loadOptional, rendering the 503 page on failure or timeout. */
+export async function load<T>(
+  res: Response,
+  what: string,
+  fn: () => Promise<T>,
+): Promise<{ ok: true; value: T } | { ok: false }> {
+  const loaded = await loadOptional(what, fn);
+  if (!loaded.ok) {
+    unavailable(res, what);
+  }
+  return loaded;
 }
 
 /** A route's :period: parsePeriodKey only, never before the group's first month and never after the current Pacific month. */

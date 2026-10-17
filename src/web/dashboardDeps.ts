@@ -13,6 +13,7 @@ import {
 import { PostgresReportSnapshotRepository } from '../lib/repositories/postgresReportSnapshotRepository.js';
 import { PostgresIdentityRepository } from '../lib/repositories/postgresIdentityRepository.js';
 import { PostgresLinkProgressRepository } from '../lib/repositories/postgresLinkProgressRepository.js';
+import { PostgresMemberRepository } from '../lib/repositories/postgresMemberRepository.js';
 import { PostgresSuspensionRepository } from '../lib/repositories/postgresSuspensionRepository.js';
 import { ApplicationCache } from '../util/cache.js';
 import {
@@ -166,6 +167,7 @@ export function dashboardPageDeps(): DashboardPageDeps {
     suspensions: () => PostgresSuspensionRepository.instance(),
     identity: () => PostgresIdentityRepository.instance(),
     linkProgress: () => PostgresLinkProgressRepository.instance(),
+    memberLinks: () => PostgresMemberRepository.instance(),
   };
 }
 

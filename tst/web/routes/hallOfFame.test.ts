@@ -1,8 +1,18 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { Logger } from 'tslog';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { formatHallOfFamePost } from '../../../src/lib/helpers/hallOfFame.js';
 import { formatHostingStatsText } from '../../../src/lib/reports/hallOfFameReport.js';
 import { Period } from '../../../src/lib/reports/period.js';
-import { COPY_SCRIPT } from '../../../src/web/pageKit.js';
+import {
+  HallOfFameEvent,
+  HallOfFamePayload,
+  MemberRef,
+} from '../../../src/lib/reports/types.js';
+import {
+  COPY_SCRIPT,
+  PAGE_LOAD_DEADLINE_MS,
+} from '../../../src/web/pageKit.js';
 import {
   DashboardPageDeps,
   registerAllProtectedRoutes,
@@ -22,6 +32,7 @@ import {
   REAL_EVENT_URL,
   SEPT,
   SeedRow,
+  fakeMemberLinks,
   fakeOrganizerDeps,
   fakePageDeps,
   fakeSnapshots,
@@ -390,5 +401,268 @@ describe('Hall of Fame months list', () => {
     const res = await get('/dashboard/hall-of-fame');
     expect(res.status).toBe(200);
     expect(res.text).toContain('No Hall of Fame reports');
+  });
+});
+
+describe('Hall of Fame mention copy text', () => {
+  const ZWSP = '​';
+  const ANN = '111111111111111111';
+  const BOB = '22222222222222222222';
+  const member = (id: string, name: string): MemberRef => ({
+    id,
+    name,
+    memberUrl: `https://www.meetup.com/members/${id}/`,
+  });
+  const ann = member('2001', 'Ann');
+  const bob = member('2002', 'Bob');
+  const everyone = member('2003', '@everyone');
+  const dee = member('2004', 'Dee');
+  const event = (
+    id: string,
+    title: string,
+    hosts: MemberRef[],
+  ): HallOfFameEvent => ({
+    id,
+    title,
+    eventUrl: `https://www.meetup.com/1-5genasians/events/${id}/`,
+    dateTime: '2026-09-04T02:00:00.000Z',
+    maxTickets: 10,
+    attendance: 7,
+    eventHosts: hosts.map((m) => ({ member: m })),
+  });
+  const games = event('31', 'Board games', [ann, bob, everyone]);
+  const pings = event('32', '<@&123> @here', [dee]);
+
+  /** Ann (new) co-hosts with Bob and "@everyone"; Dee hosts a title full of pings. */
+  function mentionPayload(): HallOfFamePayload {
+    return {
+      version: 1,
+      reportType: 'hall_of_fame',
+      period: '2026-09',
+      asOf: '2026-10-01T07:00:00.000Z',
+      summary: { events: 2, hosts: 4, newHosts: 1 },
+      totalEvents: 2,
+      hosts: [
+        { host: ann, isNew: true, events: [games] },
+        { host: bob, isNew: false, events: [games] },
+        { host: everyone, isNew: false, events: [games] },
+        { host: dee, isNew: false, events: [pings] },
+      ],
+    };
+  }
+
+  // Ann and Bob linked with valid ids; Dee's stored id is 4 digits; "@everyone" unlinked.
+  const LINKS = { '2001': ANN, '2002': BOB, '2004': '1234' };
+
+  const EXPECTED = [
+    '**Hall of Fame — 2026 September**',
+    '',
+    `**#1: <@${ANN}> — 1 event** 🆕`,
+    '    Board games (Sep 3)',
+    `**#2: <@${BOB}> — 1 event**`,
+    '    Board games (Sep 3)',
+    `**#3: @${ZWSP}everyone — 1 event**`,
+    '    Board games (Sep 3)',
+    '**#4: Dee — 1 event**',
+    `    <@${ZWSP}&123> @${ZWSP}here (Sep 3)`,
+    '',
+    `New hosts: <@${ANN}> (co-hosts: <@${BOB}>, @${ZWSP}everyone)`,
+    '',
+    '**Hosts: 4 · Events: 2**',
+  ].join('\n');
+
+  const textarea = (body: string, id: string) =>
+    new RegExp(
+      `<textarea id="${id}" class="copy" readonly>([\\s\\S]*?)</textarea>`,
+    ).exec(body)?.[1];
+
+  async function page(
+    links: Partial<DashboardPageDeps> = {
+      memberLinks: async () => fakeMemberLinks(LINKS),
+    },
+    payload = mentionPayload(),
+  ) {
+    const { get } = await setup(
+      [seedRow('hall_of_fame', SEPT, payload)],
+      links,
+    );
+    return get(MONTH);
+  }
+
+  const plainOf = (payload: HallOfFamePayload) =>
+    neutralizeMentions(
+      formatHallOfFamePost({
+        periodLabel: '2026 September',
+        hostStats: payload.hosts,
+        totalEvents: payload.totalEvents,
+        newHostIds: new Set(
+          payload.hosts.filter((h) => h.isNew).map((h) => h.host.id),
+        ),
+      }),
+    );
+
+  it('mentions linked hosts and co-hosts, names everyone else, defuses Meetup text', async () => {
+    const res = await page();
+    expect(res.status).toBe(200);
+    const raw = textarea(res.text, 'hof-post-mentions');
+    expect(raw).toBeDefined();
+    expect(unescape(raw ?? '')).toBe(EXPECTED);
+  });
+
+  it("keeps the bot's own mentions live and lets no other ping through", async () => {
+    const res = await page();
+    const text = unescape(textarea(res.text, 'hof-post-mentions') ?? '');
+    expect(text).toContain(`<@${ANN}>`);
+    expect(text).toContain(`<@${BOB}>`);
+    expect(text).not.toContain(`<@${ZWSP}${ANN}>`);
+    const live = [...text.matchAll(/<@[^​]/g)].length;
+    expect(live).toBe(4); // Ann twice, Bob twice
+    expect(text).not.toMatch(/@everyone|@here|<@&|<@!/);
+  });
+
+  it('an invalid stored id appears by name, never as a mention', async () => {
+    const res = await page();
+    const text = unescape(textarea(res.text, 'hof-post-mentions') ?? '');
+    expect(text).toContain('**#4: Dee — 1 event**');
+    expect(text).not.toContain('<@1234>');
+  });
+
+  it('the textarea content is escaped text', async () => {
+    const res = await page();
+    expect(res.text).toContain(`&lt;@${ANN}&gt;`);
+    expect(res.text).not.toContain(`<@${ANN}>`);
+  });
+
+  it('asks once for every distinct person in the text', async () => {
+    const links = fakeMemberLinks(LINKS);
+    await page({ memberLinks: async () => links });
+    expect(links.discordIdsByMeetupIds).toHaveBeenCalledTimes(1);
+    expect(links.discordIdsByMeetupIds.mock.calls[0][0]).toEqual([
+      '2001',
+      '2002',
+      '2003',
+      '2004',
+    ]);
+  });
+
+  it('says how many people appear by name', async () => {
+    const res = await page();
+    expect(res.text).toContain(
+      '2 of 4 people have no linked Discord account and appear by name.',
+    );
+  });
+
+  it('no unlinked line when every person is linked', async () => {
+    const res = await page({
+      memberLinks: async () =>
+        fakeMemberLinks({
+          '2001': ANN,
+          '2002': BOB,
+          '2003': '333333333333333333',
+          '2004': '444444444444444444',
+        }),
+    });
+    expect(textarea(res.text, 'hof-post-mentions')).toBeDefined();
+    expect(res.text).not.toContain('no linked Discord account');
+  });
+
+  it('the copy button names the mention textarea', async () => {
+    const res = await page();
+    expect(res.text).toContain(
+      '<button type="button" data-copy="hof-post-mentions">Copy</button>',
+    );
+    expect(res.text).toContain('<h2>Ready to post (with mentions)</h2>');
+    expect(res.text.indexOf('id="hof-post"')).toBeLessThan(
+      res.text.indexOf('id="hof-post-mentions"'),
+    );
+  });
+
+  it('the plain box is unchanged next to the mention box', async () => {
+    const payload = mentionPayload();
+    const res = await page(undefined, payload);
+    const plain = unescape(textarea(res.text, 'hof-post') ?? '');
+    expect(plain).toBe(plainOf(payload));
+    expect(plain).toContain('**#1: Ann — 1 event** 🆕');
+    expect(plain).not.toContain(ANN);
+  });
+
+  it('a stored host or title that is not a string is still a 200', async () => {
+    const payload = mentionPayload();
+    payload.hosts[2].host = { ...everyone, name: undefined };
+    payload.hosts[3].events = [{ ...pings, title: 42 as never }];
+    const res = await page(undefined, payload);
+    expect(res.status).toBe(200);
+    const text = unescape(textarea(res.text, 'hof-post-mentions') ?? '');
+    expect(text).toContain('**#3: undefined — 1 event**');
+    expect(text).toContain('    42 (Sep 3)');
+  });
+
+  const FALLBACK =
+    'Mentions are unavailable right now; use the text above and add mentions by hand.';
+
+  for (const [label, memberLinks] of [
+    [
+      'the repository cannot be opened',
+      () => Promise.reject(new Error('password=hunter2')),
+    ],
+    [
+      'the lookup rejects',
+      async () => ({
+        discordIdsByMeetupIds: () =>
+          Promise.reject(new Error('password=hunter2')),
+      }),
+    ],
+  ] as const) {
+    it(`falls back to a fixed line when ${label}`, async () => {
+      const warn = vi.spyOn(Logger.prototype, 'warn');
+      try {
+        const payload = mentionPayload();
+        const res = await page({ memberLinks }, payload);
+        expect(res.status).toBe(200);
+        expect(res.text).toContain(FALLBACK);
+        expect(textarea(res.text, 'hof-post-mentions')).toBeUndefined();
+        expect(res.text).not.toContain('data-copy="hof-post-mentions"');
+        expect(unescape(textarea(res.text, 'hof-post') ?? '')).toBe(
+          plainOf(payload),
+        );
+        expect(res.text).toContain('<h2>Hosts</h2>');
+        expect(res.text).not.toContain('hunter2');
+        expect(JSON.stringify(warn.mock.calls)).not.toContain('hunter2');
+      } finally {
+        warn.mockRestore();
+      }
+    });
+  }
+
+  it('falls back at the page deadline when the lookup never settles', async () => {
+    const payload = mentionPayload();
+    const { req, cookie } = await setup(
+      [seedRow('hall_of_fame', SEPT, payload)],
+      {
+        memberLinks: async () => ({
+          discordIdsByMeetupIds: () => new Promise<never>(() => undefined),
+        }),
+      },
+    );
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const settled = Promise.resolve(req.get(MONTH).set('Cookie', cookie));
+      for (let i = 0; i < 20; i += 1) {
+        // eslint-disable-next-line no-await-in-loop -- let the socket I/O run between clock steps
+        await new Promise<void>((r) => {
+          setImmediate(r);
+        });
+        // eslint-disable-next-line no-await-in-loop -- see above
+        await vi.advanceTimersByTimeAsync(PAGE_LOAD_DEADLINE_MS);
+      }
+      const res = await settled;
+      expect(res.status).toBe(200);
+      expect(res.text).toContain(FALLBACK);
+      expect(unescape(textarea(res.text, 'hof-post') ?? '')).toBe(
+        plainOf(payload),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
