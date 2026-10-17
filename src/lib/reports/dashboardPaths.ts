@@ -1,5 +1,11 @@
 import { PUBLIC_APP_ORIGIN } from '../../constants.js';
-import { Period, parsePeriodKey, periodKey } from './period.js';
+import {
+  comparePeriods,
+  GROUP_FIRST_PERIOD,
+  Period,
+  parsePeriodKey,
+  periodKey,
+} from './period.js';
 
 /**
  * Every dashboard page path, shared by the route registrations (src/web) and
@@ -31,7 +37,19 @@ export type MonthPathTemplate =
 
 const MEMBER_ID = /^[0-9]{1,20}$/;
 
-/** '/dashboard/hall-of-fame/2026-09'. The month must survive parsePeriodKey, so no other text can reach the path. */
+/** A real month before the group's first (GROUP_FIRST_PERIOD): no dashboard page exists for it. */
+export class MonthBeforeGroupError extends RangeError {
+  constructor() {
+    super("monthPath needs a month from the group's first onwards");
+    this.name = 'MonthBeforeGroupError';
+  }
+}
+
+/**
+ * '/dashboard/hall-of-fame/2026-09'. The month must survive parsePeriodKey, so
+ * no other text can reach the path, and must not be before GROUP_FIRST_PERIOD
+ * (the routes 404 those months). The one floor for every month link.
+ */
 export function monthPath(template: MonthPathTemplate, period: Period): string {
   const key = periodKey(period);
   const parsed = parsePeriodKey(key);
@@ -41,6 +59,9 @@ export function monthPath(template: MonthPathTemplate, period: Period): string {
     parsed.month !== period.month
   ) {
     throw new RangeError('monthPath needs a real month');
+  }
+  if (comparePeriods(parsed, GROUP_FIRST_PERIOD) < 0) {
+    throw new MonthBeforeGroupError();
   }
   return `${DASHBOARD_BASE}${template.replace(':period', key)}`;
 }

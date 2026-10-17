@@ -1653,6 +1653,9 @@ describe('month page links', () => {
     ]);
   });
 
+  // Pins current behaviour, not a rule: Task 12 is expected to make buildMonth
+  // refuse months before GROUP_FIRST_PERIOD, and the buildMonth assertion
+  // below flips then.
   it('a month before the group began cannot be requested, but buildMonth itself would build it', async () => {
     const h = makeDeps();
     expect(

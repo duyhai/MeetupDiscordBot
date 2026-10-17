@@ -4,6 +4,7 @@ import {
   DASHBOARD_PATHS,
   dashboardPath,
   memberHistoryPath,
+  MonthBeforeGroupError,
   monthPageUrls,
   monthPath,
 } from '../../../src/lib/reports/dashboardPaths.js';
@@ -39,6 +40,31 @@ describe('dashboardPaths', () => {
       RangeError,
     );
     expect(() => monthPageUrls(period)).toThrow(RangeError);
+  });
+
+  it('refuses a month before the group began (2013-02) and accepts its first (2013-03)', () => {
+    const before: Period = { year: 2013, month: 2 };
+    for (const template of [
+      DASHBOARD_PATHS.hallOfFameMonth,
+      DASHBOARD_PATHS.noShowHistoryMonth,
+      DASHBOARD_PATHS.refresh,
+    ] as const) {
+      expect(() => monthPath(template, before)).toThrow(MonthBeforeGroupError);
+    }
+    expect(() => monthPageUrls(before)).toThrow(MonthBeforeGroupError);
+    expect(() => monthPageUrls({ year: 2012, month: 12 })).toThrow(
+      MonthBeforeGroupError,
+    );
+    expect(new MonthBeforeGroupError()).toBeInstanceOf(RangeError);
+    expect(monthPageUrls({ year: 2013, month: 3 })).toEqual({
+      hallOfFame:
+        'https://meetup-discord-bot.herokuapp.com/dashboard/hall-of-fame/2013-03',
+      noShowHistory:
+        'https://meetup-discord-bot.herokuapp.com/dashboard/no-show-history/2013-03',
+    });
+    expect(monthPath(DASHBOARD_PATHS.refresh, { year: 2013, month: 3 })).toBe(
+      '/dashboard/reports/2013-03/refresh',
+    );
   });
 
   it('memberHistoryPath builds only from 1-20 digits', () => {

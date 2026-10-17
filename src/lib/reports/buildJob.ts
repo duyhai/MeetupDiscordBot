@@ -36,7 +36,7 @@ import {
   planDueWork,
   snapshotKey,
 } from './buildSchedule.js';
-import { monthPageUrls } from './dashboardPaths.js';
+import { MonthBeforeGroupError, monthPageUrls } from './dashboardPaths.js';
 import { collectLinkProgress, LinkProgressCounts } from './linkProgress.js';
 import { noShowsMissing } from './meetupMonth.js';
 import { buildMonthReports, MonthReports } from './monthReports.js';
@@ -349,23 +349,26 @@ function builtByText(builtBy: string): string {
 /**
  * Plain links to the month's dashboard pages, for the build alerts. Built
  * only from PUBLIC_APP_ORIGIN and the build's own month (via monthPageUrls,
- * which refuses anything parsePeriodKey would), never from payload text. A
- * month before the group's first is not a dashboard page (it 404s), so it
- * gets no links either. Embeds never ping or unfurl.
+ * which refuses anything parsePeriodKey would and any month before the
+ * group's first), never from payload text. Embeds never ping or unfurl.
  */
 function monthLinkLines(period: Period): string[] {
   try {
-    if (comparePeriods(period, GROUP_FIRST_PERIOD) < 0) {
-      return [];
-    }
     const urls = monthPageUrls(period);
     return [
       `Hall of Fame page: ${urls.hallOfFame}`,
       `No-show history page: ${urls.noShowHistory}`,
     ];
   } catch (error) {
-    // The alert still posts, just without links.
-    logger.error(`Month page links skipped: ${String(error)}`);
+    // The alert still posts, just without links. A month before the group's
+    // first has no pages, which is expected, not an error.
+    if (error instanceof MonthBeforeGroupError) {
+      logger.warn(
+        `Month page links skipped: ${periodKey(period)} is before the group's first month`,
+      );
+    } else {
+      logger.error(`Month page links skipped: ${String(error)}`);
+    }
     return [];
   }
 }

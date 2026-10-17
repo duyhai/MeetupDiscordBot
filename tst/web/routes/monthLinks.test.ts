@@ -61,4 +61,20 @@ describe('build alert month links', () => {
     const res = await req.get(new URL(url).pathname).set('Cookie', cookie);
     expect(res.status).toBe(200);
   });
+
+  it('a month before the group began is a 404 on every month page', async () => {
+    const app = express();
+    app.set('trust proxy', 1);
+    app.use(DASHBOARD_BASE, buildRouter());
+    const req = clientFor(await listen(app));
+    const cookie = await signIn(req);
+    for (const path of [
+      '/dashboard/hall-of-fame/2013-02',
+      '/dashboard/no-show-history/2013-02',
+    ]) {
+      // eslint-disable-next-line no-await-in-loop -- one page at a time
+      const res = await req.get(path).set('Cookie', cookie);
+      expect(res.status, path).toBe(404);
+    }
+  });
 });
