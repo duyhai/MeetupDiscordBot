@@ -193,7 +193,7 @@ Actions:
 | **Mark as sent** | Status → `warning_sent`. Records who and when. |
 | **Put on hold** | Status → `on_hold`; a note is required (e.g. "paid for Halloween, revisit after 3rd no-show"). |
 | **Record suspension** | 1.5 Leadership Team only. Confirm step with the suspension date (default today; from the month's first day through today, Pacific). The length is computed by the policy from the member's earlier suspensions. Writes a `suspension_records` row with the command's SQL, carrying the notes; status → `suspended`. Refused if the range overlaps a live suspension of the member (an override may come later). |
-| **Link suspension** | 1.5 Leadership Team only. Links a live suspension recorded outside the workspace (e.g. with `/meetup_record_suspension`) dated in or after the month; status → `suspended`. |
+| **Link suspension** | 1.5 Leadership Team only. Links a live suspension recorded outside the workspace (e.g. with `/meetup_record_suspension`) dated in or after the month; status → `suspended`; a record another row already links is never offered. |
 | **Skip** | Status → `skipped`; note required. |
 | **Void** | 1.5 Leadership Team only. For a recorded suspension: reason required; uses the command's void SQL. |
 | **Notes** | Edit at any time. |
@@ -251,8 +251,9 @@ hosted at least one PAST event in the group. `{policy_link}` and
 `{no_show_list}` is one line per counted no-show: title and Pacific date.
 `{end_date}` is the last suspended day (the suspension date plus
 `{suspension_days}`, minus one). When the host waiver applies, the fee is
-left out: the warning ends at "…a {suspension_days}-day suspension from the
-group.", and the suspension message drops the "Rejoining requires…" sentence.
+left out: the warning's penalty clause ends at "…a {suspension_days}-day
+suspension from the group.", and the suspension message drops the
+"Rejoining requires…" sentence.
 
 ## Build job and notifications
 
@@ -275,8 +276,8 @@ group.", and the suspension message drops the "Rejoining requires…" sentence.
   syncs that month's workspace, then posts a plain alert in #meetup-bot-alerts
   (`BOT_ALERTS_CHANNEL_ID`) with `allowedMentions: { parse: [] }`, linking
   the month's workspace, Hall of Fame and no-show history. It is delivered at
-  least once: a crashed or failed post is retried after 30 minutes or on the
-  next tick, after checking the channel for it.
+  least once: a crashed claim is reclaimed after 30 minutes and a failed post
+  is retried on the next tick, after checking the channel for it.
 
 ## Backfill
 

@@ -1530,7 +1530,7 @@ describe('manual refresh budget', () => {
     h.cache.values.set('report-rebuild-cooldown-2026-10', '987654321');
     expect((await refresh(h, OCT)).status).toBe('cooldown');
     h.cache.values.delete('report-rebuild-cooldown-2026-10');
-    // Identity sweep and quiet hour.
+    // Identity sweep.
     h.cache.values.set('identity-digest-2026-10-05', 'x');
     expect((await refresh(h, OCT)).status).toBe('identity-sweep');
     h.cache.values.delete('identity-digest-2026-10-05');
