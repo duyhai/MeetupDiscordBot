@@ -48,6 +48,12 @@ import { refreshForm, refreshNotice } from './refresh.js';
 
 const WHAT = 'The no-show report';
 const MEMBER_WHAT = "This member's no-show history";
+/**
+ * The workspace outcomes are an optional column: a hung read gives up at
+ * 5 s, so it adds at most that to a page whose own read already has
+ * PAGE_LOAD_DEADLINE_MS, well under Heroku's 30 s.
+ */
+export const HISTORY_OUTCOMES_DEADLINE_MS = 5000;
 /** The same rule as memberHistoryPath and the repository: checked here so a bad id never reaches a query. */
 const MEMBER_ID = /^[0-9]{1,20}$/;
 
@@ -387,8 +393,10 @@ export function registerNoShowHistoryRoutes(
     }
     const page = parsePage(req.query.page);
     // In parallel with the history read; loadOptional never rejects.
-    const outcomesRead = loadOptional('workspace outcomes', async () =>
-      (await deps.workspace()).statusesForMember(memberId),
+    const outcomesRead = loadOptional(
+      'workspace outcomes',
+      async () => (await deps.workspace()).statusesForMember(memberId),
+      HISTORY_OUTCOMES_DEADLINE_MS,
     );
     const loaded = await load(res, MEMBER_WHAT, async () =>
       (await deps.snapshots()).listMemberNoShowMonths(memberId, {
@@ -506,13 +514,16 @@ export function registerNoShowHistoryRoutes(
     // Only months in the workspace range, only this page's members.
     const outcomes: Outcomes =
       isWorkspaceMonth(period, now) && pageCases.length > 0
-        ? await loadOptional('workspace outcomes', async () =>
-            (await deps.workspace()).statusesByMember(
-              period,
-              pageCases
-                .map((c) => c.member.id)
-                .filter((id): id is string => typeof id === 'string'),
-            ),
+        ? await loadOptional(
+            'workspace outcomes',
+            async () =>
+              (await deps.workspace()).statusesByMember(
+                period,
+                pageCases
+                  .map((c) => c.member.id)
+                  .filter((id): id is string => typeof id === 'string'),
+              ),
+            HISTORY_OUTCOMES_DEADLINE_MS,
           )
         : undefined;
     const s = (isObject(payload.summary) ? payload.summary : {}) as Record<

@@ -132,21 +132,23 @@ export function unavailable(res: Response, what: string): void {
 export const PAGE_LOAD_DEADLINE_MS = 10_000;
 
 class PageLoadTimeoutError extends Error {
-  constructor() {
-    super(`page read took over ${PAGE_LOAD_DEADLINE_MS} ms`);
+  constructor(ms: number) {
+    super(`page read took over ${ms} ms`);
     this.name = 'PageLoadTimeoutError';
   }
 }
 
 /**
- * Runs a data read under PAGE_LOAD_DEADLINE_MS; on failure or timeout logs
- * the error's class name only and renders nothing: for a page part that
- * has its own fixed fallback. A read still running at
- * the deadline is left to finish (or fail) unobserved.
+ * Runs a data read under `deadlineMs` (PAGE_LOAD_DEADLINE_MS unless a page
+ * part asks for less); on failure or timeout logs the error's class name
+ * only and renders nothing: for a page part that has its own fixed
+ * fallback. A read still running at the deadline is left to finish (or
+ * fail) unobserved.
  */
 export async function loadOptional<T>(
   what: string,
   fn: () => Promise<T>,
+  deadlineMs: number = PAGE_LOAD_DEADLINE_MS,
 ): Promise<{ ok: true; value: T } | { ok: false }> {
   let timer: NodeJS.Timeout | undefined;
   try {
@@ -155,8 +157,8 @@ export async function loadOptional<T>(
     const read = fn();
     const deadline = new Promise<never>((_resolve, reject) => {
       timer = setTimeout(
-        () => reject(new PageLoadTimeoutError()),
-        PAGE_LOAD_DEADLINE_MS,
+        () => reject(new PageLoadTimeoutError(deadlineMs)),
+        deadlineMs,
       );
       timer.unref();
     });

@@ -1,14 +1,16 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { WorkspaceStatus } from '../../../src/lib/workspace/types.js';
 
 import { Period } from '../../../src/lib/reports/period.js';
 import { NoShowPayload } from '../../../src/lib/reports/types.js';
 import { MemberNoShowMonth } from '../../../src/lib/repositories/postgresReportSnapshotRepository.js';
+import { PAGE_LOAD_DEADLINE_MS } from '../../../src/web/pageKit.js';
 import {
   DashboardPageDeps,
   registerAllProtectedRoutes,
 } from '../../../src/web/routes/dashboardPages.js';
+import { HISTORY_OUTCOMES_DEADLINE_MS } from '../../../src/web/routes/noShowHistory.js';
 import {
   closeServers,
   makeApp,
@@ -683,6 +685,78 @@ describe('no-show history month page: workspace outcomes', () => {
     const res2 = await lookup.get(MONTH);
     expect(res2.status).toBe(200);
     expect(res2.text).toContain('<th>Outcome (unavailable)</th>');
+  });
+});
+
+/**
+ * Sends a GET on fake timers and steps the clock 250 ms at a time (letting
+ * socket I/O run between steps) until the response arrives. Resolves with
+ * the response and the fake time it took; gives up just short of the page
+ * deadline, so a read held to PAGE_LOAD_DEADLINE_MS never answers here.
+ */
+async function getOnFakeClock(
+  send: () => PromiseLike<{ status: number; text: string }>,
+) {
+  const STEP = 250;
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+  try {
+    let res: { status: number; text: string } | undefined;
+    const settled = Promise.resolve(send()).then((r) => {
+      res = r;
+    });
+    let elapsed = 0;
+    while (res === undefined && elapsed < PAGE_LOAD_DEADLINE_MS - STEP) {
+      // eslint-disable-next-line no-await-in-loop -- let the socket I/O run between clock steps
+      await new Promise<void>((r) => {
+        setImmediate(r);
+      });
+      // eslint-disable-next-line no-await-in-loop -- see above
+      await vi.advanceTimersByTimeAsync(STEP);
+      elapsed += STEP;
+    }
+    for (let i = 0; i < 20 && res === undefined; i += 1) {
+      // eslint-disable-next-line no-await-in-loop -- I/O only, the clock stays put
+      await new Promise<void>((r) => {
+        setImmediate(r);
+      });
+    }
+    return { res, elapsed, settled };
+  } finally {
+    vi.useRealTimers();
+  }
+}
+
+describe('workspace outcomes read deadline', () => {
+  const never = () => new Promise<never>(() => undefined);
+
+  it('is 5 seconds, half the page deadline', () => {
+    expect(HISTORY_OUTCOMES_DEADLINE_MS).toBe(5000);
+  });
+
+  it('a month page whose outcomes read hangs renders without them after 5 s', async () => {
+    const ws = workspaceOf([]);
+    ws.statusesByMember.mockImplementation(never);
+    const { get } = await setup(undefined, [], { workspace: async () => ws });
+    const { res, elapsed } = await getOnFakeClock(() => get(MONTH));
+    expect(res?.status).toBe(200);
+    expect(res?.text).toContain('<th>Outcome (unavailable)</th>');
+    expect(elapsed).toBeGreaterThanOrEqual(HISTORY_OUTCOMES_DEADLINE_MS);
+    expect(elapsed).toBeLessThan(PAGE_LOAD_DEADLINE_MS);
+  });
+
+  it('a member page whose outcomes read hangs renders without them after 5 s', async () => {
+    const ws = workspaceOf([]);
+    ws.statusesForMember.mockImplementation(never);
+    const { get } = await setup(
+      undefined,
+      [memberMonth(SEPT, { noShowCase: noShowCase(0) })],
+      { workspace: async () => ws },
+    );
+    const { res, elapsed } = await getOnFakeClock(() => get(MEMBER));
+    expect(res?.status).toBe(200);
+    expect(res?.text).toContain('<th>Outcome (unavailable)</th>');
+    expect(elapsed).toBeGreaterThanOrEqual(HISTORY_OUTCOMES_DEADLINE_MS);
+    expect(elapsed).toBeLessThan(PAGE_LOAD_DEADLINE_MS);
   });
 });
 

@@ -10,6 +10,7 @@ import {
   builtByHtml,
   dashboardPage,
   load,
+  loadOptional,
   pacificDate,
   pacificDateTime,
   parseRouteMonth,
@@ -291,6 +292,41 @@ describe('load deadline', () => {
     fail(new Error('pg finally answered'));
     await vi.advanceTimersByTimeAsync(0);
     expect(sent.count).toBe(1);
+  });
+
+  it('loadOptional takes a shorter deadline when given one', async () => {
+    vi.useFakeTimers();
+    let settled = false;
+    const pending = loadOptional(
+      'X',
+      () => new Promise(() => undefined),
+      5000,
+    ).then((result) => {
+      settled = true;
+      return result;
+    });
+    await vi.advanceTimersByTimeAsync(4999);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(settled).toBe(true);
+    expect(await pending).toEqual({ ok: false });
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('loadOptional defaults to the page deadline', async () => {
+    vi.useFakeTimers();
+    let settled = false;
+    const pending = loadOptional('X', () => new Promise(() => undefined)).then(
+      (result) => {
+        settled = true;
+        return result;
+      },
+    );
+    await vi.advanceTimersByTimeAsync(PAGE_LOAD_DEADLINE_MS - 1);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(settled).toBe(true);
+    expect(await pending).toEqual({ ok: false });
   });
 
   it('unrefs its timer, so it never holds the process open', async () => {
