@@ -99,6 +99,9 @@ function line(si: number, points: string, color: string): SafeHtml {
   }
 }
 
+/** Legend glyphs for line series, matching `line`'s dash per index: solid, 8 4, 2 3, 10 3 2 3. */
+const LINE_GLYPHS: readonly string[] = ['━', '╍', '┅', '─·'];
+
 /**
  * Server-drawn SVG under the strict html subset: drawing elements and
  * presentation attributes only (never style=), every label escaped text,
@@ -199,12 +202,15 @@ export function chart(input: ChartInput): SafeHtml {
   );
   // The first swatch sits at the text's x; later ones get a gap. dx is a
   // literal: the html subset takes no data there.
+  // A line's swatch draws its dash (see `line`); a bar's is a square. The
+  // glyph is escaped text, not an attribute.
   const legend = input.series.map((s, si) => {
     const color = colorOf(s, si);
+    const glyph = input.kind === 'line' ? LINE_GLYPHS[si % 4] : '■';
     const swatch =
       si === 0
-        ? html`<tspan fill="${color}">■</tspan>`
-        : html`<tspan dx="12" fill="${color}">■</tspan>`;
+        ? html`<tspan fill="${color}">${glyph}</tspan>`
+        : html`<tspan dx="12" fill="${color}">${glyph}</tspan>`;
     return html`${swatch}<tspan dx="4">${s.label}</tspan>`;
   });
 

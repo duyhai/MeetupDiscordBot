@@ -152,6 +152,27 @@ describe('chart', () => {
     expect(patterns[4]).toBe(patterns[0]);
   });
 
+  it('line legends show each series dash; bar legends show a square', () => {
+    const five = ['A', 'B', 'C', 'D', 'E'].map((label) => ({
+      label,
+      values: [1, 2],
+    }));
+    const glyphs = (out: string) =>
+      [
+        ...out.matchAll(/<tspan\b[^>]*\sfill="[^"]+"[^>]*>([^<]*)<\/tspan>/g),
+      ].map((m) => m[1]);
+    expect(glyphs(render({ kind: 'line', series: five }))).toEqual([
+      '━',
+      '╍',
+      '┅',
+      '─·',
+      '━',
+    ]);
+    expect(glyphs(render({ kind: 'bar', series: five }))).toEqual(
+      Array(5).fill('■'),
+    );
+  });
+
   it('empty input says no data', () => {
     expect(render({ categories: [] })).toContain(
       'No data yet for No-shows per month.',
