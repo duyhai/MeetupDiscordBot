@@ -16,8 +16,11 @@ import {
 import { safeErrorSummary } from '../helpers/identity/digest.js';
 import { PostgresDashboardNoticeRepository } from '../repositories/postgresDashboardNoticeRepository.js';
 import { PostgresLinkProgressRepository } from '../repositories/postgresLinkProgressRepository.js';
+import { PostgresNoShowWorkspaceRepository } from '../repositories/postgresNoShowWorkspaceRepository.js';
 import { PostgresReportSnapshotRepository } from '../repositories/postgresReportSnapshotRepository.js';
 import { PostgresSuspensionRepository } from '../repositories/postgresSuspensionRepository.js';
+import { isWorkspaceMonth } from '../workspace/months.js';
+import { syncWorkspace } from '../workspace/service.js';
 import {
   acquireBuildLease,
   BUILD_LEASE_TTL_SEC,
@@ -82,6 +85,27 @@ const BACKOFF_TTL_SEC = 60 * 60;
 const backoffKey = (p: Period) => `report-build-backoff-${periodKey(p)}`;
 /** Consecutive failed ticks (an hour of them) before the job alerts in Discord. */
 const INFRA_ALERT_AFTER_FAILED_TICKS = 4;
+
+const workspaceSyncAlertedKey = (p: Period, day: string) =>
+  `workspace-sync-alerted-${periodKey(p)}-${day}`;
+/**
+ * How long a build or tick waits for one workspace sync before giving up on
+ * it (the sync itself may still finish). The sync is optional work: a hung
+ * Postgres must not hold the build lease for its 30-minute TTL.
+ */
+export const WORKSPACE_SYNC_DEADLINE_MS = 30_000;
+
+/** An error's class name, and nothing it carries. */
+function errorName(error: unknown): string {
+  return error instanceof Error ? error.name : 'unknown error';
+}
+
+export class WorkspaceSyncTimeoutError extends Error {
+  constructor() {
+    super('The workspace sync did not finish in time');
+    this.name = 'WorkspaceSyncTimeoutError';
+  }
+}
 
 /**
  * Every no-show member of a finished month looks departed, and there are at
@@ -215,6 +239,12 @@ export interface BuildJobDeps {
   recentAlertTitles(): Promise<string[] | undefined>;
   reportReadyEnabled(): boolean;
   newLeaseValue(): string;
+  /**
+   * Copies a workspace month's stored no-show cases into the workspace. May
+   * reject; the job logs and alerts. Optional: the backfill has none, and a
+   * build never depends on it.
+   */
+  syncWorkspace?(period: Period): Promise<unknown>;
 }
 
 const seconds = (ms: number) => (ms / 1000).toFixed(1);
@@ -548,6 +578,61 @@ async function writeLinkProgress(
   }
 }
 
+/**
+ * Runs the workspace sync for a workspace month. Never throws, and waits at
+ * most WORKSPACE_SYNC_DEADLINE_MS. A failure is logged by its class name and
+ * alerted at most once a day per month; the next build or tick retries.
+ */
+async function syncWorkspaceSafely(
+  deps: BuildJobDeps,
+  cache: KeyValueCache,
+  period: Period,
+): Promise<void> {
+  if (!deps.syncWorkspace || !isWorkspaceMonth(period, deps.now())) {
+    return;
+  }
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const sync = Promise.resolve().then(() => deps.syncWorkspace?.(period));
+    // A sync that settles after the deadline is not reported twice.
+    sync.catch(() => undefined);
+    await Promise.race([
+      sync,
+      new Promise((_resolve, reject) => {
+        timer = setTimeout(
+          () => reject(new WorkspaceSyncTimeoutError()),
+          WORKSPACE_SYNC_DEADLINE_MS,
+        );
+      }),
+    ]);
+  } catch (error: unknown) {
+    // The class name only: a Postgres error can quote names and values.
+    logger.error(
+      `Workspace sync ${periodKey(period)} failed: ${errorName(error)}`,
+    );
+    try {
+      const key = workspaceSyncAlertedKey(period, utcDay(deps.now()));
+      if (await cache.exclusive_set(key, '1', ALERTED_TTL_SEC)) {
+        const label = monthLabel(period);
+        const posted = await deps.alert({
+          title: `No-show workspace not updated: ${label}`,
+          // The class name only, as in the process log.
+          description:
+            `The ${label} workspace could not be updated from the stored report (${errorName(error)}). ` +
+            'It retries after the next build and on every build tick.',
+        });
+        if (!posted) {
+          await cache.remove(key);
+        }
+      }
+    } catch (alertError: unknown) {
+      logger.error(`Workspace sync alert failed: ${errorName(alertError)}`);
+    }
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /** builtAt of the current rows of the previous and current month (Postgres is the durable fact). */
 async function loadBuiltAt(
   deps: BuildJobDeps,
@@ -610,6 +695,8 @@ export async function runBuildTick(deps: BuildJobDeps): Promise<void> {
       builtAt: await loadBuiltAt(deps, planNow),
       linkProgressWrittenToday: await deps.linkProgress.hasDay(utcDay(planNow)),
     });
+    // Months this tick built, to sync once everything else has run.
+    const builtMonths: Period[] = [];
     for (const item of plan) {
       const startAt = deps.now();
       const mayStart =
@@ -635,12 +722,32 @@ export async function runBuildTick(deps: BuildJobDeps): Promise<void> {
         );
         continue; // skip, not stop: later items still run
       }
-      // eslint-disable-next-line no-await-in-loop -- sequential on purpose: one month at a time
-      await (item.kind === 'month'
-        ? buildAndRecord(deps, cache, item.period, 'job')
-        : writeLinkProgress(deps, cache, item.day));
+      if (item.kind === 'month') {
+        // eslint-disable-next-line no-await-in-loop -- sequential on purpose: one month at a time
+        if (await buildAndRecord(deps, cache, item.period, 'job')) {
+          builtMonths.push(item.period);
+        }
+      } else {
+        // eslint-disable-next-line no-await-in-loop -- sequential on purpose: one month at a time
+        await writeLinkProgress(deps, cache, item.day);
+      }
     }
     await maybePostReportReady(deps);
+    // Last, so the builds, link progress and report-ready never wait on it:
+    // the months just built, and the previous and current month on every
+    // tick (a no-op when the workspace is up to date; it is also what sets
+    // up the latest finished month on the first tick after deploy).
+    const current = periodOf(deps.now());
+    const toSync = [...builtMonths];
+    for (const p of [previousPeriod(current), current]) {
+      if (!toSync.some((q) => comparePeriods(p, q) === 0)) {
+        toSync.push(p);
+      }
+    }
+    for (const p of toSync) {
+      // eslint-disable-next-line no-await-in-loop -- small Postgres syncs, one at a time on a pool of three
+      await syncWorkspaceSafely(deps, cache, p);
+    }
   } finally {
     await releaseBuildLease(cache, lease);
   }
@@ -855,9 +962,12 @@ export async function requestRebuild(
       if (deps.backgroundCache) {
         background = await deps.backgroundCache();
       }
-      return (await buildAndRecord(deps, background, period, requestedBy))
-        ? { ok: true }
-        : { ok: false };
+      if (!(await buildAndRecord(deps, background, period, requestedBy))) {
+        return { ok: false };
+      }
+      // After the build's saves and alerts, still under the lease.
+      await syncWorkspaceSafely(deps, background, period);
+      return { ok: true };
     } catch (error) {
       logger.error(`Manual report rebuild failed: ${String(error)}`);
       return { ok: false };
@@ -916,6 +1026,18 @@ export async function defaultBuildJobDeps(
     recentAlertTitles: () => recentEmbedTitles(client, BOT_ALERTS_CHANNEL_ID),
     reportReadyEnabled: () => REPORT_READY_ENABLED,
     newLeaseValue: () => crypto.randomUUID(),
+    // Lazy: the workspace schema is set up only by the workspace repository's
+    // instance(), on the first sync that needs it, so a workspace or schema
+    // failure never stops building.
+    syncWorkspace: (period) =>
+      syncWorkspace(
+        {
+          now: () => new Date(),
+          repository: () => PostgresNoShowWorkspaceRepository.instance(),
+          snapshots: async () => snapshots,
+        },
+        period,
+      ),
   };
 }
 

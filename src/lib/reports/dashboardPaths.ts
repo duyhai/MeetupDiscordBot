@@ -28,6 +28,11 @@ export const DASHBOARD_PATHS = {
   refresh: '/reports/:period/refresh',
   sessions: '/sessions',
   revokeSessions: '/sessions/revoke',
+  workspace: '/no-shows',
+  workspaceMonth: '/no-shows/:period',
+  workspaceRow: '/no-shows/:period/rows/:rowId',
+  workspaceSuspend: '/no-shows/:period/rows/:rowId/suspend',
+  workspaceSync: '/no-shows/:period/sync',
 } as const;
 
 export type DashboardPathTemplate =
@@ -35,7 +40,9 @@ export type DashboardPathTemplate =
 export type MonthPathTemplate =
   | typeof DASHBOARD_PATHS.hallOfFameMonth
   | typeof DASHBOARD_PATHS.noShowHistoryMonth
-  | typeof DASHBOARD_PATHS.refresh;
+  | typeof DASHBOARD_PATHS.refresh
+  | typeof DASHBOARD_PATHS.workspaceMonth
+  | typeof DASHBOARD_PATHS.workspaceSync;
 
 const MEMBER_ID = /^[0-9]{1,20}$/;
 

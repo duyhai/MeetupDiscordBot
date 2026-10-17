@@ -3,6 +3,7 @@
 */
 import { Client } from 'discord.js';
 import { ClientError } from 'graphql-request';
+import { Logger } from 'tslog';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { BOT_ALERTS_CHANNEL_ID } from '../../../src/constants.js';
@@ -25,6 +26,7 @@ import {
   reportReadyEntry,
   requestRebuild,
   runBuildTick,
+  WORKSPACE_SYNC_DEADLINE_MS,
 } from '../../../src/lib/reports/buildJob.js';
 import {
   planDueWork,
@@ -37,10 +39,11 @@ import {
   OrganizerTokenUnavailableError,
   withOrganizerMeetup,
 } from '../../../src/lib/reports/organizerMeetup.js';
-import { Period } from '../../../src/lib/reports/period.js';
+import { Period, periodOf } from '../../../src/lib/reports/period.js';
 import { REPORT_TYPES } from '../../../src/lib/reports/types.js';
 import { PostgresDashboardNoticeRepository } from '../../../src/lib/repositories/postgresDashboardNoticeRepository.js';
 import { PostgresLinkProgressRepository } from '../../../src/lib/repositories/postgresLinkProgressRepository.js';
+import { PostgresNoShowWorkspaceRepository } from '../../../src/lib/repositories/postgresNoShowWorkspaceRepository.js';
 import { PostgresReportSnapshotRepository } from '../../../src/lib/repositories/postgresReportSnapshotRepository.js';
 import { PostgresSuspensionRepository } from '../../../src/lib/repositories/postgresSuspensionRepository.js';
 import { ApplicationCache } from '../../../src/util/cache.js';
@@ -97,6 +100,10 @@ vi.mock(
 vi.mock(
   '../../../src/lib/repositories/postgresSuspensionRepository.js',
   () => ({ PostgresSuspensionRepository: { instance: vi.fn() } }),
+);
+vi.mock(
+  '../../../src/lib/repositories/postgresNoShowWorkspaceRepository.js',
+  () => ({ PostgresNoShowWorkspaceRepository: { instance: vi.fn() } }),
 );
 
 const SEPT: Period = { year: 2026, month: 9 };
@@ -1853,5 +1860,346 @@ describe('month page links', () => {
       expect(entry.description).not.toContain('@everyone');
       expect(entry.description).not.toContain('@here');
     }
+  });
+});
+
+describe('workspace sync hooks', () => {
+  const AUG: Period = { year: 2026, month: 8 };
+  const synced = (h: Harness) =>
+    h.syncWorkspace.mock.calls.map(([p]) => `${p.year}-${p.month}`);
+  const workspaceAlerts = (h: Harness) =>
+    titles(h.alert).filter((t) => t.startsWith('No-show workspace'));
+  const LINK = { linked: 1, unlinked: 1, reverifyTagged: 0, onboarding: 0 };
+
+  /** Oct 10: nothing is due; September is finished and built. */
+  function idle() {
+    const h = makeDeps({ clock: new Clock('2026-10-10T16:15:00Z') });
+    h.snapshots.seedBoth(SEPT, '2026-10-03T16:10:00Z');
+    h.snapshots.seedBoth(OCT, '2026-10-10T16:05:00Z');
+    h.linkProgress.days.set('2026-10-10', LINK);
+    return h;
+  }
+
+  it('syncs the workspace after a job build of a workspace month, after its saves', async () => {
+    const h = makeDeps();
+    const savedWhenSynced: number[] = [];
+    h.syncWorkspace.mockImplementation(async (period) => {
+      savedWhenSynced.push(
+        h.snapshots.rows.filter(
+          (r) =>
+            r.period.year === period.year && r.period.month === period.month,
+        ).length,
+      );
+      return 'synced';
+    });
+    await runBuildTick(h.deps);
+    expect(fetchedPeriods(h)).toEqual(['2026-9', '2026-10']);
+    expect(synced(h)).toEqual(['2026-9', '2026-10']);
+    expect(savedWhenSynced).toEqual([2, 2]);
+  });
+
+  it('syncs the latest finished and the open month on every tick, even when nothing is due', async () => {
+    const h = idle();
+    await runBuildTick(h.deps);
+    expect(h.fetchMonthReports).not.toHaveBeenCalled();
+    expect(synced(h)).toEqual(['2026-9', '2026-10']);
+    expect(h.cache.values.has(LEASE_KEY)).toBe(false);
+  });
+
+  it('a tick that does nothing (quiet hour, before 16:00) syncs nothing', async () => {
+    for (const at of ['2026-10-10T18:30:00Z', '2026-10-10T15:59:00Z']) {
+      const h = makeDeps({ clock: new Clock(at) });
+      // eslint-disable-next-line no-await-in-loop -- two independent ticks, one at a time
+      await runBuildTick(h.deps);
+      expect(h.syncWorkspace).not.toHaveBeenCalled();
+    }
+  });
+
+  it("never syncs months before the workspace's first month", async () => {
+    const h = makeDeps({ clock: new Clock('2026-09-10T16:15:00Z') });
+    h.snapshots.seedBoth(AUG, '2026-09-03T16:10:00Z');
+    h.snapshots.seedBoth(SEPT, '2026-09-10T16:05:00Z');
+    h.linkProgress.days.set('2026-09-10', LINK);
+    await runBuildTick(h.deps);
+    expect(synced(h)).toEqual(['2026-9']);
+  });
+
+  it('report-ready and link progress do not wait for the workspace sync', async () => {
+    const h = makeDeps({ clock: new Clock('2026-10-05T16:15:00Z') });
+    const order: string[] = [];
+    h.alert.mockImplementation(async (entry) => {
+      order.push(entry.title);
+      return true;
+    });
+    h.syncWorkspace.mockImplementation(async (period) => {
+      order.push(`sync ${period.month}`);
+      expect(h.linkProgress.days.has('2026-10-05')).toBe(true);
+      return 'synced';
+    });
+    await runBuildTick(h.deps);
+    expect(order).toEqual([
+      'Reports built: September 2026',
+      'Reports ready: September 2026',
+      'sync 9',
+      'sync 10',
+    ]);
+  });
+
+  it('a failing workspace sync alerts once a day and does not fail the build or the tick', async () => {
+    const h = makeDeps();
+    const error = vi.spyOn(Logger.prototype, 'error');
+    h.syncWorkspace.mockRejectedValue(
+      new TypeError('relation "noshow_workspace_rows" does not exist: secret'),
+    );
+    await expect(runBuildTick(h.deps)).resolves.toBeUndefined();
+    // The builds were saved, link progress written, report-ready posted.
+    expect(h.snapshots.rows).toHaveLength(4);
+    expect(h.linkProgress.days.has('2026-10-05')).toBe(true);
+    expect(ready(h)).toHaveLength(1);
+    expect(workspaceAlerts(h)).toEqual([
+      'No-show workspace not updated: September 2026',
+      'No-show workspace not updated: October 2026',
+    ]);
+    const description = descriptions(h.alert).find((d) =>
+      d.startsWith('The September 2026 workspace'),
+    );
+    expect(description).toBe(
+      'The September 2026 workspace could not be updated from the stored report (TypeError). ' +
+        'It retries after the next build and on every build tick.',
+    );
+    // The process log names the error class only.
+    const logged = error.mock.calls.map((c) => String(c[0])).join('\n');
+    expect(logged).toContain('Workspace sync 2026-09 failed: TypeError');
+    expect(logged).not.toContain('secret');
+    expect(logged).not.toContain('noshow_workspace_rows');
+    expect(h.cache.values.has(LEASE_KEY)).toBe(false);
+
+    // Later the same day: no second alert.
+    h.alert.mockClear();
+    h.clock.set('2026-10-05T16:30:00Z');
+    await runBuildTick(h.deps);
+    expect(h.syncWorkspace.mock.calls.length).toBeGreaterThan(2);
+    expect(workspaceAlerts(h)).toEqual([]);
+
+    // The next day: alerted again.
+    h.alert.mockClear();
+    h.clock.set('2026-10-06T16:15:00Z');
+    await runBuildTick(h.deps);
+    expect(workspaceAlerts(h)).toEqual([
+      'No-show workspace not updated: September 2026',
+      'No-show workspace not updated: October 2026',
+    ]);
+  });
+
+  it('a workspace alert that fails to post is retried on the next tick', async () => {
+    const h = idle();
+    h.syncWorkspace.mockImplementation(async (period) => {
+      if (isSept(period)) {
+        throw new Error('down');
+      }
+      return 'current';
+    });
+    let failNext = true;
+    h.alert.mockImplementation(async (entry) => {
+      if (entry.title.startsWith('No-show workspace') && failNext) {
+        failNext = false;
+        return false;
+      }
+      return true;
+    });
+    await runBuildTick(h.deps);
+    expect(workspaceAlerts(h)).toEqual([
+      'No-show workspace not updated: September 2026',
+    ]);
+    expect(failNext).toBe(false);
+    h.alert.mockClear();
+    h.clock.set('2026-10-10T16:30:00Z');
+    await runBuildTick(h.deps);
+    expect(workspaceAlerts(h)).toEqual([
+      'No-show workspace not updated: September 2026',
+    ]);
+  });
+
+  it('an unreadable alert key or a throwing alert never fails the tick', async () => {
+    const h = idle();
+    h.syncWorkspace.mockRejectedValue(new Error('down'));
+    vi.spyOn(h.cache, 'exclusive_set').mockImplementation(async (key) => {
+      if (key.startsWith('workspace-sync-alerted-')) {
+        throw new Error('redis down');
+      }
+      return true;
+    });
+    await expect(runBuildTick(h.deps)).resolves.toBeUndefined();
+    expect(h.syncWorkspace).toHaveBeenCalledTimes(2);
+  });
+
+  it('a hung workspace sync is given up on after its deadline; the tick finishes and releases the lease', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const h = idle();
+      h.syncWorkspace.mockImplementation(() => new Promise(() => undefined));
+      let finished = false;
+      const tick = runBuildTick(h.deps).then(() => {
+        finished = true;
+      });
+      await vi.advanceTimersByTimeAsync(WORKSPACE_SYNC_DEADLINE_MS - 1);
+      expect(finished).toBe(false);
+      await vi.advanceTimersByTimeAsync(WORKSPACE_SYNC_DEADLINE_MS + 1);
+      await tick;
+      expect(finished).toBe(true);
+      expect(workspaceAlerts(h)).toEqual([
+        'No-show workspace not updated: September 2026',
+        'No-show workspace not updated: October 2026',
+      ]);
+      expect(h.cache.values.has(LEASE_KEY)).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('the deadline is at most 30 s', () => {
+    expect(WORKSPACE_SYNC_DEADLINE_MS).toBeGreaterThan(0);
+    expect(WORKSPACE_SYNC_DEADLINE_MS).toBeLessThanOrEqual(30_000);
+  });
+
+  it('manual rebuilds sync too, after the build is saved, and before the lease is released', async () => {
+    const h = makeDeps({ reportReadyEnabled: false });
+    h.syncWorkspace.mockImplementation(async () => {
+      expect(h.snapshots.rows).toHaveLength(2);
+      expect(h.cache.values.has(LEASE_KEY)).toBe(true);
+      return 'synced';
+    });
+    const result = await requestRebuild(h.deps, SEPT, REQUESTER);
+    expect(await (result as { done: Promise<{ ok: boolean }> }).done).toEqual({
+      ok: true,
+    });
+    expect(synced(h)).toEqual(['2026-9']);
+    expect(h.cache.values.has(LEASE_KEY)).toBe(false);
+  });
+
+  it('a manual rebuild of a month before the workspace does not sync it', async () => {
+    const h = makeDeps({ reportReadyEnabled: false });
+    const result = await requestRebuild(h.deps, AUG, REQUESTER);
+    await (result as { done: Promise<{ ok: boolean }> }).done;
+    expect(h.snapshots.rows).toHaveLength(2);
+    expect(h.syncWorkspace).not.toHaveBeenCalled();
+  });
+
+  it('a failed manual rebuild does not sync', async () => {
+    const h = makeDeps({ reportReadyEnabled: false });
+    h.fetchMonthReports.mockImplementation(failSeptember);
+    const result = await requestRebuild(h.deps, SEPT, REQUESTER);
+    expect(await (result as { done: Promise<{ ok: boolean }> }).done).toEqual({
+      ok: false,
+    });
+    expect(h.syncWorkspace).not.toHaveBeenCalled();
+  });
+
+  it('a failing sync does not fail a manual rebuild', async () => {
+    const h = makeDeps({ reportReadyEnabled: false });
+    h.syncWorkspace.mockRejectedValue(new Error('down'));
+    const result = await requestRebuild(h.deps, SEPT, REQUESTER);
+    expect(await (result as { done: Promise<{ ok: boolean }> }).done).toEqual({
+      ok: true,
+    });
+    expect(workspaceAlerts(h)).toEqual([
+      'No-show workspace not updated: September 2026',
+    ]);
+    expect(h.cache.values.has(LEASE_KEY)).toBe(false);
+  });
+
+  it("buildMonth alone (the backfill's path) never syncs", async () => {
+    const h = makeDeps();
+    await buildMonth(h.deps, SEPT, 'backfill');
+    await buildMonth(h.deps, OCT, 'backfill');
+    expect(h.snapshots.rows).toHaveLength(4);
+    expect(h.syncWorkspace).not.toHaveBeenCalled();
+  });
+
+  it('the tick works without a syncWorkspace dep', async () => {
+    const h = makeDeps();
+    delete h.deps.syncWorkspace;
+    await runBuildTick(h.deps);
+    expect(h.snapshots.rows).toHaveLength(4);
+    expect(ready(h)).toHaveLength(1);
+    expect(h.syncWorkspace).not.toHaveBeenCalled();
+  });
+
+  it('defaultBuildJobDeps opens the workspace repository only when a sync needs it', async () => {
+    const snapshots = {
+      save: vi.fn(),
+      getCurrentMeta: vi.fn(),
+      getCurrent: vi.fn(async () => undefined),
+    };
+    vi.mocked(PostgresReportSnapshotRepository.instance).mockResolvedValue(
+      snapshots as never,
+    );
+    vi.mocked(PostgresDashboardNoticeRepository.instance).mockResolvedValue(
+      {} as never,
+    );
+    vi.mocked(PostgresLinkProgressRepository.instance).mockResolvedValue(
+      {} as never,
+    );
+    vi.mocked(PostgresSuspensionRepository.instance).mockResolvedValue(
+      {} as never,
+    );
+    const syncFromSnapshot = vi.fn(async () => ({
+      status: 'synced' as const,
+      created: 0,
+      reclassified: 0,
+      dropped: 0,
+      returned: 0,
+    }));
+    vi.mocked(PostgresNoShowWorkspaceRepository.instance).mockResolvedValue({
+      syncFromSnapshot,
+    } as never);
+    const deps = await defaultBuildJobDeps({} as Client);
+    expect(PostgresNoShowWorkspaceRepository.instance).not.toHaveBeenCalled();
+    // Before the workspace: nothing read, nothing opened.
+    expect(await deps.syncWorkspace?.({ year: 2013, month: 3 })).toBe(
+      'not-eligible',
+    );
+    expect(snapshots.getCurrent).not.toHaveBeenCalled();
+    // No report yet: the workspace schema is still not touched.
+    const current = periodOf(new Date());
+    expect(await deps.syncWorkspace?.(current)).toBe('no-report');
+    expect(PostgresNoShowWorkspaceRepository.instance).not.toHaveBeenCalled();
+    // A stored report: synced through the workspace repository.
+    snapshots.getCurrent.mockResolvedValueOnce({
+      id: 3,
+      builtAt: new Date('2026-10-02T16:00:00Z'),
+      payload: { reportType: 'no_show', cases: [] },
+    });
+    expect(await deps.syncWorkspace?.(current)).toBe('synced');
+    expect(PostgresNoShowWorkspaceRepository.instance).toHaveBeenCalledTimes(1);
+    expect(syncFromSnapshot).toHaveBeenCalledWith(
+      expect.objectContaining({ period: current, snapshotId: 3, cases: [] }),
+    );
+  });
+
+  it('a workspace repository that cannot be opened rejects the sync, never the deps', async () => {
+    vi.mocked(PostgresReportSnapshotRepository.instance).mockResolvedValue({
+      getCurrent: vi.fn(async () => ({
+        id: 3,
+        builtAt: new Date(),
+        payload: { reportType: 'no_show', cases: [] },
+      })),
+    } as never);
+    vi.mocked(PostgresDashboardNoticeRepository.instance).mockResolvedValue(
+      {} as never,
+    );
+    vi.mocked(PostgresLinkProgressRepository.instance).mockResolvedValue(
+      {} as never,
+    );
+    vi.mocked(PostgresSuspensionRepository.instance).mockResolvedValue(
+      {} as never,
+    );
+    vi.mocked(PostgresNoShowWorkspaceRepository.instance).mockRejectedValue(
+      new Error('relation "suspension_records" does not exist'),
+    );
+    const deps = await defaultBuildJobDeps({} as Client);
+    await expect(deps.syncWorkspace?.(periodOf(new Date()))).rejects.toThrow(
+      'suspension_records',
+    );
   });
 });

@@ -319,6 +319,7 @@ export interface Harness {
     typeof vi.fn<() => Promise<string[] | undefined>>
   >;
   cacheSpy: ReturnType<typeof vi.fn<() => Promise<FakeCache>>>;
+  syncWorkspace: ReturnType<typeof vi.fn<(period: Period) => Promise<unknown>>>;
 }
 
 export interface HarnessOptions {
@@ -348,6 +349,9 @@ export function makeDeps(options: HarnessOptions = {}): Harness {
     async (): Promise<string[] | undefined> => [],
   );
   const cacheSpy = vi.fn(() => Promise.resolve(cache));
+  const syncWorkspace = vi.fn(
+    async (_period: Period): Promise<unknown> => 'synced',
+  );
   const deps: BuildJobDeps = {
     now: () => clock.now(),
     cache: cacheSpy,
@@ -363,6 +367,7 @@ export function makeDeps(options: HarnessOptions = {}): Harness {
       leases += 1;
       return `lease-${leases}`;
     },
+    syncWorkspace,
   };
   return {
     deps,
@@ -376,5 +381,6 @@ export function makeDeps(options: HarnessOptions = {}): Harness {
     alert,
     recentAlertTitles,
     cacheSpy,
+    syncWorkspace,
   };
 }
