@@ -381,6 +381,32 @@ describe('URL attributes, widened', () => {
     expect(html`<b data-x="${'y'}">z</b>`.value).toBe('<b data-x="y">z</b>');
   });
 
+  describe('data-label (the stacked tables’ cell labels) is literal only', () => {
+    it('takes a literal value', () => {
+      expect(html`<td data-label="Month">${'x'}</td>`.value).toBe(
+        '<td data-label="Month">x</td>',
+      );
+    });
+
+    it('refuses any interpolation, in any case and quoting', () => {
+      for (const make of [
+        () => html`<td data-label="${'Month'}">x</td>`,
+        () => html`<td data-label="Mo${'nth'}">x</td>`,
+        () => html`<td data-label="${'Month'}">x</td>`,
+        () => html`<td DATA-LABEL="${'Month'}">x</td>`,
+        () => html`<td data-Label="${7}">x</td>`,
+      ]) {
+        expect(make).toThrow(UnsafeAttributeError);
+      }
+    });
+
+    it('leaves the other data-* attributes as they were', () => {
+      expect(html`<b data-labels="${'y'}" data-copy="${'z'}">w</b>`.value).toBe(
+        '<b data-labels="y" data-copy="z">w</b>',
+      );
+    });
+  });
+
   it('refuses an interpolation in attribute-name position', () => {
     // prettier-ignore
     expect(() => html`<a ${'href'}="${url}">x</a>`).toThrow(UnsafeAttributeError);
