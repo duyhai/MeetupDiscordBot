@@ -110,8 +110,10 @@ describe('Home report cards', () => {
   it('shows the latest link progress day', async () => {
     const out = await render();
     expect(out).toContain(
-      'Linked 200, unlinked 40, Reverify-tagged 5, onboarding 3 on 2026-10-04',
+      'Linked 200, unlinked 40, onboarding 3 on 2026-10-04',
     );
+    // The Reverify role is gone; the stored count is not shown.
+    expect(out).not.toMatch(/reverify/i);
     const empty = await render({
       linkProgress: async () => fakeLinkProgress([]),
     });

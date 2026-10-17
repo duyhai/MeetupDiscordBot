@@ -227,8 +227,7 @@ export async function renderHomeReports(
             ${
               day
                 ? html`<p>
-                    Linked ${day.linked}, unlinked ${day.unlinked},
-                    Reverify-tagged ${day.reverifyTagged}, onboarding
+                    Linked ${day.linked}, unlinked ${day.unlinked}, onboarding
                     ${day.onboarding} on ${day.day}
                   </p>`
                 : html`<p class="muted">No link progress recorded yet.</p>`
