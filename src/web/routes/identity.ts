@@ -127,6 +127,7 @@ function isListRow(row: unknown): row is IdentityChangeListItem {
     Object.prototype.hasOwnProperty.call(FIELD_LABELS, r.field) &&
     isOptionalText(r.oldValue) &&
     isOptionalText(r.newValue) &&
+    (typeof r.source === 'string' || r.source === null) &&
     isValidDate(r.detectedAt) &&
     typeof r.hasOldThumb === 'boolean' &&
     typeof r.hasNewThumb === 'boolean'
@@ -354,6 +355,11 @@ export function registerIdentityRoutes(
       (side !== 'old' && side !== 'new')
     ) {
       notFound(res);
+      return;
+    }
+    // An abandoned request (a lazy image scrolled past, a closed tab): do
+    // not queue it on the identity pool's two connections.
+    if (req.socket?.destroyed) {
       return;
     }
     const loaded = await load(res, 'The image', async () =>

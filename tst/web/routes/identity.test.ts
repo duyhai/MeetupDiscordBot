@@ -331,6 +331,22 @@ describe('identity changes page', () => {
     expect(fake.logged.join('\n')).not.toContain(DISCORD_SUBJECT);
   });
 
+  it('503 when a row has a non-string source', async () => {
+    const { get } = await setup(
+      fakeIdentity([
+        {
+          ...identityChange(),
+          source: 42,
+        } as unknown as IdentityChangeListItem,
+      ]),
+    );
+    expect((await get(PAGE)).status).toBe(503);
+    const { get: get2 } = await setup(
+      fakeIdentity([{ ...identityChange(), source: null }]),
+    );
+    expect((await get2(PAGE)).status).toBe(200);
+  });
+
   it('503 when a row is malformed', async () => {
     const bad = {
       ...identityChange(),
@@ -512,6 +528,28 @@ describe('identity thumbnail route', () => {
     );
     expect(thumbs.map((r) => r.path)).toEqual([DASHBOARD_PATHS.identityThumb]);
     expect(DASHBOARD_PATHS.identityThumb).not.toMatch(/:(memberId|subjectId)/);
+  });
+
+  it('skips the read when the client already went away', async () => {
+    const reader = fakeIdentity([], { '1:old': PNG_1X1 });
+    let destroyedBeforeRoute = false;
+    const { server, cookie } = await setup(reader, {}, (r) => {
+      r.use((req, _res, next) => {
+        // An abandoned lazy request: the socket is gone before the route runs.
+        req.socket.destroy();
+        destroyedBeforeRoute = req.socket.destroyed;
+        next();
+      });
+    });
+    await rawRequest(server, 'GET', thumb('1', 'old'), {
+      Cookie: cookie,
+    }).catch(() => undefined);
+    // Let the handler run to completion.
+    await new Promise((resolve) => {
+      setTimeout(resolve, 20);
+    });
+    expect(destroyedBeforeRoute).toBe(true);
+    expect(reader.getChangeThumb).not.toHaveBeenCalled();
   });
 
   it('503 when the thumbnail read fails', async () => {

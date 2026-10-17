@@ -5,7 +5,13 @@ import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { GUILD_ID } from '../../src/constants.js';
 import { MeetupSnapshot } from '../../src/lib/helpers/identity/meetupSnapshot.js';
 import { identityNameKey } from '../../src/lib/helpers/identity/names.js';
-import { PostgresIdentityRepository } from '../../src/lib/repositories/postgresIdentityRepository.js';
+import {
+  MAX_THUMB_BYTES,
+  PostgresIdentityRepository,
+} from '../../src/lib/repositories/postgresIdentityRepository.js';
+import { registerAllProtectedRoutes } from '../../src/web/routes/dashboardPages.js';
+import { closeServers, makeApp, signIn } from '../web/dashboardHarness.js';
+import { fakeOrganizerDeps, fakePageDeps } from '../web/routes/pageFakes.js';
 import { IdentitySnapshot } from '../../src/lib/repositories/identityTypes.js';
 
 // Exercises BYTEA round-trips, TIMESTAMPTZ ordering and the upsert conflict
@@ -1165,6 +1171,43 @@ describe.skipIf(!POSTGRES_AVAILABLE)('PostgresIdentityRepository', () => {
       expect(await repo.getChangeThumb(foreign, 'new')).toBeUndefined();
     });
 
+    it('getChangeThumb never returns a thumbnail over the size cap, and the route 404s', async () => {
+      const subject = digits();
+      const atCap = Buffer.alloc(MAX_THUMB_BYTES, 0);
+      PNG.copy(atCap);
+      const overCap = Buffer.alloc(MAX_THUMB_BYTES + 1, 0);
+      PNG.copy(overCap);
+      const id = await recordOne('meetup', MEETUP_SCOPE, subject, 'photo', {
+        oldThumb: atCap,
+        newThumb: overCap,
+      });
+      expect((await repo.getChangeThumb(id, 'old'))?.length).toBe(
+        MAX_THUMB_BYTES,
+      );
+      expect(await repo.getChangeThumb(id, 'new')).toBeUndefined();
+
+      // The real route over the real repository.
+      const { req } = await makeApp({
+        protectedRoutes: (r) =>
+          registerAllProtectedRoutes(r, {
+            organizer: fakeOrganizerDeps(),
+            pages: fakePageDeps({ identity: async () => repo }),
+          }),
+      });
+      const cookie = await signIn(req);
+      const over = await req
+        .get(`/dashboard/identity/changes/${id}/thumb/new`)
+        .set('Cookie', cookie);
+      expect(over.status).toBe(404);
+      expect(over.headers['content-type']).toMatch(/^text\/html/);
+      const at = await req
+        .get(`/dashboard/identity/changes/${id}/thumb/old`)
+        .set('Cookie', cookie);
+      expect(at.status).toBe(200);
+      expect(at.headers['content-type']).toBe('image/png');
+      await closeServers();
+    });
+
     it('getChangeThumb returns one side', async () => {
       const subject = digits();
       const id = await recordOne('meetup', MEETUP_SCOPE, subject, 'photo', {
@@ -1215,8 +1258,12 @@ describe.skipIf(!POSTGRES_AVAILABLE)('PostgresIdentityRepository', () => {
           string,
           unknown[],
         ];
-        expect(sql.replace(/\s+/g, ' ')).toMatch(
-          /^SELECT old_thumb AS thumb FROM member_identity_changes WHERE id = \$1::bigint AND \(platform, scope_id\) IN /,
+        const flat = sql.replace(/\s+/g, ' ');
+        expect(flat).toMatch(
+          /^SELECT CASE WHEN octet_length\(old_thumb\) <= 262144 THEN old_thumb END AS thumb /,
+        );
+        expect(flat).toMatch(
+          / FROM member_identity_changes WHERE id = \$1::bigint AND \(platform, scope_id\) IN /,
         );
         expect(sql).not.toContain('subject_id');
         expect(sql).not.toContain('new_thumb');

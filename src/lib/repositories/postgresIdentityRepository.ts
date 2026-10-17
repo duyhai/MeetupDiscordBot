@@ -79,6 +79,11 @@ const SUBJECT_ID = /^[0-9]{1,20}$/;
 /** A change row id: digits only, and at most 18 so it always fits a bigint. */
 const CHANGE_ID = /^[0-9]{1,18}$/;
 const PAGE_LIMIT = 50;
+/**
+ * The largest stored thumbnail the dashboard will read (256 KB). Real ones
+ * are ~2-4 KB; anything larger is never sent to Node, so it is a 404.
+ */
+export const MAX_THUMB_BYTES = 262144;
 
 /** A dashboard list row: metadata plus whether each thumbnail exists, never the bytes. */
 export interface IdentityChangeListItem extends IdentityChangeMetadata {
@@ -566,8 +571,11 @@ export class PostgresIdentityRepository {
     // From the closed union, never from request text.
     const column = side === 'old' ? 'old_thumb' : 'new_thumb';
     const scope = scopeClause(2);
+    // Over the cap the CASE yields NULL in Postgres: the bytes never leave it.
     const result = await this.pool.query<{ thumb: Buffer | null }>(
-      `SELECT ${column} AS thumb FROM member_identity_changes
+      `SELECT CASE WHEN octet_length(${column}) <= ${MAX_THUMB_BYTES}
+                   THEN ${column} END AS thumb
+         FROM member_identity_changes
         WHERE id = $1::bigint AND ${scope.sql}`,
       [id, ...scope.params],
     );
