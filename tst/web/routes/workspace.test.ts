@@ -12,6 +12,7 @@ import {
   WorkspaceRow,
 } from '../../../src/lib/workspace/types.js';
 import { UpcomingEntry } from '../../../src/lib/workspace/upcoming.js';
+import { escapeHtml } from '../../../src/web/html.js';
 import { WORKSPACE_SCRIPT } from '../../../src/web/pageKit.js';
 import {
   DashboardPageDeps,
@@ -1112,7 +1113,10 @@ describe('GET /dashboard/no-shows/:period/rows/:rowId/suspend (confirm)', () => 
     });
     const res = await get(CONFIRM);
     expect(res.status).toBe(200);
-    expect(words(res.text)).toContain('60 days (1 earlier suspension)');
+    expect(words(res.text)).toContain(
+      'Dated today that is 60 days (1 earlier suspension)',
+    );
+    expect(words(res.text)).toContain('$20 admin fee to rejoin');
     expect(res.text).toContain(
       '<input type="date" name="date" value="2026-10-05" min="2026-09-01" ' +
         'max="2026-10-05" required />',
@@ -1124,12 +1128,115 @@ describe('GET /dashboard/no-shows/:period/rows/:rowId/suspend (confirm)', () => 
         'name="version" value="4"',
         'name="action" value="record_suspension"',
         'name="confirm" value="yes"',
+        '<input type="hidden" name="date" value="2026-10-05" />',
       ].join('[\\s\\S]*'),
     );
     expect(res.text).toMatch(confirmForm);
     expect(res.text).toContain(`<bdi>${RTL}</bdi>`);
     expect(res.text).toContain('Member 1');
     expect(res.text).toContain('href="/dashboard/no-shows/2026-09">Cancel</a>');
+  });
+
+  describe('a chosen date', () => {
+    /** Earlier records: March, and one dated Sep 20 in the month. */
+    const twoRecords = () => [
+      prior(),
+      suspensionRecord({
+        id: 50,
+        memberId: '2001',
+        suspendedAt: new Date('2026-09-20T00:00:00Z'),
+      }),
+    ];
+    const recordForm = (body: string) =>
+      /<form method="post" action="\/dashboard\/no-shows\/2026-09\/rows\/2">[\s\S]*?<\/form>/.exec(
+        body,
+      )?.[0] ?? '';
+    const dateForm = (body: string) =>
+      /<form method="get"[\s\S]*?<\/form>/.exec(body)?.[0] ?? '';
+
+    it('today counts both earlier records', async () => {
+      const { get } = await setup({ records: twoRecords(), leader: true });
+      const res = await get(CONFIRM);
+      expect(words(res.text)).toContain(
+        'Dated today that is 120 days (2 earlier suspensions)',
+      );
+      expect(words(res.text)).toContain('$40 admin fee to rejoin');
+    });
+
+    it('a date before the Sep 20 record counts only the earlier one', async () => {
+      const { get } = await setup({ records: twoRecords(), leader: true });
+      const res = await get(`${CONFIRM}?date=2026-09-15`);
+      expect(res.status).toBe(200);
+      expect(words(res.text)).toContain(
+        'Dated the chosen day that is 60 days (1 earlier suspension)',
+      );
+      expect(words(res.text)).toContain('$20 admin fee to rejoin');
+      expect(words(res.text)).not.toContain('Dated today');
+      // The date the length was worked out for is the one recorded.
+      expect(recordForm(res.text)).toContain(
+        '<input type="hidden" name="date" value="2026-09-15" />',
+      );
+      expect(dateForm(res.text)).toContain(
+        '<input type="date" name="date" value="2026-09-15" min="2026-09-01" ' +
+          'max="2026-10-05" required />',
+      );
+    });
+
+    it('a record dated the chosen day is not earlier than it', async () => {
+      const { get } = await setup({ records: twoRecords(), leader: true });
+      const res = await get(`${CONFIRM}?date=2026-09-20`);
+      expect(words(res.text)).toContain('60 days (1 earlier suspension)');
+    });
+
+    it('the date form is a GET back to this page, carrying only the date', async () => {
+      const { get } = await setup({ leader: true });
+      const res = await get(CONFIRM);
+      const form = dateForm(res.text);
+      expect(form).toContain(
+        '<form method="get" action="/dashboard/no-shows/2026-09/rows/2/suspend">',
+      );
+      expect(form).not.toContain('_csrf');
+      expect(form).not.toContain('name="action"');
+      expect(form.match(/name="/g)).toHaveLength(1);
+      // The record form has no date input of its own to drift from the length shown.
+      expect(recordForm(res.text)).not.toContain('type="date"');
+    });
+
+    it.each([
+      ['before the month', '2026-08-31'],
+      ['after today', '2026-10-06'],
+      ['not a calendar day', '2026-09-31'],
+      ['not a date', '<script>alert(1)</script>'],
+      ['loose', '2026-9-15'],
+      ['with a time', '2026-09-15T00:00:00Z'],
+      ['an attribute break', '2026-09-15" autofocus onfocus="alert(1)'],
+    ])('a date %s falls back to today, never echoed', async (_what, date) => {
+      const { get } = await setup({ records: twoRecords(), leader: true });
+      const res = await get(`${CONFIRM}?date=${encodeURIComponent(date)}`);
+      expect(res.status).toBe(200);
+      expect(words(res.text)).toContain(
+        'Dated today that is 120 days (2 earlier suspensions)',
+      );
+      expect(recordForm(res.text)).toContain(
+        '<input type="hidden" name="date" value="2026-10-05" />',
+      );
+      expect(res.raw).not.toContain(date);
+      expect(res.raw).not.toContain(escapeHtml(date));
+    });
+
+    it('a repeated date falls back to today', async () => {
+      const { get } = await setup({ records: twoRecords(), leader: true });
+      const res = await get(`${CONFIRM}?date=2026-09-15&date=2026-09-16`);
+      expect(words(res.text)).toContain('Dated today that is 120 days');
+      expect(res.raw).not.toContain('2026-09-15');
+      expect(res.raw).not.toContain('2026-09-16');
+    });
+
+    it("today's date given explicitly reads as today", async () => {
+      const { get } = await setup({ records: twoRecords(), leader: true });
+      const res = await get(`${CONFIRM}?date=2026-10-05`);
+      expect(words(res.text)).toContain('Dated today that is 120 days');
+    });
   });
 
   it('the confirm page always asks Discord live, even after a month-page load', async () => {

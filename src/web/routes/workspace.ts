@@ -23,7 +23,11 @@ import { NoShowCasePayload } from '../../lib/reports/types.js';
 import { SuspensionRecordState } from '../../lib/repositories/postgresSuspensionRepository.js';
 import { SuspensionRecord } from '../../lib/repositories/types.js';
 import { workspaceMonths } from '../../lib/workspace/months.js';
-import { ACTION_TITLES, STATUS_LABELS } from '../../lib/workspace/service.js';
+import {
+  ACTION_TITLES,
+  STATUS_LABELS,
+  validateActionFields,
+} from '../../lib/workspace/service.js';
 import {
   feeDollars,
   suspensionMessage,
@@ -129,10 +133,31 @@ const recordDay = (value: Date): string =>
 const plural = (n: number, one: string, many: string) =>
   `${n} ${n === 1 ? one : many}`;
 
-/** Live records dated before today: what the next suspension's length counts (countSuspensionsBefore). */
+/** Live records dated before `day` (a UTC midnight): what a suspension dated then counts (countSuspensionsBefore). */
+const priorBefore = (records: SuspensionRecord[], day: Date): number =>
+  records.filter((r) => r.suspendedAt < day).length;
+
+/** Live records dated before today: what the next suspension's length counts. */
 function priorCount(records: SuspensionRecord[], now: Date): number {
-  const today = utcMidnight(pacificToday(now));
-  return records.filter((r) => r.suspendedAt < today).length;
+  return priorBefore(records, utcMidnight(pacificToday(now)));
+}
+
+/**
+ * The confirm page's suspension date: `?date=` when the record step itself
+ * would take it (validateActionFields: YYYY-MM-DD, a real day, from the 1st
+ * through today), else today. Always rebuilt from the parsed date, so the
+ * query text never reaches the page.
+ */
+function chosenDay(query: unknown, period: Period, now: Date): string {
+  const checked = validateActionFields(
+    'record_suspension',
+    { version: '1', date: query },
+    period,
+    now,
+  );
+  return checked.ok && checked.fields.suspendedOn
+    ? dayjs.utc(checked.fields.suspendedOn).format('YYYY-MM-DD')
+    : pacificToday(now);
 }
 
 /** The suspension a card's message and length line describe. */
@@ -908,9 +933,11 @@ export function registerWorkspaceRoutes(
       });
       return;
     }
-    const prior = priorCount(records, now);
-    const days = recommendedSuspensionDays(prior);
     const today = pacificToday(now);
+    const day = chosenDay(req.query.date, period, now);
+    const prior = priorBefore(records, utcMidnight(day));
+    const days = recommendedSuspensionDays(prior);
+    const confirmUrl = localUrl(workspaceRowPath(period, row.id, 'suspend'));
     dashboardPage(res, {
       title: 'Record suspension',
       body: html`<div class="card">
@@ -919,10 +946,27 @@ export function registerWorkspaceRoutes(
           ${memberLink({ id: row.memberId, name: row.memberName })}
         </h1>
         <p>
-          Length: 30 days × 2 per earlier suspension. Dated today that is
+          Length: 30 days × 2 per earlier suspension, counted from the
+          suspensions dated before the chosen day.
+          ${day === today ? 'Dated today' : 'Dated the chosen day'} that is
           <strong>${days} days</strong>
-          (${plural(prior, 'earlier suspension', 'earlier suspensions')}).
+          (${plural(prior, 'earlier suspension', 'earlier suspensions')}), plus
+          a $${feeDollars(prior)} admin fee to rejoin (none for a member who has
+          hosted).
         </p>
+        <form method="get" action="${confirmUrl}">
+          <label
+            >Suspension date
+            <input
+              type="date"
+              name="date"
+              value="${day}"
+              min="${periodDate(period)}"
+              max="${today}"
+              required
+          /></label>
+          <button type="submit">Show the length for this date</button>
+        </form>
         <p>
           Their upcoming RSVPs will be removed on Meetup by whoever applies the
           suspension.
@@ -939,16 +983,7 @@ export function registerWorkspaceRoutes(
           <input type="hidden" name="version" value="${row.version}" />
           <input type="hidden" name="action" value="record_suspension" />
           <input type="hidden" name="confirm" value="yes" />
-          <label
-            >Suspension date
-            <input
-              type="date"
-              name="date"
-              value="${today}"
-              min="${periodDate(period)}"
-              max="${today}"
-              required
-          /></label>
+          <input type="hidden" name="date" value="${day}" />
           <button type="submit">Record suspension</button>
         </form>
         <p><a href="${back}">Cancel</a></p>
