@@ -31,6 +31,8 @@ export interface ChartInput {
 const DEFAULT_WIDTH = 720;
 const DEFAULT_HEIGHT = 260;
 const HEX = /^#[0-9a-f]{6}$/i;
+/** Per-bar <title> tooltips only up to this many categories. */
+export const MAX_TOOLTIP_CATEGORIES = 60;
 
 /** One decimal, and never NaN or Infinity in an attribute. */
 function fmt(n: number): string {
@@ -78,23 +80,37 @@ export function chart(input: ChartInput): SafeHtml {
     }
     return CHART_COLORS[i % CHART_COLORS.length];
   };
-  const barW = Math.max(1, (slot * 0.8) / input.series.length);
+  // No minimum width: each group stays inside the middle 80% of its slot,
+  // so groups never overlap, even at 240 months.
+  const barW = (slot * 0.8) / input.series.length;
+  // Above this many categories the per-bar tooltips are left out to keep
+  // the page small; the data table holds the exact numbers.
+  const tooltips = n <= MAX_TOOLTIP_CATEGORIES;
 
   const marks = input.series.map((s, si) => {
     const color = colorOf(s, si);
     const values = s.values.slice(0, n);
     if (input.kind === 'bar') {
-      return values.map(
-        (v, i) =>
-          html`<rect
-            x="${fmt(pad.left + slot * i + slot * 0.1 + barW * si)}"
+      return values.map((v, i) => {
+        const bx = fmt(pad.left + slot * i + slot * 0.1 + barW * si);
+        if (!tooltips) {
+          return html`<rect
+            x="${bx}"
             y="${fmt(y(v))}"
             width="${fmt(barW)}"
             height="${fmt(baseline - y(v))}"
             fill="${color}"
-            ><title>${input.categories[i]}: ${clean(v)}</title></rect
-          >`,
-      );
+          />`;
+        }
+        return html`<rect
+          x="${bx}"
+          y="${fmt(y(v))}"
+          width="${fmt(barW)}"
+          height="${fmt(baseline - y(v))}"
+          fill="${color}"
+          ><title>${input.categories[i]}: ${clean(v)}</title></rect
+        >`;
+      });
     }
     if (values.length === 1) {
       return html`<circle

@@ -144,4 +144,42 @@ describe('chart', () => {
     expect(render()).toContain('<th>Month</th>');
     expect(render({ categoryLabel: 'Day' })).toContain('<th>Day</th>');
   });
+  const months = (count: number) =>
+    Array.from({ length: count }, (_, i) => `m${i}`);
+  const threeSeries = (count: number) =>
+    ['A', 'B', 'C'].map((label) => ({
+      label,
+      values: Array.from({ length: count }, (_, i) => i + 1),
+    }));
+  const rects = (out: string) =>
+    [...out.matchAll(/<rect\s[^>]*?\sx="([^"]+)"[^>]*?\swidth="([^"]+)"/g)].map(
+      (m) => ({ x: Number(m[1]), width: Number(m[2]) }),
+    );
+
+  it('keeps every bar group inside its own slot at 240 months', () => {
+    const n = 240;
+    const out = render({ categories: months(n), series: threeSeries(n) });
+    const bars = rects(out);
+    expect(bars).toHaveLength(n * 3);
+    // Default 720 wide, 40 left and 12 right padding.
+    const slot = (720 - 40 - 12) / n;
+    bars.forEach((bar, k) => {
+      const i = k % n;
+      const slotStart = 40 + slot * i;
+      expect(bar.width).toBeGreaterThan(0);
+      expect(bar.x).toBeGreaterThanOrEqual(slotStart);
+      expect(bar.x + bar.width).toBeLessThanOrEqual(slotStart + slot);
+    });
+  });
+
+  it('skips per-bar tooltips above 60 categories', () => {
+    const at60 = render({ categories: months(60), series: threeSeries(60) });
+    expect(at60.match(/<\/title>\s*<\/rect/g)).toHaveLength(180);
+    const at61 = render({ categories: months(61), series: threeSeries(61) });
+    expect(at61).not.toMatch(/<\/title>\s*<\/rect/);
+    expect(rects(at61)).toHaveLength(183);
+    // The chart's own title and the data table remain.
+    expect(at61).toContain('<title>No-shows per month</title>');
+    expect(at61).toContain('<td>m60</td>');
+  });
 });

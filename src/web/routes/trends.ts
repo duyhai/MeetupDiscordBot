@@ -10,6 +10,7 @@ import {
   periodKey,
   periodOf,
   previousPeriod,
+  suspensionCutoff,
 } from '../../lib/reports/period.js';
 import { LinkProgressDay } from '../../lib/repositories/postgresLinkProgressRepository.js';
 import {
@@ -66,9 +67,6 @@ function monthsEndingAt(last: Period, count: number): Period[] {
 function asList<T>(value: T[]): T[] {
   return Array.isArray(value) ? value : [];
 }
-
-/** UTC midnight of a month's first day: suspended_at's own convention. */
-const utcMonthStart = (p: Period) => new Date(Date.UTC(p.year, p.month - 1, 1));
 
 /** Summary objects by month key. Rows without a valid period are skipped. */
 function summariesByMonth(
@@ -160,7 +158,9 @@ export function registerTrendsRoutes(
       const [hallOfFame, noShows, suspended, days] = await Promise.all([
         snapshots.listSummarySeries('hall_of_fame', { months }),
         snapshots.listSummarySeries('no_show', { months }),
-        suspensions.countByMonth(utcMonthStart(window[0])),
+        // UTC midnight of the first month's first day: suspended_at's own
+        // convention, from the one helper that defines that boundary.
+        suspensions.countByMonth(suspensionCutoff(previousPeriod(window[0]))),
         linkProgress.listDays(Math.min(MAX_LINK_DAYS, months * 31)),
       ]);
       return { hallOfFame, noShows, suspended, days };
