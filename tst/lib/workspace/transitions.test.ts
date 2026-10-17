@@ -388,13 +388,15 @@ describe('allowedActions', () => {
 });
 
 describe('Leadership-only actions (Hai, 2026-10-16)', () => {
-  it('are exactly record_suspension and void', () => {
+  it('are exactly record_suspension, link_suspension and void', () => {
     expect([...LEADERSHIP_ONLY_ACTIONS].sort()).toEqual(
-      ['record_suspension', 'void'].sort(),
+      ['record_suspension', 'link_suspension', 'void'].sort(),
     );
     for (const action of ALL_ACTIONS) {
       expect(isLeadershipOnly(action), action).toBe(
-        action === 'record_suspension' || action === 'void',
+        action === 'record_suspension' ||
+          action === 'link_suspension' ||
+          action === 'void',
       );
     }
   });

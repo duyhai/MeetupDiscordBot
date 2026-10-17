@@ -122,15 +122,19 @@ export const TRANSITION_RULES = Object.freeze({
 >;
 
 /**
- * Who may do what beyond "any dashboard user" (Hai, 2026-10-16): recording and
- * voiding a suspension are for the 1.5 Leadership Team only, checked live
+ * Who may do what beyond "any dashboard user" (Hai, 2026-10-16): recording,
+ * linking and voiding a suspension are for the 1.5 Leadership Team only, checked live
  * against Discord at the moment of the action (Task 8). This is the one place
  * that says which actions; the service, the routes and the page read it. It
  * does not change what decideTransition or allowedActions allow: the state
  * rules and the role rule are separate questions.
  */
 export const LEADERSHIP_ONLY_ACTIONS: readonly WorkspaceAction[] =
-  Object.freeze(['record_suspension', 'void'] as WorkspaceAction[]);
+  Object.freeze([
+    'record_suspension',
+    'link_suspension',
+    'void',
+  ] as WorkspaceAction[]);
 
 export const isLeadershipOnly = (action: WorkspaceAction): boolean =>
   LEADERSHIP_ONLY_ACTIONS.includes(action);
