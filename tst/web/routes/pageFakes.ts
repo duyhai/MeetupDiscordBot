@@ -29,6 +29,7 @@ import {
   IdentityChangeFilter,
   IdentityChangeListItem,
 } from '../../../src/lib/repositories/postgresIdentityRepository.js';
+import { LinkProgressDay } from '../../../src/lib/repositories/postgresLinkProgressRepository.js';
 import {
   SuspensionPageRow,
   SuspensionState,
@@ -36,6 +37,7 @@ import {
 import {
   DashboardPageDeps,
   IdentityPageReader,
+  LinkProgressPageReader,
   PageRebuildResult,
   SnapshotPageReader,
   SuspensionPageReader,
@@ -324,6 +326,7 @@ export function suspensionRow(
 /** An in-memory SuspensionPageReader: rows per tab, sliced by offset/limit like the repository. */
 export function fakeSuspensions(
   rows: Partial<Record<SuspensionState, SuspensionPageRow[]>> = {},
+  byMonth: { month: string; count: number }[] = [],
 ) {
   const tab = (state: SuspensionState) => rows[state] ?? [];
   return {
@@ -345,6 +348,10 @@ export function fakeSuspensions(
         past: tab('past').length,
         voided: tab('voided').length,
       }),
+    ),
+    countByMonth: vi.fn(
+      async (from: Date): Promise<{ month: string; count: number }[]> =>
+        byMonth.filter((m) => m.month >= from.toISOString().slice(0, 7)),
     ),
   } satisfies SuspensionPageReader;
 }
@@ -425,6 +432,40 @@ export function fakeIdentity(
   } satisfies IdentityPageReader;
 }
 
+/** One day of link progress counts. */
+export function linkDay(
+  day: string,
+  overrides: Partial<LinkProgressDay> = {},
+): LinkProgressDay {
+  return {
+    day,
+    linked: 100,
+    unlinked: 40,
+    reverifyTagged: 5,
+    onboarding: 3,
+    ...overrides,
+  };
+}
+
+/** `count` consecutive days ending the day before PAGE_NOW, newest first (like listDays). */
+export function linkDays(count: number): LinkProgressDay[] {
+  const end = Date.UTC(2026, 9, 4);
+  return Array.from({ length: count }, (_, i) =>
+    linkDay(new Date(end - i * 86_400_000).toISOString().slice(0, 10), {
+      linked: 200 - i,
+    }),
+  );
+}
+
+/** An in-memory LinkProgressPageReader over newest-first days, capped like the repository. */
+export function fakeLinkProgress(days: LinkProgressDay[] = linkDays(3)) {
+  return {
+    listDays: vi.fn(async (limit: number = 90): Promise<LinkProgressDay[]> =>
+      days.slice(0, Math.min(1000, limit)),
+    ),
+  } satisfies LinkProgressPageReader;
+}
+
 /** The default seed: a September 2026 Hall of Fame row. */
 export const SEED: SeedRow[] = [seedRow('hall_of_fame', SEPT, hofPayload())];
 
@@ -458,6 +499,7 @@ export function fakePageDeps(
     // The access matrix asks for change 1's old thumb: a 1x1 PNG.
     identity: async () =>
       fakeIdentity([identityChange({ id: '1' })], { '1:old': PNG_1X1 }),
+    linkProgress: async () => fakeLinkProgress(),
     rebuild: vi.fn(async (): Promise<PageRebuildResult> => ({
       status: 'started',
       done: Promise.resolve({ ok: true }),

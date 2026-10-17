@@ -349,6 +349,27 @@ export class PostgresSuspensionRepository implements SuspensionRepository {
   }
 
   /**
+   * Live (unvoided) records per UTC month of suspended_at, from `from` on,
+   * oldest first; months with none are absent. suspended_at is UTC midnight
+   * of a calendar date, so the UTC month is the date's month. At most one
+   * row per month (trends asks for 240 months at most).
+   */
+  async countByMonth(from: Date): Promise<{ month: string; count: number }[]> {
+    if (!(from instanceof Date) || Number.isNaN(from.getTime())) {
+      throw new RangeError('from must be a valid Date');
+    }
+    const result = await this.pool.query<{ month: string; count: number }>(
+      `SELECT to_char(date_trunc('month', suspended_at AT TIME ZONE 'UTC'), 'YYYY-MM') AS month,
+              count(*)::int AS count
+         FROM suspension_records
+        WHERE voided_at IS NULL AND suspended_at >= $1
+        GROUP BY 1 ORDER BY 1`,
+      [from],
+    );
+    return result.rows.map((row) => ({ month: row.month, count: row.count }));
+  }
+
+  /**
    * Names and Discord ids of linked members, for at most one page of ids. The
    * members table is the member repository's; a database without it yields none.
    */

@@ -422,6 +422,38 @@ if (!POSTGRES_AVAILABLE) {
         });
       });
 
+      it('countByMonth counts live records by month', async () => {
+        await seed('3101', '2026-07-31', 30);
+        await seed('3102', '2026-08-01', 30);
+        await seed('3103', '2026-08-31', 30);
+        await seed('3104', '2026-10-01', 30);
+        const v = await seed('3105', '2026-10-02', 30);
+        await repo.void(v.id, '123456789012345678', 'dup');
+        // From August 1 (UTC midnight, like suspended_at): July is left out,
+        // the voided October record is excluded, and September has no row.
+        expect(await repo.countByMonth(at('2026-08-01'))).toEqual([
+          { month: '2026-08', count: 2 },
+          { month: '2026-10', count: 1 },
+        ]);
+        expect(await repo.countByMonth(at('2026-11-01'))).toEqual([]);
+      });
+
+      it('countByMonth refuses an invalid date, and no query runs', async () => {
+        const pool = (repo as unknown as { pool: pg.Pool }).pool;
+        const query = vi.spyOn(pool, 'query');
+        try {
+          await expect(repo.countByMonth(new Date('nope'))).rejects.toThrow(
+            RangeError,
+          );
+          await expect(
+            repo.countByMonth('2026-01-01' as unknown as Date),
+          ).rejects.toThrow(RangeError);
+          expect(query).not.toHaveBeenCalled();
+        } finally {
+          query.mockRestore();
+        }
+      });
+
       it('orders like the command: newest suspended first', async () => {
         const older = await seed('4001', '2026-10-01', 90);
         const newest = await seed('4002', '2026-10-20', 30);

@@ -4,6 +4,7 @@ import { LogEntry } from '../../lib/helpers/discordLogger.js';
 import { RebuildResult } from '../../lib/reports/buildJob.js';
 import { Period } from '../../lib/reports/period.js';
 import { PostgresIdentityRepository } from '../../lib/repositories/postgresIdentityRepository.js';
+import { PostgresLinkProgressRepository } from '../../lib/repositories/postgresLinkProgressRepository.js';
 import { PostgresReportSnapshotRepository } from '../../lib/repositories/postgresReportSnapshotRepository.js';
 import { PostgresSuspensionRepository } from '../../lib/repositories/postgresSuspensionRepository.js';
 import { AccessCheck } from '../roleGate.js';
@@ -14,10 +15,12 @@ import {
 } from './organizerLogin.js';
 import { registerHallOfFameRoutes } from './hallOfFame.js';
 import { registerIdentityRoutes } from './identity.js';
+import { registerLinkProgressRoutes } from './linkProgress.js';
 import { registerNoShowHistoryRoutes } from './noShowHistory.js';
 import { registerRefreshRoute } from './refresh.js';
 import { registerSessionRoutes } from './sessions.js';
 import { registerSuspensionRoutes } from './suspensions.js';
+import { registerTrendsRoutes } from './trends.js';
 
 /** The snapshot reads the month pages use: never save. */
 export type SnapshotPageReader = Pick<
@@ -29,10 +32,16 @@ export type SnapshotPageReader = Pick<
   | 'listMemberNoShowMonths'
 >;
 
-/** The suspension reads the records page uses: never insert or void. Task 10 adds countByMonth. */
+/** The suspension reads the records and trends pages use: never insert or void. */
 export type SuspensionPageReader = Pick<
   PostgresSuspensionRepository,
-  'listPage' | 'countByState'
+  'listPage' | 'countByState' | 'countByMonth'
+>;
+
+/** The link progress read (newest first, at most 1000 days): never upsert. */
+export type LinkProgressPageReader = Pick<
+  PostgresLinkProgressRepository,
+  'listDays'
 >;
 
 /**
@@ -68,6 +77,8 @@ export interface DashboardPageDeps {
   suspensions: () => Promise<SuspensionPageReader>;
   /** The identity change store (pool of 2, shared with the sweeps). */
   identity: () => Promise<IdentityPageReader>;
+  /** The daily link progress counts. */
+  linkProgress: () => Promise<LinkProgressPageReader>;
 }
 
 /**
@@ -85,7 +96,8 @@ export function registerDashboardPages(
   registerRefreshRoute(router, deps);
   registerSuspensionRoutes(router, deps);
   registerIdentityRoutes(router, deps);
-  // Tasks 5-10 add one register…Routes(router, deps) line each.
+  registerLinkProgressRoutes(router, deps);
+  registerTrendsRoutes(router, deps);
 }
 
 /** Production's whole protectedRoutes hook, so the access matrix tests exactly what ships. */
