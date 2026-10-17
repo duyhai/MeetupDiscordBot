@@ -1,15 +1,21 @@
 /* eslint-disable @typescript-eslint/unbound-method -- vi.mocked on module mocks */
+import { EventEmitter } from 'node:events';
 import { readFileSync } from 'node:fs';
 
 import { Client, Routes } from 'discord.js';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  backfillCache,
   main,
   parseBackfillArgs,
   restPoster,
+  stopOnSignals,
 } from '../../scripts/backfillReports.js';
 import { RedisCache } from '../../src/lib/cache/redisCache.js';
+import { BUILD_LEASE_KEY } from '../../src/lib/reports/buildLease.js';
+import { CacheTimeoutError } from '../../src/web/timedCache.js';
+import { FakeCache } from '../web/fakeCache.js';
 import {
   BACKFILL_DEFAULT_DELAY_MS,
   BACKFILL_LEASE_WAIT_MS,
@@ -40,7 +46,11 @@ vi.mock('../../src/lib/reports/buildJob.js', async (importOriginal) => ({
   organizerMonthReports: vi.fn(() => 'organizer-read'),
 }));
 vi.mock('../../src/lib/cache/redisCache.js', () => ({
-  RedisCache: { instance: vi.fn(() => Promise.resolve('redis')) },
+  RedisCache: {
+    instance: vi.fn(() =>
+      Promise.resolve({ get: () => Promise.resolve('from-redis') }),
+    ),
+  },
 }));
 vi.mock(
   '../../src/lib/repositories/postgresReportSnapshotRepository.js',
@@ -198,7 +208,8 @@ describe('main', () => {
       allowAllDeparted: true,
     });
     // Redis itself, never the in-memory fallback.
-    expect(await deps.cache()).toBe('redis');
+    // Timed: commands go to Redis through the timeout wrapper.
+    expect(await (await deps.cache()).get('k')).toBe('from-redis');
     expect(RedisCache.instance).toHaveBeenCalled();
     expect(deps.build.snapshots).toBe('snapshots');
     expect(deps.build.fetchMonthReports).toBe('organizer-read');
@@ -249,5 +260,84 @@ describe('main', () => {
       expect(source).not.toContain('new Client(');
       expect(source).not.toContain('.login(');
     }
+  });
+});
+
+describe('stop signals', () => {
+  it('SIGTERM or SIGINT sets the stop flag, and dispose removes the handlers', () => {
+    for (const signal of ['SIGTERM', 'SIGINT']) {
+      const emitter = new EventEmitter();
+      const stop = stopOnSignals(emitter);
+      expect(stop.requested()).toBe(false);
+      emitter.emit(signal);
+      expect(stop.requested()).toBe(true);
+      stop.dispose();
+      expect(emitter.listenerCount('SIGTERM')).toBe(0);
+      expect(emitter.listenerCount('SIGINT')).toBe(0);
+    }
+  });
+
+  it('main passes the flag to the run, exits 3 when stopped, and removes its handlers', async () => {
+    const emitter = new EventEmitter();
+    vi.mocked(runBackfill).mockImplementation(async (deps) => {
+      expect(deps.stopRequested?.()).toBe(false);
+      emitter.emit('SIGTERM');
+      expect(deps.stopRequested?.()).toBe(true);
+      return result({ stopped: 'stopped' });
+    });
+    expect(await main([], { ...FULL_ENV }, emitter)).toBe(3);
+    expect(emitter.listenerCount('SIGTERM')).toBe(0);
+    expect(emitter.listenerCount('SIGINT')).toBe(0);
+  });
+
+  it('a missing bot token exits 1 before installing anything', async () => {
+    const emitter = new EventEmitter();
+    expect(
+      await main([], { ...FULL_ENV, DISCORD_API_KEY: undefined }, emitter),
+    ).toBe(1);
+    expect(emitter.listenerCount('SIGTERM')).toBe(0);
+    expect(runBackfill).not.toHaveBeenCalled();
+  });
+});
+
+describe('backfillCache', () => {
+  /** A Redis that answers after `delayMs`. */
+  class SlowCache extends FakeCache {
+    constructor(private readonly delayMs: number) {
+      super();
+    }
+
+    override async get(key: string) {
+      await new Promise((r) => {
+        setTimeout(r, this.delayMs);
+      });
+      return super.get(key);
+    }
+
+    override async exclusive_set(key: string, value: string, ttl?: number) {
+      await new Promise((r) => {
+        setTimeout(r, this.delayMs);
+      });
+      return super.exclusive_set(key, value, ttl);
+    }
+  }
+
+  it('times out commands', async () => {
+    const inner = new SlowCache(200);
+    const cache = await backfillCache(() => Promise.resolve(inner), 20)();
+    await expect(cache.get('k')).rejects.toBeInstanceOf(CacheTimeoutError);
+  });
+
+  it('releases a lease that was granted after its request timed out', async () => {
+    const slow = new SlowCache(60);
+    // The release goes through the untimed client: slow, but it waits.
+    const cache = await backfillCache(() => Promise.resolve(slow), 20)();
+    await expect(
+      cache.exclusive_set(BUILD_LEASE_KEY, 'late', 1800),
+    ).rejects.toBeInstanceOf(CacheTimeoutError);
+    await new Promise((r) => {
+      setTimeout(r, 400);
+    });
+    expect(slow.values.has(BUILD_LEASE_KEY)).toBe(false);
   });
 });

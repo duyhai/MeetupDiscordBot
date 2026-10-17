@@ -22,6 +22,9 @@
  *   #meetup-bot-alerts over Discord REST only: no gateway login, no content,
  *   allowed_mentions { parse: [] }. Error text in posts is describeBuildError's
  *   (never a Meetup body); full errors go to the process log only.
+ * - Stops (exit 3) after a 401 or 429 from Meetup, no usable organizer token,
+ *   3 failed months in a row, a Redis timeout (5 s per command), or SIGTERM
+ *   / SIGINT (the month in progress finishes first).
  * - Needs DATABASE_URL, REDISCLOUD_URL and DISCORD_API_KEY. Sets PG_POOL_MAX=1
  *   when unset, so the dyno holds at most three connections (dashboard 1,
  *   suspension 1, credential 1). PG_POOL_MAX must never be set as an app
@@ -39,6 +42,7 @@ import { REST, Routes } from 'discord.js';
 import { Logger } from 'tslog';
 
 import { BOT_ALERTS_CHANNEL_ID } from '../src/constants.js';
+import { KeyValueCache } from '../src/lib/cache/base.js';
 import { RedisCache } from '../src/lib/cache/redisCache.js';
 import { LogEntry } from '../src/lib/helpers/discordLogger.js';
 import {
@@ -58,6 +62,11 @@ import {
 } from '../src/lib/reports/period.js';
 import { PostgresReportSnapshotRepository } from '../src/lib/repositories/postgresReportSnapshotRepository.js';
 import { PostgresSuspensionRepository } from '../src/lib/repositories/postgresSuspensionRepository.js';
+// A script may import src/web (only src/lib must not).
+import {
+  releaseLateBuildLease,
+  timedCacheFactory,
+} from '../src/web/timedCache.js';
 
 const logger = new Logger({ name: 'backfillReports' });
 
@@ -69,6 +78,61 @@ export interface BackfillArgs {
 }
 
 const MAX_DELAY_MS = 60_000;
+
+/** Every backfill Redis command gives up after this; the run then stops as cache-unavailable. */
+export const BACKFILL_CACHE_TIMEOUT_MS = 5_000;
+
+/**
+ * Redis with a per-command timeout, so an outage stops the run instead of
+ * hanging it (node-redis queues commands while offline). A lease granted
+ * after its request timed out is released at once through the untimed
+ * client (value-compared), so it is never left ownerless for its TTL.
+ */
+export function backfillCache(
+  getInner: () => Promise<KeyValueCache> = () => RedisCache.instance(),
+  ms: number = BACKFILL_CACHE_TIMEOUT_MS,
+): () => Promise<KeyValueCache> {
+  return timedCacheFactory(
+    getInner,
+    ms,
+    releaseLateBuildLease(getInner, logger),
+  );
+}
+
+export interface SignalSource {
+  on(signal: 'SIGTERM' | 'SIGINT', listener: () => void): unknown;
+  removeListener(signal: 'SIGTERM' | 'SIGINT', listener: () => void): unknown;
+}
+
+/**
+ * SIGTERM (Heroku restart or deploy) or SIGINT asks the run to stop before
+ * the next month: the month in progress finishes and releases its lease,
+ * then the final post goes out and main exits 3. Heroku sends SIGKILL about
+ * 30 s after SIGTERM; a month still building then is killed with its lease
+ * held until the lease TTL (30 minutes) runs out, and nothing of it is saved
+ * unless both rows were (a re-run rebuilds it either way).
+ */
+export function stopOnSignals(source: SignalSource = process): {
+  requested(): boolean;
+  dispose(): void;
+} {
+  let requested = false;
+  const onSignal = () => {
+    if (!requested) {
+      logger.warn('Backfill asked to stop: finishing the current month');
+    }
+    requested = true;
+  };
+  source.on('SIGTERM', onSignal);
+  source.on('SIGINT', onSignal);
+  return {
+    requested: () => requested,
+    dispose: () => {
+      source.removeListener('SIGTERM', onSignal);
+      source.removeListener('SIGINT', onSignal);
+    },
+  };
+}
 
 /** Never echoes an argument back: it could be anything. */
 export function parseBackfillArgs(
@@ -150,11 +214,14 @@ const REFUSAL_TEXT: Record<BackfillRefusal, string> = {
   'identity-sweep':
     'Refusing to start while the identity sweep runs. Run it again in a few minutes.',
   'before-group': `--from cannot be earlier than ${periodKey(GROUP_FIRST_PERIOD)}.`,
+  'cache-unavailable':
+    'Refusing to start: Redis did not answer, so the build lease could not be taken. Run it again later.',
 };
 
 export async function main(
   argv: string[] = process.argv.slice(2),
   env: NodeJS.ProcessEnv = process.env,
+  signals: SignalSource = process,
 ): Promise<number> {
   const args = parseBackfillArgs(argv);
   if ('error' in args) {
@@ -184,13 +251,14 @@ export async function main(
     PostgresReportSnapshotRepository.instance(),
     PostgresSuspensionRepository.instance(),
   ]);
+  const stop = stopOnSignals(signals);
   try {
     const result = await runBackfill(
       {
         now: () => new Date(),
         // Redis itself, never the in-memory fallback: only Redis excludes
-        // the bot's own build job.
-        cache: () => RedisCache.instance(),
+        // the bot's own build job. Timed, so an outage stops the run.
+        cache: backfillCache(),
         build: {
           now: () => new Date(),
           snapshots,
@@ -204,6 +272,7 @@ export async function main(
           }),
         newLeaseValue: () => crypto.randomUUID(),
         log: logger,
+        stopRequested: () => stop.requested(),
       },
       {
         force: args.force,
@@ -227,6 +296,8 @@ export async function main(
       return 2;
     }
     throw error;
+  } finally {
+    stop.dispose();
   }
 }
 
