@@ -562,7 +562,10 @@ export function createDashboardRouter(deps: DashboardDeps): express.Router {
     let reports: SafeHtml | undefined;
     try {
       reports = deps.homeReports ? await deps.homeReports() : undefined;
-    } catch {
+    } catch (error) {
+      logger.warn(
+        `Dashboard home reports failed: ${error instanceof Error ? error.name : 'Error'}`,
+      );
       // The cards are extra: the welcome and organizer cards still render.
       reports = undefined;
     }
