@@ -6,6 +6,7 @@ import { AttendanceEvidence } from '../../src/lib/reports/types.js';
 import {
   COPY_SCRIPT,
   PAGE_LOAD_DEADLINE_MS,
+  WORKSPACE_SCRIPT,
   builtByHtml,
   dashboardPage,
   load,
@@ -126,6 +127,26 @@ describe('pageKit', () => {
       expect(out).not.toContain(bad);
       expect(out).toBe('a staff member');
     }
+  });
+
+  it('WORKSPACE_SCRIPT has no interpolation and finds its textarea by position', () => {
+    const source = fs.readFileSync(
+      new URL('../../src/web/pageKit.ts', import.meta.url),
+      'utf8',
+    );
+    const start = source.indexOf('export const WORKSPACE_SCRIPT');
+    expect(start).toBeGreaterThan(-1);
+    const end = source.indexOf('`;', start);
+    const definition = source.slice(start, end + 2);
+    expect(definition).not.toContain('${');
+    expect(definition).toMatch(
+      /^export const WORKSPACE_SCRIPT = staticRaw`[^`]*`;$/,
+    );
+    expect(isSafeHtml(WORKSPACE_SCRIPT)).toBe(true);
+    expect(WORKSPACE_SCRIPT.value).toContain("closest('[data-copy-box]')");
+    expect(WORKSPACE_SCRIPT.value).not.toContain('getElementById');
+    // The clipboard fallback is COPY_SCRIPT's.
+    expect(WORKSPACE_SCRIPT.value).toContain("'Select the text and copy it'");
   });
 
   it('COPY_SCRIPT has no interpolation', () => {

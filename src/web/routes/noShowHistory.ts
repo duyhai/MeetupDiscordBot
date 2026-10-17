@@ -70,8 +70,11 @@ const isCase = (c: unknown): boolean =>
 
 const isCleared = (c: unknown): boolean => isObject(c) && isObject(c.member);
 
-/** A stored payload this page can render; anything else is the 503 page, never a 500. */
-const isNoShow = (p: unknown): p is NoShowPayload =>
+/**
+ * A stored payload this page can render; anything else is the 503 page,
+ * never a 500. The workspace page uses the same guard for its cases.
+ */
+export const isNoShowPayload = (p: unknown): p is NoShowPayload =>
   isObject(p) &&
   p.reportType === 'no_show' &&
   typeof p.asOf === 'string' &&
@@ -411,7 +414,7 @@ export function registerNoShowHistoryRoutes(
       });
       return;
     }
-    if (!isNoShow(snapshot.payload)) {
+    if (!isNoShowPayload(snapshot.payload)) {
       unavailable(res, WHAT);
       return;
     }

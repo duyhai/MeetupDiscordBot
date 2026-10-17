@@ -1,12 +1,20 @@
 import dayjs from 'dayjs';
+import type { Client } from 'discord.js';
 
+import Configuration from '../../configuration.js';
 import type { KeyValueCache } from '../cache/base.js';
+import { mapWithConcurrency } from '../client/meetup/paginationHelper.js';
 import type { EventSummary } from '../client/meetup/types.js';
 import {
   actByDate,
   paymentNote,
   upcomingEvents,
 } from '../helpers/noShowReport.js';
+import {
+  OrganizerMeetupDeps,
+  defaultOrganizerMeetupDeps,
+  withOrganizerMeetup,
+} from '../reports/organizerMeetup.js';
 import { toEventRef } from '../reports/types.js';
 
 /**
@@ -220,4 +228,41 @@ export function actByFor(
     return undefined;
   }
   return actByDate(entry.events[0].dateTime, dayjs(now));
+}
+
+/** Meetup reads in flight at once for one batch, as the command's. */
+export const UPCOMING_FETCH_CONCURRENCY = 5;
+
+/**
+ * The production fetchMany: the command's read (YES RSVPs to UPCOMING
+ * events, with payment info) through withOrganizerMeetup, as the report job
+ * reads Meetup (the uncached organizer client, one forced refresh and a
+ * re-run on a 401, which is safe because this only reads). The answer has an
+ * entry for every requested id: undefined means the member left the group.
+ * Any failure rejects the whole batch, which the loader shows as
+ * unavailable and never caches.
+ */
+export function organizerFetchMany(
+  getClient: () => Client | undefined,
+  organizer: OrganizerMeetupDeps = defaultOrganizerMeetupDeps,
+): UpcomingDeps['fetchMany'] {
+  return (memberIds) =>
+    withOrganizerMeetup(
+      getClient(),
+      async (meetup) => {
+        const lists = await mapWithConcurrency(
+          memberIds,
+          UPCOMING_FETCH_CONCURRENCY,
+          (id) =>
+            meetup.getMemberRsvpEvents(
+              id,
+              Configuration.meetup.groupId,
+              { rsvpStatus: ['YES'], eventStatus: ['UPCOMING'] },
+              { withPaymentInfo: true },
+            ),
+        );
+        return new Map(memberIds.map((id, i) => [id, lists[i]]));
+      },
+      organizer,
+    );
 }

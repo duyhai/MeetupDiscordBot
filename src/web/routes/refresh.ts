@@ -4,9 +4,11 @@ import { Logger } from 'tslog';
 import { RebuildRefusal } from '../../lib/reports/buildJob.js';
 import {
   DASHBOARD_PATHS,
+  MonthPathTemplate,
   monthPath,
 } from '../../lib/reports/dashboardPaths.js';
 import { Period, periodKey } from '../../lib/reports/period.js';
+import { isWorkspaceMonth } from '../../lib/workspace/months.js';
 import { dashboardLocals } from '../dashboardRouter.js';
 import { SafeHtml, html, localUrl } from '../html.js';
 import { notFound, parseRouteMonth } from '../pageKit.js';
@@ -47,7 +49,7 @@ export function refreshNotice(code: unknown): SafeHtml | '' {
     : '';
 }
 
-export type RefreshReturn = 'hall-of-fame' | 'no-show-history';
+export type RefreshReturn = 'hall-of-fame' | 'no-show-history' | 'workspace';
 
 export function refreshForm(
   period: Period,
@@ -74,16 +76,22 @@ export function registerRefreshRoute(
   deps: Pick<DashboardPageDeps, 'now' | 'rebuild'>,
 ): void {
   router.post(DASHBOARD_PATHS.refresh, (async (req, res) => {
-    const period = parseRouteMonth(req.params.period, deps.now());
+    const now = deps.now();
+    const period = parseRouteMonth(req.params.period, now);
     if (period === undefined) {
       notFound(res);
       return;
     }
     const body = req.body as Record<string, unknown> | undefined;
-    const target =
-      body?.return === 'no-show-history'
-        ? DASHBOARD_PATHS.noShowHistoryMonth
-        : DASHBOARD_PATHS.hallOfFameMonth;
+    let target: MonthPathTemplate = DASHBOARD_PATHS.hallOfFameMonth;
+    if (body?.return === 'no-show-history') {
+      target = DASHBOARD_PATHS.noShowHistoryMonth;
+    } else if (body?.return === 'workspace') {
+      // A month with no workspace would 404 there: its no-show history instead.
+      target = isWorkspaceMonth(period, now)
+        ? DASHBOARD_PATHS.workspaceMonth
+        : DASHBOARD_PATHS.noShowHistoryMonth;
+    }
     const { session } = dashboardLocals(res);
     let code: RefreshCode;
     try {

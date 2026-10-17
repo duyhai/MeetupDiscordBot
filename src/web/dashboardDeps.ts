@@ -24,6 +24,10 @@ import {
   performWorkspaceAction,
   syncWorkspace,
 } from '../lib/workspace/service.js';
+import {
+  createUpcomingLoader,
+  organizerFetchMany,
+} from '../lib/workspace/upcoming.js';
 import { ApplicationCache } from '../util/cache.js';
 import {
   baseSecurityHeaders,
@@ -140,6 +144,17 @@ export async function manualRebuildDeps(client: Client): Promise<BuildJobDeps> {
   };
 }
 
+/**
+ * Live upcoming RSVPs for the workspace cards. Created once, so its
+ * single-flight map is shared by every request; cached (derived fields only,
+ * 6 h) in the dashboard's timed cache.
+ */
+const upcomingLoader = createUpcomingLoader({
+  now: () => new Date(),
+  cache: dashboardCache,
+  fetchMany: organizerFetchMany(() => discordClient),
+});
+
 const auditActivity = async (entry: LogEntry) => {
   if (!discordClient) {
     return false;
@@ -209,6 +224,7 @@ export function dashboardPageDeps(): DashboardPageDeps {
         ),
       moderationLog: workspaceModerationLog,
     },
+    upcoming: upcomingLoader,
   };
 }
 

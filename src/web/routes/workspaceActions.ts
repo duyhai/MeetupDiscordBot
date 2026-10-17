@@ -34,6 +34,7 @@ import {
   parseWorkspaceMonth,
 } from '../pageKit.js';
 import { FixedWindowLimiter } from '../rateLimit.js';
+import type { AccessCheck } from '../roleGate.js';
 import type { DashboardPageDeps } from './dashboardPages.js';
 
 const logger = new Logger({ name: 'dashboard' });
@@ -81,6 +82,33 @@ async function withDeadline<T>(ms: number, fn: () => Promise<T>): Promise<T> {
     return await Promise.race([work, deadline]);
   } finally {
     clearTimeout(timer);
+  }
+}
+
+/** The live Leadership check's answer for a page (see leadershipOf). */
+export type LeadershipAnswer = 'leader' | 'not-leader' | 'unreachable';
+
+/**
+ * The live 1.5 Leadership Team check for a GET page, under
+ * LEADERSHIP_CHECK_DEADLINE_MS. A failure or timeout is 'unreachable', which
+ * pages treat as "not Leadership" (fail closed). It only decides what a
+ * page shows; each POST runs its own check, which is the authority.
+ */
+export async function leadershipOf(
+  isLeadership: AccessCheck,
+  userId: string,
+): Promise<LeadershipAnswer> {
+  try {
+    return (await withDeadline(LEADERSHIP_CHECK_DEADLINE_MS, () =>
+      isLeadership(userId),
+    )) === true
+      ? 'leader'
+      : 'not-leader';
+  } catch (error: unknown) {
+    logger.warn(
+      `Dashboard Leadership check failed: ${error instanceof Error ? error.name : 'Error'}`,
+    );
+    return 'unreachable';
   }
 }
 

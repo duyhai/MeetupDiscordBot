@@ -1,7 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { KeyValueCache } from '../../../src/lib/cache/base.js';
+import type { GqlMeetupClient } from '../../../src/lib/client/meetup/gqlClient.js';
 import type { EventSummary } from '../../../src/lib/client/meetup/types.js';
+import {
+  type OrganizerMeetupDeps,
+  OrganizerTokenUnavailableError,
+} from '../../../src/lib/reports/organizerMeetup.js';
 import {
   UPCOMING_BATCH_TIMEOUT_MS,
   UPCOMING_CACHE_TTL_SEC,
@@ -9,6 +14,7 @@ import {
   UPCOMING_MAX_MEMBERS,
   actByFor,
   createUpcomingLoader,
+  organizerFetchMany,
   type UpcomingDeps,
   type UpcomingEntry,
 } from '../../../src/lib/workspace/upcoming.js';
@@ -461,5 +467,82 @@ describe('actByFor', () => {
     expect(
       actByFor({ state: 'ok', fetchedAt: 'x', events: [] }, NOW),
     ).toBeUndefined();
+  });
+});
+
+describe('organizerFetchMany (the production fetchMany)', () => {
+  type Rsvps = (
+    memberId: string,
+    groupId: string,
+    filter: unknown,
+    options: unknown,
+  ) => Promise<EventSummary[] | undefined>;
+
+  function organizer(getMemberRsvpEvents: Rsvps, token = 'tok') {
+    const rsvps = vi.fn(getMemberRsvpEvents);
+    const getToken = vi.fn(async () => token);
+    const makeClient = vi.fn(
+      () => ({ getMemberRsvpEvents: rsvps }) as unknown as GqlMeetupClient,
+    );
+    return {
+      rsvps,
+      getToken,
+      deps: { getToken, makeClient } as unknown as OrganizerMeetupDeps,
+    };
+  }
+
+  it('answers every requested id: events, or undefined for a member who left', async () => {
+    const o = organizer(async (id) => {
+      if (id === '222') {
+        return undefined;
+      }
+      return [event('9', '2026-10-20T02:00:00.000Z')];
+    });
+    const out = await organizerFetchMany(
+      () => undefined,
+      o.deps,
+    )(['111', '222']);
+    expect([...out.keys()]).toEqual(['111', '222']);
+    expect(out.has('222')).toBe(true);
+    expect(out.get('222')).toBeUndefined();
+    expect(out.get('111')?.[0].id).toBe('9');
+    expect(o.rsvps).toHaveBeenCalledWith(
+      '111',
+      expect.any(String),
+      { rsvpStatus: ['YES'], eventStatus: ['UPCOMING'] },
+      { withPaymentInfo: true },
+    );
+  });
+
+  it('rejects when Meetup fails, so the loader shows unavailable', async () => {
+    const o = organizer(async () => {
+      throw new Error('meetup down');
+    });
+    await expect(
+      organizerFetchMany(() => undefined, o.deps)(['111']),
+    ).rejects.toThrow('meetup down');
+  });
+
+  it('rejects when there is no organizer login', async () => {
+    const o = organizer(async () => [], '');
+    await expect(
+      organizerFetchMany(() => undefined, o.deps)(['111']),
+    ).rejects.toThrow(OrganizerTokenUnavailableError);
+    expect(o.rsvps).not.toHaveBeenCalled();
+  });
+
+  it('end to end: a Meetup failure through the loader is unavailable and never cached', async () => {
+    const o = organizer(async () => {
+      throw new Error('meetup down');
+    });
+    const cache = new FakeCache();
+    const load = createUpcomingLoader({
+      now: () => NOW,
+      cache: async () => cache,
+      fetchMany: organizerFetchMany(() => undefined, o.deps),
+    });
+    const out = await load(['111']);
+    expect(out.get('111')).toEqual({ state: 'unavailable' });
+    expect(await cache.get('workspace-upcoming-v1-111')).toBeUndefined();
   });
 });

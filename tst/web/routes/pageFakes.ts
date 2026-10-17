@@ -32,8 +32,11 @@ import {
 import { LinkProgressDay } from '../../../src/lib/repositories/postgresLinkProgressRepository.js';
 import {
   SuspensionPageRow,
+  SuspensionRecordState,
   SuspensionState,
 } from '../../../src/lib/repositories/postgresSuspensionRepository.js';
+import { SuspensionRecord } from '../../../src/lib/repositories/types.js';
+import { UpcomingEntry } from '../../../src/lib/workspace/upcoming.js';
 import {
   DashboardPageDeps,
   IdentityPageReader,
@@ -336,13 +339,54 @@ export function suspensionRow(
   };
 }
 
-/** An in-memory SuspensionPageReader: rows per tab, sliced by offset/limit like the repository. */
+/** One suspension record with its void state: a live September 1 30-day record unless overridden. */
+export function suspensionRecord(
+  overrides: Partial<SuspensionRecordState> = {},
+): SuspensionRecordState {
+  suspensionIds += 1;
+  return {
+    id: suspensionIds,
+    memberId: String(7000 + suspensionIds),
+    memberName: `Suspended ${suspensionIds}`,
+    suspendedAt: new Date('2026-09-01T00:00:00Z'),
+    durationDays: 30,
+    notes: null,
+    createdAt: new Date('2026-09-01T00:00:00Z'),
+    voidedAt: null,
+    voidedBy: null,
+    voidReason: null,
+    ...overrides,
+  };
+}
+
+/**
+ * An in-memory SuspensionPageReader: rows per tab, sliced by offset/limit
+ * like the repository. `records` back listByMemberIds (live only, like the
+ * repository) and listByIds (voided included).
+ */
 export function fakeSuspensions(
   rows: Partial<Record<SuspensionState, SuspensionPageRow[]>> = {},
   byMonth: { month: string; count: number }[] = [],
+  records: SuspensionRecordState[] = [],
 ) {
   const tab = (state: SuspensionState) => rows[state] ?? [];
   return {
+    listByMemberIds: vi.fn(
+      async (memberIds: string[], before?: Date): Promise<SuspensionRecord[]> =>
+        records
+          .filter(
+            (r) =>
+              r.voidedAt === null &&
+              memberIds.includes(r.memberId) &&
+              (before === undefined || r.suspendedAt < before),
+          )
+          .map(
+            ({ voidedAt: _a, voidedBy: _b, voidReason: _c, ...live }) => live,
+          ),
+    ),
+    listByIds: vi.fn(async (ids: number[]): Promise<SuspensionRecordState[]> =>
+      records.filter((r) => ids.includes(r.id)),
+    ),
     listPage: vi.fn(
       async (options: {
         state: SuspensionState;
@@ -669,6 +713,10 @@ export function fakePageDeps(
     memberLinks: async () => fakeMemberLinks(),
     workspace: async () => fakeWorkspace(),
     workspaceActions: fakeWorkspaceActions(),
+    upcoming: vi.fn(
+      async (_memberIds: string[]): Promise<Map<string, UpcomingEntry>> =>
+        new Map(),
+    ),
     rebuild: vi.fn(async (): Promise<PageRebuildResult> => ({
       status: 'started',
       done: Promise.resolve({ ok: true }),

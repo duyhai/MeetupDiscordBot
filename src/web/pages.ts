@@ -25,6 +25,7 @@ table{border-collapse:collapse;width:100%}th,td{text-align:left;padding:4px 8px;
 .muted{color:#57606a}.badge{font-size:12px;border:1px solid #d0d7de;border-radius:10px;padding:0 6px}
 textarea.copy{width:100%;min-height:240px;font-family:ui-monospace,monospace}
 svg.chart{max-width:100%;height:auto}
+.actions{display:flex;flex-wrap:wrap;gap:8px;align-items:flex-start}.actions form{margin:0}details{margin-top:8px}
 `;
 
 export function layout({

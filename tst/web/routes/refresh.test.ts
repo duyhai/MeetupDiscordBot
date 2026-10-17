@@ -146,6 +146,33 @@ describe('POST /dashboard/reports/:period/refresh', () => {
     expect(hof.headers.location).toBe(`${MONTH}?refresh=started`);
   });
 
+  it('return=workspace redirects to the workspace month', async () => {
+    const { post, token } = await setup();
+    const res = await post(REFRESH, { _csrf: token, return: 'workspace' });
+    expect(res.status).toBe(303);
+    expect(res.headers.location).toBe(
+      '/dashboard/no-shows/2026-09?refresh=started',
+    );
+    const open = await post('/dashboard/reports/2026-10/refresh', {
+      _csrf: token,
+      return: 'workspace',
+    });
+    expect(open.headers.location).toBe(
+      '/dashboard/no-shows/2026-10?refresh=started',
+    );
+  });
+
+  it('return=workspace for a month before the workspace goes to the no-show history page', async () => {
+    const { post, token } = await setup();
+    const res = await post('/dashboard/reports/2026-08/refresh', {
+      _csrf: token,
+      return: 'workspace',
+    });
+    expect(res.headers.location).toBe(
+      '/dashboard/no-show-history/2026-08?refresh=started',
+    );
+  });
+
   it('every code has fixed text', () => {
     expect([...REFRESH_CODES].sort()).toEqual(
       [...REFUSALS, 'started', 'error', 'unavailable'].sort(),

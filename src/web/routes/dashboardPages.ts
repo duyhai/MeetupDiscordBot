@@ -14,6 +14,7 @@ import {
   WorkspaceActionResult,
   WorkspaceSyncCode,
 } from '../../lib/workspace/service.js';
+import { UpcomingEntry } from '../../lib/workspace/upcoming.js';
 import { AccessCheck } from '../roleGate.js';
 import { SessionStore } from '../session.js';
 import {
@@ -28,6 +29,7 @@ import { registerRefreshRoute } from './refresh.js';
 import { registerSessionRoutes } from './sessions.js';
 import { registerSuspensionRoutes } from './suspensions.js';
 import { registerTrendsRoutes } from './trends.js';
+import { registerWorkspaceRoutes } from './workspace.js';
 import { registerWorkspaceActionRoutes } from './workspaceActions.js';
 
 /** The snapshot reads the month pages use: never save. */
@@ -40,10 +42,14 @@ export type SnapshotPageReader = Pick<
   | 'listMemberNoShowMonths'
 >;
 
-/** The suspension reads the records and trends pages use: never insert or void. */
+/**
+ * The suspension reads the records, trends and workspace pages use: never
+ * insert or void. listByMemberIds is live records only; listByIds includes
+ * voided ones (a linked record's live state).
+ */
 export type SuspensionPageReader = Pick<
   PostgresSuspensionRepository,
-  'listPage' | 'countByState' | 'countByMonth'
+  'listPage' | 'countByState' | 'countByMonth' | 'listByMemberIds' | 'listByIds'
 >;
 
 /** The link progress read (newest first, at most 1000 days): never upsert. */
@@ -123,6 +129,8 @@ export interface DashboardPageDeps {
   workspace: () => Promise<WorkspacePageReader>;
   /** The workspace's actions and sync. */
   workspaceActions: WorkspaceActions;
+  /** Live upcoming RSVPs for the workspace's suspension cards (createUpcomingLoader). Never rejects. */
+  upcoming: (memberIds: string[]) => Promise<Map<string, UpcomingEntry>>;
 }
 
 /**
@@ -138,6 +146,7 @@ export function registerDashboardPages(
   registerHallOfFameRoutes(router, deps);
   registerNoShowHistoryRoutes(router, deps);
   registerRefreshRoute(router, deps);
+  registerWorkspaceRoutes(router, deps);
   registerWorkspaceActionRoutes(router, deps);
   registerSuspensionRoutes(router, deps);
   registerIdentityRoutes(router, deps);

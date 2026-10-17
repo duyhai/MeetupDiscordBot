@@ -33,7 +33,12 @@ function buildRouter(clock: () => number = () => PAGE_NOW.getTime()) {
     protectedRoutes: (r) =>
       registerAllProtectedRoutes(r, {
         organizer: fakeOrganizerDeps(),
-        pages: fakePageDeps({ now: () => new Date(clock()) }),
+        // A 1.5 Leadership Team member, so the record-suspension confirm
+        // page answers 200; a Moderator's refusal is in workspace.test.ts.
+        pages: fakePageDeps({
+          now: () => new Date(clock()),
+          isLeadership: vi.fn().mockResolvedValue(true),
+        }),
       }),
   });
   return { deps, router };
@@ -153,6 +158,9 @@ describe('access matrix', () => {
     expect(labels).toContain('GET /identity/changes/:id/thumb/:side');
     expect(labels).toContain('GET /link-progress');
     expect(labels).toContain('GET /trends');
+    expect(labels).toContain('GET /no-shows');
+    expect(labels).toContain('GET /no-shows/:period');
+    expect(labels).toContain('GET /no-shows/:period/rows/:rowId/suspend');
     expect(labels).toContain('POST /no-shows/:period/rows/:rowId');
     expect(labels).toContain('POST /no-shows/:period/sync');
     expect(UNSAFE.length).toBeGreaterThan(0);
