@@ -981,8 +981,9 @@ const suspension = (
         const id = await seedSuspension();
         const other = await seedSuspension('222', OCTOBER);
         await insertRecord('222', '2026-03-01');
-        // Later than the chosen date, and already backing the October row.
-        await linkDirectly(other, await insertRecord('222', '2026-11-01'));
+        // Later than the chosen date, already backing the October row, and
+        // clear of the new range whether it is 60 days (right) or 120 (M6).
+        await linkDirectly(other, await insertRecord('222', '2027-03-01'));
         const outcome = okOf(
           await act(id, 'record_suspension', {
             suspendedOn: day('2026-09-10'),
@@ -1061,7 +1062,8 @@ const suspension = (
           `UPDATE suspension_records SET voided_at = now(), voided_by = $2, void_reason = 'x' WHERE id = $1`,
           [voided, MOD_B],
         );
-        await linkDirectly(october, await insertRecord('222', '2026-10-02'));
+        // After the new 09-20..10-19 range, so it does not overlap.
+        await linkDirectly(october, await insertRecord('222', '2026-10-25'));
         const outcome = okOf(
           await act(id, 'record_suspension', {
             suspendedOn: day('2026-09-20'),
@@ -1434,6 +1436,78 @@ const suspension = (
           const outcome = okOf(await recordOctober(oct, '2026-11-15'));
           expect(outcome.suspension?.durationDays).toBe(60);
           expect(await count('suspension_records')).toBe(2);
+        });
+
+        it('backdating into a later suspension is refused', async () => {
+          const sep = await seedSuspension('222', SEPTEMBER);
+          const oct = await seedSuspension('222', OCTOBER);
+          okOf(await recordOctober(oct, '2026-10-15'));
+          // 10-01 for 30 days runs to 10-30, into 10-15.
+          expect(
+            await act(sep, 'record_suspension', {
+              suspendedOn: day('2026-10-01'),
+            }),
+          ).toEqual({ ok: false, reason: 'already-suspended' });
+          expect(await count('suspension_records')).toBe(1);
+          expect(await stateOf(sep)).toMatchObject({
+            version: 1,
+            status: 'new',
+          });
+        });
+
+        it('backdating to a range that ends before the later suspension records', async () => {
+          const sep = await seedSuspension('222', SEPTEMBER);
+          const oct = await seedSuspension('222', OCTOBER);
+          okOf(await recordOctober(oct, '2026-10-15'));
+          // 09-01 through 09-30.
+          const outcome = okOf(
+            await act(sep, 'record_suspension', {
+              suspendedOn: day('2026-09-01'),
+            }),
+          );
+          expect(outcome.suspension?.durationDays).toBe(30);
+          expect(await count('suspension_records')).toBe(2);
+        });
+
+        describe('boundaries', () => {
+          /** A 30-day record on `iso`, already backing the October row. */
+          const existingOn = async (iso: string) => {
+            const oct = await seedSuspension('222', OCTOBER);
+            await linkDirectly(oct, await insertRecord('222', iso));
+            return seedSuspension('222', SEPTEMBER);
+          };
+          const tryOn = (sep: number, iso: string) =>
+            act(sep, 'record_suspension', { suspendedOn: day(iso) });
+
+          it('an existing record ending the day before the new start: records', async () => {
+            const sep = await existingOn('2026-10-01'); // last day 10-30
+            const outcome = okOf(await tryOn(sep, '2026-10-31'));
+            expect(outcome.suspension?.durationDays).toBe(60);
+          });
+
+          it('an existing record ending on the new start day: refused', async () => {
+            const sep = await existingOn('2026-10-01'); // last day 10-30
+            expect(await tryOn(sep, '2026-10-30')).toEqual({
+              ok: false,
+              reason: 'already-suspended',
+            });
+          });
+
+          it('a new range ending the day before an existing start: records', async () => {
+            const sep = await existingOn('2026-10-15');
+            // 09-15 for 30 days: through 10-14.
+            const outcome = okOf(await tryOn(sep, '2026-09-15'));
+            expect(outcome.suspension?.durationDays).toBe(30);
+          });
+
+          it('a new range ending on an existing start day: refused', async () => {
+            const sep = await existingOn('2026-10-15');
+            // 09-16 for 30 days: through 10-15.
+            expect(await tryOn(sep, '2026-09-16')).toEqual({
+              ok: false,
+              reason: 'already-suspended',
+            });
+          });
         });
 
         it('a voided earlier record does not block', async () => {

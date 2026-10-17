@@ -308,12 +308,17 @@ const UNLINKED_LIVE = `s.member_id = $1 AND s.voided_at IS NULL AND s.suspended_
   AND NOT EXISTS (SELECT 1 FROM noshow_workspace_rows w WHERE w.suspension_record_id = s.id)`;
 
 /**
- * A live record of member $1 whose active range covers the day $2 (UTC
- * midnight of a date): from suspended_at's UTC day through its last day,
- * inclusive. lastSuspendedDay and isSuspensionActive's rule, in SQL.
+ * A live record of member $1 whose active range overlaps the new one: the
+ * UTC day of $2 (UTC midnight of a date) through $2's day + $3 days - 1.
+ * A record's range is its suspended_at UTC day through its last day,
+ * inclusive (lastSuspendedDay and isSuspensionActive's rule, in SQL).
  */
-const COVERS_DAY = `s.member_id = $1 AND s.voided_at IS NULL AND s.suspended_at <= $2
-  AND ((s.suspended_at AT TIME ZONE 'UTC')::date + s.duration_days - 1) >= ($2::timestamptz AT TIME ZONE 'UTC')::date`;
+const START_DAY = `(s.suspended_at AT TIME ZONE 'UTC')::date`;
+const LAST_DAY = `(${START_DAY} + s.duration_days - 1)`;
+const NEW_START = `($2::timestamptz AT TIME ZONE 'UTC')::date`;
+const NEW_LAST = `(${NEW_START} + $3::int - 1)`;
+const OVERLAPS_RANGE = `s.member_id = $1 AND s.voided_at IS NULL
+  AND ${START_DAY} <= ${NEW_LAST} AND ${LAST_DAY} >= ${NEW_START}`;
 
 /**
  * The month-by-month no-show workspace: one row per member per month,
@@ -506,8 +511,8 @@ export class PostgresNoShowWorkspaceRepository {
    * constants), run on this transaction's client.
    *
    * record_suspension is refused as already-suspended when an unlinked live
-   * record in the month exists (offered to link) or when any live record
-   * covers the chosen day, linked to another row or not.
+   * record in the month exists (offered to link) or when any live record,
+   * linked to another row or not, overlaps the new suspension's days.
    *
    * A refusal writes nothing here, not even an event (the events CHECK has
    * no refusal action). Who may act is the caller's check.
@@ -582,26 +587,27 @@ export class PostgresNoShowWorkspaceRepository {
                 suspendedAt: live.rows[0].suspended_at,
               });
             }
-            // Linked to another row or not: never two live suspensions over
-            // the same day.
-            const covering = await client.query(
-              `SELECT 1 FROM suspension_records s WHERE ${COVERS_DAY} LIMIT 1`,
-              [row.memberId, on],
-            );
-            if (covering.rowCount > 0) {
-              throw refuse('already-suspended');
-            }
             const prior = await countSuspensionsBeforeInTx(
               client,
               row.memberId,
               on,
             );
+            const durationDays = recommendedSuspensionDays(prior);
+            // Linked to another row or not, earlier or later: never two live
+            // suspensions over the same day.
+            const overlapping = await client.query(
+              `SELECT 1 FROM suspension_records s WHERE ${OVERLAPS_RANGE} LIMIT 1`,
+              [row.memberId, on, durationDays],
+            );
+            if (overlapping.rowCount > 0) {
+              throw refuse('already-suspended');
+            }
             await this.options.beforeSuspensionInsertForTest?.();
             const inserted = await insertSuspensionInTx(client, {
               memberId: row.memberId,
               memberName: row.memberName || null,
               suspendedAt: on,
-              durationDays: recommendedSuspensionDays(prior),
+              durationDays,
               notes: normalizeNote(row.notes) || null,
             });
             if (inserted) {
