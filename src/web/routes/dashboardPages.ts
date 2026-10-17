@@ -6,8 +6,14 @@ import { Period } from '../../lib/reports/period.js';
 import { PostgresIdentityRepository } from '../../lib/repositories/postgresIdentityRepository.js';
 import { PostgresLinkProgressRepository } from '../../lib/repositories/postgresLinkProgressRepository.js';
 import { PostgresMemberRepository } from '../../lib/repositories/postgresMemberRepository.js';
+import { PostgresNoShowWorkspaceRepository } from '../../lib/repositories/postgresNoShowWorkspaceRepository.js';
 import { PostgresReportSnapshotRepository } from '../../lib/repositories/postgresReportSnapshotRepository.js';
 import { PostgresSuspensionRepository } from '../../lib/repositories/postgresSuspensionRepository.js';
+import {
+  WorkspaceActionInput,
+  WorkspaceActionResult,
+  WorkspaceSyncCode,
+} from '../../lib/workspace/service.js';
 import { AccessCheck } from '../roleGate.js';
 import { SessionStore } from '../session.js';
 import {
@@ -22,6 +28,7 @@ import { registerRefreshRoute } from './refresh.js';
 import { registerSessionRoutes } from './sessions.js';
 import { registerSuspensionRoutes } from './suspensions.js';
 import { registerTrendsRoutes } from './trends.js';
+import { registerWorkspaceActionRoutes } from './workspaceActions.js';
 
 /** The snapshot reads the month pages use: never save. */
 export type SnapshotPageReader = Pick<
@@ -63,6 +70,30 @@ export type IdentityPageReader = Pick<
   | 'listIdentityNames'
 >;
 
+/** The workspace reads the workspace, home and no-show history pages use: never sync or act. */
+export type WorkspacePageReader = Pick<
+  PostgresNoShowWorkspaceRepository,
+  | 'monthState'
+  | 'listMonths'
+  | 'listRows'
+  | 'countRows'
+  | 'getRow'
+  | 'listRecentEvents'
+  | 'statusCounts'
+  | 'statusesByMember'
+  | 'statusesForMember'
+>;
+
+/** The workspace's state changes (the service). Each may reject; the routes answer 'error'. */
+export interface WorkspaceActions {
+  /** performWorkspaceAction. The caller has already run the live Leadership check. */
+  perform(input: WorkspaceActionInput): Promise<WorkspaceActionResult>;
+  /** syncWorkspace. */
+  sync(period: Period): Promise<WorkspaceSyncCode>;
+  /** The moderation log (embed only, no pings); call sites fire and forget. */
+  moderationLog(entry: LogEntry): Promise<unknown>;
+}
+
 /** requestRebuild's answer, or 'unavailable' when the bot is not ready to build. */
 export type PageRebuildResult =
   RebuildResult | { status: 'unavailable'; message: string };
@@ -88,6 +119,10 @@ export interface DashboardPageDeps {
   linkProgress: () => Promise<LinkProgressPageReader>;
   /** Meetup id -> Discord id links, for the Hall of Fame mention text. */
   memberLinks: () => Promise<MemberLinkPageReader>;
+  /** The no-show workspace store (dashboard pool). */
+  workspace: () => Promise<WorkspacePageReader>;
+  /** The workspace's actions and sync. */
+  workspaceActions: WorkspaceActions;
 }
 
 /**
@@ -103,6 +138,7 @@ export function registerDashboardPages(
   registerHallOfFameRoutes(router, deps);
   registerNoShowHistoryRoutes(router, deps);
   registerRefreshRoute(router, deps);
+  registerWorkspaceActionRoutes(router, deps);
   registerSuspensionRoutes(router, deps);
   registerIdentityRoutes(router, deps);
   registerLinkProgressRoutes(router, deps);

@@ -75,6 +75,25 @@ export function monthPath(template: MonthPathTemplate, period: Period): string {
   return `${DASHBOARD_BASE}${template.replace(':period', key)}`;
 }
 
+const MAX_ROW_ID = 2 ** 31 - 1;
+
+/**
+ * '/dashboard/no-shows/2026-09/rows/12' (or '.../12/suspend'): monthPath's
+ * checks plus a row id from 1 to 2^31-1 (a Postgres SERIAL). Throws
+ * RangeError. The routes add the workspace range (parseWorkspaceMonth).
+ */
+export function workspaceRowPath(
+  period: Period,
+  rowId: number,
+  suffix?: 'suspend',
+): string {
+  const month = monthPath(DASHBOARD_PATHS.workspaceMonth, period);
+  if (!Number.isSafeInteger(rowId) || rowId < 1 || rowId > MAX_ROW_ID) {
+    throw new RangeError('workspaceRowPath needs a row id from 1 to 2^31-1');
+  }
+  return `${month}/rows/${rowId}${suffix === 'suspend' ? '/suspend' : ''}`;
+}
+
 /**
  * monthPath for a stored row's month: the path, or undefined when monthPath
  * refuses it (before the group's first month, or not a real month), so one

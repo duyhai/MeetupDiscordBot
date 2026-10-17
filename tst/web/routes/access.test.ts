@@ -70,6 +70,7 @@ const SAMPLE_PARAMS: Record<string, string> = {
   memberId: '123456',
   id: '1',
   side: 'old',
+  rowId: '1',
 };
 
 /** Statuses other than 200 that a signed-in, allowed GET is expected to answer. */
@@ -87,6 +88,9 @@ const EXPECTED_UNSAFE_ALLOWED: Record<string, number> = {
   'POST /organizer-login/start': 200,
   'POST /sessions/revoke': 303,
   'POST /reports/:period/refresh': 303,
+  // An empty form has no action: 'invalid', back to the month.
+  'POST /no-shows/:period/rows/:rowId': 303,
+  'POST /no-shows/:period/sync': 303,
 };
 
 function concrete(path: string): string {
@@ -149,6 +153,8 @@ describe('access matrix', () => {
     expect(labels).toContain('GET /identity/changes/:id/thumb/:side');
     expect(labels).toContain('GET /link-progress');
     expect(labels).toContain('GET /trends');
+    expect(labels).toContain('POST /no-shows/:period/rows/:rowId');
+    expect(labels).toContain('POST /no-shows/:period/sync');
     expect(UNSAFE.length).toBeGreaterThan(0);
   });
 

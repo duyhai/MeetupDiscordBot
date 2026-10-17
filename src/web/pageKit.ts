@@ -20,6 +20,7 @@ import {
   periodOf,
 } from '../lib/reports/period.js';
 import { AttendanceEvidence } from '../lib/reports/types.js';
+import { isWorkspaceMonth } from '../lib/workspace/months.js';
 import { tz } from '../util/timezone.js';
 import { dashboardLocals } from './dashboardRouter.js';
 import { SafeHtml, html, localUrl, staticRaw } from './html.js';
@@ -169,6 +170,25 @@ export function parseRouteMonth(value: unknown, now: Date): Period | undefined {
     return undefined;
   }
   return period;
+}
+
+/** parseRouteMonth plus the workspace range (WORKSPACE_FIRST_PERIOD through the current Pacific month). */
+export function parseWorkspaceMonth(
+  value: unknown,
+  now: Date,
+): Period | undefined {
+  const period = parseRouteMonth(value, now);
+  return period !== undefined && isWorkspaceMonth(period, now)
+    ? period
+    : undefined;
+}
+
+/** A workspace row id route param: 1-9 digits, no leading zero (so never 0). */
+export function parseRowId(value: unknown): number | undefined {
+  if (typeof value !== 'string' || !/^[1-9][0-9]{0,8}$/.test(value)) {
+    return undefined;
+  }
+  return Number(value);
 }
 
 /** 'Sep 3, 2026 7:00 PM' in the group's timezone. */

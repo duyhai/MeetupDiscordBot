@@ -4,7 +4,11 @@ import express from 'express';
 import { Logger } from 'tslog';
 
 import { BASE_DISCORD_BOT_URL, SERVER_ROLES } from '../constants.js';
-import { LogEntry, logActivity } from '../lib/helpers/discordLogger.js';
+import {
+  LogEntry,
+  logActivity,
+  logModeration,
+} from '../lib/helpers/discordLogger.js';
 import {
   BuildJobDeps,
   defaultBuildJobDeps,
@@ -14,7 +18,12 @@ import { PostgresReportSnapshotRepository } from '../lib/repositories/postgresRe
 import { PostgresIdentityRepository } from '../lib/repositories/postgresIdentityRepository.js';
 import { PostgresLinkProgressRepository } from '../lib/repositories/postgresLinkProgressRepository.js';
 import { PostgresMemberRepository } from '../lib/repositories/postgresMemberRepository.js';
+import { PostgresNoShowWorkspaceRepository } from '../lib/repositories/postgresNoShowWorkspaceRepository.js';
 import { PostgresSuspensionRepository } from '../lib/repositories/postgresSuspensionRepository.js';
+import {
+  performWorkspaceAction,
+  syncWorkspace,
+} from '../lib/workspace/service.js';
 import { ApplicationCache } from '../util/cache.js';
 import {
   baseSecurityHeaders,
@@ -138,6 +147,14 @@ const auditActivity = async (entry: LogEntry) => {
   return logActivity(discordClient, entry);
 };
 
+/** The moderation log for workspace actions and refusals: embed only, no pings. */
+const workspaceModerationLog = async (entry: LogEntry) => {
+  if (!discordClient) {
+    return false;
+  }
+  return logModeration(discordClient, entry);
+};
+
 /** Production page deps, each read wired to its repository's instance(). */
 export function dashboardPageDeps(): DashboardPageDeps {
   return {
@@ -168,6 +185,28 @@ export function dashboardPageDeps(): DashboardPageDeps {
     identity: () => PostgresIdentityRepository.instance(),
     linkProgress: () => PostgresLinkProgressRepository.instance(),
     memberLinks: () => PostgresMemberRepository.instance(),
+    workspace: () => PostgresNoShowWorkspaceRepository.instance(),
+    workspaceActions: {
+      perform: (input) =>
+        performWorkspaceAction(
+          {
+            now: () => new Date(),
+            repository: () => PostgresNoShowWorkspaceRepository.instance(),
+            moderationLog: workspaceModerationLog,
+          },
+          input,
+        ),
+      sync: (period) =>
+        syncWorkspace(
+          {
+            now: () => new Date(),
+            repository: () => PostgresNoShowWorkspaceRepository.instance(),
+            snapshots: () => PostgresReportSnapshotRepository.instance(),
+          },
+          period,
+        ),
+      moderationLog: workspaceModerationLog,
+    },
   };
 }
 
