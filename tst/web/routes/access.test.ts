@@ -141,6 +141,9 @@ describe('access matrix', () => {
     expect(labels).toContain('POST /sessions/revoke');
     expect(labels).toContain('GET /hall-of-fame');
     expect(labels).toContain('GET /hall-of-fame/:period');
+    expect(labels).toContain('GET /no-show-history');
+    expect(labels).toContain('GET /no-show-history/:period');
+    expect(labels).toContain('GET /no-show-history/members/:memberId');
     expect(labels).toContain('POST /reports/:period/refresh');
     expect(UNSAFE.length).toBeGreaterThan(0);
   });

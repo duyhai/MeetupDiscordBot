@@ -11,6 +11,7 @@ import {
   registerOrganizerLoginRoutes,
 } from './organizerLogin.js';
 import { registerHallOfFameRoutes } from './hallOfFame.js';
+import { registerNoShowHistoryRoutes } from './noShowHistory.js';
 import { registerRefreshRoute } from './refresh.js';
 import { registerSessionRoutes } from './sessions.js';
 
@@ -54,6 +55,7 @@ export function registerDashboardPages(
 ): void {
   registerSessionRoutes(router, deps);
   registerHallOfFameRoutes(router, deps);
+  registerNoShowHistoryRoutes(router, deps);
   registerRefreshRoute(router, deps);
   // Tasks 5-10 add one register…Routes(router, deps) line each.
 }

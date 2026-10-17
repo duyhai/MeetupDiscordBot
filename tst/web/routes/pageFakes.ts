@@ -11,9 +11,12 @@ import {
   HallOfFameEvent,
   HallOfFamePayload,
   MemberRef,
+  NoShowCasePayload,
+  NoShowPayload,
   ReportType,
 } from '../../../src/lib/reports/types.js';
 import {
+  MemberNoShowMonth,
   Snapshot,
   SnapshotMeta,
 } from '../../../src/lib/repositories/postgresReportSnapshotRepository.js';
@@ -64,7 +67,10 @@ const samePeriod = (a: Period, b: Period) =>
   a.year === b.year && a.month === b.month;
 
 /** An in-memory SnapshotPageReader over seeded rows; every method is a vi.fn. */
-export function fakeSnapshots(rows: SeedRow[]) {
+export function fakeSnapshots(
+  rows: SeedRow[],
+  memberMonths: MemberNoShowMonth[] = [],
+) {
   const find = (type: ReportType, period: Period) =>
     rows.find(
       (r) => r.meta.reportType === type && samePeriod(r.meta.period, period),
@@ -113,7 +119,12 @@ export function fakeSnapshots(rows: SeedRow[]) {
           .reverse()
           .map((r) => r.meta),
     ),
-    listMemberNoShowMonths: vi.fn(async () => []),
+    listMemberNoShowMonths: vi.fn(
+      async (
+        _memberId: string,
+        _options: { offset?: number; limit?: number } = {},
+      ): Promise<MemberNoShowMonth[]> => memberMonths,
+    ),
   } satisfies SnapshotPageReader;
 }
 
@@ -187,6 +198,85 @@ export function hofPayload(
     summary: { events: 61, hosts: 60, newHosts: 1 },
     totalEvents: 61,
     hosts,
+    ...overrides,
+  };
+}
+
+const noShowEvent = (i: number, title = `Event ${i}`) => ({
+  id: String(500 + i),
+  title,
+  eventUrl: `https://www.meetup.com/1-5genasians/events/${500 + i}/`,
+  dateTime: '2026-09-04T02:00:00.000Z',
+});
+
+/** One no-show case for member 2000+i; a warning unless `classification` says otherwise. */
+export function noShowCase(
+  i: number,
+  overrides: Partial<NoShowCasePayload> = {},
+): NoShowCasePayload {
+  return {
+    member: meetupMember(1000 + i, `Member ${i}`),
+    classification: 'warning',
+    counted: [noShowEvent(i)],
+    since: { day: '2025-10-01', reason: 'twelve-months' },
+    priorSuspensions: 0,
+    recommendedDays: 30,
+    hostedPastEvent: false,
+    ...overrides,
+  };
+}
+
+/**
+ * September 2026 no-show report. Case 0 has a hostile name and memberUrl and
+ * a hostile event title and URL; case 1 is a suspension candidate.
+ */
+export function noShowPayload(
+  overrides: Partial<NoShowPayload> = {},
+): NoShowPayload {
+  const hostile: NoShowCasePayload = noShowCase(0, {
+    member: {
+      ...meetupMember(1000, '<script>alert(1)</script>\u202e'),
+      memberUrl: 'https://evil.example/',
+    },
+    counted: [
+      {
+        ...noShowEvent(0, '"><img src=x onerror=alert(1)>'),
+        eventUrl: 'javascript:alert(1)',
+      },
+      noShowEvent(99, 'Board games'),
+    ],
+  });
+  return {
+    version: 1,
+    reportType: 'no_show',
+    period: periodKey(SEPT),
+    asOf: '2026-10-01T07:00:00.000Z',
+    summary: {
+      noShows: 3,
+      members: 2,
+      warnings: 1,
+      suspensionCandidates: 1,
+      cleared: 1,
+      departed: 1,
+    },
+    attendance: { pastEventsWithRsvps: 6, eventsWithNoShow: 2, noShows: 3 },
+    cases: [
+      hostile,
+      noShowCase(1, {
+        classification: 'suspension',
+        since: { day: '2026-03-02', reason: 'last-suspension' },
+        priorSuspensions: 1,
+        recommendedDays: 60,
+        hostedPastEvent: true,
+      }),
+    ],
+    cleared: [
+      {
+        member: meetupMember(3000, 'Cleared One'),
+        lastSuspendedDay: '2026-08-01',
+      },
+    ],
+    departed: [meetupMember(4000, 'Gone One')],
     ...overrides,
   };
 }
