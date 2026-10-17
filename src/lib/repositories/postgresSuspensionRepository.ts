@@ -340,7 +340,7 @@ export class PostgresSuspensionRepository implements SuspensionRepository {
     const result = await this.pool.query<Record<SuspensionState, number>>(
       `SELECT count(*) FILTER (WHERE ${STATE_WHERE.active})::int AS active,
               count(*) FILTER (WHERE ${STATE_WHERE.past})::int AS past,
-              count(*) FILTER (WHERE voided_at IS NOT NULL)::int AS voided
+              count(*) FILTER (WHERE ${STATE_WHERE.voided})::int AS voided
          FROM suspension_records`,
       [today],
     );
@@ -376,7 +376,11 @@ export class PostgresSuspensionRepository implements SuspensionRepository {
       );
     } catch (error) {
       if ((error as { code?: string }).code === '42P01') {
-        return new Map(); // undefined_table
+        // undefined_table. No ids in the message.
+        logger.warn(
+          'members table missing; suspension page shows no linked names',
+        );
+        return new Map();
       }
       throw error;
     }

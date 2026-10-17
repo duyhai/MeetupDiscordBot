@@ -1,5 +1,6 @@
 import dayjs from 'dayjs';
 import pg from 'pg';
+import { Logger } from 'tslog';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -7,7 +8,6 @@ import {
   pacificToday,
 } from '../../src/lib/helpers/suspensionList.js';
 import { PostgresMemberRepository } from '../../src/lib/repositories/postgresMemberRepository.js';
-
 import { suspensionHistory } from '../../src/lib/helpers/noShowReport.js';
 import {
   PostgresSuspensionRepository,
@@ -321,6 +321,67 @@ if (!POSTGRES_AVAILABLE) {
           expect(ids(await page('active', today)), now).toEqual(ids(command));
           // eslint-disable-next-line no-await-in-loop -- one instant at a time
           expect(ids(await page('past', today)), now).toEqual(ids(commandPast));
+        }
+      });
+
+      it('parity holds across the 2026-11-01 DST change', async () => {
+        await seed('1101', '2026-10-02', 30); // last day 10-31
+        await seed('1102', '2026-10-03', 30); // last day 11-01
+        await seed('1103', '2026-10-04', 30); // last day 11-02
+        const all = await repo.listAll();
+        for (const now of [
+          '2026-11-01T06:59:00Z', // Oct 31 PDT
+          '2026-11-01T07:00:00Z', // Nov 1 PDT
+          '2026-11-01T08:00:00Z', // still Nov 1
+          '2026-11-02T07:59:00Z', // Nov 1 11:59pm PST
+          '2026-11-02T08:00:00Z', // Nov 2 PST
+        ]) {
+          const today = pacificToday(new Date(now));
+          const command = all.filter((r) => isSuspensionActive(r, dayjs(now)));
+          // eslint-disable-next-line no-await-in-loop -- one instant at a time
+          expect(ids(await page('active', today)), now).toEqual(ids(command));
+          // eslint-disable-next-line no-await-in-loop -- one instant at a time
+          expect((await repo.countByState(today)).active, now).toBe(
+            command.length,
+          );
+        }
+      });
+
+      it('a missing members table: no linked names, one warning without ids', async () => {
+        await seed('8801', '2026-10-01', 30);
+        const pool = (repo as unknown as { pool: pg.Pool }).pool;
+        const realQuery = pool.query.bind(pool) as (
+          ...args: unknown[]
+        ) => Promise<unknown>;
+        const missing = Object.assign(
+          new Error('relation "members" does not exist'),
+          { code: '42P01' },
+        );
+        function fakeQuery(text: unknown, ...rest: unknown[]) {
+          if (typeof text === 'string' && text.includes('FROM members')) {
+            return Promise.reject(missing);
+          }
+          return realQuery(text, ...rest);
+        }
+        const query = vi
+          .spyOn(pool, 'query')
+          // eslint-disable-next-line @typescript-eslint/no-misused-promises -- pool.query's callback overload
+          .mockImplementation(fakeQuery);
+        const warn = vi.spyOn(Logger.prototype, 'warn');
+        try {
+          const rows = await page('active', '2026-10-05');
+          expect(rows.map((r) => r.memberId)).toEqual(['8801']);
+          expect(rows[0]).toMatchObject({
+            linkedName: null,
+            linkedDiscordId: null,
+          });
+          expect(warn).toHaveBeenCalledTimes(1);
+          const logged = JSON.stringify(warn.mock.calls[0]);
+          expect(logged).toContain('members table missing');
+          expect(logged).not.toContain('8801');
+        } finally {
+          warn.mockRestore();
+          query.mockRestore();
         }
       });
 

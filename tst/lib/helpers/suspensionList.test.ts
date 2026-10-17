@@ -167,6 +167,18 @@ describe('suspensionList exports (the dashboard reuses the command rule)', () =>
     expect(pacificToday(dayjs('2026-10-01T07:00:00Z'))).toBe('2026-10-01');
   });
 
+  it('pacificToday across the 2026-11-01 DST change', () => {
+    // Midnight Nov 1 is still PDT (UTC-7): the date turns at 07:00Z.
+    expect(pacificToday(new Date('2026-11-01T06:59:00Z'))).toBe('2026-10-31');
+    expect(pacificToday(new Date('2026-11-01T07:00:00Z'))).toBe('2026-11-01');
+    // 07:59Z and 08:00Z on Nov 1 are both 12:59/1:00am PDT: no turn there.
+    expect(pacificToday(new Date('2026-11-01T07:59:00Z'))).toBe('2026-11-01');
+    expect(pacificToday(new Date('2026-11-01T08:00:00Z'))).toBe('2026-11-01');
+    // Midnight Nov 2 is PST (UTC-8): the date turns at 08:00Z.
+    expect(pacificToday(new Date('2026-11-02T07:59:00Z'))).toBe('2026-11-01');
+    expect(pacificToday(new Date('2026-11-02T08:00:00Z'))).toBe('2026-11-02');
+  });
+
   it('accepts a Date as well as a Dayjs', () => {
     const at = new Date('2026-10-01T06:30:00Z');
     expect(isSuspensionActive(fixtures[0], at)).toBe(true);

@@ -37,8 +37,27 @@ function parseState(value: unknown): SuspensionState {
 const isValidDate = (v: unknown): v is Date =>
   v instanceof Date && !Number.isNaN(v.getTime());
 
-/** A row this page can render; anything else is the 503 page, never a 500. */
-function isPageRow(row: unknown): row is SuspensionPageRow {
+/** Text columns: a string, null, or absent. */
+const isOptionalText = (v: unknown): boolean =>
+  v === null || v === undefined || typeof v === 'string';
+
+const TEXT_FIELDS = [
+  'notes',
+  'voidReason',
+  'memberName',
+  'linkedName',
+  'voidedBy',
+  'linkedDiscordId',
+] as const;
+
+/**
+ * A row this tab can render; anything else is the 503 page, never a 500. A
+ * voided-tab row must carry a valid void time.
+ */
+function isPageRow(
+  row: unknown,
+  state: SuspensionState,
+): row is SuspensionPageRow {
   if (typeof row !== 'object' || row === null) {
     return false;
   }
@@ -50,7 +69,12 @@ function isPageRow(row: unknown): row is SuspensionPageRow {
     Number.isSafeInteger(r.durationDays) &&
     typeof r.lastDay === 'string' &&
     DAY.test(r.lastDay) &&
-    (r.voidedAt === null || isValidDate(r.voidedAt))
+    (state === 'voided'
+      ? isValidDate(r.voidedAt)
+      : r.voidedAt === null ||
+        r.voidedAt === undefined ||
+        isValidDate(r.voidedAt)) &&
+    TEXT_FIELDS.every((field) => isOptionalText(r[field]))
   );
 }
 
@@ -168,7 +192,7 @@ export function registerSuspensionRoutes(
       return;
     }
     const { counts, rows } = loaded.value;
-    if (!Array.isArray(rows) || !rows.every(isPageRow)) {
+    if (!Array.isArray(rows) || !rows.every((row) => isPageRow(row, state))) {
       unavailable(res, WHAT);
       return;
     }

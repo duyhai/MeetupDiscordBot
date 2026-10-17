@@ -303,4 +303,43 @@ describe('suspension records page', () => {
       expect(res.status, JSON.stringify(bad)).toBe(503);
     }
   });
+
+  it('503 when a voided row lacks a valid voidedAt or a text field has the wrong type', async () => {
+    const voided = (o: Partial<SuspensionPageRow>) =>
+      suspensionRow({
+        voidedAt: new Date('2026-09-02T17:00:00Z'),
+        voidedBy: '123456789012345678',
+        voidReason: 'dup',
+        ...o,
+      });
+    const bad = <T>(v: unknown) => v as T;
+    const cases: [SuspensionState, SuspensionPageRow][] = [
+      ['voided', voided({ voidedAt: null })],
+      ['voided', voided({ voidedAt: bad<Date>('2026-09-02T17:00:00Z') })],
+      ['voided', voided({ voidedAt: new Date('nope') })],
+      ['voided', voided({ voidReason: bad<string>(42) })],
+      ['voided', voided({ voidedBy: bad<string>({ id: 1 }) })],
+      ['active', suspensionRow({ notes: bad<string>(['x']) })],
+      ['active', suspensionRow({ memberName: bad<string>(7) })],
+      ['active', suspensionRow({ linkedName: bad<string>(true) })],
+      ['active', suspensionRow({ linkedDiscordId: bad<string>(123) })],
+    ];
+    for (const [state, row] of cases) {
+      // eslint-disable-next-line no-await-in-loop -- one app at a time
+      const { get } = await setup({ [state]: [row] });
+      // eslint-disable-next-line no-await-in-loop -- one request at a time
+      const res = await get(`${PAGE}?state=${state}`);
+      expect(res.status, `${state} ${JSON.stringify(row)}`).toBe(503);
+    }
+    // undefined text fields are fine.
+    const { get } = await setup({
+      voided: [
+        voided({
+          notes: bad<string>(undefined),
+          linkedName: bad<string>(undefined),
+        }),
+      ],
+    });
+    expect((await get(`${PAGE}?state=voided`)).status).toBe(200);
+  });
 });
