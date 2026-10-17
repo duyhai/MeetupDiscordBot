@@ -106,6 +106,83 @@ describe('dashboard session gate', () => {
     );
   });
 
+  /** Answers `value` after 300 ms, so concurrent requests overlap the check. */
+  const slowly = (value: boolean) => () =>
+    new Promise<boolean>((resolve) => {
+      setTimeout(() => resolve(value), 300);
+    });
+
+  it('10 concurrent requests at the re-check make one Discord fetch', async () => {
+    let now = 0;
+    const checkAccess = vi.fn().mockResolvedValue(true);
+    const { req } = await makeApp({ checkAccess, now: () => now });
+    const cookie = await signIn(req);
+    const atSignIn = checkAccess.mock.calls.length;
+    now = 10 * 60 * 1000;
+    checkAccess.mockImplementation(slowly(true));
+    const statuses = await Promise.all(
+      Array.from({ length: 10 }, () =>
+        req
+          .get('/dashboard')
+          .set('Cookie', cookie)
+          .then((r) => r.status),
+      ),
+    );
+    expect(statuses).toEqual(Array.from({ length: 10 }, () => 200));
+    expect(checkAccess).toHaveBeenCalledTimes(atSignIn + 1);
+  });
+
+  it('a role lost at a shared re-check ends every waiting request and is audited once', async () => {
+    let now = 0;
+    const checkAccess = vi.fn().mockResolvedValue(true);
+    const { req, deps } = await makeApp({ checkAccess, now: () => now });
+    const cookie = await signIn(req);
+    const otherBrowser = await signIn(req);
+    const atSignIn = checkAccess.mock.calls.length;
+    now = 10 * 60 * 1000;
+    checkAccess.mockImplementation(slowly(false));
+    const statuses = await Promise.all(
+      Array.from({ length: 10 }, () =>
+        req
+          .get('/dashboard')
+          .set('Cookie', cookie)
+          .then((r) => r.status),
+      ),
+    );
+    expect(statuses).toEqual(Array.from({ length: 10 }, () => 403));
+    expect(checkAccess).toHaveBeenCalledTimes(atSignIn + 1);
+    // This browser's session is gone (revokeUser only marks the others).
+    expect((await req.get('/dashboard').set('Cookie', cookie)).status).toBe(
+      302,
+    );
+    const ended = vi
+      .mocked(deps.audit)
+      .mock.calls.filter(([e]) => e.title === 'Dashboard session ended');
+    expect(ended).toHaveLength(1);
+    // The member's other browser was revoked by the shared check: it is
+    // signed out without another Discord fetch.
+    expect(
+      (await req.get('/dashboard').set('Cookie', otherBrowser)).status,
+    ).toBe(302);
+    expect(checkAccess).toHaveBeenCalledTimes(atSignIn + 1);
+  });
+
+  it('a finished re-check is not reused: the next stale request checks again', async () => {
+    let now = 0;
+    const checkAccess = vi.fn().mockResolvedValue(true);
+    const { req } = await makeApp({ checkAccess, now: () => now });
+    const cookie = await signIn(req);
+    const atSignIn = checkAccess.mock.calls.length;
+    now = 10 * 60 * 1000;
+    await req.get('/dashboard').set('Cookie', cookie);
+    now = 21 * 60 * 1000;
+    checkAccess.mockResolvedValue(false);
+    expect((await req.get('/dashboard').set('Cookie', cookie)).status).toBe(
+      403,
+    );
+    expect(checkAccess).toHaveBeenCalledTimes(atSignIn + 2);
+  });
+
   it('keeps the session but answers 503 when Discord is unreachable at re-check', async () => {
     let now = 0;
     const checkAccess = vi.fn().mockResolvedValue(true);

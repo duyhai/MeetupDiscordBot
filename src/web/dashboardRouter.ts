@@ -451,6 +451,50 @@ export function createDashboardRouter(deps: DashboardDeps): express.Router {
 
   // ---- The gate: a live session whose role check is current. ----
 
+  /**
+   * One role re-check per member at a time. A page with many lazy thumbnails
+   * reaches the 10-minute mark with many requests at once; they all await
+   * the same Discord fetch, and its result applies to all of them. On a lost
+   * role the revocation (every session of the member) and the audit post
+   * happen once, inside the shared check. Cleared when it settles, so the
+   * next stale request checks again.
+   */
+  const roleChecks = new Map<
+    string,
+    Promise<'allowed' | 'denied' | 'unreachable'>
+  >();
+  const recheckRole = (userId: string) => {
+    const inFlight = roleChecks.get(userId);
+    if (inFlight !== undefined) {
+      return inFlight;
+    }
+    const check = (async (): Promise<'allowed' | 'denied' | 'unreachable'> => {
+      let allowed: boolean;
+      try {
+        allowed = await deps.checkAccess(userId);
+      } catch (error: unknown) {
+        // Fail closed, but keep the session: Discord being down is not the
+        // member losing their role.
+        logger.warn(`Dashboard role re-check failed: ${String(error)}`);
+        return 'unreachable';
+      }
+      if (allowed) {
+        return 'allowed';
+      }
+      // Every browser this member signed in from, not just this one.
+      await (await sessions()).revokeUser(userId);
+      audit({
+        title: 'Dashboard session ended',
+        description: `<@${userId}> no longer holds a dashboard role.`,
+      });
+      return 'denied';
+    })().finally(() => {
+      roleChecks.delete(userId);
+    });
+    roleChecks.set(userId, check);
+    return check;
+  };
+
   const dashboardSessionGate = async function dashboardSessionGate(
     req: Request,
     res: Response,
@@ -477,29 +521,20 @@ export function createDashboardRouter(deps: DashboardDeps): express.Router {
       return;
     }
     if (now() - session.roleCheckedAt >= ROLE_RECHECK_MS) {
-      let allowed: boolean;
-      try {
-        allowed = await deps.checkAccess(session.userId);
-      } catch (error: unknown) {
-        // Fail closed, but keep the session: Discord being down is not the
-        // member losing their role.
-        logger.warn(`Dashboard role re-check failed: ${String(error)}`);
+      const outcome = await recheckRole(session.userId);
+      if (outcome === 'unreachable') {
         fail(res, 503);
         return;
       }
       const store = await sessions();
-      if (!allowed) {
-        // Every browser this member signed in from, not just this one.
-        await store.revokeUser(session.userId);
+      if (outcome === 'denied') {
+        // recheckRole already revoked every session of this member and
+        // audited it once; this request ends its own.
         await store.destroy(sid);
         res.append(
           'Set-Cookie',
           clearCookie(SESSION_COOKIE, SESSION_COOKIE_PATH),
         );
-        audit({
-          title: 'Dashboard session ended',
-          description: `<@${session.userId}> no longer holds a dashboard role.`,
-        });
         fail(res, 403);
         return;
       }
