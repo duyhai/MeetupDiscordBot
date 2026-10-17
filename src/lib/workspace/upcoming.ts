@@ -275,13 +275,27 @@ export function organizerFetchMany(
               if (isMeetupUnauthorized(error)) {
                 throw error;
               }
-              logger.warn(
-                `Upcoming RSVP read failed for one member: ${error instanceof Error ? error.name : 'Error'}`,
-              );
-              return { ok: false as const };
+              return {
+                ok: false as const,
+                errorName: error instanceof Error ? error.name : 'Error',
+              };
             }
           },
         );
+        // One warn per batch: counts and distinct error names only, never
+        // an id or a name.
+        const failedNames: string[] = [];
+        for (const one of lists) {
+          if (!one.ok) {
+            failedNames.push(one.errorName);
+          }
+        }
+        if (failedNames.length > 0) {
+          const names = [...new Set(failedNames)].sort();
+          logger.warn(
+            `Upcoming RSVP reads failed for ${failedNames.length} of ${memberIds.length} members: ${names.join(', ')}`,
+          );
+        }
         const out = new Map<string, EventSummary[] | undefined>();
         memberIds.forEach((id, i) => {
           const one = lists[i];

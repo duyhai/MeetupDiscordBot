@@ -1,4 +1,5 @@
 import { ClientError } from 'graphql-request';
+import { Logger } from 'tslog';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { KeyValueCache } from '../../../src/lib/cache/base.js';
@@ -536,6 +537,49 @@ describe('organizerFetchMany (the production fetchMany)', () => {
     const entries = await load(['111', '222']);
     expect(entries.get('111')?.state).toBe('ok');
     expect(entries.get('222')).toEqual({ state: 'unavailable' });
+  });
+
+  it('logs one warn per batch for failed reads: counts and error names, no ids or names', async () => {
+    class MeetupTimeout extends Error {
+      name = 'MeetupTimeout';
+    }
+    const o = organizer(async (id) => {
+      if (id === '222' || id === '444') {
+        throw new Error('meetup down for 222');
+      }
+      if (id === '333') {
+        throw new MeetupTimeout('slow for 333');
+      }
+      return [];
+    });
+    const warn = vi.spyOn(Logger.prototype, 'warn');
+    try {
+      const out = await organizerFetchMany(
+        () => undefined,
+        o.deps,
+      )(['111', '222', '333', '444']);
+      expect([...out.keys()]).toEqual(['111']);
+      const lines = warn.mock.calls.map((c) => String(c[0]));
+      expect(lines).toEqual([
+        'Upcoming RSVP reads failed for 3 of 4 members: Error, MeetupTimeout',
+      ]);
+      for (const id of ['111', '222', '333', '444']) {
+        expect(lines.join('\n')).not.toContain(id);
+      }
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('a batch with no failed reads logs no warn', async () => {
+    const o = organizer(async () => []);
+    const warn = vi.spyOn(Logger.prototype, 'warn');
+    try {
+      await organizerFetchMany(() => undefined, o.deps)(['111', '222']);
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it('a 401 rejects the whole batch, so the organizer client refreshes once and retries', async () => {

@@ -771,22 +771,38 @@ const suspension = (
         expect((await repo.linkedRecordIds([free])).size).toBe(0);
       });
 
-      it('linkedRecordIds skips the query for no ids and refuses an unbounded list', async () => {
-        let queries = 0;
+      it('linkedRecordIds skips the query for no ids and reads a long list in chunks of 1000', async () => {
+        await sync([suspension('111')]);
+        const linkedId = (
+          await pool.query<{ id: number }>(
+            `INSERT INTO suspension_records (member_id, member_name, suspended_at, duration_days)
+             VALUES ('111', 'M111', '2026-10-02T00:00:00Z'::timestamptz, 30) RETURNING id`,
+          )
+        ).rows[0].id;
+        await pool.query(
+          `UPDATE noshow_workspace_rows SET status = 'suspended', suspension_record_id = $1
+            WHERE meetup_member_id = '111' AND period = '2026-09-01'::date`,
+          [linkedId],
+        );
+        const sizes: number[] = [];
         const counting = new PostgresNoShowWorkspaceRepository({
           query: async (text: string, values?: unknown[]) => {
-            queries += 1;
+            sizes.push((values?.[0] as unknown[]).length);
             return pool.query(text, values);
           },
         } as unknown as pg.Pool);
         expect((await counting.linkedRecordIds([])).size).toBe(0);
         expect((await counting.linkedRecordIds([0, -5])).size).toBe(0);
-        expect(queries).toBe(0);
-        const many = Array.from({ length: 1001 }, (_, i) => i + 1);
-        await expect(counting.linkedRecordIds(many)).rejects.toThrow(
-          RangeError,
+        expect(sizes).toEqual([]);
+        // 2001 distinct ids (plus a repeat), the linked one in the last chunk.
+        const many = Array.from(
+          { length: 2000 },
+          (_, i) => linkedId + 1000 + i,
         );
-        expect(queries).toBe(0);
+        many.push(linkedId, linkedId);
+        const linked = await counting.linkedRecordIds(many);
+        expect([...linked]).toEqual([linkedId]);
+        expect(sizes).toEqual([1000, 1000, 1]);
       });
 
       it('listMonths lists synced months newest first', async () => {
