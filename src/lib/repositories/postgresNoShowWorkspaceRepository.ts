@@ -323,7 +323,7 @@ const UNLINKED_LIVE = `s.member_id = $1 AND s.voided_at IS NULL AND s.suspended_
  * never in it (NOT EXISTS), and the one-row-per-record unique index is the
  * backstop.
  */
-const UNLINKABLE_WINDOW = `${UNLINKED_LIVE} AND s.suspended_at < $3`;
+const UNLINKED_IN_WINDOW = `${UNLINKED_LIVE} AND s.suspended_at < $3`;
 
 /**
  * A live record of member $1 whose active range overlaps the new one: the
@@ -599,7 +599,7 @@ export class PostgresNoShowWorkspaceRepository {
               throw refuse('bad-date');
             }
             const live = await client.query<{ id: number; suspended_at: Date }>(
-              `SELECT s.id, s.suspended_at FROM suspension_records s WHERE ${UNLINKABLE_WINDOW}
+              `SELECT s.id, s.suspended_at FROM suspension_records s WHERE ${UNLINKED_IN_WINDOW}
                 ORDER BY s.suspended_at DESC, s.id DESC LIMIT 1`,
               [row.memberId, floor, until],
             );
@@ -660,7 +660,7 @@ export class PostgresNoShowWorkspaceRepository {
               throw refuse('record-unavailable');
             }
             const rec = await client.query<SuspensionRecordRow>(
-              `SELECT s.* FROM suspension_records s WHERE s.id = $4 AND ${UNLINKABLE_WINDOW} FOR UPDATE`,
+              `SELECT s.* FROM suspension_records s WHERE s.id = $4 AND ${UNLINKED_IN_WINDOW} FOR UPDATE`,
               [row.memberId, floor, until, id],
             );
             if (!rec.rows[0]) {

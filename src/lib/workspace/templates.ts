@@ -72,7 +72,7 @@ export function warningMessage(input: {
 
 /**
  * The part both suspension messages share: the length, the end date (the
- * last suspended day, lastSuspendedDay's arithmetic), the fee and the links.
+ * last suspended day, lastSuspendedDay's arithmetic) and the fee; callers add the links.
  */
 function suspensionTerms(input: {
   priorSuspensions: number;
@@ -152,7 +152,7 @@ export function recordedSuspensionMessage(input: {
   });
   return [
     `Hello ${greeting(input.memberName)}, because of your no-shows, under our Attendance & No-Show Policy ` +
-      `(${NO_SHOW_POLICY_URL}) you are being suspended from the group for ${days} days. Your current RSVPs will ` +
+      `(${NO_SHOW_POLICY_URL}), you are being suspended from the group for ${days} days. Your current RSVPs will ` +
       `be removed. After ${endDate}, you can reapply to join on Meetup. ${fee}If you think this was a mistake, ` +
       `you can appeal here: ${NO_SHOW_APPEAL_URL}. Thank you for understanding.`,
     SIGNATURE,
