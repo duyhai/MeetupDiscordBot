@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { periodKey } from '../../../src/lib/reports/period.js';
 import {
   isWorkspaceMonth,
+  linkWindow,
   WORKSPACE_FIRST_PERIOD,
   workspaceMonths,
 } from '../../../src/lib/workspace/months.js';
@@ -36,5 +37,20 @@ describe('workspace months', () => {
       false,
     );
     expect(isWorkspaceMonth(undefined, now)).toBe(false);
+  });
+});
+
+describe('linkWindow', () => {
+  it("runs from the case month's 1st to the 1st of the month after next, UTC midnights", () => {
+    expect(linkWindow({ year: 2026, month: 9 })).toEqual({
+      from: new Date('2026-09-01T00:00:00.000Z'),
+      until: new Date('2026-11-01T00:00:00.000Z'),
+    });
+  });
+  it('crosses the year', () => {
+    expect(linkWindow({ year: 2026, month: 12 })).toEqual({
+      from: new Date('2026-12-01T00:00:00.000Z'),
+      until: new Date('2027-02-01T00:00:00.000Z'),
+    });
   });
 });

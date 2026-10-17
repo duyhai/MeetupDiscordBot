@@ -142,7 +142,7 @@ export const WORKSPACE_RESULT_MESSAGES = {
     'That note is too long (notes up to 2000 characters, void reasons up to 500).',
   'no-earlier-status': 'This card has no earlier status to go back to.',
   'already-suspended':
-    'This member already has a suspension dated in this month. Link it from the card instead of recording another.',
+    'This member already has a suspension dated in this month or the next. Link it from the card instead of recording another.',
   'suspension-overlap':
     'This member already has a live suspension covering some of those days. Nothing was recorded.',
   'record-unavailable':

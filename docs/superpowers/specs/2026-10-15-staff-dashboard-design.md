@@ -193,7 +193,7 @@ Actions:
 | **Mark as sent** | Status → `warning_sent`. Records who and when. |
 | **Put on hold** | Status → `on_hold`; a note is required (e.g. "paid for Halloween, revisit after 3rd no-show"). |
 | **Record suspension** | 1.5 Leadership Team only. Confirm step with the suspension date (default today; from the month's first day through today, Pacific). The length and fee are computed by the policy from the member's suspensions dated before the chosen day, and the page reloads them when the date changes. Writes a `suspension_records` row with the command's SQL, carrying the notes; status → `suspended`. Refused if the range overlaps a live suspension of the member (an override may come later). |
-| **Link suspension** | 1.5 Leadership Team only. Links a live suspension recorded outside the workspace (e.g. with `/meetup_record_suspension`) dated in the month (its 1st through its last day); status → `suspended`; a record another row already links is never offered. |
+| **Link suspension** | 1.5 Leadership Team only. Links a live suspension recorded outside the workspace (e.g. with `/meetup_record_suspension`) dated from the month's 1st through the last day of the next month (a September case is often suspended in October); status → `suspended`; a record another row already links is never offered. |
 | **Skip** | Status → `skipped`; note required. |
 | **Void** | 1.5 Leadership Team only. For a recorded suspension: reason required; uses the command's void SQL. |
 | **Notes** | Edit at any time. |

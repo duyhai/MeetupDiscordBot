@@ -677,48 +677,49 @@ describe('GET /dashboard/no-shows/:period (month cards)', () => {
     );
   });
 
-  it("only records dated in the card's month are shown or offered for linking", async () => {
+  it("only records dated from the card's month through the next are shown or offered for linking", async () => {
+    const at = (id: number, iso: string) =>
+      suspensionRecord({
+        id,
+        memberId: '2001',
+        suspendedAt: new Date(`${iso}T00:00:00Z`),
+      });
     const { get, ws } = await setup({
       records: [
-        suspensionRecord({
-          id: 7,
-          memberId: '2001',
-          suspendedAt: new Date('2026-08-31T00:00:00Z'),
-        }),
-        suspensionRecord({
-          id: 8,
-          memberId: '2001',
-          suspendedAt: new Date('2026-09-30T00:00:00Z'),
-        }),
-        suspensionRecord({
-          id: 9,
-          memberId: '2001',
-          suspendedAt: new Date('2026-10-01T00:00:00Z'),
-        }),
+        at(6, '2026-08-31'),
+        at(7, '2026-09-01'),
+        at(8, '2026-10-31'),
+        at(9, '2026-11-01'),
       ],
       leader: true,
     });
     const res = await get(MONTH);
     const card = cards(res.text)[1];
+    // The first day of the month is in (the page's lower bound is >=).
     expect(words(card)).toContain(
-      'Suspended outside the workspace on Sep 30, 2026 (#8)',
+      'Suspended outside the workspace on Sep 1, 2026 (#7)',
+    );
+    expect(card).toContain('<input type="hidden" name="recordId" value="7" />');
+    // A September case suspended in October with the slash command.
+    expect(words(card)).toContain(
+      'Suspended outside the workspace on Oct 31, 2026 (#8)',
     );
     expect(card).toContain('<input type="hidden" name="recordId" value="8" />');
-    for (const id of ['7', '9']) {
+    for (const id of ['6', '9']) {
       expect(card).not.toContain(`(#${id})`);
       expect(card).not.toContain(`name="recordId" value="${id}"`);
     }
-    // Only the in-month record is asked about.
-    expect(ws.linkedRecordIds).toHaveBeenCalledWith([8]);
+    // Only the records in the window are asked about.
+    expect(ws.linkedRecordIds).toHaveBeenCalledWith([7, 8]);
   });
 
-  it('an October record never reaches the September card, linked elsewhere or not', async () => {
+  it('a November record never reaches the September card, linked elsewhere or not', async () => {
     const { get, ws } = await setup({
       records: [
         suspensionRecord({
           id: 9,
           memberId: '2001',
-          suspendedAt: new Date('2026-10-02T00:00:00Z'),
+          suspendedAt: new Date('2026-11-02T00:00:00Z'),
         }),
       ],
       leader: true,

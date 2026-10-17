@@ -1322,62 +1322,126 @@ const suspension = (
         expect(outcome.suspension?.durationDays).toBe(30);
       });
 
-      describe("only records dated in the case's month", () => {
-        it('September cannot link an October record; October can', async () => {
+      describe("only records dated from the case's month through the next", () => {
+        /** As /meetup_record_suspension writes it (recordCsvRows). */
+        const viaCommand = async (memberId: string, iso: string) => {
+          const suspensions = await PostgresSuspensionRepository.instance();
+          const csv = await recordCsvRows(
+            suspensions,
+            [
+              {
+                memberId,
+                memberName: `M${memberId}`,
+                durationDays: 30,
+                suspendedAt: day(iso),
+                notes: null,
+                rowNumber: 2,
+              },
+            ],
+            new Map([[memberId, `M${memberId}`]]),
+          );
+          expect(csv.recorded).toHaveLength(1);
+          return (
+            await pool.query<{ id: number }>(
+              'SELECT id FROM suspension_records WHERE member_id = $1 AND suspended_at = $2',
+              [memberId, day(iso)],
+            )
+          ).rows[0].id;
+        };
+
+        it("September links the October record /meetup_record_suspension made; October's card then cannot take it", async () => {
           const id = await seedSuspension();
           const october = await seedSuspension('222', OCTOBER);
-          const later = await insertRecord('222', '2026-10-01');
-          expect(
-            await act(id, 'link_suspension', { linkRecordId: later }),
-          ).toEqual({ ok: false, reason: 'record-unavailable' });
-          expect(await stateOf(id)).toMatchObject({
-            version: 1,
-            status: 'new',
-          });
-          const outcome = okOf(
-            await act(october, 'link_suspension', {
-              linkRecordId: later,
-              period: OCTOBER,
-            }),
-          );
-          expect(outcome.suspension?.id).toBe(later);
-        });
-
-        it('a record dated the last day of the month can be linked', async () => {
-          const id = await seedSuspension();
-          const last = await insertRecord('222', '2026-09-30');
-          expect(
-            okOf(await act(id, 'link_suspension', { linkRecordId: last }))
-              .suspension?.id,
-          ).toBe(last);
-        });
-
-        it('recording in September never offers an October record', async () => {
-          const id = await seedSuspension();
-          await insertRecord('222', '2026-10-02');
-          // Its days overlap the new ones: refused, with nothing to link.
+          const record = await viaCommand('222', '2026-10-06');
+          // Recording on September's card offers it.
           expect(
             await act(id, 'record_suspension', {
-              suspendedOn: day('2026-10-03'),
-            }),
-          ).toEqual({ ok: false, reason: 'already-suspended' });
-          expect(await count('suspension_records')).toBe(1);
-          expect((await stateOf(id)).version).toBe(1);
-        });
-
-        it('a September record is still offered when an October one exists too', async () => {
-          const id = await seedSuspension();
-          const september = await insertRecord('222', '2026-09-12');
-          await insertRecord('222', '2026-10-15');
-          expect(
-            await act(id, 'record_suspension', {
-              suspendedOn: day('2026-10-03'),
+              suspendedOn: day('2026-10-06'),
             }),
           ).toEqual({
             ok: false,
             reason: 'already-suspended',
-            existing: { id: september, suspendedAt: day('2026-09-12') },
+            existing: { id: record, suspendedAt: day('2026-10-06') },
           });
+          expect(
+            okOf(await act(id, 'link_suspension', { linkRecordId: record }))
+              .suspension?.id,
+          ).toBe(record);
+          expect(
+            await act(october, 'link_suspension', {
+              linkRecordId: record,
+              period: OCTOBER,
+            }),
+          ).toEqual({ ok: false, reason: 'record-unavailable' });
+          expect(await stateOf(october)).toMatchObject({
+            version: 1,
+            status: 'new',
+            suspension_record_id: null,
+          });
+        });
+
+        it('the unique index holds when two cards link one record', async () => {
+          const id = await seedSuspension();
+          const october = await seedSuspension('222', OCTOBER);
+          const record = await insertRecord('222', '2026-10-06');
+          okOf(await act(id, 'link_suspension', { linkRecordId: record }));
+          await expect(
+            pool.query(
+              `UPDATE noshow_workspace_rows SET status = 'suspended', suspension_record_id = $2 WHERE id = $1`,
+              [october, record],
+            ),
+          ).rejects.toMatchObject({ code: '23505' });
+        });
+
+        it('a November record is refused for September and never offered', async () => {
+          const id = await seedSuspension();
+          const november = await insertRecord('222', '2026-11-01');
+          expect(
+            await act(id, 'link_suspension', { linkRecordId: november }),
+          ).toEqual({ ok: false, reason: 'record-unavailable' });
+          // Its days do not overlap Sep 10..Oct 9: September records its own.
+          const outcome = okOf(
+            await act(id, 'record_suspension', {
+              suspendedOn: day('2026-09-10'),
+            }),
+          );
+          expect(outcome.linkedExisting).toBe(false);
+          expect(outcome.suspension?.id).not.toBe(november);
+        });
+
+        it.each([
+          ['2026-09-01', true],
+          ['2026-10-31', true],
+          ['2026-11-01', false],
+          ['2026-08-31', false],
+        ])('a record dated %s: linkable from September %s', async (iso, ok) => {
+          const id = await seedSuspension();
+          const record = await insertRecord('222', iso);
+          const outcome = await act(id, 'link_suspension', {
+            linkRecordId: record,
+          });
+          if (ok) {
+            expect(okOf(outcome).suspension?.id).toBe(record);
+          } else {
+            expect(outcome).toEqual({
+              ok: false,
+              reason: 'record-unavailable',
+            });
+          }
+        });
+
+        it('October offers the record when September has not linked it', async () => {
+          await seedSuspension();
+          const october = await seedSuspension('222', OCTOBER);
+          const record = await insertRecord('222', '2026-10-06');
+          expect(
+            okOf(
+              await act(october, 'link_suspension', {
+                linkRecordId: record,
+                period: OCTOBER,
+              }),
+            ).suspension?.id,
+          ).toBe(record);
         });
       });
 

@@ -1,8 +1,11 @@
 import {
   comparePeriods,
+  nextPeriod,
   Period,
+  periodDate,
   periodOf,
   previousPeriod,
+  suspensionCutoff,
 } from '../reports/period.js';
 
 /**
@@ -22,6 +25,22 @@ export function isWorkspaceMonth(p: Period | undefined, now: Date): boolean {
     comparePeriods(p, WORKSPACE_FIRST_PERIOD) >= 0 &&
     comparePeriods(p, periodOf(now)) <= 0
   );
+}
+
+/**
+ * The suspension dates a case's card may link (lead review, 2026-10-17): from
+ * the case month's 1st through the last day of the month after it, in the
+ * stored convention (UTC midnights): `from` included, `until` (the 1st of
+ * the month after next) excluded. A September case is usually suspended in
+ * October, often with /meetup_record_suspension, and its card must be able
+ * to link that record. The action's SQL and the month page both use it, so
+ * the page offers only what the POST takes.
+ */
+export function linkWindow(p: Period): { from: Date; until: Date } {
+  return {
+    from: new Date(`${periodDate(p)}T00:00:00.000Z`),
+    until: suspensionCutoff(nextPeriod(p)),
+  };
 }
 
 /** Newest first: the current Pacific month back to WORKSPACE_FIRST_PERIOD. */
