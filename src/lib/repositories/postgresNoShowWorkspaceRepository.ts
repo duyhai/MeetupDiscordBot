@@ -308,6 +308,14 @@ const UNLINKED_LIVE = `s.member_id = $1 AND s.voided_at IS NULL AND s.suspended_
   AND NOT EXISTS (SELECT 1 FROM noshow_workspace_rows w WHERE w.suspension_record_id = s.id)`;
 
 /**
+ * A live record of member $1 whose active range covers the day $2 (UTC
+ * midnight of a date): from suspended_at's UTC day through its last day,
+ * inclusive. lastSuspendedDay and isSuspensionActive's rule, in SQL.
+ */
+const COVERS_DAY = `s.member_id = $1 AND s.voided_at IS NULL AND s.suspended_at <= $2
+  AND ((s.suspended_at AT TIME ZONE 'UTC')::date + s.duration_days - 1) >= ($2::timestamptz AT TIME ZONE 'UTC')::date`;
+
+/**
  * The month-by-month no-show workspace: one row per member per month,
  * synced from the stored no-show report, plus an append-only event trail.
  * Uses the dashboard pool; suspension SQL inside its transactions runs on
@@ -497,6 +505,10 @@ export class PostgresNoShowWorkspaceRepository {
    * suspension write included. Suspension SQL is the command's (shared
    * constants), run on this transaction's client.
    *
+   * record_suspension is refused as already-suspended when an unlinked live
+   * record in the month exists (offered to link) or when any live record
+   * covers the chosen day, linked to another row or not.
+   *
    * A refusal writes nothing here, not even an event (the events CHECK has
    * no refusal action). Who may act is the caller's check.
    */
@@ -569,6 +581,15 @@ export class PostgresNoShowWorkspaceRepository {
                 id: live.rows[0].id,
                 suspendedAt: live.rows[0].suspended_at,
               });
+            }
+            // Linked to another row or not: never two live suspensions over
+            // the same day.
+            const covering = await client.query(
+              `SELECT 1 FROM suspension_records s WHERE ${COVERS_DAY} LIMIT 1`,
+              [row.memberId, on],
+            );
+            if (covering.rowCount > 0) {
+              throw refuse('already-suspended');
             }
             const prior = await countSuspensionsBeforeInTx(
               client,

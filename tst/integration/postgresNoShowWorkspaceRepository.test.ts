@@ -1293,10 +1293,11 @@ const suspension = (
 
       /**
        * The member lock serialises suspension writes across that member's
-       * rows. A record linked to another row is not "already suspended"
-       * (UNLINKED_LIVE), so September and October can each record one; what
-       * the lock guarantees is that the second sees the first: its check and
-       * its prior count run after the first commits.
+       * rows. A record linked to another row is not offered for linking
+       * (UNLINKED_LIVE), so September and October can each record one on
+       * days that don't overlap; what the lock guarantees is that the second
+       * sees the first: its checks and its prior count run after the first
+       * commits.
        */
       it('two rows of one member recording at once are serialised: the later one counts the earlier', async () => {
         for (let run = 0; run < 5; run += 1) {
@@ -1324,7 +1325,7 @@ const suspension = (
             ),
             sleep(40).then(() =>
               act(oct, 'record_suspension', {
-                suspendedOn: day('2026-10-06'),
+                suspendedOn: day('2026-11-10'),
                 period: OCTOBER,
               }),
             ),
@@ -1349,9 +1350,100 @@ const suspension = (
         ]);
         expect(outcomes.filter((o) => o.ok)).toHaveLength(1);
         expect(outcomes.filter((o) => !o.ok)).toEqual([
-          { ok: false, reason: 'record-unavailable' },
+          { ok: false, reason: 'already-suspended' },
         ]);
         expect(await count('suspension_records')).toBe(1);
+      });
+
+      describe('overlapping suspensions', () => {
+        const recordSeptember = async (sep: number, iso = '2026-10-01') =>
+          okOf(await act(sep, 'record_suspension', { suspendedOn: day(iso) }));
+        const recordOctober = (oct: number, iso: string) =>
+          act(oct, 'record_suspension', {
+            suspendedOn: day(iso),
+            period: OCTOBER,
+          });
+
+        it('a date inside a live suspension linked to another row is refused', async () => {
+          const sep = await seedSuspension('222', SEPTEMBER);
+          const oct = await seedSuspension('222', OCTOBER);
+          expect((await recordSeptember(sep)).suspension?.durationDays).toBe(
+            30,
+          );
+          for (const iso of ['2026-10-01', '2026-10-15', '2026-10-30']) {
+            // eslint-disable-next-line no-await-in-loop -- one date at a time
+            expect(await recordOctober(oct, iso), iso).toEqual({
+              ok: false,
+              reason: 'already-suspended',
+            });
+          }
+          expect(await count('suspension_records')).toBe(1);
+          expect(await stateOf(oct)).toMatchObject({
+            version: 1,
+            status: 'new',
+          });
+        });
+
+        it('is refused when the two run at once, the lock serialising them', async () => {
+          for (let run = 0; run < 5; run += 1) {
+            // eslint-disable-next-line no-await-in-loop -- one race per run, each from a clean slate
+            await pool.query(
+              `TRUNCATE noshow_workspace_events, noshow_workspace_rows,
+                 noshow_workspace_months, suspension_records RESTART IDENTITY CASCADE`,
+            );
+            // eslint-disable-next-line no-await-in-loop -- as above
+            const sep = await seedSuspension('222', SEPTEMBER);
+            // eslint-disable-next-line no-await-in-loop -- as above
+            const oct = await seedSuspension('222', OCTOBER);
+            const slow = new PostgresNoShowWorkspaceRepository(pool, {
+              beforeSuspensionInsertForTest: () => sleep(150),
+            });
+            // eslint-disable-next-line no-await-in-loop -- as above
+            const [first, second] = await Promise.all([
+              act(
+                sep,
+                'record_suspension',
+                { suspendedOn: day('2026-10-01') },
+                slow,
+              ),
+              sleep(40).then(() => recordOctober(oct, '2026-10-15')),
+            ]);
+            expect(first.ok, `run ${run}`).toBe(true);
+            expect(second, `run ${run}`).toEqual({
+              ok: false,
+              reason: 'already-suspended',
+            });
+            // eslint-disable-next-line no-await-in-loop -- as above
+            expect(await count('suspension_records'), `run ${run}`).toBe(1);
+          }
+        });
+
+        it('a date after the earlier suspension ends records, escalated', async () => {
+          const sep = await seedSuspension('222', SEPTEMBER);
+          const oct = await seedSuspension('222', OCTOBER);
+          await recordSeptember(sep); // 10-01 through 10-30
+          const outcome = okOf(await recordOctober(oct, '2026-10-31'));
+          expect(outcome.suspension?.durationDays).toBe(60);
+          expect(outcome.linkedExisting).toBe(false);
+        });
+
+        it('2026-11-15, after the October 1 suspension ends on Oct 30, records with 60 days', async () => {
+          const sep = await seedSuspension('222', SEPTEMBER);
+          const oct = await seedSuspension('222', OCTOBER);
+          await recordSeptember(sep);
+          const outcome = okOf(await recordOctober(oct, '2026-11-15'));
+          expect(outcome.suspension?.durationDays).toBe(60);
+          expect(await count('suspension_records')).toBe(2);
+        });
+
+        it('a voided earlier record does not block', async () => {
+          const sep = await seedSuspension('222', SEPTEMBER);
+          const oct = await seedSuspension('222', OCTOBER);
+          await recordSeptember(sep);
+          okOf(await act(sep, 'void', { note: 'wrong member' }));
+          const outcome = okOf(await recordOctober(oct, '2026-10-15'));
+          expect(outcome.suspension?.durationDays).toBe(30);
+        });
       });
 
       it('a refused action leaves the version unchanged', async () => {
