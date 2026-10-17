@@ -48,9 +48,12 @@ export class MeetupRecordSuspensionCommands {
     interaction: CommandInteraction,
   ) {
     await discordCommandWrapper(interaction, async () => {
+      // The role itself, not Administrator (Hai, 2026-10-17).
       await requireModOrOrganizer(
         interaction,
-        'Only moderators and organizers can record suspensions.',
+        'Only the 1.5 Leadership Team can record suspensions.',
+        ['leadership'],
+        { allowAdmin: false },
       );
       // Parse the file before asking for Meetup authorization, so a
       // malformed file fails straight away.
