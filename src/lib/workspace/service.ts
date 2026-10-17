@@ -68,6 +68,7 @@ export interface WorkspaceServiceDeps {
 
 const VERSION = /^[0-9]{1,9}$/;
 const RECORD_ID = /^[0-9]{1,9}$/;
+const DAY = /^[0-9]{4}-[0-9]{2}-[0-9]{2}$/;
 const DISCORD_ID = /^[0-9]{17,20}$/;
 const MEMBER_ID = /^[0-9]{1,20}$/;
 /** Code points of a note before escaping (the brief's 900). */
@@ -126,6 +127,62 @@ function errorClass(error: unknown): string {
   return error instanceof Error ? error.name : 'Error';
 }
 
+/** The form fields validateActionFields reads: raw, as the body parser gave them. */
+export interface ActionFieldInput {
+  version: unknown;
+  date?: unknown;
+  recordId?: unknown;
+}
+
+export interface ActionFields {
+  expectedVersion: number;
+  /** record_suspension: the Pacific date as its UTC midnight. */
+  suspendedOn?: Date;
+  /** link_suspension: the record to link. */
+  linkRecordId?: number;
+}
+
+/**
+ * The one check of an action's version, suspension date and record id, used
+ * by both the route (before any database work) and the service, so the two
+ * cannot disagree. The version and record id are 1-9 digits; the date is
+ * YYYY-MM-DD, a real calendar day, from the month's first day (the stored
+ * convention) through today, Pacific.
+ */
+export function validateActionFields(
+  action: WorkspaceAction,
+  input: ActionFieldInput,
+  period: Period,
+  now: Date,
+):
+  | { ok: true; fields: ActionFields }
+  | { ok: false; code: 'invalid' | 'bad-date' } {
+  const { version } = input;
+  if (typeof version !== 'string' || !VERSION.test(version)) {
+    return { ok: false, code: 'invalid' };
+  }
+  const fields: ActionFields = { expectedVersion: Number(version) };
+  if (action === 'record_suspension') {
+    const day = typeof input.date === 'string' ? input.date : '';
+    const suspendedOn = DAY.test(day) ? parseUtcDateStrict(day) : undefined;
+    if (
+      suspendedOn === undefined ||
+      day < periodDate(period) ||
+      day > pacificToday(now)
+    ) {
+      return { ok: false, code: 'bad-date' };
+    }
+    fields.suspendedOn = suspendedOn;
+  }
+  if (action === 'link_suspension') {
+    if (typeof input.recordId !== 'string' || !RECORD_ID.test(input.recordId)) {
+      return { ok: false, code: 'invalid' };
+    }
+    fields.linkRecordId = Number(input.recordId);
+  }
+  return { ok: true, fields };
+}
+
 /**
  * One staff action on one card. Validates the raw form values, applies the
  * action in the repository's single transaction, then, after commit, posts
@@ -137,11 +194,9 @@ export async function performWorkspaceAction(
   deps: WorkspaceServiceDeps,
   input: WorkspaceActionInput,
 ): Promise<WorkspaceActionResult> {
-  const { action, version } = input;
+  const { action } = input;
   if (
     !isAction(action) ||
-    typeof version !== 'string' ||
-    !VERSION.test(version) ||
     typeof input.actor !== 'string' ||
     !DISCORD_ID.test(input.actor) ||
     !Number.isSafeInteger(input.rowId) ||
@@ -149,31 +204,16 @@ export async function performWorkspaceAction(
   ) {
     return { code: 'invalid' };
   }
-  let suspendedOn: Date | undefined;
-  if (action === 'record_suspension') {
-    const day = typeof input.date === 'string' ? input.date : '';
-    suspendedOn = parseUtcDateStrict(day);
-    // From the month's first day (the stored convention) through today, Pacific.
-    if (
-      suspendedOn === undefined ||
-      day < periodDate(input.period) ||
-      day > pacificToday(deps.now())
-    ) {
-      return { code: 'bad-date' };
-    }
+  const checked = validateActionFields(action, input, input.period, deps.now());
+  if (checked.ok === false) {
+    return { code: checked.code };
   }
-  let linkRecordId: number | undefined;
-  if (action === 'link_suspension') {
-    if (typeof input.recordId !== 'string' || !RECORD_ID.test(input.recordId)) {
-      return { code: 'invalid' };
-    }
-    linkRecordId = Number(input.recordId);
-  }
+  const { expectedVersion, suspendedOn, linkRecordId } = checked.fields;
   const repo = await deps.repository();
   const outcome = await repo.applyAction({
     period: input.period,
     rowId: input.rowId,
-    expectedVersion: Number(version),
+    expectedVersion,
     actor: input.actor,
     action,
     note: typeof input.note === 'string' ? input.note : '',

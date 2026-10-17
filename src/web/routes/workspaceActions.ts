@@ -1,7 +1,6 @@
 import express, { RequestHandler, Response } from 'express';
 import { Logger } from 'tslog';
 
-import { parseUtcDateStrict } from '../../lib/helpers/suspensionCsv.js';
 import {
   DASHBOARD_PATHS,
   monthPath,
@@ -15,6 +14,7 @@ import {
   WorkspaceSyncCode,
   leadershipRefusalEntry,
   postWithoutWaiting,
+  validateActionFields,
 } from '../../lib/workspace/service.js';
 import {
   TRANSITION_RULES,
@@ -112,21 +112,29 @@ const isAction = (value: unknown): value is WorkspaceAction =>
   typeof value === 'string' &&
   (WORKSPACE_ACTIONS as readonly string[]).includes(value);
 
-const DIGITS = /^[0-9]{1,9}$/;
-const DAY = /^[0-9]{4}-[0-9]{2}-[0-9]{2}$/;
-
 /**
  * The form checks that need no database: a code to refuse with, or
- * undefined when the service may run. The service and the repository check
- * again; this only keeps a bad form from opening a transaction.
+ * undefined when the service may run. Version, date and record id are the
+ * service's own validator; the service runs it again.
  */
 function formRefusal(
   action: WorkspaceAction,
   body: Record<string, unknown> | undefined,
+  period: Period,
+  now: Date,
 ): WorkspaceResultCode | undefined {
-  const version = field(body, 'version');
-  if (version === undefined || !DIGITS.test(version)) {
-    return 'invalid';
+  const checked = validateActionFields(
+    action,
+    {
+      version: field(body, 'version'),
+      date: field(body, 'date'),
+      recordId: field(body, 'recordId'),
+    },
+    period,
+    now,
+  );
+  if (checked.ok === false) {
+    return checked.code;
   }
   const rule = TRANSITION_RULES[action];
   const note = field(body, 'note');
@@ -136,22 +144,6 @@ function formRefusal(
     Array.from(normalizeNote(note)).length > rule.noteMax
   ) {
     return 'note-too-long';
-  }
-  if (action === 'record_suspension') {
-    const date = field(body, 'date');
-    if (
-      date === undefined ||
-      !DAY.test(date) ||
-      parseUtcDateStrict(date) === undefined
-    ) {
-      return 'bad-date';
-    }
-  }
-  if (action === 'link_suspension') {
-    const recordId = field(body, 'recordId');
-    if (recordId === undefined || !DIGITS.test(recordId)) {
-      return 'invalid';
-    }
   }
   return undefined;
 }
@@ -251,7 +243,7 @@ export function registerWorkspaceActionRoutes(
       res.redirect(303, workspaceRowPath(period, rowId, 'suspend'));
       return;
     }
-    const refusal = formRefusal(action, body);
+    const refusal = formRefusal(action, body, period, now);
     if (refusal !== undefined) {
       back(refusal);
       return;

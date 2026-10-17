@@ -286,6 +286,21 @@ describe('workspace action routes', () => {
     expect(perform).not.toHaveBeenCalled();
   });
 
+  it('the route refuses a date outside the month-to-today range, like the service', async () => {
+    const { post, perform } = await setup({ leader: true });
+    for (const date of ['2026-08-31', '2026-10-06']) {
+      // eslint-disable-next-line no-await-in-loop -- one date at a time, so a failure names it
+      const res = await post(ROW, {
+        action: 'record_suspension',
+        confirm: 'yes',
+        version: '1',
+        date,
+      });
+      expect(location(res), date).toBe(`${MONTH}?result=bad-date`);
+    }
+    expect(perform).not.toHaveBeenCalled();
+  });
+
   it('a note over the limit → result=note-too-long, nothing performed', async () => {
     const { post, perform } = await setup({ leader: true });
     const long = await post(ROW, {

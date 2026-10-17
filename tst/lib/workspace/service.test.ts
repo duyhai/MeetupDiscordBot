@@ -11,6 +11,7 @@ import {
   leadershipRefusalEntry,
   moderationEntry,
   performWorkspaceAction,
+  validateActionFields,
   REFUSED_WHAT,
   STATUS_LABELS,
   syncWorkspace,
@@ -775,5 +776,65 @@ describe('field values fit Discord (UTF-16 length)', () => {
 describe('REFUSED_WHAT', () => {
   it('names exactly the Leadership-only actions', () => {
     expect(Object.keys(REFUSED_WHAT)).toEqual([...LEADERSHIP_ONLY_ACTIONS]);
+  });
+});
+
+describe('validateActionFields (shared by the route and the service)', () => {
+  const at = (action: WorkspaceAction, fields: Record<string, unknown>) =>
+    validateActionFields(action, fields, SEPT, NOW);
+
+  it('accepts a digit version and returns it as a number', () => {
+    expect(at('hold', { version: '12' })).toEqual({
+      ok: true,
+      fields: { expectedVersion: 12 },
+    });
+  });
+
+  it.each([undefined, '', '-1', '1.5', ' 1', '1234567890', ['1'], 1])(
+    'refuses version %j as invalid',
+    (version) => {
+      expect(at('hold', { version })).toEqual({ ok: false, code: 'invalid' });
+    },
+  );
+
+  it('parses a record date to UTC midnight within the month through today', () => {
+    expect(
+      at('record_suspension', { version: '1', date: '2026-09-15' }),
+    ).toEqual({
+      ok: true,
+      fields: {
+        expectedVersion: 1,
+        suspendedOn: new Date('2026-09-15T00:00:00.000Z'),
+      },
+    });
+    for (const date of [
+      '2026-08-31',
+      '2026-10-06',
+      '2026-02-30',
+      '2026-9-15',
+      '',
+      undefined,
+    ]) {
+      expect(
+        at('record_suspension', { version: '1', date }),
+        String(date),
+      ).toEqual({
+        ok: false,
+        code: 'bad-date',
+      });
+    }
+  });
+
+  it('needs digit record ids for a link', () => {
+    expect(at('link_suspension', { version: '1', recordId: '41' })).toEqual({
+      ok: true,
+      fields: { expectedVersion: 1, linkRecordId: 41 },
+    });
+    for (const recordId of ['', '4a', '-4', '1e3', undefined, ['41']]) {
+      expect(
+        at('link_suspension', { version: '1', recordId }),
+        String(recordId),
+      ).toEqual({ ok: false, code: 'invalid' });
+    }
   });
 });
