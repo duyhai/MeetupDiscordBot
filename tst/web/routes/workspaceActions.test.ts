@@ -204,6 +204,25 @@ describe('workspace action routes', () => {
     expect(perform).toHaveBeenCalledTimes(1);
   });
 
+  it.each<[string, () => Record<string, string>]>([
+    ['mark_sent', () => ({ action: 'mark_sent', version: '1' })],
+    ['a Leadership action', () => leadershipForm('void')],
+  ])(
+    'stale (%s) is answered in place: 409, no redirect, no result code',
+    async (_what, form) => {
+      const { post, perform } = await setup({
+        leader: true,
+        perform: async () => ({ code: 'stale' }),
+      });
+      const res = await post(ROW, form());
+      expect(res.status).toBe(409);
+      expect(res.headers.location).toBeUndefined();
+      expect(res.text).not.toContain('?result=');
+      expect(res.text).toContain('Nothing was saved');
+      expect(perform).toHaveBeenCalledTimes(1);
+    },
+  );
+
   it('a row that is not in the month → 404', async () => {
     const { post } = await setup({
       perform: async () => ({ code: 'not-found' }),

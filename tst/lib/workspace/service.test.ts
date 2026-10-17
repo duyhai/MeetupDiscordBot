@@ -466,6 +466,39 @@ describe('performWorkspaceAction', () => {
     expect('existing' in result).toBe(false);
   });
 
+  it('an overlap refusal sends the chosen date, has no record to offer, and logs nothing', async () => {
+    const h = service({ ok: false, reason: 'already-suspended' });
+    const result = await performWorkspaceAction(
+      h.deps,
+      input({
+        action: 'record_suspension',
+        date: '2026-09-15',
+        leadershipConfirmed: true,
+      }),
+    );
+    expect(result).toEqual({ code: 'already-suspended' });
+    expect(h.applyAction).toHaveBeenCalledTimes(1);
+    expect(h.applyAction.mock.calls[0][0]).toMatchObject({
+      action: 'record_suspension',
+      expectedVersion: 2,
+      suspendedOn: new Date('2026-09-15T00:00:00.000Z'),
+    });
+    await flush();
+    expect(h.moderationLog).not.toHaveBeenCalled();
+  });
+
+  it('a stale refusal of a Leadership action is stale, with nothing logged', async () => {
+    const h = service({ ok: false, reason: 'stale' });
+    const result = await performWorkspaceAction(
+      h.deps,
+      input({ action: 'void', note: 'mistake', leadershipConfirmed: true }),
+    );
+    expect(result).toEqual({ code: 'stale' });
+    expect('existing' in result).toBe(false);
+    await flush();
+    expect(h.moderationLog).not.toHaveBeenCalled();
+  });
+
   it('a repository error propagates (the route answers it), and nothing is logged', async () => {
     const h = service();
     h.applyAction.mockRejectedValueOnce(new Error('connection lost'));
