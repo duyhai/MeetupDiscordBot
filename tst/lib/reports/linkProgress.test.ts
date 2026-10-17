@@ -2,7 +2,6 @@ import { Client } from 'discord.js';
 import { describe, expect, it, vi } from 'vitest';
 
 import { GUILD_ID, SERVER_ROLES } from '../../../src/constants.js';
-import { collectUnlinkedMemberIds } from '../../../src/lib/helpers/unlinkedDigest.js';
 import {
   collectLinkProgress,
   countLinkProgress,
@@ -61,7 +60,7 @@ describe('countLinkProgress', () => {
     expect(countLinkProgress(members, [], undefined).reverifyTagged).toBe(0);
   });
 
-  it('agrees with the unlinked digest', () => {
+  it('unlinked is a non-bot member with no Meetup id and no Onboarding role', () => {
     const members = [
       member('1'),
       member('2'),
@@ -71,17 +70,7 @@ describe('countLinkProgress', () => {
       member('6'),
     ];
     const rows = [row('1', 'm1'), row('2', null), row('4', 'm4')];
-    const digest = collectUnlinkedMemberIds(
-      members.map((m) => ({
-        id: m.id,
-        isBot: m.isBot,
-        hasOnboardingRole: m.roleIds.includes(SERVER_ROLES.onboarding),
-      })),
-      rows as MemberRecord[],
-    );
-    expect(countLinkProgress(members, rows, undefined).unlinked).toBe(
-      digest.length,
-    );
+    expect(countLinkProgress(members, rows, undefined).unlinked).toBe(3);
   });
 });
 

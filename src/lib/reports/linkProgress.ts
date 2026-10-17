@@ -24,10 +24,11 @@ export interface LinkProgressMember {
 
 /**
  * Counts over current, non-bot guild members only: a member row for someone
- * who left the server is not progress. Definitions match the unlinked digest
- * (collectUnlinkedMemberIds): linked = a row with a Meetup id; unlinked = not
- * linked and not in Onboarding. A linked member who is also in Onboarding is
- * counted in both linked and onboarding; the four numbers are not a partition.
+ * who left the server is not progress. linked = a row with a Meetup id;
+ * unlinked = not linked and not in Onboarding. A linked member who is also in
+ * Onboarding is counted in both linked and onboarding; the numbers are not a
+ * partition. reverifyTagged is 0 without a Reverify role (deleted 2026-10-17
+ * after the cutover); it is still stored but no longer shown.
  */
 export function countLinkProgress(
   members: LinkProgressMember[],

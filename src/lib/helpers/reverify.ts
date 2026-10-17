@@ -15,7 +15,7 @@ import { Logger } from 'tslog';
 import { SERVER_ROLES } from '../../constants.js';
 import { isAdmin } from '../../util/discord.js';
 import { MemberRecord, MemberRepository } from '../repositories/types.js';
-import { LogEntry, logModeration } from './discordLogger.js';
+import { logModeration } from './discordLogger.js';
 
 const logger = new Logger({ name: 'reverify' });
 
@@ -178,19 +178,6 @@ export async function moveToOnboardingIfStillUnlinked(
     'Meetup linking deadline passed without a link',
   );
   return true;
-}
-
-export function formatReverifyProgress({
-  stillTagged,
-  linked,
-}: {
-  linked: number;
-  stillTagged: number;
-}): LogEntry {
-  return {
-    title: `Reverify progress: ${stillTagged} still need to link`,
-    description: `${linked} members linked to Meetup so far.`,
-  };
 }
 
 export async function findReverifyRole(

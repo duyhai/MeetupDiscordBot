@@ -6,7 +6,6 @@ import { logModeration } from '../../../src/lib/helpers/discordLogger.js';
 import {
   ReverifyCandidate,
   fetchAllMembers,
-  formatReverifyProgress,
   moveToOnboardingIfStillUnlinked,
   selectEnforceTargets,
   selectReverifyTargets,
@@ -110,14 +109,6 @@ describe('selectEnforceTargets', () => {
     expect(selectEnforceTargets(members, [], REVERIFY_ROLE_ID)).toEqual([
       'both',
     ]);
-  });
-});
-
-describe('formatReverifyProgress', () => {
-  it('reports how many still need to link and how many are linked', () => {
-    const entry = formatReverifyProgress({ stillTagged: 312, linked: 210 });
-    expect(entry.title).toBe('Reverify progress: 312 still need to link');
-    expect(entry.description).toContain('210 members linked');
   });
 });
 
