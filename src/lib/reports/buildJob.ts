@@ -94,6 +94,8 @@ const workspaceSyncAlertedKey = (p: Period, day: string) =>
  * Postgres must not hold the build lease for its 30-minute TTL.
  */
 export const WORKSPACE_SYNC_DEADLINE_MS = 30_000;
+/** How long the malformed path's meta read may take before the tick moves on (silently). */
+export const WORKSPACE_MALFORMED_META_DEADLINE_MS = 5000;
 
 /** An error's class name, and nothing it carries. */
 function errorName(error: unknown): string {
@@ -655,9 +657,18 @@ async function syncWorkspaceSafely(
     clearTimeout(timer);
   }
   if (outcome === 'malformed') {
-    const meta = await deps.snapshots
-      .getCurrentMeta('no_show', period)
-      .catch((): undefined => undefined);
+    let metaTimer: ReturnType<typeof setTimeout> | undefined;
+    const meta = await Promise.race([
+      deps.snapshots.getCurrentMeta('no_show', period),
+      new Promise<undefined>((resolve) => {
+        metaTimer = setTimeout(
+          () => resolve(undefined),
+          WORKSPACE_MALFORMED_META_DEADLINE_MS,
+        );
+      }),
+    ])
+      .catch((): undefined => undefined)
+      .finally(() => clearTimeout(metaTimer));
     if (meta) {
       await alertWorkspaceNotUpdated(
         deps,

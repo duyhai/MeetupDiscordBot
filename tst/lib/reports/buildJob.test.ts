@@ -26,6 +26,7 @@ import {
   reportReadyEntry,
   requestRebuild,
   runBuildTick,
+  WORKSPACE_MALFORMED_META_DEADLINE_MS,
   WORKSPACE_SYNC_DEADLINE_MS,
 } from '../../../src/lib/reports/buildJob.js';
 import {
@@ -2188,6 +2189,38 @@ describe('workspace sync hooks', () => {
     h.clock.set('2026-10-10T16:30:00Z');
     await runBuildTick(h.deps);
     expect(workspaceAlerts(h)).toEqual([]);
+  });
+
+  it('a malformed outcome whose meta read hangs gives up after a short deadline, silently', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const h = idle();
+      const meta = vi.spyOn(h.snapshots, 'getCurrentMeta');
+      h.syncWorkspace.mockImplementation(async (period) => {
+        if (!isSept(period)) {
+          return 'current';
+        }
+        // The malformed path's own meta read never settles.
+        meta.mockImplementationOnce(() => new Promise(() => undefined));
+        return 'malformed';
+      });
+      let done = false;
+      const tick = runBuildTick(h.deps).then(() => {
+        done = true;
+      });
+      await vi.advanceTimersByTimeAsync(
+        WORKSPACE_MALFORMED_META_DEADLINE_MS - 1,
+      );
+      expect(done).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      await tick;
+      expect(done).toBe(true);
+      expect(workspaceAlerts(h)).toEqual([]);
+      expect(ready(h)).toHaveLength(1);
+      expect(h.cache.values.has(LEASE_KEY)).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('a malformed outcome for a month with no current no-show snapshot stays silent', async () => {

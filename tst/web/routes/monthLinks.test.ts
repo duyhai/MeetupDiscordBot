@@ -67,8 +67,8 @@ function isRegisteredGet(pathname: string): boolean {
 }
 
 const SEPT = { year: 2026, month: 9 };
-const urls = Object.values(
-  monthPageUrls(SEPT) as unknown as Record<string, string>,
+const urls = Object.values(monthPageUrls(SEPT)).filter(
+  (url): url is string => typeof url === 'string',
 );
 
 describe('build alert month links', () => {
