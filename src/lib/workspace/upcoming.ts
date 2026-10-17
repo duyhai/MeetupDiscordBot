@@ -41,6 +41,12 @@ export type UpcomingEntry =
 
 /** At most 12 h by the global constraint; 6 h here. */
 export const UPCOMING_CACHE_TTL_SEC = 6 * 60 * 60;
+/**
+ * How long a failed read ('unavailable': a failed or timed-out batch, or a
+ * member the batch left out) is remembered, so a Meetup outage costs one
+ * batch a minute, not one per page load.
+ */
+export const UPCOMING_UNAVAILABLE_TTL_SEC = 60;
 export const UPCOMING_DEADLINE_MS = 6000;
 export const UPCOMING_MAX_MEMBERS = 50;
 /** A hung batch must not pin members as pending forever. */
@@ -57,6 +63,10 @@ export interface UpcomingDeps {
 
 const MEMBER_ID = /^[0-9]{1,20}$/;
 const cacheKey = (id: string) => `workspace-upcoming-v1-${id}`;
+
+/** What the cache holds for a member: a read, or a remembered failure. */
+type CachedUpcoming =
+  MemberUpcoming | { state: 'unavailable'; fetchedAt: string };
 
 function toEntry(
   events: EventSummary[] | undefined,
@@ -100,10 +110,26 @@ function stillUpcoming(entry: MemberUpcoming, now: Date): MemberUpcoming {
   return { ...entry, events: entry.events.filter((e) => keep.has(e.id)) };
 }
 
-function parseCached(text: string | undefined): MemberUpcoming | undefined {
+/**
+ * A cached read, or a failure remembered less than
+ * UPCOMING_UNAVAILABLE_TTL_SEC ago by `now` (checked here too, not only by
+ * the cache's TTL). Anything else is a miss.
+ */
+function parseCached(
+  text: string | undefined,
+  now: Date,
+): MemberUpcoming | { state: 'unavailable' } | undefined {
   try {
     const v =
-      text === undefined ? undefined : (JSON.parse(text) as MemberUpcoming);
+      text === undefined ? undefined : (JSON.parse(text) as CachedUpcoming);
+    if (v?.state === 'unavailable') {
+      const at =
+        typeof v.fetchedAt === 'string' ? Date.parse(v.fetchedAt) : NaN;
+      const age = now.getTime() - at;
+      return age >= 0 && age < UPCOMING_UNAVAILABLE_TTL_SEC * 1000
+        ? { state: 'unavailable' }
+        : undefined;
+    }
     return v &&
       (v.state === 'ok' ? Array.isArray(v.events) : v.state === 'left')
       ? v
@@ -116,8 +142,10 @@ function parseCached(text: string | undefined): MemberUpcoming | undefined {
 /**
  * Cache hits answer at once; misses are read in one organizer batch,
  * single-flight per member across concurrent page loads. What is not back by
- * the deadline is 'pending' (it still lands in the cache for the next load);
- * a Meetup or token failure is 'unavailable' and is not cached. Never rejects.
+ * the deadline is 'pending' (it still lands in the cache for the next load).
+ * A Meetup or token failure, after the organizer client's own 401 refresh
+ * and retry, is 'unavailable', remembered for UPCOMING_UNAVAILABLE_TTL_SEC.
+ * Never rejects.
  */
 export function createUpcomingLoader(
   deps: UpcomingDeps,
@@ -143,7 +171,10 @@ export function createUpcomingLoader(
     const cached = await Promise.all(
       ids.map(async (id) => {
         try {
-          return parseCached(cache ? await cache.get(cacheKey(id)) : undefined);
+          return parseCached(
+            cache ? await cache.get(cacheKey(id)) : undefined,
+            deps.now(),
+          );
         } catch {
           return undefined;
         }
@@ -153,7 +184,10 @@ export function createUpcomingLoader(
     ids.forEach((id, i) => {
       const hit = cached[i];
       if (hit) {
-        out.set(id, stillUpcoming(hit, deps.now()));
+        out.set(
+          id,
+          hit.state === 'unavailable' ? hit : stillUpcoming(hit, deps.now()),
+        );
       } else {
         misses.push(id);
       }
@@ -168,26 +202,39 @@ export function createUpcomingLoader(
       }
       batch = withBatchTimeout(batch);
       batch.catch(() => undefined); // observed per member below
+      const remember = async (
+        id: string,
+        entry: CachedUpcoming,
+        ttl: number,
+      ) => {
+        if (cache) {
+          await cache
+            .set(cacheKey(id), JSON.stringify(entry), ttl)
+            .catch(() => undefined);
+        }
+      };
       for (const id of fresh) {
         const one = batch
           .then(async (byId) => {
             // The helper returns undefined for a member who left the group, so
             // that is a key present with an undefined value. A key that is
-            // absent says nothing about the member: unavailable, not cached.
+            // absent says nothing about the member: unavailable.
             if (!byId.has(id)) {
               throw new Error('member missing from the Meetup result');
             }
             const entry = toEntry(byId.get(id), deps.now());
-            if (cache) {
-              await cache
-                .set(
-                  cacheKey(id),
-                  JSON.stringify(entry),
-                  UPCOMING_CACHE_TTL_SEC,
-                )
-                .catch(() => undefined);
-            }
+            await remember(id, entry, UPCOMING_CACHE_TTL_SEC);
             return entry;
+          })
+          .catch(async (error: unknown) => {
+            // The final failure only: the organizer client has already
+            // refreshed the token and retried once on a 401.
+            await remember(
+              id,
+              { state: 'unavailable', fetchedAt: deps.now().toISOString() },
+              UPCOMING_UNAVAILABLE_TTL_SEC,
+            );
+            throw error;
           })
           .finally(() => inFlight.delete(id));
         one.catch(() => undefined);
@@ -244,7 +291,7 @@ export const UPCOMING_FETCH_CONCURRENCY = 5;
  * re-run on a 401, which is safe because this only reads). The answer has an
  * entry for every member it could read: undefined means the member left the
  * group. A member whose read failed is left out, which the loader shows as
- * unavailable for that card alone and never caches. A 401 (after the one
+ * unavailable for that card alone, remembered for 60 s. A 401 (after the one
  * retry) or a missing organizer login rejects the whole batch.
  */
 export function organizerFetchMany(

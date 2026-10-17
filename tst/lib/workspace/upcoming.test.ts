@@ -14,6 +14,7 @@ import {
   UPCOMING_CACHE_TTL_SEC,
   UPCOMING_DEADLINE_MS,
   UPCOMING_MAX_MEMBERS,
+  UPCOMING_UNAVAILABLE_TTL_SEC,
   actByFor,
   createUpcomingLoader,
   organizerFetchMany,
@@ -235,15 +236,80 @@ describe('createUpcomingLoader', () => {
     expect(UPCOMING_DEADLINE_MS).toBe(6000);
   });
 
-  it('Meetup failure is unavailable and not cached', async () => {
+  it('Meetup failure is unavailable, remembered for 60 s only', async () => {
     const h = harness(async () => {
       throw new Error('meetup down');
     });
     const out = await createUpcomingLoader(h.deps)(['111', '222']);
     expect(out.get('111')).toEqual({ state: 'unavailable' });
     expect(out.get('222')).toEqual({ state: 'unavailable' });
-    expect(h.cache.values.size).toBe(0);
+    expect(UPCOMING_UNAVAILABLE_TTL_SEC).toBe(60);
+    for (const id of ['111', '222']) {
+      const key = `workspace-upcoming-v1-${id}`;
+      expect(h.cache.ttls.get(key)).toBe(UPCOMING_UNAVAILABLE_TTL_SEC);
+      // Nothing from Meetup: the state and when, nothing else.
+      expect(JSON.parse(h.cache.values.get(key) ?? '')).toEqual({
+        state: 'unavailable',
+        fetchedAt: NOW.toISOString(),
+      });
+    }
   });
+
+  it('a reload within 60 s of a Meetup failure makes no Meetup call; after 60 s it asks again', async () => {
+    let clock = NOW.getTime();
+    let fail = true;
+    const h = harness(async (ids) => {
+      if (fail) {
+        throw new Error('meetup down');
+      }
+      return new Map(ids.map((id) => [id, [] as EventSummary[]]));
+    });
+    h.deps.now = () => new Date(clock);
+    const load = createUpcomingLoader(h.deps);
+    expect((await load(['111'])).get('111')).toEqual({ state: 'unavailable' });
+    expect(h.fetchMany).toHaveBeenCalledTimes(1);
+    fail = false;
+    clock += UPCOMING_UNAVAILABLE_TTL_SEC * 1000 - 1;
+    expect((await load(['111'])).get('111')).toEqual({ state: 'unavailable' });
+    expect(h.fetchMany).toHaveBeenCalledTimes(1);
+    // The fake cache keeps keys forever; the loader checks the age itself.
+    clock += 1;
+    expect((await load(['111'])).get('111')?.state).toBe('ok');
+    expect(h.fetchMany).toHaveBeenCalledTimes(2);
+    expect(h.cache.ttls.get('workspace-upcoming-v1-111')).toBe(
+      UPCOMING_CACHE_TTL_SEC,
+    );
+  });
+
+  it('a remembered unavailable answer from the future is not trusted', async () => {
+    const h = harness(okMap([['111', []]]));
+    await h.cache.set(
+      'workspace-upcoming-v1-111',
+      JSON.stringify({
+        state: 'unavailable',
+        fetchedAt: new Date(NOW.getTime() + 3_600_000).toISOString(),
+      }),
+    );
+    expect(
+      (await createUpcomingLoader(h.deps)(['111'])).get('111')?.state,
+    ).toBe('ok');
+    expect(h.fetchMany).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ['no time', { state: 'unavailable' }],
+    ['a junk time', { state: 'unavailable', fetchedAt: 'yesterday' }],
+    ['a number', { state: 'unavailable', fetchedAt: 5 }],
+  ])(
+    'a remembered unavailable answer with %s is ignored',
+    async (_what, stored) => {
+      const h = harness(okMap([['111', []]]));
+      await h.cache.set('workspace-upcoming-v1-111', JSON.stringify(stored));
+      expect(
+        (await createUpcomingLoader(h.deps)(['111'])).get('111')?.state,
+      ).toBe('ok');
+    },
+  );
 
   it('a synchronous fetchMany throw is unavailable too', async () => {
     const h = harness(() => {
@@ -275,19 +341,23 @@ describe('createUpcomingLoader', () => {
     expect(rb.get('111')?.state).toBe('ok');
   });
 
-  it('a failed shared fetch is unavailable for every waiting load, and a later load retries', async () => {
+  it('a failed shared fetch is unavailable for every waiting load, and a load after 60 s retries', async () => {
     let fail = true;
+    let clock = NOW.getTime();
     const h = harness(async () => {
       if (fail) {
         throw new Error('down');
       }
       return new Map([['111', [] as EventSummary[]]]);
     });
+    h.deps.now = () => new Date(clock);
     const load = createUpcomingLoader(h.deps);
     const [a, b] = await Promise.all([load(['111']), load(['111'])]);
     expect(a.get('111')).toEqual({ state: 'unavailable' });
     expect(b.get('111')).toEqual({ state: 'unavailable' });
+    expect(h.fetchMany).toHaveBeenCalledTimes(1);
     fail = false;
+    clock += UPCOMING_UNAVAILABLE_TTL_SEC * 1000;
     const c = await load(['111']);
     expect(c.get('111')?.state).toBe('ok');
     expect(h.fetchMany).toHaveBeenCalledTimes(2);
@@ -354,15 +424,20 @@ describe('createUpcomingLoader', () => {
     expect(fetchMany).toHaveBeenCalledTimes(1);
   });
 
-  it('a member missing from the fetch result is unavailable and not cached', async () => {
+  it('a member missing from the fetch result is unavailable, remembered for 60 s', async () => {
     const h = harness(okMap([['111', []]]));
-    const out = await createUpcomingLoader(h.deps)(['111', '222']);
+    const load = createUpcomingLoader(h.deps);
+    const out = await load(['111', '222']);
     expect(out.get('111')?.state).toBe('ok');
     expect(out.get('222')).toEqual({ state: 'unavailable' });
-    expect(h.cache.values.has('workspace-upcoming-v1-222')).toBe(false);
+    expect(h.cache.ttls.get('workspace-upcoming-v1-222')).toBe(
+      UPCOMING_UNAVAILABLE_TTL_SEC,
+    );
+    expect((await load(['222'])).get('222')).toEqual({ state: 'unavailable' });
+    expect(h.fetchMany).toHaveBeenCalledTimes(1);
   });
 
-  it('a hung batch times out after 30 seconds: nothing cached, later loads refetch', async () => {
+  it('a hung batch times out after 30 seconds: unavailable for 60 s, then refetched', async () => {
     vi.useFakeTimers();
     let release!: (m: Map<string, EventSummary[] | undefined>) => void;
     const h = harness(
@@ -371,6 +446,8 @@ describe('createUpcomingLoader', () => {
           release = resolve;
         }),
     );
+    let clock = NOW.getTime();
+    h.deps.now = () => new Date(clock);
     const load = createUpcomingLoader(h.deps);
     const first = load(['111']);
     await vi.advanceTimersByTimeAsync(UPCOMING_DEADLINE_MS);
@@ -380,16 +457,27 @@ describe('createUpcomingLoader', () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(h.fetchMany).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(UPCOMING_BATCH_TIMEOUT_MS);
-    await second;
-    // The hung fetch finally answers: too late, nothing is cached.
+    expect((await second).get('111')).toEqual({ state: 'pending' });
+    // The hung fetch finally answers: too late, only the failure is kept.
     release(new Map([['111', [event('e1', '2026-10-25T02:00:00Z')]]]));
     await vi.advanceTimersByTimeAsync(0);
-    expect(h.cache.values.size).toBe(0);
+    expect(
+      (
+        JSON.parse(
+          h.cache.values.get('workspace-upcoming-v1-111') ?? '',
+        ) as StoredShape
+      ).state,
+    ).toBe('unavailable');
     const third = load(['111']);
+    await vi.advanceTimersByTimeAsync(0);
+    expect((await third).get('111')).toEqual({ state: 'unavailable' });
+    expect(h.fetchMany).toHaveBeenCalledTimes(1);
+    clock += UPCOMING_UNAVAILABLE_TTL_SEC * 1000;
+    const fourth = load(['111']);
     await vi.advanceTimersByTimeAsync(0);
     expect(h.fetchMany).toHaveBeenCalledTimes(2);
     await vi.advanceTimersByTimeAsync(UPCOMING_DEADLINE_MS);
-    await third;
+    await fourth;
   });
 
   it('drops cached events that have started since they were cached', async () => {
@@ -623,7 +711,7 @@ describe('organizerFetchMany (the production fetchMany)', () => {
     expect(o.rsvps).not.toHaveBeenCalled();
   });
 
-  it('end to end: a Meetup failure through the loader is unavailable and never cached', async () => {
+  it('end to end: a Meetup failure through the loader is unavailable, remembered for 60 s', async () => {
     const o = organizer(async () => {
       throw new Error('meetup down');
     });
@@ -635,6 +723,36 @@ describe('organizerFetchMany (the production fetchMany)', () => {
     });
     const out = await load(['111']);
     expect(out.get('111')).toEqual({ state: 'unavailable' });
-    expect(await cache.get('workspace-upcoming-v1-111')).toBeUndefined();
+    expect(cache.ttls.get('workspace-upcoming-v1-111')).toBe(
+      UPCOMING_UNAVAILABLE_TTL_SEC,
+    );
+    await load(['111']);
+    expect(o.rsvps).toHaveBeenCalledTimes(1);
+  });
+
+  it('end to end: a 401 refreshes and retries first; only the final failure is remembered', async () => {
+    const o = organizer(async () => {
+      throw new ClientError(
+        { status: 401, headers: new Headers(), body: '' },
+        { query: '' },
+      );
+    });
+    const cache = new FakeCache();
+    const load = createUpcomingLoader({
+      now: () => NOW,
+      cache: async () => cache,
+      fetchMany: organizerFetchMany(() => undefined, o.deps),
+    });
+    expect((await load(['111'])).get('111')).toEqual({ state: 'unavailable' });
+    // The first read, then the retry after one forced refresh.
+    expect(o.getToken).toHaveBeenCalledTimes(2);
+    expect(o.getToken.mock.calls[1][0]).toMatchObject({ forceRefresh: true });
+    expect(o.rsvps).toHaveBeenCalledTimes(2);
+    expect(cache.ttls.get('workspace-upcoming-v1-111')).toBe(
+      UPCOMING_UNAVAILABLE_TTL_SEC,
+    );
+    await load(['111']);
+    expect(o.rsvps).toHaveBeenCalledTimes(2);
+    expect(o.getToken).toHaveBeenCalledTimes(2);
   });
 });
