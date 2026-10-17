@@ -86,6 +86,7 @@ export function homePage(
   user: PageUser,
   nonce: string,
   organizer?: HomeOrganizerStatus,
+  reports?: SafeHtml,
 ): string {
   return layout({
     title: 'Home',
@@ -93,8 +94,15 @@ export function homePage(
     user,
     body: html`<div class="card">
         <h1>Welcome</h1>
-        <p>Reports will appear here once the monthly build job is running.</p>
+        ${
+          reports
+            ? html`<p>Latest reports:</p>`
+            : html`<p>
+                Reports will appear here once the monthly build job is running.
+              </p>`
+        }
       </div>
+      ${reports ?? ''}
       <div class="card">
         <h2>Organizer login</h2>
         ${organizer ? html`<p>${organizerStatusText(organizer)}</p>` : ''}

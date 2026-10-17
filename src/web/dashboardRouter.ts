@@ -18,6 +18,7 @@ import {
   parseCookies,
   serializeCookie,
 } from './cookies.js';
+import type { SafeHtml } from './html.js';
 import { openOAuthCookie, sealOAuthCookie } from './oauthCookie.js';
 import {
   HomeOrganizerStatus,
@@ -98,6 +99,8 @@ export interface DashboardDeps {
    * returns tokens. Left out, the home page links to the page without a status.
    */
   homeStatus?: () => Promise<OrganizerCredentialStatus | undefined>;
+  /** Report cards for the home page. Must not throw; left out, the home page shows the welcome text only. */
+  homeReports?: () => Promise<SafeHtml>;
 }
 
 interface Locals {
@@ -556,7 +559,18 @@ export function createDashboardRouter(deps: DashboardDeps): express.Router {
 
   protectedRouter.get('/', (async (_req, res) => {
     const { session, nonce } = locals(res);
-    send(res, 200, homePage(session, nonce, await organizerStatus(deps)));
+    let reports: SafeHtml | undefined;
+    try {
+      reports = deps.homeReports ? await deps.homeReports() : undefined;
+    } catch {
+      // The cards are extra: the welcome and organizer cards still render.
+      reports = undefined;
+    }
+    send(
+      res,
+      200,
+      homePage(session, nonce, await organizerStatus(deps), reports),
+    );
   }) as RequestHandler);
 
   protectedRouter.post('/logout', (async (_req, res) => {

@@ -32,6 +32,7 @@ import {
   DashboardPageDeps,
   registerAllProtectedRoutes,
 } from './routes/dashboardPages.js';
+import { renderHomeReports } from './routes/home.js';
 import { SessionStore } from './session.js';
 import {
   DASHBOARD_CACHE_TIMEOUT_MS,
@@ -178,6 +179,7 @@ export function dashboardRouterFromEnv(
     return notConfiguredRouter();
   }
   const organizerDeps = organizerLoginDeps(() => discordClient);
+  const pageDeps = dashboardPageDeps();
   return createDashboardRouter({
     cache: dashboardCache,
     checkAccess: discordAccessCheck(() => discordClient),
@@ -195,8 +197,9 @@ export function dashboardRouterFromEnv(
     protectedRoutes: (router) =>
       registerAllProtectedRoutes(router, {
         organizer: organizerDeps,
-        pages: dashboardPageDeps(),
+        pages: pageDeps,
       }),
     homeStatus: organizerDeps.credentialStatus,
+    homeReports: () => renderHomeReports(pageDeps),
   });
 }
