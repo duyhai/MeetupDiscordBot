@@ -703,7 +703,8 @@ function within<T>(promise: Promise<T>, ms: number): Promise<T> {
         await ensureDashboardSchema(pool);
         const indexes = await pool.query<{ indexdef: string }>(
           `SELECT indexdef FROM pg_indexes
-           WHERE tablename = 'report_snapshots'
+           WHERE schemaname = current_schema()
+             AND tablename = 'report_snapshots'
              AND indexname = 'report_snapshots_noshow_payload_idx'`,
         );
         expect(indexes.rows).toHaveLength(1);
