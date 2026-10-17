@@ -33,7 +33,7 @@ browse every report, see trends, and work the monthly no-show list together.
 | Backfill | All time: every month since the group's first event. |
 | Messaging members | Meetup's API has no messaging mutation (checked 2026-10-15: 16 mutations, none sends a message). The workspace gives **Copy warning / Open on Meetup / Mark as sent** buttons; a person sends the message from the shared organizer account. No browser automation. |
 | Holds | A workspace row can be put **on hold**, and every row has a free-text **Notes** field. |
-| Notifications | Build results go to #meetup-bot-alerts. "New report ready" with a link goes to a staff channel, pinging Moderator and 1.5 Leadership Team. |
+| Notifications | Build results and the "reports ready" notice go to #meetup-bot-alerts as plain embeds. Nothing pings: staff have notifications on for the channel (Hai, 2026-10-16). |
 | Templates | Drafted below, signed "1.5 Gen Asians Organizers", linking the public policy and appeal form. Suspended members lose their existing RSVPs. |
 | Commands | All existing slash commands keep working. |
 
@@ -172,7 +172,10 @@ HTML-escaped, wrapped in `<bdi>`.
 
 ## No-show workspace
 
-For the selected month, one card per member from the no-show snapshot:
+The workspace covers every month from 2026-09 onward, the open (current)
+month included, so the list can be worked weekly. Older months stay
+read-only history. For the selected month, one card per member from the
+no-show snapshot:
 
 - Classification, counted no-shows (since the later of 12 months ago and the
   last suspension), prior suspensions, recommended length and fee.
@@ -184,19 +187,29 @@ Actions:
 
 | Action | Effect |
 |---|---|
-| **Copy warning** / **Copy suspension message** | Renders the template for this member and copies it. Status → `warning_copied` (warnings only). |
+| **Copy warning** | Renders the warning for this member and copies it. Status → `warning_copied`. |
+| **Copy suspension message** | Renders the suspension message and copies it. Changes no status and writes nothing. |
 | **Open on Meetup** | Opens the member's Meetup profile in a new tab; the sender uses Message there while signed in as the organizer account. |
 | **Mark as sent** | Status → `warning_sent`. Records who and when. |
 | **Put on hold** | Status → `on_hold`; a note is required (e.g. "paid for Halloween, revisit after 3rd no-show"). |
-| **Record suspension** | Confirm dialog with the suspension date (default today). Writes a `suspension_records` row through the existing repository, carrying the notes; status → `suspended`. Same rules as `/meetup_record_suspension`. |
+| **Record suspension** | 1.5 Leadership Team only. Confirm step with the suspension date (default today; from the month's first day through today, Pacific). The length is computed by the policy from the member's earlier suspensions. Writes a `suspension_records` row with the command's SQL, carrying the notes; status → `suspended`. Refused if the range overlaps a live suspension of the member (an override may come later). |
+| **Link suspension** | 1.5 Leadership Team only. Links a live suspension recorded outside the workspace (e.g. with `/meetup_record_suspension`) dated in or after the month; status → `suspended`. |
 | **Skip** | Status → `skipped`; note required. |
-| **Void** | For a recorded suspension: reason required; uses the existing void logic. |
+| **Void** | 1.5 Leadership Team only. For a recorded suspension: reason required; uses the command's void SQL. |
 | **Notes** | Edit at any time. |
+
+Recording, linking and voiding suspensions are for the 1.5 Leadership Team
+only (Hai, 2026-10-16 and 2026-10-17). The role is checked live against
+Discord at the moment of the action; if Discord cannot be reached the action
+is refused and nothing changes. The month page shows those controls from a
+60-second cache of that answer, for display only. Moderators see the
+workspace and do everything else.
 
 Every action writes a `noshow_workspace_events` row and logs to the staff
 moderation channel (`MODERATION_LOG_CHANNEL_ID`) with who did it, as the
-commands do. Concurrent edits: each action sends the row's `version`; a stale
-version is refused with "someone just updated this, reload".
+commands do, with no pings. Concurrent edits: each action sends the row's
+`version`; a stale version is refused with "someone just updated this,
+reload".
 
 The CSV export stays available for anyone who prefers the old flow; the CSV
 upload command keeps working.
@@ -205,9 +218,10 @@ upload command keeps working.
 
 Rendered per member. `{fee}` and `{suspension_days}` come from prior
 suspensions: 30 days and $10 the first time, doubling each time
-(60/$20, 120/$40, ...). Event hosts are shown a $0 fee per the policy's host
-waiver; "host" means the member has hosted at least one PAST event in the
-group. `{policy_link}` and `{appeal_link}` are configuration values.
+(60/$20, 120/$40, ...). For event hosts the policy waives the fee, so their
+messages leave the fee sentence out (see below); "host" means the member has
+hosted at least one PAST event in the group. `{policy_link}` and
+`{appeal_link}` are configuration values.
 
 **Warning (1 no-show)**
 
@@ -235,7 +249,10 @@ group. `{policy_link}` and `{appeal_link}` are configuration values.
 > 1.5 Gen Asians Organizers
 
 `{no_show_list}` is one line per counted no-show: title and Pacific date.
-When the host waiver applies, the fee sentence is omitted.
+`{end_date}` is the last suspended day (the suspension date plus
+`{suspension_days}`, minus one). When the host waiver applies, the fee is
+left out: the warning ends at "…a {suspension_days}-day suspension from the
+group.", and the suspension message drops the "Rejoining requires…" sentence.
 
 ## Build job and notifications
 
@@ -248,15 +265,18 @@ When the host waiver applies, the fee sentence is omitted.
   18:00 identity sweep.
 - **Manual refresh.** "Refresh from Meetup" on the workspace and report pages
   queues a rebuild of that month (one at a time; refused while one is
-  running).
+  running). At most 4 manual rebuilds per UTC hour across all staff and
+  months; the job's own builds do not count.
 - **Alerts.** Each build posts to #meetup-bot-alerts: reports and month
   built, duration, failures with the error. A failed build retries on the next
   tick and stays flagged until it succeeds. Credential failures surface the
   same way as for the identity sweep.
 - **Report ready.** When a finished month's reports are first built, the bot
-  posts to the staff channel (`DASHBOARD_NOTIFY_CHANNEL_ID`) with a role
-  mention for Moderator and 1.5 Leadership Team and a link to that month's
-  workspace. `allowedMentions` is limited to those two roles.
+  syncs that month's workspace, then posts a plain alert in #meetup-bot-alerts
+  (`BOT_ALERTS_CHANNEL_ID`) with `allowedMentions: { parse: [] }`, linking
+  the month's workspace, Hall of Fame and no-show history. It is delivered at
+  least once: a crashed or failed post is retried after 30 minutes or on the
+  next tick, after checking the channel for it.
 
 ## Backfill
 
@@ -313,8 +333,7 @@ Four PRs, each reviewed before merge, none merged 18:00–19:00 UTC:
 - **12-month window.** The bot counts no-shows from the last 12 months and
   since the last suspension; the public policy page does not mention a
   window. Either the policy page gains a line or the templates say it.
-- **Notify channel.** Which staff channel gets the report-ready notice
-  (mod-watercooler is the likely one if leadership reads it).
+- ~~**Notify channel.**~~ Resolved: #meetup-bot-alerts.
 - **Host waiver.** The policy waives the fee for event hosts but doesn't
   define "host". This spec assumes at least one past hosted event in the
   group; confirm or set a threshold.
