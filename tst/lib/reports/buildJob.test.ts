@@ -1992,30 +1992,85 @@ describe('workspace sync hooks', () => {
     ]);
   });
 
-  it("report-ready posts only once its month's workspace sync has finished", async () => {
-    const h = makeDeps({ clock: new Clock('2026-10-05T16:15:00Z') });
-    const finished = new Set<number>();
-    let septemberSyncedWhenPosted: boolean | undefined;
-    h.alert.mockImplementation(async (entry) => {
-      if (entry.title === 'Reports ready: September 2026') {
-        septemberSyncedWhenPosted = finished.has(9);
-      }
-      return true;
+  /** Oct 17: September was backfilled after it ended (no sync then), October is due. */
+  function backfilledSeptember() {
+    const h = makeDeps({ clock: new Clock('2026-10-17T16:15:00Z') });
+    h.snapshots.seedBoth(SEPT, '2026-10-02T03:00:00Z', {
+      builtBy: 'backfill',
     });
-    h.syncWorkspace.mockImplementation(async (period) => {
-      // A sync that takes a few turns of the event loop.
-      await new Promise((resolve) => {
-        setImmediate(resolve);
+    h.linkProgress.days.set('2026-10-17', LINK);
+    return h;
+  }
+
+  it.each([
+    ['this tick built it (Oct 5)', () => makeDeps()],
+    ['it was backfilled and only October is due (Oct 17)', backfilledSeptember],
+  ])(
+    "report-ready posts only once its month's workspace sync has finished: %s",
+    async (_name, harness) => {
+      const h = harness();
+      const finished = new Set<number>();
+      let septemberSyncedWhenPosted: boolean | undefined;
+      h.alert.mockImplementation(async (entry) => {
+        if (entry.title === 'Reports ready: September 2026') {
+          septemberSyncedWhenPosted = finished.has(9);
+        }
+        return true;
       });
-      finished.add(period.month);
+      h.syncWorkspace.mockImplementation(async (period) => {
+        // A sync that takes a few turns of the event loop.
+        await new Promise((resolve) => {
+          setImmediate(resolve);
+        });
+        finished.add(period.month);
+        return 'synced';
+      });
+      await runBuildTick(h.deps);
+      expect(ready(h)).toHaveLength(1);
+      expect(septemberSyncedWhenPosted).toBe(true);
+      // Each month once: September is not synced again after the notice.
+      expect(synced(h).sort()).toEqual(['2026-10', '2026-9']);
+    },
+  );
+
+  it('a backfilled month whose sync rejects is still announced', async () => {
+    const h = backfilledSeptember();
+    h.syncWorkspace.mockImplementation(async (period) => {
+      if (period.month === 9) {
+        throw new Error('down');
+      }
       return 'synced';
     });
     await runBuildTick(h.deps);
+    expect(fetchedPeriods(h)).toEqual(['2026-10']);
     expect(ready(h)).toHaveLength(1);
-    expect(septemberSyncedWhenPosted).toBe(true);
+    expect(synced(h)).toEqual(['2026-10', '2026-9']);
   });
 
-  it('only the current month built: it syncs before report-ready, the previous month after', async () => {
+  it('a backfilled month whose sync hangs is still announced, after at most the deadline', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const h = backfilledSeptember();
+      h.syncWorkspace.mockImplementation(async (period) => {
+        if (period.month === 9) {
+          return new Promise(() => undefined);
+        }
+        return 'synced';
+      });
+      const tick = runBuildTick(h.deps);
+      await vi.advanceTimersByTimeAsync(WORKSPACE_SYNC_DEADLINE_MS - 1);
+      expect(ready(h)).toHaveLength(0);
+      await vi.advanceTimersByTimeAsync(1);
+      await tick;
+      expect(ready(h)).toHaveLength(1);
+      expect(synced(h)).toEqual(['2026-10', '2026-9']);
+      expect(h.cache.values.has(LEASE_KEY)).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('only the current month built: it and then the previous month sync before report-ready', async () => {
     const h = makeDeps({ clock: new Clock('2026-10-10T16:15:00Z') });
     h.snapshots.seedBoth(SEPT, '2026-10-03T16:10:00Z');
     h.snapshots.seedBoth(OCT, '2026-10-09T16:05:00Z');
@@ -2033,8 +2088,8 @@ describe('workspace sync hooks', () => {
     expect(fetchedPeriods(h)).toEqual(['2026-10']);
     expect(order).toEqual([
       'sync 10',
-      'Reports ready: September 2026',
       'sync 9',
+      'Reports ready: September 2026',
     ]);
   });
 

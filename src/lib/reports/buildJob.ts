@@ -735,23 +735,27 @@ export async function runBuildTick(deps: BuildJobDeps): Promise<void> {
         await writeLinkProgress(deps, cache, item.day);
       }
     }
-    // The months just built first, so report-ready links a workspace that
-    // is set up. Each sync waits at most its deadline and never throws, so
-    // report-ready still runs after a failed or hung sync.
-    for (const p of builtMonths) {
+    // Before report-ready: the months just built, and the previous month
+    // (the one report-ready announces) even when this tick did not build it,
+    // since a backfilled month was never synced. So the notice links a
+    // workspace that is set up. Each sync waits at most its deadline and
+    // never throws, so a failed or hung sync never blocks the notice.
+    const current = periodOf(deps.now());
+    const previous = previousPeriod(current);
+    const builtThisTick = (p: Period) =>
+      builtMonths.some((q) => comparePeriods(p, q) === 0);
+    const beforeReady = builtThisTick(previous)
+      ? builtMonths
+      : [...builtMonths, previous];
+    for (const p of beforeReady) {
       // eslint-disable-next-line no-await-in-loop -- small Postgres syncs, one at a time on a pool of three
       await syncWorkspaceSafely(deps, cache, p);
     }
     await maybePostReportReady(deps);
-    // Then the previous and current month on every tick (a no-op when the
-    // workspace is up to date; it is also what sets up the latest finished
-    // month on the first tick after deploy).
-    const current = periodOf(deps.now());
-    for (const p of [previousPeriod(current), current]) {
-      if (!builtMonths.some((q) => comparePeriods(p, q) === 0)) {
-        // eslint-disable-next-line no-await-in-loop -- small Postgres syncs, one at a time on a pool of three
-        await syncWorkspaceSafely(deps, cache, p);
-      }
+    // Then the current month on every tick (a no-op when the workspace is
+    // up to date). Each month syncs at most once per tick.
+    if (!builtThisTick(current)) {
+      await syncWorkspaceSafely(deps, cache, current);
     }
   } finally {
     await releaseBuildLease(cache, lease);
