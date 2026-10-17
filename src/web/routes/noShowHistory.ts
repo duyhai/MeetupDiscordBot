@@ -168,13 +168,15 @@ function outcomeCell(outcomes: Outcomes, key: unknown, period: Period) {
       ? outcomes.value.get(key)
       : undefined;
   if (status === undefined) {
-    return html`<td>—</td>`;
+    return html`<td data-label="Outcome">—</td>`;
   }
   const path = linkableMonthPath(DASHBOARD_PATHS.workspaceMonth, period);
   const label = outcomeLabel(status);
   return path === undefined
-    ? html`<td>${label}</td>`
-    : html`<td><a href="${localUrl(path)}">${label}</a></td>`;
+    ? html`<td data-label="Outcome">${label}</td>`
+    : html`<td data-label="Outcome">
+        <a href="${localUrl(path)}">${label}</a>
+      </td>`;
 }
 
 function caseRow(
@@ -186,15 +188,17 @@ function caseRow(
   const { since } = c;
   const reason = SINCE_LABELS[since.reason];
   return html`<tr>
-    <td>${memberCell(c.member)}</td>
-    <td>${classificationLabel(c)}</td>
-    <td>
+    <td data-label="Member">${memberCell(c.member)}</td>
+    <td data-label="Status">${classificationLabel(c)}</td>
+    <td data-label="Counted no-shows">
       ${c.counted.length} ${countedList(c.counted)}
       <span class="muted">Counted since ${asText(since.day)} (${reason})</span>
     </td>
-    <td>${count(c.priorSuspensions)}</td>
-    <td>${count(c.recommendedDays)} days</td>
-    <td>${c.hostedPastEvent === true ? 'Has hosted' : ''}</td>
+    <td data-label="Prior suspensions">${count(c.priorSuspensions)}</td>
+    <td data-label="Next suspension">${count(c.recommendedDays)} days</td>
+    <td data-label="Hosting">
+      ${c.hostedPastEvent === true ? 'Has hosted' : ''}
+    </td>
     ${outcomeCell(outcomes, c.member.id, period)}
   </tr>`;
 }
@@ -227,7 +231,7 @@ function casesTable(
     return html`<p>No member has a no-show case this month.</p>`;
   }
   const start = (page - 1) * PAGE_SIZE;
-  return html`<table>
+  return html`<table class="stack">
       <thead>
         <tr>
           <th>Member</th>
@@ -338,7 +342,7 @@ export function registerNoShowHistoryRoutes(
     const table =
       metas.length === 0
         ? html`<p>No no-show reports have been built yet.</p>`
-        : html`<table>
+        : html`<table class="stack">
             <thead>
               <tr>
                 <th>Month</th>
@@ -360,16 +364,20 @@ export function registerNoShowHistoryRoutes(
                   att !== undefined &&
                   noShowsMissing(att);
                 return html`<tr>
-                  <td>
+                  <td data-label="Month">
                     ${monthCell(DASHBOARD_PATHS.noShowHistoryMonth, meta.period)}
                   </td>
-                  <td>${count(s.noShows)}</td>
-                  <td>${count(s.members)}</td>
-                  <td>${count(s.warnings)}</td>
-                  <td>${count(s.suspensionCandidates)}</td>
-                  <td>${count(s.cleared)}</td>
-                  <td>${count(s.departed)}</td>
-                  <td>${missing ? 'No no-shows recorded' : ''}</td>
+                  <td data-label="No-show RSVPs">${count(s.noShows)}</td>
+                  <td data-label="Members">${count(s.members)}</td>
+                  <td data-label="Warnings">${count(s.warnings)}</td>
+                  <td data-label="Suspension candidates">
+                    ${count(s.suspensionCandidates)}
+                  </td>
+                  <td data-label="Cleared">${count(s.cleared)}</td>
+                  <td data-label="Left the group">${count(s.departed)}</td>
+                  <td data-label="Note">
+                    ${missing ? 'No no-shows recorded' : ''}
+                  </td>
                 </tr>`;
               })}
             </tbody>
@@ -429,7 +437,7 @@ export function registerNoShowHistoryRoutes(
           ? html`<p>No more months.</p>
               ${pager}`
           : html`<p>No stored no-show report mentions this member.</p>`
-        : html`<table>
+        : html`<table class="stack">
               <thead>
                 <tr>
                   <th>Month</th>
@@ -443,12 +451,16 @@ export function registerNoShowHistoryRoutes(
                 ${rows.map((row) => {
                   const counted = memberCounted(row);
                   return html`<tr>
-                    <td>
+                    <td data-label="Month">
                       ${monthCell(DASHBOARD_PATHS.noShowHistoryMonth, row.period)}
                     </td>
-                    <td>${memberStatus(row)}</td>
-                    <td>${counted.length > 0 ? countedList(counted) : ''}</td>
-                    <td>As of ${pacificDateTime(row.asOf)} Pacific</td>
+                    <td data-label="Status">${memberStatus(row)}</td>
+                    <td data-label="Counted no-shows">
+                      ${counted.length > 0 ? countedList(counted) : ''}
+                    </td>
+                    <td data-label="As of">
+                      As of ${pacificDateTime(row.asOf)} Pacific
+                    </td>
                     ${
                       outcomes === undefined
                         ? ''
@@ -458,7 +470,7 @@ export function registerNoShowHistoryRoutes(
                               periodKey(row.period),
                               row.period,
                             )
-                          : html`<td></td>`
+                          : html`<td data-label="Outcome"></td>`
                     }
                   </tr>`;
                 })}

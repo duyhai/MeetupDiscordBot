@@ -66,6 +66,11 @@ const TEXT_PAIRS: [string, string][] = [
     'attn',
     bg,
   ]),
+  // Home stat tiles (on --raised): the done number. The to-do number is
+  // --attn on --raised, above; the labels are --muted on --raised.
+  ['ok-ink', 'raised'],
+  // Stacked table rows are --raised cards: badges inside keep their own
+  // backgrounds; links are --accent on --raised, above.
   // Badges and notices.
   ['attn-ink', 'attn-soft'],
   ['accent-ink', 'accent-soft'],

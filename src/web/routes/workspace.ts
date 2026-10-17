@@ -496,6 +496,10 @@ function historyBody(events: WorkspaceEvent[]): SafeHtml {
   </ul>`;
 }
 
+/** Actions that park or reopen a card: secondary (ghost) buttons. */
+const SECONDARY_ACTIONS: ReadonlySet<WorkspaceAction> =
+  new Set<WorkspaceAction>(['hold', 'skip', 'reopen']);
+
 /** One member card: a pure function of what the page read for this row. */
 function cardHtml(v: CardView): SafeHtml {
   const { row } = v;
@@ -531,10 +535,18 @@ function cardHtml(v: CardView): SafeHtml {
       return '';
     }
     // Voiding undoes a suspension: the destructive (coral ghost) button.
-    return action === 'void'
+    // Parking or reopening a card is secondary: ghost. Marking it sent is
+    // the card's main action: primary.
+    if (action === 'void') {
+      return form(
+        action,
+        html`${extra}<button type="submit" class="danger">${label}</button>`,
+      );
+    }
+    return SECONDARY_ACTIONS.has(action)
       ? form(
           action,
-          html`${extra}<button type="submit" class="danger">${label}</button>`,
+          html`${extra}<button type="submit" class="ghost">${label}</button>`,
         )
       : form(action, html`${extra}<button type="submit">${label}</button>`);
   }
@@ -626,7 +638,7 @@ function cardHtml(v: CardView): SafeHtml {
     ${form(
       'edit_notes',
       html`<label>Notes ${notesArea} </label>
-        <button type="submit">Save notes</button>`,
+        <button type="submit" class="ghost">Save notes</button>`,
     )}
     <details>
       <summary>History</summary>
@@ -642,7 +654,7 @@ const sum = (
 
 /** The months as links, the current one plain text. */
 function monthPicker(period: Period, now: Date): SafeHtml {
-  return html`<nav class="pager">
+  return html`<nav class="pager choices" aria-label="Months">
     ${workspaceMonths(now).map((p) => {
       if (comparePeriods(p, period) === 0) {
         return html`<strong>${monthLabel(p)}</strong>`;
@@ -777,7 +789,7 @@ export function registerWorkspaceRoutes(
           One card per member with no-shows, from September 2026 on. Older
           months are on the no-show history pages.
         </p>
-        <table>
+        <table class="stack">
           <thead>
             <tr>
               <th>Month</th>
@@ -792,11 +804,13 @@ export function registerWorkspaceRoutes(
               const c = counts.get(periodKey(p));
               const state = stateOf(p);
               return html`<tr>
-                <td>${monthCell(DASHBOARD_PATHS.workspaceMonth, p)}</td>
-                <td>${sum(c, OPEN_STATUSES)}</td>
-                <td>${sum(c, PARKED_STATUSES)}</td>
-                <td>${sum(c, DONE_STATUSES)}</td>
-                <td>
+                <td data-label="Month">
+                  ${monthCell(DASHBOARD_PATHS.workspaceMonth, p)}
+                </td>
+                <td data-label="To do">${sum(c, OPEN_STATUSES)}</td>
+                <td data-label="On hold">${sum(c, PARKED_STATUSES)}</td>
+                <td data-label="Done">${sum(c, DONE_STATUSES)}</td>
+                <td data-label="Set up">
                   ${
                     state
                       ? `Updated ${pacificDateTime(state.syncedAt)}`
@@ -1115,7 +1129,9 @@ export function registerWorkspaceRoutes(
               max="${today}"
               required
           /></label>
-          <button type="submit">Show the length for this date</button>
+          <button type="submit" class="ghost">
+            Show the length for this date
+          </button>
         </form>
         <p>
           Their upcoming RSVPs will be removed on Meetup by whoever applies the

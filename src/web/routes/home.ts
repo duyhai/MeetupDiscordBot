@@ -139,19 +139,37 @@ async function workspaceCard(
     ws.statusCounts(months),
     Promise.all(months.map((p) => ws.monthState(p))),
   ]);
-  const line = (p: Period, i: number) => {
+  // Each month: three tiles. Classes are literals; only the counts are data.
+  const month = (p: Period, i: number) => {
+    const heading = html`<h3>
+      ${monthCell(DASHBOARD_PATHS.workspaceMonth, p)}
+    </h3>`;
     if (!states[i]) {
-      return html`<li>
-        ${monthCell(DASHBOARD_PATHS.workspaceMonth, p)}: not set up yet
-      </li>`;
+      return html`<section class="ws-month">
+        ${heading}
+        <p class="muted">Not set up yet</p>
+      </section>`;
     }
     const c = counts.get(periodKey(p)) ?? {};
     const sum = (list: readonly WorkspaceStatus[]) =>
       list.reduce((n, s) => n + num(c, s), 0);
-    return html`<li>
-      ${monthCell(DASHBOARD_PATHS.workspaceMonth, p)}: ${sum(OPEN_STATUSES)} to
-      do, ${sum(PARKED_STATUSES)} on hold, ${sum(DONE_STATUSES)} done
-    </li>`;
+    return html`<section class="ws-month">
+      ${heading}
+      <dl class="stats">
+        <div class="stat todo">
+          <dt>To do</dt>
+          <dd>${sum(OPEN_STATUSES)}</dd>
+        </div>
+        <div class="stat">
+          <dt>On hold</dt>
+          <dd>${sum(PARKED_STATUSES)}</dd>
+        </div>
+        <div class="stat done">
+          <dt>Done</dt>
+          <dd>${sum(DONE_STATUSES)}</dd>
+        </div>
+      </dl>
+    </section>`;
   };
   return html`<div class="card">
     <h2>
@@ -159,9 +177,7 @@ async function workspaceCard(
         >No-show workspace</a
       >
     </h2>
-    <ul>
-      ${months.map(line)}
-    </ul>
+    ${months.map(month)}
   </div>`;
 }
 

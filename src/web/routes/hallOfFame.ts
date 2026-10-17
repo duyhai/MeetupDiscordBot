@@ -166,7 +166,7 @@ function monthPage(
 ): { hosts: SafeHtml; post: string } {
   const start = (page - 1) * PAGE_SIZE;
   const rows = payload.hosts.slice(start, start + PAGE_SIZE);
-  const hosts = html`<table>
+  const hosts = html`<table class="stack">
       <thead>
         <tr>
           <th>#</th>
@@ -178,13 +178,13 @@ function monthPage(
         ${rows.map(
           (h, i) =>
             html`<tr>
-              <td>${start + i + 1}</td>
-              <td>
+              <td data-label="#">${start + i + 1}</td>
+              <td data-label="Host">
                 ${memberLink(h.host)}${
-                  h.isNew ? html` <span class="badge">New host</span>` : ''
+                  h.isNew ? html` <span class="badge ok">New host</span>` : ''
                 }
               </td>
-              <td>
+              <td data-label="Events">
                 ${h.events.length}
                 <ul>
                   ${h.events.map(eventRow)}
@@ -246,7 +246,7 @@ export function registerHallOfFameRoutes(
     const table =
       metas.length === 0
         ? html`<p>No Hall of Fame reports have been built yet.</p>`
-        : html`<table>
+        : html`<table class="stack">
             <thead>
               <tr>
                 <th>Month</th>
@@ -260,13 +260,15 @@ export function registerHallOfFameRoutes(
               ${metas.map((meta) => {
                 const s = (meta.summary ?? {}) as Record<string, unknown>;
                 return html`<tr>
-                  <td>
+                  <td data-label="Month">
                     ${monthCell(DASHBOARD_PATHS.hallOfFameMonth, meta.period)}
                   </td>
-                  <td>${count(s.events)}</td>
-                  <td>${count(s.hosts)}</td>
-                  <td>${count(s.newHosts)}</td>
-                  <td>${pacificDateTime(meta.builtAt)} Pacific</td>
+                  <td data-label="Events">${count(s.events)}</td>
+                  <td data-label="Hosts">${count(s.hosts)}</td>
+                  <td data-label="New hosts">${count(s.newHosts)}</td>
+                  <td data-label="Built">
+                    ${pacificDateTime(meta.builtAt)} Pacific
+                  </td>
                 </tr>`;
               })}
             </tbody>

@@ -95,16 +95,24 @@ function memberCell(row: SuspensionPageRow): SafeHtml {
 
 function recordRow(row: SuspensionPageRow, voided: boolean): SafeHtml {
   return html`<tr>
-    <td>#${row.id}</td>
-    <td>${memberCell(row)}</td>
-    <td>${utcDateOnly(row.suspendedAt)} through ${row.lastDay}</td>
-    <td>${row.durationDays} days</td>
-    <td>${row.notes ? memberText(row.notes) : ''}</td>
+    <td data-label="Record">#${row.id}</td>
+    <td data-label="Member">${memberCell(row)}</td>
+    <td data-label="Suspended">
+      ${utcDateOnly(row.suspendedAt)} through ${row.lastDay}
+    </td>
+    <td data-label="Length">${row.durationDays} days</td>
+    <td data-label="Notes">${row.notes ? memberText(row.notes) : ''}</td>
     ${
       voided
-        ? html`<td>${pacificDateTime(row.voidedAt ?? '')} Pacific</td>
-            <td>${discordUserLink(row.voidedBy, 'moderator')}</td>
-            <td>${row.voidReason ? memberText(row.voidReason) : ''}</td>`
+        ? html`<td data-label="Voided">
+              ${pacificDateTime(row.voidedAt ?? '')} Pacific
+            </td>
+            <td data-label="Voided by">
+              ${discordUserLink(row.voidedBy, 'moderator')}
+            </td>
+            <td data-label="Reason">
+              ${row.voidReason ? memberText(row.voidReason) : ''}
+            </td>`
         : ''
     }
   </tr>`;
@@ -115,7 +123,7 @@ function tabs(
   counts: Record<SuspensionState, number>,
 ): SafeHtml {
   const path = dashboardPath(DASHBOARD_PATHS.suspensions);
-  return html`<nav class="pager">
+  return html`<nav class="pager choices" aria-label="Suspension records">
     ${STATES.map((state) => {
       const label = `${TAB_LABELS[state]} (${Number(counts[state]) || 0})`;
       return state === current
@@ -143,7 +151,7 @@ function recordsTable(
       : html`<p>No ${TAB_LABELS[state].toLowerCase()} suspensions.</p>`;
   }
   const voided = state === 'voided';
-  return html`<table>
+  return html`<table class="stack">
       <thead>
         <tr>
           <th>Record</th>

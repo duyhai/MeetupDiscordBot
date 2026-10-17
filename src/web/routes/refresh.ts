@@ -70,7 +70,7 @@ export function refreshForm(
   >
     <input type="hidden" name="_csrf" value="${csrfToken}" />
     <input type="hidden" name="return" value="${returnTo}" />
-    <button type="submit">Refresh from Meetup</button>
+    <button type="submit" class="ghost">Refresh from Meetup</button>
   </form>`;
 }
 

@@ -186,25 +186,27 @@ export function chart(input: ChartInput): SafeHtml {
     </svg>
     <details>
       <summary>Data</summary>
-      <table>
-        <thead>
-          <tr>
-            <th>${input.categoryLabel ?? 'Month'}</th>
-            ${input.series.map((s) => html`<th>${s.label}</th>`)}
-          </tr>
-        </thead>
-        <tbody>
-          ${input.categories.map(
-            (c, i) =>
-              html`<tr>
-                <td>${c}</td>
-                ${input.series.map(
-                  (s) => html`<td>${clean(s.values[i] ?? 0)}</td>`,
-                )}
-              </tr>`,
-          )}
-        </tbody>
-      </table>
+      <div class="table-scroll">
+        <table>
+          <thead>
+            <tr>
+              <th>${input.categoryLabel ?? 'Month'}</th>
+              ${input.series.map((s) => html`<th>${s.label}</th>`)}
+            </tr>
+          </thead>
+          <tbody>
+            ${input.categories.map(
+              (c, i) =>
+                html`<tr>
+                  <td>${c}</td>
+                  ${input.series.map(
+                    (s) => html`<td>${clean(s.values[i] ?? 0)}</td>`,
+                  )}
+                </tr>`,
+            )}
+          </tbody>
+        </table>
+      </div>
     </details>
   </figure>`;
 }

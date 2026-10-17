@@ -418,7 +418,7 @@ describe('no-show history months list', () => {
     expect(res.status).toBe(200);
     expect(res.text).toContain('href="/dashboard/no-show-history/2026-09"');
     expect(res.text).toContain('href="/dashboard/no-show-history/2026-08"');
-    expect(res.text).toMatch(/<td>\s*9\s*<\/td>/);
+    expect(res.text).toMatch(/<td[^>]*>\s*9\s*<\/td>/);
     expect(res.text).not.toContain('<b>');
     expect(res.text).not.toContain('&lt;b&gt;');
     expect(res.text).not.toContain('No no-shows recorded');
@@ -439,7 +439,7 @@ describe('no-show history months list', () => {
     expect(res.text).toContain('href="/dashboard/no-show-history/2026-09"');
     expect(res.text).toContain('href="/dashboard/no-show-history/2013-03"');
     expect(res.text).not.toContain('2013-02');
-    expect(res.text).toMatch(/<td>\s*February 2013\s*<\/td>/);
+    expect(res.text).toMatch(/<td[^>]*>\s*February 2013\s*<\/td>/);
     expect(res.text).not.toMatch(/<a[^>]*>\s*February 2013/);
   });
 
@@ -515,7 +515,7 @@ describe('no-show history member page', () => {
     expect(res.text).toContain('href="/dashboard/no-show-history/2026-09"');
     expect(res.text).toContain('href="/dashboard/no-show-history/2013-03"');
     expect(res.text).not.toContain('2013-02');
-    expect(res.text).toMatch(/<td>\s*February 2013\s*<\/td>/);
+    expect(res.text).toMatch(/<td[^>]*>\s*February 2013\s*<\/td>/);
     expect(res.text).not.toMatch(/<a[^>]*>\s*February 2013/);
   });
 

@@ -78,7 +78,7 @@ export function registerSessionRoutes(
           >
             <input type="hidden" name="_csrf" value="${session.csrfToken}" />
             <input type="hidden" name="userId" value="${session.userId}" />
-            <button type="submit">Sign me out everywhere</button>
+            <button type="submit" class="danger">Sign me out everywhere</button>
           </form>
         </div>
         <div class="card">
@@ -100,7 +100,9 @@ export function registerSessionRoutes(
                 pattern="[0-9]{17,20}"
                 required
             /></label>
-            <button type="submit">Sign them out everywhere</button>
+            <button type="submit" class="danger">
+              Sign them out everywhere
+            </button>
           </form>
         </div>`,
     });

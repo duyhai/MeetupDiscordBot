@@ -125,7 +125,7 @@ function categoriesFor(
 
 function rangeNav(current: RangeChoice): SafeHtml {
   const path = dashboardPath(DASHBOARD_PATHS.trends);
-  return html`<nav class="pager">
+  return html`<nav class="pager choices" aria-label="Range">
     ${RANGE_CHOICES.map((months) => {
       const label = RANGE_LABELS[months];
       if (months === current) {

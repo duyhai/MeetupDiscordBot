@@ -193,8 +193,8 @@ describe('Hall of Fame month page', () => {
     expect(first.text).not.toContain('members/1050/');
     const second = await get(`${MONTH}?page=2`);
     expect(hostRows(second.text)).toBe(10);
-    expect(second.text).toMatch(/<td>\s*51\s*<\/td>/);
-    expect(second.text).toMatch(/<td>\s*60\s*<\/td>/);
+    expect(second.text).toMatch(/<td[^>]*>\s*51\s*<\/td>/);
+    expect(second.text).toMatch(/<td[^>]*>\s*60\s*<\/td>/);
     expect(second.text).toContain('members/1050/');
     expect(second.text).not.toContain('members/1049/');
   });
@@ -329,7 +329,7 @@ describe('Hall of Fame months list', () => {
     expect(res.status).toBe(200);
     expect(res.text).toContain('href="/dashboard/hall-of-fame/2026-09"');
     expect(res.text).toContain('href="/dashboard/hall-of-fame/2026-08"');
-    expect(res.text).toMatch(/<td>\s*12\s*<\/td>/);
+    expect(res.text).toMatch(/<td[^>]*>\s*12\s*<\/td>/);
     expect(res.text).not.toContain('<b>');
     expect(res.text).not.toContain('&lt;b&gt;');
     expect(res.text).not.toMatch(/incomplete/i);
@@ -352,7 +352,7 @@ describe('Hall of Fame months list', () => {
     expect(res.text).toContain('href="/dashboard/hall-of-fame/2026-09"');
     expect(res.text).toContain('href="/dashboard/hall-of-fame/2013-03"');
     expect(res.text).not.toContain('2013-02');
-    expect(res.text).toMatch(/<td>\s*February 2013\s*<\/td>/);
+    expect(res.text).toMatch(/<td[^>]*>\s*February 2013\s*<\/td>/);
     expect(res.text).not.toMatch(/<a[^>]*>\s*February 2013/);
   });
 
