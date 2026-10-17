@@ -1,4 +1,6 @@
-import { Period } from '../reports/period.js';
+import type { Period } from '../reports/period.js';
+import type { SuspensionRecordState } from '../repositories/postgresSuspensionRepository.js';
+import type { TransitionRefusal } from './transitions.js';
 
 /** A workspace row's status. The order is the CHECK list's order. */
 export const WORKSPACE_STATUSES = [
@@ -14,7 +16,7 @@ export type WorkspaceStatus = (typeof WORKSPACE_STATUSES)[number];
 
 export type Classification = 'warning' | 'suspension';
 
-/** What staff can do to a row (Task 5 adds the request and outcome types). */
+/** What staff can do to a row. */
 export const WORKSPACE_ACTIONS = [
   'copy_warning',
   'mark_sent',
@@ -111,3 +113,52 @@ export interface WorkspaceMonthState {
 
 export const isWorkspaceStatus = (value: unknown): value is WorkspaceStatus =>
   WORKSPACE_STATUSES.some((status) => status === value);
+
+/**
+ * One staff action on one row. Who may send it (LEADERSHIP_ONLY_ACTIONS,
+ * checked live) is the caller's business: the repository applies it as
+ * `actor`.
+ */
+export interface ActionRequest {
+  period: Period;
+  rowId: number;
+  /** The version the form was rendered from: a different current one is 'stale'. */
+  expectedVersion: number;
+  /** The Discord user id of who acted. */
+  actor: string;
+  action: WorkspaceAction;
+  /** hold/skip/void reason, or edit_notes' new notes. Untrimmed; decideTransition normalises. */
+  note: string;
+  /** record_suspension: UTC midnight of the chosen Pacific date (parseUtcDateStrict). */
+  suspendedOn?: Date;
+  /** link_suspension: the record to link. */
+  linkRecordId?: number;
+}
+
+export type ActionRefusalReason =
+  | 'not-found'
+  | 'stale'
+  | TransitionRefusal
+  | 'already-suspended'
+  | 'record-unavailable'
+  | 'bad-date';
+
+/** A refusal wrote nothing: not the version bump, not an event. */
+export type ActionOutcome =
+  | {
+      ok: true;
+      row: WorkspaceRow;
+      previousStatus: WorkspaceStatus;
+      event: WorkspaceEvent;
+      suspension?: SuspensionRecordState;
+      /** The record already existed (link_suspension, or a same-date record found on insert). */
+      linkedExisting: boolean;
+      /** void: the record had been voided outside the workspace; it was not voided again. */
+      alreadyVoided: boolean;
+    }
+  | {
+      ok: false;
+      reason: ActionRefusalReason;
+      /** already-suspended: the live record the row could link instead. */
+      existing?: { id: number; suspendedAt: Date };
+    };

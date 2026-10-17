@@ -1,12 +1,17 @@
 import pg from 'pg';
 
+import { recommendedSuspensionDays } from '../helpers/noShowReport.js';
 import {
   parsePeriodKey,
   Period,
   periodDate,
   periodKey,
 } from '../reports/period.js';
+import { decideTransition, normalizeNote } from '../workspace/transitions.js';
 import {
+  ActionOutcome,
+  ActionRefusalReason,
+  ActionRequest,
   Classification,
   MEMBER_NAME_MAX,
   NOTES_MAX,
@@ -24,7 +29,15 @@ import {
   inDashboardTransaction,
   SCHEMA_LOCK_KEY,
 } from './dashboardPool.js';
-import { PostgresSuspensionRepository } from './postgresSuspensionRepository.js';
+import {
+  countSuspensionsBeforeInTx,
+  insertSuspensionInTx,
+  PostgresSuspensionRepository,
+  SuspensionRecordRow,
+  SuspensionRecordState,
+  toStateRecord,
+  voidSuspensionInTx,
+} from './postgresSuspensionRepository.js';
 
 const STATUS_LIST = `'new','warning_copied','warning_sent','on_hold','suspended','skipped','voided'`;
 const ACTION_LIST = `'copy_warning','mark_sent','hold','skip','reopen','record_suspension','link_suspension',
@@ -133,10 +146,16 @@ export async function ensureWorkspaceSchema(
   );
 }
 
-export type WorkspaceRepositoryOptions = DashboardTransactionOptions;
+export interface WorkspaceRepositoryOptions extends DashboardTransactionOptions {
+  /** Test-only: runs on the action's client right before the suspension insert. */
+  beforeSuspensionInsertForTest?: () => Promise<void>;
+}
 
 const ROW_COLUMNS = `id, to_char(period, 'YYYY-MM') AS period_key, meetup_member_id, member_name, classification,
   status, notes, suspension_record_id, in_latest_snapshot, version, updated_at, updated_by`;
+
+const EVENT_COLUMNS = `id::text AS id, row_id, actor, action, old_status, new_status, note,
+  suspension_record_id, created_at`;
 
 const MONTH_COLUMNS = `to_char(period, 'YYYY-MM') AS period_key, snapshot_id, snapshot_built_at, synced_at`;
 
@@ -259,11 +278,40 @@ function clampInt(
 const isRowId = (value: number): boolean =>
   Number.isSafeInteger(value) && value >= 1 && value <= MAX_ROW_ID;
 
+/** A refusal thrown out of the action transaction, so it rolls back; applyAction returns its outcome. */
+class ActionRefusal extends Error {
+  constructor(readonly outcome: Extract<ActionOutcome, { ok: false }>) {
+    super(outcome.reason);
+    this.name = 'ActionRefusal';
+  }
+}
+
+const refuse = (
+  reason: ActionRefusalReason,
+  existing?: { id: number; suspendedAt: Date },
+): ActionRefusal =>
+  new ActionRefusal({ ok: false, reason, ...(existing && { existing }) });
+
+/**
+ * The period floor in the suspended_at convention (UTC midnight of the
+ * 1st), not periodStart (Pacific midnight, 07:00 or 08:00 UTC): a record
+ * dated the 1st is in the month.
+ */
+const periodFloor = (p: Period): Date =>
+  new Date(`${periodDate(p)}T00:00:00.000Z`);
+
+/**
+ * A live record of member $1 dated in or after the month ($2, periodFloor)
+ * that backs no workspace row yet.
+ */
+const UNLINKED_LIVE = `s.member_id = $1 AND s.voided_at IS NULL AND s.suspended_at >= $2
+  AND NOT EXISTS (SELECT 1 FROM noshow_workspace_rows w WHERE w.suspension_record_id = s.id)`;
+
 /**
  * The month-by-month no-show workspace: one row per member per month,
  * synced from the stored no-show report, plus an append-only event trail.
- * Uses the dashboard pool; suspension SQL inside its transactions (Task 5)
- * runs on the same client.
+ * Uses the dashboard pool; suspension SQL inside its transactions runs on
+ * the same client, so the two commit together.
  */
 export class PostgresNoShowWorkspaceRepository {
   private static singleton:
@@ -438,6 +486,225 @@ export class PostgresNoShowWorkspaceRepository {
       },
       this.options,
     );
+  }
+
+  /**
+   * One workspace action in one transaction. The first statement is the
+   * optimistic version check: it bumps the version only if the form's
+   * version is current, and it takes the row lock, so a concurrent action
+   * with the same version waits, then finds the version changed. Any
+   * refusal or failure after that rolls everything back, the bump and any
+   * suspension write included. Suspension SQL is the command's (shared
+   * constants), run on this transaction's client.
+   *
+   * A refusal writes nothing here, not even an event (the events CHECK has
+   * no refusal action). Who may act is the caller's check.
+   */
+  async applyAction(req: ActionRequest): Promise<ActionOutcome> {
+    try {
+      return await inDashboardTransaction(
+        this.pool,
+        'workspace action',
+        async (client) => {
+          const day = periodDate(req.period);
+          const bumped = await client.query<RowRecord>(
+            `UPDATE noshow_workspace_rows SET version = version + 1
+              WHERE id = $1 AND period = $2::date AND version = $3 RETURNING ${ROW_COLUMNS}`,
+            [req.rowId, day, req.expectedVersion],
+          );
+          if (bumped.rowCount !== 1) {
+            const found = await client.query(
+              'SELECT 1 FROM noshow_workspace_rows WHERE id = $1 AND period = $2::date',
+              [req.rowId, day],
+            );
+            throw refuse(found.rowCount === 1 ? 'stale' : 'not-found');
+          }
+          const row = toRow(bumped.rows[0]);
+          const statusBeforePark =
+            req.action === 'reopen'
+              ? await this.statusBeforePark(client, row)
+              : undefined;
+          const decision = decideTransition({
+            action: req.action,
+            status: row.status,
+            classification: row.classification,
+            inLatestSnapshot: row.inLatestSnapshot,
+            note: req.note,
+            statusBeforePark,
+          });
+          if (decision.ok === false) {
+            throw refuse(decision.reason);
+          }
+          const floor = periodFloor(req.period);
+          let recordId = row.suspensionRecordId;
+          let suspension: SuspensionRecordState | undefined;
+          let linkedExisting = false;
+          let alreadyVoided = false;
+          if (
+            req.action === 'record_suspension' ||
+            req.action === 'link_suspension'
+          ) {
+            // Two rows of one member (two months) cannot both suspend at once.
+            await client.query(
+              'SELECT pg_advisory_xact_lock($1, hashtext($2))',
+              [DASHBOARD_LOCK_CLASS, `suspension:${row.memberId}`],
+            );
+          }
+          if (req.action === 'record_suspension') {
+            const on = req.suspendedOn;
+            if (
+              !(on instanceof Date) ||
+              Number.isNaN(on.getTime()) ||
+              on < floor
+            ) {
+              throw refuse('bad-date');
+            }
+            const live = await client.query<{ id: number; suspended_at: Date }>(
+              `SELECT s.id, s.suspended_at FROM suspension_records s WHERE ${UNLINKED_LIVE}
+                ORDER BY s.suspended_at DESC, s.id DESC LIMIT 1`,
+              [row.memberId, floor],
+            );
+            if (live.rows[0]) {
+              throw refuse('already-suspended', {
+                id: live.rows[0].id,
+                suspendedAt: live.rows[0].suspended_at,
+              });
+            }
+            const prior = await countSuspensionsBeforeInTx(
+              client,
+              row.memberId,
+              on,
+            );
+            await this.options.beforeSuspensionInsertForTest?.();
+            const inserted = await insertSuspensionInTx(client, {
+              memberId: row.memberId,
+              memberName: row.memberName || null,
+              suspendedAt: on,
+              durationDays: recommendedSuspensionDays(prior),
+              notes: normalizeNote(row.notes) || null,
+            });
+            if (inserted) {
+              suspension = {
+                ...inserted,
+                voidedAt: null,
+                voidedBy: null,
+                voidReason: null,
+              };
+            } else {
+              // ON CONFLICT: a live record for this member and date appeared
+              // after the check (a CSV import in between). Link it, unless
+              // another row already holds it.
+              const same = await client.query<SuspensionRecordRow>(
+                `SELECT s.* FROM suspension_records s WHERE ${UNLINKED_LIVE} AND s.suspended_at = $3`,
+                [row.memberId, floor, on],
+              );
+              if (!same.rows[0]) {
+                throw refuse('record-unavailable');
+              }
+              suspension = toStateRecord(same.rows[0]);
+              linkedExisting = true;
+            }
+            recordId = suspension.id;
+          } else if (req.action === 'link_suspension') {
+            const id = req.linkRecordId;
+            if (!Number.isSafeInteger(id) || id < 1 || id > MAX_ROW_ID) {
+              throw refuse('record-unavailable');
+            }
+            const rec = await client.query<SuspensionRecordRow>(
+              `SELECT s.* FROM suspension_records s WHERE s.id = $3 AND ${UNLINKED_LIVE} FOR UPDATE`,
+              [row.memberId, floor, id],
+            );
+            if (!rec.rows[0]) {
+              throw refuse('record-unavailable');
+            }
+            suspension = toStateRecord(rec.rows[0]);
+            recordId = suspension.id;
+            linkedExisting = true;
+          } else if (req.action === 'void') {
+            if (recordId === null) {
+              throw refuse('record-unavailable');
+            }
+            // As /meetup_void_suspension: who voided, and the trimmed reason.
+            const voided = await voidSuspensionInTx(
+              client,
+              recordId,
+              req.actor,
+              decision.note ?? '',
+            );
+            if (voided) {
+              suspension = voided;
+            } else {
+              // Voided outside the workspace (/meetup_void_suspension): the
+              // row follows; nothing is voided twice.
+              const rec = await client.query<SuspensionRecordRow>(
+                'SELECT * FROM suspension_records WHERE id = $1',
+                [recordId],
+              );
+              if (!rec.rows[0] || rec.rows[0].voided_at === null) {
+                throw refuse('record-unavailable');
+              }
+              suspension = toStateRecord(rec.rows[0]);
+              alreadyVoided = true;
+            }
+          }
+          const notes =
+            req.action === 'edit_notes' ? (decision.note ?? '') : row.notes;
+          const updated = await client.query<RowRecord>(
+            `UPDATE noshow_workspace_rows SET status = $2, notes = $3, suspension_record_id = $4,
+               updated_at = now(), updated_by = $5 WHERE id = $1 RETURNING ${ROW_COLUMNS}`,
+            [row.id, decision.to, notes, recordId, req.actor],
+          );
+          const event = await client.query<EventRecord>(
+            `INSERT INTO noshow_workspace_events
+               (row_id, actor, action, old_status, new_status, note, suspension_record_id)
+             VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING ${EVENT_COLUMNS}`,
+            [
+              row.id,
+              req.actor,
+              req.action,
+              row.status,
+              decision.to,
+              decision.note,
+              recordId,
+            ],
+          );
+          return {
+            ok: true as const,
+            row: toRow(updated.rows[0]),
+            previousStatus: row.status,
+            event: toEvent(event.rows[0]),
+            suspension,
+            linkedExisting,
+            alreadyVoided,
+          };
+        },
+        this.options,
+      );
+    } catch (error) {
+      if (error instanceof ActionRefusal) {
+        return error.outcome;
+      }
+      // The record was linked to another row between our check and our
+      // update (the one-row-per-record unique index).
+      if ((error as { code?: unknown }).code === '23505') {
+        return { ok: false, reason: 'record-unavailable' };
+      }
+      throw error;
+    }
+  }
+
+  /** The status the latest hold or skip left from. */
+  private async statusBeforePark(
+    client: pg.PoolClient,
+    row: WorkspaceRow,
+  ): Promise<WorkspaceStatus | undefined> {
+    const result = await client.query<{ old_status: WorkspaceStatus }>(
+      `SELECT old_status FROM noshow_workspace_events
+        WHERE row_id = $1 AND action IN ('hold', 'skip') AND new_status = $2
+        ORDER BY id DESC LIMIT 1`,
+      [row.id, row.status],
+    );
+    return result.rows[0]?.old_status;
   }
 
   async monthState(period: Period): Promise<WorkspaceMonthState | undefined> {

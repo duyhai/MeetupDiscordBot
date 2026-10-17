@@ -2,6 +2,11 @@ import pg from 'pg';
 import { Logger } from 'tslog';
 
 import {
+  DASHBOARD_LOCK_CLASS,
+  DashboardTransactionOptions,
+  inDashboardTransaction,
+} from './dashboardPool.js';
+import {
   SuspensionInsert,
   SuspensionRecord,
   SuspensionRepository,
@@ -16,6 +21,15 @@ const logger = new Logger({ name: 'PostgresSuspensionRepository' });
  * wrong record is voided, the corrected one can be recorded on the same
  * date. The old full index is dropped by name; the partial one has a new
  * name so CREATE ... IF NOT EXISTS can't mistake one for the other.
+ *
+ * A boot on an upgraded table only reads the catalog. CREATE TABLE IF NOT
+ * EXISTS returns before locking anything, but ALTER TABLE takes an ACCESS
+ * EXCLUSIVE lock (even when every ADD COLUMN IF NOT EXISTS is a no-op) and
+ * CREATE INDEX IF NOT EXISTS a SHARE lock (blocking writes) before either
+ * notices there is nothing to do. So each upgrade step sits behind a
+ * catalog check scoped to current_schema(), and runs exactly the statement
+ * it always ran. ensureSuspensionSchema runs this under an advisory lock
+ * with a lock_timeout.
  */
 export const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS suspension_records (
@@ -27,24 +41,77 @@ CREATE TABLE IF NOT EXISTS suspension_records (
   notes         TEXT,
   created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
-ALTER TABLE suspension_records
-  ADD COLUMN IF NOT EXISTS voided_at   TIMESTAMPTZ,
-  ADD COLUMN IF NOT EXISTS voided_by   TEXT,
-  ADD COLUMN IF NOT EXISTS void_reason TEXT;
-CREATE INDEX IF NOT EXISTS suspension_records_member_id_idx
-  ON suspension_records (member_id);
-DROP INDEX IF EXISTS suspension_records_member_suspended_at_idx;
-CREATE UNIQUE INDEX IF NOT EXISTS suspension_records_live_member_suspended_at_idx
-  ON suspension_records (member_id, suspended_at)
-  WHERE voided_at IS NULL;
+DO $do$
+BEGIN
+  IF (SELECT count(*) FROM information_schema.columns
+       WHERE table_schema = current_schema()
+         AND table_name = 'suspension_records'
+         AND column_name IN ('voided_at', 'voided_by', 'void_reason')) < 3 THEN
+    ALTER TABLE suspension_records
+      ADD COLUMN IF NOT EXISTS voided_at   TIMESTAMPTZ,
+      ADD COLUMN IF NOT EXISTS voided_by   TEXT,
+      ADD COLUMN IF NOT EXISTS void_reason TEXT;
+  END IF;
+  IF to_regclass(quote_ident(current_schema()) || '.suspension_records_member_id_idx') IS NULL THEN
+    CREATE INDEX IF NOT EXISTS suspension_records_member_id_idx
+      ON suspension_records (member_id);
+  END IF;
+  IF to_regclass(quote_ident(current_schema()) || '.suspension_records_member_suspended_at_idx') IS NOT NULL THEN
+    DROP INDEX IF EXISTS suspension_records_member_suspended_at_idx;
+  END IF;
+  IF to_regclass(quote_ident(current_schema()) || '.suspension_records_live_member_suspended_at_idx') IS NULL THEN
+    CREATE UNIQUE INDEX IF NOT EXISTS suspension_records_live_member_suspended_at_idx
+      ON suspension_records (member_id, suspended_at)
+      WHERE voided_at IS NULL;
+  END IF;
+END
+$do$;
 `;
 
+/** (DASHBOARD_LOCK_CLASS, SUSPENSION_SCHEMA_LOCK_KEY) serializes SCHEMA_SQL across processes. */
+export const SUSPENSION_SCHEMA_LOCK_KEY = 1;
+
+/**
+ * SCHEMA_SQL in one transaction, under its advisory lock, with the dashboard
+ * transaction's lock_timeout: a first boot's ALTER waiting behind a long
+ * query fails (and is retried on the next instance() call) instead of
+ * queueing every later query on the table behind it.
+ */
+export async function ensureSuspensionSchema(
+  pool: pg.Pool,
+  options: DashboardTransactionOptions = {},
+): Promise<void> {
+  await inDashboardTransaction(
+    pool,
+    'suspension schema transaction',
+    async (client) => {
+      await client.query('SELECT pg_advisory_xact_lock($1, $2)', [
+        DASHBOARD_LOCK_CLASS,
+        SUSPENSION_SCHEMA_LOCK_KEY,
+      ]);
+      await client.query(SCHEMA_SQL);
+    },
+    options,
+  );
+}
+
 // Must name the partial index's predicate, or Postgres can't match it.
-const INSERT_SQL = `INSERT INTO suspension_records
+export const INSERT_SQL = `INSERT INTO suspension_records
   (member_id, member_name, suspended_at, duration_days, notes)
 VALUES ($1, $2, $3, $4, $5)
 ON CONFLICT (member_id, suspended_at) WHERE voided_at IS NULL DO NOTHING
 RETURNING *`;
+
+export const VOID_SQL = `UPDATE suspension_records
+       SET voided_at = now(), voided_by = $2, void_reason = $3
+       WHERE id = $1 AND voided_at IS NULL
+       RETURNING *`;
+
+export const COUNT_BEFORE_SQL = `SELECT COUNT(*) AS count FROM suspension_records
+       WHERE member_id = $1 AND suspended_at < $2 AND voided_at IS NULL`;
+
+/** A pool or a checked-out client: the SQL below runs the same on either. */
+export type Queryable = Pick<pg.PoolClient, 'query'>;
 
 /** The web dyno's suspension pool (PG_POOL_MAX unset). */
 const DEFAULT_SUSPENSION_POOL_SIZE = 5;
@@ -152,6 +219,75 @@ function toVoidedRecord(row: SuspensionRow): VoidedSuspensionRecord {
   };
 }
 
+/** A record live or voided: the void columns are null while it is live. */
+export interface SuspensionRecordState extends SuspensionRecord {
+  voidedAt: Date | null;
+  voidedBy: string | null;
+  voidReason: string | null;
+}
+
+/** A suspension_records row as SELECT * reads it. */
+export type SuspensionRecordRow = SuspensionRow;
+
+export function toStateRecord(row: SuspensionRow): SuspensionRecordState {
+  return {
+    ...toRecord(row),
+    voidedAt: row.voided_at,
+    voidedBy: row.voided_by,
+    voidReason: row.void_reason,
+  };
+}
+
+/**
+ * INSERT_SQL on `db`: the command's insert (the pool, or insertMany's
+ * client) and the workspace's (its transaction's client) are one statement.
+ * Undefined when a live record for the member and date already exists.
+ */
+export async function insertSuspensionInTx(
+  db: Queryable,
+  record: SuspensionInsert,
+): Promise<SuspensionRecord | undefined> {
+  const result = await db.query<SuspensionRow>(INSERT_SQL, [
+    record.memberId,
+    record.memberName,
+    record.suspendedAt,
+    record.durationDays,
+    record.notes,
+  ]);
+  return result.rows[0] ? toRecord(result.rows[0]) : undefined;
+}
+
+/** VOID_SQL on `db`. Undefined when the id is unknown or already void. */
+export async function voidSuspensionInTx(
+  db: Queryable,
+  id: number,
+  voidedBy: string,
+  reason: string,
+): Promise<VoidedSuspensionRecord | undefined> {
+  const result = await db.query<SuspensionRow>(VOID_SQL, [
+    id,
+    voidedBy,
+    reason,
+  ]);
+  return result.rows[0] ? toVoidedRecord(result.rows[0]) : undefined;
+}
+
+/** COUNT_BEFORE_SQL on `db`: live records strictly before `before`. */
+export async function countSuspensionsBeforeInTx(
+  db: Queryable,
+  memberId: string,
+  before: Date,
+): Promise<number> {
+  const result = await db.query<{ count: string }>(COUNT_BEFORE_SQL, [
+    memberId,
+    before,
+  ]);
+  return Number(result.rows[0].count);
+}
+
+const MAX_RECORD_ID = 2 ** 31 - 1;
+const MAX_IDS = 50;
+
 /**
  * Postgres-backed suspension history. Same lifecycle conventions as
  * PostgresMemberRepository: singleton, lazy schema ensure, Heroku TLS.
@@ -190,9 +326,7 @@ export class PostgresSuspensionRepository implements SuspensionRepository {
     }
     const repo = this.singleton;
     if (repo.schemaEnsured === undefined) {
-      repo.schemaEnsured = (async () => {
-        await repo.pool.query(SCHEMA_SQL);
-      })();
+      repo.schemaEnsured = ensureSuspensionSchema(repo.pool);
     }
     try {
       await repo.schemaEnsured;
@@ -206,14 +340,7 @@ export class PostgresSuspensionRepository implements SuspensionRepository {
   async insert(
     record: SuspensionInsert,
   ): Promise<SuspensionRecord | undefined> {
-    const result = await this.pool.query<SuspensionRow>(INSERT_SQL, [
-      record.memberId,
-      record.memberName,
-      record.suspendedAt,
-      record.durationDays,
-      record.notes,
-    ]);
-    return result.rows[0] ? toRecord(result.rows[0]) : undefined;
+    return insertSuspensionInTx(this.pool, record);
   }
 
   async insertMany(records: SuspensionInsert[]): Promise<SuspensionRecord[]> {
@@ -223,15 +350,9 @@ export class PostgresSuspensionRepository implements SuspensionRepository {
       const inserted: SuspensionRecord[] = [];
       for (const record of records) {
         // eslint-disable-next-line no-await-in-loop
-        const result = await client.query<SuspensionRow>(INSERT_SQL, [
-          record.memberId,
-          record.memberName,
-          record.suspendedAt,
-          record.durationDays,
-          record.notes,
-        ]);
-        if (result.rows[0]) {
-          inserted.push(toRecord(result.rows[0]));
+        const row = await insertSuspensionInTx(client, record);
+        if (row) {
+          inserted.push(row);
         }
       }
       await client.query('COMMIT');
@@ -248,12 +369,7 @@ export class PostgresSuspensionRepository implements SuspensionRepository {
     memberId: string,
     before: Date,
   ): Promise<number> {
-    const result = await this.pool.query<{ count: string }>(
-      `SELECT COUNT(*) AS count FROM suspension_records
-       WHERE member_id = $1 AND suspended_at < $2 AND voided_at IS NULL`,
-      [memberId, before],
-    );
-    return Number(result.rows[0].count);
+    return countSuspensionsBeforeInTx(this.pool, memberId, before);
   }
 
   async listByMemberId(memberId: string): Promise<SuspensionRecord[]> {
@@ -297,14 +413,29 @@ export class PostgresSuspensionRepository implements SuspensionRepository {
     voidedBy: string,
     reason: string,
   ): Promise<VoidedSuspensionRecord | undefined> {
-    const result = await this.pool.query<SuspensionRow>(
-      `UPDATE suspension_records
-       SET voided_at = now(), voided_by = $2, void_reason = $3
-       WHERE id = $1 AND voided_at IS NULL
-       RETURNING *`,
-      [id, voidedBy, reason],
+    return voidSuspensionInTx(this.pool, id, voidedBy, reason);
+  }
+
+  /**
+   * Records by id, voided ones included, oldest id first: the workspace
+   * shows a record voided with /meetup_void_suspension. Ids that are not
+   * 1..2^31-1 are dropped; none left runs no query; more than 50 is refused.
+   */
+  async listByIds(ids: number[]): Promise<SuspensionRecordState[]> {
+    const usable = [...new Set(ids)].filter(
+      (id) => Number.isSafeInteger(id) && id >= 1 && id <= MAX_RECORD_ID,
     );
-    return result.rows[0] ? toVoidedRecord(result.rows[0]) : undefined;
+    if (usable.length > MAX_IDS) {
+      throw new RangeError(`listByIds takes at most ${MAX_IDS} ids`);
+    }
+    if (usable.length === 0) {
+      return [];
+    }
+    const result = await this.pool.query<SuspensionRow>(
+      'SELECT * FROM suspension_records WHERE id = ANY($1::int[]) ORDER BY id',
+      [usable],
+    );
+    return result.rows.map(toStateRecord);
   }
 
   /**

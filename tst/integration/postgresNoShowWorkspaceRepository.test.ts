@@ -13,8 +13,17 @@ import {
   PostgresNoShowWorkspaceRepository,
   WORKSPACE_SCHEMA_SQL,
 } from '../../src/lib/repositories/postgresNoShowWorkspaceRepository.js';
-import { SCHEMA_SQL as SUSPENSION_SCHEMA_SQL } from '../../src/lib/repositories/postgresSuspensionRepository.js';
-import { SyncCase } from '../../src/lib/workspace/types.js';
+import { recordCsvRows } from '../../src/lib/helpers/recordSuspensions.js';
+import {
+  PostgresSuspensionRepository,
+  SCHEMA_SQL as SUSPENSION_SCHEMA_SQL,
+} from '../../src/lib/repositories/postgresSuspensionRepository.js';
+import {
+  ActionOutcome,
+  ActionRequest,
+  SyncCase,
+  WorkspaceAction,
+} from '../../src/lib/workspace/types.js';
 import { useIsolatedSchema } from './isolatedSchema.js';
 
 // Requires DATABASE_URL against a throwaway Postgres; skipped otherwise.
@@ -745,6 +754,623 @@ const suspension = (
         const shared = await PostgresNoShowWorkspaceRepository.instance();
         expect(await PostgresNoShowWorkspaceRepository.instance()).toBe(shared);
         expect(await shared.listMonths()).toEqual([]);
+      });
+    });
+
+    describe('actions', () => {
+      const MOD_B = '223456789012345678';
+      const day = (iso: string) => new Date(`${iso}T00:00:00.000Z`);
+      const sleep = (ms: number) =>
+        new Promise<void>((resolve) => {
+          setTimeout(resolve, ms);
+        });
+
+      /** A row's live state, by id. */
+      const stateOf = async (rowId: number) =>
+        (
+          await pool.query<{
+            status: string;
+            version: number;
+            notes: string;
+            suspension_record_id: number | null;
+            updated_by: string | null;
+          }>(
+            `SELECT status, version, notes, suspension_record_id, updated_by
+               FROM noshow_workspace_rows WHERE id = $1`,
+            [rowId],
+          )
+        ).rows[0];
+
+      const records = async () =>
+        (
+          await pool.query<{
+            id: number;
+            member_id: string;
+            member_name: string | null;
+            suspended_at: Date;
+            duration_days: number;
+            notes: string | null;
+            voided_at: Date | null;
+            voided_by: string | null;
+            void_reason: string | null;
+          }>('SELECT * FROM suspension_records ORDER BY id')
+        ).rows;
+
+      const insertRecord = async (memberId: string, iso: string) =>
+        (
+          await pool.query<{ id: number }>(
+            `INSERT INTO suspension_records (member_id, member_name, suspended_at, duration_days)
+             VALUES ($1, $2, $3, 30) RETURNING id`,
+            [memberId, `M${memberId}`, day(iso)],
+          )
+        ).rows[0].id;
+
+      /** Points a row at a record directly, as an earlier action would have. */
+      const linkDirectly = (rowId: number, recordId: number) =>
+        pool.query(
+          `UPDATE noshow_workspace_rows SET status = 'suspended', suspension_record_id = $2 WHERE id = $1`,
+          [rowId, recordId],
+        );
+
+      /** Applies `action` at the row's current version (unless one is given). */
+      async function act(
+        rowId: number,
+        action: WorkspaceAction,
+        extra: Partial<ActionRequest> = {},
+        on: PostgresNoShowWorkspaceRepository = repo,
+      ): Promise<ActionOutcome> {
+        const version = extra.expectedVersion ?? (await stateOf(rowId)).version;
+        const period = extra.period ?? SEPTEMBER;
+        return on.applyAction({
+          period,
+          rowId,
+          expectedVersion: version,
+          actor: MOD,
+          action,
+          note: '',
+          ...extra,
+        });
+      }
+
+      const okOf = (outcome: ActionOutcome) => {
+        if (outcome.ok === false) {
+          throw new Error(`expected ok, got ${outcome.reason}`);
+        }
+        return outcome;
+      };
+
+      const seedSuspension = async (memberId = '222', period = SEPTEMBER) => {
+        await sync([suspension(memberId)], T1, period.month, period);
+        return (await rowOf(period, memberId)).id;
+      };
+      const seedWarning = async (memberId = '111') => {
+        await sync([warning(memberId)]);
+        return (await rowOf(SEPTEMBER, memberId)).id;
+      };
+
+      it('refuses a stale version and writes nothing', async () => {
+        const id = await seedWarning();
+        const first = await act(id, 'hold', {
+          expectedVersion: 1,
+          note: 'away',
+        });
+        const second = await act(id, 'hold', {
+          expectedVersion: 1,
+          note: 'again',
+        });
+        expect(first.ok).toBe(true);
+        expect(second).toEqual({ ok: false, reason: 'stale' });
+        expect((await stateOf(id)).version).toBe(2);
+        expect(
+          (await eventsOf(id)).filter((e) => e.action === 'hold'),
+        ).toHaveLength(1);
+      });
+
+      it('an unknown row, or a row of another month, is not-found', async () => {
+        const id = await seedWarning();
+        expect(
+          await act(id + 99, 'hold', { note: 'x', expectedVersion: 1 }),
+        ).toEqual({
+          ok: false,
+          reason: 'not-found',
+        });
+        expect(await act(id, 'hold', { note: 'x', period: OCTOBER })).toEqual({
+          ok: false,
+          reason: 'not-found',
+        });
+        expect((await stateOf(id)).version).toBe(1);
+      });
+
+      it('two moderators with the same version: exactly one wins', async () => {
+        const id = await seedWarning();
+        const outcomes = await Promise.all([
+          act(id, 'hold', { expectedVersion: 1, note: 'a' }),
+          act(id, 'skip', { expectedVersion: 1, note: 'b', actor: MOD_B }),
+        ]);
+        expect(outcomes.filter((o) => o.ok)).toHaveLength(1);
+        expect(outcomes.filter((o) => !o.ok)).toEqual([
+          { ok: false, reason: 'stale' },
+        ]);
+        expect((await stateOf(id)).version).toBe(2);
+        expect(await eventsOf(id)).toHaveLength(2);
+      });
+
+      it('rolls back the suspension when the workspace update fails', async () => {
+        const id = await seedSuspension();
+        await pool.query(`
+          CREATE FUNCTION test_refuse_suspended() RETURNS trigger LANGUAGE plpgsql
+            AS $fn$ BEGIN RAISE EXCEPTION 'refused for the test'; END $fn$;
+          CREATE TRIGGER test_refuse_suspended BEFORE UPDATE ON noshow_workspace_rows
+            FOR EACH ROW WHEN (NEW.status = 'suspended') EXECUTE FUNCTION test_refuse_suspended();
+        `);
+        try {
+          await expect(
+            act(id, 'record_suspension', { suspendedOn: day('2026-10-03') }),
+          ).rejects.toThrow('refused for the test');
+        } finally {
+          await pool.query(`
+            DROP TRIGGER test_refuse_suspended ON noshow_workspace_rows;
+            DROP FUNCTION test_refuse_suspended();
+          `);
+        }
+        expect(await count('suspension_records')).toBe(0);
+        expect(await stateOf(id)).toMatchObject({ version: 1, status: 'new' });
+        expect(await eventsOf(id)).toHaveLength(1);
+      });
+
+      it('record suspension writes the same row /meetup_record_suspension would', async () => {
+        await sync([
+          suspension('501', 'Same Name'),
+          suspension('502', 'Same Name'),
+        ]);
+        const a = (await rowOf(SEPTEMBER, '501')).id;
+        await insertRecord('501', '2026-03-01');
+        await insertRecord('502', '2026-03-01');
+        okOf(await act(a, 'edit_notes', { note: '  no-show twice \r\n' }));
+        const outcome = okOf(
+          await act(a, 'record_suspension', { suspendedOn: day('2026-10-03') }),
+        );
+        const suspensions = await PostgresSuspensionRepository.instance();
+        const csv = await recordCsvRows(
+          suspensions,
+          [
+            {
+              memberId: '502',
+              memberName: 'Same Name',
+              durationDays: 60,
+              suspendedAt: day('2026-10-03'),
+              notes: 'no-show twice',
+              rowNumber: 2,
+            },
+          ],
+          new Map([['502', 'Same Name']]),
+        );
+        expect(csv.recorded).toHaveLength(1);
+        expect(csv.durationMismatches).toEqual([]);
+        const rows = await pool.query<Record<string, unknown> & { id: number }>(
+          `SELECT * FROM suspension_records WHERE member_id IN ('501', '502')
+             AND suspended_at = '2026-10-03T00:00:00Z' ORDER BY member_id`,
+        );
+        const strip = ({
+          id: _id,
+          member_id: _m,
+          created_at: _c,
+          ...rest
+        }: Record<string, unknown>) => rest;
+        expect(rows.rows).toHaveLength(2);
+        expect(strip(rows.rows[0])).toEqual(strip(rows.rows[1]));
+        expect(rows.rows[0]).toMatchObject({
+          member_name: 'Same Name',
+          duration_days: 60,
+          notes: 'no-show twice',
+        });
+        expect(outcome.suspension).toMatchObject({
+          id: rows.rows[0].id,
+          durationDays: 60,
+          voidedAt: null,
+        });
+        expect(outcome.linkedExisting).toBe(false);
+        expect(outcome.row).toMatchObject({
+          status: 'suspended',
+          suspensionRecordId: rows.rows[0].id,
+          updatedBy: MOD,
+        });
+      });
+
+      it('duration follows 30 × 2^prior as of the chosen date', async () => {
+        const id = await seedSuspension();
+        const other = await seedSuspension('222', OCTOBER);
+        await insertRecord('222', '2026-03-01');
+        // Later than the chosen date, and already backing the October row.
+        await linkDirectly(other, await insertRecord('222', '2026-11-01'));
+        const outcome = okOf(
+          await act(id, 'record_suspension', {
+            suspendedOn: day('2026-09-10'),
+          }),
+        );
+        expect(outcome.suspension?.durationDays).toBe(60);
+      });
+
+      it('the suspension date is stored as UTC midnight of the chosen day', async () => {
+        const id = await seedSuspension();
+        okOf(
+          await act(id, 'record_suspension', {
+            suspendedOn: day('2026-10-03'),
+          }),
+        );
+        const [rec] = await records();
+        expect(rec.suspended_at.toISOString()).toBe('2026-10-03T00:00:00.000Z');
+        expect(rec.duration_days).toBe(30);
+        expect(rec.notes).toBeNull();
+      });
+
+      it('refuses a date before the month started', async () => {
+        const id = await seedSuspension();
+        for (const suspendedOn of [
+          day('2026-08-31'),
+          new Date(new Date('2026-09-01T00:00:00.000Z').getTime() - 1),
+          new Date('nope'),
+          undefined,
+        ]) {
+          expect(
+            // eslint-disable-next-line no-await-in-loop -- one case at a time
+            await act(id, 'record_suspension', {
+              suspendedOn,
+            }),
+          ).toEqual({ ok: false, reason: 'bad-date' });
+        }
+        expect(await count('suspension_records')).toBe(0);
+        expect(await stateOf(id)).toMatchObject({ version: 1, status: 'new' });
+        expect(await eventsOf(id)).toHaveLength(1);
+      });
+
+      it('refuses when a live suspension after the period start exists and offers to link it', async () => {
+        const id = await seedSuspension();
+        const existing = await insertRecord('222', '2026-09-20');
+        expect(
+          await act(id, 'record_suspension', {
+            suspendedOn: day('2026-10-03'),
+          }),
+        ).toEqual({
+          ok: false,
+          reason: 'already-suspended',
+          existing: { id: existing, suspendedAt: day('2026-09-20') },
+        });
+        expect(await count('suspension_records')).toBe(1);
+        expect((await stateOf(id)).version).toBe(1);
+      });
+
+      it('a suspension dated the 1st of the month counts as in the month', async () => {
+        const id = await seedSuspension();
+        const existing = await insertRecord('222', '2026-09-01');
+        const outcome = await act(id, 'record_suspension', {
+          suspendedOn: day('2026-09-10'),
+        });
+        expect(outcome).toMatchObject({
+          ok: false,
+          reason: 'already-suspended',
+          existing: { id: existing },
+        });
+      });
+
+      it('a voided suspension or one already linked to another row is not offered', async () => {
+        const id = await seedSuspension();
+        const october = await seedSuspension('222', OCTOBER);
+        const voided = await insertRecord('222', '2026-09-15');
+        await pool.query(
+          `UPDATE suspension_records SET voided_at = now(), voided_by = $2, void_reason = 'x' WHERE id = $1`,
+          [voided, MOD_B],
+        );
+        await linkDirectly(october, await insertRecord('222', '2026-10-02'));
+        const outcome = okOf(
+          await act(id, 'record_suspension', {
+            suspendedOn: day('2026-09-20'),
+          }),
+        );
+        expect(outcome.linkedExisting).toBe(false);
+        expect(await count('suspension_records')).toBe(3);
+        expect(outcome.suspension?.durationDays).toBe(30);
+      });
+
+      it('link_suspension links without inserting', async () => {
+        const id = await seedSuspension();
+        const existing = await insertRecord('222', '2026-09-20');
+        const outcome = okOf(
+          await act(id, 'link_suspension', { linkRecordId: existing }),
+        );
+        expect(outcome.linkedExisting).toBe(true);
+        expect(outcome.suspension?.id).toBe(existing);
+        expect(outcome.row).toMatchObject({
+          status: 'suspended',
+          suspensionRecordId: existing,
+        });
+        expect(outcome.event).toMatchObject({
+          action: 'link_suspension',
+          oldStatus: 'new',
+          newStatus: 'suspended',
+          suspensionRecordId: existing,
+          actor: MOD,
+        });
+        expect(await count('suspension_records')).toBe(1);
+      });
+
+      it('link_suspension refuses a record of another member, before the month, voided, or linked', async () => {
+        const id = await seedSuspension();
+        const october = await seedSuspension('222', OCTOBER);
+        const otherMember = await insertRecord('999', '2026-09-20');
+        const beforeMonth = await insertRecord('222', '2026-08-31');
+        const voided = await insertRecord('222', '2026-09-15');
+        await pool.query(
+          `UPDATE suspension_records SET voided_at = now(), voided_by = $2, void_reason = 'x' WHERE id = $1`,
+          [voided, MOD_B],
+        );
+        const linked = await insertRecord('222', '2026-10-02');
+        await linkDirectly(october, linked);
+        for (const linkRecordId of [
+          otherMember,
+          beforeMonth,
+          voided,
+          linked,
+          999999,
+          0,
+          -1,
+          1.5,
+          undefined,
+        ]) {
+          // eslint-disable-next-line no-await-in-loop -- one case at a time
+          expect(await act(id, 'link_suspension', { linkRecordId })).toEqual({
+            ok: false,
+            reason: 'record-unavailable',
+          });
+        }
+        expect(await stateOf(id)).toMatchObject({ version: 1, status: 'new' });
+      });
+
+      it('same-date ON CONFLICT links the existing row', async () => {
+        const id = await seedSuspension();
+        let inserted: number | undefined;
+        const racing = new PostgresNoShowWorkspaceRepository(pool, {
+          beforeSuspensionInsertForTest: async () => {
+            // Another session records the same member and date, and commits.
+            inserted = await insertRecord('222', '2026-10-03');
+          },
+        });
+        const outcome = okOf(
+          await act(
+            id,
+            'record_suspension',
+            { suspendedOn: day('2026-10-03') },
+            racing,
+          ),
+        );
+        expect(outcome.linkedExisting).toBe(true);
+        expect(outcome.suspension?.id).toBe(inserted);
+        expect(await count('suspension_records')).toBe(1);
+        expect((await stateOf(id)).suspension_record_id).toBe(inserted);
+      });
+
+      it('void voids the linked record with the reason and who', async () => {
+        const id = await seedSuspension();
+        const recorded = okOf(
+          await act(id, 'record_suspension', {
+            suspendedOn: day('2026-10-03'),
+          }),
+        );
+        const outcome = okOf(
+          await act(id, 'void', { note: '  wrong member  ', actor: MOD_B }),
+        );
+        expect(outcome.alreadyVoided).toBe(false);
+        expect(outcome.previousStatus).toBe('suspended');
+        expect(outcome.row.status).toBe('voided');
+        expect(outcome.suspension).toMatchObject({
+          id: recorded.suspension?.id,
+          voidedBy: MOD_B,
+          voidReason: 'wrong member',
+        });
+        const [rec] = await records();
+        expect(rec).toMatchObject({
+          voided_by: MOD_B,
+          void_reason: 'wrong member',
+        });
+        expect(rec.voided_at).toBeInstanceOf(Date);
+        expect(outcome.event).toMatchObject({
+          action: 'void',
+          note: 'wrong member',
+          actor: MOD_B,
+        });
+      });
+
+      it('void after /meetup_void_suspension voided it outside marks the row voided', async () => {
+        const id = await seedSuspension();
+        const recorded = okOf(
+          await act(id, 'record_suspension', {
+            suspendedOn: day('2026-10-03'),
+          }),
+        );
+        const suspensions = await PostgresSuspensionRepository.instance();
+        await suspensions.void(
+          recorded.suspension?.id ?? 0,
+          MOD_B,
+          'via the command',
+        );
+        const outcome = okOf(await act(id, 'void', { note: 'dup' }));
+        expect(outcome.alreadyVoided).toBe(true);
+        expect(outcome.row.status).toBe('voided');
+        const [rec] = await records();
+        expect(rec).toMatchObject({
+          voided_by: MOD_B,
+          void_reason: 'via the command',
+        });
+        expect(outcome.suspension).toMatchObject({ voidedBy: MOD_B });
+      });
+
+      it('record_suspension again after a void links a fresh record', async () => {
+        const id = await seedSuspension();
+        const first = okOf(
+          await act(id, 'record_suspension', {
+            suspendedOn: day('2026-10-03'),
+          }),
+        );
+        okOf(await act(id, 'void', { note: 'wrong date' }));
+        const again = okOf(
+          await act(id, 'record_suspension', {
+            suspendedOn: day('2026-10-03'),
+          }),
+        );
+        expect(again.suspension?.id).not.toBe(first.suspension?.id);
+        expect(again.linkedExisting).toBe(false);
+        expect(again.previousStatus).toBe('voided');
+        expect((await stateOf(id)).suspension_record_id).toBe(
+          again.suspension?.id,
+        );
+        expect(await count('suspension_records')).toBe(2);
+      });
+
+      it('every action writes exactly one event row', async () => {
+        const id = await seedWarning();
+        okOf(await act(id, 'hold', { note: 'travelling' }));
+        okOf(await act(id, 'reopen'));
+        okOf(await act(id, 'copy_warning'));
+        okOf(await act(id, 'mark_sent', { actor: MOD_B }));
+        const last = okOf(await act(id, 'edit_notes', { note: 'sent by DM' }));
+        expect((await eventsOf(id)).slice(1)).toEqual([
+          {
+            action: 'hold',
+            actor: MOD,
+            old_status: 'new',
+            new_status: 'on_hold',
+            note: 'travelling',
+          },
+          {
+            action: 'reopen',
+            actor: MOD,
+            old_status: 'on_hold',
+            new_status: 'new',
+            note: null,
+          },
+          {
+            action: 'copy_warning',
+            actor: MOD,
+            old_status: 'new',
+            new_status: 'warning_copied',
+            note: null,
+          },
+          {
+            action: 'mark_sent',
+            actor: MOD_B,
+            old_status: 'warning_copied',
+            new_status: 'warning_sent',
+            note: null,
+          },
+          {
+            action: 'edit_notes',
+            actor: MOD,
+            old_status: 'warning_sent',
+            new_status: 'warning_sent',
+            note: 'sent by DM',
+          },
+        ]);
+        expect(last.row).toMatchObject({
+          status: 'warning_sent',
+          notes: 'sent by DM',
+          version: 6,
+          updatedBy: MOD,
+        });
+        expect(await stateOf(id)).toMatchObject({
+          version: 6,
+          notes: 'sent by DM',
+        });
+      });
+
+      it('reopen restores the status before the hold', async () => {
+        const id = await seedWarning();
+        okOf(await act(id, 'mark_sent'));
+        okOf(await act(id, 'hold', { note: 'check' }));
+        const outcome = okOf(await act(id, 'reopen'));
+        expect(outcome.row.status).toBe('warning_sent');
+        expect(outcome.previousStatus).toBe('on_hold');
+      });
+
+      /**
+       * The member lock serialises suspension writes across that member's
+       * rows. A record linked to another row is not "already suspended"
+       * (UNLINKED_LIVE), so September and October can each record one; what
+       * the lock guarantees is that the second sees the first: its check and
+       * its prior count run after the first commits.
+       */
+      it('two rows of one member recording at once are serialised: the later one counts the earlier', async () => {
+        for (let run = 0; run < 5; run += 1) {
+          // eslint-disable-next-line no-await-in-loop -- one race per run, each from a clean slate
+          await pool.query(
+            `TRUNCATE noshow_workspace_events, noshow_workspace_rows,
+               noshow_workspace_months, suspension_records RESTART IDENTITY CASCADE`,
+          );
+          // eslint-disable-next-line no-await-in-loop -- as above
+          const sep = await seedSuspension('222', SEPTEMBER);
+          // eslint-disable-next-line no-await-in-loop -- as above
+          const oct = await seedSuspension('222', OCTOBER);
+          // September pauses before its insert, holding the lock; October
+          // starts inside that pause.
+          const slow = new PostgresNoShowWorkspaceRepository(pool, {
+            beforeSuspensionInsertForTest: () => sleep(150),
+          });
+          // eslint-disable-next-line no-await-in-loop -- as above
+          const [first, second] = await Promise.all([
+            act(
+              sep,
+              'record_suspension',
+              { suspendedOn: day('2026-10-05') },
+              slow,
+            ),
+            sleep(40).then(() =>
+              act(oct, 'record_suspension', {
+                suspendedOn: day('2026-10-06'),
+                period: OCTOBER,
+              }),
+            ),
+          ]);
+          expect(okOf(first).suspension?.durationDays, `run ${run}`).toBe(30);
+          // Without the lock October counts no prior and records 30 days.
+          expect(okOf(second).suspension?.durationDays, `run ${run}`).toBe(60);
+          // eslint-disable-next-line no-await-in-loop -- as above
+          expect(await count('suspension_records'), `run ${run}`).toBe(2);
+        }
+      });
+
+      it('two rows of one member recording the same date: exactly one record', async () => {
+        const sep = await seedSuspension('222', SEPTEMBER);
+        const oct = await seedSuspension('222', OCTOBER);
+        const outcomes = await Promise.all([
+          act(sep, 'record_suspension', { suspendedOn: day('2026-10-05') }),
+          act(oct, 'record_suspension', {
+            suspendedOn: day('2026-10-05'),
+            period: OCTOBER,
+          }),
+        ]);
+        expect(outcomes.filter((o) => o.ok)).toHaveLength(1);
+        expect(outcomes.filter((o) => !o.ok)).toEqual([
+          { ok: false, reason: 'record-unavailable' },
+        ]);
+        expect(await count('suspension_records')).toBe(1);
+      });
+
+      it('a refused action leaves the version unchanged', async () => {
+        const id = await seedWarning();
+        expect(await act(id, 'void', { note: 'x' })).toEqual({
+          ok: false,
+          reason: 'not-allowed',
+        });
+        expect(await act(id, 'hold', { note: '   ' })).toEqual({
+          ok: false,
+          reason: 'note-required',
+        });
+        expect(
+          await act(id, 'record_suspension', {
+            suspendedOn: day('2026-10-03'),
+          }),
+        ).toEqual({ ok: false, reason: 'wrong-classification' });
+        expect(await stateOf(id)).toMatchObject({ version: 1, status: 'new' });
+        expect(await eventsOf(id)).toHaveLength(1);
       });
     });
   },
