@@ -385,6 +385,17 @@ describe('allowedActions', () => {
       }),
     ).toEqual(['link_suspension', 'edit_notes']);
   });
+  it('a suspended card a rebuild reclassified or dropped can still be voided, and nothing else', () => {
+    for (const inLatestSnapshot of [true, false]) {
+      expect(
+        allowedActions({
+          status: 'suspended',
+          classification: 'warning',
+          inLatestSnapshot,
+        }),
+      ).toEqual(['void', 'edit_notes']);
+    }
+  });
 });
 
 describe('Leadership-only actions (Hai, 2026-10-16)', () => {

@@ -861,7 +861,14 @@ export class PostgresNoShowWorkspaceRepository {
     return linked;
   }
 
-  /** Status counts per 'YYYY-MM' (at most 24 months), in-report rows only. */
+  /**
+   * Status counts per 'YYYY-MM' (at most 24 months), in one aggregate. A
+   * row counts while it is in the latest report, and a suspended, voided or
+   * skipped row counts even after a rebuild dropped it: recording a
+   * suspension on the open month changes what its next build counts
+   * (countableNoShows starts after the member's last suspension), and the
+   * card must not vanish from the Home and months-list counts for that.
+   */
   async statusCounts(
     periods: Period[],
   ): Promise<Map<string, Partial<Record<WorkspaceStatus, number>>>> {
@@ -881,7 +888,8 @@ export class PostgresNoShowWorkspaceRepository {
     }>(
       `SELECT to_char(period, 'YYYY-MM') AS period_key, status, count(*)::int AS count
          FROM noshow_workspace_rows
-        WHERE period = ANY($1::date[]) AND in_latest_snapshot
+        WHERE period = ANY($1::date[])
+          AND (in_latest_snapshot OR status IN ('suspended', 'voided', 'skipped'))
         GROUP BY 1, 2`,
       [periods.map(periodDate)],
     );

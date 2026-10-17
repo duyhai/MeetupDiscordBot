@@ -354,7 +354,7 @@ describe('GET /dashboard/no-shows/:period (month cards)', () => {
     );
   });
 
-  describe('a suspended card writes its message from the linked record', () => {
+  describe('a suspended card describes its linked record, with no copy box', () => {
     /** 2026-10-17, 09:00 Pacific: four weeks after the backdated record. */
     const OCT_17 = new Date('2026-10-17T16:00:00Z');
     const linkedRecord = (overrides: Partial<SuspensionRecordState> = {}) =>
@@ -365,9 +365,13 @@ describe('GET /dashboard/no-shows/:period (month cards)', () => {
         durationDays: 30,
         ...overrides,
       });
-    const suspendedCard = () =>
+    const suspendedCard = (overrides: Partial<WorkspaceRow> = {}) =>
       seed([
-        suspensionCardRow({ status: 'suspended', suspensionRecordId: 31 }),
+        suspensionCardRow({
+          status: 'suspended',
+          suspensionRecordId: 31,
+          ...overrides,
+        }),
       ]);
     /** The September report with case 1 not a host. */
     const noWaiver = () => {
@@ -381,29 +385,20 @@ describe('GET /dashboard/no-shows/:period (month cards)', () => {
       expect(res.status).toBe(200);
       return {
         card: words(cards(res.text)[0]),
-        text: copyTexts(res.raw)[0],
+        raw: cards(res.text)[0],
+        texts: copyTexts(res.raw),
       };
     }
 
     it('a record backdated to Sep 20 for 30 days, no earlier ones', async () => {
-      const { card, text } = await view({
+      const { card, raw, texts } = await view({
         seed: suspendedCard(),
         snapshots: noWaiver(),
         records: [linkedRecord()],
       });
-      expect(text).toBe(
-        suspensionMessage({
-          memberName: 'Member 1',
-          counted: payload().cases[1].counted,
-          priorSuspensions: 0,
-          hostWaiver: false,
-          suspendedOn: '2026-09-20',
-          durationDays: 30,
-        }),
-      );
-      expect(text).toContain('suspended from the group for 30 days.');
-      expect(text).toContain('After October 19, 2026, you can reapply');
-      expect(text).toContain('$10 admin fee');
+      expect(texts).toEqual([]);
+      expect(raw).not.toContain('data-copy-box');
+      expect(card).toContain('Suspended — see the record above.');
       expect(card).toContain(
         'Earlier suspensions: 0 · This suspension: 30 days (plus a $10 admin fee to rejoin)',
       );
@@ -411,7 +406,7 @@ describe('GET /dashboard/no-shows/:period (month cards)', () => {
     });
 
     it('one earlier record sets the fee, the record keeps its own length', async () => {
-      const { card, text } = await view({
+      const { card, texts } = await view({
         seed: suspendedCard(),
         snapshots: noWaiver(),
         records: [
@@ -423,29 +418,41 @@ describe('GET /dashboard/no-shows/:period (month cards)', () => {
           linkedRecord(),
         ],
       });
-      expect(text).toContain('suspended from the group for 30 days.');
-      expect(text).toContain('After October 19, 2026, you can reapply');
-      expect(text).toContain('$20 admin fee');
+      expect(texts).toEqual([]);
       expect(card).toContain(
         'Earlier suspensions: 1 · This suspension: 30 days (plus a $20 admin fee to rejoin)',
       );
     });
 
-    it('a host gets the same dates and no fee', async () => {
-      const { card, text } = await view({
+    it('a host gets no fee', async () => {
+      const { card, texts } = await view({
         seed: suspendedCard(),
         records: [linkedRecord()],
       });
-      expect(text).toContain('suspended from the group for 30 days.');
-      expect(text).toContain('After October 19, 2026, you can reapply');
-      expect(text).not.toContain('admin fee');
+      expect(texts).toEqual([]);
       expect(card).toContain(
         'Earlier suspensions: 0 · This suspension: 30 days (has hosted, so no admin fee)',
       );
     });
 
-    it('a voided linked record falls back to a suspension starting today', async () => {
-      const { card, text } = await view({
+    it('a rebuild that reclassified it as a warning shows no warning box', async () => {
+      // Recording the suspension on the open month: the next build counts
+      // only no-shows after it, and the member comes back as a warning.
+      const { card, raw, texts } = await view({
+        seed: suspendedCard({ classification: 'warning' }),
+        snapshots: noWaiver(),
+        records: [linkedRecord()],
+        leader: true,
+      });
+      expect(texts).toEqual([]);
+      expect(raw).not.toContain('data-copy-box');
+      expect(raw).not.toContain('value="copy_warning"');
+      expect(card).not.toContain('Copy warning');
+      expect(card).toContain('Suspended — see the record above');
+    });
+
+    it('a voided linked record on a still-suspended card shows no box either', async () => {
+      const { card, texts } = await view({
         seed: suspendedCard(),
         records: [
           linkedRecord({
@@ -455,11 +462,34 @@ describe('GET /dashboard/no-shows/:period (month cards)', () => {
           }),
         ],
       });
-      expect(text).toContain('After November 15, 2026, you can reapply');
+      expect(texts).toEqual([]);
       expect(card).toContain(
         'Earlier suspensions: 0 · Next suspension: 30 days',
       );
     });
+
+    it.each(['warning', 'suspension'] as const)(
+      'a voided %s card says Voided instead of a copy box',
+      async (classification) => {
+        const { card, raw, texts } = await view({
+          seed: suspendedCard({ status: 'voided', classification }),
+          snapshots: noWaiver(),
+          records: [
+            linkedRecord({
+              voidedAt: new Date('2026-09-21T00:00:00Z'),
+              voidedBy: '123456789012345678',
+              voidReason: 'mistake',
+            }),
+          ],
+        });
+        expect(texts).toEqual([]);
+        expect(raw).not.toContain('data-copy-box');
+        expect(card).toContain('Voided — no message to send.');
+        expect(card).not.toContain('Suspended — see the record above');
+        expect(card).not.toContain('Copy warning');
+        expect(card).not.toContain('Copy suspension message');
+      },
+    );
   });
 
   it('Copy warning submits copy_warning only after copying', async () => {

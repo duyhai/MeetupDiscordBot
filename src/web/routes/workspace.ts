@@ -269,6 +269,15 @@ function messageBody(
   form: (action: WorkspaceAction, inner: SafeHtml, box?: boolean) => SafeHtml,
   actions: Set<WorkspaceAction>,
 ): SafeHtml | '' {
+  // Never a message on a suspended or voided card, whatever its
+  // classification: recording a suspension on the open month changes what
+  // the next build counts, which can reclassify the card as a warning.
+  if (v.row.status === 'suspended') {
+    return html`<p class="muted">Suspended — see the record above.</p>`;
+  }
+  if (v.row.status === 'voided') {
+    return html`<p class="muted">Voided — no message to send.</p>`;
+  }
   const c = v.noShowCase;
   if (!c || !v.row.inLatestSnapshot) {
     return '';

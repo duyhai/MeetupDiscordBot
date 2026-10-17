@@ -682,7 +682,7 @@ const suspension = (
         ).rejects.toThrow(RangeError);
       });
 
-      it('statusCounts counts only rows in the latest report', async () => {
+      it('statusCounts counts open and parked rows only while they are in the latest report', async () => {
         await sync([warning('111'), warning('222'), warning('333')]);
         await sync([warning('111'), warning('222')], T2);
         await pool.query(
@@ -698,6 +698,88 @@ const suspension = (
         expect(counts.get('2026-10')).toEqual({ new: 1 });
         expect(counts.has('2026-11')).toBe(false);
         expect((await repo.statusCounts([])).size).toBe(0);
+      });
+
+      it('statusCounts keeps suspended, voided and skipped rows a rebuild dropped', async () => {
+        // The open month's rebuild after a suspension: countableNoShows
+        // starts after the new record, so the member leaves the report.
+        await sync([
+          suspension('111'),
+          suspension('222'),
+          warning('333'),
+          warning('444'),
+          warning('555'),
+        ]);
+        const record = (
+          await pool.query<{ id: number }>(
+            `INSERT INTO suspension_records (member_id, member_name, suspended_at, duration_days)
+             VALUES ('111', 'M111', '2026-09-20T00:00:00Z', 30) RETURNING id`,
+          )
+        ).rows[0].id;
+        await pool.query(
+          `UPDATE noshow_workspace_rows SET status = 'suspended', suspension_record_id = $1
+            WHERE meetup_member_id = '111'`,
+          [record],
+        );
+        await pool.query(
+          `UPDATE noshow_workspace_rows SET status = 'voided' WHERE meetup_member_id = '222'`,
+        );
+        await pool.query(
+          `UPDATE noshow_workspace_rows SET status = 'skipped' WHERE meetup_member_id = '333'`,
+        );
+        await pool.query(
+          `UPDATE noshow_workspace_rows SET status = 'on_hold' WHERE meetup_member_id = '444'`,
+        );
+        // Everyone but 555 drops out of the rebuild.
+        expect((await sync([warning('555')], T2)).dropped).toBe(4);
+        const counts = await repo.statusCounts([SEPTEMBER]);
+        // Done stays done; an open or parked row that left the report does not count.
+        expect(counts.get('2026-09')).toEqual({
+          suspended: 1,
+          voided: 1,
+          skipped: 1,
+          new: 1,
+        });
+      });
+
+      it('a rebuild that reclassifies or drops a suspended row never changes its status', async () => {
+        await sync([suspension('111')]);
+        const record = (
+          await pool.query<{ id: number }>(
+            `INSERT INTO suspension_records (member_id, member_name, suspended_at, duration_days)
+             VALUES ('111', 'M111', '2026-09-20T00:00:00Z', 30) RETURNING id`,
+          )
+        ).rows[0].id;
+        await pool.query(
+          `UPDATE noshow_workspace_rows SET status = 'suspended', suspension_record_id = $1
+            WHERE meetup_member_id = '111'`,
+          [record],
+        );
+        expect((await sync([warning('111')], T2)).reclassified).toBe(1);
+        const linked = async () =>
+          (
+            await pool.query<{
+              status: string;
+              classification: string;
+              suspension_record_id: number | null;
+            }>(
+              `SELECT status, classification, suspension_record_id FROM noshow_workspace_rows
+                WHERE meetup_member_id = '111'`,
+            )
+          ).rows[0];
+        expect(await linked()).toEqual({
+          status: 'suspended',
+          classification: 'warning',
+          suspension_record_id: record,
+        });
+        expect((await sync([], T3, 2)).dropped).toBe(1);
+        expect(await linked()).toMatchObject({
+          status: 'suspended',
+          suspension_record_id: record,
+        });
+        expect((await repo.statusCounts([SEPTEMBER])).get('2026-09')).toEqual({
+          suspended: 1,
+        });
       });
 
       it("statusesByMember maps the asked members' month by member id, and only those", async () => {
