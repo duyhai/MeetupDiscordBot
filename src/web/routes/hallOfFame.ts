@@ -33,6 +33,20 @@ import { refreshForm, refreshNotice } from './refresh.js';
 
 const WHAT = 'The Hall of Fame report';
 
+/**
+ * For the dashboard's copy text only: a zero-width space (U+200B) after the
+ * @ of "@everyone", "@here" and every "<@" (user, nickname "<@!" and role
+ * "<@&" mentions), so pasting the post into Discord pings nobody. Fixed
+ * text has no mentions, so in effect this touches names and titles only.
+ * Idempotent. Not in formatHallOfFamePost: the slash command's output (and
+ * its goldens) stay byte-identical.
+ */
+export function neutralizeMentions(text: string): string {
+  return text
+    .replace(/@(?=everyone|here)/g, '@\u200b')
+    .replace(/<@(?!\u200b)/g, '<@\u200b');
+}
+
 /** '2026 September': the label the slash command uses, so the copy text matches it. */
 export function commandPeriodLabel(period: Period): string {
   const [monthName] = monthLabel(period).split(' ');
@@ -107,15 +121,18 @@ function monthPage(
       page,
       start + PAGE_SIZE < payload.hosts.length,
     )}`;
-  // Exactly the command's ready-to-post block.
-  const post = formatHallOfFamePost({
-    periodLabel: commandPeriodLabel(period),
-    hostStats: payload.hosts,
-    totalEvents: payload.totalEvents,
-    newHostIds: new Set(
-      payload.hosts.filter((h) => h.isNew).map((h) => h.host.id),
-    ),
-  });
+  // The command's ready-to-post block, with mentions neutralised: staff
+  // paste it into Discord, where a host named "@everyone" would ping.
+  const post = neutralizeMentions(
+    formatHallOfFamePost({
+      periodLabel: commandPeriodLabel(period),
+      hostStats: payload.hosts,
+      totalEvents: payload.totalEvents,
+      newHostIds: new Set(
+        payload.hosts.filter((h) => h.isNew).map((h) => h.host.id),
+      ),
+    }),
+  );
   return { hosts, post };
 }
 

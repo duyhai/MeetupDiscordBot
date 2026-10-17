@@ -7,7 +7,10 @@ import {
   DashboardPageDeps,
   registerAllProtectedRoutes,
 } from '../../../src/web/routes/dashboardPages.js';
-import { commandPeriodLabel } from '../../../src/web/routes/hallOfFame.js';
+import {
+  commandPeriodLabel,
+  neutralizeMentions,
+} from '../../../src/web/routes/hallOfFame.js';
 import {
   closeServers,
   makeApp,
@@ -122,7 +125,57 @@ describe('Hall of Fame month page', () => {
       includeLinks: false,
     }).split('----- READY TO POST -----\n\n')[1];
     expect(expected).toContain('Hall of Fame — 2026 September');
-    expect(unescape(raw ?? '')).toBe(expected);
+    // The page applies neutralizeMentions to the command's text; this
+    // fixture has no mentions, so the copy text is the command's block.
+    expect(neutralizeMentions(expected)).toBe(expected);
+    expect(unescape(raw ?? '')).toBe(neutralizeMentions(expected));
+  });
+
+  it('neutralises @everyone, @here and <@…> mentions in the copy text only', async () => {
+    const payload = hofPayload();
+    payload.hosts[0].host = { ...payload.hosts[0].host, name: '@everyone' };
+    payload.hosts[0].events[1] = {
+      ...payload.hosts[0].events[1],
+      title: '<@&123> and <@!456> and <@789> @here',
+    };
+    const { get } = await setup([seedRow('hall_of_fame', SEPT, payload)]);
+    const res = await get(MONTH);
+    const raw = unescape(
+      /<textarea id="hof-post" class="copy" readonly>([\s\S]*?)<\/textarea>/.exec(
+        res.text,
+      )?.[1] ?? '',
+    );
+    const ZWSP = '\u200b';
+    expect(raw).toContain(`@${ZWSP}everyone`);
+    expect(raw).toContain(
+      `<@${ZWSP}&123> and <@${ZWSP}!456> and <@${ZWSP}789> @${ZWSP}here`,
+    );
+    expect(raw).not.toMatch(/@everyone|@here|<@[&!0-9]/);
+    // The command's own text is untouched: it is the shared formatter's.
+    const command = formatHostingStatsText(payload, {
+      periodLabel: '2026 September',
+      showDates: false,
+      includeLinks: false,
+    }).split('----- READY TO POST -----\n\n')[1];
+    expect(command).toContain('@everyone');
+    expect(raw).toBe(neutralizeMentions(command));
+    // The visible table shows the names and titles as stored.
+    const table = /<tbody>([\s\S]*?)<\/tbody>/.exec(res.text)?.[1] ?? '';
+    expect(table).toContain('<bdi>@everyone</bdi>');
+    expect(table).toContain(
+      '&lt;@&amp;123&gt; and &lt;@!456&gt; and &lt;@789&gt; @here',
+    );
+    expect(table).not.toContain(ZWSP);
+  });
+
+  it('neutralizeMentions inserts U+200B after the @ of each mention form only', () => {
+    expect(neutralizeMentions('@everyone @here <@1> <@!2> <@&3>')).toBe(
+      '@\u200beveryone @\u200bhere <@\u200b1> <@\u200b!2> <@\u200b&3>',
+    );
+    expect(neutralizeMentions('mail me@example.com, @Ann, 3 @ 5')).toBe(
+      'mail me@example.com, @Ann, 3 @ 5',
+    );
+    expect(neutralizeMentions('@\u200beveryone')).toBe('@\u200beveryone');
   });
 
   it('commandPeriodLabel is the command label', () => {
