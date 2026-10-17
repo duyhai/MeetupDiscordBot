@@ -3,50 +3,48 @@ import path from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-// Nothing this bot posts may ping anyone (Hai, 2026-10-16). Embeds never
-// ping, so the only ways to ping are a role/user mention in content and an
-// allowedMentions list; this scan keeps both out of the source tree.
+import { findPingViolations } from './noPingsScan.js';
+
+// Nothing this bot posts may ping anyone (Hai, 2026-10-16). The rules live in
+// noPingsScan.ts (and are tested in noPingsScan.test.ts); this walks the real
+// tree: every role-mention construct fails unless its file is on the
+// allow-list, and every allowedMentions must be exactly { parse: [] }.
 const ROOT = path.resolve(import.meta.dirname, '../..');
 
-function tsFiles(dir: string): string[] {
+function sourceFiles(dir: string): string[] {
   return readdirSync(dir).flatMap((name) => {
     const full = path.join(dir, name);
     if (statSync(full).isDirectory()) {
-      return name === 'node_modules' ? [] : tsFiles(full);
+      return name === 'node_modules' ? [] : sourceFiles(full);
     }
-    return full.endsWith('.ts') ? [full] : [];
+    return /\.(ts|js)$/.test(full) ? [full] : [];
   });
 }
 
-const stripComments = (text: string): string =>
-  text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`])\/\/.*$/gm, '$1');
+const files = ['src', 'scripts']
+  .flatMap((dir) => sourceFiles(path.join(ROOT, dir)))
+  .map((file) => path.relative(ROOT, file));
 
-const sources = ['src', 'scripts']
-  .flatMap((dir) => tsFiles(path.join(ROOT, dir)))
-  .map((file) => ({
-    file: path.relative(ROOT, file),
-    text: stripComments(readFileSync(file, 'utf8')),
-  }));
-
-const offenders = (pattern: RegExp): string[] =>
-  sources.filter(({ text }) => pattern.test(text)).map(({ file }) => file);
+const violations = (rule: string) =>
+  files
+    .flatMap((file) =>
+      findPingViolations(file, readFileSync(path.join(ROOT, file), 'utf8')),
+    )
+    .filter((v) => v.rule === rule)
+    .map((v) => v.detail);
 
 describe('no pings anywhere', () => {
-  it('scans a real set of source files', () => {
-    expect(sources.length).toBeGreaterThan(50);
+  it('scans src and the scripts, ts and js', () => {
+    expect(files.length).toBeGreaterThan(50);
+    expect(files).toContain('scripts/auditLgbtqOverwrites.js');
+    expect(files).toContain('scripts/backfillReports.ts');
   });
 
-  it('no source builds a role mention', () => {
-    expect(offenders(/<@&\$\{/)).toEqual([]);
+  it('no source builds a role mention outside the allow-list', () => {
+    expect(violations('role mention')).toEqual([]);
   });
 
-  it('no allowedMentions lists roles, users or a parse type', () => {
-    expect(
-      offenders(/allowedMentions\s*:\s*\{[^}]*\b(roles|users|repliedUser)\b/),
-    ).toEqual([]);
-    expect(
-      offenders(/allowed_mentions\s*:\s*\{[^}]*\b(roles|users)\b/),
-    ).toEqual([]);
-    expect(offenders(/parse\s*:\s*\[\s*['"]/)).toEqual([]);
+  it('every allowedMentions is exactly { parse: [] }', () => {
+    expect(violations('allowedMentions')).toEqual([]);
   });
 });
