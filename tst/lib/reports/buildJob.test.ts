@@ -1079,7 +1079,7 @@ describe('report-ready', () => {
     clock.set('2026-10-10T16:30:00Z');
     const second = settled({
       clock,
-      notices,
+      notices: notices.caller(),
       snapshots,
       cache: new FakeCache(),
     });
@@ -1088,7 +1088,7 @@ describe('report-ready', () => {
     clock.set('2026-10-10T17:01:00Z');
     const third = settled({
       clock,
-      notices,
+      notices: notices.caller(),
       snapshots,
       cache: new FakeCache(),
     });
@@ -1590,6 +1590,36 @@ describe('defaultBuildJobDeps', () => {
 });
 
 describe('fake store sanity', () => {
+  it("FakeNoticeStore.markPosted succeeds only for the caller's current, unposted claim", async () => {
+    const clock = new Clock('2026-10-10T16:15:00Z');
+    const a = new FakeNoticeStore(() => clock.now().getTime());
+    const b = a.caller(); // another process on the same table
+    // No claim of its own.
+    expect(await b.markPosted('report_ready', SEPT)).toBe(false);
+    expect(await a.claim('report_ready', SEPT)).toBe('fresh');
+    expect(await b.markPosted('report_ready', SEPT)).toBe(false);
+    expect(a.isPosted('report_ready', SEPT)).toBe(false);
+    // b takes over the crashed claim: a's markPosted no longer lands.
+    clock.set('2026-10-10T16:46:00Z');
+    expect(await b.claim('report_ready', SEPT)).toBe('retry');
+    expect(await a.markPosted('report_ready', SEPT)).toBe(false);
+    expect(await b.markPosted('report_ready', SEPT)).toBe(true);
+    expect(a.isPosted('report_ready', SEPT)).toBe(true);
+    // A claim is used once.
+    expect(await b.markPosted('report_ready', SEPT)).toBe(false);
+  });
+
+  it("FakeNoticeStore.release touches only the caller's current claim", async () => {
+    const clock = new Clock('2026-10-10T16:15:00Z');
+    const a = new FakeNoticeStore(() => clock.now().getTime());
+    const b = a.caller();
+    expect(await a.claim('report_ready', SEPT)).toBe('fresh');
+    await b.release('report_ready', SEPT); // not b's claim
+    expect(await b.claim('report_ready', SEPT)).toBe(false);
+    await a.release('report_ready', SEPT);
+    expect(await b.claim('report_ready', SEPT)).toBe('retry');
+  });
+
   it('FakeLinkProgressStore and FakeSnapshotStore behave like the repositories', async () => {
     const store = new FakeLinkProgressStore();
     expect(await store.hasDay('2026-10-05')).toBe(false);

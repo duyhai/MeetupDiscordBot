@@ -131,18 +131,43 @@ export class FakeSnapshotStore {
   }
 }
 
+interface FakeMarker {
+  claimedAtMs: number;
+  posted: boolean;
+  /** Bumped on every claim: which claim is current. */
+  token: number;
+}
+
 /**
  * The notice table's rules on a test clock: a posted marker is final, an
  * unposted claim older than NOTICE_RECLAIM_AFTER_MS is taken again as a
- * retry, and a release makes an unposted claim retryable at once.
+ * retry, and a release makes an unposted claim retryable at once. Like the
+ * repository, markPosted and release act only on this caller's current,
+ * unposted claim; `caller()` is another process on the same table.
  */
 export class FakeNoticeStore {
-  readonly markers = new Map<
-    string,
-    { claimedAtMs: number; posted: boolean }
-  >();
+  /** This caller's claims: marker key -> the token it got. */
+  private readonly own = new Map<string, number>();
 
-  constructor(private readonly nowMs: () => number = () => Date.now()) {}
+  constructor(
+    private readonly nowMs: () => number = () => Date.now(),
+    readonly markers = new Map<string, FakeMarker>(),
+  ) {}
+
+  /** Another caller (process) sharing these markers and this clock. */
+  caller(): FakeNoticeStore {
+    return new FakeNoticeStore(this.nowMs, this.markers);
+  }
+
+  /** The marker of this caller's current, unposted claim, else undefined. */
+  private ownMarker(key: string): FakeMarker | undefined {
+    const token = this.own.get(key);
+    this.own.delete(key);
+    const marker = this.markers.get(key);
+    return marker !== undefined && !marker.posted && marker.token === token
+      ? marker
+      : undefined;
+  }
 
   readonly claim = vi.fn(
     async (kind: string, period: Period): Promise<NoticeClaim> => {
@@ -150,7 +175,8 @@ export class FakeNoticeStore {
       const now = this.nowMs();
       const marker = this.markers.get(key);
       if (marker === undefined) {
-        this.markers.set(key, { claimedAtMs: now, posted: false });
+        this.markers.set(key, { claimedAtMs: now, posted: false, token: 1 });
+        this.own.set(key, 1);
         return 'fresh';
       }
       if (
@@ -158,6 +184,8 @@ export class FakeNoticeStore {
         marker.claimedAtMs < now - NOTICE_RECLAIM_AFTER_MS
       ) {
         marker.claimedAtMs = now;
+        marker.token += 1;
+        this.own.set(key, marker.token);
         return 'retry';
       }
       return false;
@@ -165,14 +193,14 @@ export class FakeNoticeStore {
   );
 
   readonly release = vi.fn(async (kind: string, period: Period) => {
-    const marker = this.markers.get(`${kind}:${periodKey(period)}`);
-    if (marker !== undefined && !marker.posted) {
+    const marker = this.ownMarker(`${kind}:${periodKey(period)}`);
+    if (marker !== undefined) {
       marker.claimedAtMs = -Infinity;
     }
   });
 
   readonly markPosted = vi.fn(async (kind: string, period: Period) => {
-    const marker = this.markers.get(`${kind}:${periodKey(period)}`);
+    const marker = this.ownMarker(`${kind}:${periodKey(period)}`);
     if (marker === undefined) {
       return false;
     }

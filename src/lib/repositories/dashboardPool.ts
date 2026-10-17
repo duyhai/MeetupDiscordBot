@@ -41,15 +41,28 @@ CREATE TABLE IF NOT EXISTS dashboard_notices (
   PRIMARY KEY (kind, period)
 );
 -- PR 2 tables: posted_at NOT NULL DEFAULT now() held the claim time and
--- there was no claimed_at. Rows from then count as posted. Every statement
--- is a no-op on an upgraded table, so this runs on every boot.
-ALTER TABLE dashboard_notices ADD COLUMN IF NOT EXISTS claimed_at TIMESTAMPTZ;
-UPDATE dashboard_notices SET claimed_at = posted_at WHERE claimed_at IS NULL;
-ALTER TABLE dashboard_notices
-  ALTER COLUMN claimed_at SET DEFAULT now(),
-  ALTER COLUMN claimed_at SET NOT NULL,
-  ALTER COLUMN posted_at DROP DEFAULT,
-  ALTER COLUMN posted_at DROP NOT NULL;
+-- there was no claimed_at. Rows from then count as posted. Guarded by a
+-- catalog read, so a boot on a table that has claimed_at (upgraded, or
+-- created above) only reads: ALTER TABLE, even ADD COLUMN IF NOT EXISTS,
+-- would take an ACCESS EXCLUSIVE lock on every boot.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+     WHERE table_schema = current_schema()
+       AND table_name = 'dashboard_notices'
+       AND column_name = 'claimed_at'
+  ) THEN
+    ALTER TABLE dashboard_notices ADD COLUMN claimed_at TIMESTAMPTZ;
+    UPDATE dashboard_notices SET claimed_at = posted_at;
+    ALTER TABLE dashboard_notices
+      ALTER COLUMN claimed_at SET DEFAULT now(),
+      ALTER COLUMN claimed_at SET NOT NULL,
+      ALTER COLUMN posted_at DROP DEFAULT,
+      ALTER COLUMN posted_at DROP NOT NULL;
+  END IF;
+END
+$$;
 -- Per-member no-show lookups: payload @> '{"cases":[{"member":{"id":"…"}}]}'
 -- (and the cleared/departed forms). Partial: only current no-show rows are
 -- searched, and queries must state this predicate literally to use it.

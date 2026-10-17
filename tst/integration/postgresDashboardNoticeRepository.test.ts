@@ -2,7 +2,12 @@ import pg from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { Period } from '../../src/lib/reports/period.js';
-import { ensureDashboardSchema } from '../../src/lib/repositories/dashboardPool.js';
+import {
+  DASHBOARD_LOCK_CLASS,
+  DASHBOARD_SCHEMA_SQL,
+  ensureDashboardSchema,
+  SCHEMA_LOCK_KEY,
+} from '../../src/lib/repositories/dashboardPool.js';
 import { PostgresDashboardNoticeRepository } from '../../src/lib/repositories/postgresDashboardNoticeRepository.js';
 import { useIsolatedSchema } from './isolatedSchema.js';
 
@@ -128,7 +133,7 @@ const pause = (ms: number) =>
       expect(await second.markPosted('report_ready', SEPTEMBER)).toBe(true);
     });
 
-    it('markPosted marks only the caller own claim', async () => {
+    it("markPosted marks only the caller's own claim", async () => {
       const a = another();
       const b = another();
       expect(await a.claim('report_ready', SEPTEMBER)).toBe('fresh');
@@ -138,7 +143,7 @@ const pause = (ms: number) =>
       expect(await b.isPosted('report_ready', SEPTEMBER)).toBe(true);
     });
 
-    it('a reclaimed claim makes the old owner markPosted fail', async () => {
+    it("a reclaimed claim makes the old owner's markPosted fail", async () => {
       const a = another();
       const b = another();
       expect(await a.claim('report_ready', SEPTEMBER)).toBe('fresh');
@@ -210,6 +215,54 @@ const pause = (ms: number) =>
       // A new month on the upgraded table works like a new table.
       expect(await repo.claim('report_ready', AUGUST)).toBe('fresh');
       expect(await repo.isPosted('report_ready', AUGUST)).toBe(false);
+    });
+
+    /**
+     * The locks the schema statements take on dashboard_notices, read from
+     * pg_locks inside the same transaction ensureDashboardSchema runs (lock
+     * then DASHBOARD_SCHEMA_SQL), then rolled back.
+     */
+    async function noticeLocksDuringSchema(): Promise<string[]> {
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        await client.query('SELECT pg_advisory_xact_lock($1, $2)', [
+          DASHBOARD_LOCK_CLASS,
+          SCHEMA_LOCK_KEY,
+        ]);
+        await client.query(DASHBOARD_SCHEMA_SQL);
+        const locks = await client.query<{ mode: string }>(
+          `SELECT mode FROM pg_locks
+            WHERE pid = pg_backend_pid()
+              AND relation = to_regclass(quote_ident(current_schema()) || '.dashboard_notices')
+            ORDER BY mode`,
+        );
+        return locks.rows.map((r) => r.mode);
+      } finally {
+        await client.query('ROLLBACK');
+        client.release();
+      }
+    }
+
+    it('a boot on an upgraded table takes no AccessExclusiveLock on dashboard_notices', async () => {
+      // beforeEach already ran the schema once (a fresh table); a PR 2 table
+      // upgraded by one boot must be the same on the next.
+      expect(await noticeLocksDuringSchema()).not.toContain(
+        'AccessExclusiveLock',
+      );
+      await pool.query('DROP TABLE dashboard_notices');
+      await pool.query(`CREATE TABLE dashboard_notices (
+        kind      TEXT NOT NULL CHECK (kind IN ('report_ready')),
+        period    DATE NOT NULL CHECK (EXTRACT(DAY FROM period) = 1),
+        posted_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        PRIMARY KEY (kind, period)
+      )`);
+      // The upgrade itself does lock: the measurement is not vacuous.
+      expect(await noticeLocksDuringSchema()).toContain('AccessExclusiveLock');
+      await ensureDashboardSchema(pool);
+      expect(await noticeLocksDuringSchema()).not.toContain(
+        'AccessExclusiveLock',
+      );
     });
 
     it('schema is idempotent', async () => {
