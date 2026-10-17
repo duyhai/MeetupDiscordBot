@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { KeyValueCache } from '../../../src/lib/cache/base.js';
 import type { EventSummary } from '../../../src/lib/client/meetup/types.js';
 import {
+  UPCOMING_BATCH_TIMEOUT_MS,
   UPCOMING_CACHE_TTL_SEC,
   UPCOMING_DEADLINE_MS,
   UPCOMING_MAX_MEMBERS,
@@ -343,6 +344,81 @@ describe('createUpcomingLoader', () => {
     const out = await createUpcomingLoader(deps)(['111']);
     expect(out.get('111')?.state).toBe('ok');
     expect(fetchMany).toHaveBeenCalledTimes(1);
+  });
+
+  it('a member missing from the fetch result is unavailable and not cached', async () => {
+    const h = harness(okMap([['111', []]]));
+    const out = await createUpcomingLoader(h.deps)(['111', '222']);
+    expect(out.get('111')?.state).toBe('ok');
+    expect(out.get('222')).toEqual({ state: 'unavailable' });
+    expect(h.cache.values.has('workspace-upcoming-v1-222')).toBe(false);
+  });
+
+  it('a hung batch times out after 30 seconds: nothing cached, later loads refetch', async () => {
+    vi.useFakeTimers();
+    let release!: (m: Map<string, EventSummary[] | undefined>) => void;
+    const h = harness(
+      () =>
+        new Promise((resolve) => {
+          release = resolve;
+        }),
+    );
+    const load = createUpcomingLoader(h.deps);
+    const first = load(['111']);
+    await vi.advanceTimersByTimeAsync(UPCOMING_DEADLINE_MS);
+    expect((await first).get('111')).toEqual({ state: 'pending' });
+    // Still in flight: a second load does not fetch again.
+    const second = load(['111']);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.fetchMany).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(UPCOMING_BATCH_TIMEOUT_MS);
+    await second;
+    // The hung fetch finally answers: too late, nothing is cached.
+    release(new Map([['111', [event('e1', '2026-10-25T02:00:00Z')]]]));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.cache.values.size).toBe(0);
+    const third = load(['111']);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.fetchMany).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(UPCOMING_DEADLINE_MS);
+    await third;
+  });
+
+  it('drops cached events that have started since they were cached', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-10-26T03:00:00Z'));
+    const h = harness(okMap([]));
+    h.deps.now = () => new Date();
+    await h.cache.set(
+      'workspace-upcoming-v1-111',
+      JSON.stringify({
+        state: 'ok',
+        fetchedAt: NOW.toISOString(),
+        events: [
+          {
+            id: 'started',
+            title: 't',
+            eventUrl: 'u',
+            dateTime: '2026-10-26T02:00:00Z',
+            payment: null,
+          },
+          {
+            id: 'next',
+            title: 't',
+            eventUrl: 'u',
+            dateTime: '2026-11-02T02:00:00Z',
+            payment: null,
+          },
+        ],
+      }),
+    );
+    const out = await createUpcomingLoader(h.deps)(['111']);
+    const entry = out.get('111') as { events: { id: string }[] };
+    expect(entry.events.map((e) => e.id)).toEqual(['next']);
+    expect(h.fetchMany).not.toHaveBeenCalled();
+    expect(actByFor(entry as UpcomingEntry, new Date())?.actBy).toBe(
+      '2026-10-29',
+    );
   });
 
   it('ignores a corrupt cached value and refetches', async () => {
