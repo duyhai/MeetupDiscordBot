@@ -188,7 +188,7 @@ Actions:
 | Action | Effect |
 |---|---|
 | **Copy warning** | Renders the warning for this member and copies it. Status → `warning_copied`. |
-| **Copy suspension message** | Renders the suspension message and copies it. Changes no status and writes nothing. A suspended or voided card shows no copy box, only a fixed line, even after a rebuild reclassifies it. |
+| **Copy suspension message** | Renders the suspension message and copies it. Changes no status and writes nothing. A suspended card's message is built from its linked record alone (its date and length, the fee from the live records before it), never from the report's no-shows, and it never shows a warning box, even after a rebuild reclassifies or drops it. A voided card shows no message. |
 | **Open on Meetup** | Opens the member's Meetup profile in a new tab; the sender uses Message there while signed in as the organizer account. |
 | **Mark as sent** | Status → `warning_sent`. Records who and when. |
 | **Put on hold** | Status → `on_hold`; a note is required (e.g. "paid for Halloween, revisit after 3rd no-show"). |

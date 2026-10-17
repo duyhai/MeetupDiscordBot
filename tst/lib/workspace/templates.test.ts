@@ -6,6 +6,7 @@ import {
 import {
   feeDollars,
   firstName,
+  recordedSuspensionMessage,
   suspensionMessage,
   warningMessage,
 } from '../../../src/lib/workspace/templates.js';
@@ -26,6 +27,16 @@ const susp = (over = {}) =>
     priorSuspensions: 0,
     hostWaiver: false,
     suspendedOn: '2026-10-01',
+    ...over,
+  });
+
+const recorded = (over = {}) =>
+  recordedSuspensionMessage({
+    memberName: 'Ana María Lee',
+    priorSuspensions: 0,
+    hostWaiver: false,
+    suspendedOn: '2026-09-20',
+    durationDays: 30,
     ...over,
   });
 
@@ -90,20 +101,48 @@ describe('names and dates', () => {
       'After November 29, 2026, you can reapply',
     );
   });
-  it('an explicit durationDays sets the length and the end date, the prior count the fee', () => {
-    const text = susp({
-      suspendedOn: '2026-09-20',
-      durationDays: 30,
-      priorSuspensions: 1,
-    });
-    expect(text).toContain('for 30 days.');
+  it('suspensionMessage takes no length of its own: the prior count sets it', () => {
+    expect(susp({ durationDays: 999 })).toContain('for 30 days.');
+  });
+});
+
+describe('recordedSuspensionMessage (a suspended card: the record defines it)', () => {
+  it("the record's own date and length set the end date; the prior count sets the fee", () => {
+    const text = recorded({ priorSuspensions: 1 });
+    expect(text).toContain('Hello Ana,');
+    expect(text).toContain('suspended from the group for 30 days');
     expect(text).toContain('After October 19, 2026, you can reapply');
     expect(text).toContain('$20 admin fee');
+    expect(text).toContain(NO_SHOW_POLICY_URL);
+    expect(text).toContain(NO_SHOW_APPEAL_URL);
+    expect(text.endsWith('1.5 Gen Asians Organizers')).toBe(true);
   });
-  it('suspensionMessage refuses a bad durationDays', () => {
+  it('lists no events: it never reads the rebuilt report', () => {
+    const text = recorded();
+    expect(text).not.toContain('our records show');
+    expect(text).not.toMatch(/^- /m);
+  });
+  it('a host gets no fee sentence', () => {
+    const text = recorded({ hostWaiver: true });
+    expect(text).not.toContain('$');
+    expect(text).not.toContain('admin fee');
+  });
+  it('a 60-day record ends 59 days after its first day', () => {
+    expect(recorded({ durationDays: 60, suspendedOn: '2026-10-01' })).toContain(
+      'After November 29, 2026, you can reapply',
+    );
+  });
+  it('refuses a bad length, date or prior count', () => {
     for (const bad of [0, -30, 1.5, Number.NaN, '30' as never]) {
-      expect(() => susp({ durationDays: bad })).toThrow(RangeError);
+      expect(() => recorded({ durationDays: bad })).toThrow(RangeError);
     }
+    for (const bad of ['2026-02-30', 'tomorrow', '']) {
+      expect(() => recorded({ suspendedOn: bad })).toThrow(RangeError);
+    }
+    expect(() => recorded({ priorSuspensions: -1 })).toThrow(RangeError);
+  });
+  it('a name cannot ping', () => {
+    expect(recorded({ memberName: '@everyone' })).not.toContain('@everyone');
   });
   it('suspensionMessage refuses a bad date', () => {
     for (const bad of ['2026-02-30', 'tomorrow', '', '2026-1-1']) {

@@ -70,31 +70,20 @@ export function warningMessage(input: {
   ].join('\n');
 }
 
-export function suspensionMessage(input: {
-  memberName: string;
-  counted: { title: string; dateTime: string }[];
+/**
+ * The part both suspension messages share: the length, the end date (the
+ * last suspended day, lastSuspendedDay's arithmetic), the fee and the links.
+ */
+function suspensionTerms(input: {
   priorSuspensions: number;
   hostWaiver: boolean;
-  /** YYYY-MM-DD, the first day of the suspension. */
   suspendedOn: string;
-  /**
-   * A recorded suspension's own length. Absent: the length the prior count
-   * recommends, for a suspension not recorded yet.
-   */
-  durationDays?: number;
-}): string {
+  days: number;
+}): { days: number; endDate: string; fee: string } {
   checkPrior(input.priorSuspensions);
-  if (!Array.isArray(input.counted) || input.counted.length === 0) {
-    throw new RangeError('counted must list at least one no-show');
-  }
-  if (
-    input.durationDays !== undefined &&
-    (!Number.isInteger(input.durationDays) || input.durationDays <= 0)
-  ) {
+  if (!Number.isInteger(input.days) || input.days <= 0) {
     throw new RangeError('durationDays must be a positive integer');
   }
-  const days =
-    input.durationDays ?? recommendedSuspensionDays(input.priorSuspensions);
   const start = parseUtcDateStrict(input.suspendedOn);
   if (start === undefined) {
     throw new RangeError('suspendedOn must be YYYY-MM-DD');
@@ -102,13 +91,33 @@ export function suspensionMessage(input: {
   // lastSuspendedDay reads only these two fields; it is the one place that owns the arithmetic.
   const span: Pick<SuspensionRecord, 'suspendedAt' | 'durationDays'> = {
     suspendedAt: start,
-    durationDays: days,
+    durationDays: input.days,
   };
   const endDate = calendarDay(lastSuspendedDay(span as SuspensionRecord));
   const fee = input.hostWaiver
     ? ''
     : `Rejoining requires a $${feeDollars(input.priorSuspensions)} admin fee, which you can donate to any Asian ` +
       'charity of your choice (or pay to 1.5 Gen Asians). ';
+  return { days: input.days, endDate, fee };
+}
+
+/** The next suspension of a case: its counted no-shows, and the length the prior count recommends. */
+export function suspensionMessage(input: {
+  memberName: string;
+  counted: { title: string; dateTime: string }[];
+  priorSuspensions: number;
+  hostWaiver: boolean;
+  /** YYYY-MM-DD, the first day of the suspension. */
+  suspendedOn: string;
+}): string {
+  checkPrior(input.priorSuspensions);
+  if (!Array.isArray(input.counted) || input.counted.length === 0) {
+    throw new RangeError('counted must list at least one no-show');
+  }
+  const { days, endDate, fee } = suspensionTerms({
+    ...input,
+    days: recommendedSuspensionDays(input.priorSuspensions),
+  });
   return [
     `Hello ${greeting(input.memberName)}, our records show ${input.counted.length} no-shows:`,
     ...input.counted.map(
@@ -118,6 +127,34 @@ export function suspensionMessage(input: {
     `Under our Attendance & No-Show Policy (${NO_SHOW_POLICY_URL}), you are being suspended from the group for ` +
       `${days} days. Your current RSVPs will be removed. After ${endDate}, you can reapply to join on Meetup. ` +
       `${fee}If you think this was a mistake, you can appeal here: ${NO_SHOW_APPEAL_URL}. Thank you for understanding.`,
+    SIGNATURE,
+  ].join('\n');
+}
+
+/**
+ * A recorded suspension's message, for a suspended card. Everything comes
+ * from the record (its date and its own length) and the live records before
+ * it (the fee). It lists no no-shows: a rebuild of the open month after the
+ * suspension counts only later ones, so the stored report no longer says
+ * which events led to it.
+ */
+export function recordedSuspensionMessage(input: {
+  memberName: string;
+  priorSuspensions: number;
+  hostWaiver: boolean;
+  /** YYYY-MM-DD, the record's first day. */
+  suspendedOn: string;
+  durationDays: number;
+}): string {
+  const { days, endDate, fee } = suspensionTerms({
+    ...input,
+    days: input.durationDays,
+  });
+  return [
+    `Hello ${greeting(input.memberName)}, because of your no-shows, under our Attendance & No-Show Policy ` +
+      `(${NO_SHOW_POLICY_URL}) you are being suspended from the group for ${days} days. Your current RSVPs will ` +
+      `be removed. After ${endDate}, you can reapply to join on Meetup. ${fee}If you think this was a mistake, ` +
+      `you can appeal here: ${NO_SHOW_APPEAL_URL}. Thank you for understanding.`,
     SIGNATURE,
   ].join('\n');
 }

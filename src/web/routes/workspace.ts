@@ -30,6 +30,7 @@ import {
 } from '../../lib/workspace/service.js';
 import {
   feeDollars,
+  recordedSuspensionMessage,
   suspensionMessage,
   warningMessage,
 } from '../../lib/workspace/templates.js';
@@ -299,16 +300,59 @@ function suspensionBody(v: CardView): SafeHtml | '' {
     </p>`;
 }
 
+function copyBox(text: string, label: string): SafeHtml {
+  // RCDATA: escaped text, never an attribute or a script.
+  const box = html`<textarea class="copy" readonly rows="8">${text}</textarea>`;
+  return html`<div data-copy-box>
+    ${box}<button type="button" data-copy-near>${label}</button>
+  </div>`;
+}
+
+/**
+ * A suspended card: the suspension message of its live linked record, never
+ * a warning, whatever the classification or report says now. Recording a
+ * suspension on the open month changes what the next build counts, which
+ * can reclassify the card as a warning or drop it from the report, so the
+ * message reads only the record (its date and length) and the live records
+ * before it (the fee), never the rebuilt case's no-shows. Without a live
+ * record (voided outside the workspace, not yet followed) there is nothing
+ * to send.
+ */
+function suspendedMessageBody(v: CardView): SafeHtml {
+  const s = cardSuspension(v);
+  if (!s.recorded) {
+    return html`<p class="muted">Suspended — see the record above.</p>`;
+  }
+  const c = v.noShowCase;
+  let text: string;
+  try {
+    text = recordedSuspensionMessage({
+      memberName: v.row.memberName,
+      priorSuspensions: s.prior,
+      // Only the latest report says who hosted; without the case, the fee stays.
+      hostWaiver: c?.hostedPastEvent === true,
+      suspendedOn: s.suspendedOn,
+      durationDays: s.days,
+    });
+  } catch {
+    return html`<p class="muted">Suspended — see the record above.</p>`;
+  }
+  const unchecked = c
+    ? ''
+    : html`<p class="note">
+        This member is not in the latest report, so hosting could not be
+        checked. If they have hosted, remove the admin fee sentence.
+      </p>`;
+  return html`${unchecked}${copyBox(text, 'Copy suspension message')}`;
+}
+
 function messageBody(
   v: CardView,
   form: (action: WorkspaceAction, inner: SafeHtml, box?: boolean) => SafeHtml,
   actions: Set<WorkspaceAction>,
 ): SafeHtml | '' {
-  // Never a message on a suspended or voided card, whatever its
-  // classification: recording a suspension on the open month changes what
-  // the next build counts, which can reclassify the card as a warning.
   if (v.row.status === 'suspended') {
-    return html`<p class="muted">Suspended — see the record above.</p>`;
+    return suspendedMessageBody(v);
   }
   if (v.row.status === 'voided') {
     return html`<p class="muted">Voided — no message to send.</p>`;
@@ -336,7 +380,6 @@ function messageBody(
             priorSuspensions: s.prior,
             hostWaiver,
             suspendedOn: s.suspendedOn,
-            ...(s.recorded && { durationDays: s.days }),
           });
   } catch {
     // A stored event without a usable date: no message, never a 500.
