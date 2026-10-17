@@ -2165,6 +2165,56 @@ describe('workspace sync hooks', () => {
     ]);
   });
 
+  it('a malformed stored report alerts once a day with a fixed reason, and the notice still posts', async () => {
+    const h = idle();
+    h.syncWorkspace.mockImplementation(async (period) => {
+      return isSept(period) ? 'malformed' : 'current';
+    });
+    await runBuildTick(h.deps);
+    expect(ready(h)).toHaveLength(1);
+    expect(workspaceAlerts(h)).toEqual([
+      'No-show workspace not updated: September 2026',
+    ]);
+    expect(
+      descriptions(h.alert).find((d) => d.startsWith('The September 2026')),
+    ).toBe(
+      'The September 2026 workspace could not be updated from the stored report ' +
+        '(the stored no-show report is not in the expected shape). ' +
+        'It retries after the next build and on every build tick.',
+    );
+
+    // Later the same day: no second alert.
+    h.alert.mockClear();
+    h.clock.set('2026-10-10T16:30:00Z');
+    await runBuildTick(h.deps);
+    expect(workspaceAlerts(h)).toEqual([]);
+  });
+
+  it('a malformed outcome for a month with no current no-show snapshot stays silent', async () => {
+    const h = makeDeps({ clock: new Clock('2026-10-10T16:15:00Z') });
+    // Only Hall of Fame stored for September; October is current.
+    h.snapshots.seed('hall_of_fame', SEPT, '2026-10-03T16:10:00Z');
+    h.snapshots.seedBoth(OCT, '2026-10-10T16:05:00Z');
+    h.linkProgress.days.set('2026-10-10', LINK);
+    h.fetchMonthReports.mockRejectedValue(new Error('not now'));
+    h.syncWorkspace.mockImplementation(async (period) => {
+      return isSept(period) ? 'malformed' : 'current';
+    });
+    await runBuildTick(h.deps);
+    expect(synced(h)).toContain('2026-9');
+    expect(workspaceAlerts(h)).toEqual([]);
+  });
+
+  it("'no-report' stays silent", async () => {
+    const h = idle();
+    h.syncWorkspace.mockImplementation(async (period) => {
+      return isSept(period) ? 'no-report' : 'current';
+    });
+    await runBuildTick(h.deps);
+    expect(synced(h)).toEqual(['2026-9', '2026-10']);
+    expect(workspaceAlerts(h)).toEqual([]);
+  });
+
   it('a workspace alert that fails to post is retried on the next tick', async () => {
     const h = idle();
     h.syncWorkspace.mockImplementation(async (period) => {

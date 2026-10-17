@@ -581,10 +581,45 @@ async function writeLinkProgress(
   }
 }
 
+/** The fixed reason shown when the stored no-show report is not one the workspace can read. */
+const MALFORMED_REPORT_REASON =
+  'the stored no-show report is not in the expected shape';
+
+/**
+ * "No-show workspace not updated", at most once a day per month. The reason
+ * is a class name or a fixed text, never payload or error text. Never throws.
+ */
+async function alertWorkspaceNotUpdated(
+  deps: BuildJobDeps,
+  cache: KeyValueCache,
+  period: Period,
+  reason: string,
+): Promise<void> {
+  try {
+    const key = workspaceSyncAlertedKey(period, utcDay(deps.now()));
+    if (await cache.exclusive_set(key, '1', ALERTED_TTL_SEC)) {
+      const label = monthLabel(period);
+      const posted = await deps.alert({
+        title: `No-show workspace not updated: ${label}`,
+        description:
+          `The ${label} workspace could not be updated from the stored report (${reason}). ` +
+          'It retries after the next build and on every build tick.',
+      });
+      if (!posted) {
+        await cache.remove(key);
+      }
+    }
+  } catch (alertError: unknown) {
+    logger.error(`Workspace sync alert failed: ${errorName(alertError)}`);
+  }
+}
+
 /**
  * Runs the workspace sync for a workspace month. Never throws, and waits at
  * most WORKSPACE_SYNC_DEADLINE_MS. A failure is logged by its class name and
- * alerted at most once a day per month; the next build or tick retries.
+ * alerted at most once a day per month; the next build or tick retries. A
+ * 'malformed' outcome for a month with a current no-show snapshot is alerted
+ * the same way, with a fixed reason; 'no-report' stays silent.
  */
 async function syncWorkspaceSafely(
   deps: BuildJobDeps,
@@ -595,11 +630,12 @@ async function syncWorkspaceSafely(
     return;
   }
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let outcome: unknown;
   try {
     const sync = Promise.resolve().then(() => deps.syncWorkspace?.(period));
     // A sync that settles after the deadline is not reported twice.
     sync.catch(() => undefined);
-    await Promise.race([
+    outcome = await Promise.race([
       sync,
       new Promise((_resolve, reject) => {
         timer = setTimeout(
@@ -613,26 +649,23 @@ async function syncWorkspaceSafely(
     logger.error(
       `Workspace sync ${periodKey(period)} failed: ${errorName(error)}`,
     );
-    try {
-      const key = workspaceSyncAlertedKey(period, utcDay(deps.now()));
-      if (await cache.exclusive_set(key, '1', ALERTED_TTL_SEC)) {
-        const label = monthLabel(period);
-        const posted = await deps.alert({
-          title: `No-show workspace not updated: ${label}`,
-          // The class name only, as in the process log.
-          description:
-            `The ${label} workspace could not be updated from the stored report (${errorName(error)}). ` +
-            'It retries after the next build and on every build tick.',
-        });
-        if (!posted) {
-          await cache.remove(key);
-        }
-      }
-    } catch (alertError: unknown) {
-      logger.error(`Workspace sync alert failed: ${errorName(alertError)}`);
-    }
+    await alertWorkspaceNotUpdated(deps, cache, period, errorName(error));
+    return;
   } finally {
     clearTimeout(timer);
+  }
+  if (outcome === 'malformed') {
+    const meta = await deps.snapshots
+      .getCurrentMeta('no_show', period)
+      .catch((): undefined => undefined);
+    if (meta) {
+      await alertWorkspaceNotUpdated(
+        deps,
+        cache,
+        period,
+        MALFORMED_REPORT_REASON,
+      );
+    }
   }
 }
 
