@@ -123,8 +123,9 @@ async function monthCard(
 
 /**
  * Open workspace items for the latest finished and the open month: one
- * aggregate (statusCounts) over at most those two months, never row lists.
- * Months before the workspace have no line; with none, no card.
+ * aggregate (statusCounts) over at most those two months, and each month's
+ * state, never row lists. A month not set up yet says so, like the months
+ * list. Months before the workspace have no line; with none, no card.
  */
 async function workspaceCard(
   deps: Pick<DashboardPageDeps, 'workspace'>,
@@ -133,8 +134,17 @@ async function workspaceCard(
   if (months.length === 0) {
     return html``;
   }
-  const counts = await (await deps.workspace()).statusCounts(months);
-  const line = (p: Period) => {
+  const ws = await deps.workspace();
+  const [counts, states] = await Promise.all([
+    ws.statusCounts(months),
+    Promise.all(months.map((p) => ws.monthState(p))),
+  ]);
+  const line = (p: Period, i: number) => {
+    if (!states[i]) {
+      return html`<li>
+        ${monthCell(DASHBOARD_PATHS.workspaceMonth, p)}: not set up yet
+      </li>`;
+    }
     const c = counts.get(periodKey(p)) ?? {};
     const sum = (list: readonly WorkspaceStatus[]) =>
       list.reduce((n, s) => n + num(c, s), 0);

@@ -188,8 +188,20 @@ const workspaceRows = () => {
   ];
 };
 
+/** A month state: the month has been set up. */
+const setUp = (period: typeof SEPT) => ({
+  period,
+  snapshotId: 1,
+  snapshotBuiltAt: new Date('2026-10-01T15:00:00Z'),
+  syncedAt: new Date('2026-10-01T16:00:00Z'),
+});
+
 const seededWorkspace = () =>
-  fakeWorkspace({ rows: workspaceRows(), months: [], events: [] });
+  fakeWorkspace({
+    rows: workspaceRows(),
+    months: [setUp(SEPT), setUp(OCT)],
+    events: [],
+  });
 
 describe('Home open workspace items card', () => {
   it('shows open workspace items for the latest finished and the open month', async () => {
@@ -223,13 +235,31 @@ describe('Home open workspace items card', () => {
     expect(ws.statusesByMember).not.toHaveBeenCalled();
   });
 
-  it('a month with no rows shows zeros', async () => {
+  it('a set-up month with no rows shows zeros', async () => {
     const out = await render({
       workspace: async () =>
-        fakeWorkspace({ rows: [], months: [], events: [] }),
+        fakeWorkspace({
+          rows: [],
+          months: [setUp(SEPT), setUp(OCT)],
+          events: [],
+        }),
     });
     expect(out).toContain('September 2026</a>: 0 to do, 0 on hold, 0 done');
     expect(out).toContain('October 2026</a>: 0 to do, 0 on hold, 0 done');
+  });
+
+  it('a month with no workspace yet says so, never zeros', async () => {
+    const ws = fakeWorkspace({
+      rows: workspaceRows(),
+      months: [setUp(SEPT)],
+      events: [],
+    });
+    const out = await render({ workspace: async () => ws });
+    expect(out).toContain('September 2026</a>: 3 to do, 1 on hold, 3 done');
+    expect(out).toContain('October 2026</a>: not set up yet');
+    expect(out).not.toContain('October 2026</a>: 0 to do');
+    expect(ws.monthState).toHaveBeenCalledTimes(2);
+    expect(ws.listRows).not.toHaveBeenCalled();
   });
 
   it('the workspace card failure degrades alone', async () => {
@@ -423,6 +453,25 @@ describe('Home report cards, failure isolation and timing', () => {
       expect(out.match(/Unavailable right now\./g)).toHaveLength(1);
       expect(out).toContain('8 no-show RSVPs');
       expect(out).toContain('Linked 200');
+      expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it('the month-state read shares the 5 s deadline', async () => {
+      vi.useFakeTimers();
+      const ws = seededWorkspace();
+      ws.monthState.mockReturnValue(new Promise(() => {}));
+      let out = '';
+      const pending = renderHomeReports(
+        deps({ workspace: async () => ws }),
+      ).then((v) => {
+        out = v.value;
+      });
+      await vi.advanceTimersByTimeAsync(HOME_REPORTS_DEADLINE_MS - 1);
+      expect(out).toBe('');
+      await vi.advanceTimersByTimeAsync(1);
+      await pending;
+      expect(out.match(/Unavailable right now\./g)).toHaveLength(1);
+      expect(out).toContain('8 no-show RSVPs');
       expect(vi.getTimerCount()).toBe(0);
     });
 
