@@ -350,7 +350,9 @@ export function createDashboardRouter(deps: DashboardDeps): express.Router {
     }
     res.redirect(308, httpsRedirectTarget(deps.origin, req.originalUrl));
   });
-  router.use(express.urlencoded({ extended: false, limit: '16kb' }));
+  // 32 kB: a 2000-character note of 4-byte characters is about 24 kB once
+  // percent-encoded, plus the other fields.
+  router.use(express.urlencoded({ extended: false, limit: '32kb' }));
 
   // ---- Public routes: the only ones reachable without a session. ----
 

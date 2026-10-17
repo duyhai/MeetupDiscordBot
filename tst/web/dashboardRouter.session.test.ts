@@ -994,7 +994,7 @@ describe('dashboard CSRF and logout', () => {
       .post('/dashboard/logout')
       .set('Cookie', cookie)
       .type('form')
-      .send(`_csrf=${'a'.repeat(20 * 1024)}`);
+      .send(`_csrf=${'a'.repeat(33 * 1024)}`);
     expect(res.status).toBe(400);
     expect(res.headers['cache-control']).toBe('no-store');
     expect(res.text).not.toContain('entity too large');

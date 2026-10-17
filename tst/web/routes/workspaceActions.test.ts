@@ -337,9 +337,32 @@ describe('workspace action routes', () => {
     await post(ROW, {
       action: 'hold',
       version: '1',
-      // 3000 UTF-16 units, 2000 code points (the body limit is 16 kB).
+      // 3000 UTF-16 units, 2000 code points (the body limit is 32 kB).
       note: ` ${'😀'.repeat(NOTES_MAX / 2)}${'x'.repeat(NOTES_MAX / 2)} `,
     });
+    expect(perform).toHaveBeenCalledTimes(1);
+  });
+
+  it('a note of 2000 emoji saves: the body limit fits the notes cap', async () => {
+    const { post, postRaw, perform } = await setup();
+    // 4 UTF-8 bytes each, 12 once percent-encoded: about 24 kB.
+    const res = await post(ROW, {
+      action: 'edit_notes',
+      version: '1',
+      note: '😀'.repeat(NOTES_MAX),
+    });
+    expect(res.status).toBe(303);
+    expect(perform).toHaveBeenCalledTimes(1);
+    expect(perform.mock.calls[0][0]).toMatchObject({
+      action: 'edit_notes',
+      note: '😀'.repeat(NOTES_MAX),
+    });
+    // Past 32 kB the body is still refused, before any action.
+    const over = await postRaw(
+      ROW,
+      `action=edit_notes&version=1&note=${'x'.repeat(33 * 1024)}`,
+    );
+    expect(over.status).toBe(400);
     expect(perform).toHaveBeenCalledTimes(1);
   });
 
