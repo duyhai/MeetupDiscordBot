@@ -142,6 +142,7 @@ const MONTH = '/dashboard/no-shows/2026-09';
         now: () => PAGE_NOW,
         repository: async () => repo,
         moderationLog,
+        isLeadership,
       };
       const { req } = await makeApp({
         now: () => PAGE_NOW.getTime(),
@@ -191,6 +192,8 @@ const MONTH = '/dashboard/no-shows/2026-09';
       expect(res.status).toBe(303);
       expect(res.headers.location).toBe(`${MONTH}?result=done`);
       expect(isLeadership).toHaveBeenCalledWith(USER.id);
+      // The route asked; the service trusts its flag: one Discord call.
+      expect(isLeadership).toHaveBeenCalledTimes(1);
       expect(await count('suspension_records')).toBe(1);
       expect(await rowState(id)).toMatchObject({
         status: 'suspended',

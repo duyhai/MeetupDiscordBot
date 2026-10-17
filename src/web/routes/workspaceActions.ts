@@ -208,6 +208,7 @@ export function registerWorkspaceActionRoutes(
       return;
     }
     const { session } = dashboardLocals(res);
+    let leadershipConfirmed = false;
     if (isLeadershipOnly(action)) {
       // Live, on every request: the session's cached roles (which only
       // decide what the page shows) are never the authority here.
@@ -236,6 +237,7 @@ export function registerWorkspaceActionRoutes(
         );
         return;
       }
+      leadershipConfirmed = true;
     }
     // The confirm step: a record request that did not come from the
     // confirm page shows it instead.
@@ -260,6 +262,8 @@ export function registerWorkspaceActionRoutes(
         note: field(body, 'note'),
         date: field(body, 'date'),
         recordId: field(body, 'recordId'),
+        // Set only after this request's own live check passed.
+        ...(leadershipConfirmed && { leadershipConfirmed: true }),
       });
     } catch (error: unknown) {
       logger.warn(

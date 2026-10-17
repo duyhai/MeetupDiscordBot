@@ -23,6 +23,7 @@ import {
 import type { PostgresNoShowWorkspaceRepository } from '../repositories/postgresNoShowWorkspaceRepository.js';
 import type { PostgresReportSnapshotRepository } from '../repositories/postgresReportSnapshotRepository.js';
 import { isWorkspaceMonth } from './months.js';
+import { isLeadershipOnly } from './transitions.js';
 import { casesFromPayload } from './sync.js';
 import {
   type ActionOutcome,
@@ -45,9 +46,20 @@ export interface WorkspaceActionInput {
   note?: unknown;
   date?: unknown;
   recordId?: unknown;
+  /**
+   * True only when the caller asked Discord live, for this request, that
+   * `actor` holds the 1.5 Leadership Team role (the route does). Otherwise a
+   * Leadership-only action asks deps.isLeadership here.
+   */
+  leadershipConfirmed?: boolean;
 }
 
-export type WorkspaceActionCode = 'done' | 'invalid' | ActionRefusalReason;
+export type WorkspaceActionCode =
+  | 'done'
+  | 'invalid'
+  | 'not-leadership'
+  | 'leadership-unavailable'
+  | ActionRefusalReason;
 
 /**
  * `existing` only on 'already-suspended', and only when the live record can
@@ -64,6 +76,8 @@ export interface WorkspaceServiceDeps {
   repository(): Promise<Pick<PostgresNoShowWorkspaceRepository, 'applyAction'>>;
   /** Posts to the moderation log (logModeration: embed only, no pings). */
   moderationLog(entry: LogEntry): Promise<unknown>;
+  /** Live Discord check for the 1.5 Leadership Team role. Rejects when Discord cannot answer. */
+  isLeadership(discordUserId: string): Promise<boolean>;
 }
 
 const VERSION = /^[0-9]{1,9}$/;
@@ -187,8 +201,8 @@ export function validateActionFields(
  * One staff action on one card. Validates the raw form values, applies the
  * action in the repository's single transaction, then, after commit, posts
  * the moderation-log entry without waiting for it. Who may send a
- * Leadership-only action is checked by the caller (live, Task 8) before this
- * runs. A repository error propagates; the route answers it.
+ * Leadership-only action is checked live: by the caller (which then sets
+ * leadershipConfirmed) or here through deps.isLeadership. A repository error propagates; the route answers it.
  */
 export async function performWorkspaceAction(
   deps: WorkspaceServiceDeps,
@@ -209,6 +223,38 @@ export async function performWorkspaceAction(
     return { code: checked.code };
   }
   const { expectedVersion, suspendedOn, linkRecordId } = checked.fields;
+  if (isLeadershipOnly(action) && input.leadershipConfirmed !== true) {
+    // The rule holds for every caller: one that did not ask Discord itself
+    // is asked for here, and a refusal writes nothing.
+    let why: LeadershipRefusal | undefined;
+    try {
+      why =
+        (await deps.isLeadership(input.actor)) === true
+          ? undefined
+          : 'not-leadership';
+    } catch (error: unknown) {
+      logger.warn(`Workspace Leadership check failed: ${errorClass(error)}`);
+      why = 'discord-unreachable';
+    }
+    if (why !== undefined) {
+      postWithoutWaiting(
+        deps,
+        leadershipRefusalEntry(
+          input.period,
+          input.rowId,
+          action,
+          input.actor,
+          why,
+        ),
+      );
+      return {
+        code:
+          why === 'not-leadership'
+            ? 'not-leadership'
+            : 'leadership-unavailable',
+      };
+    }
+  }
   const repo = await deps.repository();
   const outcome = await repo.applyAction({
     period: input.period,

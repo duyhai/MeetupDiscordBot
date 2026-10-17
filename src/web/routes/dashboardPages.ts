@@ -86,7 +86,7 @@ export type WorkspacePageReader = Pick<
 
 /** The workspace's state changes (the service). Each may reject; the routes answer 'error'. */
 export interface WorkspaceActions {
-  /** performWorkspaceAction. The caller has already run the live Leadership check. */
+  /** performWorkspaceAction. The route runs the live Leadership check and passes leadershipConfirmed. */
   perform(input: WorkspaceActionInput): Promise<WorkspaceActionResult>;
   /** syncWorkspace. */
   sync(period: Period): Promise<WorkspaceSyncCode>;

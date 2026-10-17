@@ -501,6 +501,9 @@ describe('Leadership-only workspace actions', () => {
       expect(isLeadership).toHaveBeenCalledWith(USER.id);
       expect(perform).toHaveBeenCalledTimes(1);
       expect(perform.mock.calls[0][0].action).toBe(action);
+      // The route's live check is passed on: one Discord call per request.
+      expect(perform.mock.calls[0][0].leadershipConfirmed).toBe(true);
+      expect(isLeadership).toHaveBeenCalledTimes(1);
       await settle();
       expect(moderationLog).not.toHaveBeenCalled();
     },
@@ -604,6 +607,7 @@ describe('Leadership-only workspace actions', () => {
       const res = await post(ROW, { action, version: '1', note: 'why' });
       expect(location(res)).toBe(`${MONTH}?result=done`);
       expect(perform).toHaveBeenCalledTimes(1);
+      expect(perform.mock.calls[0][0].leadershipConfirmed).toBeUndefined();
       expect(isLeadership).not.toHaveBeenCalled();
     },
   );

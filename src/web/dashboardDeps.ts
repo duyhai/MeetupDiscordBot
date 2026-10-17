@@ -157,15 +157,16 @@ const workspaceModerationLog = async (entry: LogEntry) => {
 
 /** Production page deps, each read wired to its repository's instance(). */
 export function dashboardPageDeps(): DashboardPageDeps {
+  const isLeadership = discordRoleCheck(
+    () => discordClient,
+    SERVER_ROLES.leadership,
+  );
   return {
     now: () => new Date(),
     // The router's cache and clock (Date.now), so a revocation here is the
     // one the gate reads.
     sessionStore: async () => new SessionStore(await dashboardCache()),
-    isLeadership: discordRoleCheck(
-      () => discordClient,
-      SERVER_ROLES.leadership,
-    ),
+    isLeadership,
     audit: auditActivity,
     snapshots: () => PostgresReportSnapshotRepository.instance(),
     // The refresh route: the timed request phase, the late-lease release and
@@ -193,6 +194,7 @@ export function dashboardPageDeps(): DashboardPageDeps {
             now: () => new Date(),
             repository: () => PostgresNoShowWorkspaceRepository.instance(),
             moderationLog: workspaceModerationLog,
+            isLeadership,
           },
           input,
         ),

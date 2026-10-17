@@ -10,6 +10,7 @@ import {
   fitFieldValue,
   leadershipRefusalEntry,
   moderationEntry,
+  type ActionFieldInput,
   performWorkspaceAction,
   validateActionFields,
   REFUSED_WHAT,
@@ -129,6 +130,7 @@ interface ServiceHarness {
   moderationLog: ReturnType<
     typeof vi.fn<(entry: LogEntry) => Promise<unknown>>
   >;
+  isLeadership: ReturnType<typeof vi.fn<(id: string) => Promise<boolean>>>;
 }
 
 function service(
@@ -138,11 +140,13 @@ function service(
   const applyAction = vi.fn(async (_req: ActionRequest) => outcome);
   const repository = vi.fn(async () => ({ applyAction }));
   const log = vi.fn(moderationLog);
+  const isLeadership = vi.fn(async (_id: string) => true);
   return {
-    deps: { now: () => NOW, repository, moderationLog: log },
+    deps: { now: () => NOW, repository, moderationLog: log, isLeadership },
     applyAction,
     repository,
     moderationLog: log,
+    isLeadership,
   };
 }
 
@@ -780,7 +784,7 @@ describe('REFUSED_WHAT', () => {
 });
 
 describe('validateActionFields (shared by the route and the service)', () => {
-  const at = (action: WorkspaceAction, fields: Record<string, unknown>) =>
+  const at = (action: WorkspaceAction, fields: ActionFieldInput) =>
     validateActionFields(action, fields, SEPT, NOW);
 
   it('accepts a digit version and returns it as a number', () => {
@@ -835,6 +839,88 @@ describe('validateActionFields (shared by the route and the service)', () => {
         at('link_suspension', { version: '1', recordId }),
         String(recordId),
       ).toEqual({ ok: false, code: 'invalid' });
+    }
+  });
+});
+
+describe('performWorkspaceAction: the Leadership gate', () => {
+  const leadershipInput = (action: WorkspaceAction) =>
+    input({
+      action,
+      ...(action === 'record_suspension' && { date: '2026-10-01' }),
+      ...(action === 'link_suspension' && { recordId: '41' }),
+      ...(action === 'void' && { note: 'recorded twice' }),
+    });
+
+  it.each(LEADERSHIP_ONLY_ACTIONS.map((a) => [a]))(
+    '%s called directly without Leadership is refused and writes nothing',
+    async (action) => {
+      const h = service(ok(action));
+      h.isLeadership.mockResolvedValue(false);
+      const result = await performWorkspaceAction(
+        h.deps,
+        leadershipInput(action),
+      );
+      expect(result).toEqual({ code: 'not-leadership' });
+      expect(h.isLeadership).toHaveBeenCalledWith(ACTOR);
+      expect(h.repository).not.toHaveBeenCalled();
+      expect(h.applyAction).not.toHaveBeenCalled();
+      await flush();
+      expect(h.moderationLog).toHaveBeenCalledWith(
+        leadershipRefusalEntry(SEPT, 7, action, ACTOR, 'not-leadership'),
+      );
+    },
+  );
+
+  it('a Leadership check that fails is refused as unreachable', async () => {
+    const h = service(ok('void'));
+    h.isLeadership.mockRejectedValue(new Error('gateway down'));
+    const result = await performWorkspaceAction(
+      h.deps,
+      leadershipInput('void'),
+    );
+    expect(result).toEqual({ code: 'leadership-unavailable' });
+    expect(h.applyAction).not.toHaveBeenCalled();
+    await flush();
+    expect(h.moderationLog).toHaveBeenCalledWith(
+      leadershipRefusalEntry(SEPT, 7, 'void', ACTOR, 'discord-unreachable'),
+    );
+  });
+
+  it('a caller that already checked live passes the flag, and Discord is not asked again', async () => {
+    const h = service(ok('void'));
+    h.isLeadership.mockResolvedValue(false);
+    const result = await performWorkspaceAction(h.deps, {
+      ...leadershipInput('void'),
+      leadershipConfirmed: true,
+    });
+    expect(result).toEqual({ code: 'done' });
+    expect(h.isLeadership).not.toHaveBeenCalled();
+  });
+
+  it('a Leadership member calling directly is asked once and acts', async () => {
+    const h = service(ok('record_suspension'));
+    const result = await performWorkspaceAction(
+      h.deps,
+      leadershipInput('record_suspension'),
+    );
+    expect(result).toEqual({ code: 'done' });
+    expect(h.isLeadership).toHaveBeenCalledTimes(1);
+  });
+
+  it('every other action never asks Discord', async () => {
+    for (const action of WORKSPACE_ACTIONS.filter(
+      (a) => !LEADERSHIP_ONLY_ACTIONS.includes(a),
+    )) {
+      const h = service(ok(action));
+      h.isLeadership.mockResolvedValue(false);
+      // eslint-disable-next-line no-await-in-loop -- one action at a time, so a failure names it
+      const result = await performWorkspaceAction(
+        h.deps,
+        input({ action, note: 'why' }),
+      );
+      expect(result.code, action).toBe('done');
+      expect(h.isLeadership, action).not.toHaveBeenCalled();
     }
   });
 });
