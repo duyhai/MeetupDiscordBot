@@ -73,7 +73,11 @@ interface FakeOptions {
   >;
   responses?: Record<string, Buffer | null | 'too-large' | Error>;
   stored?: Record<string, Buffer>;
-  fill?: (id: number, photo: Buffer) => Promise<boolean>;
+  fill?: (
+    id: number,
+    photo: Buffer,
+    source: 'profile' | 'identity-thumb',
+  ) => Promise<boolean>;
 }
 
 function fakeDeps(options: FakeOptions = {}) {
@@ -123,6 +127,9 @@ const linked = {
 
 const storedBytes = (bans: { fillProfilePhoto: ReturnType<typeof vi.fn> }) =>
   bans.fillProfilePhoto.mock.calls.map(([, photo]) => String(photo));
+/** The photo_source each fill wrote. */
+const sourcesOf = (bans: { fillProfilePhoto: ReturnType<typeof vi.fn> }) =>
+  bans.fillProfilePhoto.mock.calls.map(([, , source]) => source as string);
 
 describe('isBanPhotoSourceUrl', () => {
   it.each([
@@ -259,6 +266,8 @@ describe('fillBanPhotos: sources', () => {
     expect(fetchBytes).not.toHaveBeenCalled();
     expect(storedPhoto).toHaveBeenCalledWith(MEETUP_ID, DISCORD_ID);
     expect(storedBytes(bans)).toEqual([expect.stringContaining('stored')]);
+    // Stored thumbnails are labelled consistently (Hai, 2026-10-22).
+    expect(sourcesOf(bans)).toEqual(['identity-thumb']);
     expect(counts).toMatchObject({ filled: 1, fromStored: 1, deferred: 0 });
   });
 
@@ -344,6 +353,7 @@ describe('fillBanPhotos: sources', () => {
       STANDARD_URL,
     ]);
     expect(storedBytes(bans)).toEqual([expect.stringContaining('standard')]);
+    expect(sourcesOf(bans)).toEqual(['profile']);
   });
 
   it('a member still present but with every source over the cap has no source, and stored is not read', async () => {
@@ -564,5 +574,144 @@ describe('runBanPhotoFillSafely', () => {
     ]) {
       expect(printed).not.toContain(secret);
     }
+  });
+});
+
+describe('fillBanPhotos: a present member with no photo at all (Hai, 2026-10-22, "yes to both" via the lead)', () => {
+  const noAvatar = { userAvatarHash: null, memberAvatarHash: null };
+  const stored = { [MEETUP_ID]: image('stored') };
+
+  it('linked, in a trusted guild cache, no avatar, and gone from the roster: the stored thumbnail, as identity-thumb', async () => {
+    const { deps, bans, fetchBytes, storedPhoto } = fakeDeps({
+      links: linked.links,
+      guild: { [DISCORD_ID]: noAvatar },
+      stored,
+    });
+    const counts = await fillBanPhotos(deps, [rosterMember(OTHER_ID)], true);
+    expect(fetchBytes).not.toHaveBeenCalled();
+    expect(storedPhoto).toHaveBeenCalledWith(MEETUP_ID, DISCORD_ID);
+    expect(storedBytes(bans)).toEqual([expect.stringContaining('stored')]);
+    expect(sourcesOf(bans)).toEqual(['identity-thumb']);
+    expect(counts).toMatchObject({ filled: 1, fromStored: 1, noSource: 0 });
+  });
+
+  it('in the fetched roster with no Meetup photo (none, or no URLs), unlinked: the stored thumbnail', async () => {
+    for (const photo of [
+      null,
+      { id: 'p', thumbUrl: null, standardUrl: null },
+    ]) {
+      const { deps, bans, fetchBytes } = fakeDeps({ stored });
+      // eslint-disable-next-line no-await-in-loop
+      const counts = await fillBanPhotos(
+        deps,
+        [rosterMember(MEETUP_ID, photo)],
+        false,
+      );
+      expect(fetchBytes).not.toHaveBeenCalled();
+      expect(sourcesOf(bans)).toEqual(['identity-thumb']);
+      expect(counts).toMatchObject({ filled: 1, fromStored: 1 });
+    }
+  });
+
+  it('present in both with no photo in either: the stored thumbnail', async () => {
+    const { deps, bans } = fakeDeps({
+      links: linked.links,
+      guild: { [DISCORD_ID]: noAvatar },
+      stored,
+    });
+    await fillBanPhotos(deps, [rosterMember(MEETUP_ID, null)], true);
+    expect(sourcesOf(bans)).toEqual(['identity-thumb']);
+  });
+
+  it('a photo whose download fails defers the ban, and the stored thumbnail is never read', async () => {
+    for (const failure of [null, new Error('ECONNRESET'), NOT_AN_IMAGE]) {
+      const { deps, bans, storedPhoto } = fakeDeps({
+        links: linked.links,
+        guild: { [DISCORD_ID]: noAvatar },
+        responses: { [STANDARD_URL]: failure },
+        stored,
+      });
+      // eslint-disable-next-line no-await-in-loop
+      const counts = await fillBanPhotos(deps, [rosterMember()], true);
+      expect(storedPhoto).not.toHaveBeenCalled();
+      expect(bans.fillProfilePhoto).not.toHaveBeenCalled();
+      expect(counts).toMatchObject({ filled: 0, deferred: 1, noSource: 0 });
+    }
+    // A failed avatar download with no Meetup photo: deferred too.
+    const avatar = fakeDeps({
+      ...linked,
+      responses: { [GUILD_URL]: null },
+      stored,
+    });
+    const counts = await fillBanPhotos(
+      avatar.deps,
+      [rosterMember(MEETUP_ID, null)],
+      true,
+    );
+    expect(avatar.storedPhoto).not.toHaveBeenCalled();
+    expect(counts).toMatchObject({ filled: 0, deferred: 1 });
+  });
+
+  it('the over-cap path is unchanged: a present member whose only photo is over the cap has no source', async () => {
+    const { deps, bans, storedPhoto } = fakeDeps({
+      links: linked.links,
+      guild: { [DISCORD_ID]: noAvatar },
+      responses: { [STANDARD_URL]: TOO_LARGE, [THUMB_URL]: 'too-large' },
+      stored,
+    });
+    const counts = await fillBanPhotos(deps, [rosterMember()], true);
+    expect(storedPhoto).not.toHaveBeenCalled();
+    expect(bans.fillProfilePhoto).not.toHaveBeenCalled();
+    expect(counts).toMatchObject({ filled: 0, noSource: 1, deferred: 0 });
+  });
+
+  it('discordKnown false: a linked member with no avatar in the cache, or missing from it, is still deferred', async () => {
+    for (const guild of [{ [DISCORD_ID]: noAvatar }, {}]) {
+      const { deps, bans, storedPhoto } = fakeDeps({
+        links: linked.links,
+        guild,
+        stored,
+      });
+      // eslint-disable-next-line no-await-in-loop
+      const counts = await fillBanPhotos(
+        deps,
+        [rosterMember(MEETUP_ID, null)],
+        false,
+      );
+      expect(storedPhoto).not.toHaveBeenCalled();
+      expect(bans.fillProfilePhoto).not.toHaveBeenCalled();
+      expect(counts).toMatchObject({ filled: 0, deferred: 1 });
+    }
+  });
+
+  it('a source that could not be checked defers: the roster not fetched, or the link lookup failed', async () => {
+    const noRoster = fakeDeps({
+      links: linked.links,
+      guild: { [DISCORD_ID]: noAvatar },
+      stored,
+    });
+    expect(await fillBanPhotos(noRoster.deps, undefined, true)).toMatchObject({
+      filled: 0,
+      deferred: 1,
+    });
+    expect(noRoster.storedPhoto).not.toHaveBeenCalled();
+
+    const noLinks = fakeDeps({ stored });
+    noLinks.discordIdsByMeetupIds.mockRejectedValue(new Error('db down'));
+    expect(
+      await fillBanPhotos(noLinks.deps, [rosterMember(MEETUP_ID, null)], true),
+    ).toMatchObject({ filled: 0, deferred: 1 });
+    expect(noLinks.storedPhoto).not.toHaveBeenCalled();
+  });
+
+  it('a present member whose stored bytes are not an image has no source', async () => {
+    const { deps, bans } = fakeDeps({ stored: { [MEETUP_ID]: NOT_AN_IMAGE } });
+    const counts = await fillBanPhotos(
+      deps,
+      [rosterMember(MEETUP_ID, null)],
+      true,
+    );
+    expect(bans.fillProfilePhoto).not.toHaveBeenCalled();
+    expect(counts).toMatchObject({ filled: 0, noSource: 1 });
   });
 });

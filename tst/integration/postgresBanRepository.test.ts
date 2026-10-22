@@ -189,8 +189,17 @@ async function pollUntil(
         await expect(
           insert('5', bytes(1, 153_601), 'profile', null),
         ).rejects.toEqual(refused);
+        // 'identity-thumb' is a sweep source too (Hai, 2026-10-22): no actor.
+        await expect(
+          insert('6', bytes(1), 'identity-thumb', MOD),
+        ).rejects.toEqual(refused);
+        await expect(insert('6', bytes(1), 'stored', null)).rejects.toEqual(
+          refused,
+        );
         // The valid forms of the same statements go in.
         await insert('5', bytes(1, 153_600), 'profile', null);
+        await insert('6', bytes(1), 'identity-thumb', null);
+        await pool.query("DELETE FROM member_bans WHERE member_id = '6'");
         await expect(
           pool.query(
             `UPDATE member_bans SET lifted_at = now(), lifted_by = $1 WHERE member_id = '5'`,
@@ -345,7 +354,7 @@ async function pollUntil(
       try {
         await uploader.query('BEGIN');
         await uploader.query(UPLOAD_PHOTO_SQL, [target.id, upload, LEAD]);
-        const fill = repo.fillProfilePhoto(target.id, bytes(0xbb));
+        const fill = repo.fillProfilePhoto(target.id, bytes(0xbb), 'profile');
         // The fill reaches the row lock before the upload commits.
         const fillWaits = () =>
           pool
@@ -353,7 +362,7 @@ async function pollUntil(
               `SELECT count(*)::int AS n FROM pg_stat_activity
                 WHERE wait_event_type = 'Lock'
                   AND datname = current_database() AND pid <> pg_backend_pid()
-                  AND query LIKE '%photo_source = ''profile''%'`,
+                  AND query LIKE '%photo_source = $3%'`,
             )
             .then((r) => r.rows[0].n === 1);
         expect(await pollUntil(fillWaits)).toBe(true);
@@ -383,9 +392,15 @@ async function pollUntil(
       expect(await repo.listPhotoFillCandidates(10, DAY)).toEqual([
         { id: open.id, memberId: '70' },
       ]);
-      expect(await repo.fillProfilePhoto(open.id, bytes(1))).toBe(true);
-      expect(await repo.fillProfilePhoto(open.id, bytes(2))).toBe(false);
-      expect(await repo.fillProfilePhoto(toLift.id, bytes(3))).toBe(false);
+      expect(await repo.fillProfilePhoto(open.id, bytes(1), 'profile')).toBe(
+        true,
+      );
+      expect(await repo.fillProfilePhoto(open.id, bytes(2), 'profile')).toBe(
+        false,
+      );
+      expect(await repo.fillProfilePhoto(toLift.id, bytes(3), 'profile')).toBe(
+        false,
+      );
       expect(await repo.getPhoto(open.id)).toEqual(bytes(1));
       expect(await repo.getPhoto(toLift.id)).toBeUndefined();
       const [row] = await repo.listPage({
@@ -400,6 +415,25 @@ async function pollUntil(
       });
       expect(row.photoUpdatedAt).toBeInstanceOf(Date);
       expect(await repo.listPhotoFillCandidates(10, DAY)).toEqual([]);
+      // A stored identity thumbnail is labelled as one.
+      const thumb = await recorded('72');
+      expect(
+        await repo.fillProfilePhoto(thumb.id, bytes(5), 'identity-thumb'),
+      ).toBe(true);
+      const filled = (
+        await repo.listPage({ state: 'active', offset: 0, limit: 50 })
+      ).find((r) => r.id === thumb.id);
+      expect(filled).toMatchObject({
+        photoSource: 'identity-thumb',
+        photoUpdatedBy: null,
+      });
+      expect(
+        await repo.fillProfilePhoto(
+          (await recorded('73')).id,
+          bytes(6),
+          'upload' as never,
+        ),
+      ).toBe(false);
     });
 
     it('setUploadedPhoto replaces a profile photo and reports replaced: true; refuses a lifted ban', async () => {
@@ -463,7 +497,9 @@ async function pollUntil(
       expect(await repo.getPhoto(older.id)).toEqual(bytes(0x11));
       expect(await repo.getPhoto(middle.id)).toEqual(bytes(0x22));
       // The sweep leaves the carried photo alone.
-      expect(await repo.fillProfilePhoto(active90.id, bytes(0x33))).toBe(false);
+      expect(
+        await repo.fillProfilePhoto(active90.id, bytes(0x33), 'profile'),
+      ).toBe(false);
       expect(
         (await repo.listPhotoFillCandidates(10, DAY)).map((c) => c.memberId),
       ).toEqual(['91']);
@@ -506,7 +542,7 @@ async function pollUntil(
 
     it('lift keeps the photo; listPage(lifted) shows who, when, why and hasPhoto', async () => {
       const target = await recorded('100');
-      await repo.fillProfilePhoto(target.id, bytes(9));
+      await repo.fillProfilePhoto(target.id, bytes(9), 'profile');
       const lifted = await repo.lift(target.id, LEAD, 'served');
       expect(lifted).toMatchObject({
         liftedBy: LEAD,
@@ -537,7 +573,7 @@ async function pollUntil(
     it('getPhoto returns the bytes for one id and undefined for a ban without a photo', async () => {
       const withPhoto = await recorded('110');
       const without = await recorded('111');
-      await repo.fillProfilePhoto(withPhoto.id, bytes(4, 1000));
+      await repo.fillProfilePhoto(withPhoto.id, bytes(4, 1000), 'profile');
       expect(await repo.getPhoto(withPhoto.id)).toEqual(bytes(4, 1000));
       expect(await repo.getPhoto(without.id)).toBeUndefined();
       expect(await repo.getPhoto(999_999)).toBeUndefined();

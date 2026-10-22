@@ -8,6 +8,7 @@ import {
   BAN_PHOTO_MAX_BYTES,
   BanImportOutcome,
   BanInsert,
+  BanFillSource,
   BanPhotoSource,
   BanRecordOutcome,
   BanRow,
@@ -44,7 +45,7 @@ CREATE TABLE IF NOT EXISTS member_bans (
   recorded_by      TEXT NOT NULL CHECK (recorded_by ~ ${DISCORD_ID}),
   created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
   photo            BYTEA CHECK (photo IS NULL OR octet_length(photo) BETWEEN 1 AND ${BAN_PHOTO_MAX_BYTES}),
-  photo_source     TEXT CHECK (photo_source IN ('upload', 'profile')),
+  photo_source     TEXT CHECK (photo_source IN ('upload', 'profile', 'identity-thumb')),
   photo_updated_at TIMESTAMPTZ,
   photo_updated_by TEXT CHECK (photo_updated_by IS NULL OR photo_updated_by ~ ${DISCORD_ID}),
   lifted_at        TIMESTAMPTZ,
@@ -53,7 +54,7 @@ CREATE TABLE IF NOT EXISTS member_bans (
   CHECK ((photo IS NULL) = (photo_source IS NULL)
      AND (photo IS NULL) = (photo_updated_at IS NULL)),
   CHECK (photo_source IS DISTINCT FROM 'upload' OR photo_updated_by IS NOT NULL),
-  CHECK (photo_source IS DISTINCT FROM 'profile' OR photo_updated_by IS NULL),
+  CHECK (photo_source NOT IN ('profile', 'identity-thumb') OR photo_updated_by IS NULL),
   CHECK ((lifted_at IS NULL) = (lifted_by IS NULL)
      AND (lifted_at IS NULL) = (lift_reason IS NULL))
 );
@@ -150,7 +151,7 @@ RETURNING ${banColumns('b')}, old.had`;
  * replaces one (re-checked after waiting on a concurrent upload's row lock).
  */
 export const FILL_PHOTO_SQL = `UPDATE member_bans
-   SET photo = $2, photo_source = 'profile', photo_updated_at = now(),
+   SET photo = $2, photo_source = $3, photo_updated_at = now(),
        photo_updated_by = NULL
  WHERE id = $1 AND photo IS NULL AND lifted_at IS NULL`;
 
@@ -360,10 +361,22 @@ export class PostgresBanRepository {
       : { ban: toBan(row), replaced: row.had };
   }
 
-  /** True only when this call stored the photo (active, and none before). */
-  async fillProfilePhoto(id: number, photo: Buffer): Promise<boolean> {
-    if (!isSerialId(id)) return false;
-    const result = await this.pool.query(FILL_PHOTO_SQL, [id, photo]);
+  /**
+   * True only when this call stored the photo (active, and none before).
+   * `source` is 'profile' for a live avatar or Meetup photo and
+   * 'identity-thumb' for a stored identity thumbnail.
+   */
+  async fillProfilePhoto(
+    id: number,
+    photo: Buffer,
+    source: BanFillSource,
+  ): Promise<boolean> {
+    if (
+      !isSerialId(id) ||
+      (source !== 'profile' && source !== 'identity-thumb')
+    )
+      return false;
+    const result = await this.pool.query(FILL_PHOTO_SQL, [id, photo, source]);
     return result.rowCount === 1;
   }
 

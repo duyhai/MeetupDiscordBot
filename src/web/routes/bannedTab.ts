@@ -163,7 +163,8 @@ export function isBanRow(row: unknown, show: BanState): row is BanRow {
     typeof r.hasPhoto === 'boolean' &&
     (r.photoSource === null ||
       r.photoSource === 'upload' ||
-      r.photoSource === 'profile') &&
+      r.photoSource === 'profile' ||
+      r.photoSource === 'identity-thumb') &&
     isOptionalDate(r.photoUpdatedAt) &&
     isOptionalText(r.photoUpdatedBy) &&
     (show === 'lifted' ? isValidDate(r.liftedAt) : r.liftedAt === null) &&
@@ -197,6 +198,9 @@ function photoSourceCell(row: BanRow): SafeHtml | '' {
   }
   if (row.photoSource === 'profile') {
     return html`From their profile on ${on}`;
+  }
+  if (row.photoSource === 'identity-thumb') {
+    return html`From a stored profile thumbnail on ${on}`;
   }
   return '';
 }

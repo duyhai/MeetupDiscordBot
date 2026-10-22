@@ -14,7 +14,13 @@ export const BAN_IMPORT_MAX_ROWS = 200;
 export const BAN_FILL_MAX_PER_RUN = 50;
 
 export type BanState = 'active' | 'lifted';
-export type BanPhotoSource = 'upload' | 'profile';
+/**
+ * 'profile': a live Discord avatar or Meetup photo; 'identity-thumb': a
+ * thumbnail the identity monitor stored (Hai, 2026-10-22).
+ */
+export type BanPhotoSource = 'upload' | 'profile' | 'identity-thumb';
+/** What the sweep fill writes: never 'upload'. */
+export type BanFillSource = Exclude<BanPhotoSource, 'upload'>;
 
 /** One member_bans row without its photo bytes. */
 export interface BanRow {

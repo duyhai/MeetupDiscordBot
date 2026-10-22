@@ -203,21 +203,61 @@ async function findPhoto(
     }
   }
 
-  // 3. The newest image the identity monitor stored, only for a member gone
-  // from both live sources. Still present (with no usable photo there): no
-  // source. Not known to be gone (roster or links unread today, or a linked
-  // member missing from a guild cache the Discord sweep could not refresh):
-  // tomorrow.
-  if (member || rosterMember) {
+  // 3. The newest image the identity monitor stored, only when every live
+  // source is known to have no photo at all: the member is gone from it, or
+  // still there with none (Hai, 2026-10-22). A source with a photo that did
+  // not do (every size over the cap, or no allowed URL): no source. A source
+  // that could not be checked (roster or links unread today, or a linked
+  // member in a guild cache the Discord sweep could not refresh): tomorrow.
+  const discord = discordSource(member, discordId, known);
+  const meetup = meetupSource(rosterMember, known);
+  if (discord === 'has-photo' || meetup === 'has-photo') {
     return undefined;
   }
-  if (!known.links || !known.roster || (discordId && !known.discord)) {
+  if (discord === 'unknown' || meetup === 'unknown') {
     return 'deferred';
   }
   const stored = acceptable(await deps.storedPhoto(meetupId, discordId));
   return stored && stored !== 'too-large'
     ? { photo: stored, source: 'stored' }
     : undefined;
+}
+
+/** What one live source says about the member's photo, for the stored fallback. */
+type LiveSource = 'has-photo' | 'no-photo' | 'unknown';
+
+/**
+ * Discord: no photo when the link lookup worked and the member is unlinked,
+ * or is linked and, in a guild cache today's sweep refreshed, either absent
+ * or present with neither avatar. A partial cache is never trusted.
+ */
+function discordSource(
+  member: ReturnType<BanPhotoFillDeps['guildMember']>,
+  discordId: string | undefined,
+  known: { links: boolean; discord: boolean },
+): LiveSource {
+  if (member && (member.memberAvatarHash || member.userAvatarHash)) {
+    return 'has-photo';
+  }
+  if (!known.links) {
+    return 'unknown';
+  }
+  if (!discordId) {
+    return 'no-photo';
+  }
+  return known.discord ? 'no-photo' : 'unknown';
+}
+
+/** Meetup: no photo when the roster was fetched and the member is absent or has no photo URL. */
+function meetupSource(
+  rosterMember: MeetupGroupMember | undefined,
+  known: { roster: boolean },
+): LiveSource {
+  const photo = rosterMember?.memberPhoto;
+  if (photo && (photo.standardUrl || photo.thumbUrl)) {
+    return 'has-photo';
+  }
+  return known.roster ? 'no-photo' : 'unknown';
 }
 
 /**
@@ -303,8 +343,14 @@ export async function fillBanPhotos(
         counts.noSource += 1;
         continue;
       }
-      // eslint-disable-next-line no-await-in-loop
-      if (await bans.fillProfilePhoto(candidate.id, found.photo)) {
+      if (
+        // eslint-disable-next-line no-await-in-loop
+        await bans.fillProfilePhoto(
+          candidate.id,
+          found.photo,
+          found.source === 'stored' ? 'identity-thumb' : 'profile',
+        )
+      ) {
         counts.filled += 1;
         if (found.source === 'discord') counts.fromDiscord += 1;
         else if (found.source === 'meetup') counts.fromMeetup += 1;

@@ -117,7 +117,15 @@ describe('Banned tab', () => {
       photoSource: 'profile',
       photoUpdatedAt: new Date('2026-10-03T17:00:00Z'),
     });
-    const { get, bans } = await setup({ active: [uploaded, profile] });
+    const thumb = banRow({
+      id: 13,
+      memberId: '616161',
+      memberName: 'Cy Banned',
+      hasPhoto: true,
+      photoSource: 'identity-thumb',
+      photoUpdatedAt: new Date('2026-10-04T17:00:00Z'),
+    });
+    const { get, bans } = await setup({ active: [uploaded, profile, thumb] });
     const res = await get(TAB);
     expect(res.status).toBe(200);
     expect(bans.listPage).toHaveBeenCalledWith({
@@ -149,6 +157,8 @@ describe('Banned tab', () => {
     expect(text).toContain('Harassed members at two events');
     expect(text).toContain('Uploaded by staff member on Oct 2, 2026');
     expect(text).toContain('From their profile on Oct 3, 2026');
+    // Hai, 2026-10-22: a stored identity thumbnail says so.
+    expect(text).toContain('From a stored profile thumbnail on Oct 4, 2026');
     expect(body).toContain(`href="https://discord.com/users/${UPLOADER}"`);
     for (const label of [
       'Photo',
@@ -161,7 +171,7 @@ describe('Banned tab', () => {
       expect(body).toContain(`data-label="${label}"`);
     }
     expect(body).not.toContain('data-label="Lifted"');
-    expect(words(res.text)).toContain('Active (2)');
+    expect(words(res.text)).toContain('Active (3)');
     expect(words(res.text)).toContain('Lifted (0)');
   });
 

@@ -68,7 +68,7 @@ describe('PostgresBanRepository SQL', () => {
   it('the sweep fill never replaces a photo: FILL_PHOTO_SQL needs photo IS NULL, and fillProfilePhoto sends it', async () => {
     expect(FILL_PHOTO_SQL).toMatch(/\bphoto IS NULL\b/);
     expect(FILL_PHOTO_SQL).toMatch(/WHERE[\s\S]*\bphoto IS NULL\b/);
-    await repo.fillProfilePhoto(1, Buffer.from([1]));
+    await repo.fillProfilePhoto(1, Buffer.from([1]), 'profile');
     expect(calls).toEqual([FILL_PHOTO_SQL]);
   });
 
