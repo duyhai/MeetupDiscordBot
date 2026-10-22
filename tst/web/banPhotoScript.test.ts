@@ -48,6 +48,8 @@ function harness(
     encode?: Encoder;
     noBitmap?: boolean;
     noToBlob?: boolean;
+    /** Older WebKit: the imageOrientation option value is refused. */
+    rejectOptions?: boolean;
   } = {},
 ) {
   const el = <T extends object>(extra: T) => ({
@@ -110,7 +112,10 @@ function harness(
   };
   const createImageBitmap = options.noBitmap
     ? undefined
-    : vi.fn(async (_file: unknown, _opts: unknown) => {
+    : vi.fn(async (_file: unknown, opts?: unknown) => {
+        if (options.rejectOptions && opts !== undefined) {
+          throw new TypeError('imageOrientation');
+        }
         const bitmap = options.bitmap ?? { width: 2000, height: 1000 };
         if (bitmap instanceof Error) {
           throw bitmap;
@@ -281,6 +286,39 @@ describe('BAN_PHOTO_SCRIPT', () => {
       'That file could not be read as a picture.',
     );
     expect(h.toBlobCalls).toEqual([]);
+    expect(h.field.value).toBe('');
+    expect(h.button.disabled).toBe(true);
+    expect(h.submit()).toHaveBeenCalled();
+    // Tried with the orientation option, then once without it.
+    expect(h.createImageBitmap?.mock.calls).toEqual([
+      [h.file, { imageOrientation: 'from-image' }],
+      [h.file],
+    ]);
+  });
+
+  it('a browser that refuses the orientation option decodes on the retry without it', async () => {
+    const h = harness({ rejectOptions: true });
+    await h.pick();
+    expect(h.createImageBitmap?.mock.calls).toEqual([
+      [h.file, { imageOrientation: 'from-image' }],
+      [h.file],
+    ]);
+    expect([h.canvas.width, h.canvas.height]).toEqual([512, 256]);
+    expect(h.status.textContent).toBe('Ready: 40 KB');
+    expect(h.field.value).not.toBe('');
+    expect(h.button.disabled).toBe(false);
+  });
+
+  it('a JPEG fallback that does not give a JPEG fails with a fixed message', async () => {
+    const h = harness({ encode: () => blob('image/png', 30_000) });
+    await h.pick();
+    expect(h.toBlobCalls).toEqual([
+      ['image/webp', 0.8],
+      ['image/jpeg', 0.8],
+    ]);
+    expect(h.status.textContent).toBe(
+      'This browser could not make a JPEG or WebP photo. Use a current Chrome, Edge, Firefox or Safari.',
+    );
     expect(h.field.value).toBe('');
     expect(h.button.disabled).toBe(true);
     expect(h.submit()).toHaveBeenCalled();

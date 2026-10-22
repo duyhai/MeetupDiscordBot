@@ -732,6 +732,38 @@ describe('ban photo upload', () => {
     expect(plain.text).not.toContain(BAN_PHOTO_SCRIPT.value);
   });
 
+  it('a Leader gets one Actions column: the photo form, then the lift form, in td.ban-actions of a stack bans table', async () => {
+    const { get } = await postSetup({ leader: true });
+    const page = await get(TAB);
+    expect(page.text).toContain('<table class="stack bans">');
+    const head = /<thead>([\s\S]*?)<\/thead>/.exec(page.text)?.[1] ?? '';
+    expect(head).toMatch(/<th>Actions<\/th>/);
+    expect(head).not.toMatch(/<th>(Lift|Upload photo)<\/th>/);
+    const cell =
+      /<td data-label="Actions" class="ban-actions">([\s\S]*?)<\/td>/.exec(
+        tbody(page.text),
+      )?.[1] ?? '';
+    const photo = cell.indexOf('action="/dashboard/bans/3/photo"');
+    const lift = cell.indexOf('action="/dashboard/bans/3/lift"');
+    expect(photo).toBeGreaterThan(-1);
+    expect(lift).toBeGreaterThan(photo);
+    expect(tbody(page.text)).not.toMatch(/data-label="(Lift|Upload photo)"/);
+    // A Moderator's table has no Actions column.
+    const moderator = await postSetup({ leader: false });
+    const plain = await moderator.get(TAB);
+    expect(plain.text).toContain('<table class="stack bans">');
+    expect(plain.text).not.toContain('<th>Actions</th>');
+    expect(plain.text).not.toContain('class="ban-actions"');
+  });
+
+  it('the photo status line is a role="status" live region', async () => {
+    const { get } = await postSetup({ leader: true });
+    const [form] = photoForms((await get(TAB)).text);
+    expect(form).toMatch(
+      /<p class="muted" role="status" data-ban-photo-status>/,
+    );
+  });
+
   it('the file input has no name attribute and the page carries BAN_PHOTO_SCRIPT with the nonce', async () => {
     const { get } = await postSetup({ leader: true });
     const page = await get(TAB);
@@ -811,7 +843,7 @@ describe('ban photo upload', () => {
     expect(page.text).not.toContain(forged.slice(0, 8));
   });
 
-  it('a missing or repeated photo field reaches no service: invalid or photo-not-accepted', async () => {
+  it('a repeated photo field is invalid and reaches no service; a missing one goes to the service', async () => {
     const { post, postRaw, banActions } = await postSetup();
     expect(
       location(await postRaw('/dashboard/bans/3/photo', 'photo=a&photo=b')),

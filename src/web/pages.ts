@@ -105,6 +105,11 @@ td ul{margin:var(--s1) 0 0;padding-left:var(--s4)}
 .table-scroll tr:last-child td{border-bottom:0}
 img.ban-photo{display:block;width:96px;max-width:100%;height:auto;aspect-ratio:1;object-fit:cover;border-radius:8px}
 canvas.ban-preview{display:block;max-width:96px;height:auto;border-radius:8px}
+td.ban-actions{width:15rem}
+td.ban-actions form+form{margin-top:var(--s3);padding-top:var(--s3);border-top:1px solid var(--line)}
+form[data-ban-photo] input[type="file"]{width:100%}
+table.bans th{overflow-wrap:normal}
+code{overflow-wrap:anywhere}
 [hidden]{display:none!important}
 img.thumb{display:block;width:64px;max-width:100%;height:auto;aspect-ratio:1;object-fit:cover;border-radius:8px;
 border:1px solid var(--line);background:var(--raised)}

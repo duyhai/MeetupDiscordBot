@@ -242,7 +242,7 @@ export function banPhotoForm(ban: BanRow, csrf: string): SafeHtml {
       >Pick a photo <input type="file" accept="image/*"
     /></label>
     <canvas class="ban-preview" width="0" height="0" hidden></canvas>
-    <p class="muted" data-ban-photo-status></p>
+    <p class="muted" role="status" data-ban-photo-status></p>
     <button type="submit" disabled>
       ${ban.hasPhoto ? 'Replace photo' : 'Upload photo'}
     </button>
@@ -312,7 +312,7 @@ function bansTable(view: BannedTabView): SafeHtml {
   }
   const lifted = view.show === 'lifted';
   const canLift = view.leader && !lifted;
-  return html`<table class="stack">
+  return html`<table class="stack bans">
       <thead>
         <tr>
           <th>Photo</th>
@@ -328,12 +328,7 @@ function bansTable(view: BannedTabView): SafeHtml {
                   <th>Reason</th>`
               : ''
           }
-          ${
-            canLift
-              ? html`<th>Upload photo</th>
-                  <th>Lift</th>`
-              : ''
-          }
+          ${canLift ? html`<th>Actions</th>` : ''}
         </tr>
       </thead>
       <tbody>
@@ -342,10 +337,9 @@ function bansTable(view: BannedTabView): SafeHtml {
             row,
             lifted,
             canLift
-              ? html`<td data-label="Upload photo">
-                    ${banPhotoForm(row, view.csrf)}
-                  </td>
-                  <td data-label="Lift">${liftForm(row, view.csrf)}</td>`
+              ? html`<td data-label="Actions" class="ban-actions">
+                  ${banPhotoForm(row, view.csrf)} ${liftForm(row, view.csrf)}
+                </td>`
               : undefined,
           ),
         )}

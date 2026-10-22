@@ -143,6 +143,7 @@ const TABLE_PAGES = [
   '/dashboard/suspensions',
   '/dashboard/suspensions?state=past',
   '/dashboard/suspensions?state=voided',
+  '/dashboard/suspensions?state=banned',
   '/dashboard/identity',
   '/dashboard/link-progress',
   '/dashboard/trends',
@@ -225,7 +226,8 @@ describe('tables on narrow screens', () => {
           expect(t.attrs).not.toContain('stack');
           continue;
         }
-        expect(t.attrs).toBe(' class="stack"');
+        // The Banned tab's table adds its own class for column widths.
+        expect(t.attrs).toMatch(/^ class="stack( bans)?"$/);
         expect(t.markup).toMatch(/<td/);
         expect(labelProblems(t.markup)).toEqual([]);
       }
