@@ -2,7 +2,7 @@ import { Client } from 'discord.js';
 import { Logger } from 'tslog';
 
 import { GUILD_ID } from '../../constants.js';
-import { fetchBytesCapped } from '../../util/boundedFetch.js';
+import { fetchBytesCappedOutcome } from '../../util/boundedFetch.js';
 import { ApplicationIdentityRepository } from '../../util/identityRepository.js';
 import { MeetupGroupMember } from '../client/meetup/types.js';
 import { HealBudget } from '../helpers/identity/healBudget.js';
@@ -35,7 +35,11 @@ export interface BanPhotoFillDeps {
     meetupId: string,
     discordId: string | undefined,
   ): Promise<Buffer | undefined>;
-  fetchBytes(url: string): Promise<Buffer | null>;
+  /**
+   * The body, `'too-large'` when it is over BAN_PHOTO_MAX_BYTES, or null
+   * when the download failed (timeout, non-2xx, error).
+   */
+  fetchBytes(url: string): Promise<Buffer | 'too-large' | null>;
   guildId: string;
   now(): number;
 }
@@ -46,7 +50,15 @@ export interface BanPhotoFillCounts {
   fromDiscord: number;
   fromMeetup: number;
   fromStored: number;
+  /** Nothing usable anywhere: every live source over the cap, or none. */
   noSource: number;
+  /**
+   * Left for tomorrow: a live source's download failed, or a live source
+   * could not be checked (roster not fetched, link lookup failed). Never
+   * filled from the stored thumbnail, so one bad day cannot lock in a
+   * postage-stamp photo.
+   */
+  deferred: number;
   /** Candidates whose lookup or write threw (caught; the run went on). */
   failed: number;
 }
@@ -80,37 +92,51 @@ export function isBanPhotoSourceUrl(url: unknown): url is string {
 }
 
 /**
- * The bytes to store, or undefined: stripped of metadata first (D14; PNG
- * sources too), then a known image type within the cap.
+ * The bytes to store, `'too-large'` when they are over the cap after the
+ * strip, or undefined when they are not a usable image: stripped of metadata
+ * first (D14; PNG sources too), then a known image type within the cap.
  */
-function acceptable(bytes: Buffer | null | undefined): Buffer | undefined {
+function acceptable(
+  bytes: Buffer | 'too-large' | null | undefined,
+): Buffer | 'too-large' | undefined {
+  if (bytes === 'too-large') {
+    return 'too-large';
+  }
   if (!bytes || bytes.length === 0) {
     return undefined;
   }
   const stripped = stripImageMetadata(bytes);
-  if (
-    stripped === undefined ||
-    sniffImageType(stripped) === undefined ||
-    stripped.length > BAN_PHOTO_MAX_BYTES
-  ) {
+  if (stripped === undefined || sniffImageType(stripped) === undefined) {
     return undefined;
   }
-  return stripped;
+  return stripped.length > BAN_PHOTO_MAX_BYTES ? 'too-large' : stripped;
 }
 
-/** The first usable photo from the D12 sources, in order. */
+type Found = { photo: Buffer; source: FillSource } | 'deferred' | undefined;
+
+/**
+ * The first usable photo from the D12 sources, in order, or 'deferred'.
+ *
+ * Inside a live source (Discord avatars, then Meetup standard then thumb),
+ * only a file over the cap moves on to the next, smaller one. Any other
+ * failure defers the ban to tomorrow, so a timeout cannot lock in a smaller
+ * photo (the fill never overwrites). The stored identity thumbnail is used
+ * only for a member known to be gone from both live sources.
+ */
 async function findPhoto(
   deps: BanPhotoFillDeps,
   meetupId: string,
   discordId: string | undefined,
   rosterMember: MeetupGroupMember | undefined,
-): Promise<{ photo: Buffer; source: FillSource } | undefined> {
-  const fetchFrom = async (urls: (string | null | undefined)[]) => {
+  known: { links: boolean; roster: boolean },
+): Promise<Found> {
+  const fetchFrom = async (
+    urls: (string | null | undefined)[],
+  ): Promise<Buffer | 'deferred' | undefined> => {
     for (const url of urls) {
       if (isBanPhotoSourceUrl(url)) {
-        // One source at a time, first acceptable wins. A failed download
-        // is the same as no photo there: try the next source.
-        let bytes: Buffer | null = null;
+        // One source at a time, first acceptable wins.
+        let bytes: Buffer | 'too-large' | null = null;
         try {
           // eslint-disable-next-line no-await-in-loop
           bytes = await deps.fetchBytes(url);
@@ -118,9 +144,13 @@ async function findPhoto(
           bytes = null;
         }
         const photo = acceptable(bytes);
-        if (photo) {
+        if (photo === undefined) {
+          return 'deferred';
+        }
+        if (photo !== 'too-large') {
           return photo;
         }
+        // Over the cap: the next, smaller size may do.
       }
     }
     return undefined;
@@ -150,6 +180,9 @@ async function findPhoto(
         : undefined,
     ];
     const photo = await fetchFrom(urls);
+    if (photo === 'deferred') {
+      return 'deferred';
+    }
     if (photo) {
       return { photo, source: 'discord' };
     }
@@ -162,14 +195,27 @@ async function findPhoto(
       meetupPhoto.standardUrl,
       meetupPhoto.thumbUrl,
     ]);
+    if (photo === 'deferred') {
+      return 'deferred';
+    }
     if (photo) {
       return { photo, source: 'meetup' };
     }
   }
 
-  // 3. The newest image the identity monitor stored.
+  // 3. The newest image the identity monitor stored, only for a member gone
+  // from both live sources. Still present (with no usable photo there): no
+  // source. Not known to be gone (roster or links unread today): tomorrow.
+  if (member || rosterMember) {
+    return undefined;
+  }
+  if (!known.links || !known.roster) {
+    return 'deferred';
+  }
   const stored = acceptable(await deps.storedPhoto(meetupId, discordId));
-  return stored ? { photo: stored, source: 'stored' } : undefined;
+  return stored && stored !== 'too-large'
+    ? { photo: stored, source: 'stored' }
+    : undefined;
 }
 
 /**
@@ -190,6 +236,7 @@ export async function fillBanPhotos(
     fromMeetup: 0,
     fromStored: 0,
     noSource: 0,
+    deferred: 0,
     failed: 0,
   };
   const bans = await deps.bans();
@@ -213,8 +260,10 @@ export async function fillBanPhotos(
     }
   }
   let links = new Map<string, string>();
+  let linksKnown = false;
   try {
     links = await deps.discordIdsByMeetupIds([...wanted]);
+    linksKnown = true;
   } catch (error: unknown) {
     // Discord is one source of three; the others still run.
     logger.warn(
@@ -235,8 +284,13 @@ export async function fillBanPhotos(
           candidate.memberId,
           links.get(candidate.memberId),
           rosterById.get(candidate.memberId),
+          { links: linksKnown, roster: roster !== undefined },
         ),
       );
+      if (found === 'deferred') {
+        counts.deferred += 1;
+        continue;
+      }
       if (!found) {
         counts.noSource += 1;
         continue;
@@ -295,6 +349,7 @@ export async function runBanPhotoFillSafely(
       `Ban photo fill: ${c.filled} of ${c.candidates} filled ` +
         `(${c.fromDiscord} Discord, ${c.fromMeetup} Meetup, ${c.fromStored} stored), ` +
         `${c.noSource} without a usable photo` +
+        (c.deferred > 0 ? `, ${c.deferred} deferred to tomorrow` : '') +
         (c.failed > 0 ? `, ${c.failed} failed` : ''),
     );
   } catch (error: unknown) {
@@ -331,7 +386,7 @@ export function defaultBanPhotoFillDeps(client: Client): BanPhotoFillDeps {
       if (!isBanPhotoSourceUrl(url)) {
         return null;
       }
-      return fetchBytesCapped(
+      return fetchBytesCappedOutcome(
         url,
         BAN_PHOTO_MAX_BYTES,
         BAN_FILL_FETCH_TIMEOUT_MS,

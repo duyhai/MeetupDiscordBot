@@ -53,6 +53,21 @@ export async function fetchBytesCapped(
   maxBytes: number,
   timeoutMs: number,
 ): Promise<Buffer | null> {
+  const outcome = await fetchBytesCappedOutcome(url, maxBytes, timeoutMs);
+  return outcome === 'too-large' ? null : outcome;
+}
+
+/**
+ * fetchBytesCapped, but a body over `maxBytes` (declared or streamed) is
+ * `'too-large'` rather than null, so a caller can tell "this file is too big"
+ * (a smaller size may do) from "this download failed" (try again later).
+ * Null for everything else. Never throws.
+ */
+export async function fetchBytesCappedOutcome(
+  url: string,
+  maxBytes: number,
+  timeoutMs: number,
+): Promise<Buffer | 'too-large' | null> {
   let target: URL;
   try {
     target = new URL(url);
@@ -68,14 +83,19 @@ export async function fetchBytesCapped(
       { redirect: 'error' },
       timeoutMs,
     );
-    const declared = response.headers.get('content-length');
-    if (
-      !response.ok ||
-      response.body === null ||
-      (declared !== null && !(Number(declared) <= maxBytes))
-    ) {
+    if (!response.ok || response.body === null) {
       response.body?.cancel().catch(() => undefined);
       return null;
+    }
+    const header = response.headers.get('content-length');
+    const declared = header === null ? undefined : Number(header);
+    if (
+      declared !== undefined &&
+      (!Number.isFinite(declared) || declared < 0 || declared > maxBytes)
+    ) {
+      response.body.cancel().catch(() => undefined);
+      // A garbled length is a failed download, not a big file.
+      return declared > maxBytes ? 'too-large' : null;
     }
     const chunks: Uint8Array[] = [];
     let total = 0;
@@ -84,7 +104,7 @@ export async function fetchBytesCapped(
     for await (const chunk of response.body as AsyncIterable<Uint8Array>) {
       total += chunk.byteLength;
       if (total > maxBytes) {
-        return null;
+        return 'too-large';
       }
       chunks.push(chunk);
     }

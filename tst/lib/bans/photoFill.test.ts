@@ -15,6 +15,7 @@ const GUILD = '912461362289061939';
 const MEETUP_ID = '279964402';
 const OTHER_ID = '311122233';
 const THIRD_ID = '322233344';
+const FOURTH_ID = '333344455';
 const DISCORD_ID = '123456789012345678';
 
 function pngChunk(type: string, data: Buffer = Buffer.alloc(0)): Buffer {
@@ -70,7 +71,7 @@ interface FakeOptions {
     string,
     { userAvatarHash: string | null; memberAvatarHash: string | null }
   >;
-  responses?: Record<string, Buffer | null | Error>;
+  responses?: Record<string, Buffer | null | 'too-large' | Error>;
   stored?: Record<string, Buffer>;
   fill?: (id: number, photo: Buffer) => Promise<boolean>;
 }
@@ -178,18 +179,34 @@ describe('fillBanPhotos: sources', () => {
     expect(counts).toMatchObject({ fromDiscord: 0, fromMeetup: 1 });
   });
 
-  it('uses the Meetup standardUrl, then thumbUrl when standard is too large or fails', async () => {
-    for (const standard of [TOO_LARGE, null, new Error('reset')]) {
+  it('uses the Meetup thumbUrl only when standardUrl is over the cap', async () => {
+    for (const standard of [TOO_LARGE, 'too-large' as const]) {
       const { deps, bans, fetchBytes } = fakeDeps({
         responses: { [STANDARD_URL]: standard, [THUMB_URL]: image('thumb') },
       });
       // eslint-disable-next-line no-await-in-loop -- one case at a time
-      await fillBanPhotos(deps, [rosterMember()]);
+      const counts = await fillBanPhotos(deps, [rosterMember()]);
       expect(fetchBytes.mock.calls.map(([u]) => u)).toEqual([
         STANDARD_URL,
         THUMB_URL,
       ]);
       expect(storedBytes(bans)).toEqual([expect.stringContaining('thumb')]);
+      expect(counts).toMatchObject({ filled: 1, fromMeetup: 1, deferred: 0 });
+    }
+  });
+
+  it('defers, without the thumb or the stored photo, when standardUrl times out or fails', async () => {
+    for (const standard of [null, new Error('reset'), NOT_AN_IMAGE]) {
+      const { deps, bans, fetchBytes, storedPhoto } = fakeDeps({
+        responses: { [STANDARD_URL]: standard, [THUMB_URL]: image('thumb') },
+        stored: { [MEETUP_ID]: image('stored') },
+      });
+      // eslint-disable-next-line no-await-in-loop -- one case at a time
+      const counts = await fillBanPhotos(deps, [rosterMember()]);
+      expect(fetchBytes.mock.calls.map(([u]) => u)).toEqual([STANDARD_URL]);
+      expect(storedPhoto).not.toHaveBeenCalled();
+      expect(bans.fillProfilePhoto).not.toHaveBeenCalled();
+      expect(counts).toMatchObject({ filled: 0, deferred: 1, noSource: 0 });
     }
   });
 
@@ -226,38 +243,90 @@ describe('fillBanPhotos: sources', () => {
     expect(bans.fillProfilePhoto).not.toHaveBeenCalled();
   });
 
-  it('falls back to the stored photo when neither profile yields bytes', async () => {
-    const { deps, bans, storedPhoto } = fakeDeps({
-      ...linked,
+  it('uses the stored photo only when the member is gone from a fetched roster and the guild', async () => {
+    const { deps, bans, fetchBytes, storedPhoto } = fakeDeps({
+      links: linked.links,
+      guild: {},
       stored: { [MEETUP_ID]: image('stored') },
     });
-    const counts = await fillBanPhotos(deps, [rosterMember()]);
+    const counts = await fillBanPhotos(deps, [rosterMember(OTHER_ID)]);
+    expect(fetchBytes).not.toHaveBeenCalled();
     expect(storedPhoto).toHaveBeenCalledWith(MEETUP_ID, DISCORD_ID);
     expect(storedBytes(bans)).toEqual([expect.stringContaining('stored')]);
-    expect(counts).toMatchObject({ filled: 1, fromStored: 1 });
+    expect(counts).toMatchObject({ filled: 1, fromStored: 1, deferred: 0 });
   });
 
-  it('uses the stored photo when the member is not in the roster at all', async () => {
-    const { deps, bans, fetchBytes } = fakeDeps({
+  it('defers instead of using the stored photo when the roster was not fetched', async () => {
+    const { deps, bans, storedPhoto } = fakeDeps({
       stored: { [MEETUP_ID]: image('stored') },
     });
-    await fillBanPhotos(deps, undefined);
-    expect(fetchBytes).not.toHaveBeenCalled();
-    expect(storedBytes(bans)).toEqual([expect.stringContaining('stored')]);
+    const counts = await fillBanPhotos(deps, undefined);
+    expect(storedPhoto).not.toHaveBeenCalled();
+    expect(bans.fillProfilePhoto).not.toHaveBeenCalled();
+    expect(counts).toMatchObject({ filled: 0, deferred: 1, noSource: 0 });
   });
 
-  it('refuses bytes that sniff as nothing and bytes over 153600, and tries the next source', async () => {
-    const { deps, bans } = fakeDeps({
+  it('defers instead of using Meetup or stored when the Discord avatar download fails for a present member', async () => {
+    for (const guildAnswer of [null, new Error('timeout'), NOT_AN_IMAGE]) {
+      const { deps, bans, fetchBytes, storedPhoto } = fakeDeps({
+        ...linked,
+        responses: {
+          [GUILD_URL]: guildAnswer,
+          [USER_URL]: image('user'),
+          [STANDARD_URL]: image('standard'),
+        },
+        stored: { [MEETUP_ID]: image('stored') },
+      });
+      // Gone from the roster, still in the guild.
+      // eslint-disable-next-line no-await-in-loop -- one case at a time
+      const counts = await fillBanPhotos(deps, []);
+      expect(fetchBytes.mock.calls.map(([u]) => u)).toEqual([GUILD_URL]);
+      expect(storedPhoto).not.toHaveBeenCalled();
+      expect(bans.fillProfilePhoto).not.toHaveBeenCalled();
+      expect(counts).toMatchObject({ filled: 0, deferred: 1 });
+    }
+  });
+
+  it('a Discord avatar over the cap moves on to the next avatar, then Meetup', async () => {
+    const { deps, bans, fetchBytes } = fakeDeps({
       ...linked,
       responses: {
-        [GUILD_URL]: NOT_AN_IMAGE,
+        [GUILD_URL]: 'too-large',
         [USER_URL]: TOO_LARGE,
-        [STANDARD_URL]: NOT_AN_IMAGE,
-        [THUMB_URL]: TOO_LARGE,
+        [STANDARD_URL]: image('standard'),
       },
-      stored: { [MEETUP_ID]: NOT_AN_IMAGE },
+    });
+    await fillBanPhotos(deps, [rosterMember()]);
+    expect(fetchBytes.mock.calls.map(([u]) => u)).toEqual([
+      GUILD_URL,
+      USER_URL,
+      STANDARD_URL,
+    ]);
+    expect(storedBytes(bans)).toEqual([expect.stringContaining('standard')]);
+  });
+
+  it('a member still present but with every source over the cap has no source, and stored is not read', async () => {
+    const { deps, bans, storedPhoto } = fakeDeps({
+      ...linked,
+      responses: {
+        [GUILD_URL]: TOO_LARGE,
+        [USER_URL]: 'too-large',
+        [STANDARD_URL]: TOO_LARGE,
+        [THUMB_URL]: 'too-large',
+      },
+      stored: { [MEETUP_ID]: image('stored') },
     });
     const counts = await fillBanPhotos(deps, [rosterMember()]);
+    expect(storedPhoto).not.toHaveBeenCalled();
+    expect(bans.fillProfilePhoto).not.toHaveBeenCalled();
+    expect(counts).toMatchObject({ filled: 0, noSource: 1, deferred: 0 });
+  });
+
+  it('a gone member whose stored bytes are not an image has no source', async () => {
+    const { deps, bans } = fakeDeps({
+      stored: { [MEETUP_ID]: NOT_AN_IMAGE },
+    });
+    const counts = await fillBanPhotos(deps, []);
     expect(bans.fillProfilePhoto).not.toHaveBeenCalled();
     expect(counts).toMatchObject({ filled: 0, noSource: 1 });
   });
@@ -347,7 +416,7 @@ describe('fillBanPhotos: limits and failures', () => {
       }
       return image('other');
     });
-    const counts = await fillBanPhotos(deps, undefined);
+    const counts = await fillBanPhotos(deps, []);
     expect(bans.fillProfilePhoto).toHaveBeenCalledTimes(1);
     expect(bans.fillProfilePhoto.mock.calls[0][0]).toBe(2);
     expect(counts).toMatchObject({ candidates: 2, filled: 1, failed: 1 });
@@ -362,6 +431,19 @@ describe('fillBanPhotos: limits and failures', () => {
     });
     await fillBanPhotos(deps, [rosterMember()]);
     expect(storedBytes(bans)).toEqual([expect.stringContaining('standard')]);
+  });
+
+  it('a failing link lookup never falls back to the stored photo', async () => {
+    const { deps, bans, storedPhoto } = fakeDeps({
+      stored: { [MEETUP_ID]: image('stored') },
+    });
+    deps.discordIdsByMeetupIds = vi.fn(async () => {
+      throw new Error('db down');
+    });
+    const counts = await fillBanPhotos(deps, []);
+    expect(storedPhoto).not.toHaveBeenCalled();
+    expect(bans.fillProfilePhoto).not.toHaveBeenCalled();
+    expect(counts).toMatchObject({ filled: 0, deferred: 1 });
   });
 });
 
@@ -402,6 +484,7 @@ describe('runBanPhotoFillSafely', () => {
         { id: 1, memberId: MEETUP_ID },
         { id: 2, memberId: OTHER_ID },
         { id: 3, memberId: THIRD_ID },
+        { id: 4, memberId: FOURTH_ID },
       ],
       responses: { [GUILD_URL]: image('guild') },
     });
@@ -412,19 +495,24 @@ describe('runBanPhotoFillSafely', () => {
       }
       return undefined;
     });
-    await runBanPhotoFillSafely(deps, [rosterMember()]);
+    // The fourth is in the roster but its standard photo does not download.
+    await runBanPhotoFillSafely(deps, [
+      rosterMember(),
+      rosterMember(FOURTH_ID),
+    ]);
     deps.bans = async () => {
       throw new Error(`member ${MEETUP_ID} at ${STANDARD_URL}`);
     };
     await runBanPhotoFillSafely(deps, [rosterMember()]);
     const printed = log.mock.calls.flat().map(String).join('\n');
     expect(printed).toContain(
-      'Ban photo fill: 1 of 3 filled (1 Discord, 0 Meetup, 0 stored), 1 without a usable photo, 1 failed',
+      'Ban photo fill: 1 of 4 filled (1 Discord, 0 Meetup, 0 stored), 1 without a usable photo, 1 deferred to tomorrow, 1 failed',
     );
     for (const secret of [
       MEETUP_ID,
       OTHER_ID,
       THIRD_ID,
+      FOURTH_ID,
       DISCORD_ID,
       'cdn.discordapp.com',
       'meetupstatic',

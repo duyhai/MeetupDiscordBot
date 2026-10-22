@@ -6,6 +6,7 @@ import {
   FetchUrl,
   boundedFetch,
   fetchBytesCapped,
+  fetchBytesCappedOutcome,
 } from '../../src/util/boundedFetch.js';
 
 const realFetch = globalThis.fetch;
@@ -173,5 +174,68 @@ describe('fetchBytesCapped', () => {
     expect(printed).toContain('TypeError');
     expect(printed).not.toContain('token=abc');
     expect(printed).not.toContain('photos.example.test');
+  });
+});
+
+describe('fetchBytesCappedOutcome', () => {
+  const HOST = 'https://photos.example.test';
+  const CAP = 1000;
+
+  it('returns the body when it is within the cap', async () => {
+    nock(HOST).get('/a.webp').reply(200, Buffer.alloc(CAP, 7));
+    expect(await fetchBytesCappedOutcome(`${HOST}/a.webp`, CAP, 1_000)).toEqual(
+      Buffer.alloc(CAP, 7),
+    );
+  });
+
+  it('says too-large for a Content-Length over the cap', async () => {
+    nock(HOST)
+      .get('/big.webp')
+      .reply(200, Buffer.alloc(CAP + 1), { 'Content-Length': String(CAP + 1) });
+    expect(await fetchBytesCappedOutcome(`${HOST}/big.webp`, CAP, 1_000)).toBe(
+      'too-large',
+    );
+  });
+
+  it('says too-large for a stream that passes the cap', async () => {
+    globalThis.fetch = vi.fn(async () => new Response(new Uint8Array(CAP + 1)));
+    expect(await fetchBytesCappedOutcome(`${HOST}/stream`, CAP, 1_000)).toBe(
+      'too-large',
+    );
+  });
+
+  it('returns null, not too-large, on 404, timeout, error and http', async () => {
+    nock(HOST).get('/missing').reply(404, 'nope');
+    expect(
+      await fetchBytesCappedOutcome(`${HOST}/missing`, CAP, 1_000),
+    ).toBeNull();
+    globalThis.fetch = stallingFetch();
+    expect(await fetchBytesCappedOutcome(`${HOST}/slow`, CAP, 10)).toBeNull();
+    globalThis.fetch = vi.fn(async () => {
+      throw new TypeError('reset');
+    });
+    expect(
+      await fetchBytesCappedOutcome(`${HOST}/reset`, CAP, 1_000),
+    ).toBeNull();
+    expect(
+      await fetchBytesCappedOutcome('http://photos.example.test/a', CAP, 1_000),
+    ).toBeNull();
+  });
+
+  it('a garbled Content-Length is a failed download, not too-large', async () => {
+    globalThis.fetch = vi.fn(
+      async () =>
+        new Response(new Uint8Array(10), {
+          headers: { 'Content-Length': 'lots' },
+        }),
+    );
+    expect(
+      await fetchBytesCappedOutcome(`${HOST}/garbled`, CAP, 1_000),
+    ).toBeNull();
+  });
+
+  it('fetchBytesCapped still maps too-large to null', async () => {
+    globalThis.fetch = vi.fn(async () => new Response(new Uint8Array(CAP + 1)));
+    expect(await fetchBytesCapped(`${HOST}/stream`, CAP, 1_000)).toBeNull();
   });
 });
