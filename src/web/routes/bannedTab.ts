@@ -82,7 +82,9 @@ export const BAN_RESULT_MESSAGES = {
   'reason-too-long': 'That reason is too long (up to 500 characters).',
   'photo-not-accepted':
     'That photo was not accepted. Pick a JPEG or WebP image and try again.',
+  // Bytes: over 150 KB after the metadata strip.
   'photo-too-large': 'That photo is over 150 KB after compression.',
+  // Pixels: over 512 px on either side.
   'photo-too-big': 'That photo is over 512 pixels on a side.',
   'not-leadership':
     'Only the 1.5 Leadership Team can record, import, upload or lift a ban. Nothing was changed.',

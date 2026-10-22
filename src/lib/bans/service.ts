@@ -50,7 +50,9 @@ export type BanResultCode =
   | 'reason-required'
   | 'reason-too-long'
   | 'photo-not-accepted'
+  /** Bytes: over BAN_PHOTO_MAX_BYTES (150 KB) after the metadata strip. */
   | 'photo-too-large'
+  /** Pixels: wider or taller than BAN_PHOTO_MAX_SIDE (512 px). */
   | 'photo-too-big'
   | 'not-leadership'
   | 'leadership-unavailable'

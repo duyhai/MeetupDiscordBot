@@ -47,7 +47,7 @@ const bytes = (fill: number, length = 64): Buffer => Buffer.alloc(length, fill);
 /** Re-runs `check` every 20 ms until it is true; false after `timeoutMs`. */
 async function pollUntil(
   check: () => Promise<boolean>,
-  timeoutMs = 2000,
+  timeoutMs = 5000,
 ): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {

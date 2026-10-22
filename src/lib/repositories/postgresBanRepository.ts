@@ -103,7 +103,7 @@ function banColumns(table = ''): string {
   ${t}lift_reason`;
 }
 
-export const BAN_COLUMNS = banColumns();
+const BAN_COLUMNS = banColumns();
 
 /**
  * One new ban; a re-ban starts with the member's latest lifted photo (all
@@ -111,7 +111,7 @@ export const BAN_COLUMNS = banColumns();
  * Must name the partial index's predicate, or Postgres can't match it. No
  * row back means the member already has an active ban.
  */
-export const INSERT_BAN_SQL = `INSERT INTO member_bans
+const INSERT_BAN_SQL = `INSERT INTO member_bans
   (member_id, member_name, banned_on, notes, recorded_by,
    photo, photo_source, photo_updated_at, photo_updated_by)
 SELECT $1::text, $2::text, $3::date, $4::text, $5::text,
@@ -127,7 +127,7 @@ SELECT $1::text, $2::text, $3::date, $4::text, $5::text,
 ON CONFLICT (member_id) WHERE lifted_at IS NULL DO NOTHING
 RETURNING ${BAN_COLUMNS}`;
 
-export const LIFT_SQL = `UPDATE member_bans
+const LIFT_SQL = `UPDATE member_bans
    SET lifted_at = now(), lifted_by = $2, lift_reason = $3
  WHERE id = $1 AND lifted_at IS NULL
 RETURNING ${BAN_COLUMNS}`;
