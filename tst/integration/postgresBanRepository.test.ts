@@ -320,6 +320,7 @@ async function pollUntil(
   });
 
   describe('photos', () => {
+    const DAY = '2026-10-22';
     const recorded = async (memberId: string) => {
       const outcome = await repo.record(ban(memberId));
       if (!outcome.ok) throw new Error('not recorded');
@@ -368,7 +369,7 @@ async function pollUntil(
       const open = await recorded('70');
       const toLift = await recorded('71');
       await repo.lift(toLift.id, LEAD, 'lifted');
-      expect(await repo.listPhotoFillCandidates(10)).toEqual([
+      expect(await repo.listPhotoFillCandidates(10, DAY)).toEqual([
         { id: open.id, memberId: '70' },
       ]);
       expect(await repo.fillProfilePhoto(open.id, bytes(1))).toBe(true);
@@ -387,7 +388,7 @@ async function pollUntil(
         photoUpdatedBy: null,
       });
       expect(row.photoUpdatedAt).toBeInstanceOf(Date);
-      expect(await repo.listPhotoFillCandidates(10)).toEqual([]);
+      expect(await repo.listPhotoFillCandidates(10, DAY)).toEqual([]);
     });
 
     it('setUploadedPhoto replaces a profile photo and reports replaced: true; refuses a lifted ban', async () => {
@@ -453,8 +454,43 @@ async function pollUntil(
       // The sweep leaves the carried photo alone.
       expect(await repo.fillProfilePhoto(active90.id, bytes(0x33))).toBe(false);
       expect(
-        (await repo.listPhotoFillCandidates(10)).map((c) => c.memberId),
+        (await repo.listPhotoFillCandidates(10, DAY)).map((c) => c.memberId),
       ).toEqual(['91']);
+    });
+
+    it('fill candidates: stable order within a day, rotating daily, so sourceless bans cannot block the rest', async () => {
+      expect(
+        await repo.importMany(
+          Array.from({ length: 60 }, (_, i) => ban(String(1000 + i))),
+        ),
+      ).toEqual({ ok: true, count: 60 });
+      const all = (
+        await pool.query<{ id: number }>(
+          'SELECT id FROM member_bans ORDER BY id',
+        )
+      ).rows.map((r) => r.id);
+      expect(all).toHaveLength(60);
+      const fiftieth = all[49];
+      const ids = async (day: string) =>
+        (await repo.listPhotoFillCandidates(50, day)).map((c) => c.id);
+      const first = await ids('2026-10-22');
+      expect(first).toHaveLength(50);
+      expect(await ids('2026-10-22')).toEqual(first);
+      const second = await ids('2026-10-23');
+      expect(second).toHaveLength(50);
+      expect(second).not.toEqual(first);
+      expect(second.some((id) => id > fiftieth)).toBe(true);
+      // Over two days, more than one day's worth is reached.
+      expect(new Set([...first, ...second]).size).toBeGreaterThan(50);
+    });
+
+    it('listPhotoFillCandidates refuses a malformed day before any query', async () => {
+      for (const day of ['', '2026-1-22', "2026-10-22' OR 1=1", '22/10/2026']) {
+        // eslint-disable-next-line no-await-in-loop -- each must refuse
+        await expect(
+          repo.listPhotoFillCandidates(10, day),
+        ).rejects.toBeInstanceOf(RangeError);
+      }
     });
 
     it('lift keeps the photo; listPage(lifted) shows who, when, why and hasPhoto', async () => {

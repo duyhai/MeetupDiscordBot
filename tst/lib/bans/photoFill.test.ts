@@ -4,6 +4,7 @@ import {
   BAN_FILL_DEADLINE_MS,
   BanPhotoFillDeps,
   fillBanPhotos,
+  isBanPhotoSourceUrl,
   runBanPhotoFillSafely,
 } from '../../../src/lib/bans/photoFill.js';
 import { BAN_PHOTO_MAX_BYTES } from '../../../src/lib/bans/types.js';
@@ -77,7 +78,7 @@ interface FakeOptions {
 function fakeDeps(options: FakeOptions = {}) {
   const bans = {
     listPhotoFillCandidates: vi.fn(
-      async (_limit: number) =>
+      async (_limit: number, _day: string) =>
         options.candidates ?? [{ id: 1, memberId: MEETUP_ID }],
     ),
     fillProfilePhoto: vi.fn(options.fill ?? (async () => true)),
@@ -121,6 +122,23 @@ const linked = {
 
 const storedBytes = (bans: { fillProfilePhoto: ReturnType<typeof vi.fn> }) =>
   bans.fillProfilePhoto.mock.calls.map(([, photo]) => String(photo));
+
+describe('isBanPhotoSourceUrl', () => {
+  it.each([
+    ['https://secure.meetupstatic.com/photos/member/a/thumb.jpeg', true],
+    ['https://cdn.discordapp.com/avatars/1/a.webp?size=256', true],
+    ['https://evilmeetupstatic.com/x', false],
+    ['https://cdn.discordapp.com@evil.test/x', false],
+    ['https://evil.test@cdn.discordapp.com/x', false],
+    ['https://cdn.discordapp.com:8443/x', false],
+    ['https://media.discordapp.net/x', false],
+    ['https://secure.meetupstatic.com./x', false],
+    ['http://cdn.discordapp.com/x', false],
+    ['not a url', false],
+  ])('%s -> %s', (url, expected) => {
+    expect(isBanPhotoSourceUrl(url)).toBe(expected);
+  });
+});
 
 describe('fillBanPhotos: sources', () => {
   it('prefers the guild avatar of a linked member still in the server', async () => {
@@ -301,10 +319,12 @@ describe('fillBanPhotos: limits and failures', () => {
     expect(counts).toMatchObject({ candidates: 2, filled: 1 });
   });
 
-  it('asks for at most 50 candidates', async () => {
+  it("asks for at most 50 candidates, ordered for the run's UTC day", async () => {
     const { deps, bans } = fakeDeps({ candidates: [] });
+    // 23:30 Pacific on the 22nd is already the 23rd in UTC.
+    deps.now = () => Date.parse('2026-10-23T06:30:00Z');
     await fillBanPhotos(deps, []);
-    expect(bans.listPhotoFillCandidates).toHaveBeenCalledWith(50);
+    expect(bans.listPhotoFillCandidates).toHaveBeenCalledWith(50, '2026-10-23');
   });
 
   it('looks up links only for the candidates', async () => {

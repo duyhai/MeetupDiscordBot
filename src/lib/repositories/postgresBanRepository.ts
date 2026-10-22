@@ -163,6 +163,7 @@ const MAX_PAGE_ROWS = 50;
 const MAX_ACTIVE_LOOKUP = 1000;
 const MAX_SERIAL = 2 ** 31 - 1;
 const MEMBER_ID = /^[0-9]{1,20}$/;
+const UTC_DAY = /^[0-9]{4}-[0-9]{2}-[0-9]{2}$/;
 
 const isState = (value: unknown): value is BanState =>
   value === 'active' || value === 'lifted';
@@ -364,15 +365,25 @@ export class PostgresBanRepository {
     return result.rowCount === 1;
   }
 
+  /**
+   * Active bans with no photo, in an order fixed for `day` (the run's UTC
+   * 'YYYY-MM-DD', from the caller's clock) that changes the next day: bans
+   * with no usable photo source cannot hold the first places every run and
+   * keep the rest from ever being reached.
+   */
   async listPhotoFillCandidates(
     limit: number,
+    day: string,
   ): Promise<{ id: number; memberId: string }[]> {
+    if (typeof day !== 'string' || !UTC_DAY.test(day)) {
+      throw new RangeError('bad fill day');
+    }
     const result = await this.pool.query<{ id: number; member_id: string }>(
       `SELECT id, member_id FROM member_bans
         WHERE lifted_at IS NULL AND photo IS NULL
-        ORDER BY id
+        ORDER BY hashtext(id::text || ':' || $2::text), id
         LIMIT least($1::int, ${BAN_FILL_MAX_PER_RUN})`,
-      [rowLimit(limit, BAN_FILL_MAX_PER_RUN)],
+      [rowLimit(limit, BAN_FILL_MAX_PER_RUN), day],
     );
     return result.rows.map((r) => ({ id: r.id, memberId: r.member_id }));
   }

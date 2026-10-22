@@ -450,8 +450,8 @@ export async function runIdentityDigestOnce(client: Client): Promise<void> {
 
     // Missing ban photos, from the roster just fetched. Its own 90 s
     // deadline and catch: it can neither delay the digest past that nor
-    // break it. Before the ceiling, so it cannot widen today's change range
-    // (it records no changes anyway).
+    // break it. Before the ceiling: the fill records no changes; running it
+    // first only lets today's ceiling include events that arrive during it.
     try {
       await runBanPhotoFillSafely(
         defaultBanPhotoFillDeps(client),

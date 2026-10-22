@@ -44,7 +44,7 @@ describe('PostgresBanRepository SQL', () => {
     await repo.listPage({ state: 'lifted', offset: 0, limit: 50 });
     await repo.countByState();
     await repo.activeMemberIds(['1']);
-    await repo.listPhotoFillCandidates(5);
+    await repo.listPhotoFillCandidates(5, '2026-10-22');
     expect(calls.length).toBeGreaterThanOrEqual(5);
     for (const sql of calls) {
       expect(sql.replace(/photo IS (NOT )?NULL/g, '')).not.toMatch(

@@ -194,7 +194,10 @@ export async function fillBanPhotos(
   };
   const bans = await deps.bans();
   const candidates = (
-    await bans.listPhotoFillCandidates(BAN_FILL_MAX_PER_RUN)
+    await bans.listPhotoFillCandidates(
+      BAN_FILL_MAX_PER_RUN,
+      new Date(deps.now()).toISOString().slice(0, 10),
+    )
   ).slice(0, BAN_FILL_MAX_PER_RUN);
   counts.candidates = candidates.length;
   if (candidates.length === 0) {
