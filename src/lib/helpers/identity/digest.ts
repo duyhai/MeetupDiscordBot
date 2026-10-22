@@ -441,14 +441,16 @@ export async function runIdentityDigestOnce(client: Client): Promise<void> {
     // as well as anything the event listeners caught. Each sweep is guarded
     // independently: one platform's API being down must not cost the other
     // platform its digest. See runSweepOrDegrade.
-    await runSweepOrDegrade('Discord', client, () =>
+    const discord = await runSweepOrDegrade('Discord', client, () =>
       runIdentitySweep(client, 'sweep'),
     );
     const meetup = await runSweepOrDegrade('Meetup', client, () =>
       runMeetupSweep('sweep', client),
     );
 
-    // Missing ban photos, from the roster just fetched. Its own 90 s
+    // Missing ban photos, from the roster just fetched. A failed Discord
+    // sweep means the guild cache may be partial, so the fill must not
+    // treat a linked member missing from it as gone. Its own 90 s
     // deadline and catch: it can neither delay the digest past that nor
     // break it. Before the ceiling: the fill records no changes; running it
     // first only lets today's ceiling include events that arrive during it.
@@ -456,6 +458,7 @@ export async function runIdentityDigestOnce(client: Client): Promise<void> {
       await runBanPhotoFillSafely(
         defaultBanPhotoFillDeps(client),
         meetup?.roster,
+        discord !== undefined,
       );
     } catch (error: unknown) {
       logger.warn(

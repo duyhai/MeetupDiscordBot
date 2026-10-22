@@ -629,6 +629,16 @@ describe('runIdentityDigestOnce', () => {
     expect(fillAt).toBeLessThan(repo.maxChangeId.mock.invocationCallOrder[0]);
     expect(defaultBanPhotoFillDeps).toHaveBeenCalledWith(client);
     expect(vi.mocked(runBanPhotoFillSafely).mock.calls[0][1]).toBe(roster);
+    expect(vi.mocked(runBanPhotoFillSafely).mock.calls[0][2]).toBe(true);
+  });
+
+  it('a failing Discord sweep runs the fill with the guild cache marked unknown', async () => {
+    vi.mocked(runIdentitySweep).mockRejectedValue(new Error('discord down'));
+
+    await runIdentityDigestOnce(client);
+
+    expect(runBanPhotoFillSafely).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(runBanPhotoFillSafely).mock.calls[0][2]).toBe(false);
   });
 
   it('a failing Meetup sweep still runs the fill with no roster', async () => {
@@ -638,6 +648,7 @@ describe('runIdentityDigestOnce', () => {
 
     expect(runBanPhotoFillSafely).toHaveBeenCalledTimes(1);
     expect(vi.mocked(runBanPhotoFillSafely).mock.calls[0][1]).toBeUndefined();
+    expect(vi.mocked(runBanPhotoFillSafely).mock.calls[0][2]).toBe(true);
     expect(banFill.bans.listPhotoFillCandidates).toHaveBeenCalled();
   });
 

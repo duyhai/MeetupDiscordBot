@@ -151,7 +151,7 @@ describe('fillBanPhotos: sources', () => {
         [STANDARD_URL]: image('standard'),
       },
     });
-    const counts = await fillBanPhotos(deps, [rosterMember()]);
+    const counts = await fillBanPhotos(deps, [rosterMember()], true);
     expect(storedBytes(bans)).toEqual([expect.stringContaining('guild')]);
     expect(fetchBytes.mock.calls.map(([u]) => u)).toEqual([GUILD_URL]);
     expect(counts).toMatchObject({ filled: 1, fromDiscord: 1, fromMeetup: 0 });
@@ -163,7 +163,7 @@ describe('fillBanPhotos: sources', () => {
       guild: { [DISCORD_ID]: { userAvatarHash: 'uu', memberAvatarHash: null } },
       responses: { [USER_URL]: image('user') },
     });
-    await fillBanPhotos(deps, [rosterMember()]);
+    await fillBanPhotos(deps, [rosterMember()], true);
     expect(storedBytes(bans)).toEqual([expect.stringContaining('user')]);
   });
 
@@ -173,7 +173,7 @@ describe('fillBanPhotos: sources', () => {
       guild: {},
       responses: { [STANDARD_URL]: image('standard') },
     });
-    const counts = await fillBanPhotos(deps, [rosterMember()]);
+    const counts = await fillBanPhotos(deps, [rosterMember()], true);
     expect(fetchBytes.mock.calls.map(([u]) => u)).toEqual([STANDARD_URL]);
     expect(storedBytes(bans)).toEqual([expect.stringContaining('standard')]);
     expect(counts).toMatchObject({ fromDiscord: 0, fromMeetup: 1 });
@@ -185,7 +185,7 @@ describe('fillBanPhotos: sources', () => {
         responses: { [STANDARD_URL]: standard, [THUMB_URL]: image('thumb') },
       });
       // eslint-disable-next-line no-await-in-loop -- one case at a time
-      const counts = await fillBanPhotos(deps, [rosterMember()]);
+      const counts = await fillBanPhotos(deps, [rosterMember()], true);
       expect(fetchBytes.mock.calls.map(([u]) => u)).toEqual([
         STANDARD_URL,
         THUMB_URL,
@@ -202,7 +202,7 @@ describe('fillBanPhotos: sources', () => {
         stored: { [MEETUP_ID]: image('stored') },
       });
       // eslint-disable-next-line no-await-in-loop -- one case at a time
-      const counts = await fillBanPhotos(deps, [rosterMember()]);
+      const counts = await fillBanPhotos(deps, [rosterMember()], true);
       expect(fetchBytes.mock.calls.map(([u]) => u)).toEqual([STANDARD_URL]);
       expect(storedPhoto).not.toHaveBeenCalled();
       expect(bans.fillProfilePhoto).not.toHaveBeenCalled();
@@ -214,7 +214,7 @@ describe('fillBanPhotos: sources', () => {
     const { deps, fetchBytes } = fakeDeps({
       responses: { [HIGHRES_URL]: image('highres') },
     });
-    await fillBanPhotos(deps, [rosterMember()]);
+    await fillBanPhotos(deps, [rosterMember()], true);
     expect(fetchBytes.mock.calls.map(([u]) => u)).not.toContain(HIGHRES_URL);
   });
 
@@ -229,16 +229,22 @@ describe('fillBanPhotos: sources', () => {
         [lookalike]: image('lookalike'),
       },
     });
-    await fillBanPhotos(deps, [
-      rosterMember(MEETUP_ID, {
-        id: 'p',
-        standardUrl: elsewhere,
-        thumbUrl: plain,
-      }),
-    ]);
-    await fillBanPhotos(deps, [
-      rosterMember(MEETUP_ID, { id: 'p', thumbUrl: lookalike }),
-    ]);
+    await fillBanPhotos(
+      deps,
+      [
+        rosterMember(MEETUP_ID, {
+          id: 'p',
+          standardUrl: elsewhere,
+          thumbUrl: plain,
+        }),
+      ],
+      true,
+    );
+    await fillBanPhotos(
+      deps,
+      [rosterMember(MEETUP_ID, { id: 'p', thumbUrl: lookalike })],
+      true,
+    );
     expect(fetchBytes).not.toHaveBeenCalled();
     expect(bans.fillProfilePhoto).not.toHaveBeenCalled();
   });
@@ -249,18 +255,53 @@ describe('fillBanPhotos: sources', () => {
       guild: {},
       stored: { [MEETUP_ID]: image('stored') },
     });
-    const counts = await fillBanPhotos(deps, [rosterMember(OTHER_ID)]);
+    const counts = await fillBanPhotos(deps, [rosterMember(OTHER_ID)], true);
     expect(fetchBytes).not.toHaveBeenCalled();
     expect(storedPhoto).toHaveBeenCalledWith(MEETUP_ID, DISCORD_ID);
     expect(storedBytes(bans)).toEqual([expect.stringContaining('stored')]);
     expect(counts).toMatchObject({ filled: 1, fromStored: 1, deferred: 0 });
   });
 
+  it('defers a linked member missing from a guild cache the Discord sweep could not refresh', async () => {
+    const setup = {
+      links: linked.links,
+      guild: {},
+      stored: { [MEETUP_ID]: image('stored') },
+    };
+    const partial = fakeDeps(setup);
+    const counts = await fillBanPhotos(
+      partial.deps,
+      [rosterMember(OTHER_ID)],
+      false,
+    );
+    expect(partial.storedPhoto).not.toHaveBeenCalled();
+    expect(partial.bans.fillProfilePhoto).not.toHaveBeenCalled();
+    expect(counts).toMatchObject({ filled: 0, deferred: 1, fromStored: 0 });
+
+    const full = fakeDeps(setup);
+    const known = await fillBanPhotos(
+      full.deps,
+      [rosterMember(OTHER_ID)],
+      true,
+    );
+    expect(storedBytes(full.bans)).toEqual([expect.stringContaining('stored')]);
+    expect(known).toMatchObject({ filled: 1, fromStored: 1, deferred: 0 });
+  });
+
+  it('a partial guild cache does not hold back an unlinked member gone from the roster', async () => {
+    const { deps, bans } = fakeDeps({
+      stored: { [MEETUP_ID]: image('stored') },
+    });
+    const counts = await fillBanPhotos(deps, [], false);
+    expect(storedBytes(bans)).toEqual([expect.stringContaining('stored')]);
+    expect(counts).toMatchObject({ filled: 1, fromStored: 1 });
+  });
+
   it('defers instead of using the stored photo when the roster was not fetched', async () => {
     const { deps, bans, storedPhoto } = fakeDeps({
       stored: { [MEETUP_ID]: image('stored') },
     });
-    const counts = await fillBanPhotos(deps, undefined);
+    const counts = await fillBanPhotos(deps, undefined, true);
     expect(storedPhoto).not.toHaveBeenCalled();
     expect(bans.fillProfilePhoto).not.toHaveBeenCalled();
     expect(counts).toMatchObject({ filled: 0, deferred: 1, noSource: 0 });
@@ -279,7 +320,7 @@ describe('fillBanPhotos: sources', () => {
       });
       // Gone from the roster, still in the guild.
       // eslint-disable-next-line no-await-in-loop -- one case at a time
-      const counts = await fillBanPhotos(deps, []);
+      const counts = await fillBanPhotos(deps, [], true);
       expect(fetchBytes.mock.calls.map(([u]) => u)).toEqual([GUILD_URL]);
       expect(storedPhoto).not.toHaveBeenCalled();
       expect(bans.fillProfilePhoto).not.toHaveBeenCalled();
@@ -296,7 +337,7 @@ describe('fillBanPhotos: sources', () => {
         [STANDARD_URL]: image('standard'),
       },
     });
-    await fillBanPhotos(deps, [rosterMember()]);
+    await fillBanPhotos(deps, [rosterMember()], true);
     expect(fetchBytes.mock.calls.map(([u]) => u)).toEqual([
       GUILD_URL,
       USER_URL,
@@ -316,7 +357,7 @@ describe('fillBanPhotos: sources', () => {
       },
       stored: { [MEETUP_ID]: image('stored') },
     });
-    const counts = await fillBanPhotos(deps, [rosterMember()]);
+    const counts = await fillBanPhotos(deps, [rosterMember()], true);
     expect(storedPhoto).not.toHaveBeenCalled();
     expect(bans.fillProfilePhoto).not.toHaveBeenCalled();
     expect(counts).toMatchObject({ filled: 0, noSource: 1, deferred: 0 });
@@ -326,7 +367,7 @@ describe('fillBanPhotos: sources', () => {
     const { deps, bans } = fakeDeps({
       stored: { [MEETUP_ID]: NOT_AN_IMAGE },
     });
-    const counts = await fillBanPhotos(deps, []);
+    const counts = await fillBanPhotos(deps, [], true);
     expect(bans.fillProfilePhoto).not.toHaveBeenCalled();
     expect(counts).toMatchObject({ filled: 0, noSource: 1 });
   });
@@ -338,7 +379,7 @@ describe('fillBanPhotos: sources', () => {
     const { deps, bans } = fakeDeps({
       responses: { [STANDARD_URL]: tagged },
     });
-    await fillBanPhotos(deps, [rosterMember()]);
+    await fillBanPhotos(deps, [rosterMember()], true);
     const [[, stored]] = bans.fillProfilePhoto.mock.calls;
     expect(String(stored)).not.toContain('home address');
     expect(String(stored)).toContain('thumb');
@@ -353,7 +394,7 @@ describe('fillBanPhotos: limits and failures', () => {
       responses: { [GUILD_URL]: image('guild'), [THUMB_URL]: image('thumb') },
       fill: async () => false,
     });
-    const counts = await fillBanPhotos(deps, [rosterMember()]);
+    const counts = await fillBanPhotos(deps, [rosterMember()], true);
     expect(bans.fillProfilePhoto).toHaveBeenCalledTimes(1);
     expect(counts).toMatchObject({
       candidates: 1,
@@ -381,6 +422,7 @@ describe('fillBanPhotos: limits and failures', () => {
     const counts = await fillBanPhotos(
       deps,
       [rosterMember(), rosterMember(OTHER_ID)],
+      true,
       budget,
     );
     expect(timed).toHaveBeenCalledTimes(1);
@@ -392,13 +434,13 @@ describe('fillBanPhotos: limits and failures', () => {
     const { deps, bans } = fakeDeps({ candidates: [] });
     // 23:30 Pacific on the 22nd is already the 23rd in UTC.
     deps.now = () => Date.parse('2026-10-23T06:30:00Z');
-    await fillBanPhotos(deps, []);
+    await fillBanPhotos(deps, [], true);
     expect(bans.listPhotoFillCandidates).toHaveBeenCalledWith(50, '2026-10-23');
   });
 
   it('looks up links only for the candidates', async () => {
     const { deps, discordIdsByMeetupIds } = fakeDeps();
-    await fillBanPhotos(deps, [rosterMember(), rosterMember(OTHER_ID)]);
+    await fillBanPhotos(deps, [rosterMember(), rosterMember(OTHER_ID)], true);
     expect(discordIdsByMeetupIds).toHaveBeenCalledWith([MEETUP_ID]);
   });
 
@@ -416,7 +458,7 @@ describe('fillBanPhotos: limits and failures', () => {
       }
       return image('other');
     });
-    const counts = await fillBanPhotos(deps, []);
+    const counts = await fillBanPhotos(deps, [], true);
     expect(bans.fillProfilePhoto).toHaveBeenCalledTimes(1);
     expect(bans.fillProfilePhoto.mock.calls[0][0]).toBe(2);
     expect(counts).toMatchObject({ candidates: 2, filled: 1, failed: 1 });
@@ -429,7 +471,7 @@ describe('fillBanPhotos: limits and failures', () => {
     deps.discordIdsByMeetupIds = vi.fn(async () => {
       throw new Error('db down');
     });
-    await fillBanPhotos(deps, [rosterMember()]);
+    await fillBanPhotos(deps, [rosterMember()], true);
     expect(storedBytes(bans)).toEqual([expect.stringContaining('standard')]);
   });
 
@@ -440,7 +482,7 @@ describe('fillBanPhotos: limits and failures', () => {
     deps.discordIdsByMeetupIds = vi.fn(async () => {
       throw new Error('db down');
     });
-    const counts = await fillBanPhotos(deps, []);
+    const counts = await fillBanPhotos(deps, [], true);
     expect(storedPhoto).not.toHaveBeenCalled();
     expect(bans.fillProfilePhoto).not.toHaveBeenCalled();
     expect(counts).toMatchObject({ filled: 0, deferred: 1 });
@@ -458,7 +500,7 @@ describe('runBanPhotoFillSafely', () => {
     const { deps } = fakeDeps();
     deps.fetchBytes = vi.fn(() => new Promise<Buffer | null>(() => undefined));
     let settled = false;
-    const run = runBanPhotoFillSafely(deps, [rosterMember()]).then(() => {
+    const run = runBanPhotoFillSafely(deps, [rosterMember()], true).then(() => {
       settled = true;
     });
     await vi.advanceTimersByTimeAsync(BAN_FILL_DEADLINE_MS - 1);
@@ -473,7 +515,9 @@ describe('runBanPhotoFillSafely', () => {
     deps.bans = async () => {
       throw new Error(`connection to ${MEETUP_ID} refused`);
     };
-    await expect(runBanPhotoFillSafely(deps, [])).resolves.toBeUndefined();
+    await expect(
+      runBanPhotoFillSafely(deps, [], true),
+    ).resolves.toBeUndefined();
   });
 
   it('logs counts only', async () => {
@@ -496,14 +540,15 @@ describe('runBanPhotoFillSafely', () => {
       return undefined;
     });
     // The fourth is in the roster but its standard photo does not download.
-    await runBanPhotoFillSafely(deps, [
-      rosterMember(),
-      rosterMember(FOURTH_ID),
-    ]);
+    await runBanPhotoFillSafely(
+      deps,
+      [rosterMember(), rosterMember(FOURTH_ID)],
+      true,
+    );
     deps.bans = async () => {
       throw new Error(`member ${MEETUP_ID} at ${STANDARD_URL}`);
     };
-    await runBanPhotoFillSafely(deps, [rosterMember()]);
+    await runBanPhotoFillSafely(deps, [rosterMember()], true);
     const printed = log.mock.calls.flat().map(String).join('\n');
     expect(printed).toContain(
       'Ban photo fill: 1 of 4 filled (1 Discord, 0 Meetup, 0 stored), 1 without a usable photo, 1 deferred to tomorrow, 1 failed',

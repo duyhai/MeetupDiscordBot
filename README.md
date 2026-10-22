@@ -265,8 +265,12 @@ member's cards and refuses to record or link a suspension for them.
   ban keeps its photo, and a re-ban starts with it.
 - **Sweep fill.** At 18:00 UTC, with the identity digest, the bot fills a
   photo into active bans that have none: the linked Discord avatar, else the
-  Meetup photo, else the newest stored identity image. At most 50 bans per
-  run, a 90 s limit, and it never replaces a photo. It logs counts only.
+  Meetup photo, else the newest stored identity image. The stored image is
+  used only for a member gone from both Discord and the Meetup roster. Any
+  failed download, missing roster, failed link lookup or partial guild cache
+  (the Discord sweep failed) defers the ban to the next day, so a bad day
+  never locks in a smaller photo. At most 50 bans per run, a 90 s limit, and
+  it never replaces a photo. It logs counts only.
   Sweep photos are kept small only by asking Discord for `size=256` and
   Meetup for `standardUrl` (then `thumbUrl`) and by the 150 KB cap; there is
   no 512 px check on them, unlike uploads.

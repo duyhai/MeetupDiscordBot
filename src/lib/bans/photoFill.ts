@@ -128,7 +128,7 @@ async function findPhoto(
   meetupId: string,
   discordId: string | undefined,
   rosterMember: MeetupGroupMember | undefined,
-  known: { links: boolean; roster: boolean },
+  known: { links: boolean; roster: boolean; discord: boolean },
 ): Promise<Found> {
   const fetchFrom = async (
     urls: (string | null | undefined)[],
@@ -205,11 +205,13 @@ async function findPhoto(
 
   // 3. The newest image the identity monitor stored, only for a member gone
   // from both live sources. Still present (with no usable photo there): no
-  // source. Not known to be gone (roster or links unread today): tomorrow.
+  // source. Not known to be gone (roster or links unread today, or a linked
+  // member missing from a guild cache the Discord sweep could not refresh):
+  // tomorrow.
   if (member || rosterMember) {
     return undefined;
   }
-  if (!known.links || !known.roster) {
+  if (!known.links || !known.roster || (discordId && !known.discord)) {
     return 'deferred';
   }
   const stored = acceptable(await deps.storedPhoto(meetupId, discordId));
@@ -227,6 +229,8 @@ async function findPhoto(
 export async function fillBanPhotos(
   deps: BanPhotoFillDeps,
   roster: readonly MeetupGroupMember[] | undefined,
+  /** False when today's Discord sweep failed: the guild cache may be partial. */
+  discordKnown: boolean,
   budget: HealBudget = new HealBudget(BAN_FILL_BUDGET_MS, () => deps.now()),
 ): Promise<BanPhotoFillCounts> {
   const counts: BanPhotoFillCounts = {
@@ -284,7 +288,11 @@ export async function fillBanPhotos(
           candidate.memberId,
           links.get(candidate.memberId),
           rosterById.get(candidate.memberId),
-          { links: linksKnown, roster: roster !== undefined },
+          {
+            links: linksKnown,
+            roster: roster !== undefined,
+            discord: discordKnown,
+          },
         ),
       );
       if (found === 'deferred') {
@@ -326,13 +334,14 @@ class DeadlineBudget extends HealBudget {
 export async function runBanPhotoFillSafely(
   deps: BanPhotoFillDeps,
   roster: readonly MeetupGroupMember[] | undefined,
+  discordKnown: boolean,
 ): Promise<void> {
   const budget = new DeadlineBudget(BAN_FILL_BUDGET_MS, () => deps.now());
   let timer: NodeJS.Timeout | undefined;
   try {
     // Subscribed by the race, so a fill that fails after the deadline is
     // still handled (never an unhandled rejection).
-    const fill = fillBanPhotos(deps, roster, budget);
+    const fill = fillBanPhotos(deps, roster, discordKnown, budget);
     const deadline = new Promise<'deadline'>((resolve) => {
       timer = setTimeout(() => resolve('deadline'), BAN_FILL_DEADLINE_MS);
       timer.unref();
