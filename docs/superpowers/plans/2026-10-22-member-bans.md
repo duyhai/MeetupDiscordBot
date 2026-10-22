@@ -8,7 +8,7 @@
 
 **Tech Stack:** TypeScript (Node ESM, `.js` import suffixes), Express 5, node-pg on Postgres 16, discord.js embeds, csv-parse, vitest (unit + `vitest.integration.config.ts`), supertest-style loopback harness. No new dependency.
 
-**Spec:** `docs/superpowers/specs/2026-10-22-member-bans-design.md` (approved by Hai 2026-10-22: "build the revised bans design, keeping photos on lifted bans"). Where this plan and the spec differ, the plan says so and why (Decisions D1–D12).
+**Spec:** `docs/superpowers/specs/2026-10-22-member-bans-design.md` (approved by Hai 2026-10-22: "build the revised bans design, keeping photos on lifted bans"). Where this plan and the spec differ, the plan says so and why (Decisions D1–D14, plus the Post-review rulings below).
 
 ## Global Constraints
 
@@ -67,6 +67,18 @@
   - PNG (sweep sources only): signature, then every chunk walked (32-bit big-endian length ≤ 2^31−1, `p + 12 + len ≤ length`); IHDR first with length 13 (width at 16, height at 20, zero refused); IEND last with nothing after it; whole chunks kept only from IHDR, PLTE, tRNS, IDAT, IEND, gAMA, cHRM, sRGB, sBIT, pHYs, so text, EXIF, time, ICC and APNG chunks go and an animated PNG becomes its default image. `readImageSize` reads PNG too.
   - Anything malformed is undefined, and `readImageSize` must give the same size afterwards. `checkBanPhoto` (Task 4) still accepts only WebP and JPEG uploads; it and the sweep fill (Task 8) store only stripped bytes, with the caps checked on them.
 - **D13 Refused Leadership POSTs** answer `not-leadership` / `leadership-unavailable` and post nothing (the workspace's refusal embed is not copied; YAGNI). Logged by class only.
+
+## Post-review rulings (2026-10-22)
+
+Reviews changed the plan after it was written. Where a task below says otherwise, these win.
+
+- **D13 and D14 exist.** D13 (refused Leadership POSTs post nothing) and D14 (metadata strip) were added during review, so the decisions run D1–D14.
+- **Fill rotation.** `listPhotoFillCandidates(limit, day)` takes the run's UTC day (`YYYY-MM-DD`) and orders by `hashtext(id || ':' || day), id`, not `ORDER BY id`. The order is fixed for a day and changes daily, so bans with no usable source cannot keep the rest from ever being reached (Task 8 review).
+- **`ImageSize` includes PNG.** `type` is `'image/webp' | 'image/jpeg' | 'image/png'`; `readImageSize` reads PNG for the sweep's sources. Uploads still accept only WebP and JPEG.
+- **Task 7 fails closed.** The workspace reads ban status through `loadOptional`. When it is unavailable, the month page shows a note, hides record and link, and skips the RSVP lookup; the confirm page answers 503. A failed ban read never fails the month page and never offers record or link.
+- **`table.bans` stacks below 1024 px**, not only on phones.
+- **Fill never locks in a smaller photo (final review).** The stored identity thumbnail (source 3) is used only for a member known to be gone from both live sources: no linked member in the guild cache, and no entry in a roster that was actually fetched. Inside a live source only an over-cap file falls back to the next size (`standardUrl` to `thumbUrl`, server avatar to account avatar); any other failure, a missing roster (`roster === undefined`) or a failed link lookup counts the ban as `deferred` for tomorrow. `fetchBytesCappedOutcome` tells over-cap (`'too-large'`) from failed (null).
+- **Embeds carry no staff-typed text (final review).** Ban embeds drop Notes and Reason: they carry the kind, the member id, the date, the actor's mention and the Banned tab link. This supersedes the Task 4 embed field list.
 
 ## Questions for Hai (answered 2026-10-22: Q1, Q2 and Q4 yes as defaulted; Q3 ships as defaulted)
 
