@@ -381,7 +381,9 @@ describe('liftBan', () => {
       { title: string; fields: { name: string; value: string }[] },
     ];
     expect(entry.title).toBe('Ban lifted');
-    expect(entry.fields.map((f) => f.name)).toContain('Reason');
+    // Staff-typed text can name the member: the reason stays on the tab.
+    expect(entry.fields.map((f) => f.name)).toEqual(['Member', 'Banned']);
+    expect(JSON.stringify(entry)).not.toContain('appeal');
   });
 
   it('a blank reason is reason-required', async () => {
@@ -608,6 +610,29 @@ describe('banEntry', () => {
         value: '424242',
       });
       expect(entry.description, kind).toContain(BANNED_TAB_URL);
+    }
+  });
+
+  it('never posts staff-typed notes or lift reasons, for every kind', () => {
+    const typed = ban({
+      notes: 'Notes say Jane Roe did it',
+      liftReason: 'Reason says Jane Roe appealed',
+      liftedAt: NOW,
+      liftedBy: LEAD,
+    });
+    for (const kind of [
+      'recorded',
+      'lifted',
+      'photo-uploaded',
+      'photo-replaced',
+    ] as const) {
+      const entry = banEntry(kind, typed, LEAD);
+      expect(JSON.stringify(entry), kind).not.toContain('Jane Roe');
+      expect(
+        entry.fields?.map((f) => f.name),
+        kind,
+      ).toEqual(['Member', 'Banned']);
+      expect(entry.description, kind).toContain(`<@${LEAD}>`);
     }
   });
 

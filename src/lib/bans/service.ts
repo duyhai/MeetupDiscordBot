@@ -2,14 +2,12 @@ import { Logger } from 'tslog';
 
 import { PUBLIC_APP_ORIGIN } from '../../constants.js';
 import type { LogEntry } from '../helpers/discordLogger.js';
-import { escapeDiscordText } from '../helpers/identity/names.js';
 import { readImageSize, stripImageMetadata } from '../helpers/imageBytes.js';
-import { neutralizeMentions } from '../helpers/neutralizeMentions.js';
 import { parseUtcDateStrict } from '../helpers/suspensionCsv.js';
 import { pacificToday } from '../helpers/suspensionList.js';
 import { DASHBOARD_PATHS, dashboardPath } from '../reports/dashboardPaths.js';
 import type { PostgresBanRepository } from '../repositories/postgresBanRepository.js';
-import { fitFieldValue, postWithoutWaiting } from '../workspace/service.js';
+import { postWithoutWaiting } from '../workspace/service.js';
 import { BanCsvError, parseBanCsv } from './banCsv.js';
 import {
   BAN_LIFT_REASON_MAX,
@@ -78,8 +76,6 @@ const FIRST_BAN_DAY = '2013-03-01';
 const MAX_SERIAL = 2 ** 31 - 1;
 /** Base64url, no padding: 153600 bytes are at most 204800 characters (D3). */
 const PHOTO_FIELD = /^[A-Za-z0-9_-]{1,204800}$/;
-/** Code points of notes or a reason in an embed, before escaping. */
-const TEXT_LOG_MAX = 900;
 
 const codePoints = (text: string): number => [...text].length;
 
@@ -363,11 +359,6 @@ export function checkBanPhoto(bytes: Buffer):
   return { ok: true, type: declared, bytes: stripped };
 }
 
-/** Member-supplied text for an embed: markdown escaped, then every @, <# and </ defused. */
-function embedText(text: string, maxLength?: number): string {
-  return neutralizeMentions(escapeDiscordText(text, maxLength));
-}
-
 const ENTRY_TITLES = {
   recorded: 'Ban recorded',
   lifted: 'Ban lifted',
@@ -398,22 +389,12 @@ export function banEntry(
   const memberId = MEMBER_ID.test(ban.memberId) ? ban.memberId : 'unknown id';
   const fields: NonNullable<LogEntry['fields']> = [
     // The id only, never the name: nothing from the tracker goes to Discord
-    // (controller ruling 2026-10-22). Staff follow the link for the name.
+    // (controller ruling 2026-10-22). Notes and lift reasons stay off too:
+    // staff-typed text often names the member (final review). Staff follow
+    // the link for the rest.
     { name: 'Member', value: memberId },
     { name: 'Banned', value: ban.bannedOn ?? 'Date unknown' },
   ];
-  if (kind === 'recorded' && ban.notes) {
-    fields.push({
-      name: 'Notes',
-      value: fitFieldValue(embedText(ban.notes, TEXT_LOG_MAX)),
-    });
-  }
-  if (kind === 'lifted' && ban.liftReason) {
-    fields.push({
-      name: 'Reason',
-      value: fitFieldValue(embedText(ban.liftReason, TEXT_LOG_MAX)),
-    });
-  }
   return {
     title: ENTRY_TITLES[kind],
     description: `${actorMention(actor)} ${ENTRY_VERBS[kind]}\n${BANNED_TAB_URL}`,

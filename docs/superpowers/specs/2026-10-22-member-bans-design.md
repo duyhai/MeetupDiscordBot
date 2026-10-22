@@ -137,7 +137,7 @@ A banned member's card shows a coral "Banned" badge and offers no suspension act
 
 ### Audit
 
-Every record, import, upload and lift posts one moderation-log embed with no pings and no photo. A ban embed names the member by id only (`Member: 424242`), never by name, so nothing from the tracker reaches Discord; staff follow the Banned tab link for the name (controller ruling 2026-10-22). A sweep fill posts nothing; it is logged as a count only.
+Every record, import, upload and lift posts one moderation-log embed with no pings and no photo. A ban embed carries only its kind (the title), the member id (`Member: 424242`), the ban date or "Date unknown", the actor's mention and the Banned tab link. It never carries the name, the notes or the lift reason: nothing from the tracker reaches Discord, and staff-typed text often names the member. Staff follow the link for the rest (controller rulings 2026-10-22). A sweep fill posts nothing; it is logged as a count only.
 
 ## Importing the tracker's 15 bans
 
