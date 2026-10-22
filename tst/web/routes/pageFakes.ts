@@ -1,6 +1,7 @@
 import crypto from 'crypto';
 import { vi } from 'vitest';
 
+import { BanRow, BanState } from '../../../src/lib/bans/types.js';
 import { OAuthStateRecord } from '../../../src/lib/client/oauth/state.js';
 import {
   Period,
@@ -38,6 +39,7 @@ import {
 import { SuspensionRecord } from '../../../src/lib/repositories/types.js';
 import { UpcomingEntry } from '../../../src/lib/workspace/upcoming.js';
 import {
+  BanPageReader,
   DashboardPageDeps,
   IdentityPageReader,
   LinkProgressPageReader,
@@ -432,6 +434,69 @@ export const WEBP_BYTES = Buffer.concat([
 
 export const DISCORD_SUBJECT = '123456789012345678';
 
+let banIds = 0;
+
+/** One active ban: dated, recorded by DISCORD_SUBJECT, no photo, unless overridden. */
+export function banRow(overrides: Partial<BanRow> = {}): BanRow {
+  banIds += 1;
+  return {
+    id: banIds,
+    memberId: String(9000 + banIds),
+    memberName: `Banned ${banIds}`,
+    bannedOn: '2026-09-15',
+    notes: '',
+    recordedBy: DISCORD_SUBJECT,
+    createdAt: new Date('2026-09-15T17:00:00Z'),
+    hasPhoto: false,
+    photoSource: null,
+    photoUpdatedAt: null,
+    photoUpdatedBy: null,
+    liftedAt: null,
+    liftedBy: null,
+    liftReason: null,
+    ...overrides,
+  };
+}
+
+/**
+ * An in-memory BanPageReader: rows per state, sliced by offset/limit like
+ * the repository; `photos` maps a ban id to its bytes.
+ */
+export function fakeBans(
+  rows: Partial<Record<BanState, BanRow[]>> = {},
+  photos: Record<number, Buffer> = {},
+) {
+  const tab = (state: BanState) => rows[state] ?? [];
+  return {
+    listPage: vi.fn(
+      async (options: {
+        state: BanState;
+        offset: number;
+        limit: number;
+      }): Promise<BanRow[]> =>
+        tab(options.state).slice(
+          options.offset,
+          options.offset + Math.min(50, options.limit),
+        ),
+    ),
+    countByState: vi.fn(async (): Promise<Record<BanState, number>> => ({
+      active: tab('active').length,
+      lifted: tab('lifted').length,
+    })),
+    getPhoto: vi.fn(
+      async (id: number): Promise<Buffer | undefined> => photos[id],
+    ),
+    activeMemberIds: vi.fn(
+      async (memberIds: string[]): Promise<Set<string>> =>
+        new Set(
+          tab('active')
+            .map((r) => r.memberId)
+            .filter((id) => memberIds.includes(id)),
+        ),
+    ),
+  } satisfies BanPageReader;
+}
+
 let changeIds = 0;
 
 /** One identity change list row: a Discord nickname change unless overridden. */
@@ -724,6 +789,12 @@ export function fakePageDeps(
     // The access matrix asks for change 1's old thumb: a 1x1 PNG.
     identity: async () =>
       fakeIdentity([identityChange({ id: '1' })], { '1:old': PNG_1X1 }),
+    // The access matrix asks for ban 1's photo: WebP bytes.
+    bans: async () =>
+      fakeBans(
+        { active: [banRow({ id: 1, hasPhoto: true })] },
+        { 1: WEBP_BYTES },
+      ),
     linkProgress: async () => fakeLinkProgress(),
     memberLinks: async () => fakeMemberLinks(),
     workspace: async () => fakeWorkspace(),

@@ -1,4 +1,4 @@
-import express, { RequestHandler } from 'express';
+import express, { Request, RequestHandler, Response } from 'express';
 
 import { pacificToday, utcDateOnly } from '../../lib/helpers/suspensionList.js';
 import {
@@ -9,6 +9,7 @@ import {
   SuspensionPageRow,
   SuspensionState,
 } from '../../lib/repositories/postgresSuspensionRepository.js';
+import { dashboardLocals } from '../dashboardRouter.js';
 import { SafeHtml, html, memberText, pageLink } from '../html.js';
 import { discordUserLink, memberHistoryLink, memberLink } from '../links.js';
 import {
@@ -18,6 +19,7 @@ import {
   unavailable,
 } from '../pageKit.js';
 import { PAGE_SIZE, pageNav, parsePage } from '../paging.js';
+import { bannedTabBody, isBanRow, parseBanShow } from './bannedTab.js';
 import type { DashboardPageDeps } from './dashboardPages.js';
 
 const WHAT = 'Suspension records';
@@ -29,8 +31,17 @@ const TAB_LABELS: Record<SuspensionState, string> = {
 };
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
 
-/** `?state=` when it is one of the three tabs (a plain string), else active. */
-function parseState(value: unknown): SuspensionState {
+/** A Suspensions page tab: the three record tabs, or the Banned tab. */
+type SuspensionTab = SuspensionState | 'banned';
+
+/**
+ * `?state=`: 'banned' is its own branch (the Banned tab); otherwise one of
+ * the three record tabs (a plain string), else active.
+ */
+function parseState(value: unknown): SuspensionTab {
+  if (value === 'banned') {
+    return 'banned';
+  }
   return STATES.find((s) => s === value) ?? 'active';
 }
 
@@ -119,16 +130,23 @@ function recordRow(row: SuspensionPageRow, voided: boolean): SafeHtml {
 }
 
 function tabs(
-  current: SuspensionState,
+  current: SuspensionTab,
   counts: Record<SuspensionState, number>,
+  activeBans: number,
 ): SafeHtml {
   const path = dashboardPath(DASHBOARD_PATHS.suspensions);
+  const entries: { tab: SuspensionTab; label: string }[] = [
+    ...STATES.map((state) => ({
+      tab: state,
+      label: `${TAB_LABELS[state]} (${Number(counts[state]) || 0})`,
+    })),
+    { tab: 'banned', label: `Banned (${Number(activeBans) || 0})` },
+  ];
   return html`<nav class="pager choices" aria-label="Suspension records">
-    ${STATES.map((state) => {
-      const label = `${TAB_LABELS[state]} (${Number(counts[state]) || 0})`;
-      return state === current
+    ${entries.map(({ tab, label }) => {
+      return tab === current
         ? html`<strong>${label}</strong>`
-        : html`<a href="${pageLink(path, { state })}">${label}</a>`;
+        : html`<a href="${pageLink(path, { state: tab })}">${label}</a>`;
     })}
   </nav>`;
 }
@@ -175,18 +193,83 @@ function recordsTable(
     ${pager}`;
 }
 
+type SuspensionRouteDeps = Pick<
+  DashboardPageDeps,
+  'now' | 'suspensions' | 'bans'
+>;
+
+/**
+ * The Banned tab: the suspension list is not read, only its counts for the
+ * other tab labels.
+ */
+async function bannedTab(
+  req: Request,
+  res: Response,
+  deps: SuspensionRouteDeps,
+  page: number,
+  today: string,
+): Promise<void> {
+  const show = parseBanShow(req.query.show);
+  const loaded = await load(res, 'Bans', async () => {
+    const [reader, bans] = await Promise.all([deps.suspensions(), deps.bans()]);
+    const [counts, banCounts, rows] = await Promise.all([
+      reader.countByState(today),
+      bans.countByState(),
+      bans.listPage({
+        state: show,
+        offset: (page - 1) * PAGE_SIZE,
+        limit: PAGE_SIZE,
+      }),
+    ]);
+    return { counts, banCounts, rows };
+  });
+  if (!loaded.ok) {
+    return;
+  }
+  const { counts, banCounts, rows } = loaded.value;
+  if (!Array.isArray(rows) || !rows.every((row) => isBanRow(row, show))) {
+    unavailable(res, 'Bans');
+    return;
+  }
+  dashboardPage(res, {
+    title: 'Suspension records',
+    body: html`<div class="card">
+      <h1>Suspension records</h1>
+      ${tabs('banned', counts, banCounts.active)}
+      ${bannedTabBody({
+        show,
+        rows,
+        counts: banCounts,
+        page,
+        notice: '',
+        // Task 5 decides who sees the forms.
+        leader: false,
+        csrf: dashboardLocals(res).session.csrfToken,
+      })}
+    </div>`,
+  });
+}
+
 export function registerSuspensionRoutes(
   router: express.Router,
-  deps: Pick<DashboardPageDeps, 'now' | 'suspensions'>,
+  deps: SuspensionRouteDeps,
 ): void {
   router.get(DASHBOARD_PATHS.suspensions, (async (req, res) => {
     const state = parseState(req.query.state);
     const page = parsePage(req.query.page);
     const today = pacificToday(deps.now());
+    if (state === 'banned') {
+      await bannedTab(req, res, deps, page, today);
+      return;
+    }
     const loaded = await load(res, WHAT, async () => {
-      const reader = await deps.suspensions();
-      const [counts, rows] = await Promise.all([
+      const [reader, bans] = await Promise.all([
+        deps.suspensions(),
+        deps.bans(),
+      ]);
+      const [counts, banCounts, rows] = await Promise.all([
         reader.countByState(today),
+        bans.countByState(),
         reader.listPage({
           state,
           today,
@@ -194,12 +277,12 @@ export function registerSuspensionRoutes(
           limit: PAGE_SIZE,
         }),
       ]);
-      return { counts, rows };
+      return { counts, banCounts, rows };
     });
     if (!loaded.ok) {
       return;
     }
-    const { counts, rows } = loaded.value;
+    const { counts, banCounts, rows } = loaded.value;
     if (!Array.isArray(rows) || !rows.every((row) => isPageRow(row, state))) {
       unavailable(res, WHAT);
       return;
@@ -208,7 +291,7 @@ export function registerSuspensionRoutes(
       title: 'Suspension records',
       body: html`<div class="card">
         <h1>Suspension records</h1>
-        ${tabs(state, counts)}
+        ${tabs(state, counts, banCounts.active)}
         ${
           state === 'active'
             ? html`<p class="muted">

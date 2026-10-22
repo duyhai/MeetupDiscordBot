@@ -19,6 +19,7 @@ import { PostgresIdentityRepository } from '../lib/repositories/postgresIdentity
 import { PostgresLinkProgressRepository } from '../lib/repositories/postgresLinkProgressRepository.js';
 import { PostgresMemberRepository } from '../lib/repositories/postgresMemberRepository.js';
 import { PostgresNoShowWorkspaceRepository } from '../lib/repositories/postgresNoShowWorkspaceRepository.js';
+import { PostgresBanRepository } from '../lib/repositories/postgresBanRepository.js';
 import { PostgresSuspensionRepository } from '../lib/repositories/postgresSuspensionRepository.js';
 import {
   performWorkspaceAction,
@@ -199,6 +200,7 @@ export function dashboardPageDeps(): DashboardPageDeps {
       );
     },
     suspensions: () => PostgresSuspensionRepository.instance(),
+    bans: () => PostgresBanRepository.instance(),
     identity: () => PostgresIdentityRepository.instance(),
     linkProgress: () => PostgresLinkProgressRepository.instance(),
     memberLinks: () => PostgresMemberRepository.instance(),

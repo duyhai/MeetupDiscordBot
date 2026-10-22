@@ -3,6 +3,7 @@ import express from 'express';
 import { LogEntry } from '../../lib/helpers/discordLogger.js';
 import { RebuildResult } from '../../lib/reports/buildJob.js';
 import { Period } from '../../lib/reports/period.js';
+import { PostgresBanRepository } from '../../lib/repositories/postgresBanRepository.js';
 import { PostgresIdentityRepository } from '../../lib/repositories/postgresIdentityRepository.js';
 import { PostgresLinkProgressRepository } from '../../lib/repositories/postgresLinkProgressRepository.js';
 import { PostgresMemberRepository } from '../../lib/repositories/postgresMemberRepository.js';
@@ -21,6 +22,7 @@ import {
   OrganizerLoginDeps,
   registerOrganizerLoginRoutes,
 } from './organizerLogin.js';
+import { registerBanRoutes } from './bans.js';
 import { registerHallOfFameRoutes } from './hallOfFame.js';
 import { registerIdentityRoutes } from './identity.js';
 import { registerLinkProgressRoutes } from './linkProgress.js';
@@ -50,6 +52,15 @@ export type SnapshotPageReader = Pick<
 export type SuspensionPageReader = Pick<
   PostgresSuspensionRepository,
   'listPage' | 'countByState' | 'countByMonth' | 'listByMemberIds' | 'listByIds'
+>;
+
+/**
+ * The ban reads the Banned tab, its photo route and the workspace use:
+ * never record, import, lift or store a photo.
+ */
+export type BanPageReader = Pick<
+  PostgresBanRepository,
+  'listPage' | 'countByState' | 'getPhoto' | 'activeMemberIds'
 >;
 
 /** The link progress read (newest first, at most 1000 days): never upsert. */
@@ -120,6 +131,8 @@ export interface DashboardPageDeps {
   rebuild: (period: Period, requestedBy: string) => Promise<PageRebuildResult>;
   /** The suspension records store. */
   suspensions: () => Promise<SuspensionPageReader>;
+  /** The member ban store (dashboard pool). */
+  bans: () => Promise<BanPageReader>;
   /** The identity change store (pool of 2, shared with the sweeps). */
   identity: () => Promise<IdentityPageReader>;
   /** The daily link progress counts. */
@@ -150,6 +163,7 @@ export function registerDashboardPages(
   registerWorkspaceRoutes(router, deps);
   registerWorkspaceActionRoutes(router, deps);
   registerSuspensionRoutes(router, deps);
+  registerBanRoutes(router, deps);
   registerIdentityRoutes(router, deps);
   registerLinkProgressRoutes(router, deps);
   registerTrendsRoutes(router, deps);
