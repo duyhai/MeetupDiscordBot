@@ -15,7 +15,7 @@ Staff keep banned members in a "Banned Members" tab of the no-show tracker workb
 - **Undated bans.** Import them as "date unknown". Stacey can add a date in the review file.
 - **Effect.** Record and show only. Discord and Meetup access stay manual.
 - **Photo.** One photo per ban, compressed. It lives in the ban table itself, the way identity thumbnails live in their rows.
-- **Dashboard only.** Bans are managed in the dashboard. There are no Discord commands for bans.
+- **Dashboard only.** Bans are managed in the dashboard. There are no Discord commands for managing bans; `/meetup_record_suspension` refuses rows for a banned member (see below).
 - **Sweep fills, never overwrites.** The daily identity sweep fills in a missing photo from the member's profile. It never replaces a photo already on record, so a banned member cannot swap our photo for an unrecognisable one.
 
 ## Goals
@@ -134,6 +134,10 @@ The Suspensions page gets a Banned tab, Two-Tone styled, with stacked cards on p
 ### Workspace
 
 A banned member's card shows a coral "Banned" badge and offers no suspension actions. The action POST refuses them too, with the fixed message "This member is banned."
+
+### `/meetup_record_suspension` (Hai, 2026-10-22, "yes to both" via the lead)
+
+Bans affect the workspace and this command, nothing else. The command refuses every CSV row whose member has an active ban; a lifted ban does not block. The rest of the file is still recorded, as with its other per-row outcomes. The reply's count line gains "N refused: member is banned", and the attachment lists each refused row as "member <id> is banned [row N]": ids only, never the name from the file. The import takes each member's lock (`MEMBER_LOCK_CLASS`, `hashtext('suspension:' || id)`, distinct keys in ascending order), the same lock the workspace and the ban repository take, and reads active bans after it, so a ban recorded meanwhile is seen. A database where `member_bans` does not exist has no bans.
 
 ### Audit
 

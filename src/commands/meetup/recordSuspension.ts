@@ -87,7 +87,9 @@ export class MeetupRecordSuspensionCommands {
             outcome.duplicates.length
           } already on file, ${outcome.notInGroup.length} not a current member, ${
             outcome.durationMismatches.length
-          } duration(s) to check)`,
+          } duration(s) to check, ${
+            outcome.banned.length
+          } refused: member is banned)`,
         );
         const summary = formatRecordSummary(outcome);
         keepReplyVisible(interaction);

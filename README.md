@@ -255,7 +255,10 @@ They are records only: the bot never removes anyone from Discord or Meetup;
 staff do that by hand. Moderators and the 1.5 Leadership Team see the tab;
 only the 1.5 Leadership Team can add, import, lift or upload a photo, checked
 live with Discord on every action. The no-show workspace marks a banned
-member's cards and refuses to record or link a suspension for them.
+member's cards and refuses to record or link a suspension for them, and
+`/meetup_record_suspension` refuses a CSV row for a member with an active
+ban (a lifted ban does not block), lists it as "member <id> is banned" and
+records the rest of the file.
 
 - **Table.** `member_bans` is created on first use under the dashboard schema
   lock. No migration step is needed on deploy.

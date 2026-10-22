@@ -3,10 +3,12 @@ import { Logger } from 'tslog';
 
 import {
   DASHBOARD_LOCK_CLASS,
+  MEMBER_LOCK_CLASS,
   DashboardTransactionOptions,
   inDashboardTransaction,
 } from './dashboardPool.js';
 import {
+  InsertManyResult,
   SuspensionInsert,
   SuspensionRecord,
   SuspensionRepository,
@@ -109,6 +111,24 @@ export const VOID_SQL = `UPDATE suspension_records
 
 export const COUNT_BEFORE_SQL = `SELECT COUNT(*) AS count FROM suspension_records
        WHERE member_id = $1 AND suspended_at < $2 AND voided_at IS NULL`;
+
+/**
+ * The member lock keys of a batch, distinct and ascending: the key the
+ * workspace's record/link and the ban repository take (D9), so the three
+ * writers serialise per member and two batches never deadlock.
+ */
+export const MEMBER_LOCK_KEYS_SQL = `SELECT DISTINCT hashtext('suspension:' || m) AS k
+  FROM unnest($1::text[]) m ORDER BY k`;
+
+/**
+ * Whether member_bans exists where an unqualified name resolves: a database
+ * whose dashboard never ran has no bans, and the command must still work.
+ */
+export const BANS_TABLE_PRESENT_SQL = `SELECT to_regclass('member_bans') IS NOT NULL AS present`;
+
+/** The batch's members with an active (unlifted) ban; a lifted ban does not block. */
+export const ACTIVE_BANNED_SQL = `SELECT DISTINCT member_id FROM member_bans
+  WHERE lifted_at IS NULL AND member_id = ANY($1::text[]) ORDER BY member_id`;
 
 /** A pool or a checked-out client: the SQL below runs the same on either. */
 export type Queryable = Pick<pg.PoolClient, 'query'>;
@@ -343,12 +363,44 @@ export class PostgresSuspensionRepository implements SuspensionRepository {
     return insertSuspensionInTx(this.pool, record);
   }
 
-  async insertMany(records: SuspensionInsert[]): Promise<SuspensionRecord[]> {
+  /**
+   * Takes every member's lock (sorted keys), then reads active bans, so a
+   * ban committed while this waited is seen; a banned member's rows are
+   * refused and the rest of the batch is inserted (Hai, 2026-10-22).
+   */
+  async insertMany(records: SuspensionInsert[]): Promise<InsertManyResult> {
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
+      const memberIds = [...new Set(records.map((r) => r.memberId))];
+      const keys = await client.query<{ k: number }>(MEMBER_LOCK_KEYS_SQL, [
+        memberIds,
+      ]);
+      for (const { k } of keys.rows) {
+        // Sequential on one client, in key order.
+        // eslint-disable-next-line no-await-in-loop
+        await client.query('SELECT pg_advisory_xact_lock($1, $2)', [
+          MEMBER_LOCK_CLASS,
+          k,
+        ]);
+      }
+      const present = await client.query<{ present: boolean }>(
+        BANS_TABLE_PRESENT_SQL,
+      );
+      const banned =
+        present.rows[0]?.present === true
+          ? (
+              await client.query<{ member_id: string }>(ACTIVE_BANNED_SQL, [
+                memberIds,
+              ])
+            ).rows.map((r) => r.member_id)
+          : [];
+      const refused = new Set(banned);
       const inserted: SuspensionRecord[] = [];
       for (const record of records) {
+        if (refused.has(record.memberId)) {
+          continue;
+        }
         // eslint-disable-next-line no-await-in-loop
         const row = await insertSuspensionInTx(client, record);
         if (row) {
@@ -356,7 +408,7 @@ export class PostgresSuspensionRepository implements SuspensionRepository {
         }
       }
       await client.query('COMMIT');
-      return inserted;
+      return { inserted, banned };
     } catch (error) {
       await client.query('ROLLBACK');
       throw error;

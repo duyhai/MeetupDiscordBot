@@ -136,8 +136,14 @@ if (!POSTGRES_AVAILABLE) {
       expect(rows[0].durationDays).toBe(60);
     });
 
+    it('insertMany reports no ban where member_bans does not exist (a database the dashboard never ran on)', async () => {
+      const { inserted, banned } = await repo.insertMany([record]);
+      expect(inserted).toHaveLength(1);
+      expect(banned).toEqual([]);
+    });
+
     it('insertMany inserts all rows atomically', async () => {
-      const rows = await repo.insertMany([
+      const { inserted: rows } = await repo.insertMany([
         record,
         { ...record, memberId: 'm2', memberName: 'Bob' },
       ]);
@@ -147,7 +153,7 @@ if (!POSTGRES_AVAILABLE) {
 
     it('insertMany skips exact duplicates and returns only the inserted rows', async () => {
       await repo.insert(record);
-      const rows = await repo.insertMany([
+      const { inserted: rows } = await repo.insertMany([
         record, // exact duplicate of the pre-existing row: skipped
         { ...record, memberId: 'm2', memberName: 'Bob' },
         { ...record, memberId: 'm2', memberName: 'Bob' }, // duplicate within the batch
@@ -302,7 +308,9 @@ if (!POSTGRES_AVAILABLE) {
         const corrected = await repo.insert({ ...record, durationDays: 60 });
         expect(corrected).toBeDefined();
         expect(corrected?.id).not.toBe(inserted.id);
-        const [again] = await repo.insertMany([{ ...record, memberId: 'm1' }]);
+        const {
+          inserted: [again],
+        } = await repo.insertMany([{ ...record, memberId: 'm1' }]);
         // The corrected row is live again, so the pair is a duplicate once more.
         expect(again).toBeUndefined();
         expect(await repo.listByMemberId('m1')).toEqual([
@@ -313,7 +321,9 @@ if (!POSTGRES_AVAILABLE) {
       it('insertMany also records over a voided row', async () => {
         const inserted = await repo.insert(record);
         await repo.void(inserted.id, 'mod-1', 'wrong duration');
-        const rows = await repo.insertMany([{ ...record, durationDays: 60 }]);
+        const { inserted: rows } = await repo.insertMany([
+          { ...record, durationDays: 60 },
+        ]);
         expect(rows).toHaveLength(1);
       });
 

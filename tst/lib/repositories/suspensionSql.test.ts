@@ -20,6 +20,16 @@ const RECORD_ROW = {
 };
 
 const answer = (text: string) => {
+  // insertMany's member lock keys, ban-table probe and active-ban read.
+  if (text.includes("hashtext('suspension:' || m)")) {
+    return { rows: [{ k: -5 }, { k: 3 }], rowCount: 2, command: 'SELECT' };
+  }
+  if (text.includes("to_regclass('member_bans')")) {
+    return { rows: [{ present: true }], rowCount: 1, command: 'SELECT' };
+  }
+  if (text.includes('FROM member_bans')) {
+    return { rows: [{ member_id: '222' }], rowCount: 1, command: 'SELECT' };
+  }
   if (text.includes('COUNT(*)')) {
     return { rows: [{ count: '2' }], rowCount: 1, command: 'SELECT' };
   }
@@ -101,6 +111,34 @@ describe('suspension SQL shared by the commands and the workspace', () => {
 
   afterEach(() => {
     process.env = { ...saved };
+  });
+
+  it('insertMany locks each member in sorted key order, then reads active bans, then inserts only the unbanned (M5)', async () => {
+    const result = await repo.insertMany([
+      record,
+      { ...record, memberId: '222' },
+      record,
+    ]);
+    expect(result.banned).toEqual(['222']);
+    expect(mod.MEMBER_LOCK_KEYS_SQL).toMatch(
+      /SELECT DISTINCT hashtext\('suspension:' \|\| m\) AS k[\s\S]*ORDER BY k$/,
+    );
+    expect(mod.ACTIVE_BANNED_SQL).toContain('lifted_at IS NULL');
+    expect(
+      calls
+        .filter((c) => c.via === 'client')
+        .map(({ text, values }) => [text, values]),
+    ).toEqual([
+      ['BEGIN', undefined],
+      [mod.MEMBER_LOCK_KEYS_SQL, [['111', '222']]],
+      ['SELECT pg_advisory_xact_lock($1, $2)', [52062, -5]],
+      ['SELECT pg_advisory_xact_lock($1, $2)', [52062, 3]],
+      [mod.BANS_TABLE_PRESENT_SQL, undefined],
+      [mod.ACTIVE_BANNED_SQL, [['111', '222']]],
+      [mod.INSERT_SQL, ['111', 'Ann', record.suspendedAt, 60, 'n']],
+      [mod.INSERT_SQL, ['111', 'Ann', record.suspendedAt, 60, 'n']],
+      ['COMMIT', undefined],
+    ]);
   });
 
   it('insert, insertMany and insertSuspensionInTx send the same SQL and parameters', async () => {
