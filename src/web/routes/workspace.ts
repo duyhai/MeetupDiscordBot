@@ -278,6 +278,8 @@ interface CardView {
   leader: boolean;
   /** The member has an active ban: no suspension actions (applyAction refuses them too). */
   banned: boolean;
+  /** The bans read answered. When false, no card offers record or link and none shows Banned. */
+  banStatusKnown: boolean;
 }
 
 function caseBody(v: CardView): SafeHtml | '' {
@@ -512,9 +514,10 @@ function cardHtml(v: CardView): SafeHtml {
       // Recording, linking and voiding: Leadership only. The POST checks
       // again, live; this only decides what is shown. A banned member's
       // card offers no record or link; the repository refuses them too.
+      // Nor does any card while the ban status is unknown.
       (a) =>
         (v.leader || !LEADERSHIP_ONLY_ACTIONS.includes(a)) &&
-        !(v.banned && BAN_BLOCKED_ACTIONS.includes(a)),
+        !((v.banned || !v.banStatusKnown) && BAN_BLOCKED_ACTIONS.includes(a)),
     ),
   );
   const rowUrl = localUrl(workspaceRowPath(row.period, row.id));
@@ -851,11 +854,10 @@ export function registerWorkspaceRoutes(
       leadershipOf(deps.isLeadership, session.userId),
     );
     const loaded = await load(res, WHAT, async () => {
-      const [ws, snapshots, susp, bans] = await Promise.all([
+      const [ws, snapshots, susp] = await Promise.all([
         deps.workspace(),
         deps.snapshots(),
         deps.suspensions(),
-        deps.bans(),
       ]);
       const [state, rows, counts, snapshot] = await Promise.all([
         ws.monthState(period),
@@ -868,11 +870,15 @@ export function registerWorkspaceRoutes(
       const linkedIds = rows
         .map((r) => r.suspensionRecordId)
         .filter((id): id is number => id !== null);
-      const [events, records, linked, bannedIds] = await Promise.all([
+      // The ban status is read alongside, not in here: a failing bans
+      // read hides record and link (see banStatus) instead of the page.
+      const banStatus = loadOptional('ban status', async () =>
+        (await deps.bans()).activeMemberIds(memberIds),
+      );
+      const [events, records, linked] = await Promise.all([
         ws.listRecentEvents(rowIds, 10),
         susp.listByMemberIds(memberIds),
         susp.listByIds(linkedIds),
-        bans.activeMemberIds(memberIds),
       ]);
       // Records a card would offer to link: is any already on some row?
       const candidates = [
@@ -895,7 +901,7 @@ export function registerWorkspaceRoutes(
         records,
         linked,
         linkedElsewhere,
-        bannedIds,
+        banStatus,
       };
     });
     if (!loaded.ok) {
@@ -912,8 +918,12 @@ export function registerWorkspaceRoutes(
       records,
       linked,
       linkedElsewhere,
-      bannedIds,
+      banStatus,
     } = loaded.value;
+    // loadOptional never rejects and has its own deadline.
+    const bans = await banStatus;
+    const banStatusKnown = bans.ok;
+    const bannedIds = bans.ok ? bans.value : new Set<string>();
     const answer = await leadership;
     const leader = answer === 'leader';
     const asked = rows
@@ -929,7 +939,8 @@ export function registerWorkspaceRoutes(
       )
       .map((r) => r.memberId);
     let upcoming = new Map<string, UpcomingEntry>();
-    if (asked.length > 0) {
+    // Unknown ban status: no card offers record or link, so no RSVPs.
+    if (banStatusKnown && asked.length > 0) {
       const live = await loadOptional('The upcoming RSVPs', () =>
         deps.upcoming(asked),
       );
@@ -999,6 +1010,7 @@ export function registerWorkspaceRoutes(
         linkedElsewhere,
         leader,
         banned: bannedIds.has(row.memberId),
+        banStatusKnown,
       }),
     );
     dashboardPage(res, {
@@ -1008,6 +1020,14 @@ export function registerWorkspaceRoutes(
           <h1>No-show workspace — ${label}</h1>
           ${workspaceResultNotice(req.query.result)}
           ${refreshNotice(req.query.refresh)} ${leadershipNote(answer)}
+          ${
+            banStatusKnown
+              ? ''
+              : html`<p class="note attn">
+                  Ban status unavailable. Recording and linking suspensions are
+                  hidden. Reload in a minute.
+                </p>`
+          }
           ${monthPicker(period, now)} ${built} ${unreadable} ${setUp}
           ${refreshForm(period, csrf, 'workspace')}
         </div>

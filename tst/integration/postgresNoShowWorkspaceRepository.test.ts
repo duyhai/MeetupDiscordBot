@@ -2049,7 +2049,7 @@ const suspension = (
           );
         });
 
-        it("void, hold and edit_notes still apply to a banned member's card", async () => {
+        it("void, hold, skip and edit_notes still apply to a banned member's card", async () => {
           const sep = await seedSuspension('222', SEPTEMBER);
           const oct = await seedSuspension('222', OCTOBER);
           okOf(
@@ -2066,6 +2066,11 @@ const suspension = (
             okOf(await act(oct, 'hold', { note: 'waiting', period: OCTOBER }))
               .row.status,
           ).toBe('on_hold');
+          okOf(await act(oct, 'reopen', { period: OCTOBER }));
+          expect(
+            okOf(await act(oct, 'skip', { note: 'banned', period: OCTOBER }))
+              .row.status,
+          ).toBe('skipped');
         });
 
         it('a ban recorded while a record_suspension waits on the member lock is seen', async () => {
