@@ -6,6 +6,11 @@ import {
   stripImageMetadata,
 } from '../../../src/lib/helpers/imageBytes.js';
 import { sniffImageType as reExported } from '../../../src/web/images.js';
+import {
+  CHROME_JPEG,
+  CHROME_WEBP_ALPHA,
+  CHROME_WEBP_OPAQUE,
+} from './chromeCanvasImages.js';
 
 const PNG_1X1 = Buffer.from(
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=',
@@ -395,10 +400,12 @@ describe('stripImageMetadata: JPEG after SOS', () => {
       bytes(0xff, 0x00, 0x7f, 0xff, 0xd3, 0x01),
     ]);
   const EOI = bytes(0xff, 0xd9);
+  /** A well-formed DHT (ten codes of length 2) whose values hold FF D9. */
   const DHT_WITH_EOI = segment(
     0xc4,
     Buffer.concat([
       bytes(0x00),
+      bytes(0, 10, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
       Buffer.alloc(4, 1),
       bytes(0xff, 0xd9),
       Buffer.alloc(4, 2),
@@ -618,7 +625,8 @@ describe('PNG: image data and IHDR position', () => {
 
 describe('stripImageMetadata: WebP image chunks', () => {
   const header = ['VP8X', vp8xPayload(640, 480, 0x10)] as [string, Buffer];
-  const vp8lPayload = VP8L_1X1.subarray(20);
+  // The frame must be the canvas size (PR review M2), so not VP8L_1X1.
+  const vp8lPayload = vp8lPayloadOf(640, 480);
 
   it('VP8X with exactly one VP8 or VP8L is kept', () => {
     for (const image of [
@@ -746,5 +754,234 @@ describe('sniffImageType', () => {
     expect(sniffImageType(VP8L_1X1)).toBe('image/webp');
     expect(sniffImageType(jpeg(APP0))).toBe('image/jpeg');
     expect(sniffImageType(Buffer.from('<html>'))).toBeUndefined();
+  });
+});
+
+/** A VP8L payload: signature, 14-bit width-1 and height-1, no alpha, version 0. */
+function vp8lPayloadOf(width: number, height: number): Buffer {
+  const payload = Buffer.alloc(8);
+  payload[0] = 0x2f;
+  payload.writeUInt32LE(((width - 1) | ((height - 1) << 14)) >>> 0, 1);
+  return payload;
+}
+const vp8PayloadOf = (width: number, height: number) =>
+  vp8(width, height).subarray(20);
+
+describe('stripImageMetadata: VP8X structure (PR review M2)', () => {
+  const header = (flags = 0x10): [string, Buffer] => [
+    'VP8X',
+    vp8xPayload(640, 480, flags),
+  ];
+  const image: [string, Buffer] = ['VP8 ', vp8PayloadOf(640, 480)];
+  const alph: [string, Buffer] = ['ALPH', Buffer.from('ALPHA')];
+
+  it('the well-formed controls are kept: VP8X + ALPH + VP8, VP8X + VP8L of the canvas size', () => {
+    expect(stripImageMetadata(riffChunks([header(), alph, image]))).toEqual(
+      riffChunks([header(), alph, image]),
+    );
+    const lossless = riffChunks([header(0), ['VP8L', vp8lPayloadOf(640, 480)]]);
+    expect(stripImageMetadata(lossless)).toEqual(lossless);
+  });
+
+  it('a second VP8X chunk is undefined, wherever it is', () => {
+    for (const chunks of [
+      [header(), header(), image],
+      [header(), image, header()],
+      [header(), ['VP8X', vp8xPayload(320, 240, 0x10)], alph, image],
+    ] as [string, Buffer][][]) {
+      expect(stripImageMetadata(riffChunks(chunks))).toBeUndefined();
+    }
+  });
+
+  it('more than one ALPH chunk is undefined', () => {
+    expect(
+      stripImageMetadata(riffChunks([header(), alph, alph, image])),
+    ).toBeUndefined();
+    expect(
+      stripImageMetadata(riffChunks([header(), alph, image, alph])),
+    ).toBeUndefined();
+  });
+
+  it('an ALPH chunk without the VP8X alpha flag (0x10) is undefined', () => {
+    expect(
+      stripImageMetadata(riffChunks([header(0x00), alph, image])),
+    ).toBeUndefined();
+    expect(
+      stripImageMetadata(riffChunks([header(0x20), alph, image])),
+    ).toBeUndefined();
+  });
+
+  it('a VP8 or VP8L frame whose size is not the VP8X canvas is undefined', () => {
+    for (const frame of [
+      ['VP8 ', vp8PayloadOf(512, 384)],
+      ['VP8 ', vp8PayloadOf(640, 479)],
+      ['VP8 ', vp8PayloadOf(641, 480)],
+      ['VP8L', vp8lPayloadOf(1, 1)],
+      ['VP8L', vp8lPayloadOf(640, 481)],
+    ] as [string, Buffer][]) {
+      expect(stripImageMetadata(riffChunks([header(), frame]))).toBeUndefined();
+    }
+  });
+
+  it('an inner frame header that does not parse is undefined', () => {
+    const noStartCode = Buffer.from(vp8PayloadOf(640, 480));
+    noStartCode[3] = 0x00;
+    const interFrame = Buffer.from(vp8PayloadOf(640, 480));
+    interFrame[0] |= 0x01;
+    const shortVp8 = vp8PayloadOf(640, 480).subarray(0, 9);
+    const badSignature = Buffer.from(vp8lPayloadOf(640, 480));
+    badSignature[0] = 0x2e;
+    const shortVp8l = vp8lPayloadOf(640, 480).subarray(0, 4);
+    for (const frame of [
+      ['VP8 ', noStartCode],
+      ['VP8 ', interFrame],
+      ['VP8 ', shortVp8],
+      ['VP8L', badSignature],
+      ['VP8L', shortVp8l],
+    ] as [string, Buffer][]) {
+      expect(stripImageMetadata(riffChunks([header(), frame]))).toBeUndefined();
+    }
+  });
+});
+
+describe('stripImageMetadata: JPEG frames and tables (PR review M3)', () => {
+  /** DQT: one 8-bit table (Pq 0) is 65 bytes, one 16-bit table (Pq 1) is 129. */
+  const dqt8 = (id: number) => Buffer.concat([bytes(id), Buffer.alloc(64, 1)]);
+  const dqt16 = (id: number) =>
+    Buffer.concat([bytes(0x10 | id), Buffer.alloc(128, 1)]);
+  /** DHT: class/id, 16 counts, then as many values as the counts add up to. */
+  const dht = (classId: number, counts: number[]) => {
+    const sixteen = Buffer.alloc(16);
+    counts.forEach((count, i) => {
+      sixteen[i] = count;
+    });
+    const total = counts.reduce((a, b) => a + b, 0);
+    return Buffer.concat([bytes(classId), sixteen, Buffer.alloc(total, 5)]);
+  };
+  const file = (...tables: Buffer[]) =>
+    jpeg(APP0, ...tables, sof(0xc0, 800, 600), SOS_TO_END);
+
+  it('a JPEG with two SOF segments is undefined', () => {
+    expect(
+      stripImageMetadata(
+        jpeg(APP0, sof(0xc0, 800, 600), sof(0xc0, 800, 600), SOS_TO_END),
+      ),
+    ).toBeUndefined();
+    expect(
+      stripImageMetadata(
+        jpeg(APP0, sof(0xc0, 800, 600), sof(0xc2, 16, 16), SOS_TO_END),
+      ),
+    ).toBeUndefined();
+    // The single-SOF control.
+    expect(
+      stripImageMetadata(jpeg(APP0, sof(0xc0, 800, 600), SOS_TO_END)),
+    ).toBeDefined();
+  });
+
+  it('well-formed DQT and DHT segments are kept, one or several tables each', () => {
+    const tables = [
+      segment(0xdb, dqt8(0)),
+      segment(0xdb, Buffer.concat([dqt8(1), dqt16(2)])),
+      segment(0xc4, dht(0x00, [0, 1, 5, 1, 1, 1, 1, 1, 1])),
+      segment(0xc4, Buffer.concat([dht(0x10, [0, 2, 1]), dht(0x01, [1])])),
+    ];
+    const ok = file(...tables);
+    expect(stripImageMetadata(ok)).toEqual(ok);
+  });
+
+  it('a DQT whose length does not match its tables is undefined', () => {
+    for (const payload of [
+      Buffer.alloc(64, 1), // one short
+      Buffer.concat([dqt8(0), bytes(0)]), // a stray byte
+      Buffer.concat([bytes(0x10), Buffer.alloc(64, 1)]), // Pq 1 needs 128
+      Buffer.concat([bytes(0x20), Buffer.alloc(64, 1)]), // Pq 2 does not exist
+      Buffer.alloc(0),
+    ]) {
+      expect(stripImageMetadata(file(segment(0xdb, payload)))).toBeUndefined();
+    }
+  });
+
+  it('a DHT whose length does not match its counts is undefined', () => {
+    for (const payload of [
+      dht(0x00, [0, 1, 5]).subarray(0, 20), // values cut short
+      Buffer.concat([dht(0x00, [1]), bytes(9)]), // a stray byte
+      Buffer.alloc(16), // no room for 16 counts
+      dht(0x00, [255, 255]), // more than 256 codes
+      Buffer.alloc(0),
+    ]) {
+      expect(stripImageMetadata(file(segment(0xc4, payload)))).toBeUndefined();
+    }
+  });
+
+  it('a malformed table between scans is undefined too', () => {
+    const SOS = bytes(
+      0xff,
+      0xda,
+      0x00,
+      0x08,
+      0x01,
+      0x01,
+      0x00,
+      0x00,
+      0x3f,
+      0x00,
+    );
+    const twoScans = (table: Buffer) =>
+      jpeg(
+        APP0,
+        sof(0xc2, 800, 600),
+        SOS,
+        Buffer.from('scan-one'),
+        table,
+        SOS,
+        Buffer.from('scan-two'),
+        bytes(0xff, 0xd9),
+      );
+    expect(stripImageMetadata(twoScans(segment(0xdb, dqt8(0))))).toBeDefined();
+    expect(
+      stripImageMetadata(twoScans(segment(0xdb, Buffer.alloc(10, 1)))),
+    ).toBeUndefined();
+    expect(
+      stripImageMetadata(twoScans(segment(0xc4, Buffer.alloc(10, 1)))),
+    ).toBeUndefined();
+  });
+});
+
+describe('stripImageMetadata: real Chrome canvas output still passes', () => {
+  it('opaque WebP (VP8X + ICCP + VP8) loses ICCP and its flag, keeps 24x16', () => {
+    const stripped = stripImageMetadata(CHROME_WEBP_OPAQUE);
+    expect(stripped).toBeDefined();
+    expect(stripped?.toString('latin1')).not.toContain('ICCP');
+    expect(stripped?.[20]).toBe(0x00);
+    expect(readImageSize(stripped)).toEqual({
+      type: 'image/webp',
+      width: 24,
+      height: 16,
+    });
+  });
+
+  it('WebP with transparency (VP8X + ICCP + ALPH + VP8) keeps ALPH and the alpha flag', () => {
+    const stripped = stripImageMetadata(CHROME_WEBP_ALPHA);
+    expect(stripped).toBeDefined();
+    const text = stripped?.toString('latin1') ?? '';
+    expect(text).toContain('ALPH');
+    expect(text).not.toContain('ICCP');
+    expect(stripped?.[20]).toBe(0x10);
+    expect(readImageSize(stripped)).toEqual({
+      type: 'image/webp',
+      width: 24,
+      height: 16,
+    });
+  });
+
+  it('JPEG (APP0, ICC APP2, DQT, SOF0, DHT) loses the ICC segment, keeps 24x16', () => {
+    const stripped = stripImageMetadata(CHROME_JPEG);
+    expect(stripped).toBeDefined();
+    expect(stripped?.toString('latin1')).not.toContain('ICC_PROFILE');
+    expect(readImageSize(stripped)).toEqual({
+      type: 'image/jpeg',
+      width: 24,
+      height: 16,
+    });
   });
 });
