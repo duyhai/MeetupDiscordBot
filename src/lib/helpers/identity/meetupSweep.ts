@@ -214,7 +214,12 @@ async function recordMeetupMember(
 export async function runMeetupSweep(
   source: WritableChangeSource,
   client?: Client,
-): Promise<{ scanned: number; changed: number }> {
+): Promise<{
+  scanned: number;
+  changed: number;
+  /** The roster this run fetched, for the ban photo fill. */
+  roster?: readonly MeetupGroupMember[];
+}> {
   // The helper owns the shared credential: it refreshes under the cross-process
   // lock and alerts (once per failure episode) itself, so an undefined token
   // needs no alert here.
@@ -335,5 +340,5 @@ export async function runMeetupSweep(
   logger.info(
     `Meetup identity sweep (${source}): ${scanned} scanned, ${changed} changed`,
   );
-  return { scanned, changed };
+  return { scanned, changed, roster: members };
 }

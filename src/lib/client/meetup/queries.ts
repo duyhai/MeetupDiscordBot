@@ -302,6 +302,7 @@ export const getGroupMemberships = gql`
             memberPhoto {
               id
               thumbUrl
+              standardUrl
             }
           }
         }

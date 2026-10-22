@@ -1,3 +1,5 @@
+import { Logger } from 'tslog';
+
 /**
  * `fetch` with a total-request deadline.
  *
@@ -35,4 +37,62 @@ export async function boundedFetch(
       ? AbortSignal.any([init.signal, AbortSignal.timeout(timeoutMs)])
       : AbortSignal.timeout(timeoutMs),
   });
+}
+
+const cappedLogger = new Logger({ name: 'boundedFetch' });
+
+/**
+ * The body of an https GET, or null: on a non-2xx (redirects are not
+ * followed), a `Content-Length` over `maxBytes`, a streamed body passing
+ * `maxBytes` (the read is cancelled there, so at most one chunk past the cap
+ * is ever buffered), the deadline, or any error. Never throws. Logs the
+ * error's class name only: never the URL.
+ */
+export async function fetchBytesCapped(
+  url: string,
+  maxBytes: number,
+  timeoutMs: number,
+): Promise<Buffer | null> {
+  let target: URL;
+  try {
+    target = new URL(url);
+  } catch {
+    return null;
+  }
+  if (target.protocol !== 'https:') {
+    return null;
+  }
+  try {
+    const response = await boundedFetch(
+      target.href,
+      { redirect: 'error' },
+      timeoutMs,
+    );
+    const declared = response.headers.get('content-length');
+    if (
+      !response.ok ||
+      response.body === null ||
+      (declared !== null && !(Number(declared) <= maxBytes))
+    ) {
+      response.body?.cancel().catch(() => undefined);
+      return null;
+    }
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+    // One chunk at a time, checked as it lands. Leaving the loop early
+    // cancels the stream, so nothing past this chunk is read.
+    for await (const chunk of response.body as AsyncIterable<Uint8Array>) {
+      total += chunk.byteLength;
+      if (total > maxBytes) {
+        return null;
+      }
+      chunks.push(chunk);
+    }
+    return total === 0 ? null : Buffer.concat(chunks, total);
+  } catch (error: unknown) {
+    cappedLogger.warn(
+      `Capped fetch failed: ${error instanceof Error ? error.name : 'Error'}`,
+    );
+    return null;
+  }
 }

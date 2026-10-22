@@ -314,7 +314,12 @@ export interface EditEventResponse {
 
 export interface MeetupGroupMember {
   id: string;
-  memberPhoto: { id: string; thumbUrl: string } | null;
+  /** standardUrl feeds the ban photo fill (D12); highResUrl is never asked for. */
+  memberPhoto: {
+    id: string;
+    thumbUrl: string;
+    standardUrl?: string | null;
+  } | null;
   name: string | null;
   username: string | null;
 }

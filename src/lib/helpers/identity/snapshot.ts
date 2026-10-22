@@ -27,9 +27,10 @@ export function avatarThumbUrl(
   field: 'user_avatar' | 'member_avatar',
   hash: string,
   guildId: string,
+  size: 64 | 256 = 64,
 ): string {
   if (field === 'member_avatar') {
-    return `https://cdn.discordapp.com/guilds/${guildId}/users/${discordUserId}/avatars/${hash}.webp?size=64`;
+    return `https://cdn.discordapp.com/guilds/${guildId}/users/${discordUserId}/avatars/${hash}.webp?size=${size}`;
   }
-  return `https://cdn.discordapp.com/avatars/${discordUserId}/${hash}.webp?size=64`;
+  return `https://cdn.discordapp.com/avatars/${discordUserId}/${hash}.webp?size=${size}`;
 }

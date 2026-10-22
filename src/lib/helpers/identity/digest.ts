@@ -9,6 +9,10 @@ import {
   IdentityField,
   IdentityPlatform,
 } from '../../repositories/identityTypes.js';
+import {
+  defaultBanPhotoFillDeps,
+  runBanPhotoFillSafely,
+} from '../../bans/photoFill.js';
 import { LogEntry, logAlert } from '../discordLogger.js';
 import { runMeetupSweep } from './meetupSweep.js';
 import {
@@ -175,13 +179,13 @@ export function safeErrorSummary(error: unknown): string {
  * next sweep re-detects whatever this one missed. So a failure here is
  * announced and stepped over.
  */
-async function runSweepOrDegrade(
+async function runSweepOrDegrade<T>(
   platform: string,
   client: Client,
-  sweep: () => Promise<unknown>,
-): Promise<void> {
+  sweep: () => Promise<T>,
+): Promise<T | undefined> {
   try {
-    await sweep();
+    return await sweep();
   } catch (error: unknown) {
     logger.error(`${platform} identity sweep failed: ${String(error)}`);
     await logAlert(client, {
@@ -193,6 +197,7 @@ async function runSweepOrDegrade(
         `are still reported below, and the next sweep re-checks whatever ` +
         `this pass missed.`,
     });
+    return undefined;
   }
 }
 
@@ -439,9 +444,24 @@ export async function runIdentityDigestOnce(client: Client): Promise<void> {
     await runSweepOrDegrade('Discord', client, () =>
       runIdentitySweep(client, 'sweep'),
     );
-    await runSweepOrDegrade('Meetup', client, () =>
+    const meetup = await runSweepOrDegrade('Meetup', client, () =>
       runMeetupSweep('sweep', client),
     );
+
+    // Missing ban photos, from the roster just fetched. Its own 90 s
+    // deadline and catch: it can neither delay the digest past that nor
+    // break it. Before the ceiling, so it cannot widen today's change range
+    // (it records no changes anyway).
+    try {
+      await runBanPhotoFillSafely(
+        defaultBanPhotoFillDeps(client),
+        meetup?.roster,
+      );
+    } catch (error: unknown) {
+      logger.warn(
+        `Ban photo fill could not start: ${error instanceof Error ? error.name : 'Error'}`,
+      );
+    }
 
     // Fix the ceiling BEFORE reading the rows. Advancing to "the highest id
     // that exists when the digest finishes" instead would silently skip any

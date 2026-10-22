@@ -582,6 +582,60 @@ export class PostgresIdentityRepository {
     return result.rows[0]?.thumb ?? undefined;
   }
 
+  /**
+   * The newest stored image of a member, for the ban photo fill (D12 source
+   * 3): the Meetup subject's photo changes and baseline photo, and, when
+   * linked, the Discord subject's avatar changes and baseline (guild avatar
+   * before user avatar), in the monitored scopes, at most `maxBytes` each
+   * (checked in SQL, so a larger image never reaches Node). One query.
+   * Undefined for an id that is not 1-20 digits, with no query.
+   */
+  async latestStoredPhoto(
+    meetupId: string,
+    discordId: string | undefined,
+    maxBytes: number,
+  ): Promise<Buffer | undefined> {
+    if (
+      typeof meetupId !== 'string' ||
+      !SUBJECT_ID.test(meetupId) ||
+      (discordId !== undefined &&
+        (typeof discordId !== 'string' || !SUBJECT_ID.test(discordId))) ||
+      !Number.isSafeInteger(maxBytes) ||
+      maxBytes < 1
+    ) {
+      return undefined;
+    }
+    const scope = scopeClause(4);
+    // $4 is the monitored guild and $5 the Meetup group (scopeClause).
+    const result = await this.pool.query<{ img: Buffer }>(
+      `SELECT img FROM (
+         SELECT new_thumb AS img, detected_at AS at, 0 AS rank
+           FROM member_identity_changes
+          WHERE ${scope.sql}
+            AND ((platform = 'meetup' AND subject_id = $1 AND field = 'photo')
+              OR (platform = 'discord' AND subject_id = $2::text
+                  AND field IN ('member_avatar', 'user_avatar')))
+            AND octet_length(new_thumb) <= $3
+         UNION ALL
+         SELECT photo_thumb, updated_at, 0 FROM meetup_identity
+          WHERE scope_id = $5 AND meetup_member_id = $1
+            AND octet_length(photo_thumb) <= $3
+         UNION ALL
+         SELECT member_avatar_thumb, updated_at, 1 FROM member_identity
+          WHERE scope_id = $4 AND discord_user_id = $2::text
+            AND octet_length(member_avatar_thumb) <= $3
+         UNION ALL
+         SELECT user_avatar_thumb, updated_at, 2 FROM member_identity
+          WHERE scope_id = $4 AND discord_user_id = $2::text
+            AND octet_length(user_avatar_thumb) <= $3
+       ) photos
+       ORDER BY at DESC, rank ASC
+       LIMIT 1`,
+      [meetupId, discordId ?? null, maxBytes, ...scope.params],
+    );
+    return result.rows[0]?.img ?? undefined;
+  }
+
   /** Changes detected at or after `since`, in scope. */
   async countChangesSince(since: Date): Promise<number> {
     const scope = scopeClause(2);
