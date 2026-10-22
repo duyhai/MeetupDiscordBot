@@ -156,6 +156,7 @@ describe('access matrix', () => {
     expect(labels).toContain('POST /reports/:period/refresh');
     expect(labels).toContain('GET /identity');
     expect(labels).toContain('GET /identity/changes/:id/thumb/:side');
+    expect(labels).toContain('GET /bans/:id/photo');
     expect(labels).toContain('GET /link-progress');
     expect(labels).toContain('GET /trends');
     expect(labels).toContain('GET /no-shows');

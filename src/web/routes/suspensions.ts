@@ -15,6 +15,7 @@ import { discordUserLink, memberHistoryLink, memberLink } from '../links.js';
 import {
   dashboardPage,
   load,
+  loadOptional,
   pacificDateTime,
   unavailable,
 } from '../pageKit.js';
@@ -129,18 +130,27 @@ function recordRow(row: SuspensionPageRow, voided: boolean): SafeHtml {
   </tr>`;
 }
 
+/** 'Label (n)', or the bare label when the count could not be read. */
+function tabLabel(label: string, count: number | undefined): string {
+  return count === undefined ? label : `${label} (${Number(count) || 0})`;
+}
+
+/**
+ * The tab nav. Each side's counts are optional: one store being down never
+ * takes the other's tabs with it, it only drops those counts.
+ */
 function tabs(
   current: SuspensionTab,
-  counts: Record<SuspensionState, number>,
-  activeBans: number,
+  counts: Record<SuspensionState, number> | undefined,
+  activeBans: number | undefined,
 ): SafeHtml {
   const path = dashboardPath(DASHBOARD_PATHS.suspensions);
   const entries: { tab: SuspensionTab; label: string }[] = [
     ...STATES.map((state) => ({
       tab: state,
-      label: `${TAB_LABELS[state]} (${Number(counts[state]) || 0})`,
+      label: tabLabel(TAB_LABELS[state], counts?.[state]),
     })),
-    { tab: 'banned', label: `Banned (${Number(activeBans) || 0})` },
+    { tab: 'banned', label: tabLabel('Banned', activeBans) },
   ];
   return html`<nav class="pager choices" aria-label="Suspension records">
     ${entries.map(({ tab, label }) => {
@@ -210,23 +220,28 @@ async function bannedTab(
   today: string,
 ): Promise<void> {
   const show = parseBanShow(req.query.show);
-  const loaded = await load(res, 'Bans', async () => {
-    const [reader, bans] = await Promise.all([deps.suspensions(), deps.bans()]);
-    const [counts, banCounts, rows] = await Promise.all([
-      reader.countByState(today),
-      bans.countByState(),
-      bans.listPage({
-        state: show,
-        offset: (page - 1) * PAGE_SIZE,
-        limit: PAGE_SIZE,
-      }),
-    ]);
-    return { counts, banCounts, rows };
-  });
+  const [loaded, suspensionCounts] = await Promise.all([
+    load(res, 'Bans', async () => {
+      const bans = await deps.bans();
+      const [banCounts, rows] = await Promise.all([
+        bans.countByState(),
+        bans.listPage({
+          state: show,
+          offset: (page - 1) * PAGE_SIZE,
+          limit: PAGE_SIZE,
+        }),
+      ]);
+      return { banCounts, rows };
+    }),
+    loadOptional('Suspension counts', async () =>
+      (await deps.suspensions()).countByState(today),
+    ),
+  ]);
   if (!loaded.ok) {
     return;
   }
-  const { counts, banCounts, rows } = loaded.value;
+  const { banCounts, rows } = loaded.value;
+  const counts = suspensionCounts.ok ? suspensionCounts.value : undefined;
   if (!Array.isArray(rows) || !rows.every((row) => isBanRow(row, show))) {
     unavailable(res, 'Bans');
     return;
@@ -262,27 +277,30 @@ export function registerSuspensionRoutes(
       await bannedTab(req, res, deps, page, today);
       return;
     }
-    const loaded = await load(res, WHAT, async () => {
-      const [reader, bans] = await Promise.all([
-        deps.suspensions(),
-        deps.bans(),
-      ]);
-      const [counts, banCounts, rows] = await Promise.all([
-        reader.countByState(today),
-        bans.countByState(),
-        reader.listPage({
-          state,
-          today,
-          offset: (page - 1) * PAGE_SIZE,
-          limit: PAGE_SIZE,
-        }),
-      ]);
-      return { counts, banCounts, rows };
-    });
+    const [loaded, banCounts] = await Promise.all([
+      load(res, WHAT, async () => {
+        const reader = await deps.suspensions();
+        const [counts, rows] = await Promise.all([
+          reader.countByState(today),
+          reader.listPage({
+            state,
+            today,
+            offset: (page - 1) * PAGE_SIZE,
+            limit: PAGE_SIZE,
+          }),
+        ]);
+        return { counts, rows };
+      }),
+      // Outside load: a bans outage only drops the Banned count.
+      loadOptional('Ban counts', async () =>
+        (await deps.bans()).countByState(),
+      ),
+    ]);
     if (!loaded.ok) {
       return;
     }
-    const { counts, banCounts, rows } = loaded.value;
+    const { counts, rows } = loaded.value;
+    const activeBans = banCounts.ok ? banCounts.value.active : undefined;
     if (!Array.isArray(rows) || !rows.every((row) => isPageRow(row, state))) {
       unavailable(res, WHAT);
       return;
@@ -291,7 +309,7 @@ export function registerSuspensionRoutes(
       title: 'Suspension records',
       body: html`<div class="card">
         <h1>Suspension records</h1>
-        ${tabs(state, counts, banCounts.active)}
+        ${tabs(state, counts, activeBans)}
         ${
           state === 'active'
             ? html`<p class="muted">

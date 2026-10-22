@@ -245,6 +245,34 @@ describe('Banned tab', () => {
     }
   });
 
+  it('a failing ban count leaves the suspension tabs up, labelled Banned with no count', async () => {
+    const { get } = await setup(undefined, undefined, {
+      bans: () => Promise.reject(new Error('down')),
+    });
+    const res = await get('/dashboard/suspensions');
+    expect(res.status).toBe(200);
+    expect(res.text).toMatch(
+      /<a href="\/dashboard\/suspensions\?state=banned">Banned<\/a>/,
+    );
+    expect(words(res.text)).not.toMatch(/Banned \(/);
+    expect(words(res.text)).toContain('Active (1)');
+  });
+
+  it('a failing suspension count leaves the Banned tab up, with no counts on the other tabs', async () => {
+    const { get, suspensions } = await setup({
+      active: [banRow({ memberName: 'Still Shown' })],
+    });
+    suspensions.countByState.mockRejectedValue(new Error('down'));
+    const res = await get(TAB);
+    expect(res.status).toBe(200);
+    expect(tbody(res.text)).toContain('<bdi>Still Shown</bdi>');
+    expect(res.text).toMatch(
+      /<a href="\/dashboard\/suspensions\?state=active">Active<\/a>/,
+    );
+    expect(words(res.text)).not.toMatch(/Past \(|Voided \(/);
+    expect(words(res.text)).toContain('Banned (1)');
+  });
+
   it('a failing bans read is the 503 page', async () => {
     const { get } = await setup(undefined, undefined, {
       bans: () => Promise.reject(new Error('down')),
@@ -271,7 +299,7 @@ describe('ban photo route', () => {
   });
 
   it("the photo route 404s for id 0, 'abc', a ban without a photo, and bytes that sniff as nothing", async () => {
-    const htmlBytes = Buffer.from('<html>');
+    const htmlBytes = Buffer.from('<html>BAN-BYTES-7f3a');
     const { get, bans } = await setup(
       { active: [banRow({ id: 5 }), banRow({ id: 6 })] },
       { 6: htmlBytes },
@@ -280,7 +308,7 @@ describe('ban photo route', () => {
       // eslint-disable-next-line no-await-in-loop -- one request at a time
       const res = await get(`/dashboard/bans/${path}/photo`);
       expect(res.status, path).toBe(404);
-      expect(res.text, path).not.toContain('<html>\n');
+      expect(res.text, path).not.toContain('BAN-BYTES-7f3a');
       expect(res.headers['content-type'], path).toMatch(/^text\/html/);
     }
     expect(bans.getPhoto.mock.calls.map(([id]) => id)).toEqual([5, 6]);
