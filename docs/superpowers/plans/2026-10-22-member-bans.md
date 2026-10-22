@@ -54,7 +54,7 @@
   - JPEG: from offset 2, skip `0xFF` fill bytes, read the marker; `D8`/`01`/`D0`–`D7` have no length; `D9` or `DA` before a SOF means no size; otherwise length = `readUInt16BE(p)` (≥ 2). SOF markers are `C0`–`CF` except `C4`, `C8`, `CC`: height = `readUInt16BE(p + 3)`, width = `readUInt16BE(p + 5)`. Zero sizes are refused.
 - **D7 Which workspace actions a ban blocks.** `record_suspension` and `link_suspension` (they create or attach a suspension). `void`, hold, skip, reopen, notes and the warning actions stay, so a wrong record can still be voided. Spec says "offers no suspension actions"; Question Q2 asks Hai to confirm `void` stays.
 - **D8 Re-ban photo.** A new ban for a member whose latest lifted ban has a photo starts with that photo (all four photo columns copied in the same `INSERT … SELECT`, bytes never pass through Node). The spec keeps photos on lifted bans "so the person can still be recognised"; carrying it forward is the same intent. The sweep then never touches it.
-- **D9 Ban vs suspension serialisation.** Recording or importing a ban takes `pg_advisory_xact_lock(MEMBER_LOCK_CLASS, hashtext('suspension:' || member_id))` for each member in ascending id order, the same key `applyAction` takes for record/link. `applyAction` checks for an active ban after taking that lock. So a ban and a suspension for one member cannot interleave, and two imports cannot deadlock.
+- **D9 Ban vs suspension serialisation.** Recording or importing a ban takes `pg_advisory_xact_lock(MEMBER_LOCK_CLASS, hashtext('suspension:' || member_id))` for each distinct key in ascending key order (keys read with `SELECT DISTINCT hashtext('suspension:' || m) AS k FROM unnest($1::text[]) m ORDER BY k`, so even colliding keys are always taken in one order), the same key `applyAction` takes for record/link. `applyAction` checks for an active ban after taking that lock. So a ban and a suspension for one member cannot interleave, and two imports cannot deadlock.
 - **D10 Import results.** Refusals render the Banned tab directly with status 422 and a fixed message per error with its row number (at most 10 listed, then "and N more"); nothing from the CSV is echoed, and the textarea comes back empty. Success redirects 303 with `result=imported`. The import embed carries only the count, the actor and the link: no names or ids (spec: nothing from the tracker is posted to Discord).
 - **D11 Notes column on import.** The CSV's `notes` is stored as staff-written notes. The local converter (Task 9) writes only the fixed provenance line `Imported from the no-show tracker's Banned Members tab`, which is how "the import writes only a fixed provenance line" holds.
 - **D12 Sweep sources and placement.** The fill runs in `runIdentityDigestOnce` right after the two `runSweepOrDegrade` calls, before the change ceiling is read. Sources, first that yields acceptable bytes wins:
@@ -195,14 +195,14 @@ SQL rules the tests pin:
 
 - `ensureBanSchema` = `inDashboardTransaction` + `pg_advisory_xact_lock(DASHBOARD_LOCK_CLASS, SCHEMA_LOCK_KEY)` + `BAN_SCHEMA_SQL`; `instance()` follows `PostgresNoShowWorkspaceRepository.instance()` (singleton promise on `dashboardPool()`, cleared on failure).
 - Every read lists columns explicitly from one `BAN_COLUMNS` constant that has `photo IS NOT NULL AS has_photo` and no other mention of `photo` bytes; `banned_on` read as `to_char(banned_on, 'YYYY-MM-DD')`.
-- `record`/`importMany`: one `inDashboardTransaction`; member advisory locks first (D9, ascending, deduped); then per row `INSERT … SELECT $1, $2, $3::date, $4, $5, l.photo, l.photo_source, l.photo_updated_at, l.photo_updated_by FROM (SELECT 1) one LEFT JOIN LATERAL (latest lifted ban of the member with a photo, by lifted_at DESC, id DESC) l ON true ON CONFLICT (member_id) WHERE lifted_at IS NULL DO NOTHING RETURNING <BAN_COLUMNS>`. Zero rows: throw a private refusal so the transaction rolls back, return `already-banned` (with `index` for imports).
+- `record`/`importMany`: one `inDashboardTransaction`; member advisory locks first (D9, distinct keys in ascending key order); then per row `INSERT … SELECT $1, $2, $3::date, $4, $5, l.photo, l.photo_source, l.photo_updated_at, l.photo_updated_by FROM (SELECT 1) one LEFT JOIN LATERAL (latest lifted ban of the member with a photo, by lifted_at DESC, id DESC) l ON true ON CONFLICT (member_id) WHERE lifted_at IS NULL DO NOTHING RETURNING <BAN_COLUMNS>`. Zero rows: throw a private refusal so the transaction rolls back, return `already-banned` (with `index` for imports).
 - `lift`: `UPDATE … SET lifted_at = now(), lifted_by = $2, lift_reason = $3 WHERE id = $1 AND lifted_at IS NULL RETURNING …`. Photo columns untouched.
 - `setUploadedPhoto`: `WITH old AS (SELECT id, photo IS NOT NULL AS had FROM member_bans WHERE id = $1 AND lifted_at IS NULL FOR UPDATE) UPDATE member_bans b SET photo = $2, photo_source = 'upload', photo_updated_at = now(), photo_updated_by = $3 FROM old WHERE b.id = old.id RETURNING …, old.had`.
 - `fillProfilePhoto`: `UPDATE member_bans SET photo = $2, photo_source = 'profile', photo_updated_at = now(), photo_updated_by = NULL WHERE id = $1 AND photo IS NULL AND lifted_at IS NULL`; true when `rowCount === 1`.
 - `listPhotoFillCandidates`: active, `photo IS NULL`, `ORDER BY id`, `LIMIT least($1, 50)`.
 - `listPage`: active ordered `created_at DESC, id DESC`; lifted ordered `lifted_at DESC, id DESC`; limit capped at 50 (0 or junk = 50); bad state is a `RangeError` before any query.
 - `getPhoto`: `SELECT CASE WHEN octet_length(photo) <= 153600 THEN photo END AS photo FROM member_bans WHERE id = $1`; ids outside 1..2^31-1 return undefined with no query.
-- `activeMemberIds`: deduped, only `^[0-9]{1,20}$`, at most 1000; none left runs no query.
+- `activeMemberIds`: deduped, only `^[0-9]{1,20}$`; more than 1000 left is a `RangeError` before any query; none left runs no query.
 
 - [ ] **Step 1: Write the failing unit test** `tst/lib/repositories/postgresBanRepository.test.ts`, a stub pool recording every SQL text:
   - `list reads never select the photo bytes`: call `listPage` (both states), `countByState`, `activeMemberIds(['1'])`, `listPhotoFillCandidates(5)`; for each recorded SQL, `expect(sql.replace(/photo IS (NOT )?NULL/g, '')).not.toMatch(/\bphoto\b(?!_)/)` and `expect(sql).not.toMatch(/SELECT \*/i)`.
@@ -231,7 +231,7 @@ SQL rules the tests pin:
   2. Drop `AND photo IS NULL` from `fillProfilePhoto` → the race test fails.
   3. Remove the `to_regclass` guard around the index → the AccessShareLock test fails.
   4. On a collision, skip that row and continue instead of rolling back → `importMany rolls back every row` fails.
-  5. Remove the member advisory locks → nothing here fails; confirm Task 7's cross-check covers it (note in report).
+  5. Remove the member advisory locks, or change the key prefix to `'ban:'` → `D9: record waits on the member suspension lock applyAction takes` fails (a test client holds `pg_advisory_xact_lock(MEMBER_LOCK_CLASS, hashtext('suspension:42'))`; `record` must show an ungranted advisory lock in `pg_locks` within 2 s and stay pending until the commit).
 - [ ] **Step 8: Lint and commit.** `yarn lint` clean; `git add src/lib/bans/types.ts src/lib/repositories/postgresBanRepository.ts tst/lib/repositories/postgresBanRepository.test.ts tst/integration/postgresBanRepository.test.ts docs/superpowers/specs/2026-10-22-member-bans-design.md docs/superpowers/plans/2026-10-22-member-bans.md`; commit "Add the member_bans table and its repository".
 
 ---
@@ -639,7 +639,7 @@ CSP check recorded in the task report: the script uses only `createImageBitmap`,
   1. Check the ban before taking the member lock → the waiting-lock test fails.
   2. Check `lifted_at IS NOT NULL` → the Review Focus 5 test fails.
   3. Hide the buttons but skip the repository check → the integration refusal test fails.
-  4. Change the ban repository's lock key prefix (Task 1) to `'ban:'` → the waiting-lock test fails (covers Task 1 mutation 5).
+  4. Change the `applyAction` lock key prefix to `'ban:'` → the waiting-lock test fails. (The ban repository's side of the shared key is pinned by Task 1's D9 test; this task's waiting test writes the ban with raw SQL and cannot catch a change there.)
 - [ ] **Step 7: Lint and commit** "Mark banned members in the workspace and refuse to suspend them".
 
 ---

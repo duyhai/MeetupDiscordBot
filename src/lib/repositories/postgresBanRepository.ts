@@ -182,10 +182,6 @@ function rowLimit(value: number, max: number): number {
   return n === 0 ? max : Math.min(n, max);
 }
 
-/** Ascending numeric order of digit strings. */
-const byMemberId = (a: string, b: string): number =>
-  a.length - b.length || (a < b ? -1 : a > b ? 1 : 0);
-
 interface BanDbRow {
   id: number;
   member_id: string;
@@ -283,24 +279,29 @@ export class PostgresBanRepository {
 
   /**
    * One transaction. Takes each member's suspension lock first (the key
-   * applyAction takes for record/link), deduped and in ascending id order,
-   * so a ban and a suspension cannot interleave and two imports cannot
-   * deadlock.
+   * applyAction takes for record/link: hashtext('suspension:' || id)),
+   * deduped and in ascending key order, so a ban and a suspension cannot
+   * interleave and two imports cannot deadlock.
    */
   private insertAll(inputs: BanInsert[]): Promise<BanRow[]> {
     return inDashboardTransaction(
       this.pool,
       'ban insert transaction',
       async (client) => {
-        const members = [...new Set(inputs.map((i) => i.memberId))].sort(
-          byMemberId,
+        // Lock keys distinct and ascending: two writers always take
+        // shared keys in the same order, even when two members' keys
+        // collide, so they can never deadlock.
+        const keys = await client.query<{ k: number }>(
+          `SELECT DISTINCT hashtext('suspension:' || m) AS k
+             FROM unnest($1::text[]) m ORDER BY k`,
+          [inputs.map((i) => i.memberId)],
         );
-        for (const memberId of members) {
-          // Sequential on one client: in lock order, then in input order.
+        for (const { k } of keys.rows) {
+          // Sequential on one client, in key order.
           // eslint-disable-next-line no-await-in-loop
-          await client.query('SELECT pg_advisory_xact_lock($1, hashtext($2))', [
+          await client.query('SELECT pg_advisory_xact_lock($1, $2)', [
             MEMBER_LOCK_CLASS,
-            `suspension:${memberId}`,
+            k,
           ]);
         }
         const rows: BanRow[] = [];
@@ -417,14 +418,14 @@ export class PostgresBanRepository {
   }
 
   /**
-   * Which of these Meetup ids have an active ban. Only digit ids count, and
-   * at most the first 1000 distinct ones are looked up; none left runs no
-   * query.
+   * Which of these Meetup ids have an active ban. Only digit ids count; more
+   * than 1000 distinct ones is a RangeError and none left runs no query.
    */
   async activeMemberIds(memberIds: string[]): Promise<Set<string>> {
-    const ids = [...new Set(memberIds)]
-      .filter((id) => MEMBER_ID.test(id))
-      .slice(0, MAX_ACTIVE_LOOKUP);
+    const ids = [...new Set(memberIds)].filter((id) => MEMBER_ID.test(id));
+    if (ids.length > MAX_ACTIVE_LOOKUP) {
+      throw new RangeError('too many member ids');
+    }
     if (ids.length === 0) return new Set();
     const result = await this.pool.query<{ member_id: string }>(
       `SELECT member_id FROM member_bans

@@ -4,6 +4,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { BanInsert } from '../../src/lib/bans/types.js';
 import {
   DASHBOARD_LOCK_CLASS,
+  MEMBER_LOCK_CLASS,
   SCHEMA_LOCK_KEY,
 } from '../../src/lib/repositories/dashboardPool.js';
 import {
@@ -42,6 +43,21 @@ const ban = (memberId: string, extra: Partial<BanInsert> = {}): BanInsert => ({
 });
 
 const bytes = (fill: number, length = 64): Buffer => Buffer.alloc(length, fill);
+
+/** Re-runs `check` every 20 ms until it is true; false after `timeoutMs`. */
+async function pollUntil(
+  check: () => Promise<boolean>,
+  timeoutMs = 2000,
+): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    // eslint-disable-next-line no-await-in-loop
+    if (await check()) return true;
+    if (Date.now() >= deadline) return false;
+    // eslint-disable-next-line no-await-in-loop
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+}
 
 (POSTGRES_AVAILABLE ? describe : describe.skip)('PostgresBanRepository', () => {
   let schema: { drop(): Promise<void> };
@@ -237,6 +253,40 @@ const bytes = (fill: number, length = 64): Buffer => Buffer.alloc(length, fill);
       },
     );
 
+    it('D9: record waits on the member suspension lock applyAction takes', async () => {
+      const holder = await pool.connect();
+      let settled = false;
+      try {
+        await holder.query('BEGIN');
+        await holder.query(
+          `SELECT pg_advisory_xact_lock($1, hashtext('suspension:' || $2))`,
+          [MEMBER_LOCK_CLASS, '42'],
+        );
+        const pending = repo.record(ban('42'));
+        void pending.then(
+          () => (settled = true),
+          () => (settled = true),
+        );
+        const recordWaits = () =>
+          pool
+            .query<{ n: number }>(
+              `SELECT count(*)::int AS n FROM pg_locks
+                WHERE locktype = 'advisory' AND NOT granted
+                  AND classid = $1::int::oid
+                  AND database = (SELECT oid FROM pg_database WHERE datname = current_database())`,
+              [MEMBER_LOCK_CLASS],
+            )
+            .then((r) => r.rows[0].n === 1);
+        expect(await pollUntil(recordWaits)).toBe(true);
+        expect(settled).toBe(false);
+        await holder.query('COMMIT');
+        expect(await pending).toMatchObject({ ok: true });
+      } finally {
+        if (!settled) await holder.query('ROLLBACK').catch(() => {});
+        holder.release();
+      }
+    });
+
     it('importMany rolls back every row when one collides', async () => {
       await repo.record(ban('30'));
       expect(await repo.importMany([ban('31'), ban('32'), ban('30')])).toEqual({
@@ -284,13 +334,17 @@ const bytes = (fill: number, length = 64): Buffer => Buffer.alloc(length, fill);
         await uploader.query('BEGIN');
         await uploader.query(UPLOAD_PHOTO_SQL, [target.id, upload, LEAD]);
         const fill = repo.fillProfilePhoto(target.id, bytes(0xbb));
-        // Let the fill reach the row lock before the upload commits.
-        await new Promise((resolve) => setTimeout(resolve, 300));
-        const waiting = await pool.query<{ n: number }>(
-          `SELECT count(*)::int AS n FROM pg_stat_activity
-              WHERE wait_event_type = 'Lock' AND query LIKE '%photo_source = ''profile''%'`,
-        );
-        expect(waiting.rows[0].n).toBe(1);
+        // The fill reaches the row lock before the upload commits.
+        const fillWaits = () =>
+          pool
+            .query<{ n: number }>(
+              `SELECT count(*)::int AS n FROM pg_stat_activity
+                WHERE wait_event_type = 'Lock'
+                  AND datname = current_database() AND pid <> pg_backend_pid()
+                  AND query LIKE '%photo_source = ''profile''%'`,
+            )
+            .then((r) => r.rows[0].n === 1);
+        expect(await pollUntil(fillWaits)).toBe(true);
         await uploader.query('COMMIT');
         expect(await fill).toBe(false);
       } finally {
@@ -444,6 +498,16 @@ const bytes = (fill: number, length = 64): Buffer => Buffer.alloc(length, fill);
   });
 
   describe('reads', () => {
+    it('activeMemberIds refuses more than 1000 distinct valid ids before any query', async () => {
+      const ids = Array.from({ length: 1001 }, (_, i) => String(i + 1));
+      await expect(repo.activeMemberIds(ids)).rejects.toBeInstanceOf(
+        RangeError,
+      );
+      // Duplicates and invalid ids do not count toward the cap.
+      const thousand = [...ids.slice(0, 1000), '1', '12a4', ' 7'];
+      expect(await repo.activeMemberIds(thousand)).toEqual(new Set());
+    });
+
     it('activeMemberIds returns only active bans among valid ids; countByState and paging', async () => {
       await repo.importMany([ban('200'), ban('201'), ban('202')]);
       const [, , first] = await repo.listPage({

@@ -79,4 +79,10 @@ describe('PostgresBanRepository SQL', () => {
     );
     expect(calls).toEqual([]);
   });
+
+  it('activeMemberIds refuses more than 1000 distinct valid ids before any query', async () => {
+    const ids = Array.from({ length: 1001 }, (_, i) => String(i + 1));
+    await expect(repo.activeMemberIds(ids)).rejects.toBeInstanceOf(RangeError);
+    expect(calls).toEqual([]);
+  });
 });
