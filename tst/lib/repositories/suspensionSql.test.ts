@@ -124,12 +124,17 @@ describe('suspension SQL shared by the commands and the workspace', () => {
       /SELECT DISTINCT hashtext\('suspension:' \|\| m\) AS k[\s\S]*ORDER BY k$/,
     );
     expect(mod.ACTIVE_BANNED_SQL).toContain('lifted_at IS NULL');
+    // Right after BEGIN, with the dashboard's lock_timeout (15 s).
+    expect(mod.INSERT_MANY_LOCK_TIMEOUT_SQL).toBe(
+      "SET LOCAL lock_timeout = '15000ms'",
+    );
     expect(
       calls
         .filter((c) => c.via === 'client')
         .map(({ text, values }) => [text, values]),
     ).toEqual([
       ['BEGIN', undefined],
+      [mod.INSERT_MANY_LOCK_TIMEOUT_SQL, undefined],
       [mod.MEMBER_LOCK_KEYS_SQL, [['111', '222']]],
       ['SELECT pg_advisory_xact_lock($1, $2)', [52062, -5]],
       ['SELECT pg_advisory_xact_lock($1, $2)', [52062, 3]],

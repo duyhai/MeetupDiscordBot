@@ -144,11 +144,16 @@ async function pollUntil(
           async () =>
             (
               await pool.query<{ n: number }>(
-                `SELECT count(*)::int AS n FROM pg_locks
-                  WHERE locktype = 'advisory' AND NOT granted
-                    AND database = (SELECT oid FROM pg_database WHERE datname = current_database())
-                    AND classid = $1::int::oid AND objsubid = 2`,
-                [MEMBER_LOCK_CLASS],
+                // Member 800's key only: two-int advisory keys show as
+                // classid and objid (objsubid 2).
+                `SELECT count(*)::int AS n FROM pg_locks l
+                   JOIN pg_stat_activity a ON a.pid = l.pid
+                  WHERE l.locktype = 'advisory' AND NOT l.granted
+                    AND a.datname = current_database() AND l.pid <> pg_backend_pid()
+                    AND l.classid = $1::int::oid
+                    AND l.objid = hashtext('suspension:' || $2)::oid
+                    AND l.objsubid = 2`,
+                [MEMBER_LOCK_CLASS, '800'],
               )
             ).rows[0].n > 0,
         );

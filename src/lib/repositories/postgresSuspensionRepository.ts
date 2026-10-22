@@ -3,6 +3,7 @@ import { Logger } from 'tslog';
 
 import {
   DASHBOARD_LOCK_CLASS,
+  DASHBOARD_LOCK_TIMEOUT_MS,
   MEMBER_LOCK_CLASS,
   DashboardTransactionOptions,
   inDashboardTransaction,
@@ -119,6 +120,9 @@ export const COUNT_BEFORE_SQL = `SELECT COUNT(*) AS count FROM suspension_record
  */
 export const MEMBER_LOCK_KEYS_SQL = `SELECT DISTINCT hashtext('suspension:' || m) AS k
   FROM unnest($1::text[]) m ORDER BY k`;
+
+/** insertMany's lock_timeout: the dashboard transactions' value. */
+export const INSERT_MANY_LOCK_TIMEOUT_SQL = `SET LOCAL lock_timeout = '${DASHBOARD_LOCK_TIMEOUT_MS}ms'`;
 
 /**
  * Whether member_bans exists where an unqualified name resolves: a database
@@ -372,6 +376,8 @@ export class PostgresSuspensionRepository implements SuspensionRepository {
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
+      // A member lock held too long fails the import instead of queueing it.
+      await client.query(INSERT_MANY_LOCK_TIMEOUT_SQL);
       const memberIds = [...new Set(records.map((r) => r.memberId))];
       const keys = await client.query<{ k: number }>(MEMBER_LOCK_KEYS_SQL, [
         memberIds,

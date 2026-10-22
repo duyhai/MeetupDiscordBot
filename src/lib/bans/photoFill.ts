@@ -121,7 +121,8 @@ type Found = { photo: Buffer; source: FillSource } | 'deferred' | undefined;
  * only a file over the cap moves on to the next, smaller one. Any other
  * failure defers the ban to tomorrow, so a timeout cannot lock in a smaller
  * photo (the fill never overwrites). The stored identity thumbnail is used
- * only for a member known to be gone from both live sources.
+ * only when every live source is known to have no photo (gone, or present
+ * with none).
  */
 async function findPhoto(
   deps: BanPhotoFillDeps,
