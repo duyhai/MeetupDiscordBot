@@ -241,6 +241,32 @@ const keptBeforeScan = (marker: number): boolean =>
   marker === 0xda ||
   isSof(marker);
 
+/**
+ * An APP0 or APP14 is kept only in the one form a canvas encoder writes:
+ * JFIF APP0 of length 16 with a 0x0 thumbnail (Chrome and ImageIO), and
+ * Adobe APP14 of length 14. Any other APP0 or APP14 is dropped; decoders
+ * need neither. `q` is the marker byte; the payload starts at q + 3.
+ */
+function appSegmentKept(
+  b: Buffer,
+  q: number,
+  marker: number,
+  length: number,
+): boolean {
+  if (marker === 0xe0) {
+    return (
+      length === 16 &&
+      b.toString('latin1', q + 3, q + 8) === 'JFIF\0' &&
+      b[q + 15] === 0 &&
+      b[q + 16] === 0
+    );
+  }
+  if (marker === 0xee) {
+    return length === 14 && b.toString('latin1', q + 3, q + 8) === 'Adobe';
+  }
+  return true;
+}
+
 /** Between scans: SOS, DHT, DQT, DRI and DNL. */
 const keptBetweenScans = (marker: number): boolean =>
   marker === 0xda ||
@@ -320,7 +346,11 @@ function stripJpeg(b: Buffer): Buffer | undefined {
     if (length < 2 || end > b.length) {
       return undefined;
     }
-    if (afterScan ? keptBetweenScans(marker) : keptBeforeScan(marker)) {
+    if (
+      afterScan
+        ? keptBetweenScans(marker)
+        : keptBeforeScan(marker) && appSegmentKept(b, q, marker, length)
+    ) {
       kept.push(b.subarray(q - 1, end));
     } else if (afterScan && !isAppOrComment(marker)) {
       return undefined;
@@ -346,8 +376,9 @@ const VP8X_DROPPED_FLAGS = 0x20 | 0x08 | 0x04;
 /**
  * The chunks must tile the RIFF body exactly (each padded to an even
  * length). A simple (VP8 or VP8L) file is that one chunk only, returned
- * unchanged. A VP8X file keeps only WEBP_KEPT_CHUNKS, loses the flags of
- * what was dropped, and gets a new RIFF size.
+ * unchanged. A VP8X file must hold exactly one VP8 or VP8L chunk; it keeps
+ * only WEBP_KEPT_CHUNKS, loses the flags of what was dropped, and gets a
+ * new RIFF size.
  */
 function stripWebp(b: Buffer): Buffer | undefined {
   const chunks: { fourCC: string; start: number; end: number }[] = [];
@@ -371,6 +402,12 @@ function stripWebp(b: Buffer): Buffer | undefined {
   const kept = chunks
     .filter((c) => WEBP_KEPT_CHUNKS.has(c.fourCC))
     .map((c) => Buffer.from(b.subarray(c.start, c.end)));
+  const images = chunks.filter(
+    (c) => c.fourCC === 'VP8 ' || c.fourCC === 'VP8L',
+  ).length;
+  if (images !== 1) {
+    return undefined;
+  }
   kept[0][8] &= ~VP8X_DROPPED_FLAGS;
   const head = Buffer.from(b.subarray(0, 12));
   const body = Buffer.concat(kept);
@@ -397,11 +434,13 @@ const PNG_KEPT_CHUNKS = new Set([
 ]);
 
 /**
- * Walks every chunk (length, type, data, CRC): IHDR first with length 13,
- * IEND last with nothing after it; whole allow-listed chunks are copied.
+ * Walks every chunk (length, type, data, CRC): IHDR first with length 13
+ * and nowhere else, IEND last with nothing after it, at least one IDAT;
+ * whole allow-listed chunks are copied.
  */
 function stripPng(b: Buffer): Buffer | undefined {
   const kept: Buffer[] = [b.subarray(0, 8)];
+  let sawImageData = false;
   let p = 8;
   while (p + 12 <= b.length) {
     const length = b.readUInt32BE(p);
@@ -410,14 +449,17 @@ function stripPng(b: Buffer): Buffer | undefined {
     }
     const type = b.toString('latin1', p + 4, p + 8);
     const end = p + 12 + length;
-    if (p === 8 && (type !== 'IHDR' || length !== 13)) {
+    if ((p === 8) !== (type === 'IHDR') || (p === 8 && length !== 13)) {
       return undefined;
+    }
+    if (type === 'IDAT') {
+      sawImageData = true;
     }
     if (PNG_KEPT_CHUNKS.has(type)) {
       kept.push(b.subarray(p, end));
     }
     if (type === 'IEND') {
-      return end === b.length ? Buffer.concat(kept) : undefined;
+      return end === b.length && sawImageData ? Buffer.concat(kept) : undefined;
     }
     p = end;
   }

@@ -53,7 +53,12 @@ function vp8x(width: number, height: number, flags = 0x10): Buffer {
 
 const bytes = (...values: number[]) => Buffer.from(values);
 
-const APP0 = Buffer.concat([bytes(0xff, 0xe0, 0x00, 0x10), Buffer.alloc(14)]);
+/** JFIF APP0 as Chrome and ImageIO write it: length 16, no thumbnail. */
+const APP0 = Buffer.concat([
+  bytes(0xff, 0xe0, 0x00, 0x10),
+  Buffer.from('JFIF\0', 'latin1'),
+  bytes(0x01, 0x01, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00),
+]);
 
 /** A baseline (or other) SOF segment: precision 8, height, width, 3 components. */
 function sof(marker: number, width: number, height: number): Buffer {
@@ -272,7 +277,14 @@ const segment = (marker: number, payload: Buffer) => {
 const APP1_GPS = segment(0xe1, Buffer.from('Exif\0\0GPS-LAT-51.5-LON-0.12'));
 const APP2_ICC = segment(0xe2, Buffer.from('ICC_PROFILE-SECRET'));
 const COM = segment(0xfe, Buffer.from('COMMENT-HOME-ADDRESS'));
-const APP14 = segment(0xee, Buffer.from('Adobe-colour-kept'));
+/** Adobe APP14: 'Adobe', version, flags0, flags1, transform; length 14. */
+const APP14 = segment(
+  0xee,
+  Buffer.concat([
+    Buffer.from('Adobe', 'latin1'),
+    bytes(0x00, 0x64, 0x00, 0x00, 0x00, 0x00, 0x01),
+  ]),
+);
 const APP15 = segment(0xef, Buffer.from('APP15-NOTE'));
 const SOS_TO_END = Buffer.concat([
   bytes(0xff, 0xda, 0x00, 0x08, 0x01, 0x01, 0x00, 0x00, 0x3f, 0x00),
@@ -330,6 +342,48 @@ describe('stripImageMetadata: JPEG', () => {
         jpeg(bytes(0xff, 0x00), APP0, sof(0xc0, 800, 600), SOS_TO_END),
       ),
     ).toBeUndefined();
+  });
+});
+
+describe('stripImageMetadata: APP0 and APP14 by content', () => {
+  const tail = () => Buffer.concat([sof(0xc0, 800, 600), SOS_TO_END]);
+  const clean = () => jpeg(tail());
+
+  it('keeps JFIF APP0 of length 16 with a 0x0 thumbnail and Adobe APP14 of length 14', () => {
+    const kept = jpeg(APP0, APP14, tail());
+    expect(stripImageMetadata(kept)).toEqual(kept);
+  });
+
+  it('drops an APP0 that is not JFIF, or is JFIF with a thumbnail or another length', () => {
+    const notJfif = segment(
+      0xe0,
+      Buffer.concat([Buffer.from('JFXX\0', 'latin1'), Buffer.alloc(9)]),
+    );
+    const secret = segment(0xe0, Buffer.from('APP0-SECRET-HOME'));
+    const thumbnail = Buffer.from(APP0);
+    thumbnail[16] = 0x01;
+    thumbnail[17] = 0x01;
+    const withThumb = segment(
+      0xe0,
+      Buffer.concat([thumbnail.subarray(4), Buffer.from('RGB')]),
+    );
+    const longer = segment(
+      0xe0,
+      Buffer.concat([APP0.subarray(4), Buffer.from('APP0-EXTRA')]),
+    );
+    for (const app0 of [notJfif, secret, thumbnail, withThumb, longer]) {
+      expect(stripImageMetadata(jpeg(app0, tail()))).toEqual(clean());
+    }
+  });
+
+  it('drops an APP14 that is not Adobe, or is Adobe of another length', () => {
+    const notAdobe = segment(0xee, Buffer.from('Abode-SECRET'));
+    const longer = segment(0xee, Buffer.from('Adobe-colour-SECRET'));
+    for (const app14 of [notAdobe, longer]) {
+      expect(stripImageMetadata(jpeg(APP0, app14, tail()))).toEqual(
+        jpeg(APP0, tail()),
+      );
+    }
   });
 });
 
@@ -534,6 +588,57 @@ describe('PNG: size and strip', () => {
     const huge = png(ihdr(300, 200), IDAT, IEND);
     huge.writeUInt32BE(0x80000000, 33);
     expect(stripImageMetadata(huge)).toBeUndefined();
+  });
+});
+
+describe('PNG: image data and IHDR position', () => {
+  it('a PNG with no IDAT left is undefined', () => {
+    expect(stripImageMetadata(png(ihdr(300, 200), IEND))).toBeUndefined();
+    expect(
+      stripImageMetadata(
+        png(
+          ihdr(300, 200),
+          pngChunk('acTL', Buffer.alloc(8, 1)),
+          pngChunk('fdAT', Buffer.from('only-frame')),
+          IEND,
+        ),
+      ),
+    ).toBeUndefined();
+  });
+
+  it('an IHDR anywhere but first is undefined', () => {
+    expect(
+      stripImageMetadata(png(ihdr(300, 200), IDAT, ihdr(1, 1), IEND)),
+    ).toBeUndefined();
+    expect(
+      stripImageMetadata(png(ihdr(300, 200), ihdr(4000, 4000), IDAT, IEND)),
+    ).toBeUndefined();
+  });
+});
+
+describe('stripImageMetadata: WebP image chunks', () => {
+  const header = ['VP8X', vp8xPayload(640, 480, 0x10)] as [string, Buffer];
+  const vp8lPayload = VP8L_1X1.subarray(20);
+
+  it('VP8X with exactly one VP8 or VP8L is kept', () => {
+    for (const image of [
+      ['VP8 ', vp8Payload],
+      ['VP8L', vp8lPayload],
+    ] as [string, Buffer][]) {
+      const file = riffChunks([header, image]);
+      expect(stripImageMetadata(file)).toEqual(file);
+    }
+  });
+
+  it('VP8X with no image chunk, two of them, or one of each is undefined', () => {
+    for (const chunks of [
+      [header, ['ALPH', Buffer.from('ALPHA')]],
+      [header, ['EXIF', Buffer.from('GPS-LAT')]],
+      [header, ['VP8 ', vp8Payload], ['VP8 ', vp8Payload]],
+      [header, ['VP8 ', vp8Payload], ['VP8L', vp8lPayload]],
+    ] as [string, Buffer][][]) {
+      expect(stripImageMetadata(riffChunks(chunks))).toBeUndefined();
+    }
   });
 });
 
