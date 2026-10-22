@@ -269,6 +269,8 @@ export async function renderBannedTab(
   dashboardPage(res, {
     title: 'Suspension records',
     ...(view.status !== undefined && { status: view.status }),
+    // The photo forms' script, only where they render (Leadership, display).
+    ...(leader && show === 'active' && { script: 'bans' as const }),
     body: html`<div class="card">
       <h1>Suspension records</h1>
       ${tabs('banned', counts, banCounts.active)}

@@ -258,6 +258,16 @@ export function httpsRedirectTarget(
   }
 }
 
+/**
+ * The one path whose form body may exceed 32 kB: a ban photo upload
+ * (D4), case-sensitive like the routers. Accepted residual: a signed-out
+ * client can make the server buffer up to BAN_PHOTO_BODY_LIMIT on this
+ * path before the gate answers 403.
+ */
+export const BAN_PHOTO_BODY_PATH = /^\/bans\/[1-9][0-9]{0,8}\/photo\/?$/;
+/** A 150 KB photo is at most 204800 base64url characters, plus _csrf. */
+export const BAN_PHOTO_BODY_LIMIT = '220kb';
+
 export function createDashboardRouter(deps: DashboardDeps): express.Router {
   const now = deps.now ?? Date.now;
   const loginLimiter = deps.loginLimiter ?? new FixedWindowLimiter(10, 60_000);
@@ -351,8 +361,21 @@ export function createDashboardRouter(deps: DashboardDeps): express.Router {
     res.redirect(308, httpsRedirectTarget(deps.origin, req.originalUrl));
   });
   // 32 kB: a 2000-character note of 4-byte characters is about 24 kB once
-  // percent-encoded, plus the other fields.
-  router.use(express.urlencoded({ extended: false, limit: '32kb' }));
+  // percent-encoded, plus the other fields. Only a ban photo upload gets
+  // more (D4). Still before the gate and the unsafe-method guard, which
+  // reads _csrf from the parsed body.
+  const formBody = express.urlencoded({ extended: false, limit: '32kb' });
+  const banPhotoBody = express.urlencoded({
+    extended: false,
+    limit: BAN_PHOTO_BODY_LIMIT,
+  });
+  router.use(function dashboardFormBody(req, res, next) {
+    const parser =
+      req.method === 'POST' && BAN_PHOTO_BODY_PATH.test(req.path)
+        ? banPhotoBody
+        : formBody;
+    parser(req, res, next);
+  });
 
   // ---- Public routes: the only ones reachable without a session. ----
 

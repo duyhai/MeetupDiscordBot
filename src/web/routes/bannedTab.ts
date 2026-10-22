@@ -219,10 +219,40 @@ function liftForm(row: BanRow, csrf: string): SafeHtml {
   </form>`;
 }
 
+/**
+ * One active ban's photo upload (Leadership only, display). The file input
+ * has no name: only the hidden photo field, filled by BAN_PHOTO_SCRIPT,
+ * is sent. The no-JavaScript note shows until the script hides it (the
+ * html guard refuses <noscript>). Every attribute is literal except the
+ * action and the CSRF value.
+ */
+export function banPhotoForm(ban: BanRow, csrf: string): SafeHtml {
+  return html`<form
+    method="post"
+    action="${localUrl(banPhotoPath(ban.id))}"
+    data-ban-photo
+  >
+    ${csrfField(csrf)}
+    <input type="hidden" name="photo" value="" />
+    <p class="note attn" data-ban-photo-nojs>
+      Turn on JavaScript to upload a photo. The page makes the photo smaller
+      before sending it.
+    </p>
+    <label class="field" hidden
+      >Pick a photo <input type="file" accept="image/*"
+    /></label>
+    <canvas class="ban-preview" width="0" height="0" hidden></canvas>
+    <p class="muted" data-ban-photo-status></p>
+    <button type="submit" disabled>
+      ${ban.hasPhoto ? 'Replace photo' : 'Upload photo'}
+    </button>
+  </form>`;
+}
+
 function banRowHtml(
   row: BanRow,
   lifted: boolean,
-  lift: SafeHtml | undefined,
+  actions: SafeHtml | undefined,
 ): SafeHtml {
   return html`<tr>
     <td data-label="Photo">${photoCell(row)}</td>
@@ -249,7 +279,7 @@ function banRowHtml(
             </td>`
         : ''
     }
-    ${lift === undefined ? '' : html`<td data-label="Lift">${lift}</td>`}
+    ${actions ?? ''}
   </tr>`;
 }
 
@@ -298,7 +328,12 @@ function bansTable(view: BannedTabView): SafeHtml {
                   <th>Reason</th>`
               : ''
           }
-          ${canLift ? html`<th>Lift</th>` : ''}
+          ${
+            canLift
+              ? html`<th>Upload photo</th>
+                  <th>Lift</th>`
+              : ''
+          }
         </tr>
       </thead>
       <tbody>
@@ -306,7 +341,12 @@ function bansTable(view: BannedTabView): SafeHtml {
           banRowHtml(
             row,
             lifted,
-            canLift ? liftForm(row, view.csrf) : undefined,
+            canLift
+              ? html`<td data-label="Upload photo">
+                    ${banPhotoForm(row, view.csrf)}
+                  </td>
+                  <td data-label="Lift">${liftForm(row, view.csrf)}</td>`
+              : undefined,
           ),
         )}
       </tbody>

@@ -197,6 +197,35 @@ export function registerBanRoutes(
     back(res, result?.code ?? 'error');
   }) as RequestHandler);
 
+  // POST /dashboard/bans/:id/photo: the photo field BAN_PHOTO_SCRIPT
+  // filled (base64url). The router gives only this path a 220kb body; the
+  // service decodes and checks it, and the redirect carries only the code.
+  router.post(DASHBOARD_PATHS.banPhoto, (async (req, res) => {
+    const banId = parseRowId(req.params.id);
+    if (banId === undefined) {
+      notFound(res);
+      return;
+    }
+    if (!(await leaderOrBack(res))) {
+      return;
+    }
+    const body = req.body as Record<string, unknown> | undefined;
+    if (anyRepeated(body, ['photo'])) {
+      back(res, 'invalid');
+      return;
+    }
+    const { session } = dashboardLocals(res);
+    const result = await call(() =>
+      deps.banActions.uploadPhoto({
+        actor: session.userId,
+        banId,
+        photo: text(body, 'photo'),
+        leadershipConfirmed: true,
+      }),
+    );
+    back(res, result?.code ?? 'error');
+  }) as RequestHandler);
+
   // One photo per request, by ban id only. The type comes from the bytes;
   // anything that is not PNG, JPEG or WebP is the 404 page, never the bytes.
   router.get(DASHBOARD_PATHS.banPhoto, (async (req, res) => {

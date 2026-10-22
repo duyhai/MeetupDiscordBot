@@ -104,6 +104,8 @@ td ul{margin:var(--s1) 0 0;padding-left:var(--s4)}
 .table-scroll th,.table-scroll td{white-space:nowrap;overflow-wrap:normal}
 .table-scroll tr:last-child td{border-bottom:0}
 img.ban-photo{display:block;width:96px;max-width:100%;height:auto;aspect-ratio:1;object-fit:cover;border-radius:8px}
+canvas.ban-preview{display:block;max-width:96px;height:auto;border-radius:8px}
+[hidden]{display:none!important}
 img.thumb{display:block;width:64px;max-width:100%;height:auto;aspect-ratio:1;object-fit:cover;border-radius:8px;
 border:1px solid var(--line);background:var(--raised)}
 figure{margin:0 0 var(--s5)}

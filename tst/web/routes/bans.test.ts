@@ -7,6 +7,8 @@ import {
   registerAllProtectedRoutes,
 } from '../../../src/web/routes/dashboardPages.js';
 import { liftBan } from '../../../src/lib/bans/service.js';
+import { baseSecurityHeaders } from '../../../src/web/dashboardRouter.js';
+import { BAN_PHOTO_SCRIPT } from '../../../src/web/pageKit.js';
 import {
   BAN_REQUEST_DEADLINE_MS,
   BAN_RESULT_MESSAGES,
@@ -591,7 +593,10 @@ describe('ban forms on the Banned tab', () => {
       const res = await get(`${TAB}&result=${junk}`);
       expect(res.status).toBe(200);
       expect(res.text).not.toContain('<script>');
-      expect(res.text).not.toMatch(/class="note (info|attn)"/);
+      // The photo forms' no-JavaScript note is not a result notice.
+      expect(res.text).not.toMatch(
+        /class="note (info|attn)"(?! data-ban-photo-nojs)/,
+      );
     }
   });
 
@@ -690,5 +695,192 @@ describe('ban forms on the Banned tab', () => {
     expect(banActions.record).not.toHaveBeenCalled();
     expect(banActions.import).not.toHaveBeenCalled();
     expect(banActions.lift).not.toHaveBeenCalled();
+  });
+});
+
+/** The upload form of one row, from its opening tag to its closing one. */
+const photoForms = (body: string) =>
+  body.match(/<form[^>]*data-ban-photo[\s\S]*?<\/form>/g) ?? [];
+
+describe('ban photo upload', () => {
+  it('a Leader sees Upload photo, Replace photo when a photo exists; a Moderator sees neither', async () => {
+    const rows = {
+      active: [banRow({ id: 3 }), banRow({ id: 4, hasPhoto: true })],
+    };
+    const leader = await postSetup({ leader: true, rows });
+    const page = await leader.get(TAB);
+    const forms = photoForms(page.text);
+    expect(forms).toHaveLength(2);
+    expect(forms[0]).toContain('action="/dashboard/bans/3/photo"');
+    expect(forms[0]).toMatch(/method="post"/);
+    expect(words(forms[0])).toContain('Upload photo');
+    expect(forms[1]).toContain('action="/dashboard/bans/4/photo"');
+    expect(words(forms[1])).toContain('Replace photo');
+    for (const form of forms) {
+      expect(form).toMatch(/<input type="hidden" name="_csrf" value="[^"]+"/);
+      expect(form).toContain('<input type="hidden" name="photo" value=""');
+      expect(form).toMatch(/<button type="submit" disabled>/);
+    }
+    // The lifted list offers no upload.
+    const lifted = await leader.get(`${TAB}&show=lifted`);
+    expect(photoForms(lifted.text)).toEqual([]);
+
+    const moderator = await postSetup({ leader: false, rows });
+    const plain = await moderator.get(TAB);
+    expect(photoForms(plain.text)).toEqual([]);
+    expect(plain.text).not.toMatch(/action="[^"]*\/photo"/);
+    expect(plain.text).not.toContain(BAN_PHOTO_SCRIPT.value);
+  });
+
+  it('the file input has no name attribute and the page carries BAN_PHOTO_SCRIPT with the nonce', async () => {
+    const { get } = await postSetup({ leader: true });
+    const page = await get(TAB);
+    const [form] = photoForms(page.text);
+    const file = /<input[^>]*type="file"[^>]*>/.exec(form)?.[0] ?? '';
+    expect(file).toContain('accept="image/*"');
+    expect(file).not.toMatch(/\sname=/);
+    const nonce = /<style nonce="([^"]+)"/.exec(page.text)?.[1];
+    expect(nonce).toBeDefined();
+    expect(page.text).toContain(
+      `<script nonce="${nonce}">${BAN_PHOTO_SCRIPT.value}</script>`,
+    );
+    expect(form).toMatch(
+      /<canvas class="ban-preview" width="0" height="0" hidden>/,
+    );
+  });
+
+  it('the no-JavaScript note is present in the markup, shown, and there is no noscript', async () => {
+    const { get } = await postSetup({ leader: true });
+    const page = await get(TAB);
+    const [form] = photoForms(page.text);
+    expect(form).toMatch(/<p class="note attn" data-ban-photo-nojs>/);
+    expect(words(form)).toContain(
+      'Turn on JavaScript to upload a photo. The page makes the photo smaller before sending it.',
+    );
+    // The picker starts hidden; the script shows it.
+    expect(form).toMatch(/<label class="field" hidden\s*>/);
+    expect(page.text).not.toContain('noscript');
+  });
+
+  it('POST /bans/1/photo passes the raw photo field to uploadPhoto and redirects photo-saved', async () => {
+    const { post, banActions } = await postSetup();
+    const photo = WEBP_BYTES.toString('base64url');
+    const res = await post('/dashboard/bans/1/photo', {
+      photo,
+      actor: '999999999999999999',
+    });
+    expect(res.status).toBe(303);
+    expect(location(res)).toBe(BACK('photo-saved'));
+    expect(banActions.uploadPhoto).toHaveBeenCalledWith({
+      actor: USER.id,
+      banId: 1,
+      photo,
+      leadershipConfirmed: true,
+    });
+  });
+
+  it('a photo field near the 220 KB body limit reaches the service', async () => {
+    const { post, banActions } = await postSetup();
+    const photo = 'A'.repeat(204_800);
+    expect(location(await post('/dashboard/bans/3/photo', { photo }))).toBe(
+      BACK('photo-saved'),
+    );
+    expect(banActions.uploadPhoto).toHaveBeenCalledWith(
+      expect.objectContaining({ photo }),
+    );
+  });
+
+  it('Review Focus 1: a refused photo redirects with the fixed photo-not-accepted text and the location carries no data', async () => {
+    const { post, get } = await postSetup({
+      actions: {
+        uploadPhoto: vi.fn(async () => ({
+          code: 'photo-not-accepted' as const,
+        })),
+      },
+    });
+    const forged = Buffer.from(
+      'RIFF\x10\x00\x00\x00WEBP<script>alert(1)</script>',
+      'latin1',
+    ).toString('base64url');
+    const res = await post('/dashboard/bans/3/photo', { photo: forged });
+    expect(location(res)).toBe(BACK('photo-not-accepted'));
+    expect(location(res)).not.toContain(forged.slice(0, 8));
+    const page = await get(location(res));
+    expect(page.text).toContain(BAN_RESULT_MESSAGES['photo-not-accepted']);
+    expect(page.text).not.toContain('alert(1)');
+    expect(page.text).not.toContain(forged.slice(0, 8));
+  });
+
+  it('a missing or repeated photo field reaches no service: invalid or photo-not-accepted', async () => {
+    const { post, postRaw, banActions } = await postSetup();
+    expect(
+      location(await postRaw('/dashboard/bans/3/photo', 'photo=a&photo=b')),
+    ).toBe(BACK('invalid'));
+    expect(banActions.uploadPhoto).not.toHaveBeenCalled();
+    // Missing: the service decides (photo-not-accepted in production).
+    await post('/dashboard/bans/3/photo');
+    expect(banActions.uploadPhoto).toHaveBeenCalledWith(
+      expect.objectContaining({ photo: undefined }),
+    );
+  });
+
+  it('POST /bans/abc/photo is a 404', async () => {
+    const { post, banActions } = await postSetup();
+    for (const id of ['abc', '0', '01', '1234567890']) {
+      // eslint-disable-next-line no-await-in-loop -- one request at a time
+      const res = await post(`/dashboard/bans/${id}/photo`, { photo: 'AAAA' });
+      expect(res.status).toBe(404);
+    }
+    expect(banActions.uploadPhoto).not.toHaveBeenCalled();
+  });
+
+  it("a Moderator's upload is refused live; the service is not called", async () => {
+    const { post, isLeadership, banActions } = await postSetup();
+    isLeadership.mockResolvedValue(false);
+    const res = await post('/dashboard/bans/3/photo', { photo: 'AAAA' });
+    expect(location(res)).toBe(BACK('not-leadership'));
+    expect(banActions.uploadPhoto).not.toHaveBeenCalled();
+    isLeadership.mockRejectedValue(new Error('discord down'));
+    expect(
+      location(await post('/dashboard/bans/3/photo', { photo: 'AAAA' })),
+    ).toBe(BACK('leadership-unavailable'));
+    expect(banActions.uploadPhoto).not.toHaveBeenCalled();
+  });
+
+  it('an upload that hangs answers error after 20 s', async () => {
+    let started: () => void = () => undefined;
+    const startedPromise = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const { post } = await postSetup({
+      actions: {
+        uploadPhoto: vi.fn(() => {
+          started();
+          return never<{ code: 'photo-saved' }>();
+        }),
+      },
+    });
+    fakeTimers();
+    let settled = false;
+    const pending = post('/dashboard/bans/3/photo', { photo: 'AAAA' }).then(
+      (res) => {
+        settled = true;
+        return res;
+      },
+    );
+    await startedPromise;
+    await vi.advanceTimersByTimeAsync(BAN_REQUEST_DEADLINE_MS - 1);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(location(await pending)).toBe(BACK('error'));
+  });
+
+  it('the CSP header is unchanged on the Banned tab', async () => {
+    const { get } = await postSetup({ leader: true });
+    const page = await get(TAB);
+    const nonce = /<script nonce="([^"]+)">/.exec(page.text)?.[1] ?? '';
+    expect(page.headers['content-security-policy']).toBe(
+      baseSecurityHeaders(nonce)['Content-Security-Policy'],
+    );
   });
 });
