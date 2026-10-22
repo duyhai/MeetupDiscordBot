@@ -78,7 +78,10 @@ Staff keep banned members in a "Banned Members" tab of the no-show tracker workb
   - decodes the base64;
   - accepts only bytes that sniff as WebP (the existing `sniffImageType`);
   - reads the width and height from the WebP header (VP8, VP8L or VP8X) and refuses anything over 512 px on either side or over 150 KB;
+  - strips container metadata from the accepted bytes before the caps are checked and before storing (controller ruling 2026-10-22, see below);
   - stores the bytes with `photo_source='upload'`.
+
+  **Metadata strip (controller ruling 2026-10-22).** The canvas re-encode drops metadata, but a forged post need not come from the canvas, and Safari's canvas JPEG may carry a minimal EXIF APP1. So the server strips rather than refuses, with container-level byte surgery and no decoding (`stripImageMetadata`). JPEG: the segments before SOS lose APP1–APP13, APP15 and COM; APP0 (JFIF) and APP14 (Adobe colour) stay; everything from SOS on is copied unchanged. WebP: a VP8X file loses its `EXIF` and `XMP ` chunks and their flags, and gets a new RIFF size; a plain VP8/VP8L file must be exactly one chunk and is kept as is. Anything malformed is refused. The sweep fill strips the same way.
 
   An upload replaces any existing photo, including one the sweep filled in. Staff can always correct the photo; the sweep cannot.
 - **CSP.** Unchanged. The page doesn't preview through a `blob:` URL; the preview is the canvas itself, so `img-src` stays `'self'`. The upload is a normal form post, so `connect-src` stays `'none'`.

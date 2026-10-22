@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   readImageSize,
   sniffImageType,
+  stripImageMetadata,
 } from '../../../src/lib/helpers/imageBytes.js';
 import { sniffImageType as reExported } from '../../../src/web/images.js';
 
@@ -201,6 +202,191 @@ describe('readImageSize: JPEG', () => {
     expect(
       readImageSize(jpeg(bytes(0x00, 0xff), APP0, sof(0xc0, 800, 600))),
     ).toBeUndefined();
+  });
+
+  it('FF 00 outside entropy data', () => {
+    expect(
+      readImageSize(jpeg(bytes(0xff, 0x00), APP0, sof(0xc0, 800, 600))),
+    ).toBeUndefined();
+  });
+});
+
+describe('readImageSize: first chunk size', () => {
+  /** `image` with the first chunk's declared size (offset 16) replaced. */
+  const declared = (image: Buffer, size: number) => {
+    const copy = Buffer.from(image);
+    copy.writeUInt32LE(size, 16);
+    return copy;
+  };
+
+  it('VP8 and VP8X need a declared chunk size of at least 10', () => {
+    expect(readImageSize(declared(vp8(512, 384), 9))).toBeUndefined();
+    expect(readImageSize(declared(vp8(512, 384), 0))).toBeUndefined();
+    expect(readImageSize(declared(vp8x(640, 480), 9))).toBeUndefined();
+    expect(readImageSize(declared(vp8(512, 384), 10))).toEqual({
+      type: 'image/webp',
+      width: 512,
+      height: 384,
+    });
+  });
+
+  it('VP8L needs a declared chunk size of at least 5', () => {
+    expect(readImageSize(declared(VP8L_1X1, 4))).toBeUndefined();
+    expect(readImageSize(declared(VP8L_1X1, 5))).toEqual({
+      type: 'image/webp',
+      width: 1,
+      height: 1,
+    });
+  });
+});
+
+/** RIFF/WEBP from several chunks, each padded to an even length. */
+function riffChunks(chunks: [string, Buffer][]): Buffer {
+  const parts = chunks.map(([fourCC, payload]) => {
+    const head = Buffer.alloc(8);
+    head.write(fourCC, 0, 'latin1');
+    head.writeUInt32LE(payload.length, 4);
+    return Buffer.concat([
+      head,
+      payload,
+      payload.length % 2 === 1 ? Buffer.alloc(1) : Buffer.alloc(0),
+    ]);
+  });
+  const body = Buffer.concat(parts);
+  const head = Buffer.alloc(12);
+  head.write('RIFF', 0, 'latin1');
+  head.writeUInt32LE(4 + body.length, 4);
+  head.write('WEBP', 8, 'latin1');
+  return Buffer.concat([head, body]);
+}
+
+const vp8xPayload = (width: number, height: number, flags: number) =>
+  vp8x(width, height, flags).subarray(20);
+const vp8Payload = vp8(640, 480).subarray(20);
+
+const segment = (marker: number, payload: Buffer) => {
+  const head = bytes(0xff, marker, 0, 0);
+  head.writeUInt16BE(payload.length + 2, 2);
+  return Buffer.concat([head, payload]);
+};
+const APP1_GPS = segment(0xe1, Buffer.from('Exif\0\0GPS-LAT-51.5-LON-0.12'));
+const APP2_ICC = segment(0xe2, Buffer.from('ICC_PROFILE-SECRET'));
+const COM = segment(0xfe, Buffer.from('COMMENT-HOME-ADDRESS'));
+const APP14 = segment(0xee, Buffer.from('Adobe-colour-kept'));
+const APP15 = segment(0xef, Buffer.from('APP15-NOTE'));
+const SOS_TO_END = Buffer.concat([
+  bytes(0xff, 0xda, 0x00, 0x08, 0x01, 0x01, 0x00, 0x00, 0x3f, 0x00),
+  Buffer.from('entropy-data-kept'),
+  bytes(0xff, 0x00, 0x12, 0xff, 0xd9),
+]);
+
+describe('stripImageMetadata: JPEG', () => {
+  const marked = jpeg(
+    APP0,
+    APP1_GPS,
+    APP2_ICC,
+    COM,
+    APP14,
+    APP15,
+    sof(0xc0, 800, 600),
+    SOS_TO_END,
+  );
+
+  it('drops APP1-APP13, APP15 and COM; keeps APP0, APP14, SOF and everything from SOS', () => {
+    const stripped = stripImageMetadata(marked);
+    expect(stripped).toBeDefined();
+    const text = stripped.toString('latin1');
+    for (const gone of ['GPS-LAT', 'Exif', 'ICC_PROFILE', 'COMMENT', 'APP15']) {
+      expect(text).not.toContain(gone);
+    }
+    expect(stripped).toEqual(
+      jpeg(APP0, APP14, sof(0xc0, 800, 600), SOS_TO_END),
+    );
+    expect(readImageSize(stripped)).toEqual(readImageSize(marked));
+    expect(readImageSize(stripped)).toEqual({
+      type: 'image/jpeg',
+      width: 800,
+      height: 600,
+    });
+  });
+
+  it('a clean JPEG comes back byte for byte', () => {
+    const clean = jpeg(APP0, sof(0xc0, 800, 600), SOS_TO_END);
+    expect(stripImageMetadata(clean)).toEqual(clean);
+  });
+
+  it('malformed JPEG is undefined: no SOS, EOI first, a segment past the end, FF 00 before SOS', () => {
+    expect(stripImageMetadata(jpeg(APP0, sof(0xc0, 800, 600)))).toBeUndefined();
+    expect(
+      stripImageMetadata(
+        jpeg(APP0, bytes(0xff, 0xd9), sof(0xc0, 800, 600), SOS_TO_END),
+      ),
+    ).toBeUndefined();
+    expect(
+      stripImageMetadata(jpeg(bytes(0xff, 0xe1, 0x00, 0x40), Buffer.alloc(4))),
+    ).toBeUndefined();
+    expect(
+      stripImageMetadata(
+        jpeg(bytes(0xff, 0x00), APP0, sof(0xc0, 800, 600), SOS_TO_END),
+      ),
+    ).toBeUndefined();
+  });
+});
+
+describe('stripImageMetadata: WebP', () => {
+  it('VP8X: drops EXIF and XMP chunks, clears their flags, rewrites the RIFF size', () => {
+    const alph = Buffer.from('ALPHA-ODD'); // odd: padded
+    const marked = riffChunks([
+      ['VP8X', vp8xPayload(640, 480, 0x10 | 0x08 | 0x04)],
+      ['ALPH', alph],
+      ['VP8 ', vp8Payload],
+      ['EXIF', Buffer.from('GPS-LAT-51.5-ODD')],
+      ['XMP ', Buffer.from('<x:xmpmeta>HOME</x:xmpmeta>')],
+    ]);
+    const stripped = stripImageMetadata(marked);
+    expect(stripped).toBeDefined();
+    const text = stripped.toString('latin1');
+    for (const gone of ['EXIF', 'GPS-LAT', 'XMP ', 'xmpmeta']) {
+      expect(text).not.toContain(gone);
+    }
+    expect(stripped).toEqual(
+      riffChunks([
+        ['VP8X', vp8xPayload(640, 480, 0x10)],
+        ['ALPH', alph],
+        ['VP8 ', vp8Payload],
+      ]),
+    );
+    expect(stripped.readUInt32LE(4) + 8).toBe(stripped.length);
+    expect(readImageSize(stripped)).toEqual({
+      type: 'image/webp',
+      width: 640,
+      height: 480,
+    });
+  });
+
+  it('plain VP8 and VP8L come back unchanged', () => {
+    expect(stripImageMetadata(vp8(512, 384))).toEqual(vp8(512, 384));
+    expect(stripImageMetadata(VP8L_1X1)).toEqual(VP8L_1X1);
+  });
+
+  it('malformed WebP is undefined: a chunk past the end, a simple file with a second chunk', () => {
+    const truncated = riffChunks([
+      ['VP8X', vp8xPayload(640, 480, 0x10)],
+      ['VP8 ', vp8Payload],
+    ]);
+    truncated.writeUInt32LE(9999, 30 + 4);
+    expect(stripImageMetadata(truncated)).toBeUndefined();
+    const smuggled = riffChunks([
+      ['VP8 ', vp8Payload],
+      ['EXIF', Buffer.from('GPS-LAT')],
+    ]);
+    expect(stripImageMetadata(smuggled)).toBeUndefined();
+  });
+
+  it('PNG, junk and non-Buffers are undefined', () => {
+    expect(stripImageMetadata(PNG_1X1)).toBeUndefined();
+    expect(stripImageMetadata(Buffer.from('<html>'))).toBeUndefined();
+    expect(stripImageMetadata(null)).toBeUndefined();
   });
 });
 
