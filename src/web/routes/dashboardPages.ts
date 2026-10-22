@@ -1,5 +1,12 @@
 import express from 'express';
 
+import type {
+  importBans,
+  liftBan,
+  recordBan,
+  uploadBanPhoto,
+  BanResultCode,
+} from '../../lib/bans/service.js';
 import { LogEntry } from '../../lib/helpers/discordLogger.js';
 import { RebuildResult } from '../../lib/reports/buildJob.js';
 import { Period } from '../../lib/reports/period.js';
@@ -112,6 +119,24 @@ export interface WorkspaceActions {
   moderationLog(entry: LogEntry): Promise<unknown>;
 }
 
+/**
+ * The ban changes (the service). The routes run the live Leadership check
+ * and pass leadershipConfirmed; each may reject, and the routes answer
+ * 'error'.
+ */
+export interface BanActions {
+  record(
+    input: Parameters<typeof recordBan>[1],
+  ): Promise<{ code: BanResultCode }>;
+  import(
+    input: Parameters<typeof importBans>[1],
+  ): ReturnType<typeof importBans>;
+  lift(input: Parameters<typeof liftBan>[1]): Promise<{ code: BanResultCode }>;
+  uploadPhoto(
+    input: Parameters<typeof uploadBanPhoto>[1],
+  ): Promise<{ code: BanResultCode }>;
+}
+
 /** requestRebuild's answer, or 'unavailable' when the bot is not ready to build. */
 export type PageRebuildResult =
   RebuildResult | { status: 'unavailable'; message: string };
@@ -133,6 +158,8 @@ export interface DashboardPageDeps {
   suspensions: () => Promise<SuspensionPageReader>;
   /** The member ban store (dashboard pool). */
   bans: () => Promise<BanPageReader>;
+  /** Record, import, lift and photo upload (the ban service). */
+  banActions: BanActions;
   /** The identity change store (pool of 2, shared with the sweeps). */
   identity: () => Promise<IdentityPageReader>;
   /** The daily link progress counts. */

@@ -1,18 +1,33 @@
 import express from 'express';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { BanRow, BanState } from '../../../src/lib/bans/types.js';
 import {
   DashboardPageDeps,
   registerAllProtectedRoutes,
 } from '../../../src/web/routes/dashboardPages.js';
-import { registerBanRoutes } from '../../../src/web/routes/bans.js';
+import { liftBan } from '../../../src/lib/bans/service.js';
+import {
+  BAN_REQUEST_DEADLINE_MS,
+  BAN_RESULT_MESSAGES,
+  registerBanRoutes,
+} from '../../../src/web/routes/bans.js';
+import { LEADERSHIP_CHECK_DEADLINE_MS } from '../../../src/web/routes/workspaceActions.js';
 import { clientFor } from '../../setup/loopbackServer.js';
-import { closeServers, listen, makeApp, signIn } from '../dashboardHarness.js';
+import {
+  Client,
+  ORIGIN,
+  USER,
+  closeServers,
+  listen,
+  makeApp,
+  signIn,
+} from '../dashboardHarness.js';
 import {
   PAGE_NOW,
   WEBP_BYTES,
   banRow,
+  fakeBanActions,
   fakeBans,
   fakeOrganizerDeps,
   fakePageDeps,
@@ -20,7 +35,11 @@ import {
   suspensionRow,
 } from './pageFakes.js';
 
-afterEach(closeServers);
+afterEach(() => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+  return closeServers();
+});
 
 const TAB = '/dashboard/suspensions?state=banned';
 const UPLOADER = '223456789012345678';
@@ -317,7 +336,7 @@ describe('ban photo route', () => {
   it('the photo route sets its own headers, without the router base headers', async () => {
     const bans = fakeBans({ active: [] }, { 5: WEBP_BYTES });
     const router = express.Router();
-    registerBanRoutes(router, { now: () => PAGE_NOW, bans: async () => bans });
+    registerBanRoutes(router, fakePageDeps({ bans: async () => bans }));
     const app = express();
     app.use('/dashboard', router);
     const res = await clientFor(await listen(app)).get(
@@ -339,5 +358,337 @@ describe('ban photo route', () => {
     const res = await req.get('/dashboard/bans/5/photo');
     expect(res.status).toBe(302);
     expect(res.headers.location).toMatch(/login/);
+  });
+});
+
+async function tokenOf(req: Client, cookie: string): Promise<string> {
+  const home = await req.get('/dashboard').set('Cookie', cookie);
+  const match = /name="_csrf" value="([^"]+)"/.exec(home.text);
+  if (!match) {
+    throw new Error('home page has no CSRF field');
+  }
+  return match[1];
+}
+
+const never = <T>() => new Promise<T>(() => undefined);
+
+/** Only the timers the deadlines use: the loopback server's own I/O keeps running. */
+const fakeTimers = () =>
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+
+async function postSetup(
+  options: {
+    leader?: boolean | Error;
+    actions?: Partial<DashboardPageDeps['banActions']>;
+    rows?: Partial<Record<BanState, BanRow[]>>;
+  } = {},
+) {
+  const banActions = { ...fakeBanActions(), ...options.actions };
+  const isLeadership = vi.fn<(id: string) => Promise<boolean>>(async () => {
+    if (options.leader instanceof Error) {
+      throw options.leader;
+    }
+    return options.leader ?? true;
+  });
+  const bans = fakeBans(options.rows ?? { active: [banRow({ id: 3 })] });
+  const { req } = await makeApp({
+    now: () => PAGE_NOW.getTime(),
+    protectedRoutes: (r) =>
+      registerAllProtectedRoutes(r, {
+        organizer: fakeOrganizerDeps(),
+        pages: fakePageDeps({
+          isLeadership,
+          banActions,
+          bans: async () => bans,
+        }),
+      }),
+  });
+  const cookie = await signIn(req);
+  const token = await tokenOf(req, cookie);
+  const get = (path: string) => req.get(path).set('Cookie', cookie);
+  const post = (path: string, body: Record<string, string> = {}) =>
+    req
+      .post(path)
+      .set('Cookie', cookie)
+      .set('Origin', ORIGIN)
+      .type('form')
+      .send({ _csrf: token, ...body });
+  const postRaw = (path: string, body: string) =>
+    req
+      .post(path)
+      .set('Cookie', cookie)
+      .set('Origin', ORIGIN)
+      .type('form')
+      .send(`_csrf=${encodeURIComponent(token)}&${body}`);
+  return { banActions, isLeadership, get, post, postRaw };
+}
+
+const location = (res: { headers: Record<string, unknown> }) =>
+  String(res.headers.location);
+const BACK = (code: string) =>
+  `/dashboard/suspensions?state=banned&result=${code}`;
+const ADD = { memberId: '424242', memberName: 'Ann', bannedOn: '', notes: '' };
+
+describe('ban forms on the Banned tab', () => {
+  it('a Moderator sees no ban forms; a Leader sees Add, Import and Lift', async () => {
+    const moderator = await postSetup({ leader: false });
+    const plain = await moderator.get(TAB);
+    expect(plain.status).toBe(200);
+    expect(plain.text).not.toContain('action="/dashboard/bans"');
+    expect(plain.text).not.toContain('action="/dashboard/bans/import"');
+    expect(plain.text).not.toContain('/lift"');
+    expect(words(plain.text)).toContain(
+      'Only the 1.5 Leadership Team can record, import, upload or lift a ban.',
+    );
+
+    const leader = await postSetup({ leader: true });
+    const page = await leader.get(TAB);
+    expect(page.text).toContain('action="/dashboard/bans"');
+    expect(page.text).toContain('action="/dashboard/bans/import"');
+    expect(page.text).toContain('action="/dashboard/bans/3/lift"');
+    expect(page.text).toMatch(/name="memberId"[^>]*inputmode="numeric"/);
+    expect(page.text).toContain('pattern="[0-9]{1,20}"');
+    expect(page.text).toMatch(
+      /type="date"[^>]*min="2013-03-01"[^>]*max="2026-10-05"/,
+    );
+    expect(page.text).toContain('name="csv"');
+    expect(page.text).toContain('member_id,member_name,banned_on,notes');
+    expect(page.text).toMatch(/<textarea[^>]*name="reason"[^>]*required/);
+    expect(page.text).toContain('class="danger"');
+    expect(words(page.text)).not.toContain('Only the 1.5 Leadership Team');
+    expect(
+      (page.text.match(/name="_csrf"/g) ?? []).length,
+    ).toBeGreaterThanOrEqual(3);
+    // The lifted list has no Lift form.
+    const lifted = await leader.get(`${TAB}&show=lifted`);
+    expect(lifted.text).not.toContain('/lift"');
+  });
+
+  it('POST /bans records as the session user and redirects with recorded', async () => {
+    const { post, banActions } = await postSetup();
+    const res = await post('/dashboard/bans', {
+      ...ADD,
+      notes: 'n',
+      actor: '999999999999999999',
+    });
+    expect(res.status).toBe(303);
+    expect(location(res)).toBe(BACK('recorded'));
+    expect(banActions.record).toHaveBeenCalledWith({
+      actor: USER.id,
+      memberId: '424242',
+      memberName: 'Ann',
+      bannedOn: '',
+      notes: 'n',
+      leadershipConfirmed: true,
+    });
+  });
+
+  it('POST /bans by a Moderator is refused live even with a cached Leader page', async () => {
+    const { get, post, isLeadership, banActions } = await postSetup();
+    const page = await get(TAB);
+    expect(page.text).toContain('action="/dashboard/bans"');
+    expect(location(await post('/dashboard/bans', ADD))).toBe(BACK('recorded'));
+    expect(banActions.record).toHaveBeenCalledTimes(1);
+    // The role goes: the next POST asks Discord again, within seconds.
+    isLeadership.mockResolvedValue(false);
+    const res = await post('/dashboard/bans', ADD);
+    expect(location(res)).toBe(BACK('not-leadership'));
+    expect(banActions.record).toHaveBeenCalledTimes(1);
+    for (const [path, body] of [
+      ['/dashboard/bans/import', { csv: 'x' }],
+      ['/dashboard/bans/3/lift', { reason: 'r' }],
+    ] as const) {
+      // eslint-disable-next-line no-await-in-loop
+      expect(location(await post(path, body))).toBe(BACK('not-leadership'));
+    }
+    expect(banActions.import).not.toHaveBeenCalled();
+    expect(banActions.lift).not.toHaveBeenCalled();
+  });
+
+  it('POST /bans when Discord times out answers leadership-unavailable', async () => {
+    const { post, isLeadership, banActions } = await postSetup();
+    let asked: () => void = () => undefined;
+    const askedPromise = new Promise<void>((resolve) => {
+      asked = resolve;
+    });
+    isLeadership.mockImplementation(() => {
+      asked();
+      return never();
+    });
+    fakeTimers();
+    let settled = false;
+    const pending = post('/dashboard/bans', ADD).then((res) => {
+      settled = true;
+      return res;
+    });
+    await askedPromise;
+    await vi.advanceTimersByTimeAsync(LEADERSHIP_CHECK_DEADLINE_MS - 1);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    const res = await pending;
+    expect(location(res)).toBe(BACK('leadership-unavailable'));
+    expect(banActions.record).not.toHaveBeenCalled();
+  });
+
+  it('a service that hangs answers error after 20 s', async () => {
+    let started: () => void = () => undefined;
+    const startedPromise = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const { post } = await postSetup({
+      actions: {
+        record: vi.fn(() => {
+          started();
+          return never<{ code: 'recorded' }>();
+        }),
+      },
+    });
+    fakeTimers();
+    let settled = false;
+    const pending = post('/dashboard/bans', ADD).then((res) => {
+      settled = true;
+      return res;
+    });
+    await startedPromise;
+    await vi.advanceTimersByTimeAsync(BAN_REQUEST_DEADLINE_MS - 1);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(location(await pending)).toBe(BACK('error'));
+  });
+
+  it('a service that throws answers error', async () => {
+    const { post } = await postSetup({
+      actions: { record: vi.fn(() => Promise.reject(new Error('db down'))) },
+    });
+    expect(location(await post('/dashboard/bans', ADD))).toBe(BACK('error'));
+  });
+
+  it('Review Focus 2: a spoofed member id reaches the service as typed and the notice is fixed text', async () => {
+    const { post, get, banActions } = await postSetup({
+      actions: {
+        record: vi.fn(async () => ({ code: 'bad-member-id' as const })),
+      },
+    });
+    const res = await post('/dashboard/bans', { ...ADD, memberId: '١٢٣<b>' });
+    expect(banActions.record).toHaveBeenCalledWith(
+      expect.objectContaining({ memberId: '١٢٣<b>' }),
+    );
+    expect(location(res)).toBe(BACK('bad-member-id'));
+    const page = await get(location(res));
+    expect(page.text).toContain(BAN_RESULT_MESSAGES['bad-member-id']);
+    expect(page.text).not.toContain('١٢٣');
+  });
+
+  it('?result=<script> and unknown codes render no notice', async () => {
+    const { get } = await postSetup();
+    const known = await get(`${TAB}&result=recorded`);
+    expect(known.text).toContain(BAN_RESULT_MESSAGES.recorded);
+    expect(known.text).toContain('class="note info"');
+    const coral = await get(`${TAB}&result=already-banned`);
+    expect(coral.text).toContain('class="note attn"');
+    for (const junk of ['%3Cscript%3E', 'toString', 'constructor', 'nope']) {
+      // eslint-disable-next-line no-await-in-loop
+      const res = await get(`${TAB}&result=${junk}`);
+      expect(res.status).toBe(200);
+      expect(res.text).not.toContain('<script>');
+      expect(res.text).not.toMatch(/class="note (info|attn)"/);
+    }
+  });
+
+  it('an import refusal renders 422 with Row N lines and nothing from the CSV', async () => {
+    const errors = Array.from({ length: 12 }, (_, i) => ({
+      row: i + 2,
+      code: 'member-id' as const,
+    }));
+    const { post, banActions } = await postSetup({
+      actions: {
+        import: vi.fn(async () => ({
+          code: 'import-refused' as const,
+          errors: [{ row: null, code: 'too-many-rows' as const }, ...errors],
+        })),
+      },
+    });
+    const res = await post('/dashboard/bans/import', {
+      csv: 'member_id,member_name,banned_on,notes\nx,Evil<b>Name,,',
+    });
+    expect(res.status).toBe(422);
+    expect(banActions.import).toHaveBeenCalledWith(
+      expect.objectContaining({ actor: USER.id, leadershipConfirmed: true }),
+    );
+    const text = words(res.text);
+    expect(text).toContain('Nothing was imported.');
+    expect(text).toContain(
+      'One import takes at most 200 bans. Split the file.',
+    );
+    expect(text).toContain(
+      'Row 2: member_id must be the Meetup member number, digits only.',
+    );
+    expect(text).toContain('Row 10:');
+    expect(text).not.toContain('Row 11:');
+    expect(text).toContain('…and 3 more');
+    expect(res.text).not.toContain('Evil');
+    expect(res.text).not.toMatch(/<textarea[^>]*name="csv"[^>]*>[^<]+</);
+    expect(res.text).toContain('<ul');
+  });
+
+  it('a successful import redirects imported; an empty csv is invalid', async () => {
+    const { post, banActions } = await postSetup();
+    expect(location(await post('/dashboard/bans/import', { csv: 'a,b' }))).toBe(
+      BACK('imported'),
+    );
+    expect(location(await post('/dashboard/bans/import', { csv: '' }))).toBe(
+      BACK('invalid'),
+    );
+    expect(location(await post('/dashboard/bans/import'))).toBe(
+      BACK('invalid'),
+    );
+    expect(banActions.import).toHaveBeenCalledTimes(1);
+  });
+
+  it('POST /bans/abc/lift is a 404; a missing reason redirects reason-required', async () => {
+    const repo = {
+      record: vi.fn(),
+      importMany: vi.fn(),
+      lift: vi.fn(async () => undefined),
+      setUploadedPhoto: vi.fn(),
+    };
+    const serviceDeps = {
+      now: () => PAGE_NOW,
+      repository: async () => repo,
+      moderationLog: vi.fn(async () => true),
+      isLeadership: vi.fn(async () => false),
+    };
+    const { post } = await postSetup({
+      actions: { lift: (input) => liftBan(serviceDeps, input) },
+    });
+    for (const id of ['abc', '0', '01', '1234567890']) {
+      // eslint-disable-next-line no-await-in-loop -- one request at a time
+      const res = await post(`/dashboard/bans/${id}/lift`, { reason: 'r' });
+      expect(res.status).toBe(404);
+    }
+    expect(location(await post('/dashboard/bans/3/lift'))).toBe(
+      BACK('reason-required'),
+    );
+    expect(
+      location(await post('/dashboard/bans/3/lift', { reason: 'ok' })),
+    ).toBe(BACK('not-active'));
+    expect(repo.lift).toHaveBeenCalledWith(3, USER.id, 'ok');
+    expect(serviceDeps.isLeadership).not.toHaveBeenCalled();
+  });
+
+  it('a repeated field is invalid', async () => {
+    const { postRaw, banActions } = await postSetup();
+    expect(
+      location(await postRaw('/dashboard/bans', 'memberId=1&memberId=2')),
+    ).toBe(BACK('invalid'));
+    expect(
+      location(await postRaw('/dashboard/bans/import', 'csv=a&csv=b')),
+    ).toBe(BACK('invalid'));
+    expect(
+      location(await postRaw('/dashboard/bans/3/lift', 'reason=a&reason=b')),
+    ).toBe(BACK('invalid'));
+    expect(banActions.record).not.toHaveBeenCalled();
+    expect(banActions.import).not.toHaveBeenCalled();
+    expect(banActions.lift).not.toHaveBeenCalled();
   });
 });

@@ -1,4 +1,5 @@
-import express, { Request, RequestHandler, Response } from 'express';
+import express, { RequestHandler, Response } from 'express';
+import { BanState } from '../../lib/bans/types.js';
 
 import { pacificToday, utcDateOnly } from '../../lib/helpers/suspensionList.js';
 import {
@@ -20,8 +21,15 @@ import {
   unavailable,
 } from '../pageKit.js';
 import { PAGE_SIZE, pageNav, parsePage } from '../paging.js';
-import { bannedTabBody, isBanRow, parseBanShow } from './bannedTab.js';
+import {
+  banResultNotice,
+  bannedTabBody,
+  isBanRow,
+  parseBanShow,
+} from './bannedTab.js';
 import type { DashboardPageDeps } from './dashboardPages.js';
+import { LeadershipDisplayCache } from './workspace.js';
+import { leadershipOf } from './workspaceActions.js';
 
 const WHAT = 'Suspension records';
 const STATES: readonly SuspensionState[] = ['active', 'past', 'voided'];
@@ -205,22 +213,33 @@ function recordsTable(
 
 type SuspensionRouteDeps = Pick<
   DashboardPageDeps,
-  'now' | 'suspensions' | 'bans'
+  'now' | 'suspensions' | 'bans' | 'isLeadership'
 >;
 
+/** What one render of the Banned tab shows besides the rows it reads. */
+export interface BannedTabRender {
+  show: BanState;
+  page: number;
+  notice: SafeHtml | '';
+  /** Whether to show the forms: a display answer, never the authority. */
+  leader: Promise<boolean> | boolean;
+  status?: number;
+}
+
 /**
- * The Banned tab: the suspension list is not read, only its counts for the
- * other tab labels.
+ * The Banned tab: the ban rows and counts under the page deadline (a
+ * failure is the 503 page); the suspension counts for the other tab labels
+ * are optional, so a suspension outage only drops them. The suspension
+ * list itself is never read here.
  */
-async function bannedTab(
-  req: Request,
+export async function renderBannedTab(
   res: Response,
-  deps: SuspensionRouteDeps,
-  page: number,
-  today: string,
+  deps: Pick<DashboardPageDeps, 'now' | 'suspensions' | 'bans'>,
+  view: BannedTabRender,
 ): Promise<void> {
-  const show = parseBanShow(req.query.show);
-  const [loaded, suspensionCounts] = await Promise.all([
+  const { show, page } = view;
+  const today = pacificToday(deps.now());
+  const [loaded, suspensionCounts, leader] = await Promise.all([
     load(res, 'Bans', async () => {
       const bans = await deps.bans();
       const [banCounts, rows] = await Promise.all([
@@ -236,6 +255,7 @@ async function bannedTab(
     loadOptional('Suspension counts', async () =>
       (await deps.suspensions()).countByState(today),
     ),
+    view.leader,
   ]);
   if (!loaded.ok) {
     return;
@@ -248,6 +268,7 @@ async function bannedTab(
   }
   dashboardPage(res, {
     title: 'Suspension records',
+    ...(view.status !== undefined && { status: view.status }),
     body: html`<div class="card">
       <h1>Suspension records</h1>
       ${tabs('banned', counts, banCounts.active)}
@@ -256,10 +277,10 @@ async function bannedTab(
         rows,
         counts: banCounts,
         page,
-        notice: '',
-        // Task 5 decides who sees the forms.
-        leader: false,
+        notice: view.notice,
+        leader,
         csrf: dashboardLocals(res).session.csrfToken,
+        today,
       })}
     </div>`,
   });
@@ -269,12 +290,29 @@ export function registerSuspensionRoutes(
   router: express.Router,
   deps: SuspensionRouteDeps,
 ): void {
+  // As the workspace month page: a cached live answer (up to 60 s) decides
+  // only whether the Banned tab shows its forms. Every ban POST asks
+  // Discord live.
+  const displayLeadership = new LeadershipDisplayCache(() =>
+    deps.now().getTime(),
+  );
   router.get(DASHBOARD_PATHS.suspensions, (async (req, res) => {
     const state = parseState(req.query.state);
     const page = parsePage(req.query.page);
     const today = pacificToday(deps.now());
     if (state === 'banned') {
-      await bannedTab(req, res, deps, page, today);
+      const { session } = dashboardLocals(res);
+      await renderBannedTab(res, deps, {
+        show: parseBanShow(req.query.show),
+        page,
+        notice: banResultNotice(req.query.result),
+        // leadershipOf never rejects.
+        leader: displayLeadership
+          .get(session.userId, () =>
+            leadershipOf(deps.isLeadership, session.userId),
+          )
+          .then((answer) => answer === 'leader'),
+      });
       return;
     }
     const [loaded, banCounts] = await Promise.all([

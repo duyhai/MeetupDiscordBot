@@ -71,7 +71,10 @@ export class WorkspaceDeadlineError extends Error {
  * and always cleared. Promise.race subscribes to the work, so a rejection
  * after the deadline is still handled (never an unhandled rejection).
  */
-async function withDeadline<T>(ms: number, fn: () => Promise<T>): Promise<T> {
+export async function withDeadline<T>(
+  ms: number,
+  fn: () => Promise<T>,
+): Promise<T> {
   let timer: NodeJS.Timeout | undefined;
   try {
     const work = fn();

@@ -39,6 +39,7 @@ import {
 import { SuspensionRecord } from '../../../src/lib/repositories/types.js';
 import { UpcomingEntry } from '../../../src/lib/workspace/upcoming.js';
 import {
+  BanActions,
   BanPageReader,
   DashboardPageDeps,
   IdentityPageReader,
@@ -756,6 +757,21 @@ export function fakeWorkspaceActions() {
   } satisfies WorkspaceActions;
 }
 
+/** BanActions whose methods resolve their success codes. */
+export function fakeBanActions() {
+  return {
+    record: vi.fn(async (_input: unknown) => ({ code: 'recorded' as const })),
+    import: vi.fn(async (_input: unknown) => ({
+      code: 'imported' as const,
+      count: 1,
+    })),
+    lift: vi.fn(async (_input: unknown) => ({ code: 'lifted' as const })),
+    uploadPhoto: vi.fn(async (_input: unknown) => ({
+      code: 'photo-saved' as const,
+    })),
+  } satisfies BanActions;
+}
+
 /** The default seed: a September 2026 Hall of Fame row. */
 export const SEED: SeedRow[] = [seedRow('hall_of_fame', SEPT, hofPayload())];
 
@@ -799,6 +815,7 @@ export function fakePageDeps(
     memberLinks: async () => fakeMemberLinks(),
     workspace: async () => fakeWorkspace(),
     workspaceActions: fakeWorkspaceActions(),
+    banActions: fakeBanActions(),
     upcoming: vi.fn(
       async (_memberIds: string[]): Promise<Map<string, UpcomingEntry>> =>
         new Map(),

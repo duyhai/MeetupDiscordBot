@@ -96,6 +96,10 @@ const EXPECTED_UNSAFE_ALLOWED: Record<string, number> = {
   // An empty form has no action: 'invalid', back to the month.
   'POST /no-shows/:period/rows/:rowId': 303,
   'POST /no-shows/:period/sync': 303,
+  // A fake Leadership check says no: refused, back to the Banned tab.
+  'POST /bans': 303,
+  'POST /bans/import': 303,
+  'POST /bans/:id/lift': 303,
 };
 
 function concrete(path: string): string {

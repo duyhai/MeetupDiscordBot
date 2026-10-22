@@ -1,4 +1,12 @@
-import { BanRow, BanState } from '../../lib/bans/types.js';
+import { BAN_CSV_HEADER } from '../../lib/bans/banCsv.js';
+import type { BanResultCode } from '../../lib/bans/service.js';
+import {
+  BAN_LIFT_REASON_MAX,
+  BAN_NAME_MAX,
+  BAN_NOTES_MAX,
+  BanRow,
+  BanState,
+} from '../../lib/bans/types.js';
 import {
   DASHBOARD_BASE,
   DASHBOARD_PATHS,
@@ -45,15 +53,79 @@ export function banPhotoPath(id: number): string {
   return `${DASHBOARD_BASE}${DASHBOARD_PATHS.banPhoto.replace(':id', String(id))}`;
 }
 
+/** '/dashboard/bans/12/lift': only for a ban id from 1 to 2^31-1. Throws RangeError. */
+export function banLiftPath(id: number): string {
+  if (!Number.isSafeInteger(id) || id < 1 || id > MAX_SERIAL) {
+    throw new RangeError('banLiftPath needs a ban id from 1 to 2^31-1');
+  }
+  return `${DASHBOARD_BASE}${DASHBOARD_PATHS.banLift.replace(':id', String(id))}`;
+}
+
+/** Fixed text per ban result code. Nothing from the request or the database is ever shown. */
+export const BAN_RESULT_MESSAGES = {
+  recorded: 'Ban recorded.',
+  imported: 'Bans imported.',
+  lifted: 'Ban lifted. The record and its photo are kept.',
+  'photo-saved': 'Photo saved.',
+  invalid:
+    'That request could not be understood. Reload the page and try again.',
+  'bad-member-id':
+    'The member id must be the Meetup member number, 1 to 20 digits. Nothing was recorded.',
+  'bad-date':
+    'The ban date must be blank or a real date from 2013-03-01 through today.',
+  'name-too-long': 'The name is too long (up to 500 characters).',
+  'notes-too-long': 'The notes are too long (up to 2000 characters).',
+  'already-banned':
+    'This member already has an active ban. Nothing was recorded.',
+  'not-active': 'That ban is not active (already lifted, or not found).',
+  'reason-required': 'Add a reason for lifting the ban, then try again.',
+  'reason-too-long': 'That reason is too long (up to 500 characters).',
+  'photo-not-accepted':
+    'That photo was not accepted. Pick a JPEG or WebP image and try again.',
+  'photo-too-large': 'That photo is over 150 KB after compression.',
+  'photo-too-big': 'That photo is over 512 pixels on a side.',
+  'not-leadership':
+    'Only the 1.5 Leadership Team can record, import, upload or lift a ban. Nothing was changed.',
+  'leadership-unavailable':
+    'Discord could not be reached to check your role. Nothing was changed; try again in a minute.',
+  error: 'That did not save. Please try again in a minute.',
+} as const satisfies Record<BanResultCode, string>;
+
+const isBanResultCode = (code: unknown): code is BanResultCode =>
+  typeof code === 'string' && Object.hasOwn(BAN_RESULT_MESSAGES, code);
+
+/** The codes that report something done: a blurple notice; every other code is coral. */
+const BAN_RESULT_INFO: ReadonlySet<BanResultCode> = new Set([
+  'recorded',
+  'imported',
+  'lifted',
+  'photo-saved',
+]);
+
+/** Fixed text for a known code; anything else in the query renders nothing (never echoed). */
+export function banResultNotice(code: unknown): SafeHtml | '' {
+  if (!isBanResultCode(code)) {
+    return '';
+  }
+  return BAN_RESULT_INFO.has(code)
+    ? html`<p class="note info">${BAN_RESULT_MESSAGES[code]}</p>`
+    : html`<p class="note attn">${BAN_RESULT_MESSAGES[code]}</p>`;
+}
+
 export interface BannedTabView {
   show: BanState;
   rows: BanRow[];
   counts: Record<BanState, number>;
   page: number;
   notice: SafeHtml | '';
-  /** The viewer may change bans (Task 5's forms). */
+  /**
+   * The viewer may change bans: shows the forms. A display check only;
+   * every POST asks Discord live.
+   */
   leader: boolean;
   csrf: string;
+  /** Pacific today ('YYYY-MM-DD'): the date field's max. */
+  today: string;
 }
 
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
@@ -127,7 +199,31 @@ function photoSourceCell(row: BanRow): SafeHtml | '' {
   return '';
 }
 
-function banRowHtml(row: BanRow, lifted: boolean): SafeHtml {
+function csrfField(csrf: string): SafeHtml {
+  return html`<input type="hidden" name="_csrf" value="${csrf}" />`;
+}
+
+function liftForm(row: BanRow, csrf: string): SafeHtml {
+  return html`<form method="post" action="${localUrl(banLiftPath(row.id))}">
+    ${csrfField(csrf)}
+    <label
+      >Reason
+      <textarea
+        name="reason"
+        rows="2"
+        maxlength="${BAN_LIFT_REASON_MAX}"
+        required
+      ></textarea>
+    </label>
+    <button type="submit" class="danger">Lift ban</button>
+  </form>`;
+}
+
+function banRowHtml(
+  row: BanRow,
+  lifted: boolean,
+  lift: SafeHtml | undefined,
+): SafeHtml {
   return html`<tr>
     <td data-label="Photo">${photoCell(row)}</td>
     <td data-label="Member">
@@ -153,6 +249,7 @@ function banRowHtml(row: BanRow, lifted: boolean): SafeHtml {
             </td>`
         : ''
     }
+    ${lift === undefined ? '' : html`<td data-label="Lift">${lift}</td>`}
   </tr>`;
 }
 
@@ -184,6 +281,7 @@ function bansTable(view: BannedTabView): SafeHtml {
       : html`<p>No ${SHOW_LABELS[view.show].toLowerCase()} bans.</p>`;
   }
   const lifted = view.show === 'lifted';
+  const canLift = view.leader && !lifted;
   return html`<table class="stack">
       <thead>
         <tr>
@@ -200,13 +298,70 @@ function bansTable(view: BannedTabView): SafeHtml {
                   <th>Reason</th>`
               : ''
           }
+          ${canLift ? html`<th>Lift</th>` : ''}
         </tr>
       </thead>
       <tbody>
-        ${view.rows.map((row) => banRowHtml(row, lifted))}
+        ${view.rows.map((row) =>
+          banRowHtml(
+            row,
+            lifted,
+            canLift ? liftForm(row, view.csrf) : undefined,
+          ),
+        )}
       </tbody>
     </table>
     ${pager}`;
+}
+
+/** Add one ban and import a CSV: Leadership only (display). */
+function leaderForms(view: BannedTabView): SafeHtml {
+  return html`<h2>Add a ban</h2>
+    <form
+      method="post"
+      action="${localUrl(dashboardPath(DASHBOARD_PATHS.bans))}"
+    >
+      ${csrfField(view.csrf)}
+      <label
+        >Meetup member id
+        <input
+          name="memberId"
+          inputmode="numeric"
+          pattern="[0-9]{1,20}"
+          autocomplete="off"
+          required
+      /></label>
+      <label
+        >Name
+        <input name="memberName" maxlength="${BAN_NAME_MAX}" autocomplete="off"
+      /></label>
+      <label
+        >Banned on (blank if unknown)
+        <input type="date" name="bannedOn" min="2013-03-01" max="${view.today}"
+      /></label>
+      <label
+        >Notes
+        <textarea name="notes" rows="3" maxlength="${BAN_NOTES_MAX}"></textarea>
+      </label>
+      <button type="submit">Add ban</button>
+    </form>
+    <h2>Import bans</h2>
+    <form
+      method="post"
+      action="${localUrl(dashboardPath(DASHBOARD_PATHS.banImport))}"
+    >
+      ${csrfField(view.csrf)}
+      <p class="muted">
+        Paste CSV text whose first line is exactly
+        <code>${BAN_CSV_HEADER}</code>. banned_on may be blank. If any row is
+        refused, nothing is imported.
+      </p>
+      <label
+        >CSV
+        <textarea name="csv" rows="6" required></textarea>
+      </label>
+      <button type="submit">Import bans</button>
+    </form>`;
 }
 
 /** The Banned tab's content under the Suspensions tab nav. */
@@ -216,5 +371,13 @@ export function bannedTabBody(view: BannedTabView): SafeHtml {
       Bans are recorded here only. Discord and Meetup access are changed by
       hand. A lifted ban keeps its photo.
     </p>
-    ${bansTable(view)}`;
+    ${bansTable(view)}
+    ${
+      view.leader
+        ? leaderForms(view)
+        : html`<p class="muted">
+            Only the 1.5 Leadership Team can record, import, upload or lift a
+            ban.
+          </p>`
+    }`;
 }

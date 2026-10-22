@@ -20,6 +20,13 @@ import { PostgresLinkProgressRepository } from '../lib/repositories/postgresLink
 import { PostgresMemberRepository } from '../lib/repositories/postgresMemberRepository.js';
 import { PostgresNoShowWorkspaceRepository } from '../lib/repositories/postgresNoShowWorkspaceRepository.js';
 import { PostgresBanRepository } from '../lib/repositories/postgresBanRepository.js';
+import {
+  BanServiceDeps,
+  importBans,
+  liftBan,
+  recordBan,
+  uploadBanPhoto,
+} from '../lib/bans/service.js';
 import { PostgresSuspensionRepository } from '../lib/repositories/postgresSuspensionRepository.js';
 import {
   performWorkspaceAction,
@@ -44,6 +51,7 @@ import { organizerLoginDeps } from './organizerLoginDeps.js';
 import { layout } from './pages.js';
 import { discordAccessCheck, discordRoleCheck } from './roleGate.js';
 import {
+  BanActions,
   DashboardPageDeps,
   registerAllProtectedRoutes,
 } from './routes/dashboardPages.js';
@@ -172,6 +180,27 @@ const workspaceModerationLog = async (entry: LogEntry) => {
   return logModeration(discordClient, entry);
 };
 
+/**
+ * The ban service bound to its production deps. moderationLog is
+ * logModeration: an embed only, allowedMentions { parse: [] }, no content.
+ */
+function banActions(
+  isLeadership: (id: string) => Promise<boolean>,
+): BanActions {
+  const deps: BanServiceDeps = {
+    now: () => new Date(),
+    repository: () => PostgresBanRepository.instance(),
+    moderationLog: workspaceModerationLog,
+    isLeadership,
+  };
+  return {
+    record: (input) => recordBan(deps, input),
+    import: (input) => importBans(deps, input),
+    lift: (input) => liftBan(deps, input),
+    uploadPhoto: (input) => uploadBanPhoto(deps, input),
+  };
+}
+
 /** Production page deps, each read wired to its repository's instance(). */
 export function dashboardPageDeps(): DashboardPageDeps {
   const isLeadership = discordRoleCheck(
@@ -227,6 +256,7 @@ export function dashboardPageDeps(): DashboardPageDeps {
         ),
       moderationLog: workspaceModerationLog,
     },
+    banActions: banActions(isLeadership),
     upcoming: upcomingLoader,
   };
 }
