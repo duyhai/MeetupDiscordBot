@@ -441,7 +441,7 @@ Photo route: `GET /bans/:id/photo`; `parseRowId` on `:id` else `notFound`; `req.
   export function checkBanPhoto(
     bytes: Buffer,
   ):
-    | { ok: true; type: 'image/webp' | 'image/jpeg' }
+    | { ok: true; type: 'image/webp' | 'image/jpeg'; bytes: Buffer } // bytes: stripped (D14), what gets stored
     | {
         ok: false;
         code: 'photo-not-accepted' | 'photo-too-large' | 'photo-too-big';
@@ -455,7 +455,7 @@ Photo route: `GET /bans/:id/photo`; `parseRowId` on `:id` else `notFound`; `req.
   export const BANNED_TAB_URL: string; // `${PUBLIC_APP_ORIGIN}/dashboard/suspensions?state=banned`
   ```
 
-  Behaviour: `actor` must be `^[0-9]{17,20}$` else `invalid`. Validation before the gate; the gate (as `performWorkspaceAction`: when `leadershipConfirmed !== true`, ask `deps.isLeadership`; false → `not-leadership`, throw → `leadership-unavailable`) before any repository call. `checkBanPhoto`: size > 153600 → `photo-too-large`; `readImageSize` undefined → `photo-not-accepted`; either side > 512 → `photo-too-big`. Lift reason trimmed (CRLF→LF), 1..500 code points. After a successful write, post the embed with `postWithoutWaiting` (fire and forget; a failure never changes the code). Embeds: title `Ban recorded` / `Ban lifted` / `Ban photo uploaded` / `Ban photo replaced` / `Bans imported`; fields Member (`memberText(name || 'Unknown member')` + ` (id)`), Banned (date or `Date unknown`), Notes or Reason (escaped, cut by `fitFieldValue`); description `<@actor> …` plus `\n${BANNED_TAB_URL}`; never a photo, never `content`. `Bans imported` has only `Count` and the description.
+  Behaviour: `actor` must be `^[0-9]{17,20}$` else `invalid`. Validation before the gate; the gate (as `performWorkspaceAction`: when `leadershipConfirmed !== true`, ask `deps.isLeadership`; false → `not-leadership`, throw → `leadership-unavailable`) before any repository call. `checkBanPhoto`: `stripImageMetadata` or `readImageSize` undefined → `photo-not-accepted`; then, on the stripped bytes, size > 153600 → `photo-too-large`; either side > 512 → `photo-too-big`; the stripped bytes are what `uploadBanPhoto` stores (D14). Lift reason trimmed (CRLF→LF), 1..500 code points. After a successful write, post the embed with `postWithoutWaiting` (fire and forget; a failure never changes the code). Embeds: title `Ban recorded` / `Ban lifted` / `Ban photo uploaded` / `Ban photo replaced` / `Bans imported`; fields Member (`memberText(name || 'Unknown member')` + ` (id)`), Banned (date or `Date unknown`), Notes or Reason (escaped, cut by `fitFieldValue`); description `<@actor> …` plus `\n${BANNED_TAB_URL}`; never a photo, never `content`. `Bans imported` has only `Count` and the description.
 
 - [ ] **Step 1: Write the failing parser tests** (`banCsv.test.ts`): valid file with a blank date and a quoted multi-line note → rows with correct `rowNumber`s; BOM header accepted; `Review Focus 2` ids `12a4`, `+123`, `123` (trimmed → accepted), 21 digits, `١٢٣` → `member-id` with their rows; `2026-02-30`, `10/3/2026` → `date`; `2013-02-28` and tomorrow → `date-out-of-range`; 501-code-point name; 2001-code-point notes; 201 rows → one `too-many-rows` error with row null; `Review Focus 3` a member twice → `duplicate-member` on the later row; unbalanced quote → `unreadable`; wrong header → `header`; header only → `no-rows`; every error text in `BAN_CSV_ERROR_TEXT` contains no `${`-style data (assert no error object carries the bad value: `Object.keys(err)` is exactly `['row', 'code']`).
 - [ ] **Step 2: Write the failing service tests** (`service.test.ts`, fake deps with `vi.fn`):
@@ -709,6 +709,8 @@ CSP check recorded in the task report: the script uses only `createImageBitmap`,
     export function defaultBanPhotoFillDeps(client: Client): BanPhotoFillDeps;
     ```
   - `digest.ts`: `runSweepOrDegrade<T>(platform, client, sweep: () => Promise<T>): Promise<T | undefined>`; after the two sweeps, `await runBanPhotoFillSafely(defaultBanPhotoFillDeps(client), meetup?.roster)`.
+
+Strip (D14): every source's bytes go through `stripImageMetadata` before the cap check and `fillProfilePhoto`, and only the stripped bytes are stored; it returns undefined for PNG, so a PNG source yields nothing and the next source is tried.
 
 Rules: candidates at most 50; sequential; the budget is checked before each candidate and each candidate's fetches run inside `budget.spend`; a candidate's sources in D12 order; bytes accepted only when `sniffImageType` is defined and `length <= 153600`; `fillProfilePhoto` false (an upload landed) counts as not filled and moves on; one candidate's error is caught and counted, never stops the run; the roster map is built only for candidate ids (`new Map` of at most 50 entries); `guildMember` reads `client.guilds.cache.get(guildId)?.members.cache.get(id)` (no API call). Log line: `Ban photo fill: ${filled} of ${candidates} filled (${fromDiscord} Discord, ${fromMeetup} Meetup, ${fromStored} stored), ${noSource} without a usable photo`.
 
