@@ -160,6 +160,7 @@ const LIST_ORDER: Record<BanState, { where: string; order: string }> = {
 };
 
 const MAX_PAGE_ROWS = 50;
+/** activeMemberIds' ids per query (it reads any number, in chunks of this many). */
 const MAX_ACTIVE_LOOKUP = 1000;
 const MAX_SERIAL = 2 ** 31 - 1;
 /** 1-20 ASCII digits, no leading zero (PR review M4): `0123` is not member 123. */
@@ -430,21 +431,26 @@ export class PostgresBanRepository {
   }
 
   /**
-   * Which of these Meetup ids have an active ban. Only digit ids count; more
-   * than 1000 distinct ones is a RangeError and none left runs no query.
+   * Which of these Meetup ids have an active ban. Only digit ids count; they
+   * are read MAX_ACTIVE_LOOKUP distinct ids per query, one query at a time,
+   * and none left runs no query (PR review M7: a month with more members
+   * than one chunk must not lose its ban status).
    */
   async activeMemberIds(memberIds: string[]): Promise<Set<string>> {
     const ids = [...new Set(memberIds)].filter((id) => MEMBER_ID.test(id));
-    if (ids.length > MAX_ACTIVE_LOOKUP) {
-      throw new RangeError('too many member ids');
+    const found = new Set<string>();
+    for (let i = 0; i < ids.length; i += MAX_ACTIVE_LOOKUP) {
+      // eslint-disable-next-line no-await-in-loop -- one chunk at a time on a small pool
+      const result = await this.pool.query<{ member_id: string }>(
+        `SELECT member_id FROM member_bans
+          WHERE lifted_at IS NULL AND member_id = ANY($1::text[])`,
+        [ids.slice(i, i + MAX_ACTIVE_LOOKUP)],
+      );
+      for (const r of result.rows) {
+        found.add(r.member_id);
+      }
     }
-    if (ids.length === 0) return new Set();
-    const result = await this.pool.query<{ member_id: string }>(
-      `SELECT member_id FROM member_bans
-        WHERE lifted_at IS NULL AND member_id = ANY($1::text[])`,
-      [ids],
-    );
-    return new Set(result.rows.map((r) => r.member_id));
+    return found;
   }
 
   async deleteAllForTest(): Promise<void> {

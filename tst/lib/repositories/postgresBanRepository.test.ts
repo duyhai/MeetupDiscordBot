@@ -8,6 +8,10 @@ import {
 
 /** Every SQL text the stub pool or its clients were sent, in order. */
 let calls: string[] = [];
+/** The parameters of each pool query, in the same order. */
+let params: unknown[][] = [];
+/** Rows the stub pool answers SELECTs with (activeMemberIds' chunks). */
+let selectRows: (params: unknown[]) => unknown[] = () => [];
 
 const answer = (text: string) => ({
   rows: [],
@@ -17,9 +21,11 @@ const answer = (text: string) => ({
 
 /** No database: the pool and its clients only record what they are sent. */
 const stubPool = {
-  query(text: string) {
+  query(text: string, values: unknown[] = []) {
     calls.push(text);
-    return Promise.resolve(answer(text));
+    params.push(values);
+    const rows = text.trim().startsWith('SELECT') ? selectRows(values) : [];
+    return Promise.resolve({ ...answer(text), rows, rowCount: rows.length });
   },
   connect() {
     return Promise.resolve({
@@ -39,6 +45,8 @@ describe('PostgresBanRepository SQL', () => {
 
   beforeEach(() => {
     calls = [];
+    params = [];
+    selectRows = () => [];
     repo = new PostgresBanRepository(stubPool);
   });
 
@@ -90,9 +98,20 @@ describe('PostgresBanRepository SQL', () => {
     expect(calls).toEqual([]);
   });
 
-  it('activeMemberIds refuses more than 1000 distinct valid ids before any query', async () => {
-    const ids = Array.from({ length: 1001 }, (_, i) => String(i + 1));
-    await expect(repo.activeMemberIds(ids)).rejects.toBeInstanceOf(RangeError);
-    expect(calls).toEqual([]);
+  it('activeMemberIds reads more than 1000 distinct ids in chunks of 1000 and returns the union (PR review M7)', async () => {
+    const ids = Array.from({ length: 2001 }, (_, i) => String(i + 1));
+    // Every 500th id is banned, so each chunk contributes.
+    selectRows = (values) =>
+      (values[0] as string[])
+        .filter((id) => Number(id) % 500 === 0 || id === '2001')
+        .map((member_id) => ({ member_id }));
+    const found = await repo.activeMemberIds([...ids, '1', '12a4', '0123']);
+    expect(params.map((p) => (p[0] as string[]).length)).toEqual([
+      1000, 1000, 1,
+    ]);
+    expect(new Set(params.flatMap((p) => p[0] as string[]))).toEqual(
+      new Set(ids),
+    );
+    expect(found).toEqual(new Set(['500', '1000', '1500', '2000', '2001']));
   });
 });

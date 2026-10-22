@@ -1,5 +1,13 @@
 import pg from 'pg';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from 'vitest';
 
 import { BanInsert } from '../../src/lib/bans/types.js';
 import {
@@ -537,14 +545,26 @@ async function pollUntil(
   });
 
   describe('reads', () => {
-    it('activeMemberIds refuses more than 1000 distinct valid ids before any query', async () => {
-      const ids = Array.from({ length: 1001 }, (_, i) => String(i + 1));
-      await expect(repo.activeMemberIds(ids)).rejects.toBeInstanceOf(
-        RangeError,
-      );
-      // Duplicates and invalid ids do not count toward the cap.
-      const thousand = [...ids.slice(0, 1000), '1', '12a4', ' 7'];
-      expect(await repo.activeMemberIds(thousand)).toEqual(new Set());
+    it('activeMemberIds reads 2001 distinct ids in chunks of 1000, 1000 and 1 and returns the union (PR review M7)', async () => {
+      await repo.importMany([ban('1'), ban('1500'), ban('2001'), ban('3000')]);
+      const ids = Array.from({ length: 2001 }, (_, i) => String(i + 1));
+      const sizes: number[] = [];
+      const query = vi.spyOn(pool, 'query');
+      try {
+        const found = await repo.activeMemberIds([...ids, '1', '12a4', ' 7']);
+        for (const [text, values] of query.mock.calls as unknown as [
+          string,
+          unknown[],
+        ][]) {
+          if (String(text).includes('FROM member_bans')) {
+            sizes.push((values[0] as string[]).length);
+          }
+        }
+        expect(sizes).toEqual([1000, 1000, 1]);
+        expect(found).toEqual(new Set(['1', '1500', '2001']));
+      } finally {
+        query.mockRestore();
+      }
     });
 
     it('activeMemberIds returns only active bans among valid ids; countByState and paging', async () => {
