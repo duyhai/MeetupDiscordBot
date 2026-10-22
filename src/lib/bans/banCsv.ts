@@ -13,6 +13,7 @@ export const BAN_CSV_HEADER = 'member_id,member_name,banned_on,notes';
 
 export type BanCsvErrorCode =
   | 'unreadable'
+  | 'unreadable-row'
   | 'header'
   | 'no-rows'
   | 'too-many-rows'
@@ -27,6 +28,8 @@ export type BanCsvErrorCode =
 export const BAN_CSV_ERROR_TEXT: Readonly<Record<BanCsvErrorCode, string>> = {
   unreadable:
     'The CSV could not be read. Check for a quote that is opened and never closed.',
+  'unreadable-row':
+    'This row has a character that cannot be stored (a NUL byte). Remove it and import again.',
   header: `The first line must be exactly: ${BAN_CSV_HEADER}`,
   'no-rows': 'The CSV has a header but no bans.',
   'too-many-rows': `One import takes at most ${BAN_IMPORT_MAX_ROWS} bans. Split the file.`,
@@ -95,6 +98,12 @@ export function parseBanCsv(
     const field = (index: number) => (record[index] ?? '').trim();
     const fail = (code: BanCsvErrorCode) =>
       errors.push({ row: rowNumber, code });
+
+    // Postgres text cannot hold NUL: one fixed error, no other checks.
+    if (record.some((value) => value.includes('\u0000'))) {
+      fail('unreadable-row');
+      continue;
+    }
 
     const memberId = field(0);
     const memberName = field(1);

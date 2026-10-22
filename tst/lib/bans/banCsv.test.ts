@@ -154,6 +154,26 @@ describe('parseBanCsv', () => {
     ]);
   });
 
+  it('refuses a row with a NUL character with one fixed row error', () => {
+    expect(
+      errorsOf(
+        csv(
+          '111,Ann,,fine',
+          '222,B\u0000o,,note',
+          '333,Cy,,no\u0000te',
+          '444,Di,2026-02-30\u0000,',
+        ),
+      ),
+    ).toEqual([
+      { row: 3, code: 'unreadable-row' },
+      { row: 4, code: 'unreadable-row' },
+      { row: 5, code: 'unreadable-row' },
+    ]);
+    expect(BAN_CSV_ERROR_TEXT['unreadable-row']).toBe(
+      'This row has a character that cannot be stored (a NUL byte). Remove it and import again.',
+    );
+  });
+
   it('errors carry only row and code, and the texts are fixed', () => {
     const errors = errorsOf(
       csv('<script>,<b>,2026-02-30,', `1,${'n'.repeat(501)},,`),

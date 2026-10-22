@@ -89,10 +89,14 @@ function errorClass(error: unknown): string {
   return error instanceof Error ? error.name : 'Error';
 }
 
-/** A form text field: absent is '', a string is trimmed with CRLF as LF, anything else undefined. */
+/**
+ * A form text field: absent is '', a string is trimmed with CRLF as LF,
+ * anything else undefined. So is a string with a NUL, which Postgres text
+ * cannot hold (the caller answers 'invalid').
+ */
 function formText(value: unknown): string | undefined {
   if (value === undefined || value === null) return '';
-  if (typeof value !== 'string') return undefined;
+  if (typeof value !== 'string' || value.includes('\u0000')) return undefined;
   return value.replace(/\r\n/g, '\n').trim();
 }
 

@@ -202,6 +202,26 @@ describe('recordBan', () => {
     );
   });
 
+  it('refuses a NUL character in the name, date or notes as invalid', async () => {
+    const { deps, repo } = fakeDeps();
+    for (const field of ['memberName', 'bannedOn', 'notes'] as const) {
+      expect(
+        // eslint-disable-next-line no-await-in-loop -- one field at a time
+        await recordBan(deps, recordInput({ [field]: 'a\u0000b' })),
+        field,
+      ).toEqual({ code: 'invalid' });
+    }
+    expect(repo.record).not.toHaveBeenCalled();
+  });
+
+  it('refuses a NUL character in a lift reason as invalid', async () => {
+    const { deps, repo } = fakeDeps();
+    expect(
+      await liftBan(deps, { actor: LEAD, banId: 7, reason: 'appeal\u0000' }),
+    ).toEqual({ code: 'invalid' });
+    expect(repo.lift).not.toHaveBeenCalled();
+  });
+
   it('maps already-banned and posts nothing on a refusal', async () => {
     const { deps, repo } = fakeDeps();
     repo.record.mockResolvedValueOnce({
