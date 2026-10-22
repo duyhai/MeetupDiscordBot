@@ -1,6 +1,6 @@
 # Member bans
 
-Status: draft for Hai's approval (revised 2026-10-22).
+Status: approved by Hai 2026-10-22; built per docs/superpowers/plans/2026-10-22-member-bans.md.
 
 ## Why
 
@@ -62,6 +62,10 @@ Staff keep banned members in a "Banned Members" tab of the no-show tracker workb
 
 ## Photos
 
+- **JPEG for Safari (plan D2).** Safari's canvas cannot encode WebP, so the browser script falls back to JPEG and the server accepts WebP or JPEG uploads (Hai, Q1).
+- **Void still allowed (plan D7).** A banned member's card offers no record or link, but void, hold, skip, reopen and notes stay, so a wrong record can still be voided (Hai, Q2).
+- **Re-ban photo (plan D8).** A new ban for a member whose latest lifted ban has a photo starts with that photo; the sweep then leaves it alone (Hai, Q4).
+
 ### Staff upload (dashboard, Leadership only)
 
 - **In the browser.** A small fixed script (a nonce'd `staticRaw`, the same pattern as the copy script) runs when staff pick a file:
@@ -88,12 +92,12 @@ Staff keep banned members in a "Banned Members" tab of the no-show tracker workb
 
 ### Sweep fill (daily identity sweep, never overwrites)
 
-- **When it runs.** After its normal work, the sweep reads the active bans with `photo IS NULL`. The list is small, at most 15 today, and capped at 50 per run.
+- **When it runs.** After its normal work, the sweep reads the active bans with `photo IS NULL`. The list is small, at most 15 today, and capped at 50 per run. The order is fixed for the day and changes daily, so bans with no usable source cannot keep the others from being reached.
 - **Source order:**
   1. The member's current Discord avatar, if their Meetup id is linked to a Discord account still in the server. It comes from Discord's CDN at `?size=256` in WebP, the same CDN resizing the identity sweep already uses.
   2. Otherwise, their current Meetup photo from the roster the sweep already fetched. The builder picks the largest Meetup-provided size that stays within the caps, and never resizes locally.
   3. Otherwise, the most recent identity thumbnail already stored for that member (Discord or Meetup). This covers members who have left the server or the group.
-- **What it stores.** The bytes only if they sniff as PNG, JPEG or WebP and are at most 150 KB. They are stored as-is: the CDNs strip metadata from resized images. The row gets `photo_source='profile'` and `photo_updated_by` NULL.
+- **What it stores.** The bytes after the metadata strip, only if they sniff as PNG, JPEG or WebP and are at most 150 KB (the strip runs on every source, PNG included). The row gets `photo_source='profile'` and `photo_updated_by` NULL.
 - **Overwrite guard.** The update is `... WHERE id = $1 AND photo IS NULL`, so the sweep can never replace a photo, even if a staff upload lands at the same moment.
 - **Scheduling and logging.** The fill follows the sweep's existing window (18:00 UTC) and its download budget. It logs counts only.
 

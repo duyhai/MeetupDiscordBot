@@ -247,3 +247,38 @@ a different dedicated account:
 3. Renew from the dashboard (`/dashboard/organizer-login`) while signed in to
    Meetup as the new account. The page checks the account against
    `MEETUP_ORGANIZER_MEMBER_ID` and records it.
+
+### Member bans
+
+Bans live on the Suspensions page's **Banned** tab of the staff dashboard.
+They are records only: the bot never removes anyone from Discord or Meetup;
+staff do that by hand. Moderators and the 1.5 Leadership Team see the tab;
+only the 1.5 Leadership Team can add, import, lift or upload a photo, checked
+live with Discord on every action. The no-show workspace marks a banned
+member's cards and refuses to record or link a suspension for them.
+
+- **Table.** `member_bans` is created on first use under the dashboard schema
+  lock. No migration step is needed on deploy.
+- **Photos.** One photo per ban, at most 150 KB. An upload is re-encoded in
+  the browser to WebP (JPEG on Safari) at most 512 px on a side; the server
+  accepts only WebP or JPEG, re-checks the size and strips metadata. A lifted
+  ban keeps its photo, and a re-ban starts with it.
+- **Sweep fill.** At 18:00 UTC, with the identity digest, the bot fills a
+  photo into active bans that have none: the linked Discord avatar, else the
+  Meetup photo, else the newest stored identity image. At most 50 bans per
+  run, a 90 s limit, and it never replaces a photo. It logs counts only.
+  Sweep photos are kept small only by asking Discord for `size=256` and
+  Meetup for `standardUrl` (then `thumbUrl`) and by the 150 KB cap; there is
+  no 512 px check on them, unlike uploads.
+- **Not yet checked on Safari or iPhone.** The upload has been exercised in
+  Chrome (WebP, and the forced JPEG fallback) but not on a real Safari or
+  iPhone. Someone must upload a photo from each before staff rely on uploads.
+- **Importing the tracker's bans.** Run the local scripts in
+  `.superpowers/backfill/` (gitignored): `ban_review.py` writes
+  `ban-review.csv` and the extracted photos; after Stacey reviews it,
+  `ban_to_import.py` turns it into the import CSV. Paste that into **Import
+  bans**, upload each photo with **Upload photo**, then delete the local
+  files. Nothing from the tracker is committed, put in a PR or posted to
+  Discord.
+- **Deploys.** Deploys between 18:00 and 19:00 UTC restart the bot during the
+  daily identity sweep.

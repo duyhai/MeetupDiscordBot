@@ -298,6 +298,20 @@ describe('tables on narrow screens', () => {
     expect(STYLE.value).toMatch(/(?:^|\})\s*\.rank-inline\{display:none\}/);
   });
 
+  it('the Banned table stacks below 1024px, before the phone block', () => {
+    const css = STYLE.value;
+    const wide = css.indexOf('@media (max-width:1023.98px){table.stack.bans');
+    expect(wide).toBeGreaterThan(-1);
+    expect(wide).toBeLessThan(css.indexOf('@media (max-width:639.98px)'));
+    const block =
+      /@media \(max-width:1023\.98px\)\{([\s\S]*?)\}\}/.exec(css)?.[1] ?? '';
+    expect(block).toMatch(/table\.stack\.bans thead\{[^}]*position:absolute/);
+    expect(block).toMatch(
+      /table\.stack\.bans td::before\{[^}]*content:attr\(data-label\)/,
+    );
+    expect(block).toMatch(/table\.stack\.bans td\{[^}]*display:flow-root/);
+  });
+
   it('the stylesheet stacks .stack tables below 640px and labels each cell', () => {
     const css = STYLE.value;
     const narrow = /@media \(max-width:639\.98px\)\{([\s\S]*?)\}\}/.exec(css);
