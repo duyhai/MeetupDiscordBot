@@ -260,9 +260,9 @@ export function httpsRedirectTarget(
 
 /**
  * The one path whose form body may exceed 32 kB: a ban photo upload
- * (D4), case-sensitive like the routers. Accepted residual: a signed-out
- * client can make the server buffer up to BAN_PHOTO_BODY_LIMIT on this
- * path before the gate answers 403.
+ * (D4), case-sensitive like the routers. It gets the larger limit only when
+ * the request carries a session cookie whose signature verifies, so a
+ * signed-out client cannot make the server buffer more than 32 kB.
  */
 export const BAN_PHOTO_BODY_PATH = /^\/bans\/[1-9][0-9]{0,8}\/photo\/?$/;
 /** A 150 KB photo is at most 204800 base64url characters, plus _csrf. */
@@ -369,9 +369,20 @@ export function createDashboardRouter(deps: DashboardDeps): express.Router {
     extended: false,
     limit: BAN_PHOTO_BODY_LIMIT,
   });
+  // The signature alone decides (no Redis read): a signed-out or forged
+  // cookie keeps 32 kB, and a signed cookie whose session is gone still
+  // meets the gate's 403 after the larger parse.
+  const hasSignedSessionCookie = (req: Request) =>
+    [...new Set(parseCookieValues(req.headers.cookie, SESSION_COOKIE))]
+      .slice(0, MAX_SESSION_COOKIE_CANDIDATES)
+      .some((signed) =>
+        Boolean(verifySignedSessionId(signed, deps.sessionSecret)),
+      );
   router.use(function dashboardFormBody(req, res, next) {
     const parser =
-      req.method === 'POST' && BAN_PHOTO_BODY_PATH.test(req.path)
+      req.method === 'POST' &&
+      BAN_PHOTO_BODY_PATH.test(req.path) &&
+      hasSignedSessionCookie(req)
         ? banPhotoBody
         : formBody;
     parser(req, res, next);

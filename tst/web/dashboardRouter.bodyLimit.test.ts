@@ -5,7 +5,14 @@ import {
   BAN_PHOTO_BODY_LIMIT,
   BAN_PHOTO_BODY_PATH,
 } from '../../src/web/dashboardRouter.js';
-import { ORIGIN, closeServers, makeApp, signIn } from './dashboardHarness.js';
+import { signSessionId } from '../../src/web/session.js';
+import {
+  ORIGIN,
+  SECRET,
+  closeServers,
+  makeApp,
+  signIn,
+} from './dashboardHarness.js';
 
 afterEach(() => closeServers());
 
@@ -48,7 +55,16 @@ async function setup() {
   };
   const post = (path: string, size: number, withSession = true) =>
     postWithToken(path, size, token, withSession);
-  return { post, postWithToken, reached };
+  const postWithCookie = (path: string, size: number, sent: string) =>
+    req
+      .post(path)
+      .set('Origin', ORIGIN)
+      .set('Cookie', sent)
+      .type('form')
+      .send(
+        `_csrf=${encodeURIComponent(token)}&photo=${'A'.repeat(size * KB)}`,
+      );
+  return { cookie, post, postWithCookie, postWithToken, reached };
 }
 
 describe('the ban photo body limit', () => {
@@ -106,9 +122,37 @@ describe('the ban photo body limit', () => {
     expect(reached).not.toHaveBeenCalled();
   });
 
-  it('a signed-out 210 KB post to /bans/1/photo is refused 403 and reaches no route', async () => {
+  it('a signed-out 100 KB post to /bans/1/photo is the 400 page: 32kb applies without a session cookie', async () => {
     const { post, reached } = await setup();
-    const res = await post('/dashboard/bans/1/photo', 210, false);
+    const res = await post('/dashboard/bans/1/photo', 100, false);
+    expect(res.status).toBe(400);
+    expect(reached).not.toHaveBeenCalled();
+  });
+
+  it('a tampered session cookie gets 32kb: a 100 KB post is the 400 page', async () => {
+    const { cookie, postWithCookie, reached } = await setup();
+    const last = cookie.at(-1) === 'A' ? 'B' : 'A';
+    const tampered = `${cookie.slice(0, -1)}${last}`;
+    const res = await postWithCookie('/dashboard/bans/1/photo', 100, tampered);
+    expect(res.status).toBe(400);
+    expect(reached).not.toHaveBeenCalled();
+    // The same body with the real cookie is accepted.
+    const ok = await postWithCookie('/dashboard/bans/1/photo', 100, cookie);
+    expect(ok.status).toBe(200);
+  });
+
+  it('a validly signed cookie with no live session gets 220kb, then the gate refuses it 403', async () => {
+    const { postWithCookie, reached } = await setup();
+    const sid = 'x'.repeat(43);
+    const forged = `dash_sid=${signSessionId(sid, SECRET)}`;
+    const res = await postWithCookie('/dashboard/bans/1/photo', 210, forged);
+    expect(res.status).toBe(403);
+    expect(reached).not.toHaveBeenCalled();
+  });
+
+  it('a signed-out 20 KB post to /bans/1/photo is refused 403 and reaches no route', async () => {
+    const { post, reached } = await setup();
+    const res = await post('/dashboard/bans/1/photo', 20, false);
     expect(res.status).toBe(403);
     expect(reached).not.toHaveBeenCalled();
   });

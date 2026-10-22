@@ -79,6 +79,7 @@ Reviews changed the plan after it was written. Where a task below says otherwise
 - **`table.bans` stacks below 1024 px**, not only on phones.
 - **Fill never locks in a smaller photo (final review).** The stored identity thumbnail (source 3) is used only for a member known to be gone from both live sources: no linked member in the guild cache, and no entry in a roster that was actually fetched. Inside a live source only an over-cap file falls back to the next size (`standardUrl` to `thumbUrl`, server avatar to account avatar); any other failure, a missing roster (`roster === undefined`), a failed link lookup, or a linked member missing from the guild cache when `discordKnown` is false counts the ban as `deferred` for tomorrow. The digest passes `discordKnown` as "the Discord `runSweepOrDegrade` result is not undefined", beside the roster, to `runBanPhotoFillSafely(deps, roster, discordKnown)` and `fillBanPhotos(deps, roster, discordKnown, budget?)`. `fetchBytesCappedOutcome` tells over-cap (`'too-large'`) from failed (null).
 - **Embeds carry no staff-typed text (final review).** Ban embeds drop Notes and Reason: they carry the kind, the member id, the date, the actor's mention and the Banned tab link. This supersedes the Task 4 embed field list.
+- **The 220 kB parser needs a signed cookie (PR review M1).** `POST` on `BAN_PHOTO_BODY_PATH` gets `220kb` only when the request carries a `dash_sid` whose signature verifies (`verifySignedSessionId` with the session secret; no Redis read). Signed-out or forged requests keep `32kb`, so D4's accepted residual no longer exists. The parser still runs before the CSRF guard.
 
 ## Questions for Hai (answered 2026-10-22: Q1, Q2 and Q4 yes as defaulted; Q3 ships as defaulted)
 
@@ -454,9 +455,7 @@ Photo route: `GET /bans/:id/photo`; `parseRowId` on `:id` else `notFound`; `req.
     input: Gate & { banId: number; photo: unknown },
   ): Promise<{ code: BanResultCode }>;
   export function decodePhotoField(value: unknown): Buffer | undefined; // D3
-  export function checkBanPhoto(
-    bytes: Buffer,
-  ):
+  export function checkBanPhoto(bytes: Buffer):
     | { ok: true; type: 'image/webp' | 'image/jpeg'; bytes: Buffer } // bytes: stripped (D14), what gets stored
     | {
         ok: false;
