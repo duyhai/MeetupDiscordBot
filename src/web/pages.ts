@@ -107,8 +107,12 @@ img.ban-photo{display:block;width:96px;max-width:100%;height:auto;aspect-ratio:1
 canvas.ban-preview{display:block;max-width:96px;height:auto;border-radius:8px}
 td.ban-actions{width:15rem}
 td.ban-actions form+form{margin-top:var(--s3);padding-top:var(--s3);border-top:1px solid var(--line)}
-form[data-ban-photo] input[type="file"]{width:100%}
+form[data-ban-photo] input[type="file"]{width:100%;min-width:0}
 table.bans th{overflow-wrap:normal}
+table.bans td.ban-date{white-space:nowrap;overflow-wrap:normal}
+table.bans td.ban-fixed{overflow-wrap:normal}
+form.ban-add label.field{margin:0 0 var(--s3)}
+form.ban-add label.field input{display:block;width:100%;max-width:24rem;margin-top:var(--s1)}
 code{overflow-wrap:anywhere}
 [hidden]{display:none!important}
 img.thumb{display:block;width:64px;max-width:100%;height:auto;aspect-ratio:1;object-fit:cover;border-radius:8px;
@@ -173,7 +177,8 @@ table.stack td.rank{display:none}
 .rank-inline{display:inline}
 .actions>form:has(textarea){flex:1 1 100%}
 form.filters label{flex:1 1 100%}
-form.filters input,form.filters select,form.filters button{width:100%}}
+form.filters input,form.filters select,form.filters button{width:100%}
+table.stack td.ban-actions{width:auto}}
 @media (prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;
 transition:none!important}button:active,.button:active{transform:none}}
 `;

@@ -255,23 +255,25 @@ function banRowHtml(
   actions: SafeHtml | undefined,
 ): SafeHtml {
   return html`<tr>
-    <td data-label="Photo">${photoCell(row)}</td>
+    <td data-label="Photo" class="ban-fixed">${photoCell(row)}</td>
     <td data-label="Member">
       ${memberLink({ id: row.memberId, name: row.memberName || row.memberId })}
       (${row.memberId})
     </td>
-    <td data-label="Banned">${row.bannedOn ?? 'Date unknown'}</td>
-    <td data-label="Recorded by">
+    <td data-label="Banned" class="ban-date">
+      ${row.bannedOn ?? 'Date unknown'}
+    </td>
+    <td data-label="Recorded by" class="ban-fixed">
       ${discordUserLink(row.recordedBy, 'staff member')}
     </td>
     <td data-label="Notes">${row.notes ? memberText(row.notes) : ''}</td>
-    <td data-label="Photo from">${photoSourceCell(row)}</td>
+    <td data-label="Photo from" class="ban-fixed">${photoSourceCell(row)}</td>
     ${
       lifted
-        ? html`<td data-label="Lifted">
+        ? html`<td data-label="Lifted" class="ban-fixed">
               ${pacificDateTime(row.liftedAt ?? '')} Pacific
             </td>
-            <td data-label="Lifted by">
+            <td data-label="Lifted by" class="ban-fixed">
               ${discordUserLink(row.liftedBy, 'staff member')}
             </td>
             <td data-label="Reason">
@@ -352,11 +354,12 @@ function bansTable(view: BannedTabView): SafeHtml {
 function leaderForms(view: BannedTabView): SafeHtml {
   return html`<h2>Add a ban</h2>
     <form
+      class="ban-add"
       method="post"
       action="${localUrl(dashboardPath(DASHBOARD_PATHS.bans))}"
     >
       ${csrfField(view.csrf)}
-      <label
+      <label class="field"
         >Meetup member id
         <input
           name="memberId"
@@ -365,15 +368,15 @@ function leaderForms(view: BannedTabView): SafeHtml {
           autocomplete="off"
           required
       /></label>
-      <label
+      <label class="field"
         >Name
         <input name="memberName" maxlength="${BAN_NAME_MAX}" autocomplete="off"
       /></label>
-      <label
+      <label class="field"
         >Banned on (blank if unknown)
         <input type="date" name="bannedOn" min="2013-03-01" max="${view.today}"
       /></label>
-      <label
+      <label class="field"
         >Notes
         <textarea name="notes" rows="3" maxlength="${BAN_NOTES_MAX}"></textarea>
       </label>
@@ -381,6 +384,7 @@ function leaderForms(view: BannedTabView): SafeHtml {
     </form>
     <h2>Import bans</h2>
     <form
+      class="ban-add"
       method="post"
       action="${localUrl(dashboardPath(DASHBOARD_PATHS.banImport))}"
     >
@@ -390,7 +394,7 @@ function leaderForms(view: BannedTabView): SafeHtml {
         <code>${BAN_CSV_HEADER}</code>. banned_on may be blank. If any row is
         refused, nothing is imported.
       </p>
-      <label
+      <label class="field"
         >CSV
         <textarea name="csv" rows="6" required></textarea>
       </label>
