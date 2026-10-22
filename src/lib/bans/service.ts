@@ -344,9 +344,14 @@ export function checkBanPhoto(bytes: Buffer):
       ok: false;
       code: 'photo-not-accepted' | 'photo-too-large' | 'photo-too-big';
     } {
+  // Uploads are WebP or JPEG only (D2); PNG is for sweep sources.
+  const declared = readImageSize(bytes)?.type;
+  if (declared !== 'image/webp' && declared !== 'image/jpeg') {
+    return { ok: false, code: 'photo-not-accepted' };
+  }
   const stripped = stripImageMetadata(bytes);
   const size = stripped === undefined ? undefined : readImageSize(stripped);
-  if (stripped === undefined || size === undefined) {
+  if (stripped === undefined || size?.type !== declared) {
     return { ok: false, code: 'photo-not-accepted' };
   }
   if (stripped.length > BAN_PHOTO_MAX_BYTES) {
@@ -355,7 +360,7 @@ export function checkBanPhoto(bytes: Buffer):
   if (size.width > BAN_PHOTO_MAX_SIDE || size.height > BAN_PHOTO_MAX_SIDE) {
     return { ok: false, code: 'photo-too-big' };
   }
-  return { ok: true, type: size.type, bytes: stripped };
+  return { ok: true, type: declared, bytes: stripped };
 }
 
 /** Member-supplied text for an embed: markdown escaped, then every @, <# and </ defused. */

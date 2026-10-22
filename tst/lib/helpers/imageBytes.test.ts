@@ -333,6 +333,210 @@ describe('stripImageMetadata: JPEG', () => {
   });
 });
 
+describe('stripImageMetadata: JPEG after SOS', () => {
+  const SOS = bytes(0xff, 0xda, 0x00, 0x08, 0x01, 0x01, 0x00, 0x00, 0x3f, 0x00);
+  const scan = (label: string) =>
+    Buffer.concat([
+      Buffer.from(label),
+      bytes(0xff, 0x00, 0x7f, 0xff, 0xd3, 0x01),
+    ]);
+  const EOI = bytes(0xff, 0xd9);
+  const DHT_WITH_EOI = segment(
+    0xc4,
+    Buffer.concat([
+      bytes(0x00),
+      Buffer.alloc(4, 1),
+      bytes(0xff, 0xd9),
+      Buffer.alloc(4, 2),
+    ]),
+  );
+  const head = () => jpeg(APP0, sof(0xc2, 800, 600));
+
+  it('APP1 and COM between two scans are dropped; DHT, DQT and DRI between scans are kept', () => {
+    const DQT = segment(0xdb, Buffer.alloc(65, 3));
+    const DRI = segment(0xdd, bytes(0x00, 0x10));
+    const marked = Buffer.concat([
+      head(),
+      SOS,
+      scan('scan-one'),
+      APP1_GPS,
+      COM,
+      DHT_WITH_EOI,
+      DQT,
+      DRI,
+      SOS,
+      scan('scan-two'),
+      EOI,
+    ]);
+    const stripped = stripImageMetadata(marked);
+    expect(stripped).toEqual(
+      Buffer.concat([
+        head(),
+        SOS,
+        scan('scan-one'),
+        DHT_WITH_EOI,
+        DQT,
+        DRI,
+        SOS,
+        scan('scan-two'),
+        EOI,
+      ]),
+    );
+    const text = stripped?.toString('latin1') ?? '';
+    expect(text).not.toContain('GPS-LAT');
+    expect(text).not.toContain('COMMENT');
+  });
+
+  it('junk after EOI is dropped', () => {
+    const clean = Buffer.concat([head(), SOS, scan('s'), EOI]);
+    expect(
+      stripImageMetadata(
+        Buffer.concat([clean, Buffer.from('TRAILING-SECRET'), APP1_GPS]),
+      ),
+    ).toEqual(clean);
+  });
+
+  it('FF D9 inside a DHT payload does not truncate, before or after SOS', () => {
+    const marked = Buffer.concat([
+      jpeg(APP0, DHT_WITH_EOI, sof(0xc0, 800, 600)),
+      SOS,
+      scan('s'),
+      EOI,
+    ]);
+    expect(stripImageMetadata(marked)).toEqual(marked);
+  });
+
+  it('no EOI, or a marker that has no place after SOS, is undefined', () => {
+    expect(
+      stripImageMetadata(Buffer.concat([head(), SOS, scan('s')])),
+    ).toBeUndefined();
+    expect(
+      stripImageMetadata(
+        Buffer.concat([head(), SOS, scan('s'), sof(0xc0, 800, 600), EOI]),
+      ),
+    ).toBeUndefined();
+    expect(
+      stripImageMetadata(
+        Buffer.concat([head(), SOS, scan('s'), bytes(0xff, 0x01), EOI]),
+      ),
+    ).toBeUndefined();
+  });
+
+  it('before SOS, a marker off the allow-list is dropped', () => {
+    const extension = segment(0xf0, Buffer.from('EXTENSION-SECRET'));
+    const clean = Buffer.concat([head(), SOS, scan('s'), EOI]);
+    const marked = Buffer.concat([
+      jpeg(APP0, extension, sof(0xc2, 800, 600)),
+      SOS,
+      scan('s'),
+      EOI,
+    ]);
+    expect(stripImageMetadata(marked)).toEqual(clean);
+  });
+});
+
+/** A PNG chunk: big-endian length, type, data, and a CRC (not checked). */
+function pngChunk(type: string, data: Buffer = Buffer.alloc(0)): Buffer {
+  const head = Buffer.alloc(8);
+  head.writeUInt32BE(data.length, 0);
+  head.write(type, 4, 'latin1');
+  return Buffer.concat([head, data, Buffer.alloc(4, 0xcc)]);
+}
+const PNG_SIG = bytes(0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a);
+function ihdr(width: number, height: number): Buffer {
+  const data = Buffer.alloc(13);
+  data.writeUInt32BE(width, 0);
+  data.writeUInt32BE(height, 4);
+  data[8] = 8;
+  data[9] = 6;
+  return pngChunk('IHDR', data);
+}
+const png = (...chunks: Buffer[]) => Buffer.concat([PNG_SIG, ...chunks]);
+const IDAT = pngChunk('IDAT', Buffer.from('image-data'));
+const IEND = pngChunk('IEND');
+
+describe('PNG: size and strip', () => {
+  it('readImageSize reads IHDR; a zero side or a first chunk other than IHDR is undefined', () => {
+    expect(readImageSize(png(ihdr(300, 200), IDAT, IEND))).toEqual({
+      type: 'image/png',
+      width: 300,
+      height: 200,
+    });
+    expect(readImageSize(png(ihdr(0, 200), IDAT, IEND))).toBeUndefined();
+    expect(readImageSize(png(ihdr(300, 0), IDAT, IEND))).toBeUndefined();
+    expect(readImageSize(png(IDAT, ihdr(300, 200), IEND))).toBeUndefined();
+    expect(readImageSize(png(ihdr(300, 200)).subarray(0, 30))).toBeUndefined();
+  });
+
+  it('drops tEXt, zTXt, iTXt, eXIf and tIME; keeps the allow-listed chunks', () => {
+    const keep = [
+      pngChunk('gAMA', Buffer.alloc(4, 1)),
+      pngChunk('cHRM', Buffer.alloc(32, 2)),
+      pngChunk('sRGB', bytes(0)),
+      pngChunk('sBIT', Buffer.alloc(4, 8)),
+      pngChunk('pHYs', Buffer.alloc(9, 3)),
+      pngChunk('PLTE', Buffer.alloc(6, 4)),
+      pngChunk('tRNS', Buffer.alloc(2, 5)),
+    ];
+    const marked = png(
+      ihdr(300, 200),
+      pngChunk('tEXt', Buffer.from('Author\0TEXT-SECRET')),
+      ...keep,
+      pngChunk('zTXt', Buffer.from('Z-SECRET')),
+      pngChunk('iTXt', Buffer.from('I-SECRET')),
+      pngChunk('eXIf', Buffer.from('GPS-SECRET')),
+      pngChunk('tIME', Buffer.alloc(7, 9)),
+      pngChunk('iCCP', Buffer.from('ICC-SECRET')),
+      IDAT,
+      IEND,
+    );
+    const stripped = stripImageMetadata(marked);
+    expect(stripped).toEqual(png(ihdr(300, 200), ...keep, IDAT, IEND));
+    expect(stripped?.toString('latin1') ?? '').not.toContain('SECRET');
+    expect(readImageSize(stripped)).toEqual(readImageSize(marked));
+    expect(stripImageMetadata(PNG_1X1)).toEqual(PNG_1X1);
+  });
+
+  it('an animated PNG flattens to its first frame', () => {
+    const frame = (n: number) => Buffer.alloc(26, n);
+    const animated = png(
+      ihdr(300, 200),
+      pngChunk('acTL', Buffer.alloc(8, 1)),
+      pngChunk('fcTL', frame(0)),
+      IDAT,
+      pngChunk('fcTL', frame(1)),
+      pngChunk('fdAT', Buffer.from('second-frame')),
+      IEND,
+    );
+    expect(stripImageMetadata(animated)).toEqual(
+      png(ihdr(300, 200), IDAT, IEND),
+    );
+  });
+
+  it('malformed PNG is undefined: no IEND, data after IEND, IHDR of the wrong length, a chunk past the end, a length over 2^31-1', () => {
+    expect(stripImageMetadata(png(ihdr(300, 200), IDAT))).toBeUndefined();
+    expect(
+      stripImageMetadata(
+        Buffer.concat([
+          png(ihdr(300, 200), IDAT, IEND),
+          Buffer.from('TRAILER'),
+        ]),
+      ),
+    ).toBeUndefined();
+    expect(
+      stripImageMetadata(
+        png(pngChunk('IHDR', Buffer.alloc(14, 1)), IDAT, IEND),
+      ),
+    ).toBeUndefined();
+    const past = png(ihdr(300, 200), IDAT, IEND);
+    past.writeUInt32BE(9999, 33);
+    expect(stripImageMetadata(past)).toBeUndefined();
+    const huge = png(ihdr(300, 200), IDAT, IEND);
+    huge.writeUInt32BE(0x80000000, 33);
+    expect(stripImageMetadata(huge)).toBeUndefined();
+  });
+});
+
 describe('stripImageMetadata: WebP', () => {
   it('VP8X: drops EXIF and XMP chunks, clears their flags, rewrites the RIFF size', () => {
     const alph = Buffer.from('ALPHA-ODD'); // odd: padded
@@ -383,8 +587,27 @@ describe('stripImageMetadata: WebP', () => {
     expect(stripImageMetadata(smuggled)).toBeUndefined();
   });
 
-  it('PNG, junk and non-Buffers are undefined', () => {
-    expect(stripImageMetadata(PNG_1X1)).toBeUndefined();
+  it('VP8X keeps only VP8X, ALPH, VP8 and VP8L: ICCP and unknown chunks go, and the ICC flag is cleared', () => {
+    const marked = riffChunks([
+      ['VP8X', vp8xPayload(640, 480, 0x20 | 0x10)],
+      ['ICCP', Buffer.from('ICC-PROFILE-SECRET')],
+      ['ALPH', Buffer.from('ALPHA')],
+      ['VP8 ', vp8Payload],
+      ['ZZZZ', Buffer.from('UNKNOWN-CHUNK-SECRET')],
+    ]);
+    const stripped = stripImageMetadata(marked);
+    expect(stripped).toEqual(
+      riffChunks([
+        ['VP8X', vp8xPayload(640, 480, 0x10)],
+        ['ALPH', Buffer.from('ALPHA')],
+        ['VP8 ', vp8Payload],
+      ]),
+    );
+    const text = stripped?.toString('latin1') ?? '';
+    expect(text).not.toContain('SECRET');
+  });
+
+  it('junk and non-Buffers are undefined', () => {
     expect(stripImageMetadata(Buffer.from('<html>'))).toBeUndefined();
     expect(stripImageMetadata(null)).toBeUndefined();
   });
@@ -392,7 +615,11 @@ describe('stripImageMetadata: WebP', () => {
 
 describe('readImageSize: everything else', () => {
   it('PNG, empty, 11 bytes of RIFF, 5 MB of 0xFF after FF D8, a non-Buffer', () => {
-    expect(readImageSize(PNG_1X1)).toBeUndefined();
+    expect(readImageSize(PNG_1X1)).toEqual({
+      type: 'image/png',
+      width: 1,
+      height: 1,
+    });
     expect(readImageSize(Buffer.alloc(0))).toBeUndefined();
     expect(readImageSize(VP8L_1X1.subarray(0, 11))).toBeUndefined();
     const started = Date.now();

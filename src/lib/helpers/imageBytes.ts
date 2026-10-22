@@ -35,14 +35,14 @@ export function sniffImageType(bytes: Buffer): ThumbType | undefined {
 }
 
 export interface ImageSize {
-  type: 'image/webp' | 'image/jpeg';
+  type: 'image/webp' | 'image/jpeg' | 'image/png';
   width: number;
   height: number;
 }
 
 /**
- * The pixel size from a WebP (VP8, VP8L or a still VP8X) or JPEG (SOF)
- * header, without decoding. Undefined for anything else, or a header that
+ * The pixel size from a WebP (VP8, VP8L or a still VP8X), JPEG (SOF) or
+ * PNG (IHDR) header, without decoding. Undefined for anything else, or a header that
  * is malformed, truncated, animated or zero-sized. Never throws: every read
  * is length-checked first.
  */
@@ -52,6 +52,9 @@ export function readImageSize(bytes: Buffer): ImageSize | undefined {
   }
   if (bytes.length >= 2 && bytes[0] === 0xff && bytes[1] === 0xd8) {
     return jpegSize(bytes);
+  }
+  if (bytes.length >= 8 && bytes.subarray(0, 8).equals(PNG_SIGNATURE)) {
+    return pngSize(bytes);
   }
   if (
     bytes.length >= 12 &&
@@ -180,40 +183,112 @@ function jpegSize(b: Buffer): ImageSize | undefined {
   return undefined;
 }
 
-/**
- * The same image without its metadata: container-level byte surgery, no
- * decoding. Undefined for anything that is not a well-formed JPEG or WebP
- * (PNG included), or whose size readImageSize cannot read afterwards.
- * Controller ruling 2026-10-22: the server strips rather than refuses, as
- * Safari's canvas JPEG may carry a minimal EXIF APP1.
- */
-export function stripImageMetadata(bytes: Buffer): Buffer | undefined {
-  if (!Buffer.isBuffer(bytes) || readImageSize(bytes) === undefined) {
+/** PNG chunks are at most 2^31-1 bytes (the PNG spec). */
+const PNG_MAX_CHUNK = 0x7fffffff;
+
+/** IHDR first, 13 bytes: width at 16, height at 20, big-endian. */
+function pngSize(b: Buffer): ImageSize | undefined {
+  if (
+    b.length < 33 ||
+    b.readUInt32BE(8) !== 13 ||
+    b.toString('latin1', 12, 16) !== 'IHDR'
+  ) {
     return undefined;
   }
-  const stripped = bytes[0] === 0xff ? stripJpeg(bytes) : stripWebp(bytes);
+  const width = b.readUInt32BE(16);
+  const height = b.readUInt32BE(20);
+  if (width > PNG_MAX_CHUNK || height > PNG_MAX_CHUNK) {
+    return undefined;
+  }
+  return sized('image/png', width, height);
+}
+
+/**
+ * The same image without its metadata: container-level byte surgery, no
+ * decoding, keeping only allow-listed parts. Undefined for anything that is
+ * not a well-formed JPEG, WebP or PNG, or whose size readImageSize cannot
+ * read afterwards. Controller ruling 2026-10-22 (D14): the server strips
+ * rather than refuses, as Safari's canvas JPEG may carry a minimal EXIF
+ * APP1.
+ */
+export function stripImageMetadata(bytes: Buffer): Buffer | undefined {
+  const size = Buffer.isBuffer(bytes) ? readImageSize(bytes) : undefined;
+  if (size === undefined) {
+    return undefined;
+  }
+  const stripped =
+    size.type === 'image/jpeg'
+      ? stripJpeg(bytes)
+      : size.type === 'image/png'
+        ? stripPng(bytes)
+        : stripWebp(bytes);
   return stripped !== undefined && readImageSize(stripped) !== undefined
     ? stripped
     : undefined;
 }
 
 /**
- * APP1-APP13 and APP15 (EXIF, XMP, ICC, IPTC, ...) and COM are metadata.
- * APP0 (JFIF) and APP14 (Adobe: colour transform) are kept.
+ * Before SOS: APP0 (JFIF), APP14 (Adobe colour transform), DQT, DHT, DAC,
+ * DRI and the SOF markers. Every other segment is dropped.
  */
-const isJpegMetadata = (marker: number): boolean =>
-  (marker >= 0xe1 && marker <= 0xed) || marker === 0xef || marker === 0xfe;
+const keptBeforeScan = (marker: number): boolean =>
+  marker === 0xe0 ||
+  marker === 0xee ||
+  marker === 0xdb ||
+  marker === 0xc4 ||
+  marker === 0xcc ||
+  marker === 0xdd ||
+  marker === 0xda ||
+  isSof(marker);
+
+/** Between scans: SOS, DHT, DQT, DRI and DNL. */
+const keptBetweenScans = (marker: number): boolean =>
+  marker === 0xda ||
+  marker === 0xc4 ||
+  marker === 0xdb ||
+  marker === 0xdd ||
+  marker === 0xdc;
+
+/** APP0-APP15 and COM: dropped wherever they are. */
+const isAppOrComment = (marker: number): boolean =>
+  (marker >= 0xe0 && marker <= 0xef) || marker === 0xfe;
 
 /**
- * Walks the segments before SOS, dropping metadata ones; everything from
- * SOS to the end is copied unchanged. Fill bytes before a marker are
- * dropped. Standalone markers before SOS (other than RST) are malformed.
+ * The end of one scan's entropy data, starting at `p`: the offset of the
+ * next marker's 0xFF. FF 00 (a stuffed byte), RST0-7 and FF fill bytes stay
+ * inside the scan. Undefined when the data runs out first.
+ */
+function entropyEnd(b: Buffer, p: number): number | undefined {
+  let e = p;
+  while (e + 1 < b.length) {
+    if (b[e] !== 0xff) {
+      e += 1;
+      continue;
+    }
+    const next = b[e + 1];
+    if (next === 0x00 || (next >= 0xd0 && next <= 0xd7)) {
+      e += 2;
+    } else if (next === 0xff) {
+      e += 1;
+    } else {
+      return e;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Walks the whole file. Before the first SOS, only allow-listed segments
+ * are kept; after it, the scans and the tables between them are kept,
+ * APPn and COM are dropped, and anything else is malformed. Output ends at
+ * EOI, so nothing after it survives; no EOI is malformed.
  */
 function stripJpeg(b: Buffer): Buffer | undefined {
   const kept: Buffer[] = [b.subarray(0, 2)];
   let p = 2;
-  while (p + 4 <= b.length) {
-    if (b[p] !== 0xff) {
+  let afterScan = false;
+  for (;;) {
+    if (p >= b.length || b[p] !== 0xff) {
       return undefined;
     }
     let q = p + 1;
@@ -224,24 +299,20 @@ function stripJpeg(b: Buffer): Buffer | undefined {
       return undefined;
     }
     const marker = b[q];
-    if (marker === 0xda) {
-      kept.push(b.subarray(q - 1));
-      return Buffer.concat(kept);
-    }
-    if (marker >= 0xd0 && marker <= 0xd7) {
+    if (marker === 0xd9) {
+      if (!afterScan) {
+        return undefined;
+      }
       kept.push(b.subarray(q - 1, q + 1));
-      p = q + 1;
-      continue;
+      return Buffer.concat(kept);
     }
     if (
       marker === 0x00 ||
       marker === 0x01 ||
       marker === 0xd8 ||
-      marker === 0xd9
+      (marker >= 0xd0 && marker <= 0xd7) ||
+      q + 3 > b.length
     ) {
-      return undefined;
-    }
-    if (q + 3 > b.length) {
       return undefined;
     }
     const length = b.readUInt16BE(q + 1);
@@ -249,23 +320,34 @@ function stripJpeg(b: Buffer): Buffer | undefined {
     if (length < 2 || end > b.length) {
       return undefined;
     }
-    if (!isJpegMetadata(marker)) {
+    if (afterScan ? keptBetweenScans(marker) : keptBeforeScan(marker)) {
       kept.push(b.subarray(q - 1, end));
+    } else if (afterScan && !isAppOrComment(marker)) {
+      return undefined;
     }
     p = end;
+    if (marker === 0xda) {
+      afterScan = true;
+      const scanEnd = entropyEnd(b, p);
+      if (scanEnd === undefined) {
+        return undefined;
+      }
+      kept.push(b.subarray(p, scanEnd));
+      p = scanEnd;
+    }
   }
-  return undefined;
 }
 
-const WEBP_METADATA_CHUNKS = new Set(['EXIF', 'XMP ']);
-/** VP8X flags: EXIF (0x08) and XMP (0x04) present. */
-const VP8X_METADATA_FLAGS = 0x08 | 0x04;
+/** The VP8X chunks kept: the header, alpha and the image itself. */
+const WEBP_KEPT_CHUNKS = new Set(['VP8X', 'ALPH', 'VP8 ', 'VP8L']);
+/** VP8X flags for chunks never kept: ICC (0x20), EXIF (0x08) and XMP (0x04). */
+const VP8X_DROPPED_FLAGS = 0x20 | 0x08 | 0x04;
 
 /**
  * The chunks must tile the RIFF body exactly (each padded to an even
  * length). A simple (VP8 or VP8L) file is that one chunk only, returned
- * unchanged. A VP8X file loses its EXIF and XMP chunks and their flags,
- * and gets a new RIFF size.
+ * unchanged. A VP8X file keeps only WEBP_KEPT_CHUNKS, loses the flags of
+ * what was dropped, and gets a new RIFF size.
  */
 function stripWebp(b: Buffer): Buffer | undefined {
   const chunks: { fourCC: string; start: number; end: number }[] = [];
@@ -287,11 +369,57 @@ function stripWebp(b: Buffer): Buffer | undefined {
     return chunks.length === 1 ? b : undefined;
   }
   const kept = chunks
-    .filter((c) => !WEBP_METADATA_CHUNKS.has(c.fourCC))
+    .filter((c) => WEBP_KEPT_CHUNKS.has(c.fourCC))
     .map((c) => Buffer.from(b.subarray(c.start, c.end)));
-  kept[0][8] &= ~VP8X_METADATA_FLAGS;
+  kept[0][8] &= ~VP8X_DROPPED_FLAGS;
   const head = Buffer.from(b.subarray(0, 12));
   const body = Buffer.concat(kept);
   head.writeUInt32LE(4 + body.length, 4);
   return Buffer.concat([head, body]);
+}
+
+/**
+ * The PNG chunks kept: image data and colour only. Text, EXIF, time, ICC
+ * and the APNG chunks (acTL, fcTL, fdAT) go, so an animated PNG becomes its
+ * default image.
+ */
+const PNG_KEPT_CHUNKS = new Set([
+  'IHDR',
+  'PLTE',
+  'tRNS',
+  'IDAT',
+  'IEND',
+  'gAMA',
+  'cHRM',
+  'sRGB',
+  'sBIT',
+  'pHYs',
+]);
+
+/**
+ * Walks every chunk (length, type, data, CRC): IHDR first with length 13,
+ * IEND last with nothing after it; whole allow-listed chunks are copied.
+ */
+function stripPng(b: Buffer): Buffer | undefined {
+  const kept: Buffer[] = [b.subarray(0, 8)];
+  let p = 8;
+  while (p + 12 <= b.length) {
+    const length = b.readUInt32BE(p);
+    if (length > PNG_MAX_CHUNK || p + 12 + length > b.length) {
+      return undefined;
+    }
+    const type = b.toString('latin1', p + 4, p + 8);
+    const end = p + 12 + length;
+    if (p === 8 && (type !== 'IHDR' || length !== 13)) {
+      return undefined;
+    }
+    if (PNG_KEPT_CHUNKS.has(type)) {
+      kept.push(b.subarray(p, end));
+    }
+    if (type === 'IEND') {
+      return end === b.length ? Buffer.concat(kept) : undefined;
+    }
+    p = end;
+  }
+  return undefined;
 }

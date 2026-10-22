@@ -439,6 +439,16 @@ describe('checkBanPhoto', () => {
       ok: false,
       code: 'photo-not-accepted',
     });
+    // A well-formed PNG with a real size is still refused for uploads.
+    const png = Buffer.concat([
+      PNG_1X1.subarray(0, 16),
+      Buffer.from([0, 0, 0, 64, 0, 0, 0, 64]),
+      PNG_1X1.subarray(24),
+    ]);
+    expect(checkBanPhoto(png)).toEqual({
+      ok: false,
+      code: 'photo-not-accepted',
+    });
     const html = Buffer.concat([
       Buffer.from('RIFF\x20\x00\x00\x00WEBP', 'latin1'),
       Buffer.from('<html><script>x</script>'),
