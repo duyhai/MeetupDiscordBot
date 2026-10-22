@@ -1,7 +1,10 @@
 import type pg from 'pg';
 import { beforeEach, describe, expect, it } from 'vitest';
 
-import { PostgresBanRepository } from '../../../src/lib/repositories/postgresBanRepository.js';
+import {
+  FILL_PHOTO_SQL,
+  PostgresBanRepository,
+} from '../../../src/lib/repositories/postgresBanRepository.js';
 
 /** Every SQL text the stub pool or its clients were sent, in order. */
 let calls: string[] = [];
@@ -52,6 +55,13 @@ describe('PostgresBanRepository SQL', () => {
       );
       expect(sql).not.toMatch(/SELECT \*/i);
     }
+  });
+
+  it('the sweep fill never replaces a photo: FILL_PHOTO_SQL needs photo IS NULL, and fillProfilePhoto sends it', async () => {
+    expect(FILL_PHOTO_SQL).toMatch(/\bphoto IS NULL\b/);
+    expect(FILL_PHOTO_SQL).toMatch(/WHERE[\s\S]*\bphoto IS NULL\b/);
+    await repo.fillProfilePhoto(1, Buffer.from([1]));
+    expect(calls).toEqual([FILL_PHOTO_SQL]);
   });
 
   it('listPage refuses a bad state before any query', async () => {
