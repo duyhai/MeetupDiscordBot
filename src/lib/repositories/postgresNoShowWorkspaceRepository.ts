@@ -13,6 +13,7 @@ import {
   ActionOutcome,
   ActionRefusalReason,
   ActionRequest,
+  BAN_BLOCKED_ACTIONS,
   Classification,
   MEMBER_NAME_MAX,
   NOTES_MAX,
@@ -23,6 +24,7 @@ import {
   WorkspaceRow,
   WorkspaceStatus,
 } from '../workspace/types.js';
+import { ensureBanSchema } from './postgresBanRepository.js';
 import {
   DASHBOARD_LOCK_CLASS,
   dashboardPool,
@@ -127,7 +129,8 @@ $do$;
 
 /**
  * suspension_records first (FK target; its own pool, its own ensure), then
- * ours under the dashboard schema lock.
+ * ours under the dashboard schema lock, then member_bans (applyAction reads
+ * it), in its own transaction under the same lock.
  */
 export async function ensureWorkspaceSchema(
   pool: pg.Pool,
@@ -146,6 +149,7 @@ export async function ensureWorkspaceSchema(
       await client.query(WORKSPACE_SCHEMA_SQL);
     },
   );
+  await ensureBanSchema(pool);
 }
 
 export interface WorkspaceRepositoryOptions extends DashboardTransactionOptions {
@@ -599,6 +603,17 @@ export class PostgresNoShowWorkspaceRepository {
               'SELECT pg_advisory_xact_lock($1, hashtext($2))',
               [MEMBER_LOCK_CLASS, `suspension:${row.memberId}`],
             );
+          }
+          // After the member lock, which recording a ban also takes (D9): a
+          // ban committed while this action waited is seen here.
+          if (BAN_BLOCKED_ACTIONS.includes(req.action)) {
+            const banned = await client.query(
+              'SELECT 1 FROM member_bans WHERE member_id = $1 AND lifted_at IS NULL',
+              [row.memberId],
+            );
+            if ((banned.rowCount ?? 0) > 0) {
+              throw refuse('banned');
+            }
           }
           if (req.action === 'record_suspension') {
             const on = req.suspendedOn;

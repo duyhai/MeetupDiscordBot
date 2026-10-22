@@ -156,6 +156,7 @@ export const WORKSPACE_RESULT_MESSAGES = {
     "That suspension record cannot be linked or voided here (voided, someone else's, or already on another card).",
   'bad-date':
     'Pick a suspension date from the first of the month through today.',
+  banned: 'This member is banned.',
   'not-leadership':
     'Only the 1.5 Leadership Team can record, link or void a suspension. Nothing was changed.',
   'leadership-unavailable':

@@ -1980,6 +1980,132 @@ const suspension = (
         });
       });
 
+      describe('banned members', () => {
+        const banMember = (
+          memberId: string,
+          lifted = false,
+          client: pg.Pool | pg.PoolClient = pool,
+        ) =>
+          client.query(
+            lifted
+              ? `INSERT INTO member_bans (member_id, recorded_by, lifted_at, lifted_by, lift_reason)
+                 VALUES ($1, $2, now(), $2, 'lifted')`
+              : 'INSERT INTO member_bans (member_id, recorded_by) VALUES ($1, $2)',
+            [memberId, MOD],
+          );
+
+        /** Versions, events and records: what a refusal must leave alone. */
+        const footprint = async (rowIds: number[]) => ({
+          states: await Promise.all(rowIds.map((id) => stateOf(id))),
+          events: await count('noshow_workspace_events'),
+          records: await records(),
+        });
+
+        beforeEach(async () => {
+          await pool.query('DELETE FROM member_bans');
+        });
+
+        it('ensureWorkspaceSchema creates member_bans', async () => {
+          await pool.query('DROP TABLE IF EXISTS member_bans');
+          await ensureWorkspaceSchema(pool);
+          const found = await pool.query<{ t: string | null }>(
+            "SELECT to_regclass(quote_ident(current_schema()) || '.member_bans')::text AS t",
+          );
+          expect(found.rows[0].t).not.toBeNull();
+        });
+
+        it('Review Focus 5: record and link are refused as banned on September and October cards; nothing is written', async () => {
+          await sync([suspension('222'), suspension('333')], T1, 9);
+          const sep = (await rowOf(SEPTEMBER, '222')).id;
+          // A lifted ban of another member blocks nothing.
+          const other = (await rowOf(SEPTEMBER, '333')).id;
+          const oct = await seedSuspension('222', OCTOBER);
+          const outside = await insertRecord('222', '2026-10-20');
+          await banMember('333', true);
+          await banMember('222');
+          const before = await footprint([sep, oct]);
+          for (const [id, period] of [
+            [sep, SEPTEMBER],
+            [oct, OCTOBER],
+          ] as const) {
+            // eslint-disable-next-line no-await-in-loop -- one card at a time
+            const recorded = await act(id, 'record_suspension', {
+              suspendedOn: day('2026-10-05'),
+              period,
+            });
+            expect(recorded).toEqual({ ok: false, reason: 'banned' });
+            // eslint-disable-next-line no-await-in-loop -- as above
+            const linked = await act(id, 'link_suspension', {
+              linkRecordId: outside,
+              period,
+            });
+            expect(linked).toEqual({ ok: false, reason: 'banned' });
+          }
+          expect(await footprint([sep, oct])).toEqual(before);
+          okOf(
+            await act(other, 'record_suspension', {
+              suspendedOn: day('2026-10-05'),
+            }),
+          );
+        });
+
+        it("void, hold and edit_notes still apply to a banned member's card", async () => {
+          const sep = await seedSuspension('222', SEPTEMBER);
+          const oct = await seedSuspension('222', OCTOBER);
+          okOf(
+            await act(sep, 'record_suspension', {
+              suspendedOn: day('2026-10-05'),
+            }),
+          );
+          await banMember('222');
+          okOf(await act(sep, 'edit_notes', { note: 'banned since' }));
+          expect(
+            okOf(await act(sep, 'void', { note: 'wrong date' })).row.status,
+          ).toBe('voided');
+          expect(
+            okOf(await act(oct, 'hold', { note: 'waiting', period: OCTOBER }))
+              .row.status,
+          ).toBe('on_hold');
+        });
+
+        it('a ban recorded while a record_suspension waits on the member lock is seen', async () => {
+          const sep = await seedSuspension('222', SEPTEMBER);
+          const before = await footprint([sep]);
+          const holder = await pool.connect();
+          let outcome: Promise<ActionOutcome> | undefined;
+          try {
+            await holder.query('BEGIN');
+            await holder.query(
+              "SELECT pg_advisory_xact_lock($1, hashtext('suspension:' || $2))",
+              [MEMBER_LOCK_CLASS, '222'],
+            );
+            await banMember('222', false, holder);
+            outcome = act(sep, 'record_suspension', {
+              suspendedOn: day('2026-10-05'),
+            });
+            let sawWait = false;
+            const deadline = Date.now() + 5000;
+            while (!sawWait && Date.now() < deadline) {
+              // eslint-disable-next-line no-await-in-loop -- polling pg_locks
+              sawWait = await memberLockWaiter();
+              if (!sawWait) {
+                // eslint-disable-next-line no-await-in-loop -- as above
+                await sleep(5);
+              }
+            }
+            expect(sawWait, 'the action waited on the member lock').toBe(true);
+            await holder.query('COMMIT');
+          } catch (error) {
+            await holder.query('ROLLBACK');
+            throw error;
+          } finally {
+            holder.release();
+          }
+          expect(await outcome).toEqual({ ok: false, reason: 'banned' });
+          expect(await footprint([sep])).toEqual(before);
+        });
+      });
+
       it('a refused action leaves the version unchanged', async () => {
         const id = await seedWarning();
         expect(await act(id, 'void', { note: 'x' })).toEqual({

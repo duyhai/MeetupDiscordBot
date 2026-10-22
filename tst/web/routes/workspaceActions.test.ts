@@ -468,6 +468,24 @@ describe('workspace action routes', () => {
     );
   });
 
+  it('a banned refusal redirects with result=banned and shows "This member is banned."', async () => {
+    for (const action of ['record_suspension', 'link_suspension'] as const) {
+      // eslint-disable-next-line no-await-in-loop -- one setup per action
+      const { post } = await setup({
+        leader: true,
+        perform: async () => ({ code: 'banned' }),
+      });
+      // eslint-disable-next-line no-await-in-loop -- as above
+      const res = await post(ROW, leadershipForm(action));
+      expect(res.status).toBe(303);
+      expect(location(res)).toBe(`${MONTH}?result=banned`);
+    }
+    expect(WORKSPACE_RESULT_MESSAGES.banned).toBe('This member is banned.');
+    expect(String(workspaceResultNotice('banned'))).toBe(
+      '<p class="note attn">This member is banned.</p>',
+    );
+  });
+
   it('an unknown code from the service redirects as error', async () => {
     const { post } = await setup({
       perform: async () =>
