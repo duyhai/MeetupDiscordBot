@@ -37,7 +37,7 @@ const DISCORD_ID = `'^[0-9]{17,20}$'`;
 export const BAN_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS member_bans (
   id               SERIAL PRIMARY KEY,
-  member_id        TEXT NOT NULL CHECK (member_id ~ '^[0-9]{1,20}$'),
+  member_id        TEXT NOT NULL CHECK (member_id ~ '^[1-9][0-9]{0,19}$'),
   member_name      TEXT NOT NULL DEFAULT '' CHECK (length(member_name) <= ${BAN_NAME_MAX}),
   banned_on        DATE,
   notes            TEXT NOT NULL DEFAULT '' CHECK (length(notes) <= ${BAN_NOTES_MAX}),
@@ -162,7 +162,8 @@ const LIST_ORDER: Record<BanState, { where: string; order: string }> = {
 const MAX_PAGE_ROWS = 50;
 const MAX_ACTIVE_LOOKUP = 1000;
 const MAX_SERIAL = 2 ** 31 - 1;
-const MEMBER_ID = /^[0-9]{1,20}$/;
+/** 1-20 ASCII digits, no leading zero (PR review M4): `0123` is not member 123. */
+const MEMBER_ID = /^[1-9][0-9]{0,19}$/;
 const UTC_DAY = /^[0-9]{4}-[0-9]{2}-[0-9]{2}$/;
 
 const isState = (value: unknown): value is BanState =>

@@ -449,7 +449,7 @@ describe('ban forms on the Banned tab', () => {
     expect(page.text).toContain('action="/dashboard/bans/import"');
     expect(page.text).toContain('action="/dashboard/bans/3/lift"');
     expect(page.text).toMatch(/name="memberId"[^>]*inputmode="numeric"/);
-    expect(page.text).toContain('pattern="[0-9]{1,20}"');
+    expect(page.text).toContain('pattern="[1-9][0-9]{0,19}"');
     expect(page.text).toMatch(
       /type="date"[^>]*min="2013-03-01"[^>]*max="2026-10-05"/,
     );

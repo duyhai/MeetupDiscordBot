@@ -80,6 +80,9 @@ describe('parseBanCsv', () => {
         `${'1'.repeat(21)},D,,`,
         '١٢٣,E,,',
         ',F,,',
+        '0123,G,,',
+        '0,H,,',
+        ' 007 ,I,,',
       ),
     );
     expect(errors).toEqual([
@@ -88,9 +91,18 @@ describe('parseBanCsv', () => {
       { row: 5, code: 'member-id' },
       { row: 6, code: 'member-id' },
       { row: 7, code: 'member-id' },
+      { row: 8, code: 'member-id' },
+      { row: 9, code: 'member-id' },
+      { row: 10, code: 'member-id' },
     ]);
     const padded = parseBanCsv(csv(' 123 ,C,,'), TODAY);
     expect(padded.ok && padded.rows[0].memberId).toBe('123');
+    // PR review M4: a leading zero is refused, inner and trailing zeros are not.
+    const zeros = parseBanCsv(csv('1000,J,,', `${'9'.repeat(20)},K,,`), TODAY);
+    expect(zeros.ok && zeros.rows.map((r) => r.memberId)).toEqual([
+      '1000',
+      '9'.repeat(20),
+    ]);
   });
 
   it('dates: not a real day, another format, before the group, after today', () => {

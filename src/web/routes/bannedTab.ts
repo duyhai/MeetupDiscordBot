@@ -366,7 +366,7 @@ function leaderForms(view: BannedTabView): SafeHtml {
         <input
           name="memberId"
           inputmode="numeric"
-          pattern="[0-9]{1,20}"
+          pattern="[1-9][0-9]{0,19}"
           autocomplete="off"
           required
       /></label>

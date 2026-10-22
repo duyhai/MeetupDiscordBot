@@ -73,7 +73,8 @@ interface Gate {
 export const BANNED_TAB_URL = `${PUBLIC_APP_ORIGIN}${dashboardPath(DASHBOARD_PATHS.suspensions)}?state=banned`;
 
 const DISCORD_ID = /^[0-9]{17,20}$/;
-const MEMBER_ID = /^[0-9]{1,20}$/;
+/** 1-20 ASCII digits, no leading zero (PR review M4): `0123` is not member 123. */
+const MEMBER_ID = /^[1-9][0-9]{0,19}$/;
 const FIRST_BAN_DAY = '2013-03-01';
 const MAX_SERIAL = 2 ** 31 - 1;
 /** Base64url, no padding: 153600 bytes are at most 204800 characters (D3). */

@@ -124,7 +124,18 @@ afterEach(() => {
 
 describe('recordBan', () => {
   it('validates before the gate and the gate before the repository', async () => {
-    for (const memberId of ['12a4', '+123', '١٢٣', '1'.repeat(21), 7]) {
+    // PR review M4: '0123' would never match member 123 and would slip past
+    // the one-active-ban index, so a leading zero is refused.
+    for (const memberId of [
+      '12a4',
+      '+123',
+      '١٢٣',
+      '1'.repeat(21),
+      7,
+      '0123',
+      '0',
+      '00',
+    ]) {
       const { deps, repo } = fakeDeps();
       // eslint-disable-next-line no-await-in-loop
       expect(await recordBan(deps, recordInput({ memberId }))).toEqual({

@@ -169,6 +169,9 @@ async function pollUntil(
         await expect(insert(' 123')).rejects.toEqual(refused);
         await expect(insert('1'.repeat(21))).rejects.toEqual(refused);
         await expect(insert('١٢٣')).rejects.toEqual(refused);
+        // PR review M4: no leading zero, so '0123' cannot stand beside '123'.
+        await expect(insert('0123')).rejects.toEqual(refused);
+        await expect(insert('0')).rejects.toEqual(refused);
         await expect(insert('5', bytes(1), 'upload', null)).rejects.toEqual(
           refused,
         );
