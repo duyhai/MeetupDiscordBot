@@ -132,7 +132,7 @@ A banned member's card shows a coral "Banned" badge and offers no suspension act
 
 ### Audit
 
-Every record, import, upload and lift posts one moderation-log embed with no pings and no photo. A sweep fill posts nothing; it is logged as a count only.
+Every record, import, upload and lift posts one moderation-log embed with no pings and no photo. A ban embed names the member by id only (`Member: 424242`), never by name, so nothing from the tracker reaches Discord; staff follow the Banned tab link for the name (controller ruling 2026-10-22). A sweep fill posts nothing; it is logged as a count only.
 
 ## Importing the tracker's 15 bans
 

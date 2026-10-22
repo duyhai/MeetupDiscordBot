@@ -235,6 +235,7 @@ describe('recordBan', () => {
       'https://meetup-discord-bot.herokuapp.com/dashboard/suspensions?state=banned',
     );
     const text = JSON.stringify(entry);
+    expect(text).not.toContain('Ann');
     expect(text).not.toContain('@everyone');
     expect(text).not.toContain('@here');
     expect(text).not.toContain('<@&1>');
@@ -569,19 +570,49 @@ describe('uploadBanPhoto', () => {
 });
 
 describe('banEntry', () => {
-  it('names the member, the date or Date unknown, and never carries a photo', () => {
+  it('shows the member id only, the date or Date unknown, and never carries a photo', () => {
     const entry = banEntry(
       'photo-replaced',
       ban({ bannedOn: null, memberName: '', hasPhoto: true }),
       LEAD,
     );
     expect(entry.title).toBe('Ban photo replaced');
-    expect(JSON.stringify(entry)).toContain('Unknown member (424242)');
-    expect(JSON.stringify(entry)).toContain('Date unknown');
+    expect(entry.fields).toEqual([
+      { name: 'Member', value: '424242' },
+      { name: 'Banned', value: 'Date unknown' },
+    ]);
     expect(Object.keys(entry).sort()).toEqual([
       'description',
       'fields',
       'title',
     ]);
+  });
+
+  it('never posts the tracker name, for every kind', () => {
+    const named = ban({
+      memberName: 'Tracker Name Secret',
+      liftReason: 'appeal',
+      liftedAt: NOW,
+      liftedBy: LEAD,
+    });
+    for (const kind of [
+      'recorded',
+      'lifted',
+      'photo-uploaded',
+      'photo-replaced',
+    ] as const) {
+      const entry = banEntry(kind, named, LEAD);
+      expect(JSON.stringify(entry), kind).not.toContain('Tracker Name');
+      expect(entry.fields?.[0], kind).toEqual({
+        name: 'Member',
+        value: '424242',
+      });
+      expect(entry.description, kind).toContain(BANNED_TAB_URL);
+    }
+  });
+
+  it('a member id that is not digits shows as unknown id', () => {
+    const entry = banEntry('recorded', ban({ memberId: '12a4' }), LEAD);
+    expect(entry.fields?.[0]).toEqual({ name: 'Member', value: 'unknown id' });
   });
 });

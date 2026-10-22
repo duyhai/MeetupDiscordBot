@@ -387,8 +387,8 @@ function actorMention(actor: string): string {
 }
 
 /**
- * The moderation-log embed for one ban change. No content (`<@id>` in an
- * embed never pings) and never the photo.
+ * The moderation-log embed for one ban change: the member id, never the
+ * name. No content (`<@id>` in an embed never pings) and never the photo.
  */
 export function banEntry(
   kind: 'recorded' | 'lifted' | 'photo-uploaded' | 'photo-replaced',
@@ -397,12 +397,9 @@ export function banEntry(
 ): LogEntry {
   const memberId = MEMBER_ID.test(ban.memberId) ? ban.memberId : 'unknown id';
   const fields: NonNullable<LogEntry['fields']> = [
-    {
-      name: 'Member',
-      value: fitFieldValue(
-        `${embedText(ban.memberName || 'Unknown member')} (${memberId})`,
-      ),
-    },
+    // The id only, never the name: nothing from the tracker goes to Discord
+    // (controller ruling 2026-10-22). Staff follow the link for the name.
+    { name: 'Member', value: memberId },
     { name: 'Banned', value: ban.bannedOn ?? 'Date unknown' },
   ];
   if (kind === 'recorded' && ban.notes) {
