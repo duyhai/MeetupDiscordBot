@@ -96,6 +96,11 @@ const EXPECTED_UNSAFE_ALLOWED: Record<string, number> = {
   // An empty form has no action: 'invalid', back to the month.
   'POST /no-shows/:period/rows/:rowId': 303,
   'POST /no-shows/:period/sync': 303,
+  // A fake Leadership check says no: refused, back to the Banned tab.
+  'POST /bans': 303,
+  'POST /bans/import': 303,
+  'POST /bans/:id/lift': 303,
+  'POST /bans/:id/photo': 303,
 };
 
 function concrete(path: string): string {
@@ -156,6 +161,7 @@ describe('access matrix', () => {
     expect(labels).toContain('POST /reports/:period/refresh');
     expect(labels).toContain('GET /identity');
     expect(labels).toContain('GET /identity/changes/:id/thumb/:side');
+    expect(labels).toContain('GET /bans/:id/photo');
     expect(labels).toContain('GET /link-progress');
     expect(labels).toContain('GET /trends');
     expect(labels).toContain('GET /no-shows');

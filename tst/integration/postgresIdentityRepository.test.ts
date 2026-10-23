@@ -1316,6 +1316,122 @@ describe.skipIf(!POSTGRES_AVAILABLE)('PostgresIdentityRepository', () => {
       }
     });
 
+    describe('latestStoredPhoto', () => {
+      const CAP = 100;
+      const img = (byte: number, size = 10) => Buffer.alloc(size, byte);
+      const ago = (days: number) => new Date(Date.now() - days * 86_400_000);
+
+      async function change(
+        platform: 'discord' | 'meetup',
+        scopeId: string,
+        subjectId: string,
+        field: string,
+        thumb: Buffer,
+        at: Date,
+      ): Promise<void> {
+        await poolOf().query(
+          `INSERT INTO member_identity_changes
+             (platform, scope_id, subject_id, field, old_value, new_value,
+              new_thumb, source, detected_at)
+           VALUES ($1, $2, $3, $4, 'o', 'n', $5, 'sweep', $6)`,
+          [platform, scopeId, subjectId, field, thumb, at],
+        );
+      }
+
+      it(
+        'returns the newest of change and baseline images for the Meetup and Discord subjects, ' +
+          'ignores other scopes and images over the cap',
+        async () => {
+          const meetupId = digits();
+          const discordId = digits();
+          await poolOf().query(
+            `INSERT INTO meetup_identity (scope_id, meetup_member_id, photo_id, photo_thumb, updated_at)
+           VALUES ($1, $2, 'p', $3, $4), ('999', $2, 'p', $5, now())`,
+            [MEETUP_SCOPE, meetupId, img(0xa1), ago(5), img(0xa9)],
+          );
+          await poolOf().query(
+            `INSERT INTO member_identity (scope_id, discord_user_id, member_avatar_thumb, user_avatar_thumb, updated_at)
+           VALUES ($1, $2, $3, $4, $5), ('some-other-guild', $2, $6, $6, now())`,
+            [DEFAULT_SCOPE, discordId, img(0xb1), img(0xc1), ago(3), img(0xb9)],
+          );
+          await change(
+            'meetup',
+            MEETUP_SCOPE,
+            meetupId,
+            'photo',
+            img(0xd1),
+            ago(4),
+          );
+          // Newer, but each is out of bounds: another scope, or over the cap.
+          await change(
+            'discord',
+            'some-other-guild',
+            discordId,
+            'user_avatar',
+            img(0xe9),
+            ago(0.5),
+          );
+          await change('meetup', '999', meetupId, 'photo', img(0xe8), ago(0.5));
+          await change(
+            'discord',
+            DEFAULT_SCOPE,
+            discordId,
+            'user_avatar',
+            img(0xe7, CAP + 1),
+            ago(0.4),
+          );
+
+          // Newest in scope: the Discord baseline (3 days), guild avatar first.
+          expect(
+            await repo.latestStoredPhoto(meetupId, discordId, CAP),
+          ).toEqual(img(0xb1));
+          // Without the link: the Meetup change (4 days) beats the baseline (5).
+          expect(
+            await repo.latestStoredPhoto(meetupId, undefined, CAP),
+          ).toEqual(img(0xd1));
+          // A newer Meetup change wins over everything.
+          await change(
+            'meetup',
+            MEETUP_SCOPE,
+            meetupId,
+            'photo',
+            img(0xf1),
+            ago(1),
+          );
+          expect(
+            await repo.latestStoredPhoto(meetupId, discordId, CAP),
+          ).toEqual(img(0xf1));
+          // The user avatar stands in when the guild avatar is missing.
+          await poolOf().query(
+            `UPDATE member_identity SET member_avatar_thumb = NULL, updated_at = now()
+            WHERE scope_id = $1 AND discord_user_id = $2`,
+            [DEFAULT_SCOPE, discordId],
+          );
+          expect(
+            await repo.latestStoredPhoto(meetupId, discordId, CAP),
+          ).toEqual(img(0xc1));
+          expect(await repo.latestStoredPhoto(digits(), undefined, CAP)).toBe(
+            undefined,
+          );
+        },
+      );
+
+      it('refuses ids that are not digits without a query', async () => {
+        const spy = vi.spyOn(poolOf(), 'query');
+        try {
+          expect(await repo.latestStoredPhoto('12a', undefined, 100)).toBe(
+            undefined,
+          );
+          expect(await repo.latestStoredPhoto('123', ' 1', 100)).toBe(
+            undefined,
+          );
+          expect(spy).not.toHaveBeenCalled();
+        } finally {
+          spy.mockRestore();
+        }
+      });
+    });
+
     it('countChangesSince counts in scope', async () => {
       const since = new Date(Date.now() - 1000);
       const before = await repo.countChangesSince(since);

@@ -38,6 +38,7 @@ import {
   allowedActions,
 } from '../../lib/workspace/transitions.js';
 import {
+  BAN_BLOCKED_ACTIONS,
   DONE_STATUSES,
   NOTES_MAX,
   OPEN_STATUSES,
@@ -76,6 +77,7 @@ import { isNoShowPayload } from './noShowHistory.js';
 import { refreshForm, refreshNotice } from './refresh.js';
 import {
   LeadershipAnswer,
+  WORKSPACE_RESULT_MESSAGES,
   leadershipOf,
   workspaceResultNotice,
 } from './workspaceActions.js';
@@ -274,6 +276,10 @@ interface CardView {
   linkedElsewhere: ReadonlySet<number>;
   /** The session holds the 1.5 Leadership Team role (live, or cached up to 60 s: display only). */
   leader: boolean;
+  /** The member has an active ban: no suspension actions (applyAction refuses them too). */
+  banned: boolean;
+  /** The bans read answered. When false, no card offers record or link and none shows Banned. */
+  banStatusKnown: boolean;
 }
 
 function caseBody(v: CardView): SafeHtml | '' {
@@ -506,8 +512,12 @@ function cardHtml(v: CardView): SafeHtml {
   const actions = new Set(
     allowedActions(row).filter(
       // Recording, linking and voiding: Leadership only. The POST checks
-      // again, live; this only decides what is shown.
-      (a) => v.leader || !LEADERSHIP_ONLY_ACTIONS.includes(a),
+      // again, live; this only decides what is shown. A banned member's
+      // card offers no record or link; the repository refuses them too.
+      // Nor does any card while the ban status is unknown.
+      (a) =>
+        (v.leader || !LEADERSHIP_ONLY_ACTIONS.includes(a)) &&
+        !((v.banned || !v.banStatusKnown) && BAN_BLOCKED_ACTIONS.includes(a)),
     ),
   );
   const rowUrl = localUrl(workspaceRowPath(row.period, row.id));
@@ -596,6 +606,7 @@ function cardHtml(v: CardView): SafeHtml {
           : html`<span class="badge attn">Warning</span>`
       }
       ${statusBadge(row.status)}
+      ${v.banned ? html`<span class="badge attn">Banned</span>` : ''}
     </h2>
     ${
       row.inLatestSnapshot
@@ -763,6 +774,7 @@ export function registerWorkspaceRoutes(
     | 'suspensions'
     | 'upcoming'
     | 'isLeadership'
+    | 'bans'
   >,
 ): void {
   const displayLeadership = new LeadershipDisplayCache(() =>
@@ -858,6 +870,11 @@ export function registerWorkspaceRoutes(
       const linkedIds = rows
         .map((r) => r.suspensionRecordId)
         .filter((id): id is number => id !== null);
+      // The ban status is read alongside, not in here: a failing bans
+      // read hides record and link (see banStatus) instead of the page.
+      const banStatus = loadOptional('ban status', async () =>
+        (await deps.bans()).activeMemberIds(memberIds),
+      );
       const [events, records, linked] = await Promise.all([
         ws.listRecentEvents(rowIds, 10),
         susp.listByMemberIds(memberIds),
@@ -884,6 +901,7 @@ export function registerWorkspaceRoutes(
         records,
         linked,
         linkedElsewhere,
+        banStatus,
       };
     });
     if (!loaded.ok) {
@@ -900,7 +918,12 @@ export function registerWorkspaceRoutes(
       records,
       linked,
       linkedElsewhere,
+      banStatus,
     } = loaded.value;
+    // loadOptional never rejects and has its own deadline.
+    const bans = await banStatus;
+    const banStatusKnown = bans.ok;
+    const bannedIds = bans.ok ? bans.value : new Set<string>();
     const answer = await leadership;
     const leader = answer === 'leader';
     const asked = rows
@@ -908,13 +931,16 @@ export function registerWorkspaceRoutes(
         (r) =>
           r.classification === 'suspension' &&
           r.inLatestSnapshot &&
+          // A banned member is never suspended from here: no RSVPs to show.
+          !bannedIds.has(r.memberId) &&
           allowedActions(r).some(
             (a) => a === 'record_suspension' || a === 'link_suspension',
           ),
       )
       .map((r) => r.memberId);
     let upcoming = new Map<string, UpcomingEntry>();
-    if (asked.length > 0) {
+    // Unknown ban status: no card offers record or link, so no RSVPs.
+    if (banStatusKnown && asked.length > 0) {
       const live = await loadOptional('The upcoming RSVPs', () =>
         deps.upcoming(asked),
       );
@@ -983,6 +1009,8 @@ export function registerWorkspaceRoutes(
         events: events.get(row.id) ?? [],
         linkedElsewhere,
         leader,
+        banned: bannedIds.has(row.memberId),
+        banStatusKnown,
       }),
     );
     dashboardPage(res, {
@@ -992,6 +1020,14 @@ export function registerWorkspaceRoutes(
           <h1>No-show workspace — ${label}</h1>
           ${workspaceResultNotice(req.query.result)}
           ${refreshNotice(req.query.refresh)} ${leadershipNote(answer)}
+          ${
+            banStatusKnown
+              ? ''
+              : html`<p class="note attn">
+                  Ban status unavailable. Recording and linking suspensions are
+                  hidden. Reload in a minute.
+                </p>`
+          }
           ${monthPicker(period, now)} ${built} ${unreadable} ${setUp}
           ${refreshForm(period, csrf, 'workspace')}
         </div>
@@ -1026,20 +1062,42 @@ export function registerWorkspaceRoutes(
     }
     const loaded = await load(res, WHAT, async () => {
       const row = await (await deps.workspace()).getRow(period, rowId);
-      const records = row
-        ? await (await deps.suspensions()).listByMemberIds([row.memberId])
-        : [];
-      return { row, records };
+      const [records, bannedIds] = row
+        ? await Promise.all([
+            (await deps.suspensions()).listByMemberIds([row.memberId]),
+            (await deps.bans()).activeMemberIds([row.memberId]),
+          ])
+        : [[], new Set<string>()];
+      return {
+        row,
+        records,
+        banned: row ? bannedIds.has(row.memberId) : false,
+      };
     });
     if (!loaded.ok) {
       return;
     }
-    const { row, records } = loaded.value;
+    const { row, records, banned } = loaded.value;
     if (!row) {
       notFound(res);
       return;
     }
     const back = localUrl(monthPath(DASHBOARD_PATHS.workspaceMonth, period));
+    if (banned) {
+      // The POST refuses too (applyAction, after the member lock).
+      dashboardPage(res, {
+        title: 'Record suspension',
+        body: html`<div class="card">
+          <h1>
+            Record suspension —
+            ${memberLink({ id: row.memberId, name: row.memberName })}
+          </h1>
+          <p class="note attn">${WORKSPACE_RESULT_MESSAGES.banned}</p>
+          <p><a href="${back}">Back to the workspace</a></p>
+        </div>`,
+      });
+      return;
+    }
     if (!allowedActions(row).includes('record_suspension')) {
       dashboardPage(res, {
         title: 'Record suspension',

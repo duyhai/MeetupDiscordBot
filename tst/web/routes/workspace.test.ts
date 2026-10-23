@@ -29,6 +29,8 @@ import { closeServers, makeApp, signIn } from '../dashboardHarness.js';
 import {
   PAGE_NOW,
   SEPT,
+  banRow,
+  fakeBans,
   SeedRow,
   WorkspaceSeed,
   fakeOrganizerDeps,
@@ -103,6 +105,8 @@ const snapshotRows = (p: unknown = payload()): SeedRow[] => [
 
 interface Options {
   seed?: WorkspaceSeed;
+  /** Members with an active ban. */
+  banned?: string[];
   snapshots?: SeedRow[];
   records?: SuspensionRecordState[];
   upcoming?: (ids: string[]) => Promise<Map<string, UpcomingEntry>>;
@@ -117,6 +121,9 @@ async function setup(options: Options = {}) {
   const snaps = fakeSnapshots(options.snapshots ?? snapshotRows());
   const susp = fakeSuspensions({}, [], options.records ?? []);
   const upcoming = vi.fn(options.upcoming ?? (async () => new Map()));
+  const bans = fakeBans({
+    active: (options.banned ?? []).map((memberId) => banRow({ memberId })),
+  });
   const actions = fakeWorkspaceActions();
   const isLeadership = vi.fn(async (_userId: string) => {
     if (options.leader instanceof Error) {
@@ -138,6 +145,7 @@ async function setup(options: Options = {}) {
           upcoming,
           isLeadership,
           workspaceActions: actions,
+          bans: async () => bans,
           ...options.pages,
         }),
       }),
@@ -151,7 +159,17 @@ async function setup(options: Options = {}) {
   const advance = (ms: number) => {
     clock += ms;
   };
-  return { get, ws, snaps, susp, upcoming, actions, isLeadership, advance };
+  return {
+    get,
+    ws,
+    snaps,
+    susp,
+    upcoming,
+    actions,
+    isLeadership,
+    advance,
+    bans,
+  };
 }
 
 /**
@@ -1081,6 +1099,151 @@ describe('GET /dashboard/no-shows/:period (month cards)', () => {
     const text = withoutCopyBoxes(res.text).toLowerCase();
     expect(text).not.toContain('attendance');
     expect(text).not.toContain('incomplete');
+  });
+});
+
+describe('banned members in the workspace', () => {
+  const OCT_MONTH = '/dashboard/no-shows/2026-10';
+  const banned = (period: Period, id: number) =>
+    suspensionCardRow({ id, period });
+  const outside = () =>
+    suspensionRecord({
+      id: 9,
+      memberId: '2001',
+      suspendedAt: new Date('2026-10-02T00:00:00Z'),
+    });
+
+  it("a banned member's cards show Banned and no Record or Link button in every month", async () => {
+    const { get, bans } = await setup({
+      seed: seed([warningRow(), banned(SEPT, 2), banned(OCT, 3)], {
+        months: [SEPT, OCT].map((period) => ({
+          period,
+          snapshotId: SNAPSHOT_ID,
+          snapshotBuiltAt: BUILT_AT,
+          syncedAt: new Date('2026-10-01T16:00:00Z'),
+        })),
+      }),
+      records: [outside()],
+      banned: ['2001'],
+      leader: true,
+    });
+    for (const path of [MONTH, OCT_MONTH]) {
+      // eslint-disable-next-line no-await-in-loop -- one month at a time
+      const res = await get(path);
+      expect(res.status).toBe(200);
+      const card = cards(res.text).find((c) => c.includes('/2001/'));
+      expect(card, path).toBeDefined();
+      expect(card).toMatch(
+        /<h2>[\s\S]*<span class="badge attn">Banned<\/span>[\s\S]*<\/h2>/,
+      );
+      expect(card).not.toContain('Record suspension');
+      expect(card).not.toContain('/suspend"');
+      expect(card).not.toContain('value="link_suspension"');
+      // Hold, skip and notes stay.
+      expect(card).toContain('value="hold"');
+      expect(card).toContain('value="edit_notes"');
+    }
+    expect(bans.activeMemberIds).toHaveBeenCalledWith(['2001']);
+    // The warning card is not marked.
+    const res = await get(MONTH);
+    const warningCard = cards(res.text).find((c) => c.includes('/2000/'));
+    expect(warningCard).not.toContain('>Banned<');
+  });
+
+  it("a banned member's suspended card still offers void", async () => {
+    const { get } = await setup({
+      seed: seed([
+        suspensionCardRow({ status: 'suspended', suspensionRecordId: 5 }),
+      ]),
+      banned: ['2001'],
+      leader: true,
+    });
+    const [card] = cards((await get(MONTH)).text);
+    expect(card).toContain('>Banned<');
+    expect(card).toContain('value="void"');
+  });
+
+  it('banned members are not asked for upcoming RSVPs', async () => {
+    const { get, upcoming } = await setup({
+      seed: seed([
+        warningRow(),
+        suspensionCardRow(),
+        suspensionCardRow({ id: 3, memberId: '2003' }),
+      ]),
+      banned: ['2001'],
+    });
+    await get(MONTH);
+    expect(upcoming).toHaveBeenCalledTimes(1);
+    expect(upcoming.mock.calls[0][0]).toEqual(['2003']);
+  });
+
+  it('a failing bans read hides record and link on every card and asks for no RSVPs', async () => {
+    const { get, upcoming } = await setup({
+      seed: seed([
+        warningRow(),
+        suspensionCardRow(),
+        suspensionCardRow({ id: 3, memberId: '2003' }),
+      ]),
+      records: [outside()],
+      leader: true,
+      pages: {
+        bans: async () => {
+          throw new Error('db down');
+        },
+      },
+    });
+    const res = await get(MONTH);
+    expect(res.status).toBe(200);
+    expect(words(res.raw)).toContain(
+      'Ban status unavailable. Recording and linking suspensions are hidden. Reload in a minute.',
+    );
+    expect(res.text).toContain('<p class="note attn">Ban status unavailable.');
+    const all = cards(res.text);
+    expect(all).toHaveLength(3);
+    for (const card of all) {
+      expect(card).not.toContain('Record suspension');
+      expect(card).not.toContain('/suspend"');
+      expect(card).not.toContain('value="link_suspension"');
+      expect(card).not.toContain('>Banned<');
+    }
+    // Hold stays on the suspension cards.
+    expect(all.find((c) => c.includes('/2003/'))).toContain('value="hold"');
+    expect(upcoming).not.toHaveBeenCalled();
+  });
+
+  it('the same cards offer record and link when the bans read works', async () => {
+    const { get } = await setup({
+      seed: seed([warningRow(), suspensionCardRow()]),
+      records: [outside()],
+      leader: true,
+    });
+    const res = await get(MONTH);
+    expect(res.text).not.toContain('Ban status unavailable');
+    const card = cards(res.text).find((c) => c.includes('/2001/'));
+    expect(card).toContain('/suspend"');
+    expect(card).toContain('value="link_suspension"');
+  });
+
+  it('a failing bans read on the confirm page is the 503 page', async () => {
+    const { get } = await setup({
+      leader: true,
+      pages: {
+        bans: async () => {
+          throw new Error('db down');
+        },
+      },
+    });
+    expect((await get(CONFIRM)).status).toBe(503);
+  });
+
+  it('the confirm page refuses a banned member', async () => {
+    const { get } = await setup({ banned: ['2001'], leader: true });
+    const res = await get(CONFIRM);
+    expect(res.status).toBe(200);
+    expect(words(res.text)).toContain('This member is banned.');
+    expect(res.text).not.toContain('value="record_suspension"');
+    expect(res.text).not.toContain('name="date"');
+    expect(res.text).toContain('href="/dashboard/no-shows/2026-09"');
   });
 });
 

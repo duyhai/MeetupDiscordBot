@@ -258,6 +258,16 @@ export function httpsRedirectTarget(
   }
 }
 
+/**
+ * The one path whose form body may exceed 32 kB: a ban photo upload
+ * (D4), case-sensitive like the routers. It gets the larger limit only when
+ * the request carries a session cookie whose signature verifies, so a
+ * signed-out client cannot make the server buffer more than 32 kB.
+ */
+export const BAN_PHOTO_BODY_PATH = /^\/bans\/[1-9][0-9]{0,8}\/photo\/?$/;
+/** A 150 KB photo is at most 204800 base64url characters, plus _csrf. */
+export const BAN_PHOTO_BODY_LIMIT = '220kb';
+
 export function createDashboardRouter(deps: DashboardDeps): express.Router {
   const now = deps.now ?? Date.now;
   const loginLimiter = deps.loginLimiter ?? new FixedWindowLimiter(10, 60_000);
@@ -351,8 +361,32 @@ export function createDashboardRouter(deps: DashboardDeps): express.Router {
     res.redirect(308, httpsRedirectTarget(deps.origin, req.originalUrl));
   });
   // 32 kB: a 2000-character note of 4-byte characters is about 24 kB once
-  // percent-encoded, plus the other fields.
-  router.use(express.urlencoded({ extended: false, limit: '32kb' }));
+  // percent-encoded, plus the other fields. Only a ban photo upload gets
+  // more (D4). Still before the gate and the unsafe-method guard, which
+  // reads _csrf from the parsed body.
+  const formBody = express.urlencoded({ extended: false, limit: '32kb' });
+  const banPhotoBody = express.urlencoded({
+    extended: false,
+    limit: BAN_PHOTO_BODY_LIMIT,
+  });
+  // The signature alone decides (no Redis read): a signed-out or forged
+  // cookie keeps 32 kB, and a signed cookie whose session is gone still
+  // meets the gate's 403 after the larger parse.
+  const hasSignedSessionCookie = (req: Request) =>
+    [...new Set(parseCookieValues(req.headers.cookie, SESSION_COOKIE))]
+      .slice(0, MAX_SESSION_COOKIE_CANDIDATES)
+      .some((signed) =>
+        Boolean(verifySignedSessionId(signed, deps.sessionSecret)),
+      );
+  router.use(function dashboardFormBody(req, res, next) {
+    const parser =
+      req.method === 'POST' &&
+      BAN_PHOTO_BODY_PATH.test(req.path) &&
+      hasSignedSessionCookie(req)
+        ? banPhotoBody
+        : formBody;
+    parser(req, res, next);
+  });
 
   // ---- Public routes: the only ones reachable without a session. ----
 

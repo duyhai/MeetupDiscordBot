@@ -1,3 +1,5 @@
+import { Logger } from 'tslog';
+
 /**
  * `fetch` with a total-request deadline.
  *
@@ -35,4 +37,82 @@ export async function boundedFetch(
       ? AbortSignal.any([init.signal, AbortSignal.timeout(timeoutMs)])
       : AbortSignal.timeout(timeoutMs),
   });
+}
+
+const cappedLogger = new Logger({ name: 'boundedFetch' });
+
+/**
+ * The body of an https GET, or null: on a non-2xx (redirects are not
+ * followed), a `Content-Length` over `maxBytes`, a streamed body passing
+ * `maxBytes` (the read is cancelled there, so at most one chunk past the cap
+ * is ever buffered), the deadline, or any error. Never throws. Logs the
+ * error's class name only: never the URL.
+ */
+export async function fetchBytesCapped(
+  url: string,
+  maxBytes: number,
+  timeoutMs: number,
+): Promise<Buffer | null> {
+  const outcome = await fetchBytesCappedOutcome(url, maxBytes, timeoutMs);
+  return outcome === 'too-large' ? null : outcome;
+}
+
+/**
+ * fetchBytesCapped, but a body over `maxBytes` (declared or streamed) is
+ * `'too-large'` rather than null, so a caller can tell "this file is too big"
+ * (a smaller size may do) from "this download failed" (try again later).
+ * Null for everything else. Never throws.
+ */
+export async function fetchBytesCappedOutcome(
+  url: string,
+  maxBytes: number,
+  timeoutMs: number,
+): Promise<Buffer | 'too-large' | null> {
+  let target: URL;
+  try {
+    target = new URL(url);
+  } catch {
+    return null;
+  }
+  if (target.protocol !== 'https:') {
+    return null;
+  }
+  try {
+    const response = await boundedFetch(
+      target.href,
+      { redirect: 'error' },
+      timeoutMs,
+    );
+    if (!response.ok || response.body === null) {
+      response.body?.cancel().catch(() => undefined);
+      return null;
+    }
+    const header = response.headers.get('content-length');
+    const declared = header === null ? undefined : Number(header);
+    if (
+      declared !== undefined &&
+      (!Number.isFinite(declared) || declared < 0 || declared > maxBytes)
+    ) {
+      response.body.cancel().catch(() => undefined);
+      // A garbled length is a failed download, not a big file.
+      return declared > maxBytes ? 'too-large' : null;
+    }
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+    // One chunk at a time, checked as it lands. Leaving the loop early
+    // cancels the stream, so nothing past this chunk is read.
+    for await (const chunk of response.body as AsyncIterable<Uint8Array>) {
+      total += chunk.byteLength;
+      if (total > maxBytes) {
+        return 'too-large';
+      }
+      chunks.push(chunk);
+    }
+    return total === 0 ? null : Buffer.concat(chunks, total);
+  } catch (error: unknown) {
+    cappedLogger.warn(
+      `Capped fetch failed: ${error instanceof Error ? error.name : 'Error'}`,
+    );
+    return null;
+  }
 }

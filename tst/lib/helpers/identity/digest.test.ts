@@ -13,6 +13,12 @@ import {
 } from '../../../../src/lib/helpers/identity/digest.js';
 import { logAlert } from '../../../../src/lib/helpers/discordLogger.js';
 import { runMeetupSweep } from '../../../../src/lib/helpers/identity/meetupSweep.js';
+import {
+  BAN_FILL_DEADLINE_MS,
+  defaultBanPhotoFillDeps,
+  runBanPhotoFillSafely,
+} from '../../../../src/lib/bans/photoFill.js';
+import { MeetupGroupMember } from '../../../../src/lib/client/meetup/types.js';
 import { runIdentitySweep } from '../../../../src/lib/helpers/identity/sweep.js';
 import { identityNameKey } from '../../../../src/lib/helpers/identity/names.js';
 import { IdentityChangeRecord } from '../../../../src/lib/repositories/identityTypes.js';
@@ -54,6 +60,34 @@ vi.mock('../../../../src/lib/helpers/identity/sweep.js', () => ({
 vi.mock('../../../../src/lib/helpers/identity/meetupSweep.js', () => ({
   runMeetupSweep: vi.fn().mockResolvedValue({ scanned: 0, changed: 0 }),
 }));
+// The real runBanPhotoFillSafely (its own deadline and catch) over fake
+// deps: nothing reaches Postgres, Discord or Meetup.
+const banFill = vi.hoisted(() => ({
+  bans: {
+    listPhotoFillCandidates: vi.fn(),
+    fillProfilePhoto: vi.fn(),
+  },
+  open: vi.fn(),
+}));
+vi.mock('../../../../src/lib/bans/photoFill.js', async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import('../../../../src/lib/bans/photoFill.js')
+    >();
+  return {
+    ...actual,
+    runBanPhotoFillSafely: vi.fn(actual.runBanPhotoFillSafely),
+    defaultBanPhotoFillDeps: vi.fn(() => ({
+      bans: banFill.open,
+      discordIdsByMeetupIds: async () => new Map(),
+      guildMember: () => undefined,
+      storedPhoto: async () => undefined,
+      fetchBytes: async () => null,
+      guildId: 'g1',
+      now: () => Date.now(),
+    })),
+  };
+});
 
 const at = (iso: string) => new Date(iso);
 
@@ -559,8 +593,91 @@ describe('runIdentityDigestOnce', () => {
     vi.mocked(logAlert).mockResolvedValue(true);
     vi.mocked(runIdentitySweep).mockResolvedValue({ scanned: 0, changed: 0 });
     vi.mocked(runMeetupSweep).mockResolvedValue({ scanned: 0, changed: 0 });
+    banFill.open.mockResolvedValue(banFill.bans);
+    banFill.bans.listPhotoFillCandidates.mockResolvedValue([]);
+    banFill.bans.fillProfilePhoto.mockResolvedValue(true);
   });
   afterEach(() => vi.useRealTimers());
+
+  const identityPosted = () =>
+    vi
+      .mocked(logAlert)
+      .mock.calls.some(([, entry]) =>
+        entry.title.startsWith('Identity changes'),
+      );
+
+  it('the ban fill runs after both sweeps and before the ceiling is read', async () => {
+    const roster = [
+      { id: '1', name: null, username: null, memberPhoto: null },
+    ] as MeetupGroupMember[];
+    vi.mocked(runMeetupSweep).mockResolvedValue({
+      scanned: 1,
+      changed: 0,
+      roster,
+    });
+
+    await runIdentityDigestOnce(client);
+
+    const fillAt =
+      banFill.bans.listPhotoFillCandidates.mock.invocationCallOrder[0];
+    expect(fillAt).toBeGreaterThan(
+      vi.mocked(runIdentitySweep).mock.invocationCallOrder[0],
+    );
+    expect(fillAt).toBeGreaterThan(
+      vi.mocked(runMeetupSweep).mock.invocationCallOrder[0],
+    );
+    expect(fillAt).toBeLessThan(repo.maxChangeId.mock.invocationCallOrder[0]);
+    expect(defaultBanPhotoFillDeps).toHaveBeenCalledWith(client);
+    expect(vi.mocked(runBanPhotoFillSafely).mock.calls[0][1]).toBe(roster);
+    expect(vi.mocked(runBanPhotoFillSafely).mock.calls[0][2]).toBe(true);
+  });
+
+  it('a failing Discord sweep runs the fill with the guild cache marked unknown', async () => {
+    vi.mocked(runIdentitySweep).mockRejectedValue(new Error('discord down'));
+
+    await runIdentityDigestOnce(client);
+
+    expect(runBanPhotoFillSafely).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(runBanPhotoFillSafely).mock.calls[0][2]).toBe(false);
+  });
+
+  it('a failing Meetup sweep still runs the fill with no roster', async () => {
+    vi.mocked(runMeetupSweep).mockRejectedValue(new Error('meetup api down'));
+
+    await runIdentityDigestOnce(client);
+
+    expect(runBanPhotoFillSafely).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(runBanPhotoFillSafely).mock.calls[0][1]).toBeUndefined();
+    expect(vi.mocked(runBanPhotoFillSafely).mock.calls[0][2]).toBe(true);
+    expect(banFill.bans.listPhotoFillCandidates).toHaveBeenCalled();
+  });
+
+  it('a fill that throws or hangs does not stop the digest post', async () => {
+    banFill.open.mockRejectedValue(new Error('db down'));
+    await runIdentityDigestOnce(client);
+    expect(identityPosted()).toBe(true);
+
+    vi.clearAllMocks();
+    vi.mocked(logAlert).mockResolvedValue(true);
+    vi.mocked(defaultBanPhotoFillDeps).mockImplementationOnce(() => {
+      throw new Error('no pool');
+    });
+    await runIdentityDigestOnce(client);
+    expect(identityPosted()).toBe(true);
+
+    vi.clearAllMocks();
+    vi.mocked(logAlert).mockResolvedValue(true);
+    banFill.open.mockImplementation(() => new Promise(() => undefined));
+    const run = runIdentityDigestOnce(client);
+    await vi.advanceTimersByTimeAsync(BAN_FILL_DEADLINE_MS);
+    await run;
+    expect(identityPosted()).toBe(true);
+    expect(cache.set).toHaveBeenCalledWith(
+      'identity-digest-done-2026-08-16',
+      '1',
+      expect.any(Number),
+    );
+  });
 
   it('names the members in the digest from the stored baselines', async () => {
     const rows = [meetupChange(), change()];

@@ -1,0 +1,164 @@
+# Member bans
+
+Status: approved by Hai 2026-10-22; built per docs/superpowers/plans/2026-10-22-member-bans.md.
+
+## Why
+
+Staff keep banned members in a "Banned Members" tab of the no-show tracker workbook, outside the bot. Hai asked to import the 15 banned members along with the historical suspensions (2026-10-19). He also asked for a stored, compressed photo of each banned member, so that a returning member can be recognised (2026-10-22). Today the bot has no concept of a ban.
+
+## Decisions Hai made (2026-10-22)
+
+- **Storage.** Bans get their own table, separate from suspensions.
+  - A ban never counts toward the 30/60/120-day ladder.
+  - A ban never shows as an active suspension.
+  - A ban has no length.
+- **Undated bans.** Import them as "date unknown". Stacey can add a date in the review file.
+- **Effect.** Record and show only. Discord and Meetup access stay manual.
+- **Photo.** One photo per ban, compressed. It lives in the ban table itself, the way identity thumbnails live in their rows.
+- **Dashboard only.** Bans are managed in the dashboard. There are no Discord commands for managing bans; `/meetup_record_suspension` refuses rows for a banned member (see below).
+- **Sweep fills, never overwrites.** The daily identity sweep fills in a missing photo from the member's profile. It never replaces a photo already on record, so a banned member cannot swap our photo for an unrecognisable one.
+
+## Goals
+
+- Record, list and lift bans in the dashboard, with who did it and when.
+- Keep one compressed photo per ban, uploaded by staff or filled in by the sweep.
+- Import the tracker's 15 bans and their 15 embedded photos after a review step.
+
+## Non-goals
+
+- No automatic enforcement: no kicks, no role changes, no Meetup removal.
+- No alert when a banned member links an account or rejoins.
+- No import of the tracker's free-text ban notes.
+- No new runtime dependency.
+
+## Anti-goals (failures even if it "works")
+
+- A ban changing any suspension length or count.
+- A stored photo that keeps its original metadata (EXIF or GPS), or is larger than the caps below.
+- The sweep replacing a photo that is already on record.
+- A photo served to anyone other than signed-in staff, or cached.
+- Any ping. Moderation-log embeds use `allowedMentions: { parse: [] }` and never contain the photo.
+
+## Data model: `member_bans`, one table, created on first use under the existing locks
+
+| Column | Notes |
+|---|---|
+| `id` | serial |
+| `member_id` | text; Meetup id, digits only |
+| `member_name` | text |
+| `banned_on` | date, nullable; NULL means "date unknown" |
+| `notes` | text; staff-written. The import writes only a fixed provenance line. |
+| `recorded_by` | Discord id |
+| `created_at` | |
+| `photo` | bytea, nullable |
+| `photo_source` | `'upload'`, `'profile'` (a live avatar or Meetup photo) or `'identity-thumb'` (a stored identity thumbnail) |
+| `photo_updated_at` | |
+| `photo_updated_by` | Discord id, or NULL when the sweep filled it |
+| `lifted_at`, `lifted_by`, `lift_reason` | |
+
+- **Lifting.** A ban is lifted the way a suspension is voided: the row stays and gains who lifted it, when and why.
+- **One active ban.** A partial unique index allows at most one active (unlifted) ban per member.
+- **Reads.** List reads select explicit columns and never `photo`. The photo is read only by the photo route, one row per request. This is the same pattern as identity thumbnails.
+
+## Photos
+
+- **JPEG for Safari (plan D2).** Safari's canvas cannot encode WebP, so the browser script falls back to JPEG and the server accepts WebP or JPEG uploads (Hai, Q1).
+- **Void still allowed (plan D7).** A banned member's card offers no record or link, but void, hold, skip, reopen and notes stay, so a wrong record can still be voided (Hai, Q2).
+- **Re-ban photo (plan D8).** A new ban for a member whose latest lifted ban has a photo starts with that photo; the sweep then leaves it alone (Hai, Q4).
+
+### Staff upload (dashboard, Leadership only)
+
+- **In the browser.** A small fixed script (a nonce'd `staticRaw`, the same pattern as the copy script) runs when staff pick a file:
+  1. It decodes the image with `createImageBitmap`.
+  2. It draws it on a canvas, scaled so the longest side is at most 512 px (never enlarged).
+  3. It exports WebP at quality 0.8, stepping down to 0.5 until the result is under 150 KB.
+  4. It puts the base64 result into a hidden field and submits the form.
+- **Effect on metadata.** Re-encoding through a canvas drops all metadata, including location.
+- **Fallback.** Without JavaScript, the form shows a fixed note asking staff to enable it. Nothing else changes.
+- **Server checks.** The server trusts nothing from the browser. On the upload route it:
+  - uses a route-specific body limit of about 220 KB;
+  - requires the CSRF token, the router's unsafe-method guard and the per-user rate limit;
+  - runs a live Leadership check, the same as workspace record and void;
+  - decodes the base64;
+  - accepts only bytes that sniff as WebP (the existing `sniffImageType`);
+  - reads the width and height from the WebP header (VP8, VP8L or VP8X) and refuses anything over 512 px on either side or over 150 KB;
+  - strips container metadata from the accepted bytes before the caps are checked and before storing (controller ruling 2026-10-22, see below);
+  - stores the bytes with `photo_source='upload'`.
+
+  **Metadata strip (controller ruling 2026-10-22).** The canvas re-encode drops metadata, but a forged post need not come from the canvas, and Safari's canvas JPEG may carry a minimal EXIF APP1. So the server strips rather than refuses, with container-level byte surgery, no decoding, and allow-lists only (`stripImageMetadata`). JPEG: the whole file is walked; before the first scan only JFIF (APP0), Adobe (APP14), the tables and the frame header are kept; between scans only the tables and further scans; APPn and COM are dropped everywhere (ICC included); the output ends at EOI. WebP: a VP8X file keeps only its header, alpha and image chunks (so EXIF, XMP and ICC go) and gets new flags and a new RIFF size; a plain VP8/VP8L file must be exactly one chunk. PNG (sweep sources only; uploads stay WebP or JPEG): only image and colour chunks are kept, so text, EXIF, time, ICC and animation chunks go. Anything malformed is refused. The sweep fill strips the same way.
+
+  An upload replaces any existing photo, including one the sweep filled in. Staff can always correct the photo; the sweep cannot.
+- **CSP.** Unchanged. The page doesn't preview through a `blob:` URL; the preview is the canvas itself, so `img-src` stays `'self'`. The upload is a normal form post, so `connect-src` stays `'none'`.
+
+### Sweep fill (daily identity sweep, never overwrites)
+
+- **When it runs.** After its normal work, the sweep reads the active bans with `photo IS NULL`. The list is small, at most 15 today, and capped at 50 per run. The order is fixed for the day and changes daily, so bans with no usable source cannot keep the others from being reached.
+- **Source order:**
+  1. The member's current Discord avatar, if their Meetup id is linked to a Discord account still in the server. It comes from Discord's CDN at `?size=256` in WebP, the same CDN resizing the identity sweep already uses. The server avatar is tried first, then the account avatar.
+  2. Otherwise, their current Meetup photo from the roster the sweep already fetched: `standardUrl`, then `thumbUrl`, never `highResUrl`. Nothing is resized locally.
+  3. Otherwise, the most recent identity thumbnail already stored for that member (Discord or Meetup), but only when every live source is known to have no photo at all: the member is gone from it (not a linked member in the guild's member cache, not in a roster that was actually fetched today), or is still in it with no photo at all (a linked member in a guild cache today's Discord sweep refreshed, with neither a server nor an account avatar; a roster entry with no `standardUrl` or `thumbUrl`). This covers members who have left the server and the group, and members still present who never set a photo (Hai, 2026-10-22, "yes to both" via the lead).
+- **Failures wait for tomorrow (final review, 2026-10-22).** Because the fill never overwrites, a smaller photo taken on a bad day would be kept for good. So inside a live source only a file over the 150 KB cap moves on to the next, smaller one (for example `standardUrl` to `thumbUrl`). Any other failure of a live source (timeout, error status, bytes that are not an image) defers the ban to the next run, with no fallback to a later source. The ban is also deferred, never filled from source 3, when today's roster is missing (Meetup down), the Discord link lookup failed, or a linked member is missing from a guild cache that today's Discord sweep could not refresh (its member fetch failed, so the cache may be partial). A member still present in a live source that has a photo which did not do (every size over the cap) gets nothing from source 3; only "present with no photo at all" qualifies, and a failed read or download never does. Deferred bans are logged as a count.
+- **What it stores.** The bytes after the metadata strip, only if they sniff as PNG, JPEG or WebP and are at most 150 KB (the strip runs on every source, PNG included). The row gets `photo_source='profile'` from sources 1 and 2 and `photo_source='identity-thumb'` from source 3 (Hai, 2026-10-22, "yes to both" via the lead), and `photo_updated_by` NULL. The Banned tab says "From their profile on …" or "From a stored profile thumbnail on …".
+- **Overwrite guard.** The update is `... WHERE id = $1 AND photo IS NULL`, so the sweep can never replace a photo, even if a staff upload lands at the same moment.
+- **Scheduling and logging.** The fill follows the sweep's existing window (18:00 UTC) and its download budget. It logs counts only.
+
+### Serving
+
+- **Route:** `GET /dashboard/bans/:id/photo`, for signed-in staff only.
+- **Headers:** `Content-Type` comes from the sniffed bytes, plus `nosniff` and `no-store`. This is the same handling as `getChangeThumb`.
+- **No photo:** a 404 with nothing in the body. The page shows "No photo".
+
+## Dashboard
+
+### Banned tab
+
+The Suspensions page gets a Banned tab, Two-Tone styled, with stacked cards on phones.
+
+- **Who sees it.** Moderators and Leadership can see bans. Only the 1.5 Leadership Team can record, import, upload or lift one: the forms are hidden for others, and every POST runs the live check.
+- **Active bans.** Each card shows:
+  - the photo (about 96 px), or "No photo";
+  - name and member id, linked to Meetup only when the id is all digits;
+  - the ban date, or "Date unknown";
+  - who recorded it;
+  - notes;
+  - where the photo came from: "Uploaded by …" or "From their profile on …".
+
+  Leadership also sees "Upload photo" (or "Replace photo") and "Lift ban" (reason required).
+- **Lifted bans.** Each shows who lifted it, when and why. The photo is kept, so the person can still be recognised if they return.
+- **Add ban (Leadership).** A form with member id, name, optional date and notes. It refuses a second active ban for the same member.
+- **Import bans (Leadership).** A textarea where staff paste CSV text with the columns `member_id,member_name,banned_on,notes`; `banned_on` may be blank.
+  - It uses the same strict parser rules as the suspension import.
+  - Results are shown with fixed text plus row numbers.
+  - The whole import is one transaction: if any row is bad, nothing is written.
+
+### Workspace
+
+A banned member's card shows a coral "Banned" badge and offers no suspension actions. The action POST refuses them too, with the fixed message "This member is banned."
+
+### `/meetup_record_suspension` (Hai, 2026-10-22, "yes to both" via the lead)
+
+Bans affect the workspace and this command, nothing else. The command refuses every CSV row whose member has an active ban; a lifted ban does not block. The rest of the file is still recorded, as with its other per-row outcomes. The reply's count line gains "N refused: member is banned", and the attachment lists each refused row as "member <id> is banned [row N]": ids only, never the name from the file. The import takes each member's lock (`MEMBER_LOCK_CLASS`, `hashtext('suspension:' || id)`, distinct keys in ascending order), the same lock the workspace and the ban repository take, and reads active bans after it, so a ban recorded meanwhile is seen. A database where `member_bans` does not exist has no bans.
+
+### Audit
+
+Every record, import, upload and lift posts one moderation-log embed with no pings and no photo. A ban embed carries only its kind (the title), the member id (`Member: 424242`), the ban date or "Date unknown", the actor's mention and the Banned tab link. It never carries the name, the notes or the lift reason: nothing from the tracker reaches Discord, and staff-typed text often names the member. Staff follow the link for the rest (controller rulings 2026-10-22). A sweep fill posts nothing; it is logged as a count only.
+
+## Importing the tracker's 15 bans
+
+1. A local script reads the "Banned Members" tab and writes `.superpowers/backfill/ban-review.csv` (gitignored). The columns are: id, name, proposed date (from the 8 notes that have one), confidence, keep and corrected date.
+2. The same script extracts the 15 embedded pictures, matched to their rows by cell anchors, into the same gitignored folder, named by member id.
+3. After Stacey's review, Hai pastes the converted CSV into "Import bans", then uploads each photo through "Upload photo". The browser compresses each one as described above.
+4. The local photo files are then deleted.
+
+Nothing from the tracker is committed, pasted into a PR, or posted to Discord. If a photo is missing, the next sweep fills it from the profile.
+
+## Left to the builder
+
+- The exact Meetup photo size, if the roster offers several.
+- The index choices.
+- The Banned tab's page size.
+- The exact wording.
+
+## Open points for Hai
+
+- **Keeping photos after a ban is lifted.** I chose to keep the photo on a lifted ban so a returning person can still be recognised. Say if a lifted ban should drop its photo.

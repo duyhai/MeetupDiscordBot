@@ -54,6 +54,12 @@ export interface VoidedSuspensionRecord extends SuspensionRecord {
   voidReason: string;
 }
 
+export interface InsertManyResult {
+  inserted: SuspensionRecord[];
+  /** Distinct member ids with an active (unlifted) ban: refused, not inserted. */
+  banned: string[];
+}
+
 export interface SuspensionRepository {
   /**
    * Inserts a suspension record. Returns undefined instead of inserting when
@@ -63,8 +69,12 @@ export interface SuspensionRepository {
    * suspensions on different dates are expected.
    */
   insert(record: SuspensionInsert): Promise<SuspensionRecord | undefined>;
-  /** Returns only the rows actually inserted; duplicates are silently skipped. */
-  insertMany(records: SuspensionInsert[]): Promise<SuspensionRecord[]>;
+  /**
+   * One transaction under each member's lock. Returns the rows actually
+   * inserted (duplicates are silently skipped) and the distinct member ids
+   * with an active ban, none of whose rows were inserted.
+   */
+  insertMany(records: SuspensionInsert[]): Promise<InsertManyResult>;
   /**
    * How many suspensions the member had strictly before `before` -- the
    * "prior suspensions" that double the next penalty. Deliberately takes a

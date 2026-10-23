@@ -60,10 +60,17 @@ function startingLine({ record, info }: ParsedRecord): number {
   return info.lines - breaksInside;
 }
 
-export function parseSuspensionCsv(rawText: string): ParsedSuspensionRow[] {
-  // A real RFC 4180 parser: quoted fields may contain commas, escaped quotes
-  // and line breaks. Splitting on newlines first turned the second line of a
-  // multi-line note into a phantom suspension for whichever member it named.
+/**
+ * Every record of a CSV text with the line it starts on (the header is row
+ * 1). A real RFC 4180 parser: quoted fields may contain commas, escaped
+ * quotes and line breaks. Throws csv-parse's error on malformed quoting.
+ * Shared by the suspension and ban imports.
+ */
+export function readCsvRecords(
+  rawText: string,
+): { record: string[]; rowNumber: number }[] {
+  // Splitting on newlines first turned the second line of a multi-line note
+  // into a phantom suspension for whichever member it named.
   const parsed = parse(rawText, {
     // Excel "CSV UTF-8" prepends a byte-order mark to the header.
     bom: true,
@@ -71,12 +78,20 @@ export function parseSuspensionCsv(rawText: string): ParsedSuspensionRow[] {
     // A blank spreadsheet row exports as ",,,": not a data row.
     skip_records_with_empty_values: true,
     // Hand-typed files may leave commas unquoted in the trailing notes
-    // column; they arrive as extra fields and are rejoined below.
+    // column; they arrive as extra fields and are rejoined by the callers.
     relax_column_count: true,
     info: true,
     // csv-parse's typings declare string[][] regardless of options; with
     // `info: true` each record is actually { record, info }.
   }) as unknown as ParsedRecord[];
+  return parsed.map((parsedRecord) => ({
+    record: parsedRecord.record,
+    rowNumber: startingLine(parsedRecord),
+  }));
+}
+
+export function parseSuspensionCsv(rawText: string): ParsedSuspensionRow[] {
+  const parsed = readCsvRecords(rawText);
 
   const header = (parsed[0]?.record ?? [])
     .map((field) => field.trim().toLowerCase())
@@ -86,9 +101,7 @@ export function parseSuspensionCsv(rawText: string): ParsedSuspensionRow[] {
   }
   const offset = header === NAMED_HEADER ? 1 : 0;
 
-  return parsed.slice(1).map((parsedRecord) => {
-    const { record } = parsedRecord;
-    const rowNumber = startingLine(parsedRecord);
+  return parsed.slice(1).map(({ record, rowNumber }) => {
     const field = (index: number) => (record[index] ?? '').trim();
 
     const memberId = field(0);

@@ -7,6 +7,7 @@ import {
 } from '../../../src/lib/helpers/recordSuspensions.js';
 import { ParsedSuspensionRow } from '../../../src/lib/helpers/suspensionCsv.js';
 import {
+  InsertManyResult,
   SuspensionInsert,
   SuspensionRecord,
 } from '../../../src/lib/repositories/types.js';
@@ -14,6 +15,9 @@ import {
 /** In-memory stand-in with Postgres's (member_id, suspended_at) uniqueness. */
 class FakeSuspensionRepository implements RecorderRepository {
   records: SuspensionRecord[] = [];
+
+  /** Members with an active ban: insertMany skips and reports them. */
+  banned = new Set<string>();
 
   private nextId = 1;
 
@@ -37,16 +41,24 @@ class FakeSuspensionRepository implements RecorderRepository {
     return record;
   }
 
-  async insertMany(inserts: SuspensionInsert[]): Promise<SuspensionRecord[]> {
+  async insertMany(inserts: SuspensionInsert[]): Promise<InsertManyResult> {
     const inserted: SuspensionRecord[] = [];
     for (const insert of inserts) {
+      if (this.banned.has(insert.memberId)) {
+        continue;
+      }
       // eslint-disable-next-line no-await-in-loop
       const record = await this.insert(insert);
       if (record) {
         inserted.push(record);
       }
     }
-    return inserted;
+    const banned = [
+      ...new Set(
+        inserts.map((i) => i.memberId).filter((id) => this.banned.has(id)),
+      ),
+    ];
+    return { inserted, banned };
   }
 
   async listByMemberId(memberId: string) {
@@ -301,6 +313,7 @@ describe('formatRecordSummary', () => {
       ],
       notInGroup: [{ memberId: '999', memberName: null, rowNumber: 7 }],
       durationMismatches: [{ ...alice, expectedDays: 60, priorCount: 1 }],
+      banned: [],
     });
 
     expect(summary.content).toBe(
@@ -322,9 +335,90 @@ describe('formatRecordSummary', () => {
       duplicates: [],
       notInGroup: [],
       durationMismatches: [],
+      banned: [],
     });
 
     expect(summary.body).toContain('2026-09-01');
     expect(summary.body).not.toContain('2026-08-31');
+  });
+});
+
+describe('an active ban (M5: Hai, 2026-10-22)', () => {
+  let repo: FakeSuspensionRepository;
+
+  beforeEach(() => {
+    repo = new FakeSuspensionRepository();
+  });
+
+  it('refuses every row of a banned member and records the rest of the file', async () => {
+    repo.banned.add('300');
+    const outcome = await recordCsvRows(
+      repo,
+      [
+        row({ memberId: '100', rowNumber: 2 }),
+        row({ memberId: '300', memberName: 'Banned Name', rowNumber: 3 }),
+        row({ memberId: '200', rowNumber: 4 }),
+        row({
+          memberId: '300',
+          suspendedAt: new Date('2026-10-01T00:00:00Z'),
+          rowNumber: 5,
+        }),
+      ],
+      new Map([['100', 'Alice']]),
+    );
+    expect(outcome.recorded.map((r) => r.memberId)).toEqual(['100', '200']);
+    expect(repo.records.map((r) => r.memberId)).toEqual(['100', '200']);
+    expect(outcome.banned).toEqual([
+      { memberId: '300', memberName: 'Banned Name', rowNumber: 3 },
+      { memberId: '300', memberName: null, rowNumber: 5 },
+    ]);
+    // A refused row is no duplicate, no departed member, no duration to check.
+    expect(outcome.duplicates).toEqual([]);
+    expect(outcome.notInGroup.map((m) => m.memberId)).toEqual(['200']);
+    expect(outcome.durationMismatches.map((m) => m.memberId)).not.toContain(
+      '300',
+    );
+  });
+
+  it('the reply counts the refusals and the attachment names each id with fixed wording, never the name', async () => {
+    repo.banned.add('300');
+    const outcome = await recordCsvRows(
+      repo,
+      [
+        row({ memberId: '100', rowNumber: 2 }),
+        row({ memberId: '300', memberName: 'Banned Name', rowNumber: 3 }),
+      ],
+      new Map([
+        ['100', 'Alice'],
+        ['300', 'Banned Name'],
+      ]),
+    );
+    const summary = formatRecordSummary(outcome);
+    expect(summary.result).toBe(
+      'Recorded 1 suspension(s) (1 refused: member is banned).',
+    );
+    expect(summary.content).toBe(
+      'Recorded 1 suspension(s) (1 refused: member is banned). Details in the attachment.',
+    );
+    expect(summary.body).toContain(
+      'Refused — the member has an active ban (1):\n- member 300 is banned [row 3]',
+    );
+    expect(summary.body).not.toContain('Banned Name');
+  });
+
+  it('with no ban, the summary is exactly what it was', async () => {
+    const outcome = await recordCsvRows(
+      repo,
+      [row({ memberId: '100', rowNumber: 2 })],
+      new Map([['100', 'Alice']]),
+    );
+    expect(outcome.banned).toEqual([]);
+    const summary = formatRecordSummary(outcome);
+    expect(summary.content).toBe(
+      'Recorded 1 suspension(s). Details in the attachment.',
+    );
+    expect(summary.body).toBe(
+      'Recorded (1):\n- 100 (Alice): 30 days from 2026-09-01 [row 2]',
+    );
   });
 });

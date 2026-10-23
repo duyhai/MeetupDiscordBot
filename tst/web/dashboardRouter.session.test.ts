@@ -772,7 +772,7 @@ describe('routes are gated by construction', () => {
     expect(beforeGate.filter((l) => !l.route).map((l) => l.name)).toEqual([
       'securityHeaders',
       'dashboardHttpsRedirect',
-      'urlencodedParser',
+      'dashboardFormBody',
     ]);
     // The gate is followed directly by the protected router, and nothing
     // after it but the error handler.

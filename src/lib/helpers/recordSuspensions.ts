@@ -55,6 +55,11 @@ export interface RecordOutcome {
   notInGroup: FlaggedMember[];
   /** Recorded as written, but the duration doesn't follow the policy. */
   durationMismatches: DurationMismatch[];
+  /**
+   * Not recorded: the member has an active ban (Hai, 2026-10-22). Checked
+   * under the member lock, so a ban recorded meanwhile is seen.
+   */
+  banned: FlaggedMember[];
 }
 
 const rowKey = (memberId: string, suspendedAt: Date) =>
@@ -78,13 +83,15 @@ export async function recordCsvRows(
     duplicates: [],
     notInGroup: [],
     durationMismatches: [],
+    banned: [],
   };
   const withNames = rows.map((row) => ({
     ...row,
     memberName: row.memberName ?? knownMembers.get(row.memberId) ?? null,
   }));
 
-  const inserted = await repo.insertMany(withNames);
+  const { inserted, banned } = await repo.insertMany(withNames);
+  const bannedIds = new Set(banned);
   // Each inserted key accounts for exactly one row, so a row repeated within
   // the file is reported as a duplicate rather than recorded twice.
   const unclaimed = new Map(
@@ -98,6 +105,14 @@ export async function recordCsvRows(
     { rowNumber: number; id: number; durationDays: number }
   >();
   for (const row of withNames) {
+    if (bannedIds.has(row.memberId)) {
+      outcome.banned.push({
+        memberId: row.memberId,
+        memberName: row.memberName,
+        rowNumber: row.rowNumber,
+      });
+      continue;
+    }
     const key = rowKey(row.memberId, row.suspendedAt);
     const insertedId = unclaimed.get(key);
     if (insertedId === undefined) {
@@ -207,7 +222,8 @@ export function formatRecordSummary(outcome: RecordOutcome): {
   content: string;
   body: string;
 } {
-  const { recorded, duplicates, notInGroup, durationMismatches } = outcome;
+  const { recorded, duplicates, notInGroup, durationMismatches, banned } =
+    outcome;
   const differing = duplicates.filter(differsFromFile).length;
   const repeats = duplicates.filter((d) => d.repeatsRow !== undefined).length;
   const counts = [
@@ -220,6 +236,7 @@ export function formatRecordSummary(outcome: RecordOutcome): {
           durationMismatches.length === 1 ? '' : 's'
         } to check`
       : '',
+    banned.length ? `${banned.length} refused: member is banned` : '',
   ].filter(Boolean);
   const result = `Recorded ${recorded.length} suspension(s)${
     counts.length ? ` (${counts.join(', ')})` : ''
@@ -270,6 +287,16 @@ export function formatRecordSummary(outcome: RecordOutcome): {
           `- ${d.memberId}${nameSuffix(d.memberName)}: ${utcDateOnly(
             d.suspendedAt,
           )}${rowSuffix(d.rowNumber)}${differenceSuffix(d)}`,
+      ),
+    );
+  }
+  if (banned.length) {
+    // Ids only, in fixed wording: never the name from the file.
+    sections.push(
+      '',
+      `Refused — the member has an active ban (${banned.length}):`,
+      ...banned.map(
+        (b) => `- member ${b.memberId} is banned${rowSuffix(b.rowNumber)}`,
       ),
     );
   }

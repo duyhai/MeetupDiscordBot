@@ -103,6 +103,18 @@ td ul{margin:var(--s1) 0 0;padding-left:var(--s4)}
 .table-scroll{overflow-x:auto;max-width:100%;margin:0 0 var(--s3);border:1px solid var(--line);border-radius:8px}
 .table-scroll th,.table-scroll td{white-space:nowrap;overflow-wrap:normal}
 .table-scroll tr:last-child td{border-bottom:0}
+img.ban-photo{display:block;width:96px;max-width:100%;height:auto;aspect-ratio:1;object-fit:cover;border-radius:8px}
+canvas.ban-preview{display:block;max-width:96px;height:auto;border-radius:8px}
+td.ban-actions{width:15rem}
+td.ban-actions form+form{margin-top:var(--s3);padding-top:var(--s3);border-top:1px solid var(--line)}
+form[data-ban-photo] input[type="file"]{width:100%;min-width:0}
+table.bans th{overflow-wrap:normal}
+table.bans td.ban-date{white-space:nowrap;overflow-wrap:normal}
+table.bans td.ban-fixed{overflow-wrap:normal}
+form.ban-add label.field{margin:0 0 var(--s3)}
+form.ban-add label.field input{display:block;width:100%;max-width:24rem;margin-top:var(--s1)}
+code{overflow-wrap:anywhere}
+[hidden]{display:none!important}
 img.thumb{display:block;width:64px;max-width:100%;height:auto;aspect-ratio:1;object-fit:cover;border-radius:8px;
 border:1px solid var(--line);background:var(--raised)}
 figure{margin:0 0 var(--s5)}
@@ -149,6 +161,16 @@ dl.stats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:var(--s2
 .actions form{margin:0}
 .ws-card h2{display:flex;flex-wrap:wrap;align-items:center;gap:var(--s2)}
 .ws-card details{border-top:1px solid var(--line);margin-top:var(--s4);padding-top:var(--s2)}
+@media (max-width:1023.98px){table.stack.bans,table.stack.bans tbody{display:block;width:100%}
+table.stack.bans thead{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+table.stack.bans tr{display:block;background:var(--raised);border:1px solid var(--line);border-radius:8px;
+padding:var(--s2) var(--s3);margin:0 0 var(--s3)}
+table.stack.bans td{display:flow-root;border:0;padding:var(--s1) 0 var(--s1) 40%}
+table.stack.bans td::before{content:attr(data-label);float:left;width:calc(66.667% - var(--s3));margin-left:-66.667%;
+padding-right:var(--s3);box-sizing:content-box;font-size:var(--t-sm);font-weight:600;color:var(--muted)}
+table.stack.bans td.ban-actions{width:auto}}
+@media (min-width:640px) and (max-width:1023.98px){table.stack.bans td{padding-left:12rem}
+table.stack.bans td::before{width:calc(12rem - var(--s3));margin-left:-12rem}}
 @media (max-width:639.98px){h1{font-size:var(--t-xl)}
 h2{font-size:var(--t-lg)}
 h3{font-size:var(--t-base)}
@@ -165,7 +187,8 @@ table.stack td.rank{display:none}
 .rank-inline{display:inline}
 .actions>form:has(textarea){flex:1 1 100%}
 form.filters label{flex:1 1 100%}
-form.filters input,form.filters select,form.filters button{width:100%}}
+form.filters input,form.filters select,form.filters button{width:100%}
+table.stack td.ban-actions{width:auto}}
 @media (prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;
 transition:none!important}button:active,.button:active{transform:none}}
 `;

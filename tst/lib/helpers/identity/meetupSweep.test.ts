@@ -22,6 +22,7 @@ import {
   isMeetupUnauthorized,
 } from '../../../../src/lib/helpers/organizerMeetupClient.js';
 import { runMeetupSweep } from '../../../../src/lib/helpers/identity/meetupSweep.js';
+import { getGroupMemberships } from '../../../../src/lib/client/meetup/queries.js';
 import { applyNetworkBlock } from '../../../setup/blockNetwork.js';
 
 // Token concerns (refresh, lock, episode alerts) belong to the helper and its
@@ -111,6 +112,30 @@ describe('runMeetupSweep', () => {
       (error) => error instanceof ClientError && error.response?.status === 401,
     );
     repo.getMeetupSnapshot.mockResolvedValue(undefined);
+  });
+
+  it('returns the roster it fetched', async () => {
+    const roster = [member('a'), member('b')];
+    vi.mocked(getPaginatedData).mockResolvedValue(roster);
+
+    const result = await runMeetupSweep('sweep');
+
+    expect(result.roster).toBe(roster);
+  });
+
+  it('returns no roster when there is no token', async () => {
+    vi.mocked(getOrganizerAccessToken).mockResolvedValue(undefined);
+
+    expect((await runMeetupSweep('sweep')).roster).toBeUndefined();
+  });
+
+  it('asks the roster query for the standard photo as well as the thumb', () => {
+    const text = String(getGroupMemberships);
+    const photo = /memberPhoto\s*\{([^}]*)\}/.exec(text)?.[1] ?? '';
+    expect(photo).toContain('standardUrl');
+    expect(photo).toContain('thumbUrl');
+    // Never the unbounded original.
+    expect(photo).not.toContain('highResUrl');
   });
 
   it('scans every member returned by the roster', async () => {

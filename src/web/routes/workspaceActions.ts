@@ -71,7 +71,10 @@ export class WorkspaceDeadlineError extends Error {
  * and always cleared. Promise.race subscribes to the work, so a rejection
  * after the deadline is still handled (never an unhandled rejection).
  */
-async function withDeadline<T>(ms: number, fn: () => Promise<T>): Promise<T> {
+export async function withDeadline<T>(
+  ms: number,
+  fn: () => Promise<T>,
+): Promise<T> {
   let timer: NodeJS.Timeout | undefined;
   try {
     const work = fn();
@@ -153,6 +156,7 @@ export const WORKSPACE_RESULT_MESSAGES = {
     "That suspension record cannot be linked or voided here (voided, someone else's, or already on another card).",
   'bad-date':
     'Pick a suspension date from the first of the month through today.',
+  banned: 'This member is banned.',
   'not-leadership':
     'Only the 1.5 Leadership Team can record, link or void a suspension. Nothing was changed.',
   'leadership-unavailable':

@@ -30,6 +30,16 @@ export const WORKSPACE_ACTIONS = [
 ] as const;
 export type WorkspaceAction = (typeof WORKSPACE_ACTIONS)[number];
 
+/**
+ * What an active ban blocks: creating or attaching a suspension. Void,
+ * hold, skip, reopen, notes and the warning actions stay (D7; Hai: void
+ * stays allowed).
+ */
+export const BAN_BLOCKED_ACTIONS: readonly WorkspaceAction[] = [
+  'record_suspension',
+  'link_suspension',
+];
+
 /** Event actions the sync writes, as actor 'sync'. */
 export const SYNC_EVENT_ACTIONS = [
   'sync_created',
@@ -143,7 +153,9 @@ export type ActionRefusalReason =
   | 'record-unavailable'
   | 'bad-date'
   /** record_suspension dated before one of the member's live records. */
-  | 'out-of-order';
+  | 'out-of-order'
+  /** record_suspension or link_suspension for a member with an active ban. */
+  | 'banned';
 
 /** A refusal wrote nothing: not the version bump, not an event. */
 export type ActionOutcome =
