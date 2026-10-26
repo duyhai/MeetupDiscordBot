@@ -1,8 +1,16 @@
 import { CreateEventInput } from '../lib/client/meetup/types.js';
 
+/**
+ * Body of every guest-host event. It used to be copied from a Meetup draft
+ * event (313217466) at approval time; that event was deleted on 2026-10-25,
+ * so the text now lives here. The approve handler prepends the request's
+ * "💡 Host Tip" line when there is one.
+ */
+export const GUEST_HOST_EVENT_DESCRIPTION = `TODO: recovered description pending`;
+
 export const createEventTemplate: CreateEventInput = {
   title: 'Organizer Event Template',
-  description: '',
+  description: GUEST_HOST_EVENT_DESCRIPTION,
   startDateTime: '2023-04-20T19:00',
   duration: 'PT2H',
   question: '',

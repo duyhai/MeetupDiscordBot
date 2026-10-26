@@ -11,9 +11,11 @@ import {
 import { ButtonComponent, Discord, Slash, SlashOption } from 'discordx';
 import { Logger } from 'tslog';
 
-import { DRAFT_EVENT_TEMPLATE_ID } from '../../constants.js';
 import { getPaginatedData } from '../../lib/client/meetup/paginationHelper.js';
-import { createEventTemplate } from '../../templates/createEventTemplate.js';
+import {
+  GUEST_HOST_EVENT_DESCRIPTION,
+  createEventTemplate,
+} from '../../templates/createEventTemplate.js';
 import { ApplicationCache } from '../../util/cache.js';
 import { discordCommandWrapper } from '../../util/discord.js';
 import { withLock } from '../../util/lock.js';
@@ -89,18 +91,22 @@ export class MeetupCreateEventCommands {
             const meetupUserId = getValue('**Meetup User ID**: ');
             const eventDate = getValue('**Event Date**: ');
             const eventTitle = getValue('**Event Title**: ');
+            if (
+              !/^\d+$/.test(meetupUserId) ||
+              !/^\d{4}-\d{2}-\d{2}$/.test(eventDate) ||
+              !eventTitle
+            ) {
+              throw new Error(
+                "Couldn't read the host, date or title from this request, so no event was created.",
+              );
+            }
 
-            const draftEventTemplate = await meetupClient.getEvent(
-              DRAFT_EVENT_TEMPLATE_ID,
-            );
-            logger.info(`Fetched template event`);
-
-            // Add the tip to the end of the description
+            // Add the tip to the start of the description
             const tip = lines.find((line) =>
               line.startsWith('💡 **Host Tip**: '),
             );
 
-            let { description } = draftEventTemplate.event;
+            let description = GUEST_HOST_EVENT_DESCRIPTION;
             if (tip) {
               description = `${tip.replace(
                 '**Host Tip**',
@@ -108,22 +114,46 @@ export class MeetupCreateEventCommands {
               )}\n\n${description}`;
             }
 
-            const newEvent = await meetupClient.createEvent({
-              ...createEventTemplate,
-              description,
-              title: `${GUEST_HOST_PREFIX}${eventTitle}`,
-              startDateTime: `${eventDate}T${DEFAULT_START_TIME}:00`,
-              eventHosts: [Number(meetupUserId)],
-            });
+            let newEvent: Awaited<ReturnType<typeof meetupClient.createEvent>>;
+            try {
+              newEvent = await meetupClient.createEvent({
+                ...createEventTemplate,
+                description,
+                title: `${GUEST_HOST_PREFIX}${eventTitle}`,
+                startDateTime: `${eventDate}T${DEFAULT_START_TIME}:00`,
+                eventHosts: [Number(meetupUserId)],
+              });
+            } catch (error: unknown) {
+              logger.error(error);
+              throw new Error(
+                'Meetup did not create the event, so nothing was created. Try Approve again in a few minutes.',
+              );
+            }
+            const createdEvent = newEvent?.createEvent?.event;
+            if (!createdEvent?.id) {
+              logger.error(`createEvent returned no event`);
+              throw new Error(
+                'Meetup did not create the event (it returned no event), so nothing was created. Try Approve again in a few minutes.',
+              );
+            }
             logger.info(`Event created`);
 
-            const eventId = newEvent.createEvent.event.id;
-            await meetupClient.closeEventRsvps({ eventId });
-            // Have to set this again because close RSVP wipes it out...
-            await meetupClient.editEvent({
-              eventId,
-              rsvpSettings: createEventTemplate.rsvpSettings,
-            });
+            const eventId = createdEvent.id;
+            try {
+              await meetupClient.closeEventRsvps({ eventId });
+              // Have to set this again because close RSVP wipes it out...
+              await meetupClient.editEvent({
+                eventId,
+                rsvpSettings: createEventTemplate.rsvpSettings,
+              });
+            } catch (error: unknown) {
+              logger.error(error);
+              throw new Error(
+                `The event was created (<${createdEvent.eventUrl}>) but closing its RSVPs ` +
+                  `and setting the RSVP limits failed. Please fix the RSVP settings on Meetup, ` +
+                  `and don't press Approve again: that would create a second event.`,
+              );
+            }
             logger.info(`Event RSVP closed`);
 
             const message = await interaction.message.fetch();
@@ -133,7 +163,7 @@ export class MeetupCreateEventCommands {
               content: `${
                 interaction.message.content
               }\n✅ Request approved by ${interaction.user.toString()}.\nLink to event: <${
-                newEvent.createEvent.event.eventUrl
+                createdEvent.eventUrl
               }>`,
               components: [newButtons],
             });
