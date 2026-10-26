@@ -9,14 +9,22 @@ import {
   MessageActionRowComponentBuilder,
 } from 'discord.js';
 import { ButtonComponent, Discord, Slash, SlashOption } from 'discordx';
+import { ClientError } from 'graphql-request';
 import { Logger } from 'tslog';
 
-import { DRAFT_EVENT_TEMPLATE_ID } from '../../constants.js';
+import { GqlMeetupClient } from '../../lib/client/meetup/gqlClient.js';
 import { getPaginatedData } from '../../lib/client/meetup/paginationHelper.js';
-import { createEventTemplate } from '../../templates/createEventTemplate.js';
+import {
+  GUEST_HOST_EVENT_DESCRIPTION,
+  createEventTemplate,
+} from '../../templates/createEventTemplate.js';
 import { ApplicationCache } from '../../util/cache.js';
-import { discordCommandWrapper } from '../../util/discord.js';
+import {
+  discordCommandWrapper,
+  requireModOrOrganizer,
+} from '../../util/discord.js';
 import { withLock } from '../../util/lock.js';
+import { CreateEventInput } from '../../lib/client/meetup/types.js';
 import { withMeetupClient } from '../../util/meetup.js';
 import { getRandomTip } from '../../util/tips.js';
 
@@ -26,6 +34,37 @@ const DEFAULT_START_TIME = 19;
 const DATE_FORMAT = 'YYYY-MM-DD';
 const TITLE_MAX_LENGTH = 80;
 const GUEST_HOST_PREFIX = '[Guest Host] ';
+const TEMPLATE_TITLE = 'Organizer Event Template';
+
+/**
+ * The featured photo is a fixed Meetup photo id. If that photo is ever
+ * deleted, Meetup's GraphQL error names the photo; the event is then created
+ * without one rather than not at all. Any other error is rethrown untouched,
+ * so a failure that may already have created the event is never retried.
+ */
+async function createEventWithPhotoFallback(
+  meetupClient: GqlMeetupClient,
+  input: CreateEventInput,
+) {
+  try {
+    return await meetupClient.createEvent(input);
+  } catch (error: unknown) {
+    const photoRejected =
+      error instanceof ClientError &&
+      (error.response.errors ?? []).some(({ message }) =>
+        /photo/i.test(message),
+      );
+    if (!photoRejected) {
+      throw error;
+    }
+    logger.warn(
+      `createEvent rejected featured photo ${input.featuredPhotoId}; retrying without it`,
+    );
+    const withoutPhoto = { ...input };
+    delete withoutPhoto.featuredPhotoId;
+    return meetupClient.createEvent(withoutPhoto);
+  }
+}
 
 @Discord()
 export class MeetupCreateEventCommands {
@@ -89,18 +128,22 @@ export class MeetupCreateEventCommands {
             const meetupUserId = getValue('**Meetup User ID**: ');
             const eventDate = getValue('**Event Date**: ');
             const eventTitle = getValue('**Event Title**: ');
+            if (
+              !/^\d+$/.test(meetupUserId) ||
+              !/^\d{4}-\d{2}-\d{2}$/.test(eventDate) ||
+              !eventTitle
+            ) {
+              throw new Error(
+                "Couldn't read the host, date or title from this request, so no event was created.",
+              );
+            }
 
-            const draftEventTemplate = await meetupClient.getEvent(
-              DRAFT_EVENT_TEMPLATE_ID,
-            );
-            logger.info(`Fetched template event`);
-
-            // Add the tip to the end of the description
+            // Add the tip to the start of the description
             const tip = lines.find((line) =>
               line.startsWith('💡 **Host Tip**: '),
             );
 
-            let { description } = draftEventTemplate.event;
+            let description = GUEST_HOST_EVENT_DESCRIPTION;
             if (tip) {
               description = `${tip.replace(
                 '**Host Tip**',
@@ -108,22 +151,46 @@ export class MeetupCreateEventCommands {
               )}\n\n${description}`;
             }
 
-            const newEvent = await meetupClient.createEvent({
-              ...createEventTemplate,
-              description,
-              title: `${GUEST_HOST_PREFIX}${eventTitle}`,
-              startDateTime: `${eventDate}T${DEFAULT_START_TIME}:00`,
-              eventHosts: [Number(meetupUserId)],
-            });
+            let newEvent: Awaited<ReturnType<typeof meetupClient.createEvent>>;
+            try {
+              newEvent = await createEventWithPhotoFallback(meetupClient, {
+                ...createEventTemplate,
+                description,
+                title: `${GUEST_HOST_PREFIX}${eventTitle}`,
+                startDateTime: `${eventDate}T${DEFAULT_START_TIME}:00`,
+                eventHosts: [Number(meetupUserId)],
+              });
+            } catch (error: unknown) {
+              logger.error(error);
+              throw new Error(
+                'Meetup did not create the event, so nothing was created. Try Approve again in a few minutes.',
+              );
+            }
+            const createdEvent = newEvent?.createEvent?.event;
+            if (!createdEvent?.id) {
+              logger.error(`createEvent returned no event`);
+              throw new Error(
+                'Meetup did not create the event (it returned no event), so nothing was created. Try Approve again in a few minutes.',
+              );
+            }
             logger.info(`Event created`);
 
-            const eventId = newEvent.createEvent.event.id;
-            await meetupClient.closeEventRsvps({ eventId });
-            // Have to set this again because close RSVP wipes it out...
-            await meetupClient.editEvent({
-              eventId,
-              rsvpSettings: createEventTemplate.rsvpSettings,
-            });
+            const eventId = createdEvent.id;
+            try {
+              await meetupClient.closeEventRsvps({ eventId });
+              // Have to set this again because close RSVP wipes it out...
+              await meetupClient.editEvent({
+                eventId,
+                rsvpSettings: createEventTemplate.rsvpSettings,
+              });
+            } catch (error: unknown) {
+              logger.error(error);
+              throw new Error(
+                `The event was created (<${createdEvent.eventUrl}>) but closing its RSVPs ` +
+                  `and setting the RSVP limits failed. Please fix the RSVP settings on Meetup, ` +
+                  `and don't press Approve again: that would create a second event.`,
+              );
+            }
             logger.info(`Event RSVP closed`);
 
             const message = await interaction.message.fetch();
@@ -133,7 +200,7 @@ export class MeetupCreateEventCommands {
               content: `${
                 interaction.message.content
               }\n✅ Request approved by ${interaction.user.toString()}.\nLink to event: <${
-                newEvent.createEvent.event.eventUrl
+                createdEvent.eventUrl
               }>`,
               components: [newButtons],
             });
@@ -179,6 +246,70 @@ export class MeetupCreateEventCommands {
 
         await interaction.followUp({
           content: '❌ Event request denied!',
+          ephemeral: true,
+        });
+      });
+    });
+  }
+
+  /**
+   * Hosts who copy an event on Meetup instead of using /meetup_request_event
+   * copy this draft. The bot itself no longer reads it (the approve button
+   * uses GUEST_HOST_EVENT_DESCRIPTION), so a deleted template only breaks
+   * that manual path, and Leadership can put it back from here.
+   */
+  @Slash({
+    name: 'meetup_recreate_event_template',
+    description: `Recreate the unpublished guest-host template event on Meetup for hosts to copy. Output is private.`,
+  })
+  async meetupRecreateEventTemplateHandler(interaction: CommandInteraction) {
+    await discordCommandWrapper(interaction, async () => {
+      await requireModOrOrganizer(
+        interaction,
+        'Only the Leadership Team and moderators can recreate the event template.',
+        ['leadership', 'moderator'],
+      );
+      await withMeetupClient(interaction, async (meetupClient) => {
+        const membershipInfo = await meetupClient.getUserMembershipInfo();
+        if (
+          membershipInfo.groupByUrlname.membershipMetadata.status !== 'LEADER'
+        ) {
+          throw new Error(
+            'Your Meetup account is not an organizer of the group, so it cannot create events.',
+          );
+        }
+        const userInfo = await meetupClient.getUserInfo();
+
+        let result: Awaited<ReturnType<typeof meetupClient.createEvent>>;
+        try {
+          result = await createEventWithPhotoFallback(meetupClient, {
+            ...createEventTemplate,
+            title: TEMPLATE_TITLE,
+            publishStatus: 'DRAFT',
+            // Far enough out that nobody mistakes it for a real date.
+            startDateTime: `${dayjs()
+              .add(1, 'year')
+              .format(DATE_FORMAT)}T${DEFAULT_START_TIME}:00`,
+            eventHosts: [Number(userInfo.self.id)],
+          });
+        } catch (error: unknown) {
+          logger.error(error);
+          throw new Error(
+            'Meetup did not create the template, so nothing was created. Try again in a few minutes.',
+          );
+        }
+        const template = result?.createEvent?.event;
+        if (!template?.id) {
+          throw new Error(
+            'Meetup did not create the template (it returned no event). Try again in a few minutes.',
+          );
+        }
+        logger.info(`Event template recreated: ${template.id}`);
+
+        await interaction.followUp({
+          content:
+            `✅ Recreated the unpublished event template: <${template.eventUrl}>\n` +
+            'Hosts can copy it on Meetup. It stays a draft: please do not publish or delete it.',
           ephemeral: true,
         });
       });
