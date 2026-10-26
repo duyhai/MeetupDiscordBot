@@ -1,4 +1,6 @@
 import { ButtonInteraction, CommandInteraction } from 'discord.js';
+import { GraphQLError } from 'graphql';
+import { ClientError } from 'graphql-request';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { SERVER_ROLES } from '../../../src/constants.js';
@@ -100,6 +102,18 @@ function approveInteraction(content: string) {
     raw: interaction,
     messageEdit,
   };
+}
+
+function meetupGraphQLError(message: string) {
+  return new ClientError(
+    {
+      status: 200,
+      headers: new Headers(),
+      body: '',
+      errors: [new GraphQLError(message)],
+    },
+    { query: 'mutation' },
+  );
 }
 
 describe('approving a guest-host event request', () => {
@@ -209,6 +223,39 @@ describe('approving a guest-host event request', () => {
     );
     // The lock is released so the request can be approved again.
     expect(fakeCache.data.size).toBe(0);
+  });
+
+  it('creates the event without a featured photo when Meetup rejects the photo', async () => {
+    meetup.createEvent.mockRejectedValueOnce(
+      meetupGraphQLError('Invalid featuredPhotoId: photo not found'),
+    );
+    const { interaction, raw } = approveInteraction(
+      requestContent({ withTip: false }),
+    );
+
+    await handler.meetupRequestApproveEventHandler(interaction);
+
+    expect(meetup.createEvent).toHaveBeenCalledTimes(2);
+    const retried = meetup.createEvent.mock.calls[1][0] as Record<
+      string,
+      unknown
+    >;
+    expect(retried).not.toHaveProperty('featuredPhotoId');
+    expect(retried.description).toBe(GUEST_HOST_EVENT_DESCRIPTION);
+    expect(raw.followUp).toHaveBeenCalledWith(
+      expect.objectContaining({ content: '✅ Event request approved!' }),
+    );
+  });
+
+  it('does not retry when Meetup fails for a reason other than the photo', async () => {
+    meetup.createEvent.mockRejectedValue(meetupGraphQLError('Rate limited'));
+    const { interaction } = approveInteraction(
+      requestContent({ withTip: false }),
+    );
+
+    await handler.meetupRequestApproveEventHandler(interaction);
+
+    expect(meetup.createEvent).toHaveBeenCalledTimes(1);
   });
 
   it('tells the organizer plainly when Meetup answers without an event', async () => {
@@ -350,6 +397,20 @@ describe('/meetup_recreate_event_template', () => {
     await handler.meetupRecreateEventTemplateHandler(interaction);
 
     expect(meetup.createEvent).not.toHaveBeenCalled();
+  });
+
+  it('recreates the template without a featured photo when Meetup rejects the photo', async () => {
+    meetup.createEvent.mockRejectedValueOnce(
+      meetupGraphQLError('Photo 503707686 does not exist'),
+    );
+    const { interaction } = templateInteraction([SERVER_ROLES.leadership]);
+
+    await handler.meetupRecreateEventTemplateHandler(interaction);
+
+    expect(meetup.createEvent).toHaveBeenCalledTimes(2);
+    expect(meetup.createEvent.mock.calls[1][0]).not.toHaveProperty(
+      'featuredPhotoId',
+    );
   });
 
   it('tells the leader plainly when Meetup refuses to create it', async () => {

@@ -282,7 +282,7 @@ export interface CreateEventInput {
   description: string;
   duration: string;
   eventHosts: number[];
-  featuredPhotoId: number;
+  featuredPhotoId?: number;
   fundraising: {
     enabled: boolean;
   };
