@@ -1,6 +1,7 @@
-import { ButtonInteraction } from 'discord.js';
+import { ButtonInteraction, CommandInteraction } from 'discord.js';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { SERVER_ROLES } from '../../../src/constants.js';
 import { MeetupCreateEventCommands } from '../../../src/commands/meetup/createEvent.js';
 import { logAlert } from '../../../src/lib/helpers/discordLogger.js';
 import {
@@ -10,6 +11,7 @@ import {
 
 const meetup = vi.hoisted(() => ({
   getUserMembershipInfo: vi.fn(),
+  getUserInfo: vi.fn(),
   getEvent: vi.fn(),
   createEvent: vi.fn(),
   closeEventRsvps: vi.fn(),
@@ -244,5 +246,122 @@ describe('approving a guest-host event request', () => {
     expect(meetup.createEvent).not.toHaveBeenCalled();
     const reply = raw.editReply.mock.calls.at(-1)?.[0].content;
     expect(reply).toContain("Couldn't read");
+  });
+});
+
+function templateInteraction(roleIds: string[]) {
+  const interaction = {
+    client: {},
+    commandName: 'meetup_recreate_event_template',
+    isChatInputCommand: () => true,
+    isButton: () => false,
+    user: {
+      id: 'leader-1',
+      username: 'leader',
+      toString: () => '<@leader-1>',
+    },
+    guild: {
+      members: {
+        fetch: vi.fn().mockResolvedValue({
+          permissions: { has: () => false },
+          roles: { cache: { has: (id: string) => roleIds.includes(id) } },
+        }),
+      },
+    },
+    reply: vi.fn().mockResolvedValue({ delete: vi.fn() }),
+    editReply: vi
+      .fn<(options: { content: string }) => Promise<void>>()
+      .mockResolvedValue(undefined),
+    followUp: vi
+      .fn<(options: { content: string }) => Promise<void>>()
+      .mockResolvedValue(undefined),
+  };
+  return {
+    interaction: interaction as unknown as CommandInteraction,
+    raw: interaction,
+  };
+}
+
+describe('/meetup_recreate_event_template', () => {
+  const handler = new MeetupCreateEventCommands();
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    meetup.getUserMembershipInfo.mockResolvedValue({
+      groupByUrlname: { membershipMetadata: { status: 'LEADER' } },
+    });
+    meetup.getUserInfo.mockResolvedValue({ self: { id: '182828976' } });
+    meetup.createEvent.mockResolvedValue({
+      createEvent: {
+        event: { id: '555', eventUrl: 'https://www.meetup.com/x/events/555/' },
+      },
+    });
+  });
+
+  it('creates an unpublished copy of the guest-host template for hosts to copy', async () => {
+    vi.useFakeTimers({
+      now: new Date('2026-10-26T12:00:00Z'),
+      toFake: ['Date'],
+    });
+    const { interaction, raw } = templateInteraction([SERVER_ROLES.leadership]);
+
+    await handler.meetupRecreateEventTemplateHandler(interaction);
+    vi.useRealTimers();
+
+    expect(meetup.createEvent).toHaveBeenCalledWith({
+      ...createEventTemplate,
+      title: 'Organizer Event Template',
+      description: GUEST_HOST_EVENT_DESCRIPTION,
+      publishStatus: 'DRAFT',
+      startDateTime: '2027-10-26T19:00',
+      eventHosts: [182828976],
+    });
+    expect(meetup.closeEventRsvps).not.toHaveBeenCalled();
+    expect(raw.followUp.mock.calls[0][0].content).toContain(
+      'https://www.meetup.com/x/events/555/',
+    );
+  });
+
+  it('lets moderators run it too', async () => {
+    const { interaction } = templateInteraction([SERVER_ROLES.moderator]);
+
+    await handler.meetupRecreateEventTemplateHandler(interaction);
+
+    expect(meetup.createEvent).toHaveBeenCalled();
+  });
+
+  it('refuses members outside leadership and moderators', async () => {
+    const { interaction, raw } = templateInteraction([SERVER_ROLES.organizer]);
+
+    await handler.meetupRecreateEventTemplateHandler(interaction);
+
+    expect(meetup.createEvent).not.toHaveBeenCalled();
+    expect(raw.editReply.mock.calls.at(-1)?.[0].content).toContain(
+      'Leadership',
+    );
+  });
+
+  it('refuses when the Meetup account is not an organizer of the group', async () => {
+    meetup.getUserMembershipInfo.mockResolvedValue({
+      groupByUrlname: { membershipMetadata: { status: 'MEMBER' } },
+    });
+    const { interaction } = templateInteraction([SERVER_ROLES.leadership]);
+
+    await handler.meetupRecreateEventTemplateHandler(interaction);
+
+    expect(meetup.createEvent).not.toHaveBeenCalled();
+  });
+
+  it('tells the leader plainly when Meetup refuses to create it', async () => {
+    meetup.createEvent.mockRejectedValue(
+      new Error('GraphQL Error (Code: 500)'),
+    );
+    const { interaction, raw } = templateInteraction([SERVER_ROLES.leadership]);
+
+    await handler.meetupRecreateEventTemplateHandler(interaction);
+
+    const reply = raw.editReply.mock.calls.at(-1)?.[0].content;
+    expect(reply).toContain('Meetup did not create the template');
+    expect(reply).not.toContain('GraphQL Error');
   });
 });

@@ -17,7 +17,10 @@ import {
   createEventTemplate,
 } from '../../templates/createEventTemplate.js';
 import { ApplicationCache } from '../../util/cache.js';
-import { discordCommandWrapper } from '../../util/discord.js';
+import {
+  discordCommandWrapper,
+  requireModOrOrganizer,
+} from '../../util/discord.js';
 import { withLock } from '../../util/lock.js';
 import { withMeetupClient } from '../../util/meetup.js';
 import { getRandomTip } from '../../util/tips.js';
@@ -28,6 +31,7 @@ const DEFAULT_START_TIME = 19;
 const DATE_FORMAT = 'YYYY-MM-DD';
 const TITLE_MAX_LENGTH = 80;
 const GUEST_HOST_PREFIX = '[Guest Host] ';
+const TEMPLATE_TITLE = 'Organizer Event Template';
 
 @Discord()
 export class MeetupCreateEventCommands {
@@ -209,6 +213,70 @@ export class MeetupCreateEventCommands {
 
         await interaction.followUp({
           content: '❌ Event request denied!',
+          ephemeral: true,
+        });
+      });
+    });
+  }
+
+  /**
+   * Hosts who copy an event on Meetup instead of using /meetup_request_event
+   * copy this draft. The bot itself no longer reads it (the approve button
+   * uses GUEST_HOST_EVENT_DESCRIPTION), so a deleted template only breaks
+   * that manual path, and Leadership can put it back from here.
+   */
+  @Slash({
+    name: 'meetup_recreate_event_template',
+    description: `Recreate the unpublished guest-host template event on Meetup for hosts to copy. Output is private.`,
+  })
+  async meetupRecreateEventTemplateHandler(interaction: CommandInteraction) {
+    await discordCommandWrapper(interaction, async () => {
+      await requireModOrOrganizer(
+        interaction,
+        'Only the Leadership Team and moderators can recreate the event template.',
+        ['leadership', 'moderator'],
+      );
+      await withMeetupClient(interaction, async (meetupClient) => {
+        const membershipInfo = await meetupClient.getUserMembershipInfo();
+        if (
+          membershipInfo.groupByUrlname.membershipMetadata.status !== 'LEADER'
+        ) {
+          throw new Error(
+            'Your Meetup account is not an organizer of the group, so it cannot create events.',
+          );
+        }
+        const userInfo = await meetupClient.getUserInfo();
+
+        let result: Awaited<ReturnType<typeof meetupClient.createEvent>>;
+        try {
+          result = await meetupClient.createEvent({
+            ...createEventTemplate,
+            title: TEMPLATE_TITLE,
+            publishStatus: 'DRAFT',
+            // Far enough out that nobody mistakes it for a real date.
+            startDateTime: `${dayjs()
+              .add(1, 'year')
+              .format(DATE_FORMAT)}T${DEFAULT_START_TIME}:00`,
+            eventHosts: [Number(userInfo.self.id)],
+          });
+        } catch (error: unknown) {
+          logger.error(error);
+          throw new Error(
+            'Meetup did not create the template, so nothing was created. Try again in a few minutes.',
+          );
+        }
+        const template = result?.createEvent?.event;
+        if (!template?.id) {
+          throw new Error(
+            'Meetup did not create the template (it returned no event). Try again in a few minutes.',
+          );
+        }
+        logger.info(`Event template recreated: ${template.id}`);
+
+        await interaction.followUp({
+          content:
+            `✅ Recreated the unpublished event template: <${template.eventUrl}>\n` +
+            'Hosts can copy it on Meetup. It stays a draft: please do not publish or delete it.',
           ephemeral: true,
         });
       });
