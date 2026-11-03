@@ -92,9 +92,6 @@ describe('groupCalendar', () => {
     expect(byDay['2026-11-05'].busy).toBe(1);
     expect(byDay['2026-11-07'].busy).toBe(3);
     expect(byDay['2026-11-06'].busy).toBe(0);
-    expect(byDay['2026-11-26'].dates).toEqual([
-      { name: 'Thanksgiving', kind: 'holiday' },
-    ]);
   });
 
   it('a Sunday belongs to the week that started the Monday before', async () => {

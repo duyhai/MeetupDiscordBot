@@ -133,16 +133,19 @@ const KEYWORDS: Record<Exclude<EventType, 'social'>, string[]> = {
 
 const escape = (word: string) => word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-/** One case-insensitive, word-bounded pattern per type, so "bar" never matches "Barbecue". */
-const PATTERNS: [EventType, RegExp][] = (
-  Object.entries(KEYWORDS) as [EventType, string[]][]
-).map(([type, words]) => [
-  type,
+/**
+ * One case-insensitive, word-bounded pattern for a keyword list, so "bar"
+ * never matches "Barbecue".
+ */
+export const keywordPattern = (words: readonly string[]): RegExp =>
   new RegExp(
     `(?:^|[^\\p{L}\\p{N}])(?:${words.map(escape).join('|')})(?=$|[^\\p{L}\\p{N}])`,
     'iu',
-  ),
-]);
+  );
+
+const PATTERNS: [EventType, RegExp][] = (
+  Object.entries(KEYWORDS) as [EventType, string[]][]
+).map(([type, words]) => [type, keywordPattern(words)]);
 
 /** Removes leading [Guest Host] / [Community Host] tags, however many. */
 export function stripHostPrefix(title: string): string {

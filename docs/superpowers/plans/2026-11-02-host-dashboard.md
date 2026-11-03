@@ -60,7 +60,7 @@ Branch `feat/host-dashboard-signin` off `main`. No Meetup writes, no new Discord
 | `src/lib/repositories/postgresPromotedHostRepository.ts` (new) | `promoted_hosts` + `promoted_host_events` schema; `isPromoted(memberId)`. Writes come in PR 3. |
 | `src/lib/hosts/eligibility.ts` (new) | `resolveHost(deps, who)` → eligible/refused + tier; Meetup blacklist constant. |
 | `src/lib/hosts/eventTypes.ts` (new) | Keyword event-type classifier, `stripHostPrefix`. |
-| `src/lib/hosts/holidays.ts` (new) | US holidays computed per year + static cultural dates. |
+| `src/lib/hosts/holidays.ts` (new) | Holidays recognised from event titles by keyword (not dates; Hai's PR 128 review). |
 | `src/lib/hosts/hostEvents.ts` (new) | Organizer reads: hosted past/upcoming events, group calendar; short in-process cache. |
 | `src/web/host/meetupSignIn.ts` (new) | Meetup authorize URL with a `host-` state, code exchange reuse, minimal `self { id name }` lookup. |
 | `src/web/host/hostRouter.ts` (new) | Public sign-in routes, gate with tier re-check, unsafe-method guard, logout, error handler. |
@@ -202,19 +202,19 @@ Branch `feat/host-dashboard-signin` off `main`. No Meetup writes, no new Discord
 - Produces:
   - `EVENT_TYPES = ['games','food','outdoors','active','arts','nightlife','learning','social'] as const`, `EventType`, `EVENT_TYPE_LABELS: Record<EventType, string>`, `classifyEventType(title: string): EventType` (first keyword match after `stripHostPrefix`, word-boundary, case-insensitive; `social` when nothing matches), `stripHostPrefix(title)` (removes a leading `[Guest Host] ` or `[Community Host] `, repeatedly).
     - Keywords: games: board game, game night, trivia, mahjong, poker, escape room, puzzle; food: dinner, lunch, brunch, breakfast, food, boba, cafe, coffee, dim sum, hot pot, hotpot, kbbq, bbq, ramen, potluck, baking, cooking, restaurant, tea; outdoors: hike, hiking, beach, picnic, park, camping, kayak, biking, bike, garden; active: volleyball, badminton, basketball, pickleball, tennis, bowling, climbing, bouldering, yoga, run, running, gym, soccer, dance, dancing, skating; arts: museum, art, painting, pottery, craft, movie, film, concert, theater, theatre, book club, photography; nightlife: karaoke, bar, drinks, happy hour, club, rooftop, wine; learning: workshop, talk, panel, class, networking, career, language.
-  - `calendarDates(fromDay: string, toDay: string): { day: string; name: string; kind: 'holiday' | 'cultural' }[]` (YYYY-MM-DD, Pacific). US federal holidays computed by rule (New Year's Day, MLK Day 3rd Mon Jan, Presidents Day 3rd Mon Feb, Memorial Day last Mon May, Juneteenth Jun 19, Independence Day Jul 4, Labor Day 1st Mon Sep, Columbus/Indigenous Peoples' Day 2nd Mon Oct, Veterans Day Nov 11, Thanksgiving 4th Thu Nov, Christmas Dec 25) plus Valentine's Day, Mother's Day (2nd Sun May), Father's Day (3rd Sun Jun), Halloween, Christmas Eve, New Year's Eve. `CULTURAL_DATES` static list (leadership adds more): Lunar New Year 2026-02-17, 2027-02-06, 2028-01-26; Mid-Autumn Festival 2026-09-25, 2027-09-15, 2028-10-03.
+  - `matchHolidays(title: string): string[]`: holiday names an event's title mentions, by word-bounded keyword (`HOLIDAYS` list, e.g. Friendsgiving → Thanksgiving, Tết/CNY → Lunar New Year, which shadows New Year's). Never by date: members spend the day itself with family, and the group's celebration is usually on another day (Hai, PR 128 review). Leadership extends the list.
   - ```ts
     export interface HostEvent { id: string; title: string; dateTime: string; eventUrl: string; type: EventType; hosts: { id: string; name: string }[] }
     export interface HostEventsDeps { fetchGroupEvents(filter: GroupEventFilter): Promise<HostEvent[]>; now(): Date }
     export function hostedEvents(deps, memberId: string, which: 'past' | 'upcoming'): Promise<HostEvent[]>; // PAST / ACTIVE, hostId filter, newest first for past, soonest first for upcoming
     export function groupCalendar(deps, weeks = 8): Promise<{ days: CalendarDay[] }>; // ACTIVE events from the Monday of this Pacific week for `weeks` weeks
-    export interface CalendarDay { day: string; events: HostEvent[]; busy: 0 | 1 | 2 | 3; dates: { name: string; kind: 'holiday' | 'cultural' }[] }
+    export interface CalendarDay { day: string; events: HostEvent[]; busy: 0 | 1 | 2 | 3 }
     export function attendanceUrl(eventUrl: string): string | undefined; // `${eventUrl}attendees/` for https://www.meetup.com/... URLs only
     ```
   - Production `fetchGroupEvents` = `withOrganizerMeetup` + `getPaginatedData(getGroupEvents)`, cached in-process 5 minutes per filter (max 200 entries, single-flight), so a page load is at most one Meetup round per list.
   - `busy`: 0 events → 0, 1 → 1, 2 → 2, 3+ → 3.
 
-- [ ] **Step 1: Failing tests:** classifier table (`'[Guest Host] Board Game Night'` → games; `'Hot Pot Dinner'` → food (first type in order wins); `'Barbecue'` → social (word boundary: "bar" does not match); `'[Community Host] [Guest Host] Hike'` → outdoors); holidays (2026: Thanksgiving 2026-11-26, Memorial Day 2026-05-25, MLK 2026-01-19; range filter inclusive); calendar (56 days starting Monday 2026-11-02 when now is 2026-11-03 Pacific; an event at 23:30 Pacific lands on its Pacific day; busy levels); `attendanceUrl` refuses a non-Meetup URL.
+- [ ] **Step 1: Failing tests:** classifier table (`'[Guest Host] Board Game Night'` → games; `'Hot Pot Dinner'` → food (first type in order wins); `'Barbecue'` → social (word boundary: "bar" does not match); `'[Community Host] [Guest Host] Hike'` → outdoors); holidays (by title: Friendsgiving → Thanksgiving, Lunar New Year not also New Year's, whole words only); calendar (56 days starting Monday 2026-11-02 when now is 2026-11-03 Pacific; an event at 23:30 Pacific lands on its Pacific day; busy levels); `attendanceUrl` refuses a non-Meetup URL.
 - [ ] **Step 2–4:** FAIL → implement → PASS. **Step 5:** Commit.
 
 ### Task 8: Host pages and styling
@@ -227,7 +227,7 @@ Branch `feat/host-dashboard-signin` off `main`. No Meetup writes, no new Discord
 - Consumes: Task 6 `hostLocals`, Task 7 data functions.
 - Produces: `registerHostPages(router, deps: HostPageDeps)` with `GET /` (home), `GET /calendar`, `GET /history?type=<EventType>`; `heatMap(days: Map<string, number>, endDay: string): SafeHtml` (53 weeks ending at `endDay`, Sunday-first columns, literal classes `hm0`…`hm4` for 0, 1, 2, 3–4, 5+ events, `<title>` per cell "YYYY-MM-DD: n events", plus a text total for screen readers).
 - Home: greeting with `memberText(name)`, tier pill (Regular host / Community Host), upcoming hosted events (date, title, type, "View on Meetup"), the next 14 days' group load in one line, a nudge card when `discordUserId` is null ("Link your Discord account…"), links to Calendar and History. Pending approval and announced statuses arrive in PR 2/3.
-- Calendar: 8-week grid (`table` with literal column headers Mon…Sun; each cell the day number, the event count with a busy class `busy0`…`busy3`, and holiday names), and below it a list of each day with events (time, title, hosts). On < 640 px the grid shows counts only and the list carries the detail.
+- Calendar: 8-week grid (`table` with literal column headers Mon…Sun; each cell the day number, the event count with a busy class `busy0`…`busy3`, and the holidays its events' titles name), and below it a list of each day with events (time, title, hosts). On < 640 px the grid shows counts only and the list carries the detail.
 - History: type filter as links (`?type=`; an unknown value is ignored), heat map for the last 53 weeks of the host's past events, counts per type, and the past-events list (date, title, type, "View on Meetup", "Take attendance on Meetup" via `attendanceUrl`), paginated 50 (`paging.ts`).
 - A Meetup outage renders the 503 "unavailable" page (`OrganizerTokenUnavailableError` or any fetch error), never a partial page.
 

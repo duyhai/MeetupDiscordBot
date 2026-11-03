@@ -6,7 +6,6 @@ import { GroupEventFilter } from '../client/meetup/types.js';
 import { withOrganizerMeetup } from '../reports/organizerMeetup.js';
 import { tz } from '../../util/timezone.js';
 import { EventType, classifyEventType } from './eventTypes.js';
-import { calendarDates } from './holidays.js';
 
 export interface HostEvent {
   id: string;
@@ -28,7 +27,6 @@ export interface CalendarDay {
   events: HostEvent[];
   /** 0 none, 1 one event, 2 two, 3 three or more. */
   busy: 0 | 1 | 2 | 3;
-  dates: { name: string; kind: 'holiday' | 'cultural' }[];
 }
 
 const PACIFIC = 'America/Los_Angeles';
@@ -63,7 +61,7 @@ function busyOf(n: number): CalendarDay['busy'] {
 
 /**
  * The group's published events for `weeks` weeks from the Monday of this
- * Pacific week, one entry per Pacific day, with holidays.
+ * Pacific week, one entry per Pacific day.
  */
 export async function groupCalendar(
   deps: HostEventsDeps,
@@ -92,8 +90,6 @@ export async function groupCalendar(
     const day = pacificDay(event.dateTime);
     byDay.set(day, [...(byDay.get(day) ?? []), event]);
   }
-  const lastDay = dayjs(endDay).subtract(1, 'day').format('YYYY-MM-DD');
-  const dates = calendarDates(startDay, lastDay);
   return Array.from({ length: weeks * 7 }, (_, i) => {
     const day = dayjs(startDay).add(i, 'day').format('YYYY-MM-DD');
     const dayEvents = byDay.get(day) ?? [];
@@ -101,9 +97,6 @@ export async function groupCalendar(
       day,
       events: dayEvents,
       busy: busyOf(dayEvents.length),
-      dates: dates
-        .filter((d) => d.day === day)
-        .map(({ name, kind }) => ({ name, kind })),
     };
   });
 }

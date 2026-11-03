@@ -108,12 +108,13 @@ describe('host home', () => {
 });
 
 describe('host calendar', () => {
-  it('shows 8 weeks with busy levels, holidays and the day list', async () => {
+  it('shows 8 weeks with busy levels, holidays from titles, and the day list', async () => {
     const req = await pagesApp(async () => [
       ev('a', '2026-11-05T19:00:00-08:00', HOSTILE),
       ev('b', '2026-11-07T19:00:00-08:00', 'One'),
       ev('c', '2026-11-07T20:00:00-08:00', 'Two'),
       ev('d', '2026-11-07T21:00:00-08:00', 'Three'),
+      ev('e', '2026-11-28T18:00:00-08:00', 'Friendsgiving potluck'),
     ]);
     const sid = await signInWithDiscord(req);
     const res = await req.get('/host/calendar').set('Cookie', sid);
@@ -127,7 +128,14 @@ describe('host calendar', () => {
     expect(res.text).toMatch(
       /<td class="cal busy3">\s*<span class="cal-day"\s*>7</,
     );
-    expect(res.text).toContain('Thanksgiving');
+    // Named from the title on Nov 28, never marked on Thanksgiving (Nov 26).
+    expect(res.text).toMatch(
+      /<td class="cal busy1">\s*<span class="cal-day"\s*>28<\/span\s*>(?:(?!<\/td>)[^])*Thanksgiving/,
+    );
+    expect(res.text).not.toMatch(
+      /<span class="cal-day"\s*>26<\/span\s*>(?:(?!<\/td>)[^])*Thanksgiving/,
+    );
+    expect(res.text).toContain('<span class="badge info">Thanksgiving</span>');
     expect(res.text).toContain('3 events');
     // A past day shows no count: only upcoming events are read.
     expect(res.text).not.toMatch(/<td class="cal past">(?:(?!<\/td>)[^])*Free/);

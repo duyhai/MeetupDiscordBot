@@ -17,6 +17,7 @@ import {
   hostedEvents,
   pacificDay,
 } from '../../lib/hosts/hostEvents.js';
+import { matchHolidays } from '../../lib/hosts/holidays.js';
 import { tz } from '../../util/timezone.js';
 import { SafeHtml, html, memberText, pageLink, safeHref } from '../html.js';
 import { eventLink } from '../links.js';
@@ -131,10 +132,10 @@ function quietDays(days: CalendarDay[], today: string): CalendarDay[] {
   return days.filter((d) => d.day >= first && d.day <= last && d.busy === 0);
 }
 
-function quietDayText(day: CalendarDay): string {
-  const names = day.dates.map((d) => d.name).join(', ');
-  return names ? `${dayLabel(day.day)} (${names})` : dayLabel(day.day);
-}
+/** The holidays a day's event titles name, each once. */
+const holidaysOn = (events: HostEvent[]): string[] => [
+  ...new Set(events.flatMap((e) => matchHolidays(e.title))),
+];
 
 function homeBody(
   session: HostSession,
@@ -198,7 +199,7 @@ function homeBody(
           ? html`<p>Every day in the next two weeks already has an event.</p>`
           : html`<p>Quiet days in the next two weeks:</p>
               <ul>
-                ${quiet.map((d) => html`<li>${quietDayText(d)}</li>`)}
+                ${quiet.map((d) => html`<li>${dayLabel(d.day)}</li>`)}
               </ul>`
       }
       <div class="actions">
@@ -225,16 +226,15 @@ function calendarCell(day: CalendarDay, today: string): SafeHtml {
   const countText = html`<span class="cal-count"
     >${count === 0 ? 'Free' : count === 1 ? '1 event' : `${count} events`}</span
   >`;
-  const dates = day.dates.length
-    ? html`<span class="cal-date"
-        >${day.dates.map((d) => d.name).join(', ')}</span
-      >`
+  const holidays = holidaysOn(day.events);
+  const dates = holidays.length
+    ? html`<span class="cal-date">${holidays.join(', ')}</span>`
     : '';
   const inner = html`${label}${countText}${dates}`;
   if (past) {
     // Only published (upcoming) events are read, so a past day's count
-    // would be wrong: it shows the date and holidays only.
-    return html`<td class="cal past">${label}${dates}</td>`;
+    // would be wrong: it shows the date only.
+    return html`<td class="cal past">${label}</td>`;
   }
   switch (day.busy) {
     case 0:
@@ -259,35 +259,29 @@ function calendarBody(days: CalendarDay[], today: string): SafeHtml {
         ${week.map((d) => calendarCell(d, today))}
       </tr>`,
   );
-  const listed = days.filter(
-    (d) => d.day >= today && (d.events.length > 0 || d.dates.length > 0),
-  );
+  const listed = days.filter((d) => d.day >= today && d.events.length > 0);
   const list = listed.map(
     (d) =>
       html`<li>
-        <h3>
-          ${dayLabel(d.day)}${d.dates.length ? html` <span class="badge info">${d.dates.map((x) => x.name).join(', ')}</span>` : ''}
-        </h3>
-        ${
-          d.events.length === 0
-            ? html`<p class="muted">No events yet.</p>`
-            : html`<ul>
-                ${d.events.map(
-                  (e) =>
-                    html`<li>
-                      ${timeLabel(e.dateTime)}:
-                      ${eventLink(e)}${
-                        e.hosts.length
-                          ? html` <span class="muted"
-                              >hosted by
-                              ${e.hosts.map((h, i) => html`${i ? ', ' : ''}${memberText(h.name)}`)}</span
-                            >`
-                          : ''
-                      }
-                    </li>`,
-                )}
-              </ul>`
-        }
+        <h3>${dayLabel(d.day)}</h3>
+        <ul>
+          ${d.events.map(
+            (e) =>
+              html`<li>
+                ${timeLabel(e.dateTime)}:
+                ${eventLink(e)}${matchHolidays(e.title).map(
+                  (name) => html` <span class="badge info">${name}</span>`,
+                )}${
+                  e.hosts.length
+                    ? html` <span class="muted"
+                        >hosted by
+                        ${e.hosts.map((h, i) => html`${i ? ', ' : ''}${memberText(h.name)}`)}</span
+                      >`
+                    : ''
+                }
+              </li>`,
+          )}
+        </ul>
       </li>`,
   );
   return html`<div class="card">
