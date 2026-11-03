@@ -20,6 +20,7 @@
 - OAuth: Discord OAuth2, `identify` scope only, bot's existing Discord application (`DISCORD_CLIENT_ID` / `DISCORD_SECRET`). Redirect URI: `https://meetup-discord-bot.herokuapp.com/dashboard/auth/callback`.
 - Role check cached in the session for **10 minutes**, then re-checked.
 - Session: signed, `HttpOnly`, `Secure`, `SameSite=Lax` cookie; state in Redis; **12-hour** absolute lifetime.
+  - Superseded 2026-11-02: 7 days idle, 30 days at most. See the spec's session section.
 - Every state-changing request needs a CSRF token. Every dashboard response sends `Cache-Control: no-store`. Login and actions are rate-limited. Errors render a generic page; details go to logs only.
 - All member-supplied text is HTML-escaped and wrapped in `<bdi>`. Profile links only from all-digit ids: `https://www.meetup.com/members/<digits>/`, `https://discord.com/users/<digits>`.
 - Lists paginate at **50** rows. Thumbnails stream one image per request. 512 MB dyno: nothing assembles a whole month or whole table in memory.

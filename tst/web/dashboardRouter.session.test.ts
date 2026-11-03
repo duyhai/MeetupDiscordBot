@@ -329,20 +329,53 @@ describe('dashboard sliding sessions', () => {
     clock.now = 20 * DAY;
     // Without the mark, that sign-in would still be good on day 24.
     expect(sessionKeys(cache)).toHaveLength(1);
-    const here = await signIn(req);
-    const token =
-      /name="_csrf" value="([^"]+)"/.exec(
-        (await req.get('/dashboard').set('Cookie', here)).text,
-      )?.[1] ?? '';
-    // The route itself is covered elsewhere; the mark it writes is what
-    // must outlive a 20-day-old session.
+    // The route (routes/sessions.ts) is covered by its own tests; the mark
+    // it writes is what must outlive a 20-day-old session.
     await new SessionStore(cache, () => clock.now).revokeUser(USER.id);
     // Day 24: the other browser's key (last used day 18) is still alive, so
     // only the mark can end it.
     clock.now = 24 * DAY;
     const res = await req.get('/dashboard').set('Cookie', elsewhere);
     expect(res.status).toBe(302);
-    expect(token).not.toBe('');
+  });
+
+  it('the mark ends a session past day 7 whose re-check write lands after it', async () => {
+    let releaseCheck = () => undefined as void;
+    const checkAccess = vi.fn().mockResolvedValue(true);
+    const { req, cache, clock } = await slidingApp({ checkAccess });
+    const cookie = await signIn(req);
+    clock.now = 6 * DAY;
+    expect((await req.get('/dashboard').set('Cookie', cookie)).status).toBe(
+      200,
+    );
+    // Day 10: a re-check is under way (Discord is slow) when the member is
+    // signed out everywhere. Its write lands two minutes later and slides
+    // the key to day 17 + 2 min.
+    clock.now = 10 * DAY;
+    checkAccess.mockImplementationOnce(
+      () =>
+        new Promise<boolean>((resolve) => {
+          releaseCheck = () => resolve(true);
+        }),
+    );
+    const before = checkAccess.mock.calls.length;
+    const slow = req
+      .get('/dashboard')
+      .set('Cookie', cookie)
+      .then((r) => r.status);
+    await vi.waitFor(() =>
+      expect(checkAccess).toHaveBeenCalledTimes(before + 1),
+    );
+    await new SessionStore(cache, () => clock.now).revokeUser(USER.id);
+    clock.now += 2 * 60 * 1000;
+    releaseCheck();
+    expect(await slow).toBe(200);
+    expect(sessionKeys(cache)).toHaveLength(1);
+    // Past a mark sized to the idle window (7 days + 60 s), inside the key.
+    clock.now = 17 * DAY + 90 * 1000;
+    const res = await req.get('/dashboard').set('Cookie', cookie);
+    expect(res.status).toBe(302);
+    expect(sessionKeys(cache)).toEqual([]);
   });
 
   it('a failed extension keeps the page working and logs only the error class', async () => {
@@ -356,10 +389,35 @@ describe('dashboard sliding sessions', () => {
     const res = await req.get('/dashboard').set('Cookie', cookie);
     expect(res.status).toBe(200);
     expect(fake.logged).toContain(
-      'Dashboard session extension failed: TypeError',
+      'Dashboard session extension failed: TypeError; roles are re-checked live until a write succeeds',
     );
     expect(fake.logged.join('\n')).not.toContain('secret-detail');
     expect(sessionKeys(cache)).toHaveLength(1);
+  });
+
+  it('after a failed extension the role is re-checked live, and a lost role still ends the session', async () => {
+    const checkAccess = vi.fn().mockResolvedValue(true);
+    const { req, cache, clock } = await slidingApp({ checkAccess });
+    const cookie = await signIn(req);
+    cache.set_existing = async () => {
+      throw new Error('down');
+    };
+    const atSignIn = checkAccess.mock.calls.length;
+    clock.now = ROLE_RECHECK_MS;
+    expect((await req.get('/dashboard').set('Cookie', cookie)).status).toBe(
+      200,
+    );
+    clock.now += 1;
+    expect((await req.get('/dashboard').set('Cookie', cookie)).status).toBe(
+      200,
+    );
+    // roleCheckedAt was never written, so each request asked Discord.
+    expect(checkAccess).toHaveBeenCalledTimes(atSignIn + 2);
+    checkAccess.mockResolvedValue(false);
+    clock.now += 1;
+    expect((await req.get('/dashboard').set('Cookie', cookie)).status).toBe(
+      403,
+    );
   });
 
   it('a CSRF token from sign-in still works on day 29', async () => {

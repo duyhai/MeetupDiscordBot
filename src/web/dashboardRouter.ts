@@ -578,13 +578,15 @@ export function createDashboardRouter(deps: DashboardDeps): express.Router {
       }
       // Also slides the 7-day idle window. The role check just passed, so
       // a failed write is no reason to refuse this request: the session
-      // keeps its current expiry and the next request checks again.
+      // keeps its current expiry, and since roleCheckedAt was not written
+      // every request re-checks the role live until a write succeeds.
       let kept = true;
       try {
         kept = await store.markRoleChecked(sid, session);
       } catch (error: unknown) {
+        const errorClass = error instanceof Error ? error.name : 'Error';
         logger.warn(
-          `Dashboard session extension failed: ${error instanceof Error ? error.name : 'Error'}`,
+          `Dashboard session extension failed: ${errorClass}; roles are re-checked live until a write succeeds`,
         );
       }
       if (!kept) {

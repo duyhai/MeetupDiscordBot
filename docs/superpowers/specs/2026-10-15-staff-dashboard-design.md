@@ -100,6 +100,9 @@ and services.
     session 30 days after `createdAt`, whatever the key's TTL.
   - If that write fails, the request still succeeds (the role check passed);
     the session keeps its previous expiry and only the error class is logged.
+    Because `roleCheckedAt` was not written either, every later request
+    re-checks the role live with Discord until a write succeeds, so a lost
+    role still ends the session at once.
   - The cookie's `Max-Age` is 30 days, so the browser keeps it across
     restarts; the server-side TTL is the authority on the idle limit.
   - The role re-check, not the lifetime, bounds access after a role is

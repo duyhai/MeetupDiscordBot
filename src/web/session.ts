@@ -163,7 +163,9 @@ export class SessionStore {
     const at = this.now();
     const ttlSec = sessionKeyTtlSec(session.createdAt, at);
     if (ttlSec <= 0) {
-      await this.destroy(sid);
+      // Tidy-up only: the key's TTL already ends at the cap, so a failed
+      // delete must not fail the request.
+      this.destroy(sid).catch(() => undefined);
       return false;
     }
     return this.cache.set_existing(

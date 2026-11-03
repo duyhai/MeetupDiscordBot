@@ -177,6 +177,18 @@ describe('SessionStore', () => {
     );
   });
 
+  it('a role-check write after the cap returns false even if the delete fails', async () => {
+    let now = 0;
+    const cache = new FakeCache();
+    const store = new SessionStore(cache, () => now);
+    const { sid, session } = await store.create({ userId: '1', username: 'A' });
+    cache.remove = async () => {
+      throw new Error('down');
+    };
+    now = SESSION_MAX_SEC * 1000;
+    await expect(store.markRoleChecked(sid, session)).resolves.toBe(false);
+  });
+
   it('a role-check write after the cap destroys the session', async () => {
     let now = 0;
     const cache = new FakeCache();
