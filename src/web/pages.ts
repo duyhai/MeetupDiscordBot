@@ -208,10 +208,12 @@ td.cal{vertical-align:top;height:76px;padding:var(--s1) var(--s2);font-size:var(
 overflow-wrap:anywhere}
 td.cal span{display:block}
 .cal-day{font-weight:700}
+a.cal-day{display:inline-flex;align-items:center;min-width:var(--tap);min-height:var(--tap)}
 .cal-date{font-weight:600;font-style:italic}
 .sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
 form.request-form label.field{margin:0 0 var(--s3)}
 form.request-form label.field input,form.request-form label.field select{display:block;width:100%;max-width:24rem;margin-top:var(--s1)}
+.wrap-anywhere{overflow-wrap:anywhere}
 .field-error{display:block;margin-top:var(--s1);color:var(--attn-ink);font-size:var(--t-sm);font-weight:600}
 td.cal.past{color:var(--muted);background:var(--bg)}
 td.busy0,.swatch.busy0{background:var(--ok-soft)}

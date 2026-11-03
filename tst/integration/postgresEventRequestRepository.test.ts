@@ -151,19 +151,14 @@ const request = (over: Partial<NewEventRequest> = {}): NewEventRequest => ({
 
     it('records the created event only while publishing, then finishes', async () => {
       const { id } = await repo.create(request());
-      await repo.recordCreated(
-        id,
-        '317000001',
-        'https://www.meetup.com/g/events/317000001/',
-      );
+      const url = 'https://www.meetup.com/g/events/317000001/';
+      expect(await repo.recordCreated(id, 1, '317000001', url)).toBe(false);
       expect((await repo.get(id))?.meetupEventId).toBeNull();
       await repo.startPublishing(id, 1, LEAD, ['pending']);
-      await repo.recordCreated(
-        id,
-        '317000001',
-        'https://www.meetup.com/g/events/317000001/',
-      );
-      const done = await repo.finish(id, { status: 'published' });
+      expect(await repo.recordCreated(id, 2, '317000001', url)).toBe(true);
+      // Only once: a second event is never recorded over the first.
+      expect(await repo.recordCreated(id, 3, '317000002', url)).toBe(false);
+      const done = await repo.finish(id, 3, { status: 'published' });
       expect(done).toMatchObject({
         status: 'published',
         meetupEventId: '317000001',
@@ -171,7 +166,7 @@ const request = (over: Partial<NewEventRequest> = {}): NewEventRequest => ({
       });
       // A second finish changes nothing.
       expect(
-        await repo.finish(id, { status: 'failed', failure: 'late' }),
+        await repo.finish(id, 4, { status: 'failed', failure: 'late' }),
       ).toBeUndefined();
       expect(await historyOf(id)).toEqual([
         { action: 'submit', actor: HOST, version: 1 },
@@ -181,14 +176,39 @@ const request = (over: Partial<NewEventRequest> = {}): NewEventRequest => ({
       ]);
     });
 
-    it('a failure is stored (capped) and can be retried', async () => {
+    it('an overtaken publisher can neither record nor finish', async () => {
+      const { id } = await repo.create(request());
+      // A claims at version 2, stalls; B takes the stuck row over (version 3).
+      await repo.startPublishing(id, 1, LEAD, ['pending']);
+      const future = new Date(Date.now() + 60_000);
+      const b = await repo.startPublishing(
+        id,
+        2,
+        '323456789012345678',
+        ['failed', 'publishing'],
+        future,
+      );
+      expect(b?.version).toBe(3);
+      const url = 'https://www.meetup.com/g/events/317000001/';
+      expect(await repo.recordCreated(id, 2, '317000001', url)).toBe(false);
+      expect(
+        await repo.finish(id, 2, { status: 'failed', failure: 'A gave up' }),
+      ).toBeUndefined();
+      expect(await repo.recordCreated(id, 3, '317000002', url)).toBe(true);
+      expect(await repo.finish(id, 4, { status: 'published' })).toMatchObject({
+        status: 'published',
+        meetupEventId: '317000002',
+      });
+    });
+
+    it('a failure is stored (capped by characters) and can be retried', async () => {
       const { id } = await repo.create(request());
       await repo.startPublishing(id, 1, LEAD, ['pending']);
-      const failed = await repo.finish(id, {
+      const failed = await repo.finish(id, 2, {
         status: 'failed',
-        failure: 'x'.repeat(5000),
+        failure: '🎲'.repeat(5000),
       });
-      expect(failed?.failure).toHaveLength(1000);
+      expect(Array.from(failed?.failure ?? '')).toHaveLength(1000);
       const retried = await repo.startPublishing(id, 3, LEAD, ['failed']);
       expect(retried).toMatchObject({ status: 'publishing', failure: null });
     });

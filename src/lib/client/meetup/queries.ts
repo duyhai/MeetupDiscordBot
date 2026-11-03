@@ -324,6 +324,9 @@ export const getEventForCopy = gql`
       description
       dateTime
       duration
+      group {
+        urlname
+      }
       maxTickets
       guestLimit
       howToFindUs

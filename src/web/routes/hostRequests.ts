@@ -203,7 +203,7 @@ function requestCard(
       Request #${r.id}, sent ${dayjs(r.createdAt).format('MMM D, h:mm A')}
     </p>
     ${r.denyReason ? html`<p>Reason: ${memberText(r.denyReason)}</p>` : ''}
-    ${r.failure ? html`<p class="note attn">${r.failure}</p>` : ''}
+    ${r.failure ? html`<p class="note attn wrap-anywhere">${r.failure}</p>` : ''}
     ${
       meetup
         ? html`<p>
@@ -389,7 +389,11 @@ export function registerHostRequestRoutes(
     };
 
     if (verb === 'deny') {
-      const reason = (field(body, 'reason') ?? '').trim();
+      // Browsers send a textarea's line breaks as CRLF but count them as one
+      // character for maxlength; so does this, and so is it stored.
+      const reason = (field(body, 'reason') ?? '')
+        .replace(/\r\n?/g, '\n')
+        .trim();
       if (reason === '') {
         back(res, 'reason-required');
         return;
@@ -428,7 +432,10 @@ export function registerHostRequestRoutes(
       );
     } catch (error: unknown) {
       if (error instanceof WorkspaceDeadlineError) {
-        auditLine(verb === 'approve' ? 'approved' : 'retried', undefined);
+        auditLine(
+          `${verb === 'approve' ? 'approval' : 'retry'} started (still publishing)`,
+          undefined,
+        );
         back(res, 'still-publishing');
         return;
       }

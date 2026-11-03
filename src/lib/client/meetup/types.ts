@@ -350,6 +350,7 @@ export interface GetEventForCopyResponse {
     eventUrl: string | null;
     title: string | null;
     description: string | null;
+    group: { urlname: string } | null;
     dateTime: string;
     duration: string | null;
     maxTickets: number | null;

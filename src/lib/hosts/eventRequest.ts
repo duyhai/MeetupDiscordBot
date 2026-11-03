@@ -44,16 +44,24 @@ export const START_TIMES: readonly string[] = Array.from(
 );
 
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
-// Control characters, line breaks and the Unicode line/paragraph separators.
-const UNPRINTABLE = /[\p{Cc}\u2028\u2029]/u;
+// Control characters, line breaks, the Unicode line/paragraph separators,
+// the bidi embeddings, overrides, isolates and marks (title spoofing) and
+// the zero-width space. Not all of \p{Cf}: U+200D joins emoji.
+const UNPRINTABLE =
+  /[\p{Cc}\u2028\u2029\u202A-\u202E\u2066-\u2069\u200E\u200F\u200B]/u;
 
 export function prefixFor(tier: HostTier): string {
   return tier === 'promoted' ? COMMUNITY_HOST_PREFIX : GUEST_HOST_PREFIX;
 }
 
-/** The longest title a host of this tier can type: Meetup's 80 less the prefix. */
-export const titleMaxFor = (tier: HostTier): number =>
-  EVENT_REQUEST_TITLE_MAX - prefixFor(tier).length;
+/**
+ * The longest title a host can type: Meetup's 80 less the longer prefix.
+ * The prefix follows the tier when the event is published, which may not
+ * be the tier it was asked with, so either must fit.
+ */
+export const TITLE_MAX =
+  EVENT_REQUEST_TITLE_MAX -
+  Math.max(GUEST_HOST_PREFIX.length, COMMUNITY_HOST_PREFIX.length);
 
 const length = (text: string) => Array.from(text).length;
 
@@ -90,11 +98,10 @@ const isRealDay = (day: string) =>
  */
 export function parseRequestForm(
   body: Record<string, unknown> | undefined,
-  tier: HostTier,
   today: string,
 ): FormResult {
   const errors: Partial<Record<FormField, string>> = {};
-  const max = titleMaxFor(tier);
+  const max = TITLE_MAX;
 
   const rawTitle = field(body, 'title');
   const title = rawTitle === undefined ? '' : stripHostPrefix(rawTitle).trim();
@@ -137,8 +144,15 @@ export function parseRequestForm(
 
 export type CopySource = NonNullable<GetEventForCopyResponse['event']>;
 
-/** True when this member is one of the event's hosts on Meetup. */
+/**
+ * True when this member may copy the event: it is one of this group's
+ * events (the organizer login can read other groups' too) and the member
+ * is one of its hosts.
+ */
 export function isHostOf(source: CopySource, meetupMemberId: string): boolean {
+  if (source.group?.urlname !== createEventTemplate.groupUrlname) {
+    return false;
+  }
   return (source.eventHosts ?? []).some(
     (h) =>
       h?.member?.id !== undefined && String(h.member.id) === meetupMemberId,
@@ -270,4 +284,20 @@ export function createInputFor(
     input.howToFindUs = request.howToFindUs;
   }
   return input;
+}
+
+/**
+ * True when a Meetup event is what this request became: its title is the
+ * request's (whichever prefix) and it starts at the request's local time
+ * in the group's timezone. How a retry recognises an event an earlier
+ * attempt created but did not record.
+ */
+export function isEventFor(
+  event: { title: string | null; dateTime: string },
+  request: Pick<EventRequest, 'title' | 'startLocal'>,
+): boolean {
+  return (
+    stripHostPrefix(event.title ?? '').trim() === request.title &&
+    tz(dayjs(event.dateTime)).format('YYYY-MM-DDTHH:mm') === request.startLocal
+  );
 }

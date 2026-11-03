@@ -18,7 +18,7 @@ import {
   isHostOf,
   parseRequestForm,
   prefixFor,
-  titleMaxFor,
+  TITLE_MAX,
 } from '../../lib/hosts/eventRequest.js';
 import { pacificDay } from '../../lib/hosts/hostEvents.js';
 import { PublishOutcome } from '../../lib/hosts/publishRequest.js';
@@ -35,6 +35,7 @@ import {
   pageLink,
   safeHref,
 } from '../html.js';
+import { withDeadline } from '../routes/workspaceActions.js';
 import { hostLocals } from './hostRouter.js';
 import { hostPage, unavailable } from './hostPageKit.js';
 import { HOST_BASE, HostSession } from './hostSession.js';
@@ -46,10 +47,17 @@ export const CREATE_PATHS = {
   request: (id: string) => `${HOST_BASE}/requests/${id}`,
 } as const;
 
+/**
+ * How long a Community Host's publish may run before the page moves on (it
+ * goes on in the background): inside Heroku's 30 s router timeout.
+ */
+const PUBLISH_DEADLINE_MS = 20_000;
+
 /** A regular host may have at most this many requests waiting for leadership. */
 export const MAX_PENDING = 5;
 
-const EVENT_ID = /^[0-9]{1,20}$/;
+// Meetup ids are numeric, but older recurring events have letters too.
+const EVENT_ID = /^[A-Za-z0-9]{1,40}$/;
 const REQUEST_ID = /^[1-9][0-9]{0,17}$/;
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -116,7 +124,7 @@ function formBody(
   view: FormView,
   today: string,
 ): SafeHtml {
-  const max = titleMaxFor(session.tier);
+  const max = TITLE_MAX;
   const first = dayjs(today).add(1, 'day').format('YYYY-MM-DD');
   const last = dayjs(today).add(MAX_DAYS_AHEAD, 'day').format('YYYY-MM-DD');
   const times = START_TIMES.map((t) => {
@@ -439,9 +447,7 @@ export function registerCreatePages(
       body: formBody(
         session,
         {
-          title: Array.from(defaults.title)
-            .slice(0, titleMaxFor(session.tier))
-            .join(''),
+          title: Array.from(defaults.title).slice(0, TITLE_MAX).join(''),
           day,
           time: defaults.time,
           duration: defaults.duration,
@@ -481,7 +487,6 @@ export function registerCreatePages(
     });
     const parsed = parseRequestForm(
       body as Record<string, unknown> | undefined,
-      session.tier,
       today(),
     );
     if (parsed.ok === false) {
@@ -501,7 +506,7 @@ export function registerCreatePages(
         (await store.countPending(session.userId)) >= MAX_PENDING
       ) {
         hostPage(res, {
-          title: 'Host an event',
+          title: source ? 'Copy an event' : 'Host an event',
           status: 429,
           body: formBody(
             session,
@@ -537,10 +542,8 @@ export function registerCreatePages(
       deps.alert(newRequestAlert(origin, created)).catch(() => undefined);
     } else {
       try {
-        const outcome = await deps.publish(
-          created.id,
-          created.version,
-          session.userId,
+        const outcome = await withDeadline(PUBLISH_DEADLINE_MS, () =>
+          deps.publish(created.id, created.version, session.userId),
         );
         if (outcome.code === 'published') {
           deps
@@ -560,7 +563,8 @@ export function registerCreatePages(
             .catch(() => undefined);
         }
       } catch (error: unknown) {
-        // The request page shows where it stopped; leadership can retry.
+        // A timeout leaves it publishing; the request page shows where it
+        // stopped, and leadership can retry.
         logger.error(
           `Community Host publish threw: ${error instanceof Error ? error.name : 'Error'}`,
         );

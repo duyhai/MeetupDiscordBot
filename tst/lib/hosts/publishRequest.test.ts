@@ -75,25 +75,34 @@ function store(initial: EventRequest) {
         return { ...row };
       },
     ),
-    recordCreated: vi.fn(async (_id: string, eventId: string, url: string) => {
-      await Promise.resolve();
-      if (row.status === 'publishing') {
+    recordCreated: vi.fn(
+      async (_id: string, version: number, eventId: string, url: string) => {
+        await Promise.resolve();
+        if (
+          row.status !== 'publishing' ||
+          row.version !== version ||
+          row.meetupEventId !== null
+        ) {
+          return false;
+        }
         row = {
           ...row,
           meetupEventId: eventId,
           eventUrl: url,
           version: row.version + 1,
         };
-      }
-    }),
+        return true;
+      },
+    ),
     finish: vi.fn(
       async (
         _id: string,
+        version: number,
         outcome:
           { status: 'published' } | { status: 'failed'; failure: string },
       ) => {
         await Promise.resolve();
-        if (row.status !== 'publishing') {
+        if (row.status !== 'publishing' || row.version !== version) {
           return undefined;
         }
         row = {
@@ -125,6 +134,7 @@ function deps(initial: EventRequest, over: Partial<PublishDeps> = {}) {
   const d: PublishDeps = {
     requests: s.requests,
     organizer: async () => Promise.resolve(meetup),
+    findExisting: vi.fn().mockResolvedValue(undefined),
     tierOf: vi.fn().mockResolvedValue('regular'),
     alert: vi.fn().mockResolvedValue(true),
     now: () => NOW,
@@ -321,5 +331,114 @@ describe('publishRequest', () => {
       code: 'failed',
       request: { failure: PUBLISH_FAILURES.notRecorded(URL) },
     });
+  });
+
+  it('a retry with nothing recorded adopts the event an earlier attempt made', async () => {
+    const { d, meetup, row } = deps(
+      base({
+        status: 'failed',
+        version: 4,
+        failure: PUBLISH_FAILURES.notRecorded(URL),
+      }),
+      {
+        findExisting: vi
+          .fn()
+          .mockResolvedValue({ id: '317000001', eventUrl: URL }),
+      },
+    );
+    const outcome = await publishRequest(d, '7', 4, LEAD, [
+      'failed',
+      'publishing',
+    ]);
+    expect(outcome.code).toBe('published');
+    expect(meetup.createEvent).not.toHaveBeenCalled();
+    expect(meetup.closeEventRsvps).toHaveBeenCalledWith({
+      eventId: '317000001',
+    });
+    expect(row()).toMatchObject({
+      status: 'published',
+      meetupEventId: '317000001',
+    });
+  });
+
+  it('a retry that finds nothing on Meetup creates the event', async () => {
+    const { d, meetup } = deps(base({ status: 'failed', version: 4 }));
+    expect(
+      (await publishRequest(d, '7', 4, LEAD, ['failed', 'publishing'])).code,
+    ).toBe('published');
+    expect(d.findExisting).toHaveBeenCalledTimes(1);
+    expect(meetup.createEvent).toHaveBeenCalledTimes(1);
+  });
+
+  it('a first approval does not look on Meetup', async () => {
+    const { d } = deps(base());
+    await publishRequest(d, '7', 1, LEAD, ['pending']);
+    expect(d.findExisting).not.toHaveBeenCalled();
+  });
+
+  it('a retry that cannot ask Meetup creates nothing', async () => {
+    const { d, meetup, row } = deps(base({ status: 'failed', version: 4 }), {
+      findExisting: vi.fn().mockRejectedValue(new Error('down')),
+    });
+    expect(
+      (await publishRequest(d, '7', 4, LEAD, ['failed', 'publishing'])).code,
+    ).toBe('failed');
+    expect(meetup.createEvent).not.toHaveBeenCalled();
+    expect(row().failure).toBe(PUBLISH_FAILURES.checkFailed);
+  });
+
+  it('a resumed retry without an organizer login says the event exists', async () => {
+    const { d, row } = deps(
+      base({
+        status: 'failed',
+        version: 5,
+        meetupEventId: '317000001',
+        eventUrl: URL,
+      }),
+      { organizer: vi.fn().mockRejectedValue(new Error('no token')) },
+    );
+    await publishRequest(d, '7', 5, LEAD, ['failed', 'publishing']);
+    expect(row()).toMatchObject({
+      status: 'failed',
+      meetupEventId: '317000001',
+      failure: PUBLISH_FAILURES.noOrganizerCreated(URL),
+    });
+  });
+
+  it('an overtaken publisher records nothing and flags a possible duplicate', async () => {
+    const { d, meetup, row } = deps(base());
+    // Another publisher takes the row over while createEvent runs.
+    meetup.createEvent.mockImplementation(async () => {
+      await d.requests.startPublishing(
+        '7',
+        2,
+        '323456789012345678',
+        ['publishing'],
+        new Date(NOW.getTime() + 60 * 60_000),
+      );
+      return { createEvent: { event: { id: '317000001', eventUrl: URL } } };
+    });
+    const outcome = await publishRequest(d, '7', 1, LEAD, ['pending']);
+    expect(outcome.code).toBe('stale');
+    expect(row()).toMatchObject({
+      status: 'publishing',
+      meetupEventId: null,
+      version: 3,
+    });
+    expect(meetup.closeEventRsvps).not.toHaveBeenCalled();
+    expect(JSON.stringify(vi.mocked(d.alert).mock.calls[0][0])).toContain(
+      'check for a duplicate',
+    );
+  });
+
+  it('a lost "published" write still reports published and alerts', async () => {
+    const { d } = deps(base());
+    vi.mocked(d.requests.finish).mockRejectedValue(new Error('pg down'));
+    const outcome = await publishRequest(d, '7', 1, LEAD, ['pending']);
+    expect(outcome).toMatchObject({
+      code: 'published',
+      request: { meetupEventId: '317000001' },
+    });
+    expect(d.alert).toHaveBeenCalledTimes(1);
   });
 });

@@ -229,6 +229,19 @@ describe('queue actions', () => {
     ).toBe(409);
   });
 
+  it('counts a line break in a reason once, as the textarea does', async () => {
+    const { post, store } = await setup();
+    const reason = `${'x'.repeat(248)}\r\n${'y'.repeat(250)}`;
+    const res = await post(`${QUEUE}/1/deny`, { version: '1', reason });
+    expect(res.headers.location).toBe(`${QUEUE}?result=denied`);
+    expect(store.deny).toHaveBeenLastCalledWith(
+      '1',
+      1,
+      USER.id,
+      `${'x'.repeat(248)}\n${'y'.repeat(250)}`,
+    );
+  });
+
   it('a Moderator is refused and nothing changes', async () => {
     const { post, publishRequest, store, audit } = await setup({
       leader: false,

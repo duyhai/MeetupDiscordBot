@@ -8,7 +8,8 @@ import {
   freshSettings,
   isHostOf,
   parseRequestForm,
-  titleMaxFor,
+  TITLE_MAX,
+  isEventFor,
 } from '../../../src/lib/hosts/eventRequest.js';
 import { EventRequest } from '../../../src/lib/repositories/postgresEventRequestRepository.js';
 import { createEventTemplate } from '../../../src/templates/createEventTemplate.js';
@@ -28,7 +29,6 @@ describe('parseRequestForm', () => {
     expect(
       parseRequestForm(
         form({ title: '  [Guest Host] [Community Host] Hot pot  ' }),
-        'regular',
         TODAY,
       ),
     ).toEqual({
@@ -42,23 +42,19 @@ describe('parseRequestForm', () => {
     });
   });
 
-  it('caps the title at 80 less the tier’s prefix', () => {
-    expect(titleMaxFor('regular')).toBe(80 - '[Guest Host] '.length);
-    expect(titleMaxFor('promoted')).toBe(80 - '[Community Host] '.length);
-    const promotedMax = 'x'.repeat(titleMaxFor('promoted'));
-    expect(
-      parseRequestForm(form({ title: promotedMax }), 'promoted', TODAY),
-    ).toMatchObject({ ok: true });
-    expect(
-      parseRequestForm(form({ title: `${promotedMax}y` }), 'promoted', TODAY),
-    ).toMatchObject({ ok: false, errors: { title: ANY_TEXT } });
+  it('caps every title so the longer prefix still fits in 80', () => {
+    expect(TITLE_MAX).toBe(80 - '[Community Host] '.length);
+    const max = 'x'.repeat(TITLE_MAX);
+    expect(parseRequestForm(form({ title: max }), TODAY)).toMatchObject({
+      ok: true,
+    });
+    expect(parseRequestForm(form({ title: `${max}y` }), TODAY)).toMatchObject({
+      ok: false,
+      errors: { title: ANY_TEXT },
+    });
     // Counts characters, not UTF-16 units.
     expect(
-      parseRequestForm(
-        form({ title: '🎲'.repeat(titleMaxFor('regular')) }),
-        'regular',
-        TODAY,
-      ),
+      parseRequestForm(form({ title: '🎲'.repeat(TITLE_MAX) }), TODAY),
     ).toMatchObject({ ok: true });
   });
 
@@ -68,8 +64,11 @@ describe('parseRequestForm', () => {
     ['a line break', 'Line\nbreak'],
     ['a control character', 'Bell\u0007'],
     ['a line separator', 'Sep\u2028arator'],
+    ['a right-to-left override', 'Hike \u202Eevil'],
+    ['a bidi isolate', 'Hike \u2066x'],
+    ['a zero-width space', 'Hi\u200Bke'],
   ])('refuses a title with %s', (_label, title) => {
-    expect(parseRequestForm(form({ title }), 'regular', TODAY)).toMatchObject({
+    expect(parseRequestForm(form({ title }), TODAY)).toMatchObject({
       ok: false,
       errors: { title: ANY_TEXT },
     });
@@ -82,25 +81,20 @@ describe('parseRequestForm', () => {
     ['not a real date', '2026-11-31'],
     ['not a date', 'tomorrow'],
   ])('refuses a day in %s', (_label, day) => {
-    expect(parseRequestForm(form({ day }), 'regular', TODAY)).toMatchObject({
+    expect(parseRequestForm(form({ day }), TODAY)).toMatchObject({
       ok: false,
       errors: { day: ANY_TEXT },
     });
   });
 
   it('accepts tomorrow and exactly a year out', () => {
-    expect(
-      parseRequestForm(form({ day: '2026-11-04' }), 'regular', TODAY).ok,
-    ).toBe(true);
-    expect(
-      parseRequestForm(form({ day: '2027-11-03' }), 'regular', TODAY).ok,
-    ).toBe(true);
+    expect(parseRequestForm(form({ day: '2026-11-04' }), TODAY).ok).toBe(true);
+    expect(parseRequestForm(form({ day: '2027-11-03' }), TODAY).ok).toBe(true);
   });
 
   it('refuses a time off the 15-minute steps and an unknown duration', () => {
     const result = parseRequestForm(
       form({ time: '19:10', duration: 'PT9H' }),
-      'regular',
       TODAY,
     );
     expect(result).toMatchObject({
@@ -110,17 +104,17 @@ describe('parseRequestForm', () => {
   });
 
   it('refuses repeated fields and a missing body', () => {
-    expect(
-      parseRequestForm(form({ title: ['a', 'b'] }), 'regular', TODAY),
-    ).toMatchObject({ ok: false, errors: { title: ANY_TEXT } });
-    const empty = parseRequestForm(undefined, 'regular', TODAY);
+    expect(parseRequestForm(form({ title: ['a', 'b'] }), TODAY)).toMatchObject({
+      ok: false,
+      errors: { title: ANY_TEXT },
+    });
+    const empty = parseRequestForm(undefined, TODAY);
     expect(empty.ok).toBe(false);
   });
 
   it('never echoes what the host typed in an error', () => {
     const result = parseRequestForm(
       form({ title: '<script>'.repeat(20), day: '<b>x</b>' }),
-      'regular',
       TODAY,
     );
     expect(JSON.stringify(result)).not.toContain('<');
@@ -130,6 +124,7 @@ describe('parseRequestForm', () => {
 const source = (over: Partial<CopySource> = {}): CopySource => ({
   id: '311111111',
   eventUrl: 'https://www.meetup.com/1-5genasians/events/311111111/',
+  group: { urlname: '1-5genasians' },
   title: '[Guest Host] Sunset hike',
   description: 'Meet at the trailhead.',
   dateTime: '2026-09-12T17:40:00-07:00',
@@ -148,6 +143,11 @@ describe('copying an event', () => {
     expect(isHostOf(source(), '4242')).toBe(true);
     expect(isHostOf(source(), '5555')).toBe(false);
     expect(isHostOf(source({ eventHosts: null }), '4242')).toBe(false);
+    // The organizer login reads other groups' events too: never copied.
+    expect(
+      isHostOf(source({ group: { urlname: 'another-group' } }), '4242'),
+    ).toBe(false);
+    expect(isHostOf(source({ group: null }), '4242')).toBe(false);
   });
 
   it('starts the form from the source’s title, Pacific time and length', () => {
@@ -285,5 +285,54 @@ describe('createInputFor', () => {
     createInputFor(stored(), 'regular');
     expect(createEventTemplate.title).toBe('Organizer Event Template');
     expect(createEventTemplate.featuredPhotoId).toBe(503707686);
+  });
+});
+
+describe('isEventFor', () => {
+  const request = { title: 'Hot pot', startLocal: '2026-12-05T18:30' };
+  it('matches the title under either prefix and the Pacific start', () => {
+    expect(
+      isEventFor(
+        {
+          title: '[Guest Host] Hot pot',
+          dateTime: '2026-12-05T18:30:00-08:00',
+        },
+        request,
+      ),
+    ).toBe(true);
+    expect(
+      isEventFor(
+        { title: '[Community Host] Hot pot', dateTime: '2026-12-06T02:30:00Z' },
+        request,
+      ),
+    ).toBe(true);
+  });
+
+  it('a different title or time is another event', () => {
+    expect(
+      isEventFor(
+        {
+          title: '[Guest Host] Hot pot 2',
+          dateTime: '2026-12-05T18:30:00-08:00',
+        },
+        request,
+      ),
+    ).toBe(false);
+    expect(
+      isEventFor(
+        {
+          title: '[Guest Host] Hot pot',
+          dateTime: '2026-12-05T19:30:00-08:00',
+        },
+        request,
+      ),
+    ).toBe(false);
+  });
+
+  it('a family emoji (joined with U+200D) is still allowed in a title', () => {
+    expect(
+      parseRequestForm(form({ title: 'Family day 👨\u200D👩\u200D👧' }), TODAY)
+        .ok,
+    ).toBe(true);
   });
 });

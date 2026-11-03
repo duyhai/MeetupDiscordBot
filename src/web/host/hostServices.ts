@@ -2,6 +2,8 @@ import { Client } from 'discord.js';
 
 import { SERVER_ROLES } from '../../constants.js';
 import { GqlMeetupClient } from '../../lib/client/meetup/gqlClient.js';
+import { getPaginatedData } from '../../lib/client/meetup/paginationHelper.js';
+import { isEventFor } from '../../lib/hosts/eventRequest.js';
 import { HostResolveDeps, resolveHost } from '../../lib/hosts/eligibility.js';
 import { PublishDeps, publishRequest } from '../../lib/hosts/publishRequest.js';
 import { LogEntry, logAlert } from '../../lib/helpers/discordLogger.js';
@@ -81,6 +83,23 @@ export function productionPublishDeps(
         throw new OrganizerTokenUnavailableError();
       }
       return new GqlMeetupClient(token, { bypassCache: true });
+    },
+    // Fresh, not organizerGroupEvents' 5-minute cache: the event may have
+    // been created a minute ago.
+    findExisting: async (request) => {
+      const nodes = await withOrganizerMeetup(getClient(), (meetup) =>
+        getPaginatedData(async (pagination) => {
+          const result = await meetup.getGroupEvents(pagination, {
+            status: ['ACTIVE'],
+            hostId: request.meetupMemberId,
+          });
+          return result.groupByUrlname.events;
+        }),
+      );
+      const match = nodes.find((node) => isEventFor(node, request));
+      return match
+        ? { id: String(match.id), eventUrl: String(match.eventUrl) }
+        : undefined;
     },
     tierOf: async (meetupMemberId) => {
       const resolution = await resolveHost(resolveDeps, { meetupMemberId });

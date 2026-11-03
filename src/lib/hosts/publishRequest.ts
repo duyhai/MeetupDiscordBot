@@ -28,6 +28,12 @@ export interface OrganizerWriter extends EventCreator {
   editEvent(input: EditEventInput): Promise<unknown>;
 }
 
+/** An event already on Meetup: what a retry adopts instead of creating. */
+export interface ExistingEvent {
+  id: string;
+  eventUrl: string;
+}
+
 export interface PublishDeps {
   /** PostgresEventRequestRepository's publish steps. */
   requests: {
@@ -40,11 +46,13 @@ export interface PublishDeps {
     ) => Promise<EventRequest | undefined>;
     recordCreated: (
       id: string,
+      version: number,
       eventId: string,
       eventUrl: string,
-    ) => Promise<void>;
+    ) => Promise<boolean>;
     finish: (
       id: string,
+      version: number,
       outcome: { status: 'published' } | { status: 'failed'; failure: string },
     ) => Promise<EventRequest | undefined>;
   };
@@ -54,6 +62,12 @@ export interface PublishDeps {
    * step fails the publish, and Retry resumes from what exists.
    */
   organizer: () => Promise<OrganizerWriter>;
+  /**
+   * The group's upcoming event this request may already have become: hosted
+   * by the requester, starting at its time, titled as it would be. A read,
+   * so it may retry on a 401. Throws when Meetup cannot answer.
+   */
+  findExisting: (request: EventRequest) => Promise<ExistingEvent | undefined>;
   /** The host's tier now; throws when Discord, Postgres or Meetup cannot answer. */
   tierOf: (meetupMemberId: string) => Promise<HostTier | 'not-a-host'>;
   /** #meetup-bot-alerts, plain (no mentions); fire and forget. */
@@ -75,19 +89,27 @@ export const PUBLISH_FAILURES = {
     "The host's role could not be checked (Discord, Postgres or Meetup did " +
     'not answer). Nothing was created on Meetup. Retry in a few minutes.',
   noOrganizer:
-    'The Meetup organizer login is not usable, so nothing was created on Meetup. Renew it on the dashboard, then Retry.',
+    'The Meetup organizer login is not usable, so nothing was created on ' +
+    'Meetup. Renew it on the dashboard, then Retry.',
+  noOrganizerCreated: (url: string): string =>
+    `The event was created (${url}) but the Meetup organizer login is not ` +
+    'usable, so its RSVP settings were not applied. Renew the login on the ' +
+    'dashboard, then Retry (it will not create a second event).',
+  checkFailed:
+    'An earlier attempt may have created the event, and Meetup could not be ' +
+    'asked whether it did, so nothing was created. Retry in a few minutes.',
   createFailed:
-    'Meetup did not create the event. Check the group’s events on Meetup ' +
-    'first in case it was created anyway; if it was not, Retry.',
+    'Meetup did not confirm the event. It may have been created anyway: ' +
+    'Retry looks for it on Meetup first and will not create a second one.',
   createdNothing:
-    'Meetup returned no event, so nothing is recorded as created. Check the ' +
-    'group’s events on Meetup first; if there is none, Retry.',
+    'Meetup returned no event. Retry looks for it on Meetup first and will ' +
+    'not create a second one.',
   rsvp: (url: string): string =>
     `The event was created (${url}) but its RSVP settings were not applied. ` +
     'Retry finishes it without creating a second event, or set the RSVP limits on Meetup by hand.',
   notRecorded: (url: string): string =>
-    `The event was created (${url}) but could not be recorded here. ` +
-    'Do not Retry: that would create a second event. Set its RSVP limits on Meetup by hand.',
+    `The event was created (${url}) but could not be recorded here. Retry ` +
+    'finds it on Meetup and finishes it without creating a second event.',
 } as const;
 
 function errorName(error: unknown): string {
@@ -100,9 +122,17 @@ function errorName(error: unknown): string {
  * created event's id is stored the moment Meetup returns it, so a retry
  * skips createEvent and only redoes the RSVP steps.
  *
- * Order: claim → tier (prefix) → create → record → close RSVPs and re-apply
- * the limits (closing wipes them) → published. A failure is stored with a
- * fixed text saying what exists, and alerted.
+ * A retry (from 'failed', or a stuck 'publishing') with no event recorded
+ * first asks Meetup for one an earlier attempt may have made (a crash, a
+ * timeout or a lost write between createEvent and recording it) and adopts
+ * it; it creates only when there is none.
+ *
+ * Every later write names the version this publisher holds, so a publisher
+ * that was overtaken after STUCK_PUBLISHING_MS changes nothing.
+ *
+ * Order: claim → (retry: look for it) → tier (prefix) → create → record →
+ * close RSVPs and re-apply the limits (closing wipes them) → published. A
+ * failure is stored with a fixed text saying what exists, and alerted.
  */
 export async function publishRequest(
   deps: PublishDeps,
@@ -121,16 +151,10 @@ export async function publishRequest(
   if (claimed === undefined) {
     return { code: 'stale' };
   }
+  const isRetry = from.some((s) => s !== 'pending');
+  let version = claimed.version;
 
-  const fail = async (failure: string): Promise<PublishOutcome> => {
-    let finished: EventRequest | undefined;
-    try {
-      finished = await deps.requests.finish(id, { status: 'failed', failure });
-    } catch (error: unknown) {
-      logger.error(
-        `Could not record failed request ${id}: ${errorName(error)}`,
-      );
-    }
+  const alertFailure = (failure: string) => {
     deps
       .alert({
         title: 'Host event request failed',
@@ -142,6 +166,21 @@ export async function publishRequest(
         ],
       })
       .catch(() => undefined);
+  };
+
+  const fail = async (failure: string): Promise<PublishOutcome> => {
+    let finished: EventRequest | undefined;
+    try {
+      finished = await deps.requests.finish(id, version, {
+        status: 'failed',
+        failure,
+      });
+    } catch (error: unknown) {
+      logger.error(
+        `Could not record failed request ${id}: ${errorName(error)}`,
+      );
+    }
+    alertFailure(failure);
     return {
       code: 'failed',
       request: finished ?? { ...claimed, status: 'failed', failure },
@@ -155,7 +194,53 @@ export async function publishRequest(
     meetup = await deps.organizer();
   } catch (error: unknown) {
     logger.warn(`Organizer client unavailable: ${errorName(error)}`);
-    return fail(PUBLISH_FAILURES.noOrganizer);
+    return fail(
+      eventId === null
+        ? PUBLISH_FAILURES.noOrganizer
+        : PUBLISH_FAILURES.noOrganizerCreated(eventUrl),
+    );
+  }
+
+  /** Stores the event as this request's; false when this publisher lost the row. */
+  const record = async (event: ExistingEvent): Promise<boolean> => {
+    if (
+      !(await deps.requests.recordCreated(
+        id,
+        version,
+        event.id,
+        event.eventUrl,
+      ))
+    ) {
+      return false;
+    }
+    version += 1;
+    return true;
+  };
+
+  if (eventId === null && isRetry) {
+    let existing: ExistingEvent | undefined;
+    try {
+      existing = await deps.findExisting(claimed);
+    } catch (error: unknown) {
+      logger.warn(`Existing-event check failed: ${errorName(error)}`);
+      return fail(PUBLISH_FAILURES.checkFailed);
+    }
+    if (existing !== undefined) {
+      eventId = existing.id;
+      eventUrl = existing.eventUrl;
+      let recorded: boolean;
+      try {
+        recorded = await record(existing);
+      } catch (error: unknown) {
+        logger.error(
+          `Could not record event for request ${id}: ${errorName(error)}`,
+        );
+        return fail(PUBLISH_FAILURES.notRecorded(eventUrl));
+      }
+      if (!recorded) {
+        return { code: 'stale' };
+      }
+    }
   }
 
   if (eventId === null) {
@@ -185,13 +270,28 @@ export async function publishRequest(
     }
     eventId = String(event.id);
     eventUrl = String(event.eventUrl ?? '');
+    let recorded: boolean;
     try {
-      await deps.requests.recordCreated(id, eventId, eventUrl);
+      recorded = await record({ id: eventId, eventUrl });
     } catch (error: unknown) {
       logger.error(
         `Could not record event for request ${id}: ${errorName(error)}`,
       );
       return fail(PUBLISH_FAILURES.notRecorded(eventUrl));
+    }
+    if (!recorded) {
+      // Another publisher took the row over while this one was creating.
+      // Its retry looks on Meetup first, so it adopts this event; say so in
+      // case both made one.
+      deps
+        .alert({
+          title: 'Host event request: check for a duplicate',
+          description:
+            `A slow publish of request #${id} created ${eventUrl} after another ` +
+            'publish had taken the request over. Check the group’s events for two copies.',
+        })
+        .catch(() => undefined);
+      return { code: 'stale' };
     }
   }
 
@@ -207,7 +307,22 @@ export async function publishRequest(
     return fail(PUBLISH_FAILURES.rsvp(eventUrl));
   }
 
-  const published = await deps.requests.finish(id, { status: 'published' });
+  let published: EventRequest | undefined;
+  try {
+    published = await deps.requests.finish(id, version, {
+      status: 'published',
+    });
+  } catch (error: unknown) {
+    // The event is complete on Meetup; only our record lags. A retry after
+    // STUCK_PUBLISHING_MS resumes at the RSVP steps and finishes it.
+    logger.error(
+      `Could not record published request ${id}: ${errorName(error)}`,
+    );
+    alertFailure(
+      `The event is published (${eventUrl}) but could not be marked as published here. ` +
+        'Retry it after 10 minutes to finish the record; it will not create a second event.',
+    );
+  }
   return {
     code: 'published',
     request: published ?? {

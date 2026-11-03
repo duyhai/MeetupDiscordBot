@@ -72,6 +72,7 @@ function memoryStore() {
 const source = (over: Partial<CopySource> = {}): CopySource => ({
   id: '311111111',
   eventUrl: 'https://www.meetup.com/1-5genasians/events/311111111/',
+  group: { urlname: '1-5genasians' },
   title: `[Guest Host] ${HOSTILE}`,
   description: 'Meet at the trailhead.',
   dateTime: '2026-09-12T17:30:00-07:00',
@@ -191,8 +192,29 @@ describe('host create form', () => {
     expect((await get(req, sid, '/host/create?copy=311111111')).status).toBe(
       404,
     );
-    expect((await get(req, sid, '/host/create?copy=abc')).status).toBe(404);
+    expect((await get(req, sid, '/host/create?copy=1%3B2')).status).toBe(404);
     expect(deps.copySource).toHaveBeenCalledTimes(1);
+  });
+
+  it('an event from another group cannot be copied', async () => {
+    const { req, sid } = await app({
+      copySource: vi
+        .fn()
+        .mockResolvedValue(source({ group: { urlname: 'another-group' } })),
+    });
+    expect((await get(req, sid, '/host/create?copy=311111111')).status).toBe(
+      404,
+    );
+  });
+
+  it('an older event id with letters can be copied', async () => {
+    const { req, sid, deps } = await app({
+      copySource: vi.fn().mockResolvedValue(source({ id: 'qxkdltyfccbbc' })),
+    });
+    expect(
+      (await get(req, sid, '/host/create?copy=qxkdltyfccbbc')).status,
+    ).toBe(200);
+    expect(deps.copySource).toHaveBeenCalledWith('qxkdltyfccbbc');
   });
 
   it('a Meetup outage on copy is a 503', async () => {

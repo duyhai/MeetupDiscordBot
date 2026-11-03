@@ -79,7 +79,7 @@ CREATE TABLE IF NOT EXISTS event_requests (
   host_name         TEXT NOT NULL CHECK (length(host_name) BETWEEN 1 AND 100),
   tier              TEXT NOT NULL CHECK (tier IN ('regular', 'promoted')),
   kind              TEXT NOT NULL CHECK (kind IN ('fresh', 'copy')),
-  source_event_id   TEXT CHECK (source_event_id ~ '^[0-9]{1,20}$'),
+  source_event_id   TEXT CHECK (source_event_id ~ '^[A-Za-z0-9]{1,40}$'),
   title             TEXT NOT NULL CHECK (length(title) BETWEEN 1 AND ${EVENT_REQUEST_TITLE_MAX}),
   description       TEXT NOT NULL CHECK (length(description) <= 50000),
   start_local       TEXT NOT NULL CHECK (start_local ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}$'),
@@ -402,34 +402,46 @@ export class PostgresEventRequestRepository {
     });
   }
 
-  /** Records the Meetup event the moment it exists, so a retry resumes. */
+  /**
+   * Records the Meetup event the moment it exists, so a retry resumes. Only
+   * by the publisher that still owns the row (`version`, as its claim or
+   * last step left it) and only once: false when another publisher took the
+   * row over or an event is already recorded.
+   */
   async recordCreated(
     id: string,
+    version: number,
     meetupEventId: string,
     eventUrl: string,
-  ): Promise<void> {
+  ): Promise<boolean> {
     if (!isRequestId(id)) {
-      return;
+      return false;
     }
-    await this.change('event request created', async (c) => {
+    const row = await this.change('event request created', async (c) => {
       const { rows } = await c.query<Row>(
         `UPDATE event_requests
-            SET meetup_event_id = $2, event_url = $3,
+            SET meetup_event_id = $3, event_url = $4,
                 version = version + 1, updated_at = now()
-          WHERE id = $1 AND status = 'publishing'
+          WHERE id = $1 AND version = $2 AND status = 'publishing'
+            AND meetup_event_id IS NULL
           RETURNING *`,
-        [id, meetupEventId, eventUrl],
+        [id, version, meetupEventId, eventUrl],
       );
       if (rows[0] !== undefined) {
         await history(c, rows[0], 'created', 'system', meetupEventId);
       }
       return rows[0];
     });
+    return row !== undefined;
   }
 
-  /** Ends a publish. Only a 'publishing' row changes; undefined otherwise. */
+  /**
+   * Ends a publish, only by the publisher that still owns the row
+   * (`version`). undefined when the row moved on.
+   */
   finish(
     id: string,
+    version: number,
     outcome: { status: 'published' } | { status: 'failed'; failure: string },
   ): Promise<EventRequest | undefined> {
     if (!isRequestId(id)) {
@@ -442,10 +454,10 @@ export class PostgresEventRequestRepository {
     return this.change('event request finish', async (c) => {
       const { rows } = await c.query<Row>(
         `UPDATE event_requests
-            SET status = $2, failure = $3, version = version + 1, updated_at = now()
-          WHERE id = $1 AND status = 'publishing'
+            SET status = $3, failure = $4, version = version + 1, updated_at = now()
+          WHERE id = $1 AND version = $2 AND status = 'publishing'
           RETURNING *`,
-        [id, outcome.status, failure],
+        [id, version, outcome.status, failure],
       );
       if (rows[0] !== undefined) {
         await history(c, rows[0], outcome.status, 'system', failure);
