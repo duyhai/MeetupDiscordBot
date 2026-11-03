@@ -191,7 +191,9 @@ form.filters label{flex:1 1 100%}
 form.filters input,form.filters select,form.filters button{width:100%}
 table.stack td.ban-actions{width:auto}}
 /* Host dashboard: the hosting heat map (literal level classes) and the busy/quiet calendar. */
-.heat-wrap{margin:var(--s3) 0}
+/* row-reverse starts the scroller at its right end, so a phone shows the recent months first. */
+.heat-wrap{margin:var(--s3) 0;display:flex;flex-direction:row-reverse;justify-content:flex-end}
+.heat-wrap svg{flex:none}
 svg.heat rect.hm0{fill:var(--raised);stroke:var(--line)}
 svg.heat rect.hm1{fill:var(--heat1)}
 svg.heat rect.hm2{fill:var(--heat2)}
