@@ -2,8 +2,11 @@ import crypto from 'crypto';
 import { describe, expect, it } from 'vitest';
 
 import {
+  DASHBOARD_SESSION_OPTIONS,
+  DashboardSession,
   SESSION_TTL_SEC,
   SessionStore,
+  SessionStoreOptions,
   VALID_AFTER_TTL_SEC,
   validAfterKey,
   safeEqual,
@@ -283,5 +286,98 @@ describe('SessionStore revocation', () => {
       await expect(store.revokeUser(bad)).rejects.toThrow(RangeError);
     }
     expect(cache.values.size).toBe(0);
+  });
+});
+
+describe('session domains and options', () => {
+  const HOST_OPTIONS: SessionStoreOptions<DashboardSession & { tier: string }> =
+    {
+      keyPrefix: 'host-session-',
+      validAfterPrefix: 'host-user-valid-after-',
+      userIdPattern: /^[0-9]{1,20}$/,
+      isExtra: (v) => typeof v.tier === 'string',
+    };
+
+  it('a host-domain session id does not verify as a staff one, nor the reverse', () => {
+    const host = signSessionId('abc', SECRET, 'host-sid');
+    expect(verifySignedSessionId(host, SECRET)).toBeUndefined();
+    expect(verifySignedSessionId(host, SECRET, 'host-sid')).toBe('abc');
+    expect(
+      verifySignedSessionId(signSessionId('abc', SECRET), SECRET, 'host-sid'),
+    ).toBeUndefined();
+  });
+
+  it('a host-domain OAuth cookie does not open as a staff one, nor the reverse', () => {
+    const payload = { state: 's', verifier: 'v', expiresAt: 10 };
+    const host = sealOAuthCookie(payload, SECRET, 'host-oauth');
+    expect(openOAuthCookie(host, SECRET, 1)).toBeUndefined();
+    expect(openOAuthCookie(host, SECRET, 1, 'host-oauth')).toEqual({
+      state: 's',
+      verifier: 'v',
+    });
+    expect(
+      openOAuthCookie(
+        sealOAuthCookie(payload, SECRET),
+        SECRET,
+        1,
+        'host-oauth',
+      ),
+    ).toBeUndefined();
+  });
+
+  it('the default options are the staff dashboard keys', () => {
+    expect(DASHBOARD_SESSION_OPTIONS.keyPrefix).toBe('dashboard-session-');
+    expect(DASHBOARD_SESSION_OPTIONS.validAfterPrefix).toBe(
+      'dashboard-user-valid-after-',
+    );
+  });
+
+  it('options change the Redis keys and the user id rule', async () => {
+    const cache = new FakeCache();
+    const store = new SessionStore(cache, () => 1_000, HOST_OPTIONS);
+    await store.create({ userId: '12345', username: 'H', tier: 'regular' });
+    expect([...cache.values.keys()][0]).toMatch(/^host-session-[0-9a-f]{64}$/);
+    await store.revokeUser('12345');
+    expect(cache.values.has('host-user-valid-after-12345')).toBe(true);
+    await expect(store.revokeUser('12345678901234567890123')).rejects.toThrow(
+      RangeError,
+    );
+  });
+
+  it('isExtra rejects a stored session missing an extra field', async () => {
+    const cache = new FakeCache();
+    const store = new SessionStore(cache, () => 1_000, HOST_OPTIONS);
+    const { sid } = await store.create({
+      userId: '12345',
+      username: 'H',
+      tier: 'regular',
+    });
+    const key = [...cache.values.keys()][0];
+    const stored = JSON.parse(cache.values.get(key) ?? '{}') as Record<
+      string,
+      unknown
+    >;
+    delete stored.tier;
+    cache.values.set(key, JSON.stringify(stored));
+    await expect(store.get(sid)).resolves.toBeUndefined();
+  });
+
+  it('markRoleChecked applies the patch', async () => {
+    let at = 1_000;
+    const store = new SessionStore(new FakeCache(), () => at, HOST_OPTIONS);
+    const { sid, session } = await store.create({
+      userId: '12345',
+      username: 'H',
+      tier: 'regular',
+    });
+    at = 2_000;
+    await expect(
+      store.markRoleChecked(sid, session, { tier: 'promoted' }),
+    ).resolves.toBe(true);
+    await expect(store.get(sid)).resolves.toMatchObject({
+      tier: 'promoted',
+      roleCheckedAt: 2_000,
+      createdAt: 1_000,
+    });
   });
 });

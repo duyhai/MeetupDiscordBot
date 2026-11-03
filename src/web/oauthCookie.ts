@@ -16,21 +16,26 @@ export interface OAuthCookiePayload {
   expiresAt: number;
 }
 
-/** `oauth:` keeps this MAC apart from the session id's (`sid:`). */
-const mac = (body: string, secret: string) =>
+/**
+ * `oauth:` keeps this MAC apart from the session id's (`sid:`); the host
+ * dashboard's cookie uses `host-oauth:`, so neither site's cookie opens on
+ * the other.
+ */
+const mac = (body: string, secret: string, domain: string) =>
   crypto
     .createHmac('sha256', secret)
-    .update(`oauth:${body}`)
+    .update(`${domain}:${body}`)
     .digest('base64url');
 
 export function sealOAuthCookie(
   { state, verifier, expiresAt }: OAuthCookiePayload,
   secret: string,
+  domain = 'oauth',
 ): string {
   const body = Buffer.from(
     JSON.stringify({ s: state, v: verifier, e: expiresAt }),
   ).toString('base64url');
-  return `${body}.${mac(body, secret)}`;
+  return `${body}.${mac(body, secret, domain)}`;
 }
 
 /** The state and verifier, or undefined when forged, malformed or expired. */
@@ -38,13 +43,14 @@ export function openOAuthCookie(
   value: string,
   secret: string,
   now: number,
+  domain = 'oauth',
 ): { state: string; verifier: string } | undefined {
   const dot = value.lastIndexOf('.');
   if (dot <= 0) {
     return undefined;
   }
   const body = value.slice(0, dot);
-  if (!safeEqual(value.slice(dot + 1), mac(body, secret))) {
+  if (!safeEqual(value.slice(dot + 1), mac(body, secret, domain))) {
     return undefined;
   }
   let parsed: unknown;
