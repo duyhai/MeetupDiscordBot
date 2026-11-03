@@ -28,6 +28,7 @@ import {
   uploadBanPhoto,
 } from '../lib/bans/service.js';
 import { PostgresSuspensionRepository } from '../lib/repositories/postgresSuspensionRepository.js';
+import { PostgresEventRequestRepository } from '../lib/repositories/postgresEventRequestRepository.js';
 import {
   performWorkspaceAction,
   syncWorkspace,
@@ -47,6 +48,7 @@ import {
   fetchDiscordIdentity,
 } from './discordOAuth.js';
 import { html } from './html.js';
+import { productionPublisher } from './host/hostServices.js';
 import { organizerLoginDeps } from './organizerLoginDeps.js';
 import { layout } from './pages.js';
 import { discordAccessCheck, discordRoleCheck } from './roleGate.js';
@@ -258,6 +260,8 @@ export function dashboardPageDeps(): DashboardPageDeps {
     },
     banActions: banActions(isLeadership),
     upcoming: upcomingLoader,
+    eventRequests: () => PostgresEventRequestRepository.instance(),
+    publishRequest: productionPublisher(() => discordClient),
   };
 }
 

@@ -239,6 +239,11 @@ const NAV_ITEMS = [
     label: 'No-show workspace',
   },
   {
+    key: 'hostRequests',
+    path: dashboardPath(DASHBOARD_PATHS.hostRequests),
+    label: 'Host requests',
+  },
+  {
     key: 'hallOfFame',
     path: dashboardPath(DASHBOARD_PATHS.hallOfFame),
     label: 'Hall of Fame',

@@ -38,6 +38,8 @@ export const DASHBOARD_PATHS = {
   workspaceRow: '/no-shows/:period/rows/:rowId',
   workspaceSuspend: '/no-shows/:period/rows/:rowId/suspend',
   workspaceSync: '/no-shows/:period/sync',
+  hostRequests: '/hosts/requests',
+  hostRequestAction: '/hosts/requests/:id/:action',
 } as const;
 
 export type DashboardPathTemplate =

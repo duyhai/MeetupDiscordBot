@@ -76,6 +76,7 @@ const SAMPLE_PARAMS: Record<string, string> = {
   id: '1',
   side: 'old',
   rowId: '1',
+  action: 'approve',
 };
 
 /** Statuses other than 200 that a signed-in, allowed GET is expected to answer. */
@@ -101,6 +102,8 @@ const EXPECTED_UNSAFE_ALLOWED: Record<string, number> = {
   'POST /bans/import': 303,
   'POST /bans/:id/lift': 303,
   'POST /bans/:id/photo': 303,
+  // A fake Leadership check says no: refused, back to the queue.
+  'POST /hosts/requests/:id/:action': 303,
 };
 
 function concrete(path: string): string {
