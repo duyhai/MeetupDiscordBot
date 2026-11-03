@@ -29,7 +29,7 @@ CREATE TABLE IF NOT EXISTS promoted_hosts (
   reason           TEXT NOT NULL CHECK (length(reason) BETWEEN 1 AND ${PROMOTION_REASON_MAX}),
   changed_by       TEXT NOT NULL CHECK (changed_by ~ ${DISCORD_ID_SQL}),
   changed_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
-  version          INTEGER NOT NULL DEFAULT 1
+  version          INTEGER NOT NULL DEFAULT 1 CHECK (version >= 1)
 );
 CREATE TABLE IF NOT EXISTS promoted_host_events (
   id               BIGSERIAL PRIMARY KEY,
@@ -37,8 +37,29 @@ CREATE TABLE IF NOT EXISTS promoted_host_events (
   action           TEXT NOT NULL CHECK (action IN ('promote', 'demote')),
   reason           TEXT NOT NULL CHECK (length(reason) BETWEEN 1 AND ${PROMOTION_REASON_MAX}),
   actor_discord_id TEXT NOT NULL CHECK (actor_discord_id ~ ${DISCORD_ID_SQL}),
+  -- The promoted_hosts.version this change produced, so a race between two
+  -- leaders can be read back from the history.
+  version          INTEGER NOT NULL CHECK (version >= 1),
   at               TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+-- The history is append-only: UPDATE and DELETE are refused (TRUNCATE,
+-- test-only, is not a row event).
+CREATE OR REPLACE FUNCTION promoted_host_events_append_only() RETURNS trigger
+  LANGUAGE plpgsql AS $fn$ BEGIN RAISE EXCEPTION 'promoted_host_events is append-only'; END $fn$;
+DO $do$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid
+     WHERE t.tgname = 'promoted_host_events_append_only'
+       AND c.relname = 'promoted_host_events'
+       AND c.relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = current_schema())
+  ) THEN
+    CREATE TRIGGER promoted_host_events_append_only
+      BEFORE UPDATE OR DELETE ON promoted_host_events
+      FOR EACH ROW EXECUTE FUNCTION promoted_host_events_append_only();
+  END IF;
+END
+$do$;
 `;
 
 /** PROMOTED_HOST_SCHEMA_SQL in one transaction under the dashboard schema lock. */
