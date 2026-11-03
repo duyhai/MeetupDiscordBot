@@ -1,8 +1,11 @@
 import { ClientError } from 'graphql-request';
 import { Logger } from 'tslog';
 
-import { GqlMeetupClient } from './gqlClient.js';
-import { CreateEventInput } from './types.js';
+import { CreateEventInput, CreateEventResponse } from './types.js';
+
+export interface EventCreator {
+  createEvent(input: CreateEventInput): Promise<CreateEventResponse>;
+}
 
 const logger = new Logger({ name: 'createEventWithPhotoFallback' });
 
@@ -13,9 +16,9 @@ const logger = new Logger({ name: 'createEventWithPhotoFallback' });
  * so a failure that may already have created the event is never retried.
  */
 export async function createEventWithPhotoFallback(
-  meetupClient: Pick<GqlMeetupClient, 'createEvent'>,
+  meetupClient: EventCreator,
   input: CreateEventInput,
-) {
+): Promise<CreateEventResponse> {
   try {
     return await meetupClient.createEvent(input);
   } catch (error: unknown) {
