@@ -25,7 +25,7 @@ export const STYLE = staticRaw`
 :root{--bg:#f5f5fa;--surface:#ffffff;--raised:#f1f1f8;--fg:#191a24;--muted:#555869;--line:#dedfea;--field:#7c7f93;
 --sel:#ebecfb;--accent:#4f5bd5;--btn:#4752c4;--btn-hover:#3940a0;--btn-fg:#ffffff;--focus:#5865f2;--attn:#c9283a;
 --attn-soft:#fde3e6;--attn-ink:#9c1c2c;--accent-soft:#e8e9fd;--accent-ink:#3940a0;--ok-soft:#ddf2e5;--ok-ink:#1f693d;
---rule-a:#5865f2;--rule-b:#e8414f;
+--rule-a:#5865f2;--rule-b:#e8414f;--heat1:#c9cdf7;--heat2:#9ca3ee;--heat3:#6b75e0;--heat4:#4752c4;
 --font:system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
 --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;
 --s1:4px;--s2:8px;--s3:12px;--s4:16px;--s5:24px;--s6:32px;--t-sm:.875rem;--t-base:1rem;--t-lg:1.125rem;--t-xl:1.375rem;
@@ -34,7 +34,8 @@ export const STYLE = staticRaw`
 @media (prefers-color-scheme:dark){:root{--bg:#17181f;--surface:#20212b;--raised:#2a2b37;--fg:#eeeef6;--muted:#a9abbd;
 --line:#363847;--field:#7a7d93;--sel:#2f3150;--accent:#8d96ff;--btn:#5865f2;--btn-hover:#4752c4;--btn-fg:#ffffff;
 --focus:#a3aaff;--attn:#ff7d88;--attn-soft:#46252c;--attn-ink:#ffbac0;--accent-soft:#30335e;--accent-ink:#cbcffd;
---ok-soft:#203a2b;--ok-ink:#8fd8ab;--rule-a:#7984ff;--rule-b:#ff6b77;color-scheme:dark}}
+--ok-soft:#203a2b;--ok-ink:#8fd8ab;--rule-a:#7984ff;--rule-b:#ff6b77;--heat1:#353a6e;--heat2:#4a54b0;--heat3:#6c76f0;
+--heat4:#a3aaff;color-scheme:dark}}
 *,*::before,*::after{box-sizing:border-box}
 html{-webkit-text-size-adjust:100%;text-size-adjust:100%}
 body{margin:0;font-family:var(--font);font-size:var(--t-base);line-height:1.5;color:var(--fg);background:var(--bg)}
@@ -189,6 +190,38 @@ table.stack td.rank{display:none}
 form.filters label{flex:1 1 100%}
 form.filters input,form.filters select,form.filters button{width:100%}
 table.stack td.ban-actions{width:auto}}
+/* Host dashboard: the hosting heat map (literal level classes) and the busy/quiet calendar. */
+/* row-reverse starts the scroller at its right end, so a phone shows the recent months first. */
+.heat-wrap{margin:var(--s3) 0;display:flex;flex-direction:row-reverse}
+/* margin-right:auto keeps it left-aligned when it fits; when it overflows there is no free space, so the
+scroller still opens at the recent end and scrolls left. (justify-content:flex-end here makes it unscrollable.) */
+.heat-wrap svg{flex:none;margin-right:auto}
+svg.heat rect.hm0{fill:var(--raised);stroke:var(--line)}
+svg.heat rect.hm1{fill:var(--heat1)}
+svg.heat rect.hm2{fill:var(--heat2)}
+svg.heat rect.hm3{fill:var(--heat3)}
+svg.heat rect.hm4{fill:var(--heat4)}
+svg.heat text{fill:var(--muted)}
+table.cal-grid{table-layout:fixed;width:100%;min-width:560px}
+table.cal-grid th{text-align:center}
+td.cal{vertical-align:top;height:76px;padding:var(--s1) var(--s2);font-size:var(--t-sm);white-space:normal;
+overflow-wrap:anywhere}
+td.cal span{display:block}
+.cal-day{font-weight:700}
+.cal-date{font-weight:600;font-style:italic}
+td.cal.past{color:var(--muted);background:var(--bg)}
+td.busy0,.swatch.busy0{background:var(--ok-soft)}
+td.busy1,.swatch.busy1{background:var(--surface)}
+td.busy2,.swatch.busy2{background:var(--attn-soft)}
+td.busy3,.swatch.busy3{background:var(--attn-soft);box-shadow:inset 4px 0 0 var(--attn)}
+.swatch{display:inline-block;width:14px;height:14px;border:1px solid var(--field);border-radius:3px;
+vertical-align:middle;margin:0 var(--s1) 0 var(--s3)}
+.cal-legend .swatch:first-child{margin-left:0}
+ol.cal-list{list-style:none;padding:0;margin:0}
+ol.cal-list>li{border-top:1px solid var(--line);padding:var(--s3) 0}
+ol.cal-list>li:first-child{border-top:0;padding-top:0}
+nav.type-filter{display:flex;flex-wrap:wrap;gap:0 var(--s4);margin:0 0 var(--s3)}
+nav.type-filter a{display:inline-flex;align-items:center;min-height:var(--tap)}
 @media (prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;
 transition:none!important}button:active,.button:active{transform:none}}
 `;

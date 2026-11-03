@@ -82,6 +82,10 @@ const TEXT_PAIRS: [string, string][] = [
   ['attn-ink', 'attn-soft'],
   ['accent-ink', 'accent-soft'],
   ['ok-ink', 'ok-soft'],
+  // Host calendar cells: day text on the quiet, busy and past shadings.
+  ['fg', 'ok-soft'],
+  ['fg', 'attn-soft'],
+  ['muted', 'bg'],
 ];
 
 /** Non-text that carries meaning: 3:1 (WCAG 1.4.11). */
@@ -94,6 +98,11 @@ const UI_PAIRS: [string, string][] = [
   ...['bg', 'surface', 'raised'].map((bg): [string, string] => ['field', bg]),
   // The current tab's marker.
   ['accent', 'surface'],
+  // Host heat map: the busiest level stands out from the card, and the
+  // busiest calendar day's coral marker from its shading.
+  ['heat4', 'surface'],
+  ['heat3', 'surface'],
+  ['attn', 'attn-soft'],
 ];
 
 const THEMES = themeTokens(STYLE.value);

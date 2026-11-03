@@ -887,11 +887,11 @@ export function staticRaw(strings: TemplateStringsArray): SafeHtml {
 }
 
 const LOCAL_PATH =
-  /^\/dashboard(\/[A-Za-z0-9._~%-]+)*\/?(\?[A-Za-z0-9._~%&=+-]*)?$/;
+  /^\/(?:dashboard|host)(\/[A-Za-z0-9._~%-]+)*\/?(\?[A-Za-z0-9._~%&=+-]*)?$/;
 /** A '.' or '..' segment, literal or percent-encoded (browsers decode %2e). */
 const DOT_SEGMENT = /\/(?:\.|%2e){1,2}(?=\/|\?|$)/i;
 
-/** Our own pages: /dashboard paths only; no dot segment, no '//', no scheme, no quotes. */
+/** Our own pages: /dashboard and /host paths only; no dot segment, no '//', no scheme, no quotes. */
 export function localUrl(pathAndQuery: string): SafeUrl {
   if (
     typeof pathAndQuery !== 'string' ||

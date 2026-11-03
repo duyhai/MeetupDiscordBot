@@ -58,7 +58,7 @@ function accessTokenFrom(raw: APIAccessTokenResponse): string {
 // Registered with the providers; must be byte-identical in the authorize URL
 // and the token exchange. debugRedirect keeps local dev working through the
 // production /redirect trampoline.
-const meetupRedirectUri = () =>
+export const meetupRedirectUri = () =>
   debugRedirect(`${BASE_DISCORD_BOT_URL}/connect/meetup/callback`);
 
 export function buildMeetupAuthUrl(state: string): string {

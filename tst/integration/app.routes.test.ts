@@ -275,6 +275,50 @@ describe('Meetup callback: organizer login renewal', () => {
   });
 });
 
+describe('Meetup callback: host dashboard sign-in', () => {
+  it('forwards a host- state to the host completion path without reading Redis', async () => {
+    const state = `host-${'a'.repeat(43)}`;
+    const cache = await ApplicationCache();
+    const get = vi.spyOn(cache, 'get');
+    const exchange = nockMeetupExchange();
+
+    const res = await http.get(
+      `/connect/meetup/callback?state=${state}&code=mcode&next=%2F%2Fevil.example`,
+    );
+
+    expect(res.status).toBe(302);
+    expect(res.headers.location).toBe(
+      `/host/auth/meetup/complete?state=${state}&code=mcode`,
+    );
+    expect(get).not.toHaveBeenCalled();
+    expect(exchange.isDone()).toBe(false);
+    get.mockRestore();
+  });
+
+  it('a malformed host- state is not forwarded', async () => {
+    const res = await http.get(
+      '/connect/meetup/callback?state=host-short&code=mcode',
+    );
+    expect(res.status).toBe(400);
+    expect(res.headers.location).toBeUndefined();
+  });
+});
+
+describe('host dashboard mount', () => {
+  it('mounts the host dashboard ahead of the generic 404 page, with the framing headers', async () => {
+    for (const path of ['/host', '/host/login', '/host/x']) {
+      // eslint-disable-next-line no-await-in-loop -- one path at a time
+      const res = await http.get(path).set('X-Forwarded-Proto', 'https');
+      expect([200, 302, 503], path).toContain(res.status);
+      expect(res.headers['x-frame-options'], path).toBe('DENY');
+      expect(res.headers['content-security-policy'], path).toContain(
+        "frame-ancestors 'none'",
+      );
+      expect(res.headers['cache-control'], path).toBe('no-store');
+    }
+  });
+});
+
 describe('staff dashboard mount', () => {
   it('mounts the dashboard ahead of the generic 404 page', async () => {
     // Heroku's router marks HTTPS; without it a configured dashboard
