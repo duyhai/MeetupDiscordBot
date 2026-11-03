@@ -506,6 +506,21 @@ describe('dashboard role checks while session writes fail', () => {
     clock += 1_000;
     expect((await req.get('/dashboard').set('Cookie', b)).status).toBe(403);
   });
+
+  it('a role lost while every Redis write fails still answers 403', async () => {
+    const { cache, clock, checkAccess, get } = await failingWrites();
+    const down = async () => {
+      throw new TypeError('redis said secret-detail');
+    };
+    cache.set = down;
+    cache.remove = down;
+    checkAccess.mockResolvedValue(false);
+    clock.now = ROLE_RECHECK_MS;
+    fake.logged.length = 0;
+    expect(await get()).toBe(403);
+    expect(fake.logged.join('\n')).not.toContain('secret-detail');
+    expect(fake.logged.join('\n')).toContain('TypeError');
+  });
 });
 
 describe('dashboard session revocation', () => {

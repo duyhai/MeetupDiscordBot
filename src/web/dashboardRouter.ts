@@ -565,8 +565,17 @@ export function createDashboardRouter(deps: DashboardDeps): express.Router {
         return 'allowed';
       }
       checkedDespiteFailedWrite.delete(userId);
-      // Every browser this member signed in from, not just this one.
-      await (await sessions()).revokeUser(userId);
+      // Every browser this member signed in from, not just this one. A
+      // failed write must not turn a lost role into a 500: this request
+      // still gets 403, and each other browser re-checks and is refused on
+      // its own.
+      try {
+        await (await sessions()).revokeUser(userId);
+      } catch (error: unknown) {
+        logger.warn(
+          `Dashboard revocation after a lost role failed: ${error instanceof Error ? error.name : 'Error'}`,
+        );
+      }
       audit({
         title: 'Dashboard session ended',
         description: `<@${userId}> no longer holds a dashboard role.`,
@@ -617,8 +626,15 @@ export function createDashboardRouter(deps: DashboardDeps): express.Router {
       const store = await sessions();
       if (outcome === 'denied') {
         // recheckRole already revoked every session of this member and
-        // audited it once; this request ends its own.
-        await store.destroy(sid);
+        // audited it once; this request ends its own. The answer is 403
+        // even if Redis cannot delete it.
+        try {
+          await store.destroy(sid);
+        } catch (error: unknown) {
+          logger.warn(
+            `Dashboard session delete after a lost role failed: ${error instanceof Error ? error.name : 'Error'}`,
+          );
+        }
         res.append(
           'Set-Cookie',
           clearCookie(SESSION_COOKIE, SESSION_COOKIE_PATH),
