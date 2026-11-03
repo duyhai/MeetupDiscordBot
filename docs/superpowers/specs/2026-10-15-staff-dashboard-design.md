@@ -88,7 +88,32 @@ and services.
   10 minutes; after that it is re-checked, so losing a role locks someone out
   within 10 minutes.
 - Session: signed, `HttpOnly`, `Secure`, `SameSite=Lax` cookie; server-side
-  session state in Redis (already available); 12-hour lifetime.
+  session state in Redis (already available). Lifetime (Hai, 2026-11-02:
+  "7 days idle, 30 max"):
+  - A sign-in stays valid while the dashboard is used at least once every
+    **7 days**, and never lasts more than **30 days** from sign-in.
+  - The Redis key is created with a 7-day TTL. The 10-minute role re-check
+    write (`SET … XX`) also slides it to `min(7 days, time left before the
+    30-day cap)`; there is no other write per request, so the idle window is
+    in practice 7 days minus up to 10 minutes. `XX` means a signed-out or
+    revoked session is never brought back. `SessionStore.get` also refuses a
+    session 30 days after `createdAt`, whatever the key's TTL.
+  - If that write fails, the request still succeeds (the role check passed);
+    the session keeps its previous expiry and only the error class is logged.
+    Because `roleCheckedAt` was not written either, every later request
+    re-checks the role live with Discord until a write succeeds. A passed
+    check is then trusted in memory for 60 seconds per member
+    (`FAILED_WRITE_RECHECK_MS`, failure path only, after expiry and
+    revocation are read from Redis), so a lost role ends the session within
+    10 minutes plus that minute.
+  - The cookie's `Max-Age` is 30 days, so the browser keeps it across
+    restarts; the server-side TTL is the authority on the idle limit.
+  - The role re-check, not the lifetime, bounds access after a role is
+    taken away: losing Moderator or 1.5 Leadership Team still signs someone
+    out within 10 minutes.
+  - "Sign me out everywhere" writes a per-user "valid after" mark that lives
+    30 days plus a minute, so it outlives every session it can end. The CSRF
+    token lives in the session, so it stays valid for the session's life.
 - Every state-changing request needs a CSRF token. Pages send
   `Cache-Control: no-store`. Login and actions are rate-limited.
 - Errors render a generic page; details go to logs only.
