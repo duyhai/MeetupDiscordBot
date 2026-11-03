@@ -42,8 +42,11 @@ pieces hosts feed into.
      leadership dashboard**. Approval publishes it with the `[Guest Host]`
      tag, as today.
    - **Promoted host** — publishes directly, no approval, titled
-     **`[Star Host] `** instead of `[Guest Host] ` (Hai, 2026-11-02).
-     Leadership is still notified. Promoted hosts are *not* Meetup
+     **`[Community Host] `** instead of `[Guest Host] ` (Hai, 2026-11-02, "for now";
+     chosen over Star/Resident/Homegrown because it says "one of us" without
+     implying leadership or diminishing guest hosts). Keep the prefix in one
+     constant so it's a one-line change. Not to be confused with the
+     Community Ambassador role. Leadership is still notified. Promoted hosts are *not* Meetup
      organizers and don't represent the group.
 6. **Host-triggered announcement**: a button that sends Meetup's announcement
    email for the host's own event. Not automatic; the host chooses when.
@@ -142,7 +145,7 @@ accepts entries from any source, and there's a write path for flags.
 | Who | How we know | Can |
 |---|---|---|
 | Regular host | Guest Host role in Discord, or ≥1 past hosted event on Meetup, and not blacklisted | Everything on the host side; creating an event files a request |
-| Promoted host | Row in the new `promoted_hosts` table (active) | Same, but create publishes directly, titled `[Star Host] ` |
+| Promoted host | Row in the new `promoted_hosts` table (active) | Same, but create publishes directly, titled `[Community Host] ` |
 | Leadership | **1.5 Leadership Team** role (1347289004932075521) only, checked live like the no-show workspace's record/void | Approve/deny, promote/demote. Moderators keep read access to these pages through the staff-dashboard gate but can't act |
 
 A leader who is also a host sees both sides.
@@ -212,7 +215,7 @@ source of truth is the table either way.
   re-applied, photo fallback, a lock per request. Deny records the reason and
   shows it to the host.
 - **Promoted host**: publish runs the same create path with the
-  `[Star Host] ` prefix instead, immediately. A plain alert goes to `#meetup-bot-alerts` (no pings).
+  `[Community Host] ` prefix instead, immediately. A plain alert goes to `#meetup-bot-alerts` (no pings).
 - The Discord `/meetup_request_event` flow keeps working. *Builder's call:*
   whether its requests also show in the dashboard queue.
 - Create is idempotent per request: a retry after a partial failure must not
@@ -289,7 +292,7 @@ Follow the repo's existing patterns: vitest unit tests, integration tests
 against the throwaway Postgres/Redis containers, nock with the network
 blocked. Must-cover: tier resolution from both sign-in paths, a host acting
 only on their own events, approve/announce idempotency under concurrent
-clicks, `[Guest Host] ` for regular and `[Star Host] ` for promoted, copy fidelity, and
+clicks, `[Guest Host] ` for regular and `[Community Host] ` for promoted, copy fidelity, and
 demotion taking effect.
 
 ## Suggested order (my guess, builder may adjust)
