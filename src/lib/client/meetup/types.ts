@@ -287,6 +287,7 @@ export interface CreateEventInput {
     enabled: boolean;
   };
   groupUrlname: string;
+  howToFindUs?: string;
   isCopy: boolean;
   publishStatus: string;
   question: string;
@@ -300,6 +301,7 @@ export interface CreateEventInput {
   startDateTime: string;
   title: string;
   topics: number[];
+  venueId?: string;
 }
 
 export interface CreateEventResponse {
@@ -341,6 +343,22 @@ export type GetGroupMembershipsInput = {
   first?: number;
   urlname: string;
 };
+
+export interface GetEventForCopyResponse {
+  event: {
+    id: string;
+    title: string | null;
+    description: string | null;
+    dateTime: string;
+    duration: string | null;
+    maxTickets: number | null;
+    guestLimit: number | null;
+    howToFindUs: string | null;
+    featuredEventPhoto: { id: string } | null;
+    venue: { id: string } | null;
+    eventHosts: { member: { id: string } | null }[] | null;
+  } | null;
+}
 
 export interface GetEventResponse {
   event: { description: string; id: string; title: string };

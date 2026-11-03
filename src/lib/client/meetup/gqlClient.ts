@@ -17,6 +17,7 @@ import {
 } from './mutations.js';
 import {
   getEvent,
+  getEventForCopy,
   getEventRsvps,
   getGroupEvents,
   getGroupEventsCount,
@@ -41,6 +42,7 @@ import {
   EditEventInput,
   EditEventResponse,
   EventSummary,
+  GetEventForCopyResponse,
   GetEventResponse,
   GetEventRsvpsInput,
   GetEventRsvpsResponse,
@@ -623,6 +625,17 @@ export class GqlMeetupClient {
       logger.error(error);
       throw error;
     }
+  }
+
+  /** The source of a copy; undefined when Meetup has no such event. Not logged: it carries the description. */
+  public async getEventForCopy(
+    eventId: string,
+  ): Promise<GetEventForCopyResponse['event']> {
+    const result = await this.client.request<GetEventForCopyResponse>(
+      getEventForCopy,
+      { eventId },
+    );
+    return result.event;
   }
 
   public async createEvent(input: CreateEventInput) {
