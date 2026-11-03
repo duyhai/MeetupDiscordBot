@@ -12,6 +12,7 @@ import { ButtonComponent, Discord, Slash, SlashOption } from 'discordx';
 import { ClientError } from 'graphql-request';
 import { Logger } from 'tslog';
 
+import { GUEST_HOST_PREFIX } from '../../constants.js';
 import { GqlMeetupClient } from '../../lib/client/meetup/gqlClient.js';
 import { getPaginatedData } from '../../lib/client/meetup/paginationHelper.js';
 import {
@@ -33,7 +34,6 @@ const logger = new Logger({ name: 'MeetupCreateEventCommands' });
 const DEFAULT_START_TIME = 19;
 const DATE_FORMAT = 'YYYY-MM-DD';
 const TITLE_MAX_LENGTH = 80;
-const GUEST_HOST_PREFIX = '[Guest Host] ';
 const TEMPLATE_TITLE = 'Organizer Event Template';
 
 /**

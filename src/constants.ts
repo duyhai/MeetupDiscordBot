@@ -16,6 +16,23 @@ export const GUEST_HOST_BLACKLIST: string[] = [
   '208794541422149634', // zenix0
 ];
 
+/**
+ * Meetup member ids refused as hosts on the host dashboard, for a member
+ * whose Discord account is not linked (GUEST_HOST_BLACKLIST covers linked
+ * ones). Both lists are checked on both sign-in paths.
+ */
+export const GUEST_HOST_MEETUP_BLACKLIST: string[] = [];
+
+/** Title prefix of a regular host's event (approved by leadership). */
+export const GUEST_HOST_PREFIX = '[Guest Host] ';
+
+/**
+ * Title prefix of a promoted host's event (published without approval).
+ * Hai, 2026-11-02, "for now": one constant so renaming is a one-line change.
+ * Not the Community Ambassador role; promoted hosts are not organizers.
+ */
+export const COMMUNITY_HOST_PREFIX = '[Community Host] ';
+
 export const REWARD_ROLES: Record<
   'hosting' | 'attendance' | 'discord',
   Record<500 | 100 | 50 | 20 | 5 | 1, string>
