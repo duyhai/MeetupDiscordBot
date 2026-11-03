@@ -124,6 +124,14 @@ describe('resolveHost', () => {
     ).resolves.toMatchObject({ kind: 'host', tier: 'promoted' });
   });
 
+  it('a promoted row alone does not make a host: promoted is a tier of hosts', async () => {
+    const d = deps({ isPromoted: vi.fn().mockResolvedValue(true) });
+    await expect(resolveHost(d, { meetupMemberId: MEETUP })).resolves.toEqual({
+      kind: 'refused',
+      reason: 'not-a-host',
+    });
+  });
+
   it('a lookup that throws propagates', async () => {
     const d = deps({
       pastHostedCount: vi.fn().mockRejectedValue(new Error('meetup down')),
