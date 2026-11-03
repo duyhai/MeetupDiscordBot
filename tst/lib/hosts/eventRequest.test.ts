@@ -129,6 +129,7 @@ describe('parseRequestForm', () => {
 
 const source = (over: Partial<CopySource> = {}): CopySource => ({
   id: '311111111',
+  eventUrl: 'https://www.meetup.com/1-5genasians/events/311111111/',
   title: '[Guest Host] Sunset hike',
   description: 'Meet at the trailhead.',
   dateTime: '2026-09-12T17:40:00-07:00',

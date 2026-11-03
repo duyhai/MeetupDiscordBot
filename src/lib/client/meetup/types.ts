@@ -347,6 +347,7 @@ export type GetGroupMembershipsInput = {
 export interface GetEventForCopyResponse {
   event: {
     id: string;
+    eventUrl: string | null;
     title: string | null;
     description: string | null;
     dateTime: string;

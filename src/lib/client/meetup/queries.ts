@@ -319,6 +319,7 @@ export const getEventForCopy = gql`
   query ($eventId: ID!) {
     event(id: $eventId) {
       id
+      eventUrl
       title
       description
       dateTime
