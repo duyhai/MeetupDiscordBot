@@ -26,7 +26,10 @@ export const HOST_SESSION_OPTIONS: SessionStoreOptions<HostSession> =
     keyPrefix: 'host-session-',
     validAfterPrefix: 'host-user-valid-after-',
     userIdPattern: /^[1-9][0-9]{0,19}$/,
-    isExtra: (v: Record<string, unknown>) =>
+    isExtra: (
+      v: Record<string, unknown>,
+    ): v is Record<string, unknown> &
+      Omit<HostSession, keyof DashboardSession> =>
       (v.discordUserId === null ||
         (typeof v.discordUserId === 'string' &&
           DISCORD_ID.test(v.discordUserId))) &&

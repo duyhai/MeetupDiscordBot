@@ -255,3 +255,29 @@ describe('host sign-in', () => {
     expect(res.status).toBe(403);
   });
 });
+
+describe('host logout on a cache timeout', () => {
+  it('clears the cookie and says the sign-out is not confirmed', async () => {
+    const { CacheTimeoutError } =
+      await import('../../../src/web/timedCache.js');
+    const { req, cache } = await makeHostApp();
+    const sid = await signInWithDiscord(req);
+    const session = JSON.parse(
+      [...cache.values.entries()].find(([k]) =>
+        k.startsWith('host-session-'),
+      )?.[1] ?? '{}',
+    ) as { csrfToken: string };
+    vi.spyOn(cache, 'remove').mockRejectedValue(
+      new CacheTimeoutError('remove', 2000),
+    );
+    const res = await req
+      .post('/host/logout')
+      .set('Cookie', sid)
+      .set('Origin', ORIGIN)
+      .type('form')
+      .send({ _csrf: session.csrfToken });
+    expect(res.status).toBe(503);
+    expect(res.text).toContain('Sign-out not confirmed');
+    expect(String(res.headers['set-cookie'])).toContain('host_sid=;');
+  });
+});

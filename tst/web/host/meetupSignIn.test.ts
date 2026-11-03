@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import {
   buildHostMeetupAuthUrl,
+  displayName,
   fetchMeetupSelf,
   isHostState,
   newHostState,
@@ -62,6 +63,28 @@ describe('fetchMeetupSelf', () => {
       id: '4242',
       name: '4242',
     });
+  });
+
+  it('a non-JSON 200 is a fixed error that quotes nothing', async () => {
+    nock(API).post('/gql-ext').reply(200, '<html>secret page</html>');
+    const error = await fetchMeetupSelf('tok').catch((e: unknown) => e);
+    expect(String(error)).toContain('no JSON');
+    expect(String(error)).not.toContain('secret');
+  });
+
+  it('a numeric id is refused (GraphQL IDs are strings)', async () => {
+    nock(API)
+      .post('/gql-ext')
+      .reply(200, { data: { self: { id: 4242, name: 'A' } } });
+    await expect(fetchMeetupSelf('tok')).rejects.toThrow('no usable id');
+  });
+
+  it('cleans and caps the display name', () => {
+    expect(displayName('  Ann\u0000\u001b[31m Nguyen\u0085 ')).toBe(
+      'Ann[31m Nguyen',
+    );
+    expect([...displayName('é'.repeat(150))]).toHaveLength(100);
+    expect(displayName(7)).toBe('');
   });
 
   it('rejects a non-digit id', async () => {

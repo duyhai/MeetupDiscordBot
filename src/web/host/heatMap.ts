@@ -145,12 +145,12 @@ export function heatMap(counts: Map<string, number>, endDay: string): SafeHtml {
         height="${String(height)}"
       >
         <title>
-          Events hosted per day over the last 12 months: ${total} in total
+          Events hosted per day over the past year: ${total} in total
         </title>
         ${months}${labels}${cells}
       </svg>
     </div>
     <p class="muted">
-      ${total} ${total === 1 ? 'event' : 'events'} in the last 12 months.
+      ${total} ${total === 1 ? 'event' : 'events'} in the past year shown.
     </p>`;
 }

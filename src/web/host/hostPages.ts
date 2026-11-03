@@ -124,10 +124,11 @@ function attendanceButton(event: HostEvent): SafeHtml {
 
 /** Days with no group event in the next two weeks, from today (Pacific). */
 function quietDays(days: CalendarDay[], today: string): CalendarDay[] {
-  const last = dayjs(today)
-    .add(QUIET_WINDOW_DAYS - 1, 'day')
-    .format('YYYY-MM-DD');
-  return days.filter((d) => d.day >= today && d.day <= last && d.busy === 0);
+  // From tomorrow: today's finished events are no longer published, so
+  // today can look quiet when it was not.
+  const first = dayjs(today).add(1, 'day').format('YYYY-MM-DD');
+  const last = dayjs(today).add(QUIET_WINDOW_DAYS, 'day').format('YYYY-MM-DD');
+  return days.filter((d) => d.day >= first && d.day <= last && d.busy === 0);
 }
 
 function quietDayText(day: CalendarDay): string {
@@ -231,7 +232,9 @@ function calendarCell(day: CalendarDay, today: string): SafeHtml {
     : '';
   const inner = html`${label}${countText}${dates}`;
   if (past) {
-    return html`<td class="cal past">${inner}</td>`;
+    // Only published (upcoming) events are read, so a past day's count
+    // would be wrong: it shows the date and holidays only.
+    return html`<td class="cal past">${label}${dates}</td>`;
   }
   switch (day.busy) {
     case 0:
@@ -406,19 +409,23 @@ function historyBody(
         "Take attendance on Meetup" opens the event's attendee list, where hosts
         mark who came and who did not show.
       </p>
-      <table class="stack">
-        <thead>
-          <tr>
-            <th>Date</th>
-            <th>Event</th>
-            <th>Type</th>
-            <th>Actions</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${rows}
-        </tbody>
-      </table>
+      ${
+        rows.length === 0
+          ? html`<p class="muted">No events on this page.</p>`
+          : html`<table class="stack">
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Event</th>
+                  <th>Type</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${rows}
+              </tbody>
+            </table>`
+      }
       ${pageNav(HOST_PATHS.history, page, shown.length > page * PAGE_SIZE, { type: selected })}
     </div>`;
 }

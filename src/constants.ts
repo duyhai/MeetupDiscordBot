@@ -17,9 +17,11 @@ export const GUEST_HOST_BLACKLIST: string[] = [
 ];
 
 /**
- * Meetup member ids refused as hosts on the host dashboard, for a member
- * whose Discord account is not linked (GUEST_HOST_BLACKLIST covers linked
- * ones). Both lists are checked on both sign-in paths.
+ * Meetup member ids refused as hosts on the host dashboard. Both lists are
+ * checked on both sign-in paths, but GUEST_HOST_BLACKLIST only reaches a
+ * Meetup sign-in through the member's current Discord link, which an unlink
+ * or a re-link removes. So every person on GUEST_HOST_BLACKLIST must also
+ * have their Meetup member id here.
  */
 export const GUEST_HOST_MEETUP_BLACKLIST: string[] = [];
 

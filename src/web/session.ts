@@ -23,14 +23,15 @@ export const validAfterKey = (userId: string) =>
  * dashboard keys sessions by Discord id; the host dashboard by Meetup member
  * id, with its own prefixes, so neither store can read or revoke the other's.
  */
-// eslint-disable-next-line @typescript-eslint/no-unused-vars -- S ties a store's options to its session type at the call site
 export interface SessionStoreOptions<S extends DashboardSession> {
   keyPrefix: string;
   validAfterPrefix: string;
   /** A session whose userId fails this counts as revoked. */
   userIdPattern: RegExp;
   /** Checks the fields S adds to DashboardSession on every read. */
-  isExtra?: (value: Record<string, unknown>) => boolean;
+  isExtra?: (
+    value: Record<string, unknown>,
+  ) => value is Record<string, unknown> & Omit<S, keyof DashboardSession>;
 }
 
 export const DASHBOARD_SESSION_OPTIONS: SessionStoreOptions<DashboardSession> =
@@ -112,12 +113,27 @@ function isSession(value: unknown): value is DashboardSession {
   );
 }
 
+/**
+ * The options argument: optional only for the staff session type. A store
+ * of any other session type must name its options, so it can never fall
+ * back to the staff keyspace by a forgotten argument.
+ */
+type OptionsArg<S extends DashboardSession> = DashboardSession extends S
+  ? [options?: SessionStoreOptions<S>]
+  : [options: SessionStoreOptions<S>];
+
 export class SessionStore<S extends DashboardSession = DashboardSession> {
+  private readonly options: SessionStoreOptions<S>;
+
   constructor(
     private readonly cache: KeyValueCache,
     private readonly now: () => number = Date.now,
-    private readonly options: SessionStoreOptions<S> = DASHBOARD_SESSION_OPTIONS,
-  ) {}
+    ...[options]: OptionsArg<S>
+  ) {
+    this.options =
+      options ??
+      (DASHBOARD_SESSION_OPTIONS as unknown as SessionStoreOptions<S>);
+  }
 
   private key(sid: string): string {
     return `${this.options.keyPrefix}${hashOf(sid)}`;
@@ -193,7 +209,17 @@ export class SessionStore<S extends DashboardSession = DashboardSession> {
     }
     return this.cache.set_existing(
       this.key(sid),
-      JSON.stringify({ ...session, ...patch, roleCheckedAt: at }),
+      // The identity, CSRF token and absolute lifetime are re-applied after
+      // the patch, so no patch can change who this is or extend the session.
+      JSON.stringify({
+        ...session,
+        ...patch,
+        userId: session.userId,
+        username: session.username,
+        csrfToken: session.csrfToken,
+        createdAt: session.createdAt,
+        roleCheckedAt: at,
+      }),
       remainingSec,
     );
   }
@@ -225,7 +251,7 @@ export class SessionStore<S extends DashboardSession = DashboardSession> {
   /**
    * True when the user has a mark at or after this session's createdAt.
    * Fails closed: a mark that does not read as a number, or a session whose
-   * user id is not a Discord id, counts as revoked.
+   * user id fails the store's userIdPattern, counts as revoked.
    */
   async isRevoked(session: S): Promise<boolean> {
     if (!this.options.userIdPattern.test(session.userId)) {

@@ -295,7 +295,8 @@ describe('session domains and options', () => {
       keyPrefix: 'host-session-',
       validAfterPrefix: 'host-user-valid-after-',
       userIdPattern: /^[0-9]{1,20}$/,
-      isExtra: (v) => typeof v.tier === 'string',
+      isExtra: (v): v is Record<string, unknown> & { tier: string } =>
+        typeof v.tier === 'string',
     };
 
   it('a host-domain session id does not verify as a staff one, nor the reverse', () => {
@@ -360,6 +361,32 @@ describe('session domains and options', () => {
     delete stored.tier;
     cache.values.set(key, JSON.stringify(stored));
     await expect(store.get(sid)).resolves.toBeUndefined();
+  });
+
+  it('markRoleChecked never lets a patch change the identity or lifetime', async () => {
+    let at = 1_000;
+    const store = new SessionStore(new FakeCache(), () => at, HOST_OPTIONS);
+    const { sid, session } = await store.create({
+      userId: '12345',
+      username: 'H',
+      tier: 'regular',
+    });
+    at = 2_000;
+    const sneaky = {
+      tier: 'promoted',
+      userId: '999',
+      username: 'X',
+      csrfToken: 'x',
+      createdAt: 9e15,
+    };
+    await store.markRoleChecked(sid, session, sneaky);
+    await expect(store.get(sid)).resolves.toMatchObject({
+      tier: 'promoted',
+      userId: '12345',
+      username: 'H',
+      csrfToken: session.csrfToken,
+      createdAt: 1_000,
+    });
   });
 
   it('markRoleChecked applies the patch', async () => {

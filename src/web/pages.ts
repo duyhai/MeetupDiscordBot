@@ -192,8 +192,10 @@ form.filters input,form.filters select,form.filters button{width:100%}
 table.stack td.ban-actions{width:auto}}
 /* Host dashboard: the hosting heat map (literal level classes) and the busy/quiet calendar. */
 /* row-reverse starts the scroller at its right end, so a phone shows the recent months first. */
-.heat-wrap{margin:var(--s3) 0;display:flex;flex-direction:row-reverse;justify-content:flex-end}
-.heat-wrap svg{flex:none}
+.heat-wrap{margin:var(--s3) 0;display:flex;flex-direction:row-reverse}
+/* margin-right:auto keeps it left-aligned when it fits; when it overflows there is no free space, so the
+scroller still opens at the recent end and scrolls left. (justify-content:flex-end here makes it unscrollable.) */
+.heat-wrap svg{flex:none;margin-right:auto}
 svg.heat rect.hm0{fill:var(--raised);stroke:var(--line)}
 svg.heat rect.hm1{fill:var(--heat1)}
 svg.heat rect.hm2{fill:var(--heat2)}
@@ -202,7 +204,8 @@ svg.heat rect.hm4{fill:var(--heat4)}
 svg.heat text{fill:var(--muted)}
 table.cal-grid{table-layout:fixed;width:100%;min-width:560px}
 table.cal-grid th{text-align:center}
-td.cal{vertical-align:top;height:76px;padding:var(--s1) var(--s2);font-size:var(--t-sm);overflow-wrap:anywhere}
+td.cal{vertical-align:top;height:76px;padding:var(--s1) var(--s2);font-size:var(--t-sm);white-space:normal;
+overflow-wrap:anywhere}
 td.cal span{display:block}
 .cal-day{font-weight:700}
 .cal-date{font-weight:600;font-style:italic}
@@ -217,7 +220,8 @@ vertical-align:middle;margin:0 var(--s1) 0 var(--s3)}
 ol.cal-list{list-style:none;padding:0;margin:0}
 ol.cal-list>li{border-top:1px solid var(--line);padding:var(--s3) 0}
 ol.cal-list>li:first-child{border-top:0;padding-top:0}
-nav.type-filter{display:flex;flex-wrap:wrap;gap:var(--s2) var(--s4);margin:0 0 var(--s3)}
+nav.type-filter{display:flex;flex-wrap:wrap;gap:0 var(--s4);margin:0 0 var(--s3)}
+nav.type-filter a{display:inline-flex;align-items:center;min-height:var(--tap)}
 @media (prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;
 transition:none!important}button:active,.button:active{transform:none}}
 `;

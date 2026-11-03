@@ -93,6 +93,26 @@ export function hostLoginPage(
   });
 }
 
+/**
+ * A logout whose server-side delete timed out: the cookie is cleared, but
+ * the session may live on in Redis until it expires (at most 12 hours).
+ */
+export function hostLogoutUnconfirmedPage(nonce: string): string {
+  return hostLayout({
+    title: 'Sign-out not confirmed',
+    nonce,
+    body: html`<div class="card">
+      <h1>Sign-out not confirmed</h1>
+      <p>
+        This browser is signed out, but the sign-out may not have completed on
+        the server. If you are on a shared computer, sign in again and sign out
+        once more in a minute.
+      </p>
+      <p><a href="${localUrl('/host/login')}">Sign in</a></p>
+    </div>`,
+  });
+}
+
 export const HOST_ERROR_MESSAGES = {
   400: 'This sign-in link expired or was already used. Please sign in again.',
   403: 'The host dashboard is for members who have hosted an event with us.',

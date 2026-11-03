@@ -31,6 +31,8 @@ export interface CalendarDay {
   dates: { name: string; kind: 'holiday' | 'cultural' }[];
 }
 
+const PACIFIC = 'America/Los_Angeles';
+
 const byTime = (a: HostEvent, b: HostEvent) =>
   dayjs(a.dateTime).valueOf() - dayjs(b.dateTime).valueOf();
 
@@ -69,8 +71,17 @@ export async function groupCalendar(
 ): Promise<CalendarDay[]> {
   const today = tz(dayjs(deps.now())).startOf('day');
   // dayjs weeks start on Sunday; Monday-first: Sunday goes back 6 days.
-  const start = today.subtract((today.day() + 6) % 7, 'day');
-  const end = start.add(weeks * 7, 'day');
+  // Day arithmetic on calendar dates, then each end turned into Pacific
+  // midnight on its own: a tz'd dayjs keeps its offset through add(), so
+  // across a DST change the window would be an hour off.
+  const startDay = dayjs(today.format('YYYY-MM-DD'))
+    .subtract((today.day() + 6) % 7, 'day')
+    .format('YYYY-MM-DD');
+  const endDay = dayjs(startDay)
+    .add(weeks * 7, 'day')
+    .format('YYYY-MM-DD');
+  const start = dayjs.tz(startDay, PACIFIC);
+  const end = dayjs.tz(endDay, PACIFIC);
   const events = await deps.fetchGroupEvents({
     status: ['ACTIVE'],
     afterDateTime: start.toISOString(),
@@ -81,10 +92,10 @@ export async function groupCalendar(
     const day = pacificDay(event.dateTime);
     byDay.set(day, [...(byDay.get(day) ?? []), event]);
   }
-  const lastDay = end.subtract(1, 'day').format('YYYY-MM-DD');
-  const dates = calendarDates(start.format('YYYY-MM-DD'), lastDay);
+  const lastDay = dayjs(endDay).subtract(1, 'day').format('YYYY-MM-DD');
+  const dates = calendarDates(startDay, lastDay);
   return Array.from({ length: weeks * 7 }, (_, i) => {
-    const day = start.add(i, 'day').format('YYYY-MM-DD');
+    const day = dayjs(startDay).add(i, 'day').format('YYYY-MM-DD');
     const dayEvents = byDay.get(day) ?? [];
     return {
       day,

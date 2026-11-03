@@ -42,6 +42,7 @@ import {
   NOT_LINKED_MESSAGE,
   hostErrorPage,
   hostLoginPage,
+  hostLogoutUnconfirmedPage,
 } from './hostLayout.js';
 import {
   HOST_BASE,
@@ -65,6 +66,7 @@ const MEETUP_NO_VERIFIER = 'meetup';
 const MAX_SESSION_COOKIES = 3;
 const MAX_SESSION_COOKIE_CANDIDATES = 20;
 const SAFE_METHODS = new Set(['GET', 'HEAD']);
+const DISCORD_ID = /^[0-9]{17,20}$/;
 
 export interface HostMeetupOAuth {
   buildAuthUrl(state: string): string;
@@ -300,7 +302,10 @@ export function createHostRouter(deps: HostRouterDeps): express.Router {
     ).create({
       userId: resolution.meetupMemberId,
       username: displayName,
-      discordUserId: resolution.discordUserId ?? null,
+      // A malformed id would make a session isExtra can never read back.
+      discordUserId: DISCORD_ID.test(resolution.discordUserId ?? '')
+        ? resolution.discordUserId
+        : null,
       tier: resolution.tier,
       via,
     });
@@ -513,7 +518,9 @@ export function createHostRouter(deps: HostRouterDeps): express.Router {
       }
       const patch = {
         tier: outcome.tier,
-        discordUserId: outcome.discordUserId ?? null,
+        discordUserId: DISCORD_ID.test(outcome.discordUserId ?? '')
+          ? outcome.discordUserId
+          : null,
       };
       if (!(await store.markRoleChecked(sid, session, patch))) {
         signedOut(true);
@@ -562,8 +569,21 @@ export function createHostRouter(deps: HostRouterDeps): express.Router {
   });
 
   protectedRouter.post('/logout', (async (_req, res) => {
+    // Clear the cookie first, so the browser forgets it even if the store
+    // call below fails.
     res.append('Set-Cookie', clearCookie(HOST_SESSION_COOKIE, HOST_BASE));
-    await (await sessions()).destroy(hostLocals(res).sid);
+    try {
+      await (await sessions()).destroy(hostLocals(res).sid);
+    } catch (error: unknown) {
+      if (!(error instanceof CacheTimeoutError)) {
+        throw error;
+      }
+      // The browser forgot the cookie, but the server may still hold the
+      // session: say so, rather than the generic access-check text.
+      logger.warn('Host dashboard logout cache timed out');
+      send(res, 503, hostLogoutUnconfirmedPage(hostLocals(res).nonce));
+      return;
+    }
     res.redirect(303, '/host/login');
   }) as RequestHandler);
 
@@ -594,6 +614,7 @@ export function createHostRouter(deps: HostRouterDeps): express.Router {
     };
     const code = typeof status === 'number' ? status : statusCode;
     if (typeof code === 'number' && code >= 400 && code < 500) {
+      logger.warn(`Host dashboard request rejected: ${code}`);
       fail(res, 400);
       return;
     }

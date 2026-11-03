@@ -129,6 +129,8 @@ describe('host calendar', () => {
     );
     expect(res.text).toContain('Thanksgiving');
     expect(res.text).toContain('3 events');
+    // A past day shows no count: only upcoming events are read.
+    expect(res.text).not.toMatch(/<td class="cal past">(?:(?!<\/td>)[^])*Free/);
     expect(res.text).not.toContain('style=');
   });
 });
@@ -153,7 +155,7 @@ describe('host history', () => {
       'href="https://www.meetup.com/g/events/1/attendees/"',
     );
     // The 2025 event is outside the 12-month map.
-    expect(res.text).toContain('2 events in the last 12 months.');
+    expect(res.text).toContain('2 events in the past year shown.');
   });
 
   it('filters by type, and ignores an unknown one', async () => {

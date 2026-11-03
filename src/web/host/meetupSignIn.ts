@@ -45,6 +45,18 @@ export function buildHostMeetupAuthUrl(state: string): string {
     .toString();
 }
 
+const NAME_MAX = 100;
+
+/** A Meetup display name for the page header: control characters removed, trimmed, capped. */
+export function displayName(value: unknown): string {
+  if (typeof value !== 'string') {
+    return '';
+  }
+
+  const clean = value.replace(/[\u0000-\u001f\u007f-\u009f]/g, '').trim();
+  return [...clean].slice(0, NAME_MAX).join('');
+}
+
 /**
  * Who signed in: the member's own token is used for this one query and then
  * dropped (never stored; every Meetup action uses the organizer
@@ -68,15 +80,19 @@ export async function fetchMeetupSelf(
   if (!response.ok) {
     throw new Error(`Meetup self lookup failed: ${response.status}`);
   }
-  const body = (await response.json()) as {
-    data?: { self?: { id?: unknown; name?: unknown } | null };
-  };
-  const self = body.data?.self;
-  const id = typeof self?.id === 'string' ? self.id : String(self?.id ?? '');
+  let body: { data?: { self?: { id?: unknown; name?: unknown } | null } };
+  try {
+    body = JSON.parse(await response.text()) as typeof body;
+  } catch {
+    // A JSON SyntaxError quotes the body: replaced by fixed text.
+    throw new Error('Meetup self lookup returned no JSON');
+  }
+  const self = body?.data?.self;
+  // GraphQL IDs are strings; a number could have lost precision.
+  const id = typeof self?.id === 'string' ? self.id : '';
   if (!MEETUP_ID.test(id)) {
     throw new Error('Meetup self lookup returned no usable id');
   }
-  const name =
-    typeof self?.name === 'string' && self.name.trim() ? self.name : id;
+  const name = displayName(self?.name) || id;
   return { id, name };
 }

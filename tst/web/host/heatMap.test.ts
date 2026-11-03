@@ -31,7 +31,7 @@ describe('heatMap', () => {
     expect(out).toMatch(/class="hm3"[^>]*><title>2026-11-03/);
     expect(out).toMatch(/class="hm3"[^>]*><title>2026-11-04/);
     expect(out).toMatch(/class="hm4"[^>]*><title>2026-11-05: 7 events</);
-    expect(out).toContain('17 events in the last 12 months.');
+    expect(out).toContain('17 events in the past year shown.');
     expect(out).not.toContain('style=');
   });
 });

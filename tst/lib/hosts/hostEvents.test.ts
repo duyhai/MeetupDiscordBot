@@ -139,3 +139,26 @@ describe('toHostEvent', () => {
     ).toMatchObject({ type: 'outdoors', hosts: [{ id: '4242', name: 'Ann' }] });
   });
 });
+
+describe('groupCalendar across DST', () => {
+  it('asks Meetup for Pacific midnight at both ends of a fall-back window', async () => {
+    const fetchGroupEvents = vi.fn().mockResolvedValue([]);
+    // 2026-11-01 01:30 PDT, the morning clocks fall back.
+    const days = await groupCalendar({
+      fetchGroupEvents,
+      now: () => new Date('2026-11-01T08:30:00Z'),
+    });
+    expect(days[0].day).toBe('2026-10-26');
+    expect(days[55].day).toBe('2026-12-20');
+    const filter = fetchGroupEvents.mock.calls[0][0] as {
+      afterDateTime: string;
+      beforeDateTime: string;
+    };
+    expect(new Date(filter.afterDateTime).toISOString()).toBe(
+      '2026-10-26T07:00:00.000Z',
+    );
+    expect(new Date(filter.beforeDateTime).toISOString()).toBe(
+      '2026-12-21T08:00:00.000Z',
+    );
+  });
+});
