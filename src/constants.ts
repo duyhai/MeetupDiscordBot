@@ -25,6 +25,7 @@ export const GUEST_HOST_BLACKLIST: string[] = [
  */
 export const GUEST_HOST_MEETUP_BLACKLIST: string[] = [
   '182787593', // clem3ma
+  '474916426', // zenix0
 ];
 
 /** Title prefix of a regular host's event (approved by leadership). */
