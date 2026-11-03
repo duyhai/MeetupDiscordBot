@@ -101,8 +101,11 @@ and services.
   - If that write fails, the request still succeeds (the role check passed);
     the session keeps its previous expiry and only the error class is logged.
     Because `roleCheckedAt` was not written either, every later request
-    re-checks the role live with Discord until a write succeeds, so a lost
-    role still ends the session at once.
+    re-checks the role live with Discord until a write succeeds. A passed
+    check is then trusted in memory for 60 seconds per member
+    (`FAILED_WRITE_RECHECK_MS`, failure path only, after expiry and
+    revocation are read from Redis), so a lost role ends the session within
+    10 minutes plus that minute.
   - The cookie's `Max-Age` is 30 days, so the browser keeps it across
     restarts; the server-side TTL is the authority on the idle limit.
   - The role re-check, not the lifetime, bounds access after a role is

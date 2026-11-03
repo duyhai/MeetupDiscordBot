@@ -55,6 +55,16 @@ const SESSION_COOKIE_PATH = DASHBOARD_BASE;
 const OAUTH_TTL_SEC = 10 * 60;
 /** Most verified dash_sid values looked up in Redis per request. */
 const MAX_SESSION_COOKIES = 3;
+/**
+ * While the session write (roleCheckedAt plus the idle slide) keeps
+ * failing, a role check that passed is trusted for this long, per member,
+ * so a page of thumbnails does not make one forced Discord fetch per
+ * request. Only used on that failure path: a lost role still ends the
+ * session within ROLE_RECHECK_MS plus this.
+ */
+export const FAILED_WRITE_RECHECK_MS = 60_000;
+/** Bounds the map above; past it, expired entries go, then the oldest. */
+const MAX_FAILED_WRITE_ENTRIES = 1_000;
 /** Most distinct dash_sid values whose signature is checked per request. */
 const MAX_SESSION_COOKIE_CANDIDATES = 20;
 /** Everything else, OPTIONS included, needs the CSRF token. */
@@ -289,6 +299,40 @@ export function createDashboardRouter(deps: DashboardDeps): express.Router {
   };
 
   /**
+   * Member id -> when a role check passed whose session write then failed.
+   * Never extends a session: expiry and revocation are still read from
+   * Redis on every request, before this is consulted.
+   */
+  const checkedDespiteFailedWrite = new Map<string, number>();
+  const rememberCheckDespiteFailedWrite = (userId: string) => {
+    checkedDespiteFailedWrite.delete(userId);
+    if (checkedDespiteFailedWrite.size >= MAX_FAILED_WRITE_ENTRIES) {
+      for (const [id, at] of checkedDespiteFailedWrite) {
+        if (now() - at >= FAILED_WRITE_RECHECK_MS) {
+          checkedDespiteFailedWrite.delete(id);
+        }
+      }
+    }
+    if (checkedDespiteFailedWrite.size >= MAX_FAILED_WRITE_ENTRIES) {
+      // Insertion order: the first key is the oldest entry.
+      const [oldest] = checkedDespiteFailedWrite.keys();
+      checkedDespiteFailedWrite.delete(oldest);
+    }
+    checkedDespiteFailedWrite.set(userId, now());
+  };
+  const checkedRecentlyDespiteFailedWrite = (userId: string) => {
+    const at = checkedDespiteFailedWrite.get(userId);
+    if (at === undefined) {
+      return false;
+    }
+    if (now() - at < FAILED_WRITE_RECHECK_MS) {
+      return true;
+    }
+    checkedDespiteFailedWrite.delete(userId);
+    return false;
+  };
+
+  /**
    * The session behind `sid`, unless it is gone or its user was revoked
    * after it was created. A revoked session is destroyed: it can never come
    * back, so its cookie is ours to clear.
@@ -302,6 +346,7 @@ export function createDashboardRouter(deps: DashboardDeps): express.Router {
       return undefined;
     }
     if (await store.isRevoked(session)) {
+      checkedDespiteFailedWrite.delete(session.userId);
       await store.destroy(sid);
       return undefined;
     }
@@ -519,6 +564,7 @@ export function createDashboardRouter(deps: DashboardDeps): express.Router {
       if (allowed) {
         return 'allowed';
       }
+      checkedDespiteFailedWrite.delete(userId);
       // Every browser this member signed in from, not just this one.
       await (await sessions()).revokeUser(userId);
       audit({
@@ -558,7 +604,11 @@ export function createDashboardRouter(deps: DashboardDeps): express.Router {
       signedOut(stale);
       return;
     }
-    if (now() - session.roleCheckedAt >= ROLE_RECHECK_MS) {
+    // readSession has already read expiry and revocation from Redis.
+    if (
+      now() - session.roleCheckedAt >= ROLE_RECHECK_MS &&
+      !checkedRecentlyDespiteFailedWrite(session.userId)
+    ) {
       const outcome = await recheckRole(session.userId);
       if (outcome === 'unreachable') {
         fail(res, 503);
@@ -579,11 +629,14 @@ export function createDashboardRouter(deps: DashboardDeps): express.Router {
       // Also slides the 7-day idle window. The role check just passed, so
       // a failed write is no reason to refuse this request: the session
       // keeps its current expiry, and since roleCheckedAt was not written
-      // every request re-checks the role live until a write succeeds.
+      // the role is re-checked live, at most once per
+      // FAILED_WRITE_RECHECK_MS per member, until a write succeeds.
       let kept = true;
       try {
         kept = await store.markRoleChecked(sid, session);
+        checkedDespiteFailedWrite.delete(session.userId);
       } catch (error: unknown) {
+        rememberCheckDespiteFailedWrite(session.userId);
         const errorClass = error instanceof Error ? error.name : 'Error';
         logger.warn(
           `Dashboard session extension failed: ${errorClass}; roles are re-checked live until a write succeeds`,

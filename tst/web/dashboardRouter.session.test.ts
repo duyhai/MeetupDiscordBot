@@ -2,6 +2,7 @@ import express from 'express';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  FAILED_WRITE_RECHECK_MS,
   PUBLIC_ROUTE_PATHS,
   createDashboardRouter,
   httpsRedirectTarget,
@@ -395,31 +396,6 @@ describe('dashboard sliding sessions', () => {
     expect(sessionKeys(cache)).toHaveLength(1);
   });
 
-  it('after a failed extension the role is re-checked live, and a lost role still ends the session', async () => {
-    const checkAccess = vi.fn().mockResolvedValue(true);
-    const { req, cache, clock } = await slidingApp({ checkAccess });
-    const cookie = await signIn(req);
-    cache.set_existing = async () => {
-      throw new Error('down');
-    };
-    const atSignIn = checkAccess.mock.calls.length;
-    clock.now = ROLE_RECHECK_MS;
-    expect((await req.get('/dashboard').set('Cookie', cookie)).status).toBe(
-      200,
-    );
-    clock.now += 1;
-    expect((await req.get('/dashboard').set('Cookie', cookie)).status).toBe(
-      200,
-    );
-    // roleCheckedAt was never written, so each request asked Discord.
-    expect(checkAccess).toHaveBeenCalledTimes(atSignIn + 2);
-    checkAccess.mockResolvedValue(false);
-    clock.now += 1;
-    expect((await req.get('/dashboard').set('Cookie', cookie)).status).toBe(
-      403,
-    );
-  });
-
   it('a CSRF token from sign-in still works on day 29', async () => {
     const { req, clock } = await slidingApp();
     const cookie = await signIn(req);
@@ -439,6 +415,96 @@ describe('dashboard sliding sessions', () => {
       .type('form')
       .send({ _csrf: token });
     expect(out.status).toBe(303);
+  });
+});
+
+describe('dashboard role checks while session writes fail', () => {
+  const tokenFrom = (page: string) =>
+    /name="_csrf" value="([^"]+)"/.exec(page)?.[1] ?? '';
+
+  /** Signed in at 0; from then on every SET ... XX (the extension) throws. */
+  async function failingWrites(checkAccess = vi.fn().mockResolvedValue(true)) {
+    const clock = { now: 0 };
+    const cache = new ClockedCache(() => clock.now);
+    const app = await makeApp({
+      checkAccess,
+      now: () => clock.now,
+      cache: async () => cache,
+    });
+    const cookie = await signIn(app.req);
+    cache.set_existing = async () => {
+      throw new Error('down');
+    };
+    const get = async (c = cookie) =>
+      (await app.req.get('/dashboard').set('Cookie', c)).status;
+    return { ...app, cache, clock, cookie, checkAccess, get };
+  }
+
+  it('rapid requests inside the short window make one Discord fetch', async () => {
+    const { clock, checkAccess, get } = await failingWrites();
+    const atSignIn = checkAccess.mock.calls.length;
+    clock.now = ROLE_RECHECK_MS;
+    for (let i = 0; i < 20; i += 1) {
+      // eslint-disable-next-line no-await-in-loop -- one request at a time
+      expect(await get()).toBe(200);
+      clock.now += 1_000;
+    }
+    expect(FAILED_WRITE_RECHECK_MS).toBeGreaterThanOrEqual(30_000);
+    expect(FAILED_WRITE_RECHECK_MS).toBeLessThanOrEqual(60_000);
+    expect(checkAccess).toHaveBeenCalledTimes(atSignIn + 1);
+  });
+
+  it('a lost role still ends the session once the short window lapses', async () => {
+    const { clock, checkAccess, get } = await failingWrites();
+    const atSignIn = checkAccess.mock.calls.length;
+    clock.now = ROLE_RECHECK_MS;
+    expect(await get()).toBe(200);
+    checkAccess.mockResolvedValue(false);
+    clock.now += FAILED_WRITE_RECHECK_MS - 1;
+    expect(await get()).toBe(200);
+    clock.now += 1;
+    expect(await get()).toBe(403);
+    expect(checkAccess).toHaveBeenCalledTimes(atSignIn + 2);
+  });
+
+  it('a revoked session is refused while the short-window entry is fresh', async () => {
+    const { cache, clock, get } = await failingWrites();
+    clock.now = ROLE_RECHECK_MS;
+    expect(await get()).toBe(200);
+    clock.now += 1;
+    await new SessionStore(cache, () => clock.now).revokeUser(USER.id);
+    clock.now += 1;
+    expect(await get()).toBe(302);
+  });
+
+  it('a signed-out session is refused while the short-window entry is fresh', async () => {
+    const { req, clock, cookie, get } = await failingWrites();
+    clock.now = ROLE_RECHECK_MS;
+    const page = await req.get('/dashboard').set('Cookie', cookie);
+    expect(page.status).toBe(200);
+    const out = await req
+      .post('/dashboard/logout')
+      .set('Cookie', cookie)
+      .set('Origin', ORIGIN)
+      .type('form')
+      .send({ _csrf: tokenFrom(page.text) });
+    expect(out.status).toBe(303);
+    expect(await get()).toBe(302);
+  });
+
+  it('a successful extension leaves no short-window entry behind', async () => {
+    const checkAccess = vi.fn().mockResolvedValue(true);
+    let clock = 0;
+    const { req } = await makeApp({ checkAccess, now: () => clock });
+    const a = await signIn(req);
+    const b = await signIn(req);
+    clock = ROLE_RECHECK_MS;
+    // Browser A's re-check passes and its write succeeds.
+    expect((await req.get('/dashboard').set('Cookie', a)).status).toBe(200);
+    // Browser B's re-check is due a second later; the role is gone by then.
+    checkAccess.mockResolvedValue(false);
+    clock += 1_000;
+    expect((await req.get('/dashboard').set('Cookie', b)).status).toBe(403);
   });
 });
 
