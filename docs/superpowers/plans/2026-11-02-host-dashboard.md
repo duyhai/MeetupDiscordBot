@@ -255,15 +255,145 @@ Branch `feat/host-dashboard-signin` off `main`. No Meetup writes, no new Discord
 
 # PR 2: Create/copy, approval queue, promoted direct publish
 
-Detailed per-task steps get written when PR 1 merges; the decisions are fixed here.
+Branch `feat/host-dashboard-create` off `main` (after PR 1, duyhai/MeetupDiscordBot#128, merged).
 
-- **Task 0 (gated on Hai):** confirm the organizer credential can write: one `createEvent` with `publishStatus: DRAFT`, then `deleteEvent`, run as a Heroku one-off outside 18:00–19:00 UTC. If it fails, stop and report.
-- **`event_requests` table:** `id`, `meetup_member_id`, `discord_user_id` (nullable), `kind` (`fresh`/`copy`), `source_event_id`, `title`, `description`, `start_at`, `duration_min`, `rsvp_limit`, `guest_limit`, `featured_photo_id`, `venue_id`, `how_to_find_us`, `status` (`pending`/`approved`/`denied`/`publishing`/`published`/`failed`), `deny_reason`, `decided_by`, `decided_at`, `meetup_event_id`, `event_url`, `version`, timestamps; plus `event_request_events` append-only history.
-- **Create page** (`/host/create`, `/host/create?copy=<eventId>`): day picked from the calendar; fresh pre-fills `GUEST_HOST_EVENT_DESCRIPTION` (regular hosts get the Host Tip prepended, as the Discord flow does); copy only from the host's own past events (checked against `eventHosts`), keeps title minus prefix, description, duration, start time, RSVP settings, featured photo, venue id and how-to-find-us, no tip added.
-- **One publish path** `publishRequest(requestId)`: organizer credential, under a Redis lock `event-request-<id>`, status `pending → publishing` by compare-and-set before any Meetup call; prefix `GUEST_HOST_PREFIX` or `COMMUNITY_HOST_PREFIX` by the tier at submit time re-checked at publish; `eventHosts: [host]`; close RSVPs and re-apply `rsvpSettings`; `createEventWithPhotoFallback`. The created event id is written as soon as `createEvent` returns, so a retry continues from "created" instead of creating again; failure text says what was created and what to fix by hand.
-- **Queue** on the staff dashboard (`/dashboard/hosts/requests`): Moderators view; Approve / Deny (reason required) are 1.5 Leadership Team only, checked live; stale `version` refused.
-- **Promoted publish:** immediate `publishRequest`, then the plain alert. **Regular submit:** plain alert "new request". The Discord `/meetup_request_event` flow is untouched and does not appear in the queue (builder's call: it already has its own Approve/Deny message).
-- Tests: approve idempotency under concurrent clicks (two approvals → one `createEvent`), prefix per tier, copy fidelity, a host cannot copy someone else's event.
+## Task 0 result (2026-11-03, Hai's go-ahead)
+
+Run as a Heroku one-off by Hai at 19:3x UTC: the organizer credential created draft event 317276522 (`status: DRAFT`, `errors: []`), `deleteEvent` returned `{ success: true, errors: [] }`, and `event(317276522)` then read `null`. **The organizer credential can create and delete events.** `DeleteEventInput` is `{ eventId: ID!, removeFromCalendar: Boolean, updateSeries: Boolean }`.
+
+Schema read without auth (`api.meetup.com/gql-ext` introspection): `Event` has `duration`, `howToFindUs`, `venue { id }`, `featuredEventPhoto { id }`, `maxTickets`, `guestLimit`, `eventHosts`, `status`; `rsvpSettings` on `Event` is only open/close times. `CreateEventInput` takes `venueId`, `howToFindUs`, `featuredPhotoId`, `duration`, `rsvpSettings`.
+
+## Decisions (builder's calls, within the spec)
+
+- **One table, one status machine.** `pending → publishing → published | failed`, `pending → denied`, and `failed → publishing` (retry). A promoted host's request is inserted as `pending` and published at once by the same path; the queue never shows it unless it failed.
+- **Postgres compare-and-set is the only guard** against double publishing: `UPDATE … SET status = 'publishing' WHERE id = $1 AND status = ANY($allowed) AND version = $seen RETURNING *`. No Redis lock (the plan's `event-request-<id>` lock is dropped: the CAS alone admits one caller, and a lock that expires mid-publish would add a second path to reason about).
+- **A stuck `publishing`** (process died mid-publish) older than 10 minutes can be retried by leadership like `failed`; a younger one cannot.
+- **Resume, not repeat.** `meetup_event_id` is written the moment `createEvent` returns. A retry with an event id skips `createEvent` and only re-runs the RSVP steps.
+- **Times.** The host picks a date (YYYY-MM-DD, tomorrow through 365 days out, Pacific) and a start time (HH:MM, 15-minute steps); stored as `start_local` text `YYYY-MM-DDTHH:MM`, sent to Meetup as `startDateTime` like the Discord flow (Meetup reads it in the group's timezone). Duration: one of PT1H, PT1H30M, PT2H, PT2H30M, PT3H, PT4H, PT5H, PT6H.
+- **Title.** 1–(80 − prefix length) characters, no line breaks or control characters, leading `[Guest Host]`/`[Community Host]` tags stripped (`stripHostPrefix`).
+- **Fresh description** = `GUEST_HOST_EVENT_DESCRIPTION`, with a Host Tip line (`getRandomTip()`) prepended for regular hosts, as the Discord flow does. The host edits the details on Meetup after publishing (they are its event host). No description field on the form.
+- **Copy** keeps: title (prefix stripped), description, duration (if in the list, else PT2H), start time of day, `maxTickets → rsvpLimit` (if 1–200, else the template's), `guestLimit` (0–5, else the template's), `featuredEventPhoto.id`, `venue.id`, `howToFindUs`. No tip. Only from the signed-in host's own events (`eventHosts[].member.id` contains their Meetup id); anything else is a 404.
+- **Alerts** (`logAlert`, plain embed, no mentions): new regular request; promoted host published; publish failed (with what to fix). Approve/deny themselves go to the activity log.
+- **Discord `/meetup_request_event` stays untouched** and outside the queue.
+
+## File structure
+
+| File | Responsibility |
+|---|---|
+| `src/lib/repositories/postgresEventRequestRepository.ts` (new) | `event_requests` + append-only `event_request_events`; create, get, list, CAS transitions. |
+| `src/lib/hosts/eventRequest.ts` (new) | Form parsing/validation (`parseRequestForm`), copy fields from a Meetup event (`copyFromEvent`), the Meetup input (`createInputFor`). Pure. |
+| `src/lib/hosts/publishRequest.ts` (new) | `publishRequest(deps, id, actor)`: CAS, create (resume-aware), RSVP close + re-apply, record outcome, alert. |
+| `src/lib/client/meetup/queries.ts`, `gqlClient.ts`, `mutations.ts` (modify) | `getEventForCopy(eventId)`; `createEvent` payload also selects `errors`. |
+| `src/lib/client/meetup/createEventWithPhotoFallback.ts` (new), `src/commands/meetup/createEvent.ts` (modify) | `createEventWithPhotoFallback` moves out of the command file so the publish path shares it; the command imports it back. |
+| `src/web/host/createPage.ts` (new) | `GET/POST /host/create`, `GET /host/requests/:id`. |
+| `src/web/host/hostPages.ts` (modify) | Calendar "Host on this day" links, history "Copy" buttons, home "Your requests". |
+| `src/web/routes/hostRequests.ts` (new) | Staff queue `GET /dashboard/hosts/requests`, `POST …/:id/approve`, `…/:id/deny`, `…/:id/retry`. |
+| `src/web/host/hostDeps.ts`, `src/web/dashboardDeps.ts`, `src/web/routes/dashboardPages.ts`, `src/lib/reports/dashboardPaths.ts`, `src/web/pages.ts` (modify) | Wiring, nav link, paths, CSS. |
+
+### Task 1: Event request store
+
+**Files:** create `src/lib/repositories/postgresEventRequestRepository.ts`; test `tst/integration/postgresEventRequestRepository.test.ts`.
+
+**Interfaces (produces):**
+```ts
+export type EventRequestStatus = 'pending' | 'publishing' | 'published' | 'failed' | 'denied';
+export interface EventRequestFields {
+  kind: 'fresh' | 'copy'; sourceEventId: string | null;
+  title: string; description: string; startLocal: string; duration: string;
+  rsvpLimit: number; guestLimit: number;
+  featuredPhotoId: number | null; venueId: string | null; howToFindUs: string | null;
+}
+export interface EventRequest extends EventRequestFields {
+  id: string; meetupMemberId: string; discordUserId: string | null;
+  hostName: string; tier: 'regular' | 'promoted';
+  status: EventRequestStatus; denyReason: string | null; failure: string | null;
+  decidedBy: string | null; decidedAt: Date | null;
+  meetupEventId: string | null; eventUrl: string | null;
+  version: number; createdAt: Date; updatedAt: Date;
+}
+class PostgresEventRequestRepository {
+  static instance(): Promise<PostgresEventRequestRepository>;
+  create(input: EventRequestFields & { meetupMemberId; discordUserId; hostName; tier }): Promise<EventRequest>;
+  get(id: string): Promise<EventRequest | undefined>;           // non-numeric id → undefined
+  listForMember(meetupMemberId: string, limit = 20): Promise<EventRequest[]>; // newest first
+  listByStatus(statuses: EventRequestStatus[], limit = 100): Promise<EventRequest[]>; // oldest first
+  /** CAS: one caller wins. `stuckBefore`: a 'publishing' row last updated before it also counts as allowed. */
+  startPublishing(id, seenVersion, actor: string, from: ('pending'|'failed'|'publishing')[], stuckBefore?: Date): Promise<EventRequest | undefined>;
+  recordCreated(id, meetupEventId, eventUrl): Promise<void>;     // only while 'publishing'
+  finish(id, outcome: { status: 'published' } | { status: 'failed'; failure: string }): Promise<EventRequest>;
+  deny(id, seenVersion, actor, reason): Promise<EventRequest | undefined>; // pending only
+}
+```
+Every state change bumps `version`, sets `updated_at`, and inserts an `event_request_events` row (`request_id, action, actor, detail, version, at`) in the same transaction; history is append-only (trigger, as `promoted_host_events`). CHECKs: ids by pattern, status enum, title 1–80, deny reason 1–500, failure ≤ 1000, `start_local ~ '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$'`, `meetup_event_id` digits.
+
+- [ ] Tests (integration, :55432): create/get round trip; `startPublishing` twice concurrently with the same version → exactly one row back; wrong version → undefined; `from` excludes the current status → undefined; stuck `publishing` admitted only before `stuckBefore`; `recordCreated` outside `publishing` is a no-op; `deny` only from `pending`; history rows per change with the produced version; history UPDATE/DELETE refused; `listForMember` newest first, other members excluded.
+- [ ] FAIL → implement → PASS → commit.
+
+### Task 2: Request rules and Meetup reads
+
+**Files:** create `src/lib/hosts/eventRequest.ts`, `src/lib/client/meetup/createEventWithPhotoFallback.ts`; modify `queries.ts`, `gqlClient.ts`, `types.ts`, `mutations.ts`, `src/commands/meetup/createEvent.ts`; tests `tst/lib/hosts/eventRequest.test.ts`, `tst/lib/client/meetup/createEventWithPhotoFallback.test.ts` (move existing cases if any).
+
+**Interfaces (produces):**
+```ts
+export const DURATIONS = ['PT1H','PT1H30M','PT2H','PT2H30M','PT3H','PT4H','PT5H','PT6H'] as const;
+export type FormResult = { ok: true; value: { title; day; time; duration } } | { ok: false; errors: Partial<Record<'title'|'day'|'time'|'duration', string>> };
+export function parseRequestForm(body: Record<string, unknown> | undefined, tier: HostTier, today: string /*Pacific YYYY-MM-DD*/): FormResult;
+export interface CopySource { id; title; description; dateTime; duration; maxTickets; guestLimit; featuredPhotoId; venueId; howToFindUs; hostIds: string[] }
+export function copyFields(source: CopySource): Omit<EventRequestFields, 'startLocal'|'kind'|'sourceEventId'> & { time: string };
+export function freshFields(tier: HostTier, tip: string): Pick<EventRequestFields, 'description'|'rsvpLimit'|'guestLimit'|'featuredPhotoId'|'venueId'|'howToFindUs'>;
+export function createInputFor(req: EventRequest, tierAtPublish: HostTier): CreateEventInput; // prefix by tierAtPublish, eventHosts [Number(req.meetupMemberId)], template defaults
+GqlMeetupClient.getEventForCopy(eventId): Promise<CopySource | undefined>;
+```
+- [ ] Tests: title too long for the tier's prefix, newline, control chars, empty, prefix stripped; day today/past/>365 days refused, tomorrow accepted; time not on 15 minutes refused; unknown duration refused; arrays (repeated fields) refused; copy maps every field and falls back for out-of-range duration/limits; fresh adds the tip only for regular; `createInputFor` uses `[Community Host] ` for promoted, `[Guest Host] ` for regular, sets venue/howToFindUs only when present, `publishStatus: 'PUBLISHED'`; photo fallback behaviour unchanged.
+- [ ] FAIL → implement → PASS → commit.
+
+### Task 3: Publishing
+
+**Files:** create `src/lib/hosts/publishRequest.ts`; test `tst/lib/hosts/publishRequest.test.ts`.
+
+**Interfaces:**
+```ts
+export interface PublishDeps {
+  requests: Pick<PostgresEventRequestRepository, 'get'|'startPublishing'|'recordCreated'|'finish'>;
+  meetup: <T>(fn: (m: Pick<GqlMeetupClient,'createEvent'|'closeEventRsvps'|'editEvent'>) => Promise<T>) => Promise<T>; // organizer credential, NO 401 re-run of writes
+  tierOf: (meetupMemberId: string) => Promise<HostTier | 'not-a-host'>;
+  alert: (entry: LogEntry) => Promise<unknown>;
+  now: () => Date;
+}
+export type PublishOutcome = { code: 'published'; request } | { code: 'failed'; request } | { code: 'stale' } | { code: 'not-found' } | { code: 'not-a-host' };
+export function publishRequest(deps, id: string, seenVersion: number, actor: string, from: ('pending'|'failed'|'publishing')[]): Promise<PublishOutcome>;
+```
+Order: CAS (`startPublishing`, `stuckBefore = now − 10 min`) → `tierOf` (a member who is no longer a host → `finish failed` "no longer a host", alert) → if no `meetupEventId`: `createEventWithPhotoFallback`, then `recordCreated` at once → `closeEventRsvps` + `editEvent({ rsvpSettings })` → `finish published`. Any throw → `finish failed` with fixed text saying what exists ("Created <url> but the RSVP settings were not applied: set them on Meetup, then Retry" / "Nothing was created on Meetup: Retry"). `meetup` here must not reuse `withOrganizerMeetup`'s 401 re-run around writes: get the token once, one call each; a 401 is a failure (retry is safe because of resume).
+- [ ] Tests: two concurrent publishes of one request → one `createEvent`; resume with an event id skips `createEvent`; prefix follows the tier at publish (promoted→regular demotion between submit and approve gives `[Guest Host] `); createEvent throws → failed "Nothing was created"; RSVP step throws → failed naming the URL; not-a-host → failed, no Meetup call; alert on failure, none on success from the queue (the route alerts), no mentions.
+- [ ] FAIL → implement → PASS → commit.
+
+### Task 4: Host create flow
+
+**Files:** create `src/web/host/createPage.ts`; modify `hostPages.ts`, `hostDeps.ts`, `pages.ts` (CSS); tests `tst/web/host/createPage.test.ts`, `hostPages.test.ts` additions.
+
+- `GET /host/create?day=YYYY-MM-DD` (fresh) and `GET /host/create?copy=<eventId>` (copy: 404 unless the host's own past or upcoming event). Form: title, date, start time (select, 15-minute steps), duration (select), for copy a read-only summary of what is copied. Submit button text: regular "Send for approval", promoted "Publish on Meetup".
+- `POST /host/create` (router CSRF guard already applies): re-validate; copy re-reads the source from Meetup and re-checks ownership; insert. Regular → alert "New event request from <name>: <title> on <date> — review at /dashboard/hosts/requests", redirect to `/host/requests/:id`. Promoted → `publishRequest` at once, redirect to `/host/requests/:id`.
+- At most 5 `pending` requests per host (refused with a message); the router's action rate limit covers bursts.
+- `GET /host/requests/:id`: only the owner's (else 404). Shows status, deny reason, failure, link to the Meetup event when published, attendance link not needed.
+- Home: "Your requests" (latest 10) with status pills: pending (coral "Waiting for approval"), publishing, published (green, link), denied (coral, reason), failed (coral, "Leadership has been told").
+- Calendar day list and future cells: "Host on this day" → `/host/create?day=…`. History rows: "Copy" → `/host/create?copy=<id>`.
+- [ ] Tests: hostile title escaped on every page; copy of someone else's event 404 (GET and POST); POST without CSRF 403; regular creates pending + alert (no `<@&` and no mentions), promoted publishes once; 6th pending refused; request page of another host 404; form errors re-render with the host's input escaped; 360 px no sideways scroll (browser check in Task 6).
+- [ ] FAIL → implement → PASS → commit.
+
+### Task 5: Leadership queue on the staff dashboard
+
+**Files:** create `src/web/routes/hostRequests.ts`; modify `dashboardPaths.ts` (`hostRequests: '/hosts/requests'`, `hostRequestAction: '/hosts/requests/:id/:action'`), `dashboardPages.ts` (deps `eventRequests`, `publish`), `pages.ts` (nav "Host requests"), `dashboardDeps.ts`; tests `tst/web/dashboardRouter.hostRequests.test.ts`, access-matrix additions.
+
+- GET (Moderators and Leadership): pending (oldest first), then failed and stuck publishing, then the last 20 decided. Each card: host name (`memberText`), tier, title, date/time, duration, kind (fresh / copy of <link>), submitted, hosted-event count not needed. Buttons only when `leadershipOf(...) === 'leader'`; Moderators see "Only the 1.5 Leadership Team can approve or deny."
+- POST approve (`from ['pending']`), retry (`from ['failed','publishing']`), deny (reason 1–500 required): live Leadership check with `withDeadline(LEADERSHIP_CHECK_DEADLINE_MS)` exactly as `workspaceActions.ts`; refusal → `?result=not-leadership|leadership-unavailable`, throttled refusal audit; `version` form field; stale → 409 page; publish runs under `withDeadline(WORKSPACE_REQUEST_DEADLINE_MS)` (on timeout the request stays `publishing`; the page says so and the stuck rule allows a retry after 10 minutes). Activity log line for approve/deny/retry (actor `<@id>`, request id, title) with no pings.
+- [ ] Tests: Moderator GET 200 without buttons; Moderator POST → not-leadership, nothing changed; Leadership approve → one `createEvent`; double approve (same version) → second 409; deny without reason → refused; Discord unreachable → leadership-unavailable; access matrix covers the new routes.
+- [ ] FAIL → implement → PASS → commit.
+
+### Task 6: Wiring and checks
+
+- Production deps (`hostDeps.ts`, `dashboardDeps.ts`): repository instance, organizer `meetup` runner, `tierOf` via `resolveHost`, `logAlert` via the Discord client (`false` when the client is not ready; publishing never waits on Discord).
+- Full `yarn test`, `yarn lint`, `tsc`, integration suite on :55432/:56379. Browser check at 360/1280, light and dark: create (fresh and copy), request page, home requests, staff queue.
+- [ ] Commit; per-task reviewers; fix what they confirm; open PR with the attribution line.
 
 # PR 3: Promotion, comments, announcing
 
