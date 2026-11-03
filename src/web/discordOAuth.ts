@@ -18,18 +18,23 @@ const SNOWFLAKE = /^\d{17,20}$/;
 export const dashboardRedirectUri = () =>
   `${BASE_DISCORD_BOT_URL}/dashboard/auth/callback`;
 
-const provider = () =>
+/** The host dashboard's Discord sign-in; registered in the portal like the staff one. */
+export const hostRedirectUri = () =>
+  `${BASE_DISCORD_BOT_URL}/host/auth/discord/callback`;
+
+const provider = (redirectUri: string) =>
   new Discord(
     Configuration.discord.oauthClientId,
     Configuration.discord.oauthSecret,
-    dashboardRedirectUri(),
+    redirectUri,
   );
 
 export function buildDashboardLoginUrl(
   state: string,
   codeVerifier: string,
+  redirectUri: string = dashboardRedirectUri(),
 ): string {
-  return provider()
+  return provider(redirectUri)
     .createAuthorizationURL(state, codeVerifier, ['identify'])
     .toString();
 }
@@ -43,13 +48,14 @@ export function buildDashboardLoginUrl(
 export async function exchangeDashboardCode(
   code: string,
   codeVerifier: string,
+  redirectUri: string = dashboardRedirectUri(),
 ): Promise<string> {
   const body = new URLSearchParams({
     client_id: Configuration.discord.oauthClientId,
     client_secret: Configuration.discord.oauthSecret,
     grant_type: 'authorization_code',
     code,
-    redirect_uri: dashboardRedirectUri(),
+    redirect_uri: redirectUri,
     code_verifier: codeVerifier,
   });
   const response = await boundedFetch(

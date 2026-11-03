@@ -304,6 +304,21 @@ describe('Meetup callback: host dashboard sign-in', () => {
   });
 });
 
+describe('host dashboard mount', () => {
+  it('mounts the host dashboard ahead of the generic 404 page, with the framing headers', async () => {
+    for (const path of ['/host', '/host/login', '/host/x']) {
+      // eslint-disable-next-line no-await-in-loop -- one path at a time
+      const res = await http.get(path).set('X-Forwarded-Proto', 'https');
+      expect([200, 302, 503], path).toContain(res.status);
+      expect(res.headers['x-frame-options'], path).toBe('DENY');
+      expect(res.headers['content-security-policy'], path).toContain(
+        "frame-ancestors 'none'",
+      );
+      expect(res.headers['cache-control'], path).toBe('no-store');
+    }
+  });
+});
+
 describe('staff dashboard mount', () => {
   it('mounts the dashboard ahead of the generic 404 page', async () => {
     // Heroku's router marks HTTPS; without it a configured dashboard

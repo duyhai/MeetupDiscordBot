@@ -11,6 +11,7 @@ import { startIdentityDigestScheduler } from './lib/helpers/identity/digest.js';
 import { registerMemberLeaveListener } from './lib/helpers/memberLeave.js';
 import { startReportBuildScheduler } from './lib/reports/buildJob.js';
 import { setDashboardClient } from './web/dashboardDeps.js';
+import { setHostClient } from './web/host/hostDeps.js';
 
 const logger = new Logger({ name: 'MeetupBot' });
 
@@ -59,6 +60,7 @@ client.once('clientReady', async () => {
   // client their failures reach nobody. Hand it over now that we can post.
   setOAuthAlertClient(client);
   setDashboardClient(client);
+  setHostClient(client);
 
   logger.info('Bot started');
 });
