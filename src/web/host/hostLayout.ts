@@ -95,7 +95,7 @@ export function hostLoginPage(
 
 /**
  * A logout whose server-side delete timed out: the cookie is cleared, but
- * the session may live on in Redis until it expires (at most 12 hours).
+ * the session may live on in Redis until its 7-day idle limit.
  */
 export function hostLogoutUnconfirmedPage(nonce: string): string {
   return hostLayout({

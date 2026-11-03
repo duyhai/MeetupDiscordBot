@@ -201,7 +201,7 @@ describe('dashboard sign-in', () => {
     );
   });
 
-  it('sets the session cookie with all attributes and a 12-hour Max-Age', async () => {
+  it('sets the session cookie with all attributes and a 30-day Max-Age', async () => {
     const { req } = await makeApp();
     const { state, oauthCookie } = await startSignIn(req);
     const cb = await req
@@ -213,7 +213,7 @@ describe('dashboard sign-in', () => {
       c.startsWith('dash_sid='),
     );
     expect(sid).toMatch(
-      /; Path=\/dashboard; HttpOnly; Secure; SameSite=Lax; Max-Age=43200$/,
+      /; Path=\/dashboard; HttpOnly; Secure; SameSite=Lax; Max-Age=2592000$/,
     );
   });
 

@@ -30,7 +30,7 @@ import { openOAuthCookie, sealOAuthCookie } from '../oauthCookie.js';
 import { FixedWindowLimiter } from '../rateLimit.js';
 import {
   ROLE_RECHECK_MS,
-  SESSION_TTL_SEC,
+  SESSION_MAX_SEC,
   SessionStore,
   safeEqual,
   signSessionId,
@@ -314,7 +314,7 @@ export function createHostRouter(deps: HostRouterDeps): express.Router {
       serializeCookie(
         HOST_SESSION_COOKIE,
         signSessionId(sid, deps.sessionSecret, HOST_SID_DOMAIN),
-        { path: HOST_BASE, maxAgeSec: SESSION_TTL_SEC },
+        { path: HOST_BASE, maxAgeSec: SESSION_MAX_SEC },
       ),
     );
     audit({

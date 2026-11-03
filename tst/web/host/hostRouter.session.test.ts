@@ -8,6 +8,7 @@ import {
   signInWithDiscord,
   signInWithMeetup,
 } from './hostHarness.js';
+import { SESSION_MAX_SEC } from '../../../src/web/session.js';
 
 afterEach(closeServers);
 
@@ -121,11 +122,13 @@ describe('host tier re-check', () => {
     expect(resolve.mock.calls.length).toBeGreaterThanOrEqual(2);
   });
 
-  it('a session expires 12 hours after sign-in', async () => {
+  it('a session ends 30 days after sign-in, however it is used', async () => {
     let now = 0;
     const { req } = await makeHostApp({ now: () => now, pages: echoTier });
     const sid = await signInWithDiscord(req);
-    now = 12 * 60 * 60 * 1000;
+    now = SESSION_MAX_SEC * 1000 - TEN_MIN;
+    expect((await req.get('/host').set('Cookie', sid)).status).toBe(200);
+    now = SESSION_MAX_SEC * 1000;
     expect(locationOf(await req.get('/host').set('Cookie', sid)).pathname).toBe(
       '/host/login',
     );

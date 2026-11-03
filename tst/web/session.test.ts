@@ -4,7 +4,8 @@ import { describe, expect, it } from 'vitest';
 import {
   DASHBOARD_SESSION_OPTIONS,
   DashboardSession,
-  SESSION_TTL_SEC,
+  SESSION_IDLE_SEC,
+  SESSION_MAX_SEC,
   SessionStore,
   SessionStoreOptions,
   VALID_AFTER_TTL_SEC,
@@ -15,7 +16,7 @@ import {
 } from '../../src/web/session.js';
 import { openOAuthCookie, sealOAuthCookie } from '../../src/web/oauthCookie.js';
 import { KeyValueCache } from '../../src/lib/cache/base.js';
-import { FakeCache } from './fakeCache.js';
+import { ClockedCache, FakeCache } from './fakeCache.js';
 
 const SECRET = 'x'.repeat(48);
 
@@ -85,7 +86,7 @@ describe('safeEqual', () => {
 });
 
 describe('SessionStore', () => {
-  it('creates a session with fresh random ids and a 12-hour TTL', async () => {
+  it('creates a session with fresh random ids and a 7-day idle TTL', async () => {
     const cache = new FakeCache();
     const store = new SessionStore(cache, () => 1_000);
     const a = await store.create({ userId: '1', username: 'A' });
@@ -93,9 +94,10 @@ describe('SessionStore', () => {
     expect(a.sid).not.toBe(b.sid);
     expect(a.session.csrfToken).not.toBe(b.session.csrfToken);
     expect(a.session.csrfToken.length).toBeGreaterThanOrEqual(43);
+    expect(SESSION_IDLE_SEC).toBe(7 * 24 * 60 * 60);
     expect([...cache.ttls.values()]).toEqual([
-      SESSION_TTL_SEC,
-      SESSION_TTL_SEC,
+      SESSION_IDLE_SEC,
+      SESSION_IDLE_SEC,
     ]);
     await expect(store.get(a.sid)).resolves.toEqual(a.session);
   });
@@ -111,25 +113,93 @@ describe('SessionStore', () => {
     );
   });
 
-  it('expires 12 hours after creation even if the cache still holds it', async () => {
+  it('expires 30 days after creation even if the cache still holds it', async () => {
     let now = 0;
     const cache = new FakeCache();
     const store = new SessionStore(cache, () => now);
     const { sid } = await store.create({ userId: '1', username: 'A' });
-    now = SESSION_TTL_SEC * 1000;
+    expect(SESSION_MAX_SEC).toBe(30 * 24 * 60 * 60);
+    now = SESSION_MAX_SEC * 1000 - 1;
+    await expect(store.get(sid)).resolves.toBeDefined();
+    now = SESSION_MAX_SEC * 1000;
     await expect(store.get(sid)).resolves.toBeUndefined();
     expect(cache.values.size).toBe(0);
   });
 
-  it('marks the role check without extending the lifetime', async () => {
+  it('is gone after 7 days without a role-check write', async () => {
+    let now = 0;
+    const cache = new ClockedCache(() => now);
+    const store = new SessionStore(cache, () => now);
+    const { sid } = await store.create({ userId: '1', username: 'A' });
+    now = SESSION_IDLE_SEC * 1000 - 1;
+    await expect(store.get(sid)).resolves.toBeDefined();
+    now = SESSION_IDLE_SEC * 1000;
+    await expect(store.get(sid)).resolves.toBeUndefined();
+  });
+
+  it('the role-check write slides the idle window to a fresh 7 days', async () => {
+    let now = 0;
+    const cache = new ClockedCache(() => now);
+    const store = new SessionStore(cache, () => now);
+    const { sid, session } = await store.create({ userId: '1', username: 'A' });
+    now = 6 * 24 * 60 * 60 * 1000;
+    await expect(store.markRoleChecked(sid, session)).resolves.toBe(true);
+    expect((await store.get(sid))?.roleCheckedAt).toBe(now);
+    expect([...cache.ttls.values()]).toEqual([SESSION_IDLE_SEC]);
+    // Past the first 7 days, inside the slid window.
+    now = 12 * 24 * 60 * 60 * 1000;
+    await expect(store.get(sid)).resolves.toBeDefined();
+    now = 13 * 24 * 60 * 60 * 1000;
+    await expect(store.get(sid)).resolves.toBeUndefined();
+  });
+
+  it('never slides the key past 30 days from sign-in', async () => {
+    let now = 0;
+    const cache = new ClockedCache(() => now);
+    const store = new SessionStore(cache, () => now);
+    const { sid } = await store.create({ userId: '1', username: 'A' });
+    // Active every 6 days, then once more a day before the cap.
+    for (const day of [6, 12, 18, 24, 29]) {
+      now = day * 24 * 60 * 60 * 1000;
+      // eslint-disable-next-line no-await-in-loop -- one request at a time
+      const session = await store.get(sid);
+      if (!session) {
+        throw new Error(`session gone on day ${day}`);
+      }
+      // eslint-disable-next-line no-await-in-loop -- one request at a time
+      await store.markRoleChecked(sid, session);
+    }
+    expect([...cache.ttls.values()]).toEqual([24 * 60 * 60]);
+    now = SESSION_MAX_SEC * 1000 - 1;
+    await expect(store.get(sid)).resolves.toBeDefined();
+    // The key itself is gone at the cap, not just refused by the createdAt check.
+    now = SESSION_MAX_SEC * 1000;
+    expect(cache.values.size).toBe(1);
+    await expect(cache.get([...cache.values.keys()][0])).resolves.toBe(
+      undefined,
+    );
+  });
+
+  it('a role-check write after the cap returns false even if the delete fails', async () => {
     let now = 0;
     const cache = new FakeCache();
     const store = new SessionStore(cache, () => now);
     const { sid, session } = await store.create({ userId: '1', username: 'A' });
-    now = 60 * 60 * 1000;
-    await store.markRoleChecked(sid, session);
-    expect((await store.get(sid))?.roleCheckedAt).toBe(now);
-    expect([...cache.ttls.values()]).toEqual([SESSION_TTL_SEC - 3600]);
+    cache.remove = async () => {
+      throw new Error('down');
+    };
+    now = SESSION_MAX_SEC * 1000;
+    await expect(store.markRoleChecked(sid, session)).resolves.toBe(false);
+  });
+
+  it('a role-check write after the cap destroys the session', async () => {
+    let now = 0;
+    const cache = new FakeCache();
+    const store = new SessionStore(cache, () => now);
+    const { sid, session } = await store.create({ userId: '1', username: 'A' });
+    now = SESSION_MAX_SEC * 1000;
+    await expect(store.markRoleChecked(sid, session)).resolves.toBe(false);
+    expect(cache.values.size).toBe(0);
   });
 
   it('does not resurrect a session destroyed during the re-check', async () => {
@@ -220,10 +290,10 @@ describe('SessionStore', () => {
 describe('SessionStore revocation', () => {
   const ID = '123456789012345678';
 
-  it('revokeUser marks the user with the TTL of a session plus a minute', async () => {
+  it('revokeUser marks the user with the longest session lifetime plus a minute', async () => {
     const cache = new FakeCache();
     await new SessionStore(cache, () => 5_000).revokeUser(ID);
-    expect(VALID_AFTER_TTL_SEC).toBe(SESSION_TTL_SEC + 60);
+    expect(VALID_AFTER_TTL_SEC).toBe(SESSION_MAX_SEC + 60);
     expect(validAfterKey(ID)).toBe(`dashboard-user-valid-after-${ID}`);
     expect(cache.values.get(validAfterKey(ID))).toBe('5000');
     expect(cache.ttls.get(validAfterKey(ID))).toBe(VALID_AFTER_TTL_SEC);
@@ -264,6 +334,18 @@ describe('SessionStore revocation', () => {
   it('isRevoked fails closed on a session whose user id is not a Discord id', async () => {
     const store = new SessionStore(new FakeCache(), () => 1_000);
     const { session } = await store.create({ userId: '1', username: 'A' });
+    await expect(store.isRevoked(session)).resolves.toBe(true);
+  });
+
+  it('the mark still ends a session left idle for 6 days after it was set', async () => {
+    let now = 1_000;
+    const cache = new ClockedCache(() => now);
+    const store = new SessionStore(cache, () => now);
+    const { sid, session } = await store.create({ userId: ID, username: 'A' });
+    now += 1;
+    await store.revokeUser(ID);
+    now += 6 * 24 * 60 * 60 * 1000;
+    await expect(store.get(sid)).resolves.toBeDefined();
     await expect(store.isRevoked(session)).resolves.toBe(true);
   });
 

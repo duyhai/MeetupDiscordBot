@@ -3,14 +3,34 @@ import crypto from 'crypto';
 import { KeyValueCache } from '../lib/cache/base.js';
 
 export const SESSION_COOKIE = 'dash_sid';
-export const SESSION_TTL_SEC = 12 * 60 * 60;
-/** Losing the role locks someone out within this long. */
+/**
+ * A sign-in ends after this long without use. Each role re-check slides the
+ * window, so in practice the limit is this minus up to ROLE_RECHECK_MS.
+ */
+export const SESSION_IDLE_SEC = 7 * 24 * 60 * 60;
+/** No sign-in lasts longer than this from when it was made, however used. */
+export const SESSION_MAX_SEC = 30 * 24 * 60 * 60;
+/**
+ * Losing the role locks someone out within this long. This, not the session
+ * lifetime, is what bounds access after a role is taken away.
+ */
 export const ROLE_RECHECK_MS = 10 * 60 * 1000;
 /**
  * A revocation mark outlives every session it can end: once it expires, any
  * session created before it has expired too.
  */
-export const VALID_AFTER_TTL_SEC = SESSION_TTL_SEC + 60;
+export const VALID_AFTER_TTL_SEC = SESSION_MAX_SEC + 60;
+
+/**
+ * Seconds a session key should live from `at`: the idle window, cut short
+ * so it never outlives the absolute cap. Zero or less once the cap is hit.
+ */
+export function sessionKeyTtlSec(createdAt: number, at: number): number {
+  const remainingSec = Math.ceil(
+    (createdAt + SESSION_MAX_SEC * 1000 - at) / 1000,
+  );
+  return Math.min(SESSION_IDLE_SEC, remainingSec);
+}
 
 const DISCORD_ID = /^[0-9]{17,20}$/;
 
@@ -45,7 +65,7 @@ export interface DashboardSession {
   userId: string;
   username: string;
   csrfToken: string;
-  /** Epoch ms. The lifetime is absolute from here, never extended. */
+  /** Epoch ms. SESSION_MAX_SEC from here is the hard end, never extended. */
   createdAt: number;
   roleCheckedAt: number;
 }
@@ -58,6 +78,10 @@ const randomToken = () => crypto.randomBytes(32).toString('base64url');
  */
 const hashOf = (sid: string) =>
   crypto.createHash('sha256').update(sid).digest('hex');
+
+/** The staff dashboard's Redis key for a session id. */
+export const sessionKey = (sid: string) =>
+  `${DASHBOARD_SESSION_OPTIONS.keyPrefix}${hashOf(sid)}`;
 
 /**
  * The `sid:` prefix separates this MAC from the OAuth cookie's (`oauth:`),
@@ -157,7 +181,7 @@ export class SessionStore<S extends DashboardSession = DashboardSession> {
     await this.cache.set(
       this.key(sid),
       JSON.stringify(session),
-      SESSION_TTL_SEC,
+      sessionKeyTtlSec(at, at),
     );
     return { sid, session };
   }
@@ -180,7 +204,7 @@ export class SessionStore<S extends DashboardSession = DashboardSession> {
     ) {
       return undefined;
     }
-    if (this.now() - parsed.createdAt >= SESSION_TTL_SEC * 1000) {
+    if (this.now() - parsed.createdAt >= SESSION_MAX_SEC * 1000) {
       await this.destroy(sid);
       return undefined;
     }
@@ -188,6 +212,11 @@ export class SessionStore<S extends DashboardSession = DashboardSession> {
   }
 
   /**
+   * Records the role check and slides the idle window: the key lives
+   * another SESSION_IDLE_SEC, never past createdAt + SESSION_MAX_SEC. This
+   * is the only write that extends a session, so it happens at most once
+   * per ROLE_RECHECK_MS.
+   *
    * One SET ... XX: a logout (or revocation) that deleted the key before this
    * write is never undone, and one that lands after it still deletes the key.
    * There is no read first, so there is no window between check and write.
@@ -200,11 +229,11 @@ export class SessionStore<S extends DashboardSession = DashboardSession> {
     patch: Partial<Omit<S, keyof DashboardSession>> = {},
   ): Promise<boolean> {
     const at = this.now();
-    const remainingSec = Math.ceil(
-      (session.createdAt + SESSION_TTL_SEC * 1000 - at) / 1000,
-    );
-    if (remainingSec <= 0) {
-      await this.destroy(sid);
+    const ttlSec = sessionKeyTtlSec(session.createdAt, at);
+    if (ttlSec <= 0) {
+      // Tidy-up only: the key's TTL already ends at the cap, so a failed
+      // delete must not fail the request.
+      this.destroy(sid).catch(() => undefined);
       return false;
     }
     return this.cache.set_existing(
@@ -220,7 +249,7 @@ export class SessionStore<S extends DashboardSession = DashboardSession> {
         createdAt: session.createdAt,
         roleCheckedAt: at,
       }),
-      remainingSec,
+      ttlSec,
     );
   }
 
