@@ -203,6 +203,8 @@ describe('localUrl', () => {
       '/dashboard/hall-of-fame/2026-09',
       '/dashboard/identity?platform=meetup&member=a+b',
       '/dashboard/x?y=%22',
+      '/host',
+      '/host/history?type=games',
     ]) {
       expect(localUrl(ok).href).toBe(ok);
     }
@@ -226,6 +228,10 @@ describe('localUrl', () => {
       '/dashboard\\x',
       '/dashboard/x#y',
       ' /dashboard',
+      '/hostx',
+      '/host/../dashboard',
+      '/host//x',
+      '/connect/meetup',
       '',
       7 as unknown as string,
     ]) {

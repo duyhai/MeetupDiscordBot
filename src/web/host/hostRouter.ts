@@ -1,0 +1,607 @@
+import crypto from 'crypto';
+import express, {
+  ErrorRequestHandler,
+  NextFunction,
+  Request,
+  RequestHandler,
+  Response,
+} from 'express';
+import { generateCodeVerifier, generateState } from 'arctic';
+import { Logger } from 'tslog';
+
+import { KeyValueCache } from '../../lib/cache/base.js';
+import type {
+  HostIdentity,
+  HostResolution,
+} from '../../lib/hosts/eligibility.js';
+import { LogEntry } from '../../lib/helpers/discordLogger.js';
+import {
+  clearCookie,
+  parseCookieValues,
+  parseCookies,
+  serializeCookie,
+} from '../cookies.js';
+import {
+  DashboardOAuth,
+  baseSecurityHeaders,
+  httpsRedirectTarget,
+} from '../dashboardRouter.js';
+import { openOAuthCookie, sealOAuthCookie } from '../oauthCookie.js';
+import { FixedWindowLimiter } from '../rateLimit.js';
+import {
+  ROLE_RECHECK_MS,
+  SESSION_TTL_SEC,
+  SessionStore,
+  safeEqual,
+  signSessionId,
+  verifySignedSessionId,
+} from '../session.js';
+import { CacheTimeoutError } from '../timedCache.js';
+import {
+  HostErrorStatus,
+  NOT_LINKED_MESSAGE,
+  hostErrorPage,
+  hostLoginPage,
+} from './hostLayout.js';
+import {
+  HOST_BASE,
+  HOST_OAUTH_DOMAIN,
+  HOST_SESSION_COOKIE,
+  HOST_SESSION_OPTIONS,
+  HOST_SID_DOMAIN,
+  HostSession,
+} from './hostSession.js';
+import { isHostState, newHostState } from './meetupSignIn.js';
+
+const logger = new Logger({ name: 'hostDashboard' });
+
+/** One cookie per provider, so neither callback can consume the other's. */
+export const HOST_DISCORD_OAUTH_COOKIE = 'host_oauth_discord';
+export const HOST_MEETUP_OAUTH_COOKIE = 'host_oauth_meetup';
+const OAUTH_COOKIE_PATH = '/host/auth';
+const OAUTH_TTL_SEC = 10 * 60;
+/** The Meetup flow has no PKCE verifier; the sealed cookie needs a non-empty one. */
+const MEETUP_NO_VERIFIER = 'meetup';
+const MAX_SESSION_COOKIES = 3;
+const MAX_SESSION_COOKIE_CANDIDATES = 20;
+const SAFE_METHODS = new Set(['GET', 'HEAD']);
+
+export interface HostMeetupOAuth {
+  buildAuthUrl(state: string): string;
+  /** The member's access token; used once, by fetchSelf, and dropped. */
+  exchangeCode(code: string): Promise<string>;
+  fetchSelf(accessToken: string): Promise<{ id: string; name: string }>;
+}
+
+export interface HostRouterDeps {
+  /** Sessions only: nothing writes here before a host has authenticated. */
+  cache: () => Promise<KeyValueCache>;
+  /** Throws when Discord, Postgres or Meetup cannot answer. */
+  resolve: (who: HostIdentity) => Promise<HostResolution>;
+  /** The staff dashboard's Discord OAuth, on the host redirect URI. */
+  discord: DashboardOAuth;
+  meetup: HostMeetupOAuth;
+  sessionSecret: string;
+  /** The only Origin a POST may carry. */
+  origin: string;
+  requireHttps?: boolean;
+  audit: (entry: LogEntry) => Promise<unknown>;
+  now?: () => number;
+  loginLimiter?: FixedWindowLimiter; // default 10 per minute per IP
+  actionLimiter?: FixedWindowLimiter; // default 30 per minute per host
+  /** Caps "sign-in refused" audit posts; default 1 per hour per person. */
+  refusedAuditLimiter?: FixedWindowLimiter;
+  /**
+   * The host pages. Mounted AFTER the session gate and AFTER the
+   * unsafe-method guard (rate limit, Origin, Sec-Fetch-Site, CSRF).
+   */
+  pages?: (router: express.Router) => void;
+}
+
+interface Locals {
+  nonce: string;
+  session?: HostSession;
+  sid?: string;
+}
+
+const locals = (res: Response) => res.locals as Locals;
+
+/** What the gate leaves for a host page; throws outside the gate (fails closed). */
+export function hostLocals(res: Response): {
+  session: HostSession;
+  sid: string;
+  nonce: string;
+} {
+  const { session, sid, nonce } = locals(res);
+  if (!session || !sid) {
+    throw new Error('hostLocals read outside the host session gate');
+  }
+  return { session, sid, nonce };
+}
+
+function send(res: Response, status: number, body: string) {
+  res.status(status).type('html').send(body);
+}
+
+function fail(res: Response, status: HostErrorStatus, message?: string) {
+  if (!locals(res).nonce) {
+    locals(res).nonce = crypto.randomBytes(16).toString('base64');
+  }
+  send(res, status, hostErrorPage(status, locals(res).nonce, message));
+}
+
+/** Who a refused sign-in was, for the audit line: ids only, never a name. */
+function who(identity: HostIdentity): string {
+  return 'discordUserId' in identity
+    ? `<@${identity.discordUserId}>`
+    : `Meetup member ${identity.meetupMemberId}`;
+}
+
+export function createHostRouter(deps: HostRouterDeps): express.Router {
+  const now = deps.now ?? Date.now;
+  const loginLimiter = deps.loginLimiter ?? new FixedWindowLimiter(10, 60_000);
+  const actionLimiter =
+    deps.actionLimiter ?? new FixedWindowLimiter(30, 60_000);
+  const refusedAuditLimiter =
+    deps.refusedAuditLimiter ?? new FixedWindowLimiter(1, 60 * 60 * 1000);
+  const sessions = async () =>
+    new SessionStore<HostSession>(
+      await deps.cache(),
+      now,
+      HOST_SESSION_OPTIONS,
+    );
+  const byIp = (req: Request) => req.ip ?? 'unknown';
+
+  // Fire-and-forget: a slow Discord post never holds up a sign-in.
+  const audit = (entry: LogEntry) => {
+    Promise.resolve()
+      .then(() => deps.audit(entry))
+      .catch((error: unknown) =>
+        logger.warn(`Host dashboard audit post failed: ${String(error)}`),
+      );
+  };
+
+  async function liveSession(sid: string): Promise<HostSession | undefined> {
+    const store = await sessions();
+    const session = await store.get(sid);
+    if (!session) {
+      return undefined;
+    }
+    if (await store.isRevoked(session)) {
+      await store.destroy(sid);
+      return undefined;
+    }
+    return session;
+  }
+
+  /** As the staff dashboard's readSession, on host_sid and the host MAC domain. */
+  async function readSession(
+    req: Request,
+  ): Promise<
+    | { sid: string; session: HostSession; stale?: undefined }
+    | { sid?: undefined; session?: undefined; stale: boolean }
+  > {
+    let stale = false;
+    const verified = [
+      ...new Set(parseCookieValues(req.headers.cookie, HOST_SESSION_COOKIE)),
+    ]
+      .slice(0, MAX_SESSION_COOKIE_CANDIDATES)
+      .map((signed) =>
+        verifySignedSessionId(signed, deps.sessionSecret, HOST_SID_DOMAIN),
+      )
+      .filter((sid): sid is string => Boolean(sid))
+      .slice(0, MAX_SESSION_COOKIES);
+    for (const sid of verified) {
+      // eslint-disable-next-line no-await-in-loop
+      const session = await liveSession(sid);
+      if (session) {
+        return { sid, session };
+      }
+      stale = true;
+    }
+    return { stale };
+  }
+
+  function limit(
+    limiter: FixedWindowLimiter,
+    keyOf: (req: Request) => string,
+  ): RequestHandler {
+    return (req, res, next) => {
+      const key = keyOf(req);
+      if (limiter.take(key)) {
+        next();
+        return;
+      }
+      res.set('Retry-After', String(limiter.retryAfterSec(key)));
+      fail(res, 429);
+    };
+  }
+
+  function sealedStart(
+    res: Response,
+    cookie: string,
+    state: string,
+    verifier: string,
+  ) {
+    const sealed = sealOAuthCookie(
+      { state, verifier, expiresAt: now() + OAUTH_TTL_SEC * 1000 },
+      deps.sessionSecret,
+      HOST_OAUTH_DOMAIN,
+    );
+    res.append(
+      'Set-Cookie',
+      serializeCookie(cookie, sealed, {
+        path: OAUTH_COOKIE_PATH,
+        maxAgeSec: OAUTH_TTL_SEC,
+      }),
+    );
+  }
+
+  /**
+   * The verifier of the browser that started this sign-in, or undefined.
+   * The cookie is cleared on every callback, so each is good for one try.
+   */
+  function boundStart(
+    req: Request,
+    res: Response,
+    cookie: string,
+  ): { state: string; verifier: string } | undefined {
+    const state = typeof req.query.state === 'string' ? req.query.state : '';
+    const sealed = parseCookies(req.headers.cookie).get(cookie) ?? '';
+    res.append('Set-Cookie', clearCookie(cookie, OAUTH_COOKIE_PATH));
+    const bound = openOAuthCookie(
+      sealed,
+      deps.sessionSecret,
+      now(),
+      HOST_OAUTH_DOMAIN,
+    );
+    if (!state || !bound || !safeEqual(state, bound.state)) {
+      return undefined;
+    }
+    return { state, verifier: bound.verifier };
+  }
+
+  /** Resolves the person, then either refuses or starts a session. */
+  async function admit(
+    res: Response,
+    identity: HostIdentity,
+    displayName: string,
+    via: HostSession['via'],
+  ) {
+    let resolution: HostResolution;
+    try {
+      resolution = await deps.resolve(identity);
+    } catch (error: unknown) {
+      logger.warn(
+        `Host eligibility check failed at sign-in: ${error instanceof Error ? error.name : 'Error'}`,
+      );
+      fail(res, 503);
+      return;
+    }
+    if (resolution.kind === 'refused') {
+      const key = who(identity);
+      if (refusedAuditLimiter.take(key)) {
+        audit({
+          title: 'Host dashboard sign-in refused',
+          description: `${key} tried to sign in to the host dashboard (${resolution.reason}).`,
+        });
+      }
+      // The same text for blacklisted and not-a-host: a refusal never
+      // reveals a blacklist.
+      fail(
+        res,
+        403,
+        resolution.reason === 'not-linked' ? NOT_LINKED_MESSAGE : undefined,
+      );
+      return;
+    }
+    const { sid } = await (
+      await sessions()
+    ).create({
+      userId: resolution.meetupMemberId,
+      username: displayName,
+      discordUserId: resolution.discordUserId ?? null,
+      tier: resolution.tier,
+      via,
+    });
+    res.append(
+      'Set-Cookie',
+      serializeCookie(
+        HOST_SESSION_COOKIE,
+        signSessionId(sid, deps.sessionSecret, HOST_SID_DOMAIN),
+        { path: HOST_BASE, maxAgeSec: SESSION_TTL_SEC },
+      ),
+    );
+    audit({
+      title: 'Host dashboard sign-in',
+      description: `${
+        resolution.discordUserId
+          ? `<@${resolution.discordUserId}>`
+          : `Meetup member ${resolution.meetupMemberId}`
+      } signed in to the host dashboard with ${via === 'discord' ? 'Discord' : 'Meetup'}.`,
+    });
+    res.redirect(302, HOST_BASE);
+  }
+
+  const router = express.Router({ caseSensitive: true });
+
+  router.use(function hostSecurityHeaders(_req, res, next) {
+    const nonce = crypto.randomBytes(16).toString('base64');
+    locals(res).nonce = nonce;
+    res.set(baseSecurityHeaders(nonce));
+    next();
+  });
+  router.use(function hostHttpsRedirect(req, res, next) {
+    if (!deps.requireHttps || req.secure) {
+      next();
+      return;
+    }
+    res.redirect(308, httpsRedirectTarget(deps.origin, req.originalUrl));
+  });
+  router.use(express.urlencoded({ extended: false, limit: '32kb' }));
+
+  // ---- Public routes. ----
+
+  router.get('/login', (async (req, res) => {
+    if ((await readSession(req)).session) {
+      res.redirect(302, HOST_BASE);
+      return;
+    }
+    send(res, 200, hostLoginPage(locals(res).nonce));
+  }) as RequestHandler);
+
+  router.get('/auth/discord/start', limit(loginLimiter, byIp), (_req, res) => {
+    const state = generateState();
+    const verifier = generateCodeVerifier();
+    sealedStart(res, HOST_DISCORD_OAUTH_COOKIE, state, verifier);
+    res.redirect(302, deps.discord.buildLoginUrl(state, verifier));
+  });
+
+  router.get('/auth/discord/callback', limit(loginLimiter, byIp), (async (
+    req,
+    res,
+  ) => {
+    const bound = boundStart(req, res, HOST_DISCORD_OAUTH_COOKIE);
+    if (!bound || bound.verifier === MEETUP_NO_VERIFIER) {
+      fail(res, 400);
+      return;
+    }
+    if (req.query.error || typeof req.query.code !== 'string') {
+      send(
+        res,
+        400,
+        hostLoginPage(locals(res).nonce, 'Sign-in was cancelled.'),
+      );
+      return;
+    }
+    let identity: { id: string; username: string };
+    try {
+      const accessToken = await deps.discord.exchangeCode(
+        req.query.code,
+        bound.verifier,
+      );
+      identity = await deps.discord.fetchIdentity(accessToken);
+    } catch (error: unknown) {
+      logger.warn(`Host Discord sign-in exchange failed: ${String(error)}`);
+      fail(res, 502);
+      return;
+    }
+    await admit(
+      res,
+      { discordUserId: identity.id },
+      identity.username,
+      'discord',
+    );
+  }) as RequestHandler);
+
+  router.get('/auth/meetup/start', limit(loginLimiter, byIp), (_req, res) => {
+    const state = newHostState();
+    sealedStart(res, HOST_MEETUP_OAUTH_COOKIE, state, MEETUP_NO_VERIFIER);
+    res.redirect(302, deps.meetup.buildAuthUrl(state));
+  });
+
+  // Reached through /connect/meetup/callback, which forwards host- states
+  // here with only state, code and error.
+  router.get('/auth/meetup/complete', limit(loginLimiter, byIp), (async (
+    req,
+    res,
+  ) => {
+    const bound = boundStart(req, res, HOST_MEETUP_OAUTH_COOKIE);
+    if (
+      !bound ||
+      bound.verifier !== MEETUP_NO_VERIFIER ||
+      !isHostState(bound.state)
+    ) {
+      fail(res, 400);
+      return;
+    }
+    if (req.query.error || typeof req.query.code !== 'string') {
+      send(
+        res,
+        400,
+        hostLoginPage(locals(res).nonce, 'Sign-in was cancelled.'),
+      );
+      return;
+    }
+    let self: { id: string; name: string };
+    try {
+      const accessToken = await deps.meetup.exchangeCode(req.query.code);
+      self = await deps.meetup.fetchSelf(accessToken);
+    } catch (error: unknown) {
+      // The name only: exchange errors embed Meetup's response body.
+      logger.warn(
+        `Host Meetup sign-in exchange failed: ${error instanceof Error ? error.name : 'Error'}`,
+      );
+      fail(res, 502);
+      return;
+    }
+    await admit(res, { meetupMemberId: self.id }, self.name, 'meetup');
+  }) as RequestHandler);
+
+  // ---- The gate: a live session whose tier check is current. ----
+
+  /**
+   * One re-check per host at a time, as the staff gate's recheckRole. Always
+   * by Meetup member id, so a Discord link added or removed since sign-in is
+   * picked up. Ineligible: every session of the host is revoked.
+   */
+  const checks = new Map<string, Promise<HostResolution | 'unreachable'>>();
+  const recheck = (memberId: string) => {
+    const inFlight = checks.get(memberId);
+    if (inFlight !== undefined) {
+      return inFlight;
+    }
+    const check = (async (): Promise<HostResolution | 'unreachable'> => {
+      let resolution: HostResolution;
+      try {
+        resolution = await deps.resolve({ meetupMemberId: memberId });
+      } catch (error: unknown) {
+        // Fail closed, but keep the session: an outage is not a demotion.
+        logger.warn(
+          `Host tier re-check failed: ${error instanceof Error ? error.name : 'Error'}`,
+        );
+        return 'unreachable';
+      }
+      if (resolution.kind === 'refused') {
+        await (await sessions()).revokeUser(memberId);
+        audit({
+          title: 'Host dashboard session ended',
+          description: `Meetup member ${memberId} is no longer eligible for the host dashboard (${resolution.reason}).`,
+        });
+      }
+      return resolution;
+    })().finally(() => {
+      checks.delete(memberId);
+    });
+    checks.set(memberId, check);
+    return check;
+  };
+
+  const hostSessionGate = async function hostSessionGate(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ) {
+    const signedOut = (clear: boolean) => {
+      if (clear) {
+        res.append('Set-Cookie', clearCookie(HOST_SESSION_COOKIE, HOST_BASE));
+      }
+      if (req.method === 'GET' || req.method === 'HEAD') {
+        res.redirect(302, '/host/login');
+      } else {
+        fail(res, 403);
+      }
+    };
+    const { sid, session, stale } = await readSession(req);
+    if (!session) {
+      signedOut(stale);
+      return;
+    }
+    let current = session;
+    if (now() - session.roleCheckedAt >= ROLE_RECHECK_MS) {
+      const outcome = await recheck(session.userId);
+      if (outcome === 'unreachable') {
+        fail(res, 503);
+        return;
+      }
+      const store = await sessions();
+      if (outcome.kind === 'refused') {
+        await store.destroy(sid);
+        res.append('Set-Cookie', clearCookie(HOST_SESSION_COOKIE, HOST_BASE));
+        fail(res, 403);
+        return;
+      }
+      const patch = {
+        tier: outcome.tier,
+        discordUserId: outcome.discordUserId ?? null,
+      };
+      if (!(await store.markRoleChecked(sid, session, patch))) {
+        signedOut(true);
+        return;
+      }
+      current = { ...session, ...patch, roleCheckedAt: now() };
+    }
+    locals(res).session = current;
+    locals(res).sid = sid;
+    next();
+  };
+
+  const protectedRouter = express.Router({ caseSensitive: true });
+
+  /** As the staff dashboard's guard: every check stands alone. */
+  protectedRouter.use(function hostUnsafeMethodGuard(req, res, next) {
+    if (SAFE_METHODS.has(req.method)) {
+      next();
+      return;
+    }
+    const { session } = hostLocals(res);
+    if (!actionLimiter.take(session.userId)) {
+      res.set(
+        'Retry-After',
+        String(actionLimiter.retryAfterSec(session.userId)),
+      );
+      fail(res, 429);
+      return;
+    }
+    const origin = req.headers.origin;
+    const body = req.body as Record<string, unknown> | undefined;
+    const token =
+      typeof body?._csrf === 'string'
+        ? body._csrf
+        : req.headers['x-csrf-token'];
+    if (
+      req.headers['sec-fetch-site'] === 'cross-site' ||
+      (origin !== undefined && origin !== deps.origin) ||
+      typeof token !== 'string' ||
+      !safeEqual(token, session.csrfToken)
+    ) {
+      fail(res, 403);
+      return;
+    }
+    next();
+  });
+
+  protectedRouter.post('/logout', (async (_req, res) => {
+    res.append('Set-Cookie', clearCookie(HOST_SESSION_COOKIE, HOST_BASE));
+    await (await sessions()).destroy(hostLocals(res).sid);
+    res.redirect(303, '/host/login');
+  }) as RequestHandler);
+
+  deps.pages?.(protectedRouter);
+
+  protectedRouter.use(function hostNotFound(_req, res) {
+    fail(res, 404);
+  });
+
+  router.use(hostSessionGate as RequestHandler, protectedRouter);
+
+  router.use(function hostErrorHandler(error, _req, res, _next) {
+    if (res.headersSent) {
+      logger.error(
+        `Host dashboard error after the response started: ${String(error)}`,
+      );
+      res.destroy();
+      return;
+    }
+    if (error instanceof CacheTimeoutError) {
+      logger.warn('Host dashboard cache timed out');
+      fail(res, 503);
+      return;
+    }
+    const { status, statusCode } = (error ?? {}) as {
+      status?: unknown;
+      statusCode?: unknown;
+    };
+    const code = typeof status === 'number' ? status : statusCode;
+    if (typeof code === 'number' && code >= 400 && code < 500) {
+      fail(res, 400);
+      return;
+    }
+    logger.error(
+      `Host dashboard route error: ${error instanceof Error ? error.name : 'Error'}`,
+    );
+    fail(res, 500);
+  } as ErrorRequestHandler);
+
+  return router;
+}
