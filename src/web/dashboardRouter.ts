@@ -35,7 +35,7 @@ import {
   DashboardSession,
   ROLE_RECHECK_MS,
   SESSION_COOKIE,
-  SESSION_TTL_SEC,
+  SESSION_MAX_SEC,
   SessionStore,
   safeEqual,
   signSessionId,
@@ -471,11 +471,13 @@ export function createDashboardRouter(deps: DashboardDeps): express.Router {
       userId: identity.id,
       username: identity.username,
     });
+    // The browser keeps the cookie, across restarts, until the absolute
+    // cap; the Redis key's TTL enforces the 7-day idle limit.
     res.append(
       'Set-Cookie',
       serializeCookie(SESSION_COOKIE, signSessionId(sid, deps.sessionSecret), {
         path: SESSION_COOKIE_PATH,
-        maxAgeSec: SESSION_TTL_SEC,
+        maxAgeSec: SESSION_MAX_SEC,
       }),
     );
     audit({
@@ -574,7 +576,18 @@ export function createDashboardRouter(deps: DashboardDeps): express.Router {
         fail(res, 403);
         return;
       }
-      if (!(await store.markRoleChecked(sid, session))) {
+      // Also slides the 7-day idle window. The role check just passed, so
+      // a failed write is no reason to refuse this request: the session
+      // keeps its current expiry and the next request checks again.
+      let kept = true;
+      try {
+        kept = await store.markRoleChecked(sid, session);
+      } catch (error: unknown) {
+        logger.warn(
+          `Dashboard session extension failed: ${error instanceof Error ? error.name : 'Error'}`,
+        );
+      }
+      if (!kept) {
         signedOut(true);
         return;
       }

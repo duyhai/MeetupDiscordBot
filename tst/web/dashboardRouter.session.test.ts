@@ -11,6 +11,8 @@ import { FixedWindowLimiter } from '../../src/web/rateLimit.js';
 import { timedCacheFactory } from '../../src/web/timedCache.js';
 import {
   ROLE_RECHECK_MS,
+  SESSION_IDLE_SEC,
+  SESSION_MAX_SEC,
   SessionStore,
   signSessionId,
 } from '../../src/web/session.js';
@@ -25,7 +27,7 @@ import {
   signIn,
   startSignIn,
 } from './dashboardHarness.js';
-import { FakeCache } from './fakeCache.js';
+import { ClockedCache, FakeCache } from './fakeCache.js';
 
 const fake = vi.hoisted(() => ({ logged: [] as string[] }));
 
@@ -198,21 +200,187 @@ describe('dashboard session gate', () => {
     );
   });
 
-  it('expires the session 12 hours after sign-in', async () => {
+  it('expires the session 30 days after sign-in however active it is', async () => {
     let now = 0;
     const { req } = await makeApp({ now: () => now });
     const cookie = await signIn(req);
     // Re-check runs here and resets roleCheckedAt, so the request at the
-    // 12-hour mark is inside the re-check window and only the absolute
+    // 30-day mark is inside the re-check window and only the absolute
     // expiry in SessionStore.get can end the session.
-    now = (11 * 60 + 55) * 60 * 1000;
+    now = SESSION_MAX_SEC * 1000 - 5 * 60 * 1000;
     expect((await req.get('/dashboard').set('Cookie', cookie)).status).toBe(
       200,
     );
-    now = 12 * 60 * 60 * 1000;
+    now = SESSION_MAX_SEC * 1000;
     expect((await req.get('/dashboard').set('Cookie', cookie)).status).toBe(
       302,
     );
+  });
+});
+
+describe('dashboard sliding sessions', () => {
+  const DAY = 24 * 60 * 60 * 1000;
+
+  /** A dashboard whose cache expires keys on the same clock as the router. */
+  async function slidingApp(overrides: Parameters<typeof makeApp>[0] = {}) {
+    const clock = { now: 0 };
+    const cache = new ClockedCache(() => clock.now);
+    const app = await makeApp({
+      now: () => clock.now,
+      cache: async () => cache,
+      ...overrides,
+    });
+    return { ...app, cache, clock };
+  }
+
+  const sessionKeys = (cache: FakeCache) =>
+    [...cache.values.keys()].filter((k) => k.startsWith('dashboard-session-'));
+
+  it('a sign-in left unused for 7 days is gone', async () => {
+    const { req, clock } = await slidingApp();
+    const cookie = await signIn(req);
+    clock.now = SESSION_IDLE_SEC * 1000 - 1;
+    expect((await req.get('/dashboard').set('Cookie', cookie)).status).toBe(
+      200,
+    );
+    // That request re-checked the role and slid the window; stay idle 7 days.
+    clock.now += SESSION_IDLE_SEC * 1000;
+    const res = await req.get('/dashboard').set('Cookie', cookie);
+    expect(res.status).toBe(302);
+    expect(res.headers.location).toBe('/dashboard/login');
+  });
+
+  it('using the dashboard within 7 days keeps the sign-in going', async () => {
+    const { req, clock } = await slidingApp();
+    const cookie = await signIn(req);
+    for (const day of [6, 12, 18, 24]) {
+      clock.now = day * DAY;
+      // eslint-disable-next-line no-await-in-loop -- one visit at a time
+      const res = await req.get('/dashboard').set('Cookie', cookie);
+      expect(res.status).toBe(200);
+    }
+  });
+
+  it('use just before day 30 still ends the sign-in at day 30', async () => {
+    const { req, cache, clock } = await slidingApp();
+    const cookie = await signIn(req);
+    for (const day of [6, 12, 18, 24, 29.9]) {
+      clock.now = day * DAY;
+      // eslint-disable-next-line no-await-in-loop -- one visit at a time
+      const res = await req.get('/dashboard').set('Cookie', cookie);
+      expect(res.status).toBe(200);
+    }
+    const [key] = sessionKeys(cache);
+    expect(cache.ttls.get(key)).toBeLessThanOrEqual(0.1 * DAY);
+    clock.now = SESSION_MAX_SEC * 1000;
+    expect((await req.get('/dashboard').set('Cookie', cookie)).status).toBe(
+      302,
+    );
+  });
+
+  it('extends at most once per role re-check, not on every request', async () => {
+    const checkAccess = vi.fn().mockResolvedValue(true);
+    const { req, cache, clock } = await slidingApp({ checkAccess });
+    const cookie = await signIn(req);
+    const writes = vi.spyOn(cache, 'set_existing');
+    for (let minute = 1; minute < 10; minute += 1) {
+      clock.now = minute * 60 * 1000;
+      // eslint-disable-next-line no-await-in-loop -- one visit at a time
+      expect((await req.get('/dashboard').set('Cookie', cookie)).status).toBe(
+        200,
+      );
+    }
+    expect(writes).not.toHaveBeenCalled();
+    clock.now = ROLE_RECHECK_MS;
+    await req.get('/dashboard').set('Cookie', cookie);
+    await req.get('/dashboard').set('Cookie', cookie);
+    expect(writes).toHaveBeenCalledTimes(1);
+  });
+
+  it('a signed-out session is never brought back by the extension', async () => {
+    const { req, cache, clock } = await slidingApp();
+    const cookie = await signIn(req);
+    const token =
+      /name="_csrf" value="([^"]+)"/.exec(
+        (await req.get('/dashboard').set('Cookie', cookie)).text,
+      )?.[1] ?? '';
+    const out = await req
+      .post('/dashboard/logout')
+      .set('Cookie', cookie)
+      .set('Origin', ORIGIN)
+      .type('form')
+      .send({ _csrf: token });
+    expect(out.status).toBe(303);
+    clock.now = ROLE_RECHECK_MS;
+    expect((await req.get('/dashboard').set('Cookie', cookie)).status).toBe(
+      302,
+    );
+    expect(sessionKeys(cache)).toEqual([]);
+  });
+
+  it('"sign out everywhere" ends a 20-day-old session', async () => {
+    const { req, cache, clock } = await slidingApp();
+    const elsewhere = await signIn(req);
+    for (const day of [6, 12, 18]) {
+      clock.now = day * DAY;
+      // eslint-disable-next-line no-await-in-loop -- one visit at a time
+      await req.get('/dashboard').set('Cookie', elsewhere);
+    }
+    clock.now = 20 * DAY;
+    // Without the mark, that sign-in would still be good on day 24.
+    expect(sessionKeys(cache)).toHaveLength(1);
+    const here = await signIn(req);
+    const token =
+      /name="_csrf" value="([^"]+)"/.exec(
+        (await req.get('/dashboard').set('Cookie', here)).text,
+      )?.[1] ?? '';
+    // The route itself is covered elsewhere; the mark it writes is what
+    // must outlive a 20-day-old session.
+    await new SessionStore(cache, () => clock.now).revokeUser(USER.id);
+    // Day 24: the other browser's key (last used day 18) is still alive, so
+    // only the mark can end it.
+    clock.now = 24 * DAY;
+    const res = await req.get('/dashboard').set('Cookie', elsewhere);
+    expect(res.status).toBe(302);
+    expect(token).not.toBe('');
+  });
+
+  it('a failed extension keeps the page working and logs only the error class', async () => {
+    const { req, cache, clock } = await slidingApp();
+    const cookie = await signIn(req);
+    cache.set_existing = async () => {
+      throw new TypeError('redis said secret-detail');
+    };
+    clock.now = ROLE_RECHECK_MS;
+    fake.logged.length = 0;
+    const res = await req.get('/dashboard').set('Cookie', cookie);
+    expect(res.status).toBe(200);
+    expect(fake.logged).toContain(
+      'Dashboard session extension failed: TypeError',
+    );
+    expect(fake.logged.join('\n')).not.toContain('secret-detail');
+    expect(sessionKeys(cache)).toHaveLength(1);
+  });
+
+  it('a CSRF token from sign-in still works on day 29', async () => {
+    const { req, clock } = await slidingApp();
+    const cookie = await signIn(req);
+    const token =
+      /name="_csrf" value="([^"]+)"/.exec(
+        (await req.get('/dashboard').set('Cookie', cookie)).text,
+      )?.[1] ?? '';
+    for (const day of [6, 12, 18, 24, 29]) {
+      clock.now = day * DAY;
+      // eslint-disable-next-line no-await-in-loop -- one visit at a time
+      await req.get('/dashboard').set('Cookie', cookie);
+    }
+    const out = await req
+      .post('/dashboard/logout')
+      .set('Cookie', cookie)
+      .set('Origin', ORIGIN)
+      .type('form')
+      .send({ _csrf: token });
+    expect(out.status).toBe(303);
   });
 });
 
