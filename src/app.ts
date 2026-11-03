@@ -17,6 +17,10 @@ import { getAuthLandingPage } from './templates/authLanding.js';
 import { ApplicationCache } from './util/cache.js';
 import { allowedRedirectTarget } from './util/redirectTarget.js';
 import { dashboardRouterFromEnv } from './web/dashboardDeps.js';
+import {
+  HOST_MEETUP_COMPLETE_PATH,
+  isHostState,
+} from './web/host/meetupSignIn.js';
 
 const logger = new Logger({ name: 'MeetupBot' });
 
@@ -103,11 +107,38 @@ export const meetupConnectHandler: RequestHandler = (async (req, res) => {
   return res.redirect(302, buildMeetupAuthUrl(state));
 }) as RequestHandler;
 
+/**
+ * Sends the browser on to a fixed path with only the three parameters
+ * Meetup's callback carries, each copied only when it is a single string:
+ * no other request input reaches the Location.
+ */
+function forwardMeetupCallback(
+  req: Parameters<RequestHandler>[0],
+  res: Parameters<RequestHandler>[1],
+  path: string,
+  state: string,
+) {
+  const forward = new URLSearchParams({ state });
+  for (const name of ['code', 'error'] as const) {
+    const value = req.query[name];
+    if (typeof value === 'string') {
+      forward.set(name, value);
+    }
+  }
+  return res.redirect(302, `${path}?${forward.toString()}`);
+}
+
 export const meetupConnectCallbackHandler: RequestHandler = (async (
   req,
   res,
 ) => {
   const state = String(req.query.state ?? '');
+  if (isHostState(state)) {
+    // A host dashboard sign-in: its state lives in a signed cookie on
+    // /host/auth, not in Redis, so nothing is read or written here. The
+    // host router checks the cookie, then exchanges the code.
+    return forwardMeetupCallback(req, res, HOST_MEETUP_COMPLETE_PATH, state);
+  }
   const record = await resolveOAuthState(state);
   if (!record) {
     await reportOAuthNotice({
@@ -119,19 +150,12 @@ export const meetupConnectCallbackHandler: RequestHandler = (async (
   if (record.purpose === 'organizer-renew') {
     // The staff dashboard's "Renew organizer login": hand the browser to the
     // dashboard, which checks the session binding, claims the state and
-    // exchanges the code. Nothing is consumed or exchanged here. Only these
-    // three parameters, each a single string, are copied onto a fixed path:
-    // no other request input reaches the Location.
-    const forward = new URLSearchParams({ state });
-    for (const name of ['code', 'error'] as const) {
-      const value = req.query[name];
-      if (typeof value === 'string') {
-        forward.set(name, value);
-      }
-    }
-    return res.redirect(
-      302,
-      `/dashboard/organizer-login/complete?${forward.toString()}`,
+    // exchanges the code. Nothing is consumed or exchanged here.
+    return forwardMeetupCallback(
+      req,
+      res,
+      '/dashboard/organizer-login/complete',
+      state,
     );
   }
   const userId = record.discordUserId;
