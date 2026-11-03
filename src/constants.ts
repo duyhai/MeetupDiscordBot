@@ -23,7 +23,9 @@ export const GUEST_HOST_BLACKLIST: string[] = [
  * or a re-link removes. So every person on GUEST_HOST_BLACKLIST must also
  * have their Meetup member id here.
  */
-export const GUEST_HOST_MEETUP_BLACKLIST: string[] = [];
+export const GUEST_HOST_MEETUP_BLACKLIST: string[] = [
+  '182787593', // clem3ma
+];
 
 /** Title prefix of a regular host's event (approved by leadership). */
 export const GUEST_HOST_PREFIX = '[Guest Host] ';
