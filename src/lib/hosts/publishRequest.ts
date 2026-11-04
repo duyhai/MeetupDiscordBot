@@ -1,3 +1,4 @@
+import dayjs from 'dayjs';
 import { Logger } from 'tslog';
 
 import {
@@ -16,6 +17,7 @@ import {
 } from '../repositories/postgresEventRequestRepository.js';
 import type { HostTier } from './eligibility.js';
 import { createInputFor } from './eventRequest.js';
+import { tz } from '../../util/timezone.js';
 
 const logger = new Logger({ name: 'publishRequest' });
 
@@ -82,6 +84,13 @@ export type PublishOutcome =
 
 /** Fixed texts: a failure says what exists on Meetup and what to do. */
 export const PUBLISH_FAILURES = {
+  startPassed:
+    'The event’s start time has passed, so nothing was created on Meetup. ' +
+    'Deny the request with a note to the host; they can ask for a new date.',
+  startPassedRetry:
+    'The event’s start time has passed, so nothing more was done. An earlier ' +
+    'attempt may have created it: check the group’s past events on Meetup, ' +
+    'then Deny the request with a note to the host.',
   notAHost:
     'The member is no longer a host (no Guest Host role and no hosted events, ' +
     'or blacklisted). Nothing was created on Meetup.',
@@ -130,7 +139,7 @@ function errorName(error: unknown): string {
  * Every later write names the version this publisher holds, so a publisher
  * that was overtaken after STUCK_PUBLISHING_MS changes nothing.
  *
- * Order: claim → (retry: look for it) → tier (prefix) → create → record →
+ * Order: claim → (start passed: fail) → (retry: look for it) → tier (prefix) → create → record →
  * close RSVPs and re-apply the limits (closing wipes them) → published. A
  * failure is stored with a fixed text saying what exists, and alerted.
  */
@@ -189,6 +198,20 @@ export async function publishRequest(
 
   let eventId = claimed.meetupEventId;
   let eventUrl = claimed.eventUrl ?? '';
+  // A request approved or retried after its start would make a past event
+  // (or fail, and a retry could not find it among upcoming events). An
+  // event already recorded is still finished: it exists either way.
+  if (
+    eventId === null &&
+    tz(dayjs(deps.now())).format('YYYY-MM-DDTHH:mm') >= claimed.startLocal
+  ) {
+    return fail(
+      isRetry
+        ? PUBLISH_FAILURES.startPassedRetry
+        : PUBLISH_FAILURES.startPassed,
+    );
+  }
+
   let meetup: OrganizerWriter;
   try {
     meetup = await deps.organizer();

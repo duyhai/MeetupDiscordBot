@@ -11,6 +11,9 @@ import {
 const DISCORD_ID_SQL = `'^[0-9]{17,20}$'`;
 const MEETUP_ID_SQL = `'^[1-9][0-9]{0,19}$'`;
 const REQUEST_ID = /^[1-9][0-9]{0,17}$/;
+/** The create form's one-time token (base64url); see `submitToken`. */
+export const SUBMIT_TOKEN = /^[A-Za-z0-9_-]{16,64}$/;
+const SUBMIT_TOKEN_SQL = `'^[A-Za-z0-9_-]{16,64}$'`;
 
 export const EVENT_REQUEST_TITLE_MAX = 80;
 export const DENY_REASON_MAX = 500;
@@ -49,6 +52,11 @@ export interface NewEventRequest extends EventRequestFields {
   discordUserId: string | null;
   hostName: string;
   tier: 'regular' | 'promoted';
+  /**
+   * The create form's one-time token: unique per host, so a form sent twice
+   * (a double click, a reload) makes one request, not two.
+   */
+  submitToken?: string | null;
 }
 
 export interface EventRequest extends NewEventRequest {
@@ -89,6 +97,7 @@ CREATE TABLE IF NOT EXISTS event_requests (
   featured_photo_id BIGINT,
   venue_id          TEXT CHECK (length(venue_id) BETWEEN 1 AND 40),
   how_to_find_us    TEXT CHECK (length(how_to_find_us) <= 2000),
+  submit_token      TEXT CHECK (submit_token ~ ${SUBMIT_TOKEN_SQL}),
   status            TEXT NOT NULL DEFAULT 'pending'
                     CHECK (status IN ('pending', 'publishing', 'published', 'failed', 'denied')),
   deny_reason       TEXT CHECK (length(deny_reason) BETWEEN 1 AND ${DENY_REASON_MAX}),
@@ -101,6 +110,11 @@ CREATE TABLE IF NOT EXISTS event_requests (
   created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+ALTER TABLE event_requests
+  ADD COLUMN IF NOT EXISTS submit_token TEXT CHECK (submit_token ~ ${SUBMIT_TOKEN_SQL});
+CREATE UNIQUE INDEX IF NOT EXISTS event_requests_submit_token_idx
+  ON event_requests (meetup_member_id, submit_token)
+  WHERE submit_token IS NOT NULL;
 CREATE INDEX IF NOT EXISTS event_requests_member_idx
   ON event_requests (meetup_member_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS event_requests_status_idx
@@ -169,6 +183,7 @@ interface Row {
   featured_photo_id: string | null;
   venue_id: string | null;
   how_to_find_us: string | null;
+  submit_token: string | null;
   status: EventRequestStatus;
   deny_reason: string | null;
   failure: string | null;
@@ -200,6 +215,7 @@ const toRequest = (r: Row): EventRequest => ({
     r.featured_photo_id === null ? null : Number(r.featured_photo_id),
   venueId: r.venue_id,
   howToFindUs: r.how_to_find_us,
+  submitToken: r.submit_token,
   status: r.status,
   denyReason: r.deny_reason,
   failure: r.failure,
@@ -270,14 +286,22 @@ export class PostgresEventRequestRepository {
     });
   }
 
-  async create(input: NewEventRequest): Promise<EventRequest> {
-    const created = await this.change('event request create', async (c) => {
+  /**
+   * Stores a new request. undefined when this host already sent a request
+   * with the same `submitToken` (the same form sent twice): look it up with
+   * findBySubmitToken.
+   */
+  async create(input: NewEventRequest): Promise<EventRequest | undefined> {
+    return this.change('event request create', async (c) => {
       const { rows } = await c.query<Row>(
         `INSERT INTO event_requests
            (meetup_member_id, discord_user_id, host_name, tier, kind,
             source_event_id, title, description, start_local, duration,
-            rsvp_limit, guest_limit, featured_photo_id, venue_id, how_to_find_us)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+            rsvp_limit, guest_limit, featured_photo_id, venue_id, how_to_find_us,
+            submit_token)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+         ON CONFLICT (meetup_member_id, submit_token) WHERE submit_token IS NOT NULL
+           DO NOTHING
          RETURNING *`,
         [
           input.meetupMemberId,
@@ -295,13 +319,31 @@ export class PostgresEventRequestRepository {
           input.featuredPhotoId,
           input.venueId,
           input.howToFindUs,
+          input.submitToken ?? null,
         ],
       );
+      if (rows[0] === undefined) {
+        return undefined;
+      }
       await history(c, rows[0], 'submit', input.meetupMemberId);
       return rows[0];
     });
-    // An INSERT … RETURNING always has its row.
-    return created;
+  }
+
+  /** The host's request made by the form with this token, if any. */
+  async findBySubmitToken(
+    meetupMemberId: string,
+    submitToken: string,
+  ): Promise<EventRequest | undefined> {
+    if (!SUBMIT_TOKEN.test(submitToken)) {
+      return undefined;
+    }
+    const { rows } = await this.pool.query<Row>(
+      `SELECT * FROM event_requests
+        WHERE meetup_member_id = $1 AND submit_token = $2`,
+      [meetupMemberId, submitToken],
+    );
+    return rows[0] === undefined ? undefined : toRequest(rows[0]);
   }
 
   /** undefined for an unknown id or one that cannot be a request id. */
@@ -466,7 +508,11 @@ export class PostgresEventRequestRepository {
     });
   }
 
-  /** Denies a pending request at `seenVersion`; undefined when it moved on. */
+  /**
+   * Denies a request at `seenVersion`: a pending one, or a failed one with
+   * no Meetup event recorded (so a request that cannot be published can
+   * leave the queue). undefined when it moved on.
+   */
   deny(
     id: string,
     seenVersion: number,
@@ -481,7 +527,9 @@ export class PostgresEventRequestRepository {
         `UPDATE event_requests
             SET status = 'denied', deny_reason = $4, decided_by = $3,
                 decided_at = now(), version = version + 1, updated_at = now()
-          WHERE id = $1 AND version = $2 AND status = 'pending'
+          WHERE id = $1 AND version = $2
+            AND (status = 'pending'
+                 OR (status = 'failed' AND meetup_event_id IS NULL))
           RETURNING *`,
         [id, seenVersion, actor, reason],
       );

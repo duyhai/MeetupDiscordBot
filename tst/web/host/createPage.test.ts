@@ -34,6 +34,17 @@ function memoryStore() {
     store: {
       create: vi.fn(async (input: NewEventRequest) => {
         await Promise.resolve();
+        // The unique (member, submit token) index: a repeat makes nothing.
+        if (
+          input.submitToken &&
+          rows.some(
+            (r) =>
+              r.meetupMemberId === input.meetupMemberId &&
+              r.submitToken === input.submitToken,
+          )
+        ) {
+          return undefined;
+        }
         const row: EventRequest = {
           ...input,
           id: String(rows.length + 1),
@@ -54,6 +65,12 @@ function memoryStore() {
       get: vi.fn(async (id: string) => {
         await Promise.resolve();
         return rows.find((r) => r.id === id);
+      }),
+      findBySubmitToken: vi.fn(async (member: string, token: string) => {
+        await Promise.resolve();
+        return rows.find(
+          (r) => r.meetupMemberId === member && r.submitToken === token,
+        );
       }),
       listForMember: vi.fn(async (member: string) => {
         await Promise.resolve();
@@ -123,13 +140,17 @@ async function app(
       )?.[1] ?? '{}',
     ) as { csrfToken: string }
   ).csrfToken;
-  const post = (body: Record<string, string>, token = csrf) =>
-    req
+  let forms = 0;
+  // Each call is a new form unless the body names its `submit` token.
+  const post = (body: Record<string, string>, token = csrf) => {
+    forms += 1;
+    return req
       .post('/host/create')
       .set('Cookie', sid)
       .set('Origin', ORIGIN)
       .type('form')
-      .send({ _csrf: token, ...body });
+      .send({ _csrf: token, submit: `form-token-${forms}-padding`, ...body });
+  };
   return { req, sid, deps, mem, post };
 }
 
@@ -321,6 +342,67 @@ describe('submitting a request', () => {
     expect(res.status).toBe(429);
     expect(res.text).toContain('waiting for approval');
     expect(mem.rows).toHaveLength(MAX_PENDING);
+  });
+
+  it('the form carries a one-time token, new on every render', async () => {
+    const { req, sid } = await app();
+    const tokenOf = (text: string) =>
+      /name="submit" value="([A-Za-z0-9_-]{16,64})"/.exec(text)?.[1];
+    const a = tokenOf((await get(req, sid, '/host/create')).text);
+    const b = tokenOf((await get(req, sid, '/host/create')).text);
+    expect(a).toBeDefined();
+    expect(b).toBeDefined();
+    expect(a).not.toBe(b);
+  });
+
+  it('a Community Host’s form sent twice publishes once', async () => {
+    const { post, mem, deps } = await app({}, 'promoted');
+    const once = { ...good, submit: 'same-form-token-123' };
+    const first = await post(once);
+    const second = await post(once);
+    expect(first.status).toBe(303);
+    expect(second.status).toBe(303);
+    expect(second.headers.location).toBe(first.headers.location);
+    expect(mem.rows).toHaveLength(1);
+    expect(deps.publish).toHaveBeenCalledTimes(1);
+    expect(deps.alert).toHaveBeenCalledTimes(1);
+  });
+
+  it('a form sent twice at the cap goes to its request, not a refusal', async () => {
+    const { post, mem, deps } = await app();
+    for (let i = 0; i < MAX_PENDING - 1; i += 1) {
+      // eslint-disable-next-line no-await-in-loop
+      expect((await post(good)).status).toBe(303);
+    }
+    const once = { ...good, submit: 'last-form-token-123' };
+    expect((await post(once)).status).toBe(303);
+    const again = await post(once);
+    expect(again.status).toBe(303);
+    expect(again.headers.location).toBe(`/host/requests/${MAX_PENDING}`);
+    expect(mem.rows).toHaveLength(MAX_PENDING);
+    expect(deps.alert).toHaveBeenCalledTimes(MAX_PENDING);
+  });
+
+  it('two sends of one form at the same moment make one request', async () => {
+    const { post, mem, deps } = await app({}, 'promoted');
+    const once = { ...good, submit: 'raced-form-token-12' };
+    expect((await post(once)).status).toBe(303);
+    // The second send looked before the first one's row existed.
+    mem.store.findBySubmitToken.mockResolvedValueOnce(undefined);
+    const raced = await post(once);
+    expect(raced.status).toBe(303);
+    expect(raced.headers.location).toBe('/host/requests/1');
+    expect(mem.rows).toHaveLength(1);
+    expect(deps.publish).toHaveBeenCalledTimes(1);
+  });
+
+  it('a form without its token is re-shown, and nothing is made', async () => {
+    const { post, mem } = await app();
+    const res = await post({ ...good, submit: 'short' });
+    expect(res.status).toBe(422);
+    expect(res.text).toContain('This form was out of date');
+    expect(res.text).toMatch(/name="submit" value="[A-Za-z0-9_-]{16,64}"/);
+    expect(mem.rows).toHaveLength(0);
   });
 
   it('a database outage is a 503 and nothing is alerted', async () => {

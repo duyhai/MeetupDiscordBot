@@ -810,7 +810,7 @@ export function eventRequestRow(
   };
 }
 
-/** The queue's store over fixed rows; deny changes a pending row at its version. */
+/** The queue's store over fixed rows; deny changes a pending (or failed, no event) row at its version. */
 export function fakeEventRequests(rows: EventRequest[] = [eventRequestRow()]) {
   return {
     get: vi.fn(async (id: string) => rows.find((r) => r.id === id)),
@@ -823,7 +823,10 @@ export function fakeEventRequests(rows: EventRequest[] = [eventRequestRow()]) {
     deny: vi.fn(
       async (id: string, version: number, actor: string, reason: string) => {
         const row = rows.find((r) => r.id === id);
-        if (!row || row.version !== version || row.status !== 'pending') {
+        const deniable =
+          row?.status === 'pending' ||
+          (row?.status === 'failed' && row.meetupEventId === null);
+        if (!row || row.version !== version || !deniable) {
           return undefined;
         }
         Object.assign(row, {

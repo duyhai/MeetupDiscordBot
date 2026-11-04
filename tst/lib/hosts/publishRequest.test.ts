@@ -1,6 +1,7 @@
 import { ClientError } from 'graphql-request';
 import { describe, expect, it, vi } from 'vitest';
 
+import { MeetupPayloadError } from '../../../src/lib/client/meetup/payloadErrors.js';
 import {
   PUBLISH_FAILURES,
   PublishDeps,
@@ -296,6 +297,83 @@ describe('publishRequest', () => {
       meetupEventId: '317000001',
       failure: PUBLISH_FAILURES.rsvp(URL),
     });
+  });
+
+  it('a request whose start has passed creates nothing', async () => {
+    // NOW is 12:00 Pacific on 2026-11-03.
+    const { d, meetup, row } = deps(base({ startLocal: '2026-11-03T12:00' }));
+    expect((await publishRequest(d, '7', 1, LEAD, ['pending'])).code).toBe(
+      'failed',
+    );
+    expect(meetup.createEvent).not.toHaveBeenCalled();
+    expect(row().failure).toBe(PUBLISH_FAILURES.startPassed);
+  });
+
+  it('a retry after the start creates nothing and says to check Meetup', async () => {
+    const { d, meetup, row } = deps(
+      base({ status: 'failed', startLocal: '2026-11-02T18:30' }),
+    );
+    expect(
+      (await publishRequest(d, '7', 1, LEAD, ['failed', 'publishing'])).code,
+    ).toBe('failed');
+    expect(d.findExisting).not.toHaveBeenCalled();
+    expect(meetup.createEvent).not.toHaveBeenCalled();
+    expect(row().failure).toBe(PUBLISH_FAILURES.startPassedRetry);
+  });
+
+  it('a request starting later today is still published', async () => {
+    const { d } = deps(base({ startLocal: '2026-11-03T12:15' }));
+    expect((await publishRequest(d, '7', 1, LEAD, ['pending'])).code).toBe(
+      'published',
+    );
+  });
+
+  it('a past request with its event recorded is still finished', async () => {
+    const { d, meetup } = deps(
+      base({
+        status: 'failed',
+        startLocal: '2026-11-02T18:30',
+        meetupEventId: '317000001',
+        eventUrl: URL,
+      }),
+    );
+    expect(
+      (await publishRequest(d, '7', 1, LEAD, ['failed', 'publishing'])).code,
+    ).toBe('published');
+    expect(meetup.createEvent).not.toHaveBeenCalled();
+    expect(meetup.closeEventRsvps).toHaveBeenCalled();
+  });
+
+  it('a payload error on the RSVP steps fails the publish', async () => {
+    const { d, meetup, row } = deps(base());
+    meetup.editEvent.mockRejectedValue(
+      new MeetupPayloadError('editEvent', [
+        { code: 'INVALID', field: 'rsvpSettings', message: 'bad limit' },
+      ]),
+    );
+    expect((await publishRequest(d, '7', 1, LEAD, ['pending'])).code).toBe(
+      'failed',
+    );
+    expect(row().failure).toBe(PUBLISH_FAILURES.rsvp(URL));
+  });
+
+  it('a photo payload error retries without the photo', async () => {
+    const { d, meetup } = deps(base());
+    meetup.createEvent
+      .mockRejectedValueOnce(
+        new MeetupPayloadError('createEvent', [
+          { code: 'NOT_FOUND', field: 'featuredPhotoId', message: 'not found' },
+        ]),
+      )
+      .mockResolvedValueOnce({
+        createEvent: { event: { id: '317000001', eventUrl: URL } },
+      });
+    expect((await publishRequest(d, '7', 1, LEAD, ['pending'])).code).toBe(
+      'published',
+    );
+    expect(meetup.createEvent.mock.calls[1][0]).not.toHaveProperty(
+      'featuredPhotoId',
+    );
   });
 
   it('a member who is no longer a host is not published', async () => {

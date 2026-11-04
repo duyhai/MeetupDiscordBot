@@ -1,3 +1,5 @@
+import { randomBytes } from 'node:crypto';
+
 import dayjs from 'dayjs';
 import express, { RequestHandler, Response } from 'express';
 import { Logger } from 'tslog';
@@ -26,6 +28,7 @@ import { LogEntry } from '../../lib/helpers/discordLogger.js';
 import {
   EventRequest,
   NewEventRequest,
+  SUBMIT_TOKEN,
 } from '../../lib/repositories/postgresEventRequestRepository.js';
 import {
   SafeHtml,
@@ -63,7 +66,12 @@ const DAY = /^\d{4}-\d{2}-\d{2}$/;
 
 /** The request store's host-side reads and writes. */
 export interface HostRequestStore {
-  create: (input: NewEventRequest) => Promise<EventRequest>;
+  /** undefined when the host already sent this form (same submitToken). */
+  create: (input: NewEventRequest) => Promise<EventRequest | undefined>;
+  findBySubmitToken: (
+    meetupMemberId: string,
+    submitToken: string,
+  ) => Promise<EventRequest | undefined>;
   get: (id: string) => Promise<EventRequest | undefined>;
   listForMember: (
     meetupMemberId: string,
@@ -96,8 +104,12 @@ interface FormView {
   time: string;
   duration: string;
   copy?: CopySource;
+  /** One per rendered form: sending it twice makes one request. */
+  submitToken: string;
   errors: Partial<Record<FormField | 'form', string>>;
 }
+
+const newSubmitToken = () => randomBytes(18).toString('base64url');
 
 /** One form field as a string; a missing or repeated field is undefined. */
 function field(body: unknown, name: string): string | undefined {
@@ -180,6 +192,7 @@ function formBody(
       action="${localUrl(CREATE_PATHS.create)}"
     >
       <input type="hidden" name="_csrf" value="${session.csrfToken}" />
+      <input type="hidden" name="submit" value="${view.submitToken}" />
       ${source ? html`<input type="hidden" name="copy" value="${source.id}" />` : ''}
       <label class="field"
         >Title (up to ${max} characters)
@@ -420,6 +433,7 @@ export function registerCreatePages(
             day,
             time: DEFAULT_TIME,
             duration: DEFAULT_DURATION,
+            submitToken: newSubmitToken(),
             errors: {},
           },
           today(),
@@ -452,6 +466,7 @@ export function registerCreatePages(
           time: defaults.time,
           duration: defaults.duration,
           copy: source,
+          submitToken: newSubmitToken(),
           errors: {},
         },
         today(),
@@ -477,30 +492,55 @@ export function registerCreatePages(
         return;
       }
     }
+    const sentToken = field(body, 'submit');
+    const submitToken =
+      sentToken !== undefined && SUBMIT_TOKEN.test(sentToken)
+        ? sentToken
+        : undefined;
     const view = (errors: FormView['errors']): FormView => ({
       title: field(body, 'title') ?? '',
       day: field(body, 'day') ?? '',
       time: field(body, 'time') ?? DEFAULT_TIME,
       duration: field(body, 'duration') ?? DEFAULT_DURATION,
       copy: source,
+      // Kept on a re-render, so the corrected form is still one request.
+      submitToken: submitToken ?? newSubmitToken(),
       errors,
     });
     const parsed = parseRequestForm(
       body as Record<string, unknown> | undefined,
       today(),
     );
-    if (parsed.ok === false) {
+    if (parsed.ok === false || submitToken === undefined) {
       hostPage(res, {
         title: source ? 'Copy an event' : 'Host an event',
         status: 422,
-        body: formBody(session, view(parsed.errors), today()),
+        body: formBody(
+          session,
+          view(
+            parsed.ok === false
+              ? parsed.errors
+              : {
+                  form: 'This form was out of date. Check the details and send it again.',
+                },
+          ),
+          today(),
+        ),
       });
       return;
     }
     const form = parsed.value;
-    let created: EventRequest;
+    /** The request this form already made: its page, not a second request. */
+    const toExisting = (existing: EventRequest) =>
+      res.redirect(303, CREATE_PATHS.request(existing.id));
+    let created: EventRequest | undefined;
     try {
       const store = await deps.requests();
+      const sent = await store.findBySubmitToken(session.userId, submitToken);
+      if (sent !== undefined) {
+        toExisting(sent);
+        return;
+      }
       if (
         session.tier === 'regular' &&
         (await store.countPending(session.userId)) >= MAX_PENDING
@@ -532,8 +572,21 @@ export function registerCreatePages(
         sourceEventId: source ? String(source.id) : null,
         title: form.title,
         startLocal: `${form.day}T${form.time}`,
+        submitToken,
         ...settings,
       });
+      if (created === undefined) {
+        // The same form landed twice at once; the other one made it.
+        const raced = await store.findBySubmitToken(
+          session.userId,
+          submitToken,
+        );
+        if (raced === undefined) {
+          throw new Error('Request with this submit token vanished');
+        }
+        toExisting(raced);
+        return;
+      }
     } catch (error: unknown) {
       storeUnavailable(res, error);
       return;

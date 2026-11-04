@@ -227,6 +227,71 @@ const request = (over: Partial<NewEventRequest> = {}): NewEventRequest => ({
       );
     });
 
+    it('a failed request with no event can be denied; one with an event cannot', async () => {
+      const { id } = await repo.create(request());
+      await repo.startPublishing(id, 1, LEAD, ['pending']);
+      await repo.finish(id, 2, { status: 'failed', failure: 'No host.' });
+      expect(await repo.deny(id, 3, LEAD, 'No longer a host')).toMatchObject({
+        status: 'denied',
+        denyReason: 'No longer a host',
+        version: 4,
+      });
+
+      const other = await repo.create(request());
+      await repo.startPublishing(other.id, 1, LEAD, ['pending']);
+      await repo.recordCreated(other.id, 2, '317000001', 'https://x/');
+      await repo.finish(other.id, 3, { status: 'failed', failure: 'RSVPs.' });
+      expect(await repo.deny(other.id, 4, LEAD, 'No')).toBeUndefined();
+      expect((await repo.get(other.id))?.status).toBe('failed');
+    });
+
+    it('a form token makes one request per host, however often it is sent', async () => {
+      const token = 'form-token-0123456789';
+      const first = await repo.create(request({ submitToken: token }));
+      expect(first?.submitToken).toBe(token);
+      const [a, b] = await Promise.all([
+        repo.create(request({ submitToken: token })),
+        repo.create(request({ submitToken: token })),
+      ]);
+      expect(a).toBeUndefined();
+      expect(b).toBeUndefined();
+      expect(await repo.findBySubmitToken(HOST, token)).toEqual(first);
+      // Another host's form with the same token is its own request.
+      const theirs = await repo.create(
+        request({ meetupMemberId: '5151', submitToken: token }),
+      );
+      expect(theirs?.id).not.toBe(first?.id);
+      expect(await repo.findBySubmitToken('9999', token)).toBeUndefined();
+      expect(await repo.findBySubmitToken(HOST, 'bad token')).toBeUndefined();
+      // Requests without a token are never merged.
+      await repo.create(request());
+      await repo.create(request());
+      const { rows } = await pool.query<{ n: string }>(
+        'SELECT count(*) AS n FROM event_requests',
+      );
+      expect(Number(rows[0].n)).toBe(4);
+      expect(
+        (
+          await pool.query<{ n: string }>(
+            "SELECT count(*) AS n FROM event_request_events WHERE action = 'submit'",
+          )
+        ).rows[0].n,
+      ).toBe('4');
+    });
+
+    it('adds the token column to a table made before it', async () => {
+      await pool.query('DROP INDEX event_requests_submit_token_idx');
+      await pool.query('ALTER TABLE event_requests DROP COLUMN submit_token');
+      await ensureEventRequestSchema(pool);
+      const made = await repo.create(
+        request({ submitToken: 'form-token-after-alter' }),
+      );
+      expect(made?.submitToken).toBe('form-token-after-alter');
+      expect(
+        await repo.create(request({ submitToken: 'form-token-after-alter' })),
+      ).toBeUndefined();
+    });
+
     it('the history is append-only', async () => {
       const { id } = await repo.create(request());
       await expect(

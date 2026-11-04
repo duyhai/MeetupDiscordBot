@@ -304,14 +304,27 @@ export interface CreateEventInput {
   venueId?: string;
 }
 
+/** A validation error Meetup returns inside a mutation's payload (not a GraphQL error). */
+export interface PayloadError {
+  code: string;
+  field?: string | null;
+  message: string;
+}
+
 export interface CreateEventResponse {
-  createEvent: { event: { eventUrl: string; id: string } };
+  createEvent: {
+    event: { eventUrl: string; id: string } | null;
+    errors?: PayloadError[] | null;
+  };
 }
 
 export type EditEventInput = Partial<CreateEventInput> & { eventId: string };
 
 export interface EditEventResponse {
-  editEvent: { event: { eventUrl: string; id: string } };
+  editEvent: {
+    event: { eventUrl: string; id: string } | null;
+    errors?: PayloadError[] | null;
+  };
 }
 
 export interface MeetupGroupMember {
@@ -371,7 +384,10 @@ export interface CloseEventRsvpsInput {
 }
 
 export interface CloseEventRsvpsResponse {
-  closeEventRsvps: { event: { id: string } };
+  closeEventRsvps: {
+    event: { id: string } | null;
+    errors?: PayloadError[] | null;
+  };
 }
 
 export interface PublishEventDraftInput {

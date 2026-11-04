@@ -138,6 +138,36 @@ describe('host request queue', () => {
     expect(res.text).not.toContain(`action="${QUEUE}/4/retry"`);
   });
 
+  it('a failed request with no event can be denied; one with an event cannot', async () => {
+    const { get } = await setup({
+      rows: [
+        eventRequestRow({ id: '2', status: 'failed', failure: 'No host.' }),
+        eventRequestRow({
+          id: '3',
+          status: 'failed',
+          failure: 'RSVPs not applied.',
+          meetupEventId: '317000001',
+          eventUrl: 'https://www.meetup.com/1-5genasians/events/317000001/',
+        }),
+      ],
+    });
+    const res = await get(QUEUE);
+    expect(res.text).toContain(`action="${QUEUE}/2/deny"`);
+    expect(res.text).toContain(`action="${QUEUE}/2/retry"`);
+    expect(res.text).not.toContain(`action="${QUEUE}/3/deny"`);
+    expect(res.text).toContain(`action="${QUEUE}/3/retry"`);
+  });
+
+  it('a waiting request whose start has passed offers only Deny', async () => {
+    const { get } = await setup({
+      rows: [eventRequestRow({ startLocal: '2026-10-05T09:00' })],
+    });
+    const res = await get(QUEUE);
+    expect(res.text).not.toContain(`action="${QUEUE}/1/approve"`);
+    expect(res.text).toContain(`action="${QUEUE}/1/deny"`);
+    expect(res.text).toContain('The start time has passed');
+  });
+
   it('a store outage is a 503', async () => {
     const { get } = await setup();
     const res = await get(QUEUE);

@@ -15,6 +15,7 @@ import {
   editEvent,
   publishEventDraft,
 } from './mutations.js';
+import { throwOnPayloadErrors } from './payloadErrors.js';
 import {
   getEvent,
   getEventForCopy,
@@ -646,6 +647,11 @@ export class GqlMeetupClient {
         { input },
       );
       logger.info(`createEvent result: ${JSON.stringify(result)}`);
+      // An event that exists is returned even with errors alongside it, so
+      // the caller records it rather than creating a second one.
+      if (!result.createEvent?.event) {
+        throwOnPayloadErrors('createEvent', result.createEvent?.errors);
+      }
       return result;
     } catch (error) {
       logger.error(error);
@@ -660,6 +666,7 @@ export class GqlMeetupClient {
         input,
       });
       logger.info(`editEvent result: ${JSON.stringify(result)}`);
+      throwOnPayloadErrors('editEvent', result.editEvent?.errors);
       return result;
     } catch (error) {
       logger.error(error);
@@ -677,6 +684,7 @@ export class GqlMeetupClient {
         { input },
       );
       logger.info(`closeEventRsvps result: ${JSON.stringify(result)}`);
+      throwOnPayloadErrors('closeEventRsvps', result.closeEventRsvps?.errors);
       return result;
     } catch (error) {
       logger.error(error);

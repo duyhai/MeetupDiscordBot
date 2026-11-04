@@ -2,7 +2,10 @@ import dayjs from 'dayjs';
 import express, { RequestHandler, Response } from 'express';
 import { Logger } from 'tslog';
 
-import { PublishOutcome } from '../../lib/hosts/publishRequest.js';
+import {
+  PublishOutcome,
+  STUCK_PUBLISHING_MS,
+} from '../../lib/hosts/publishRequest.js';
 import { LogEntry } from '../../lib/helpers/discordLogger.js';
 import {
   DASHBOARD_PATHS,
@@ -14,6 +17,7 @@ import {
   EventRequestStatus,
   PublishFrom,
 } from '../../lib/repositories/postgresEventRequestRepository.js';
+import { tz } from '../../util/timezone.js';
 import { dashboardLocals } from '../dashboardRouter.js';
 import { SafeHtml, html, localUrl, memberText, safeHref } from '../html.js';
 import { dashboardPage, load, notFound } from '../pageKit.js';
@@ -149,36 +153,55 @@ function cardActions(
   }
   const csrfField = html`<input type="hidden" name="_csrf" value="${csrf}" />
     <input type="hidden" name="version" value="${r.version}" />`;
+  const denyForm = html`<form
+    method="post"
+    action="${localUrl(actionPath(r.id, 'deny'))}"
+  >
+    ${csrfField}
+    <label class="field"
+      >Reason (the host sees it)
+      <textarea
+        name="reason"
+        rows="2"
+        maxlength="${DENY_REASON_MAX}"
+        required
+      ></textarea>
+    </label>
+    <button type="submit" class="danger">Deny</button>
+  </form>`;
+  // Publishing refuses a start in the past; offer only Deny for one.
+  const started = tz(dayjs(now)).format('YYYY-MM-DDTHH:mm') >= r.startLocal;
   if (r.status === 'pending') {
     return html`<div class="actions">
-      <form method="post" action="${localUrl(actionPath(r.id, 'approve'))}">
-        ${csrfField}
-        <button type="submit">Approve and publish</button>
-      </form>
-      <form method="post" action="${localUrl(actionPath(r.id, 'deny'))}">
-        ${csrfField}
-        <label class="field"
-          >Reason (the host sees it)
-          <textarea
-            name="reason"
-            rows="2"
-            maxlength="${DENY_REASON_MAX}"
-            required
-          ></textarea>
-        </label>
-        <button type="submit" class="danger">Deny</button>
-      </form>
+      ${
+        started
+          ? html`<p class="note attn">
+              The start time has passed, so this can no longer be published.
+            </p>`
+          : html`<form
+              method="post"
+              action="${localUrl(actionPath(r.id, 'approve'))}"
+            >
+              ${csrfField}
+              <button type="submit">Approve and publish</button>
+            </form>`
+      }
+      ${denyForm}
     </div>`;
   }
   const stuck =
     r.status === 'publishing' &&
-    now.getTime() - r.updatedAt.getTime() >= 10 * 60 * 1000;
+    now.getTime() - r.updatedAt.getTime() >= STUCK_PUBLISHING_MS;
   if (r.status === 'failed' || stuck) {
+    // Deny closes a failed request with no event recorded; one with an
+    // event on Meetup is finished by Retry instead.
+    const deniable = r.status === 'failed' && r.meetupEventId === null;
     return html`<div class="actions">
       <form method="post" action="${localUrl(actionPath(r.id, 'retry'))}">
         ${csrfField}
         <button type="submit">Retry</button>
       </form>
+      ${deniable ? denyForm : ''}
     </div>`;
   }
   return html``;
