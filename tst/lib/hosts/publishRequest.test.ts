@@ -401,7 +401,7 @@ describe('publishRequest', () => {
     expect(noTier.meetup.createEvent).not.toHaveBeenCalled();
   });
 
-  it('a created event that cannot be recorded says not to retry', async () => {
+  it('a created event that cannot be recorded says Retry will find it', async () => {
     const { d } = deps(base());
     vi.mocked(d.requests.recordCreated).mockRejectedValue(new Error('pg down'));
     const outcome = await publishRequest(d, '7', 1, LEAD, ['pending']);

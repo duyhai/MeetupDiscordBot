@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  ExistingEvent,
   PUBLISH_FAILURES,
   PublishOutcome,
 } from '../../../src/lib/hosts/publishRequest.js';
@@ -49,6 +50,7 @@ async function setup(
       version: number,
       actor: string,
     ) => Promise<PublishOutcome>;
+    existing?: ExistingEvent | Error;
   } = {},
 ) {
   const store = fakeEventRequests(options.rows ?? [eventRequestRow()]);
@@ -66,6 +68,14 @@ async function setup(
       })),
   );
   const audit = vi.fn().mockResolvedValue(true);
+  const findExistingEvent = vi.fn(
+    async (_request: EventRequest): Promise<ExistingEvent | undefined> => {
+      if (options.existing instanceof Error) {
+        throw options.existing;
+      }
+      return options.existing;
+    },
+  );
   const { req } = await makeApp({
     now: () => PAGE_NOW.getTime(),
     protectedRoutes: (r) =>
@@ -76,6 +86,7 @@ async function setup(
           audit,
           eventRequests: async () => store,
           publishRequest,
+          findExistingEvent,
         }),
       }),
   });
@@ -89,7 +100,15 @@ async function setup(
       .set('Origin', ORIGIN)
       .type('form')
       .send({ _csrf: token, ...body });
-  return { store, isLeadership, publishRequest, audit, get, post };
+  return {
+    store,
+    isLeadership,
+    publishRequest,
+    findExistingEvent,
+    audit,
+    get,
+    post,
+  };
 }
 
 describe('host request queue', () => {
@@ -165,33 +184,47 @@ describe('host request queue', () => {
     expect(res.text).toContain(`action="${QUEUE}/3/retry"`);
   });
 
-  it('a failed request that may have made an event offers only Retry', async () => {
+  it('a failed request with its event recorded offers Mark resolved, not Deny', async () => {
     const { get } = await setup({
       rows: [
         eventRequestRow({
           id: '2',
           status: 'failed',
-          failure: PUBLISH_FAILURES.createFailed,
+          failure: PUBLISH_FAILURES.rsvp('https://www.meetup.com/x/events/1/'),
+          meetupEventId: '317000001',
         }),
+        eventRequestRow({ id: '3', status: 'failed', failure: 'No host.' }),
+      ],
+    });
+    const res = await get(QUEUE);
+    expect(res.text).toContain(`action="${QUEUE}/2/resolve"`);
+    expect(res.text).not.toContain(`action="${QUEUE}/2/deny"`);
+    expect(res.text).not.toContain(`action="${QUEUE}/3/resolve"`);
+  });
+
+  it('a failed request past its start with no event offers Deny, not Retry', async () => {
+    const { get } = await setup({
+      rows: [
+        eventRequestRow({
+          id: '2',
+          status: 'failed',
+          startLocal: '2026-10-05T09:00',
+          failure: PUBLISH_FAILURES.startPassed,
+        }),
+        // Stuck: Retry is how it leaves 'publishing', even past its start.
         eventRequestRow({
           id: '3',
-          status: 'failed',
-          failure: PUBLISH_FAILURES.notRecorded(
-            'https://www.meetup.com/1-5genasians/events/317000001/',
-          ),
-        }),
-        eventRequestRow({
-          id: '4',
-          status: 'failed',
-          failure: PUBLISH_FAILURES.checkFailed,
+          status: 'publishing',
+          startLocal: '2026-10-05T09:00',
+          updatedAt: new Date(PAGE_NOW.getTime() - 11 * 60_000),
         }),
       ],
     });
     const res = await get(QUEUE);
-    for (const id of ['2', '3', '4']) {
-      expect(res.text).toContain(`action="${QUEUE}/${id}/retry"`);
-      expect(res.text).not.toContain(`action="${QUEUE}/${id}/deny"`);
-    }
+    expect(res.text).not.toContain(`action="${QUEUE}/2/retry"`);
+    expect(res.text).toContain(`action="${QUEUE}/2/deny"`);
+    expect(res.text).toContain('so Retry can');
+    expect(res.text).toContain(`action="${QUEUE}/3/retry"`);
   });
 
   it('a waiting request whose start has passed offers only Deny', async () => {
@@ -308,30 +341,49 @@ describe('queue actions', () => {
     );
   });
 
-  it('deny of a failed request that may have made an event is refused', async () => {
-    const { post, store } = await setup({
+  it('deny of a failed request whose event is on Meetup is refused', async () => {
+    const { post, store, findExistingEvent } = await setup({
       rows: [
         eventRequestRow({
           status: 'failed',
           version: 3,
-          failure: PUBLISH_FAILURES.notRecorded(
-            'https://www.meetup.com/1-5genasians/events/317000001/',
-          ),
+          failure: PUBLISH_FAILURES.createFailed,
         }),
       ],
+      existing: {
+        id: '317000001',
+        eventUrl: 'https://www.meetup.com/x/events/317000001/',
+      },
     });
     const res = await post(`${QUEUE}/1/deny`, { version: '3', reason: 'No' });
-    expect(res.headers.location).toBe(`${QUEUE}?result=cannot-deny`);
+    expect(res.headers.location).toBe(`${QUEUE}?result=deny-event-exists`);
+    expect(findExistingEvent).toHaveBeenCalledOnce();
     expect(store.deny).not.toHaveBeenCalled();
   });
 
-  it('deny of a failed request that made nothing goes through', async () => {
+  it('deny of a failed request is refused when Meetup cannot be asked', async () => {
     const { post, store } = await setup({
       rows: [
         eventRequestRow({
           status: 'failed',
           version: 3,
-          failure: PUBLISH_FAILURES.startPassed,
+          failure: PUBLISH_FAILURES.createFailed,
+        }),
+      ],
+      existing: new Error('meetup down'),
+    });
+    const res = await post(`${QUEUE}/1/deny`, { version: '3', reason: 'No' });
+    expect(res.headers.location).toBe(`${QUEUE}?result=deny-check-failed`);
+    expect(store.deny).not.toHaveBeenCalled();
+  });
+
+  it('deny of a failed request with nothing on Meetup goes through', async () => {
+    const { post, store } = await setup({
+      rows: [
+        eventRequestRow({
+          status: 'failed',
+          version: 3,
+          failure: PUBLISH_FAILURES.createFailed,
         }),
       ],
     });
@@ -343,6 +395,45 @@ describe('queue actions', () => {
     expect(store.deny).toHaveBeenCalledWith('1', 3, USER.id, 'Pick a new date');
   });
 
+  it('deny of a waiting request does not ask Meetup', async () => {
+    const { post, findExistingEvent } = await setup();
+    await post(`${QUEUE}/1/deny`, { version: '1', reason: 'No' });
+    expect(findExistingEvent).not.toHaveBeenCalled();
+  });
+
+  it('Mark resolved publishes a failed request with its event, and logs it', async () => {
+    const { post, store, audit } = await setup({
+      rows: [
+        eventRequestRow({
+          status: 'failed',
+          version: 5,
+          failure: 'RSVPs not applied.',
+          meetupEventId: '317000001',
+          title: '**bold** @everyone',
+        }),
+      ],
+    });
+    const res = await post(`${QUEUE}/1/resolve`, { version: '5' });
+    expect(res.headers.location).toBe(`${QUEUE}?result=resolved`);
+    expect(store.resolve).toHaveBeenCalledWith('1', 5, USER.id);
+    const entry = JSON.stringify(audit.mock.calls.at(-1)?.[0]);
+    expect(entry).toContain('Host request marked resolved');
+    expect(entry).toContain('\\\\*\\\\*bold');
+    // Already resolved: the same version is stale.
+    expect((await post(`${QUEUE}/1/resolve`, { version: '5' })).status).toBe(
+      409,
+    );
+  });
+
+  it('Mark resolved of a request with no event recorded changes nothing', async () => {
+    const { post } = await setup({
+      rows: [eventRequestRow({ status: 'failed', failure: 'No host.' })],
+    });
+    expect((await post(`${QUEUE}/1/resolve`, { version: '1' })).status).toBe(
+      409,
+    );
+  });
+
   it('a Moderator is refused and nothing changes', async () => {
     const { post, publishRequest, store, audit } = await setup({
       leader: false,
@@ -350,8 +441,10 @@ describe('queue actions', () => {
     const res = await post(`${QUEUE}/1/approve`, { version: '1' });
     expect(res.headers.location).toBe(`${QUEUE}?result=not-leadership`);
     await post(`${QUEUE}/1/deny`, { version: '1', reason: 'no' });
+    await post(`${QUEUE}/1/resolve`, { version: '1' });
     expect(publishRequest).not.toHaveBeenCalled();
     expect(store.deny).not.toHaveBeenCalled();
+    expect(store.resolve).not.toHaveBeenCalled();
     // One refusal post per window.
     expect(
       audit.mock.calls.filter(([e]) =>

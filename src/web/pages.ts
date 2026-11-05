@@ -213,6 +213,9 @@ a.cal-day{position:relative;display:inline-flex;align-items:center;min-width:var
 .sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
 form.request-form label.field{margin:0 0 var(--s3)}
 form.request-form label.field input,form.request-form label.field select{display:block;width:100%;max-width:24rem;margin-top:var(--s1)}
+form.request-form details.more-options{margin:0 0 var(--s3);padding-bottom:var(--s1);
+  border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
+form.request-form details.more-options textarea{max-width:40rem}
 .wrap-anywhere{overflow-wrap:anywhere}
 .field-error{display:block;margin-top:var(--s1);color:var(--attn-ink);font-size:var(--t-sm);font-weight:600}
 td.cal.past{color:var(--muted);background:var(--bg)}

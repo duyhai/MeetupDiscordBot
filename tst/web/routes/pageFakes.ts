@@ -810,7 +810,7 @@ export function eventRequestRow(
   };
 }
 
-/** The queue's store over fixed rows; deny changes a pending (or failed, no event) row at its version. */
+/** The queue's store over fixed rows; deny and resolve change a row at its version, as Postgres does. */
 export function fakeEventRequests(rows: EventRequest[] = [eventRequestRow()]) {
   return {
     get: vi.fn(async (id: string) => rows.find((r) => r.id === id)),
@@ -838,6 +838,24 @@ export function fakeEventRequests(rows: EventRequest[] = [eventRequestRow()]) {
         return { ...row };
       },
     ),
+    resolve: vi.fn(async (id: string, version: number, actor: string) => {
+      const row = rows.find((r) => r.id === id);
+      if (
+        !row ||
+        row.version !== version ||
+        row.status !== 'failed' ||
+        row.meetupEventId === null
+      ) {
+        return undefined;
+      }
+      Object.assign(row, {
+        status: 'published',
+        failure: null,
+        decidedBy: actor,
+        version: row.version + 1,
+      });
+      return { ...row };
+    }),
   } satisfies StaffRequestStore;
 }
 
@@ -894,6 +912,7 @@ export function fakePageDeps(
       done: Promise.resolve({ ok: true }),
     })),
     eventRequests: async () => fakeEventRequests(),
+    findExistingEvent: vi.fn(async () => undefined),
     publishRequest: vi.fn(async (): Promise<PublishOutcome> => ({
       code: 'published',
       request: eventRequestRow({ status: 'published' }),

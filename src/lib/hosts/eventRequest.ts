@@ -65,11 +65,30 @@ export const TITLE_MAX =
 
 const length = (text: string) => Array.from(text).length;
 
+/** The longest description a host can type (the tip goes on top). */
+export const DESCRIPTION_MAX = 10_000;
+/** The RSVP and guest limits a host can set, as the table allows. */
+export const RSVP_LIMIT_RANGE = { min: 1, max: 500 } as const;
+export const GUEST_LIMIT_RANGE = { min: 0, max: 10 } as const;
+
+// In a description: control characters other than tab and line breaks,
+// and the bidi embeddings, overrides and isolates (spoofing).
+const DESCRIPTION_UNPRINTABLE =
+  /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F\u202A-\u202E\u2066-\u2069]/u;
+
 export interface RequestForm {
   title: string;
   day: string;
   time: string;
   duration: Duration;
+  /**
+   * The host's description, or null for the template's: left as it was
+   * pre-filled, or blank. Line breaks are LF.
+   */
+  description: string | null;
+  /** null when left blank: the template's limit. */
+  rsvpLimit: number | null;
+  guestLimit: number | null;
 }
 
 export type FormField = keyof RequestForm;
@@ -133,12 +152,64 @@ export function parseRequestForm(
     errors.duration = 'Pick how long the event runs.';
   }
 
+  const rawDescription = (field(body, 'description') ?? '')
+    .replace(/\r\n?/g, '\n')
+    .trim();
+  let description: string | null = null;
+  if (
+    rawDescription !== '' &&
+    rawDescription !== GUEST_HOST_EVENT_DESCRIPTION.trim()
+  ) {
+    if (DESCRIPTION_UNPRINTABLE.test(rawDescription)) {
+      errors.description = 'The description has characters Meetup cannot show.';
+    } else if (length(rawDescription) > DESCRIPTION_MAX) {
+      errors.description = `Keep the description to ${DESCRIPTION_MAX.toLocaleString('en-US')} characters.`;
+    } else {
+      description = rawDescription;
+    }
+  }
+
+  const limit = (
+    name: 'rsvpLimit' | 'guestLimit',
+    range: { min: number; max: number },
+    message: string,
+  ): number | null => {
+    const raw = (field(body, name) ?? '').trim();
+    if (raw === '') {
+      return null;
+    }
+    const n = /^[0-9]{1,4}$/.test(raw) ? Number(raw) : NaN;
+    if (!(n >= range.min && n <= range.max)) {
+      errors[name] = message;
+      return null;
+    }
+    return n;
+  };
+  const rsvpLimit = limit(
+    'rsvpLimit',
+    RSVP_LIMIT_RANGE,
+    `Enter an RSVP limit from ${RSVP_LIMIT_RANGE.min} to ${RSVP_LIMIT_RANGE.max}, or leave it blank.`,
+  );
+  const guestLimit = limit(
+    'guestLimit',
+    GUEST_LIMIT_RANGE,
+    `Enter a guest limit from ${GUEST_LIMIT_RANGE.min} to ${GUEST_LIMIT_RANGE.max}, or leave it blank.`,
+  );
+
   if (Object.keys(errors).length > 0) {
     return { ok: false, errors };
   }
   return {
     ok: true,
-    value: { title, day, time, duration: duration as Duration },
+    value: {
+      title,
+      day,
+      time,
+      duration: duration as Duration,
+      description,
+      rsvpLimit,
+      guestLimit,
+    },
   };
 }
 
@@ -178,27 +249,69 @@ const VENUE_ID = /^[A-Za-z0-9_-]{1,40}$/;
 const inRange = (n: unknown, min: number, max: number): n is number =>
   typeof n === 'number' && Number.isInteger(n) && n >= min && n <= max;
 
+/** The host's optional choices on the fresh-event form; null means the template's. */
+export type FreshChoices = Pick<
+  RequestForm,
+  'description' | 'rsvpLimit' | 'guestLimit'
+>;
+
+const NO_CHOICES: FreshChoices = {
+  description: null,
+  rsvpLimit: null,
+  guestLimit: null,
+};
+
 /**
- * A fresh event's settings: the guest-host description (regular hosts get
- * a Host Tip first, as the Discord flow does) and the template's limits.
+ * A fresh event's settings: the host's description or the guest-host one
+ * (regular hosts get a Host Tip first, as the Discord flow does), and the
+ * host's limits or the template's.
  */
 export function freshSettings(
   tier: HostTier,
   tip: string,
   duration: Duration,
+  choices: FreshChoices = NO_CHOICES,
 ): RequestSettings {
+  const body = choices.description ?? GUEST_HOST_EVENT_DESCRIPTION;
   return {
     description:
-      tier === 'regular'
-        ? `💡 Host Tip: ${tip} 💡\n\n${GUEST_HOST_EVENT_DESCRIPTION}`
-        : GUEST_HOST_EVENT_DESCRIPTION,
+      tier === 'regular' ? `💡 Host Tip: ${tip} 💡\n\n${body}` : body,
     duration,
-    rsvpLimit: TEMPLATE_RSVP.rsvpLimit,
-    guestLimit: TEMPLATE_RSVP.guestLimit,
+    rsvpLimit: choices.rsvpLimit ?? TEMPLATE_RSVP.rsvpLimit,
+    guestLimit: choices.guestLimit ?? TEMPLATE_RSVP.guestLimit,
     featuredPhotoId: TEMPLATE_PHOTO,
     venueId: null,
     howToFindUs: null,
   };
+}
+
+/**
+ * True when a stored request is what this form would make: how a form sent
+ * a second time with changes is told apart from a plain repeat. The tip is
+ * random, so a fresh description is compared without it.
+ */
+export function formMatches(
+  request: EventRequest,
+  form: RequestForm,
+  kind: 'fresh' | 'copy',
+): boolean {
+  if (
+    request.title !== form.title ||
+    request.startLocal !== `${form.day}T${form.time}` ||
+    request.duration !== form.duration
+  ) {
+    return false;
+  }
+  if (kind === 'copy') {
+    return true;
+  }
+  return (
+    request.description.endsWith(
+      form.description ?? GUEST_HOST_EVENT_DESCRIPTION,
+    ) &&
+    request.rsvpLimit === (form.rsvpLimit ?? TEMPLATE_RSVP.rsvpLimit) &&
+    request.guestLimit === (form.guestLimit ?? TEMPLATE_RSVP.guestLimit)
+  );
 }
 
 /** What the form starts with when copying: the source's title, time and length. */

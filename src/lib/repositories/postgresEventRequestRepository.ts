@@ -123,7 +123,7 @@ CREATE TABLE IF NOT EXISTS event_request_events (
   id          BIGSERIAL PRIMARY KEY,
   request_id  BIGINT NOT NULL REFERENCES event_requests (id),
   action      TEXT NOT NULL CHECK (action IN
-                ('submit', 'start_publishing', 'created', 'published', 'failed', 'deny')),
+                ('submit', 'start_publishing', 'created', 'published', 'failed', 'deny', 'resolve')),
   actor       TEXT NOT NULL CHECK (length(actor) BETWEEN 1 AND 40),
   detail      TEXT CHECK (length(detail) <= ${FAILURE_MAX}),
   version     INTEGER NOT NULL CHECK (version >= 1),
@@ -232,7 +232,13 @@ const isRequestId = (id: unknown): id is string =>
   typeof id === 'string' && REQUEST_ID.test(id);
 
 type Action =
-  'submit' | 'start_publishing' | 'created' | 'published' | 'failed' | 'deny';
+  | 'submit'
+  | 'start_publishing'
+  | 'created'
+  | 'published'
+  | 'failed'
+  | 'deny'
+  | 'resolve';
 
 async function history(
   client: pg.PoolClient,
@@ -535,6 +541,36 @@ export class PostgresEventRequestRepository {
       );
       if (rows[0] !== undefined) {
         await history(c, rows[0], 'deny', actor, reason);
+      }
+      return rows[0];
+    });
+  }
+
+  /**
+   * Marks a failed request whose event is on Meetup as published, once
+   * leadership has fixed the event there by hand. The failure text stays in
+   * the history. undefined when it moved on.
+   */
+  resolve(
+    id: string,
+    seenVersion: number,
+    actor: string,
+  ): Promise<EventRequest | undefined> {
+    if (!isRequestId(id) || !Number.isInteger(seenVersion)) {
+      return Promise.resolve(undefined);
+    }
+    return this.change('event request resolve', async (c) => {
+      const { rows } = await c.query<Row>(
+        `UPDATE event_requests
+            SET status = 'published', failure = NULL, decided_by = $3,
+                decided_at = now(), version = version + 1, updated_at = now()
+          WHERE id = $1 AND version = $2
+            AND status = 'failed' AND meetup_event_id IS NOT NULL
+          RETURNING *`,
+        [id, seenVersion, actor],
+      );
+      if (rows[0] !== undefined) {
+        await history(c, rows[0], 'resolve', actor);
       }
       return rows[0];
     });

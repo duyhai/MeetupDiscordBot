@@ -1,4 +1,5 @@
 import dayjs from 'dayjs';
+import { escapeMarkdown } from 'discord.js';
 import { Logger } from 'tslog';
 
 import {
@@ -121,30 +122,40 @@ export const PUBLISH_FAILURES = {
     'finds it on Meetup and finishes it without creating a second event.',
 } as const;
 
-/**
- * The failures after which nothing can exist on Meetup for the request
- * (it stopped before createEvent, and a retry had already found nothing),
- * plus a start that has passed, which no retry can fix. Only these may be
- * denied: denying any other failed request could leave a live event on
- * Meetup that the host is told was refused.
- */
-const DENIABLE_FAILURES: ReadonlySet<string> = new Set([
-  PUBLISH_FAILURES.startPassed,
-  PUBLISH_FAILURES.startPassedRetry,
-  PUBLISH_FAILURES.notAHost,
-  PUBLISH_FAILURES.tierUnknown,
-]);
+/** True once the request's Pacific start time has come. */
+export function startHasPassed(startLocal: string, now: Date): boolean {
+  return tz(dayjs(now)).format('YYYY-MM-DDTHH:mm') >= startLocal;
+}
 
-/** Whether leadership may deny this request as it stands. */
+/**
+ * Whether the queue offers Deny: a waiting request, or a failed one with no
+ * event recorded. The deny POST still asks Meetup first for a failed one,
+ * since several failures mean an event may exist that was never recorded.
+ */
 export function canDeny(r: EventRequest): boolean {
-  if (r.status === 'pending') {
-    return true;
-  }
   return (
+    r.status === 'pending' ||
+    (r.status === 'failed' && r.meetupEventId === null)
+  );
+}
+
+/**
+ * Whether the queue offers Mark resolved: a failed request whose event is
+ * on Meetup (recorded), once leadership has fixed it there by hand.
+ */
+export function canResolve(r: EventRequest): boolean {
+  return r.status === 'failed' && r.meetupEventId !== null;
+}
+
+/**
+ * Whether Retry can do anything: not for a failed request with no event
+ * recorded whose start has passed, which publishing refuses.
+ */
+export function canRetry(r: EventRequest, now: Date): boolean {
+  return !(
     r.status === 'failed' &&
     r.meetupEventId === null &&
-    r.failure !== null &&
-    DENIABLE_FAILURES.has(r.failure)
+    startHasPassed(r.startLocal, now)
   );
 }
 
@@ -197,8 +208,12 @@ export async function publishRequest(
         description: failure,
         fields: [
           { name: 'Request', value: `#${id}`, inline: true },
-          { name: 'Host', value: claimed.hostName, inline: true },
-          { name: 'Title', value: claimed.title },
+          {
+            name: 'Host',
+            value: escapeMarkdown(claimed.hostName),
+            inline: true,
+          },
+          { name: 'Title', value: escapeMarkdown(claimed.title) },
         ],
       })
       .catch(() => undefined);
@@ -228,10 +243,7 @@ export async function publishRequest(
   // A request approved or retried after its start would make a past event
   // (or fail, and a retry could not find it among upcoming events). An
   // event already recorded is still finished: it exists either way.
-  if (
-    eventId === null &&
-    tz(dayjs(deps.now())).format('YYYY-MM-DDTHH:mm') >= claimed.startLocal
-  ) {
+  if (eventId === null && startHasPassed(claimed.startLocal, deps.now())) {
     return fail(
       isRetry
         ? PUBLISH_FAILURES.startPassedRetry

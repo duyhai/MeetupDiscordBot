@@ -48,7 +48,10 @@ import {
   fetchDiscordIdentity,
 } from './discordOAuth.js';
 import { html } from './html.js';
-import { productionPublisher } from './host/hostServices.js';
+import {
+  productionPublishDeps,
+  productionPublisher,
+} from './host/hostServices.js';
 import { organizerLoginDeps } from './organizerLoginDeps.js';
 import { layout } from './pages.js';
 import { discordAccessCheck, discordRoleCheck } from './roleGate.js';
@@ -262,6 +265,7 @@ export function dashboardPageDeps(): DashboardPageDeps {
     upcoming: upcomingLoader,
     eventRequests: () => PostgresEventRequestRepository.instance(),
     publishRequest: productionPublisher(() => discordClient),
+    findExistingEvent: productionPublishDeps(() => discordClient).findExisting,
   };
 }
 

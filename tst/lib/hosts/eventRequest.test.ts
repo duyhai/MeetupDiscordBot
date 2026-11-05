@@ -2,9 +2,12 @@ import { describe, expect, it } from 'vitest';
 
 import {
   CopySource,
+  DESCRIPTION_MAX,
+  FormField,
   copyDefaults,
   copySettings,
   createInputFor,
+  formMatches,
   freshSettings,
   isHostOf,
   parseRequestForm,
@@ -12,7 +15,10 @@ import {
   isEventFor,
 } from '../../../src/lib/hosts/eventRequest.js';
 import { EventRequest } from '../../../src/lib/repositories/postgresEventRequestRepository.js';
-import { createEventTemplate } from '../../../src/templates/createEventTemplate.js';
+import {
+  GUEST_HOST_EVENT_DESCRIPTION,
+  createEventTemplate,
+} from '../../../src/templates/createEventTemplate.js';
 
 const TODAY = '2026-11-03';
 const ANY_TEXT: unknown = expect.any(String);
@@ -38,8 +44,71 @@ describe('parseRequestForm', () => {
         day: '2026-11-04',
         time: '19:00',
         duration: 'PT2H',
+        description: null,
+        rsvpLimit: null,
+        guestLimit: null,
       },
     });
+  });
+
+  it('reads the optional description and limits; untouched means the template', () => {
+    const parse = (over: Record<string, string>) =>
+      parseRequestForm(form(over), TODAY);
+    expect(parse({ description: GUEST_HOST_EVENT_DESCRIPTION })).toMatchObject({
+      ok: true,
+      value: { description: null, rsvpLimit: null, guestLimit: null },
+    });
+    // Browsers send the pre-filled text back with CRLF line breaks.
+    expect(
+      parse({
+        description: GUEST_HOST_EVENT_DESCRIPTION.replace(/\n/g, '\r\n'),
+        rsvpLimit: ' ',
+        guestLimit: '',
+      }),
+    ).toMatchObject({ ok: true, value: { description: null } });
+    expect(
+      parse({
+        description: '  Bring a board game.\r\nMeet at the cafe.  ',
+        rsvpLimit: '30',
+        guestLimit: '0',
+      }),
+    ).toMatchObject({
+      ok: true,
+      value: {
+        description: 'Bring a board game.\nMeet at the cafe.',
+        rsvpLimit: 30,
+        guestLimit: 0,
+      },
+    });
+  });
+
+  it('refuses out-of-range limits and bad descriptions with fixed texts', () => {
+    const errors = (
+      over: Record<string, string>,
+    ): Partial<Record<FormField, string>> => {
+      const result = parseRequestForm(form(over), TODAY);
+      return result.ok === false ? result.errors : {};
+    };
+    for (const rsvpLimit of ['0', '501', '1e2', '-3', '12.5', 'x']) {
+      expect(errors({ rsvpLimit }).rsvpLimit).toMatch(
+        /RSVP limit from 1 to 500/,
+      );
+    }
+    for (const guestLimit of ['11', '-1', 'two']) {
+      expect(errors({ guestLimit }).guestLimit).toMatch(
+        /guest limit from 0 to 10/,
+      );
+    }
+    expect(errors({ description: 'x'.repeat(DESCRIPTION_MAX + 1) })).toEqual({
+      description: 'Keep the description to 10,000 characters.',
+    });
+    expect(errors({ description: 'ok' + '\u0007' })).toHaveProperty(
+      'description',
+    );
+    expect(errors({ description: 'evil \u202E txt' })).toHaveProperty(
+      'description',
+    );
+    expect(errors({ description: 'x'.repeat(DESCRIPTION_MAX) })).toEqual({});
   });
 
   it('caps every title so the longer prefix still fits in 80', () => {
@@ -200,6 +269,27 @@ describe('copying an event', () => {
 
 describe('fresh events', () => {
   it('adds the Host Tip only for regular hosts', () => {
+    const custom = freshSettings('regular', 'Start small', 'PT2H', {
+      description: 'Bring snacks.',
+      rsvpLimit: 30,
+      guestLimit: 0,
+    });
+    expect(custom).toMatchObject({
+      description: '💡 Host Tip: Start small 💡\n\nBring snacks.',
+      rsvpLimit: 30,
+      guestLimit: 0,
+    });
+    expect(
+      freshSettings('promoted', 'Start small', 'PT2H', {
+        description: 'Bring snacks.',
+        rsvpLimit: null,
+        guestLimit: null,
+      }),
+    ).toMatchObject({
+      description: 'Bring snacks.',
+      rsvpLimit: 12,
+      guestLimit: 1,
+    });
     expect(freshSettings('regular', 'Start small', 'PT2H').description).toMatch(
       /^💡 Host Tip: Start small 💡\n\n\*\*EVENT DETAILS\*\*/,
     );
@@ -334,5 +424,46 @@ describe('isEventFor', () => {
       parseRequestForm(form({ title: 'Family day 👨\u200D👩\u200D👧' }), TODAY)
         .ok,
     ).toBe(true);
+  });
+});
+
+describe('formMatches', () => {
+  const sent = {
+    title: 'Board game night',
+    day: '2026-11-20',
+    time: '19:00',
+    duration: 'PT2H' as const,
+    description: null,
+    rsvpLimit: null,
+    guestLimit: null,
+  };
+  const stored = {
+    title: 'Board game night',
+    startLocal: '2026-11-20T19:00',
+    duration: 'PT2H',
+    description: `💡 Host Tip: anything 💡\n\n${GUEST_HOST_EVENT_DESCRIPTION}`,
+    rsvpLimit: 12,
+    guestLimit: 1,
+  } as EventRequest;
+
+  it('a plain repeat matches, whatever tip the first send got', () => {
+    expect(formMatches(stored, sent, 'fresh')).toBe(true);
+  });
+
+  it('a changed title, time, description or limit does not', () => {
+    expect(formMatches(stored, { ...sent, title: 'Other' }, 'fresh')).toBe(
+      false,
+    );
+    expect(formMatches(stored, { ...sent, time: '18:00' }, 'fresh')).toBe(
+      false,
+    );
+    expect(
+      formMatches(stored, { ...sent, description: 'New text' }, 'fresh'),
+    ).toBe(false);
+    expect(formMatches(stored, { ...sent, rsvpLimit: 20 }, 'fresh')).toBe(
+      false,
+    );
+    // A copy has no optional fields to compare.
+    expect(formMatches(stored, { ...sent, rsvpLimit: 20 }, 'copy')).toBe(true);
   });
 });

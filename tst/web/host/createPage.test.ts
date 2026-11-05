@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { CopySource } from '../../../src/lib/hosts/eventRequest.js';
+import { GUEST_HOST_EVENT_DESCRIPTION } from '../../../src/templates/createEventTemplate.js';
 import {
   EventRequest,
   NewEventRequest,
@@ -403,6 +404,111 @@ describe('submitting a request', () => {
     expect(res.text).toContain('This form was out of date');
     expect(res.text).toMatch(/name="submit" value="[A-Za-z0-9_-]{16,64}"/);
     expect(mem.rows).toHaveLength(0);
+  });
+
+  it('a fresh form folds the optional fields away, pre-filled; a copy has none', async () => {
+    const { req, sid } = await app();
+    const fresh = await get(req, sid, '/host/create');
+    expect(fresh.text).toContain('<details class="more-options">');
+    expect(fresh.text).toContain('<summary>More options</summary>');
+    expect(fresh.text).toContain('**EVENT DETAILS**');
+    expect(fresh.text).toMatch(/name="rsvpLimit"[^>]*value=""/);
+    const copy = await get(req, sid, '/host/create?copy=311111111');
+    expect(copy.text).not.toContain('<details class="more-options"');
+  });
+
+  it('stores the host’s description and limits, tip first, and publishes them', async () => {
+    const { post, mem } = await app();
+    const res = await post({
+      ...good,
+      description: 'Bring a game.\r\nWe meet at the cafe.',
+      rsvpLimit: '30',
+      guestLimit: '0',
+    });
+    expect(res.status).toBe(303);
+    expect(mem.rows[0]).toMatchObject({
+      description:
+        '💡 Host Tip: Start small 💡\n\nBring a game.\nWe meet at the cafe.',
+      rsvpLimit: 30,
+      guestLimit: 0,
+    });
+  });
+
+  it('untouched optional fields mean the template', async () => {
+    const { post, mem } = await app({}, 'promoted');
+    await post({
+      ...good,
+      description: GUEST_HOST_EVENT_DESCRIPTION.replace(/\n/g, '\r\n'),
+      rsvpLimit: '',
+      guestLimit: '',
+    });
+    expect(mem.rows[0]).toMatchObject({
+      description: GUEST_HOST_EVENT_DESCRIPTION,
+      rsvpLimit: 12,
+      guestLimit: 1,
+    });
+  });
+
+  it('a bad limit re-opens the options with the host’s text escaped', async () => {
+    const { post, mem } = await app();
+    const res = await post({
+      ...good,
+      description: HOSTILE,
+      rsvpLimit: '9000',
+    });
+    expect(res.status).toBe(422);
+    expect(res.text).toContain('<details class="more-options" open>');
+    expect(res.text).toContain('Enter an RSVP limit from 1 to 500');
+    expect(res.text).not.toContain('<script>alert');
+    expect(res.text).toContain('&lt;script&gt;alert(1)&lt;/script&gt;');
+    expect(mem.rows).toHaveLength(0);
+  });
+
+  it('a form sent again with changes says the changes were not saved', async () => {
+    const { req, sid, post, mem } = await app();
+    const first = await post({ ...good, submit: 'same-form-token-0001' });
+    const again = await post({
+      ...good,
+      title: 'Board game night, edited',
+      submit: 'same-form-token-0001',
+    });
+    expect(mem.rows).toHaveLength(1);
+    expect(again.headers.location).toBe('/host/requests/1?resent=changed');
+    const page = await get(req, sid, again.headers.location);
+    expect(page.text).toContain('changes in your second send');
+    expect(page.text).toContain('Board game night');
+    // A plain repeat goes to the request with no notice.
+    const repeat = await post({ ...good, submit: 'same-form-token-0001' });
+    expect(repeat.headers.location).toBe(first.headers.location);
+  });
+
+  it('a Community Host publish that outlasts the page still alerts when it finishes', async () => {
+    let finish: (() => void) | undefined;
+    const { post, deps, mem } = await app(
+      {
+        publishDeadlineMs: 20,
+        publish: vi.fn(async (id: string) => {
+          await new Promise<void>((resolve) => {
+            finish = resolve;
+          });
+          const row = mem.rows.find((r) => r.id === id);
+          Object.assign(row, {
+            status: 'published',
+            eventUrl: 'https://www.meetup.com/1-5genasians/events/317000001/',
+          });
+          return { code: 'published' as const, request: row };
+        }),
+      },
+      'promoted',
+    );
+    const res = await post({ ...good, title: '**Bold** _night_' });
+    expect(res.status).toBe(303);
+    expect(deps.alert).not.toHaveBeenCalled();
+    finish?.();
+    await vi.waitFor(() => expect(deps.alert).toHaveBeenCalledOnce());
+    const entry = JSON.stringify(vi.mocked(deps.alert).mock.calls[0]?.[0]);
+    expect(entry).toContain('Community Host published an event');
+    expect(entry).toContain('\\\\*\\\\*Bold');
   });
 
   it('a database outage is a 503 and nothing is alerted', async () => {

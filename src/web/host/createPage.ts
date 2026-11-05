@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto';
 
 import dayjs from 'dayjs';
+import { escapeMarkdown } from 'discord.js';
 import express, { RequestHandler, Response } from 'express';
 import { Logger } from 'tslog';
 
@@ -9,19 +10,27 @@ import {
   CopySource,
   DEFAULT_DURATION,
   DEFAULT_TIME,
+  DESCRIPTION_MAX,
   DURATIONS,
   Duration,
   FormField,
+  GUEST_LIMIT_RANGE,
   MAX_DAYS_AHEAD,
+  RSVP_LIMIT_RANGE,
   START_TIMES,
   copyDefaults,
   copySettings,
+  formMatches,
   freshSettings,
   isHostOf,
   parseRequestForm,
   prefixFor,
   TITLE_MAX,
 } from '../../lib/hosts/eventRequest.js';
+import {
+  GUEST_HOST_EVENT_DESCRIPTION,
+  createEventTemplate,
+} from '../../templates/createEventTemplate.js';
 import { pacificDay } from '../../lib/hosts/hostEvents.js';
 import { PublishOutcome } from '../../lib/hosts/publishRequest.js';
 import { LogEntry } from '../../lib/helpers/discordLogger.js';
@@ -96,6 +105,8 @@ export interface CreatePageDeps {
   alert: (entry: LogEntry) => Promise<unknown>;
   /** A Host Tip for a regular host's fresh event. */
   tip: () => string;
+  /** Tests only: how long a Community Host's publish holds the page. */
+  publishDeadlineMs?: number;
 }
 
 interface FormView {
@@ -103,6 +114,10 @@ interface FormView {
   day: string;
   time: string;
   duration: string;
+  /** The optional fields, as typed (a fresh event only). */
+  description: string;
+  rsvpLimit: string;
+  guestLimit: string;
   copy?: CopySource;
   /** One per rendered form: sending it twice makes one request. */
   submitToken: string;
@@ -110,6 +125,13 @@ interface FormView {
 }
 
 const newSubmitToken = () => randomBytes(18).toString('base64url');
+
+/** The optional fields as a fresh form starts: the template's description, blank limits. */
+const DEFAULT_OPTIONS = {
+  description: GUEST_HOST_EVENT_DESCRIPTION,
+  rsvpLimit: '',
+  guestLimit: '',
+} as const;
 
 /** One form field as a string; a missing or repeated field is undefined. */
 function field(body: unknown, name: string): string | undefined {
@@ -128,6 +150,64 @@ const timeOption = (t: string) => dayjs(`2000-01-01T${t}`).format('h:mm A');
 
 function errorText(message: string | undefined): SafeHtml | '' {
   return message ? html`<span class="field-error">${message}</span>` : '';
+}
+
+const TEMPLATE_LIMITS = createEventTemplate.rsvpSettings;
+
+/**
+ * A fresh event's optional fields, folded away: open when the host changed
+ * one or one has an error, so nothing they typed is hidden.
+ */
+function moreOptions(view: FormView): SafeHtml {
+  const changed =
+    view.rsvpLimit.trim() !== '' ||
+    view.guestLimit.trim() !== '' ||
+    view.description.replace(/\r\n?/g, '\n').trim() !==
+      GUEST_HOST_EVENT_DESCRIPTION.trim();
+  const hasError =
+    view.errors.description !== undefined ||
+    view.errors.rsvpLimit !== undefined ||
+    view.errors.guestLimit !== undefined;
+  const inner = html`<summary>More options</summary>
+    <p class="muted">
+      Optional. Leave these as they are to use the group's standard description
+      and limits.
+    </p>
+    <label class="field"
+      >Description
+      <textarea name="description" rows="10" maxlength="${DESCRIPTION_MAX}">
+${view.description}</textarea>
+      ${errorText(view.errors.description)}
+    </label>
+    <label class="field"
+      >RSVP limit (${RSVP_LIMIT_RANGE.min}–${RSVP_LIMIT_RANGE.max}; blank means
+      ${TEMPLATE_LIMITS.rsvpLimit})
+      <input
+        name="rsvpLimit"
+        type="number"
+        inputmode="numeric"
+        min="${RSVP_LIMIT_RANGE.min}"
+        max="${RSVP_LIMIT_RANGE.max}"
+        value="${view.rsvpLimit}"
+      />
+      ${errorText(view.errors.rsvpLimit)}
+    </label>
+    <label class="field"
+      >Guests per member (${GUEST_LIMIT_RANGE.min}–${GUEST_LIMIT_RANGE.max};
+      blank means ${TEMPLATE_LIMITS.guestLimit})
+      <input
+        name="guestLimit"
+        type="number"
+        inputmode="numeric"
+        min="${GUEST_LIMIT_RANGE.min}"
+        max="${GUEST_LIMIT_RANGE.max}"
+        value="${view.guestLimit}"
+      />
+      ${errorText(view.errors.guestLimit)}
+    </label>`;
+  return changed || hasError
+    ? html`<details class="more-options" open>${inner}</details>`
+    : html`<details class="more-options">${inner}</details>`;
 }
 
 /** The create form; every value the host typed is escaped. */
@@ -171,8 +251,9 @@ function formBody(
         they are on Meetup. Pick the new date below.
       </p>`
     : html`<p>
-        The event starts with the group's standard description. Once it is on
-        Meetup you are its host, so you can fill in the details there.
+        The event starts with the group's standard description and limits;
+        change them under More options if you like. Once it is on Meetup you are
+        its host, so you can fill in the details there too.
       </p>`;
   const next = promoted
     ? html`<p class="muted">
@@ -231,7 +312,7 @@ function formBody(
         </select>
         ${errorText(view.errors.duration)}
       </label>
-      ${next}
+      ${source ? '' : moreOptions(view)} ${next}
       <button type="submit">
         ${promoted ? 'Publish on Meetup' : 'Send for approval'}
       </button>
@@ -258,7 +339,7 @@ export function requestStatusBadge(request: EventRequest): SafeHtml {
 const whenLabel = (startLocal: string) =>
   dayjs(startLocal).format('ddd, MMM D, YYYY [at] h:mm A');
 
-function requestBody(request: EventRequest): SafeHtml {
+function requestBody(request: EventRequest, resentChanged: boolean): SafeHtml {
   const meetupHref = safeHref(request.eventUrl ?? '');
   const detail = (() => {
     switch (request.status) {
@@ -293,6 +374,15 @@ function requestBody(request: EventRequest): SafeHtml {
   return html`<div class="card">
     <h1>${memberText(request.title)}</h1>
     <p>${requestStatusBadge(request)}</p>
+    ${
+      resentChanged
+        ? html`<p class="note attn">
+            That form had already been sent, so the changes in your second send
+            were not saved. This is the request it made. To change it, send a
+            new request from home.
+          </p>`
+        : ''
+    }
     <p>
       ${whenLabel(request.startLocal)},
       ${durationLabel(request.duration as Duration)}${
@@ -382,15 +472,31 @@ function startDay(value: unknown, today: string): string {
     : '';
 }
 
-/** The new-request alert: plain text, no mentions. */
+/** The new-request alert: plain text, no mentions, markdown escaped. */
 function newRequestAlert(origin: string, request: EventRequest): LogEntry {
   return {
     title: 'New host event request',
     description: `Review it at ${origin}${DASHBOARD_BASE}/hosts/requests`,
     fields: [
-      { name: 'Host', value: request.hostName, inline: true },
+      { name: 'Host', value: escapeMarkdown(request.hostName), inline: true },
       { name: 'When', value: whenLabel(request.startLocal), inline: true },
-      { name: 'Title', value: request.title },
+      { name: 'Title', value: escapeMarkdown(request.title) },
+    ],
+  };
+}
+
+/** A Community Host's published event: plain text, markdown escaped. */
+function publishedAlert(
+  created: EventRequest,
+  published: EventRequest,
+): LogEntry {
+  return {
+    title: 'Community Host published an event',
+    description: published.eventUrl ?? '',
+    fields: [
+      { name: 'Host', value: escapeMarkdown(created.hostName), inline: true },
+      { name: 'When', value: whenLabel(created.startLocal), inline: true },
+      { name: 'Title', value: escapeMarkdown(created.title) },
     ],
   };
 }
@@ -433,6 +539,7 @@ export function registerCreatePages(
             day,
             time: DEFAULT_TIME,
             duration: DEFAULT_DURATION,
+            ...DEFAULT_OPTIONS,
             submitToken: newSubmitToken(),
             errors: {},
           },
@@ -465,6 +572,7 @@ export function registerCreatePages(
           day,
           time: defaults.time,
           duration: defaults.duration,
+          ...DEFAULT_OPTIONS,
           copy: source,
           submitToken: newSubmitToken(),
           errors: {},
@@ -502,6 +610,9 @@ export function registerCreatePages(
       day: field(body, 'day') ?? '',
       time: field(body, 'time') ?? DEFAULT_TIME,
       duration: field(body, 'duration') ?? DEFAULT_DURATION,
+      description: field(body, 'description') ?? DEFAULT_OPTIONS.description,
+      rsvpLimit: field(body, 'rsvpLimit') ?? '',
+      guestLimit: field(body, 'guestLimit') ?? '',
       copy: source,
       // Kept on a re-render, so the corrected form is still one request.
       submitToken: submitToken ?? newSubmitToken(),
@@ -530,9 +641,18 @@ export function registerCreatePages(
       return;
     }
     const form = parsed.value;
-    /** The request this form already made: its page, not a second request. */
+    /**
+     * The request this form already made: its page, not a second request.
+     * If this send differs from the first, the page says the changes were
+     * not saved rather than dropping them silently.
+     */
     const toExisting = (existing: EventRequest) =>
-      res.redirect(303, CREATE_PATHS.request(existing.id));
+      res.redirect(
+        303,
+        formMatches(existing, form, source ? 'copy' : 'fresh')
+          ? CREATE_PATHS.request(existing.id)
+          : `${CREATE_PATHS.request(existing.id)}?resent=changed`,
+      );
     let created: EventRequest | undefined;
     try {
       const store = await deps.requests();
@@ -560,7 +680,7 @@ export function registerCreatePages(
       }
       const settings = source
         ? copySettings(source, form.duration)
-        : freshSettings(session.tier, deps.tip(), form.duration);
+        : freshSettings(session.tier, deps.tip(), form.duration, form);
       created = await store.create({
         meetupMemberId: session.userId,
         discordUserId: session.discordUserId,
@@ -594,33 +714,31 @@ export function registerCreatePages(
     if (session.tier === 'regular') {
       deps.alert(newRequestAlert(origin, created)).catch(() => undefined);
     } else {
-      try {
-        const outcome = await withDeadline(PUBLISH_DEADLINE_MS, () =>
-          deps.publish(created.id, created.version, session.userId),
-        );
-        if (outcome.code === 'published') {
-          deps
-            .alert({
-              title: 'Community Host published an event',
-              description: outcome.request.eventUrl ?? '',
-              fields: [
-                { name: 'Host', value: created.hostName, inline: true },
-                {
-                  name: 'When',
-                  value: whenLabel(created.startLocal),
-                  inline: true,
-                },
-                { name: 'Title', value: created.title },
-              ],
-            })
-            .catch(() => undefined);
-        }
-      } catch (error: unknown) {
-        // A timeout leaves it publishing; the request page shows where it
-        // stopped, and leadership can retry.
+      // The alert rides on the publish itself, not on the page's deadline:
+      // a slow publish that finishes after the page moved on still alerts.
+      const publishing = deps
+        .publish(created.id, created.version, session.userId)
+        .then((outcome) => {
+          if (outcome.code === 'published') {
+            deps
+              .alert(publishedAlert(created, outcome.request))
+              .catch(() => undefined);
+          }
+          return outcome;
+        });
+      publishing.catch((error: unknown) => {
         logger.error(
           `Community Host publish threw: ${error instanceof Error ? error.name : 'Error'}`,
         );
+      });
+      try {
+        await withDeadline(
+          deps.publishDeadlineMs ?? PUBLISH_DEADLINE_MS,
+          () => publishing,
+        );
+      } catch {
+        // A timeout leaves it publishing (it goes on, and alerts when done);
+        // the request page shows where it stopped, and leadership can retry.
       }
     }
     res.redirect(303, CREATE_PATHS.request(created.id));
@@ -644,7 +762,10 @@ export function registerCreatePages(
       notFound(res);
       return;
     }
-    hostPage(res, { title: 'Your request', body: requestBody(request) });
+    hostPage(res, {
+      title: 'Your request',
+      body: requestBody(request, req.query.resent === 'changed'),
+    });
   }) as RequestHandler);
 }
 

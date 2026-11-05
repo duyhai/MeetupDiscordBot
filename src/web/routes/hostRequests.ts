@@ -2,10 +2,16 @@ import dayjs from 'dayjs';
 import express, { RequestHandler, Response } from 'express';
 import { Logger } from 'tslog';
 
+import { escapeMarkdown } from 'discord.js';
+
 import {
+  ExistingEvent,
   PublishOutcome,
   STUCK_PUBLISHING_MS,
   canDeny,
+  canResolve,
+  canRetry,
+  startHasPassed,
 } from '../../lib/hosts/publishRequest.js';
 import { LogEntry } from '../../lib/helpers/discordLogger.js';
 import {
@@ -18,7 +24,6 @@ import {
   EventRequestStatus,
   PublishFrom,
 } from '../../lib/repositories/postgresEventRequestRepository.js';
-import { tz } from '../../util/timezone.js';
 import { dashboardLocals } from '../dashboardRouter.js';
 import { SafeHtml, html, localUrl, memberText, safeHref } from '../html.js';
 import { dashboardPage, load, notFound } from '../pageKit.js';
@@ -53,9 +58,14 @@ export interface StaffRequestStore {
     actor: string,
     reason: string,
   ) => Promise<EventRequest | undefined>;
+  resolve: (
+    id: string,
+    seenVersion: number,
+    actor: string,
+  ) => Promise<EventRequest | undefined>;
 }
 
-/** The queue's two dependencies, on DashboardPageDeps. */
+/** The queue's dependencies, on DashboardPageDeps. */
 export interface HostRequestDeps {
   /** Rejects when Postgres cannot answer: the page answers 503. */
   eventRequests: () => Promise<StaffRequestStore>;
@@ -66,9 +76,16 @@ export interface HostRequestDeps {
     actor: string,
     from: PublishFrom[],
   ) => Promise<PublishOutcome>;
+  /**
+   * The Meetup event a failed request may have become without it being
+   * recorded (publishRequest's findExisting). Throws when Meetup cannot answer.
+   */
+  findExistingEvent: (
+    request: EventRequest,
+  ) => Promise<ExistingEvent | undefined>;
 }
 
-const ACTIONS = ['approve', 'deny', 'retry'] as const;
+const ACTIONS = ['approve', 'deny', 'retry', 'resolve'] as const;
 type QueueAction = (typeof ACTIONS)[number];
 
 /** Every code a queue POST can send back in `?result=`. Fixed text only. */
@@ -81,9 +98,13 @@ export const HOST_REQUEST_RESULT_MESSAGES = {
     'Meetup is slow to answer. The request stays "publishing"; reload in a minute. If it is still stuck after 10 minutes, Retry.',
   'reason-required': 'Write a reason for the host, then deny again.',
   'reason-too-long': `Keep the reason to ${DENY_REASON_MAX} characters.`,
-  'cannot-deny':
-    'This request may already have an event on Meetup, so it was not denied. ' +
-    'Retry it; Retry finds the event instead of making a second one.',
+  'deny-event-exists':
+    'This request’s event is on Meetup, so it was not denied. Retry to finish ' +
+    'it, or delete it on Meetup first.',
+  'deny-check-failed':
+    'Meetup could not be asked whether this request’s event exists, so it was ' +
+    'not denied. Try again in a few minutes.',
+  resolved: 'Marked resolved. The host sees the event as published.',
   invalid:
     'That request could not be understood. Reload the page and try again.',
   'not-leadership':
@@ -97,6 +118,7 @@ export type HostRequestResultCode = keyof typeof HOST_REQUEST_RESULT_MESSAGES;
 const DONE: ReadonlySet<HostRequestResultCode> = new Set([
   'published',
   'denied',
+  'resolved',
 ]);
 
 const isResultCode = (code: unknown): code is HostRequestResultCode =>
@@ -174,7 +196,7 @@ function cardActions(
     <button type="submit" class="danger">Deny</button>
   </form>`;
   // Publishing refuses a start in the past; offer only Deny for one.
-  const started = tz(dayjs(now)).format('YYYY-MM-DDTHH:mm') >= r.startLocal;
+  const started = startHasPassed(r.startLocal, now);
   if (r.status === 'pending') {
     return html`<div class="actions">
       ${
@@ -197,15 +219,35 @@ function cardActions(
     r.status === 'publishing' &&
     now.getTime() - r.updatedAt.getTime() >= STUCK_PUBLISHING_MS;
   if (r.status === 'failed' || stuck) {
-    // Deny closes a failed request only when nothing can exist on Meetup;
-    // any other is finished by Retry, which finds an event already made.
-    const deniable = canDeny(r);
+    // Deny asks Meetup first (an event may exist that was never recorded);
+    // a request with its event recorded is finished by Retry or by hand.
+    const retryForm = canRetry(r, now)
+      ? html`<form
+          method="post"
+          action="${localUrl(actionPath(r.id, 'retry'))}"
+        >
+          ${csrfField}
+          <button type="submit">Retry</button>
+        </form>`
+      : html`<p class="note attn">
+          The start time has passed and no event was recorded, so Retry can only
+          fail. Deny it with a note to the host.
+        </p>`;
+    const resolveForm = canResolve(r)
+      ? html`<form
+          method="post"
+          action="${localUrl(actionPath(r.id, 'resolve'))}"
+        >
+          ${csrfField}
+          <p class="muted">
+            Fixed it on Meetup by hand? Mark it resolved and the host sees it as
+            published.
+          </p>
+          <button type="submit" class="secondary">Mark resolved</button>
+        </form>`
+      : '';
     return html`<div class="actions">
-      <form method="post" action="${localUrl(actionPath(r.id, 'retry'))}">
-        ${csrfField}
-        <button type="submit">Retry</button>
-      </form>
-      ${deniable ? denyForm : ''}
+      ${retryForm} ${resolveForm} ${canDeny(r) ? denyForm : ''}
     </div>`;
   }
   return html``;
@@ -308,7 +350,7 @@ function stalePage(res: Response): void {
 
 /**
  * GET /dashboard/hosts/requests (Moderators and Leadership) and
- * POST /dashboard/hosts/requests/:id/(approve|deny|retry) (Leadership,
+ * POST /dashboard/hosts/requests/:id/(approve|deny|retry|resolve) (Leadership,
  * checked live on every POST). CSRF, Origin, Sec-Fetch-Site and the
  * per-user action rate limit are the router's unsafe-method guard.
  */
@@ -316,7 +358,12 @@ export function registerHostRequestRoutes(
   router: express.Router,
   deps: Pick<
     DashboardPageDeps,
-    'now' | 'isLeadership' | 'audit' | 'eventRequests' | 'publishRequest'
+    | 'now'
+    | 'isLeadership'
+    | 'audit'
+    | 'eventRequests'
+    | 'publishRequest'
+    | 'findExistingEvent'
   >,
 ): void {
   const refusalPosts = new FixedWindowLimiter(
@@ -409,7 +456,9 @@ export function registerHostRequestRoutes(
           fields: [
             { name: 'Request', value: `#${id}`, inline: true },
             { name: 'By', value: `<@${session.userId}>`, inline: true },
-            ...(request ? [{ name: 'Title', value: request.title }] : []),
+            ...(request
+              ? [{ name: 'Title', value: escapeMarkdown(request.title) }]
+              : []),
           ],
         } satisfies LogEntry)
         .catch(() => undefined);
@@ -429,17 +478,36 @@ export function registerHostRequestRoutes(
         back(res, 'reason-too-long');
         return;
       }
-      let denied: EventRequest | undefined | 'refused';
+      let denied:
+        EventRequest | undefined | 'deny-event-exists' | 'deny-check-failed';
       try {
         denied = await withDeadline(WORKSPACE_REQUEST_DEADLINE_MS, async () => {
           // Checked at this version; deny's compare-and-set on the same
           // version means the row cannot have changed in between.
           const current = await store.get(id);
-          if (current === undefined || current.version !== version) {
+          if (
+            current === undefined ||
+            current.version !== version ||
+            !canDeny(current)
+          ) {
             return undefined;
           }
-          if (!canDeny(current)) {
-            return 'refused';
+          if (current.status === 'failed') {
+            // Several failures mean the event may be on Meetup unrecorded:
+            // denying it would leave a live event the host is told was
+            // refused, with no Retry left.
+            let existing: ExistingEvent | undefined;
+            try {
+              existing = await deps.findExistingEvent(current);
+            } catch (error: unknown) {
+              logger.warn(
+                `Host request deny check failed: ${error instanceof Error ? error.name : 'Error'}`,
+              );
+              return 'deny-check-failed';
+            }
+            if (existing !== undefined) {
+              return 'deny-event-exists';
+            }
           }
           return store.deny(id, version, session.userId, reason);
         });
@@ -454,12 +522,34 @@ export function registerHostRequestRoutes(
         stalePage(res);
         return;
       }
-      if (denied === 'refused') {
-        back(res, 'cannot-deny');
+      if (denied === 'deny-event-exists' || denied === 'deny-check-failed') {
+        back(res, denied);
         return;
       }
       auditLine('denied', denied);
       back(res, 'denied');
+      return;
+    }
+
+    if (verb === 'resolve') {
+      let resolved: EventRequest | undefined;
+      try {
+        resolved = await withDeadline(WORKSPACE_REQUEST_DEADLINE_MS, () =>
+          store.resolve(id, version, session.userId),
+        );
+      } catch (error: unknown) {
+        logger.warn(
+          `Host request resolve failed: ${error instanceof Error ? error.name : 'Error'}`,
+        );
+        back(res, 'error');
+        return;
+      }
+      if (resolved === undefined) {
+        stalePage(res);
+        return;
+      }
+      auditLine('marked resolved', resolved);
+      back(res, 'resolved');
       return;
     }
 
