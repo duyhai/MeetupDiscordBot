@@ -121,6 +121,33 @@ export const PUBLISH_FAILURES = {
     'finds it on Meetup and finishes it without creating a second event.',
 } as const;
 
+/**
+ * The failures after which nothing can exist on Meetup for the request
+ * (it stopped before createEvent, and a retry had already found nothing),
+ * plus a start that has passed, which no retry can fix. Only these may be
+ * denied: denying any other failed request could leave a live event on
+ * Meetup that the host is told was refused.
+ */
+const DENIABLE_FAILURES: ReadonlySet<string> = new Set([
+  PUBLISH_FAILURES.startPassed,
+  PUBLISH_FAILURES.startPassedRetry,
+  PUBLISH_FAILURES.notAHost,
+  PUBLISH_FAILURES.tierUnknown,
+]);
+
+/** Whether leadership may deny this request as it stands. */
+export function canDeny(r: EventRequest): boolean {
+  if (r.status === 'pending') {
+    return true;
+  }
+  return (
+    r.status === 'failed' &&
+    r.meetupEventId === null &&
+    r.failure !== null &&
+    DENIABLE_FAILURES.has(r.failure)
+  );
+}
+
 function errorName(error: unknown): string {
   return error instanceof Error ? error.name : 'Error';
 }

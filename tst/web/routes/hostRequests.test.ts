@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { PublishOutcome } from '../../../src/lib/hosts/publishRequest.js';
+import {
+  PUBLISH_FAILURES,
+  PublishOutcome,
+} from '../../../src/lib/hosts/publishRequest.js';
 import { EventRequest } from '../../../src/lib/repositories/postgresEventRequestRepository.js';
 import { registerAllProtectedRoutes } from '../../../src/web/routes/dashboardPages.js';
 import { HOST_REQUEST_RESULT_MESSAGES } from '../../../src/web/routes/hostRequests.js';
@@ -141,7 +144,11 @@ describe('host request queue', () => {
   it('a failed request with no event can be denied; one with an event cannot', async () => {
     const { get } = await setup({
       rows: [
-        eventRequestRow({ id: '2', status: 'failed', failure: 'No host.' }),
+        eventRequestRow({
+          id: '2',
+          status: 'failed',
+          failure: PUBLISH_FAILURES.notAHost,
+        }),
         eventRequestRow({
           id: '3',
           status: 'failed',
@@ -156,6 +163,35 @@ describe('host request queue', () => {
     expect(res.text).toContain(`action="${QUEUE}/2/retry"`);
     expect(res.text).not.toContain(`action="${QUEUE}/3/deny"`);
     expect(res.text).toContain(`action="${QUEUE}/3/retry"`);
+  });
+
+  it('a failed request that may have made an event offers only Retry', async () => {
+    const { get } = await setup({
+      rows: [
+        eventRequestRow({
+          id: '2',
+          status: 'failed',
+          failure: PUBLISH_FAILURES.createFailed,
+        }),
+        eventRequestRow({
+          id: '3',
+          status: 'failed',
+          failure: PUBLISH_FAILURES.notRecorded(
+            'https://www.meetup.com/1-5genasians/events/317000001/',
+          ),
+        }),
+        eventRequestRow({
+          id: '4',
+          status: 'failed',
+          failure: PUBLISH_FAILURES.checkFailed,
+        }),
+      ],
+    });
+    const res = await get(QUEUE);
+    for (const id of ['2', '3', '4']) {
+      expect(res.text).toContain(`action="${QUEUE}/${id}/retry"`);
+      expect(res.text).not.toContain(`action="${QUEUE}/${id}/deny"`);
+    }
   });
 
   it('a waiting request whose start has passed offers only Deny', async () => {
@@ -270,6 +306,41 @@ describe('queue actions', () => {
       USER.id,
       `${'x'.repeat(248)}\n${'y'.repeat(250)}`,
     );
+  });
+
+  it('deny of a failed request that may have made an event is refused', async () => {
+    const { post, store } = await setup({
+      rows: [
+        eventRequestRow({
+          status: 'failed',
+          version: 3,
+          failure: PUBLISH_FAILURES.notRecorded(
+            'https://www.meetup.com/1-5genasians/events/317000001/',
+          ),
+        }),
+      ],
+    });
+    const res = await post(`${QUEUE}/1/deny`, { version: '3', reason: 'No' });
+    expect(res.headers.location).toBe(`${QUEUE}?result=cannot-deny`);
+    expect(store.deny).not.toHaveBeenCalled();
+  });
+
+  it('deny of a failed request that made nothing goes through', async () => {
+    const { post, store } = await setup({
+      rows: [
+        eventRequestRow({
+          status: 'failed',
+          version: 3,
+          failure: PUBLISH_FAILURES.startPassed,
+        }),
+      ],
+    });
+    const res = await post(`${QUEUE}/1/deny`, {
+      version: '3',
+      reason: 'Pick a new date',
+    });
+    expect(res.headers.location).toBe(`${QUEUE}?result=denied`);
+    expect(store.deny).toHaveBeenCalledWith('1', 3, USER.id, 'Pick a new date');
   });
 
   it('a Moderator is refused and nothing changes', async () => {

@@ -5,6 +5,7 @@ import { Logger } from 'tslog';
 import {
   PublishOutcome,
   STUCK_PUBLISHING_MS,
+  canDeny,
 } from '../../lib/hosts/publishRequest.js';
 import { LogEntry } from '../../lib/helpers/discordLogger.js';
 import {
@@ -80,6 +81,9 @@ export const HOST_REQUEST_RESULT_MESSAGES = {
     'Meetup is slow to answer. The request stays "publishing"; reload in a minute. If it is still stuck after 10 minutes, Retry.',
   'reason-required': 'Write a reason for the host, then deny again.',
   'reason-too-long': `Keep the reason to ${DENY_REASON_MAX} characters.`,
+  'cannot-deny':
+    'This request may already have an event on Meetup, so it was not denied. ' +
+    'Retry it; Retry finds the event instead of making a second one.',
   invalid:
     'That request could not be understood. Reload the page and try again.',
   'not-leadership':
@@ -193,9 +197,9 @@ function cardActions(
     r.status === 'publishing' &&
     now.getTime() - r.updatedAt.getTime() >= STUCK_PUBLISHING_MS;
   if (r.status === 'failed' || stuck) {
-    // Deny closes a failed request with no event recorded; one with an
-    // event on Meetup is finished by Retry instead.
-    const deniable = r.status === 'failed' && r.meetupEventId === null;
+    // Deny closes a failed request only when nothing can exist on Meetup;
+    // any other is finished by Retry, which finds an event already made.
+    const deniable = canDeny(r);
     return html`<div class="actions">
       <form method="post" action="${localUrl(actionPath(r.id, 'retry'))}">
         ${csrfField}
@@ -425,11 +429,20 @@ export function registerHostRequestRoutes(
         back(res, 'reason-too-long');
         return;
       }
-      let denied: EventRequest | undefined;
+      let denied: EventRequest | undefined | 'refused';
       try {
-        denied = await withDeadline(WORKSPACE_REQUEST_DEADLINE_MS, () =>
-          store.deny(id, version, session.userId, reason),
-        );
+        denied = await withDeadline(WORKSPACE_REQUEST_DEADLINE_MS, async () => {
+          // Checked at this version; deny's compare-and-set on the same
+          // version means the row cannot have changed in between.
+          const current = await store.get(id);
+          if (current === undefined || current.version !== version) {
+            return undefined;
+          }
+          if (!canDeny(current)) {
+            return 'refused';
+          }
+          return store.deny(id, version, session.userId, reason);
+        });
       } catch (error: unknown) {
         logger.warn(
           `Host request deny failed: ${error instanceof Error ? error.name : 'Error'}`,
@@ -439,6 +452,10 @@ export function registerHostRequestRoutes(
       }
       if (denied === undefined) {
         stalePage(res);
+        return;
+      }
+      if (denied === 'refused') {
+        back(res, 'cannot-deny');
         return;
       }
       auditLine('denied', denied);
