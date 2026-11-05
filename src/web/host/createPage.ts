@@ -1,7 +1,6 @@
 import { randomBytes } from 'node:crypto';
 
 import dayjs from 'dayjs';
-import { escapeMarkdown } from 'discord.js';
 import express, { RequestHandler, Response } from 'express';
 import { Logger } from 'tslog';
 
@@ -33,7 +32,7 @@ import {
 } from '../../templates/createEventTemplate.js';
 import { pacificDay } from '../../lib/hosts/hostEvents.js';
 import { PublishOutcome } from '../../lib/hosts/publishRequest.js';
-import { LogEntry } from '../../lib/helpers/discordLogger.js';
+import { LogEntry, alertText } from '../../lib/helpers/discordLogger.js';
 import {
   EventRequest,
   NewEventRequest,
@@ -478,9 +477,9 @@ function newRequestAlert(origin: string, request: EventRequest): LogEntry {
     title: 'New host event request',
     description: `Review it at ${origin}${DASHBOARD_BASE}/hosts/requests`,
     fields: [
-      { name: 'Host', value: escapeMarkdown(request.hostName), inline: true },
+      { name: 'Host', value: alertText(request.hostName), inline: true },
       { name: 'When', value: whenLabel(request.startLocal), inline: true },
-      { name: 'Title', value: escapeMarkdown(request.title) },
+      { name: 'Title', value: alertText(request.title) },
     ],
   };
 }
@@ -494,9 +493,9 @@ function publishedAlert(
     title: 'Community Host published an event',
     description: published.eventUrl ?? '',
     fields: [
-      { name: 'Host', value: escapeMarkdown(created.hostName), inline: true },
+      { name: 'Host', value: alertText(created.hostName), inline: true },
       { name: 'When', value: whenLabel(created.startLocal), inline: true },
-      { name: 'Title', value: escapeMarkdown(created.title) },
+      { name: 'Title', value: alertText(created.title) },
     ],
   };
 }
@@ -618,8 +617,18 @@ export function registerCreatePages(
       submitToken: submitToken ?? newSubmitToken(),
       errors,
     });
+    // A copy keeps its source's description and limits and its form has no
+    // fields for them, so any sent are ignored, never shown as errors.
+    const formFields = body as Record<string, unknown> | undefined;
     const parsed = parseRequestForm(
-      body as Record<string, unknown> | undefined,
+      source
+        ? {
+            ...formFields,
+            description: undefined,
+            rsvpLimit: undefined,
+            guestLimit: undefined,
+          }
+        : formFields,
       today(),
     );
     if (parsed.ok === false || submitToken === undefined) {

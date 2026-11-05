@@ -7,6 +7,7 @@ import {
   copyDefaults,
   copySettings,
   createInputFor,
+  existingEventFilter,
   formMatches,
   freshSettings,
   isHostOf,
@@ -465,5 +466,22 @@ describe('formMatches', () => {
     );
     // A copy has no optional fields to compare.
     expect(formMatches(stored, { ...sent, rsvpLimit: 20 }, 'copy')).toBe(true);
+  });
+});
+
+describe('existingEventFilter', () => {
+  it('searches the requester’s upcoming and past events a day either side', () => {
+    expect(
+      existingEventFilter({
+        meetupMemberId: '4242',
+        startLocal: '2026-11-20T19:00',
+      }),
+    ).toEqual({
+      hostId: '4242',
+      status: ['ACTIVE', 'PAST'],
+      // 19:00 Pacific (PST) is 03:00 UTC the next day.
+      afterDateTime: '2026-11-20T03:00:00.000Z',
+      beforeDateTime: '2026-11-22T03:00:00.000Z',
+    });
   });
 });

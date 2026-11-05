@@ -216,6 +216,8 @@ form.request-form label.field input,form.request-form label.field select{display
 form.request-form details.more-options{margin:0 0 var(--s3);padding-bottom:var(--s1);
   border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
 form.request-form details.more-options textarea{max-width:40rem}
+.desc-text{white-space:pre-line;overflow-wrap:anywhere;max-height:24rem;overflow-y:auto;padding:var(--s2) var(--s3);
+  background:var(--raised);border-radius:8px;font-size:var(--t-sm)}
 .wrap-anywhere{overflow-wrap:anywhere}
 .field-error{display:block;margin-top:var(--s1);color:var(--attn-ink);font-size:var(--t-sm);font-weight:600}
 td.cal.past{color:var(--muted);background:var(--bg)}

@@ -16,6 +16,7 @@ import {
   makeApp,
   signIn,
 } from '../dashboardHarness.js';
+import { GUEST_HOST_EVENT_DESCRIPTION } from '../../../src/templates/createEventTemplate.js';
 import {
   PAGE_NOW,
   eventRequestRow,
@@ -50,7 +51,7 @@ async function setup(
       version: number,
       actor: string,
     ) => Promise<PublishOutcome>;
-    existing?: ExistingEvent | Error;
+    existing?: ExistingEvent | Error | 'never';
   } = {},
 ) {
   const store = fakeEventRequests(options.rows ?? [eventRequestRow()]);
@@ -73,6 +74,10 @@ async function setup(
       if (options.existing instanceof Error) {
         throw options.existing;
       }
+      if (options.existing === 'never') {
+        // Meetup never answers.
+        return new Promise<undefined>(() => undefined);
+      }
       return options.existing;
     },
   );
@@ -87,6 +92,7 @@ async function setup(
           eventRequests: async () => store,
           publishRequest,
           findExistingEvent,
+          denyCheckDeadlineMs: 30,
         }),
       }),
   });
@@ -237,6 +243,33 @@ describe('host request queue', () => {
     expect(res.text).toContain('The start time has passed');
   });
 
+  it('a card shows the limits and description it would publish, marking changes', async () => {
+    const { get } = await setup({
+      rows: [
+        eventRequestRow({
+          id: '1',
+          description: `Bring snacks.\n${HOSTILE}`,
+          rsvpLimit: 500,
+          guestLimit: 1,
+        }),
+        eventRequestRow({
+          id: '2',
+          description: `💡 Host Tip: Start small 💡\n\n${GUEST_HOST_EVENT_DESCRIPTION}`,
+        }),
+      ],
+    });
+    const res = await get(QUEUE);
+    expect(res.text).toContain('<strong>RSVP limit 500</strong> (default 12)');
+    expect(res.text).toContain('Custom description');
+    expect(res.text).toContain('Custom limits');
+    expect(res.text).toContain('Description: written by the host');
+    expect(res.text).toContain('Bring snacks.');
+    expect(res.text).not.toContain('<script>alert');
+    // The second: the standard description with a tip, default limits.
+    expect(res.text).toContain('Description: the standard one');
+    expect(res.text.match(/Custom description/g)).toHaveLength(1);
+  });
+
   it('a store outage is a 503', async () => {
     const { get } = await setup();
     const res = await get(QUEUE);
@@ -377,6 +410,25 @@ describe('queue actions', () => {
     expect(store.deny).not.toHaveBeenCalled();
   });
 
+  it('deny of a failed request is refused when Meetup answers too slowly, and never commits', async () => {
+    const { post, store } = await setup({
+      rows: [
+        eventRequestRow({
+          status: 'failed',
+          version: 3,
+          failure: PUBLISH_FAILURES.createFailed,
+        }),
+      ],
+      existing: 'never',
+    });
+    const res = await post(`${QUEUE}/1/deny`, { version: '3', reason: 'No' });
+    expect(res.headers.location).toBe(`${QUEUE}?result=deny-check-failed`);
+    await new Promise((resolve) => {
+      setTimeout(resolve, 100);
+    });
+    expect(store.deny).not.toHaveBeenCalled();
+  });
+
   it('deny of a failed request with nothing on Meetup goes through', async () => {
     const { post, store } = await setup({
       rows: [
@@ -409,7 +461,7 @@ describe('queue actions', () => {
           version: 5,
           failure: 'RSVPs not applied.',
           meetupEventId: '317000001',
-          title: '**bold** @everyone',
+          title: '**bold** [Free](https://evil.example) @everyone',
         }),
       ],
     });
@@ -418,6 +470,7 @@ describe('queue actions', () => {
     expect(store.resolve).toHaveBeenCalledWith('1', 5, USER.id);
     const entry = JSON.stringify(audit.mock.calls.at(-1)?.[0]);
     expect(entry).toContain('Host request marked resolved');
+    expect(entry).toContain('\\\\[Free](https://evil.example)');
     expect(entry).toContain('\\\\*\\\\*bold');
     // Already resolved: the same version is stale.
     expect((await post(`${QUEUE}/1/resolve`, { version: '5' })).status).toBe(

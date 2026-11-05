@@ -9,6 +9,7 @@ import { tz } from '../../util/timezone.js';
 import {
   CreateEventInput,
   GetEventForCopyResponse,
+  GroupEventFilter,
 } from '../client/meetup/types.js';
 import {
   EVENT_REQUEST_TITLE_MAX,
@@ -413,4 +414,22 @@ export function isEventFor(
     stripHostPrefix(event.title ?? '').trim() === request.title &&
     tz(dayjs(event.dateTime)).format('YYYY-MM-DDTHH:mm') === request.startLocal
   );
+}
+
+/**
+ * The Meetup search for the event a request may already have become: the
+ * requester's events from a day before its start to a day after, upcoming
+ * or past. Past too, because a request is often checked after its start
+ * (Deny of a past-dated failed request), when its event is no longer ACTIVE.
+ */
+export function existingEventFilter(
+  request: Pick<EventRequest, 'meetupMemberId' | 'startLocal'>,
+): GroupEventFilter {
+  const start = dayjs.tz(request.startLocal, 'America/Los_Angeles');
+  return {
+    hostId: request.meetupMemberId,
+    status: ['ACTIVE', 'PAST'],
+    afterDateTime: start.subtract(1, 'day').toISOString(),
+    beforeDateTime: start.add(1, 'day').toISOString(),
+  };
 }

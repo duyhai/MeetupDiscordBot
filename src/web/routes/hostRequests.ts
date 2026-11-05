@@ -2,8 +2,6 @@ import dayjs from 'dayjs';
 import express, { RequestHandler, Response } from 'express';
 import { Logger } from 'tslog';
 
-import { escapeMarkdown } from 'discord.js';
-
 import {
   ExistingEvent,
   PublishOutcome,
@@ -13,7 +11,7 @@ import {
   canRetry,
   startHasPassed,
 } from '../../lib/hosts/publishRequest.js';
-import { LogEntry } from '../../lib/helpers/discordLogger.js';
+import { LogEntry, alertText } from '../../lib/helpers/discordLogger.js';
 import {
   DASHBOARD_PATHS,
   dashboardPath,
@@ -24,6 +22,10 @@ import {
   EventRequestStatus,
   PublishFrom,
 } from '../../lib/repositories/postgresEventRequestRepository.js';
+import {
+  GUEST_HOST_EVENT_DESCRIPTION,
+  createEventTemplate,
+} from '../../templates/createEventTemplate.js';
 import { dashboardLocals } from '../dashboardRouter.js';
 import { SafeHtml, html, localUrl, memberText, safeHref } from '../html.js';
 import { dashboardPage, load, notFound } from '../pageKit.js';
@@ -41,6 +43,12 @@ import {
 const logger = new Logger({ name: 'dashboard' });
 
 const REQUEST_ID = /^[1-9][0-9]{0,17}$/;
+/**
+ * How long Deny waits for Meetup to say whether a failed request's event
+ * exists. Well inside the page's own deadline, so a slow answer refuses
+ * the deny (fails closed) and leaves time to write one that is allowed.
+ */
+const DENY_CHECK_DEADLINE_MS = 8_000;
 const VERSION = /^[1-9][0-9]{0,8}$/;
 const RECENT_DECIDED = 20;
 
@@ -83,6 +91,8 @@ export interface HostRequestDeps {
   findExistingEvent: (
     request: EventRequest,
   ) => Promise<ExistingEvent | undefined>;
+  /** Tests only: how long the pre-deny Meetup check may take. */
+  denyCheckDeadlineMs?: number;
 }
 
 const ACTIONS = ['approve', 'deny', 'retry', 'resolve'] as const;
@@ -253,6 +263,62 @@ function cardActions(
   return html``;
 }
 
+const DEFAULT_LIMITS = createEventTemplate.rsvpSettings;
+const TIP_LINE = /^💡 Host Tip: .* 💡\n\n/u;
+
+/** Which description a request carries, for the card's label. */
+function descriptionKind(r: EventRequest): 'standard' | 'custom' | 'copied' {
+  if (r.kind === 'copy') {
+    return 'copied';
+  }
+  return r.description.replace(TIP_LINE, '') === GUEST_HOST_EVENT_DESCRIPTION
+    ? 'standard'
+    : 'custom';
+}
+
+/** One limit, flagged when it is not the template's. */
+function limitText(label: string, value: number, standard: number): SafeHtml {
+  return value === standard
+    ? html`${label} ${value}`
+    : html`<strong>${label} ${value}</strong> (default ${standard})`;
+}
+
+/**
+ * What approving publishes besides the title and time: the limits and the
+ * description, escaped, folded away. Anything the host changed from the
+ * template is marked, so a leader sees it before approving.
+ */
+function requestSettings(r: EventRequest): SafeHtml {
+  const kind = descriptionKind(r);
+  const limitsChanged =
+    r.rsvpLimit !== DEFAULT_LIMITS.rsvpLimit ||
+    r.guestLimit !== DEFAULT_LIMITS.guestLimit;
+  const badges = [
+    kind === 'custom'
+      ? html`<span class="badge attn">Custom description</span>`
+      : '',
+    limitsChanged && r.kind === 'fresh'
+      ? html`<span class="badge attn">Custom limits</span>`
+      : '',
+  ];
+  const summary = {
+    standard: 'Description: the standard one',
+    custom: 'Description: written by the host',
+    copied: 'Description: copied from the source event',
+  }[kind];
+  // On one line: the block keeps the description's line breaks.
+  const text = html`<div class="desc-text">${memberText(r.description)}</div>`;
+  return html`<p>
+      ${limitText('RSVP limit', r.rsvpLimit, DEFAULT_LIMITS.rsvpLimit)} ·
+      ${limitText('Guests per member', r.guestLimit, DEFAULT_LIMITS.guestLimit)}
+      ${badges}
+    </p>
+    <details class="request-description">
+      <summary>${summary}</summary>
+      ${text}
+    </details>`;
+}
+
 function requestCard(
   r: EventRequest,
   leader: boolean,
@@ -268,6 +334,7 @@ function requestCard(
       ${r.duration.replace(/^PT/, '').toLowerCase()} ·
       ${r.kind === 'copy' ? `copy of Meetup event ${r.sourceEventId ?? ''}` : 'new event'}
     </p>
+    ${requestSettings(r)}
     <p class="muted">
       Request #${r.id}, sent ${dayjs(r.createdAt).format('MMM D, h:mm A')}
     </p>
@@ -364,6 +431,7 @@ export function registerHostRequestRoutes(
     | 'eventRequests'
     | 'publishRequest'
     | 'findExistingEvent'
+    | 'denyCheckDeadlineMs'
   >,
 ): void {
   const refusalPosts = new FixedWindowLimiter(
@@ -457,7 +525,7 @@ export function registerHostRequestRoutes(
             { name: 'Request', value: `#${id}`, inline: true },
             { name: 'By', value: `<@${session.userId}>`, inline: true },
             ...(request
-              ? [{ name: 'Title', value: escapeMarkdown(request.title) }]
+              ? [{ name: 'Title', value: alertText(request.title) }]
               : []),
           ],
         } satisfies LogEntry)
@@ -478,39 +546,58 @@ export function registerHostRequestRoutes(
         back(res, 'reason-too-long');
         return;
       }
-      let denied:
-        EventRequest | undefined | 'deny-event-exists' | 'deny-check-failed';
+      // Each step has its own deadline, and the deny is written only while
+      // the page is still waiting: withDeadline does not cancel the work, so
+      // one deadline around all three could commit a deny after the page had
+      // said it failed.
+      const pageDeadline = deps.now().getTime() + WORKSPACE_REQUEST_DEADLINE_MS;
+      let denied: EventRequest | undefined;
       try {
-        denied = await withDeadline(WORKSPACE_REQUEST_DEADLINE_MS, async () => {
-          // Checked at this version; deny's compare-and-set on the same
-          // version means the row cannot have changed in between.
-          const current = await store.get(id);
-          if (
-            current === undefined ||
-            current.version !== version ||
-            !canDeny(current)
-          ) {
-            return undefined;
-          }
+        // Checked at this version; deny's compare-and-set on the same
+        // version means the row cannot have changed in between.
+        const current = await withDeadline(WORKSPACE_REQUEST_DEADLINE_MS, () =>
+          store.get(id),
+        );
+        if (
+          current === undefined ||
+          current.version !== version ||
+          !canDeny(current)
+        ) {
+          denied = undefined;
+        } else {
           if (current.status === 'failed') {
             // Several failures mean the event may be on Meetup unrecorded:
             // denying it would leave a live event the host is told was
-            // refused, with no Retry left.
-            let existing: ExistingEvent | undefined;
+            // refused, with no Retry left. No answer in time is no answer.
+            let existing: ExistingEvent | undefined | 'unknown';
             try {
-              existing = await deps.findExistingEvent(current);
+              existing = await withDeadline(
+                deps.denyCheckDeadlineMs ?? DENY_CHECK_DEADLINE_MS,
+                () => deps.findExistingEvent(current),
+              );
             } catch (error: unknown) {
               logger.warn(
                 `Host request deny check failed: ${error instanceof Error ? error.name : 'Error'}`,
               );
-              return 'deny-check-failed';
+              existing = 'unknown';
+            }
+            if (existing === 'unknown') {
+              back(res, 'deny-check-failed');
+              return;
             }
             if (existing !== undefined) {
-              return 'deny-event-exists';
+              back(res, 'deny-event-exists');
+              return;
             }
           }
-          return store.deny(id, version, session.userId, reason);
-        });
+          const left = pageDeadline - deps.now().getTime();
+          if (left <= 0) {
+            throw new WorkspaceDeadlineError(WORKSPACE_REQUEST_DEADLINE_MS);
+          }
+          denied = await withDeadline(left, () =>
+            store.deny(id, version, session.userId, reason),
+          );
+        }
       } catch (error: unknown) {
         logger.warn(
           `Host request deny failed: ${error instanceof Error ? error.name : 'Error'}`,
@@ -520,10 +607,6 @@ export function registerHostRequestRoutes(
       }
       if (denied === undefined) {
         stalePage(res);
-        return;
-      }
-      if (denied === 'deny-event-exists' || denied === 'deny-check-failed') {
-        back(res, denied);
         return;
       }
       auditLine('denied', denied);

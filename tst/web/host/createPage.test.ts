@@ -406,6 +406,24 @@ describe('submitting a request', () => {
     expect(mem.rows).toHaveLength(0);
   });
 
+  it('a copy ignores any description or limits sent with it', async () => {
+    const { post, mem } = await app();
+    const res = await post({
+      ...good,
+      copy: '311111111',
+      description: 'Forged',
+      rsvpLimit: '9000',
+      guestLimit: 'x',
+    });
+    expect(res.status).toBe(303);
+    expect(mem.rows[0]).toMatchObject({
+      kind: 'copy',
+      description: 'Meet at the trailhead.',
+      rsvpLimit: 15,
+      guestLimit: 2,
+    });
+  });
+
   it('a fresh form folds the optional fields away, pre-filled; a copy has none', async () => {
     const { req, sid } = await app();
     const fresh = await get(req, sid, '/host/create');

@@ -3,7 +3,10 @@ import { Client } from 'discord.js';
 import { SERVER_ROLES } from '../../constants.js';
 import { GqlMeetupClient } from '../../lib/client/meetup/gqlClient.js';
 import { getPaginatedData } from '../../lib/client/meetup/paginationHelper.js';
-import { isEventFor } from '../../lib/hosts/eventRequest.js';
+import {
+  existingEventFilter,
+  isEventFor,
+} from '../../lib/hosts/eventRequest.js';
 import { HostResolveDeps, resolveHost } from '../../lib/hosts/eligibility.js';
 import { PublishDeps, publishRequest } from '../../lib/hosts/publishRequest.js';
 import { LogEntry, logAlert } from '../../lib/helpers/discordLogger.js';
@@ -89,10 +92,10 @@ export function productionPublishDeps(
     findExisting: async (request) => {
       const nodes = await withOrganizerMeetup(getClient(), (meetup) =>
         getPaginatedData(async (pagination) => {
-          const result = await meetup.getGroupEvents(pagination, {
-            status: ['ACTIVE'],
-            hostId: request.meetupMemberId,
-          });
+          const result = await meetup.getGroupEvents(
+            pagination,
+            existingEventFilter(request),
+          );
           return result.groupByUrlname.events;
         }),
       );

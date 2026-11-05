@@ -1,5 +1,4 @@
 import dayjs from 'dayjs';
-import { escapeMarkdown } from 'discord.js';
 import { Logger } from 'tslog';
 
 import {
@@ -11,7 +10,7 @@ import {
   CreateEventResponse,
   EditEventInput,
 } from '../client/meetup/types.js';
-import { LogEntry } from '../helpers/discordLogger.js';
+import { LogEntry, alertText } from '../helpers/discordLogger.js';
 import {
   EventRequest,
   PublishFrom,
@@ -66,9 +65,10 @@ export interface PublishDeps {
    */
   organizer: () => Promise<OrganizerWriter>;
   /**
-   * The group's upcoming event this request may already have become: hosted
-   * by the requester, starting at its time, titled as it would be. A read,
-   * so it may retry on a 401. Throws when Meetup cannot answer.
+   * The group's event this request may already have become: hosted by the
+   * requester, starting at its time, titled as it would be; upcoming or
+   * past (see existingEventFilter). A read, so it may retry on a 401.
+   * Throws when Meetup cannot answer.
    */
   findExisting: (request: EventRequest) => Promise<ExistingEvent | undefined>;
   /** The host's tier now; throws when Discord, Postgres or Meetup cannot answer. */
@@ -210,10 +210,10 @@ export async function publishRequest(
           { name: 'Request', value: `#${id}`, inline: true },
           {
             name: 'Host',
-            value: escapeMarkdown(claimed.hostName),
+            value: alertText(claimed.hostName),
             inline: true,
           },
-          { name: 'Title', value: escapeMarkdown(claimed.title) },
+          { name: 'Title', value: alertText(claimed.title) },
         ],
       })
       .catch(() => undefined);

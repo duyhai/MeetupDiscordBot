@@ -1,4 +1,4 @@
-import { Client, EmbedBuilder, TextChannel } from 'discord.js';
+import { Client, EmbedBuilder, TextChannel, escapeMarkdown } from 'discord.js';
 import { Logger } from 'tslog';
 
 import {
@@ -156,4 +156,18 @@ export async function recentEmbedTitles(
     );
     return undefined;
   }
+}
+
+/**
+ * Member-typed text (an event title, a host name) for an alert embed: every
+ * Discord markdown construct shown as typed, masked links, headings and
+ * lists included, which escapeMarkdown leaves alone by default.
+ */
+export function alertText(text: string): string {
+  return escapeMarkdown(text, {
+    maskedLink: true,
+    heading: true,
+    bulletedList: true,
+    numberedList: true,
+  });
 }

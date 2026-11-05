@@ -22,6 +22,7 @@ import {
   MODERATION_LOG_CHANNEL_ID,
 } from '../../../src/constants.js';
 import {
+  alertText,
   logActivity,
   logAlert,
   logModeration,
@@ -294,5 +295,17 @@ describe('discordLogger', () => {
         recentEmbedTitles(client, BOT_ALERTS_CHANNEL_ID),
       ).resolves.toBeUndefined();
     });
+  });
+});
+
+describe('alertText', () => {
+  it('shows masked links, headings, lists and emphasis as typed', () => {
+    expect(alertText('[Free](https://evil.example)')).toBe(
+      '\\[Free](https://evil.example)',
+    );
+    expect(alertText('# Big')).toBe('\\# Big');
+    expect(alertText('- item')).toBe('\\- item');
+    expect(alertText('1. item')).toBe('1\\. item');
+    expect(alertText('**bold** _it_')).toBe('\\*\\*bold\\*\\* \\_it\\_');
   });
 });
