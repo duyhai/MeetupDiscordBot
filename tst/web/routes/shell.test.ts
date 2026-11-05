@@ -163,6 +163,7 @@ describe('page shell', () => {
     expect(links).toEqual([
       ['/dashboard', 'Home'],
       ['/dashboard/no-shows', 'No-show workspace'],
+      ['/dashboard/hosts/requests', 'Host requests'],
       ['/dashboard/hall-of-fame', 'Hall of Fame'],
       ['/dashboard/no-show-history', 'No-show history'],
       ['/dashboard/suspensions', 'Suspensions'],
@@ -178,6 +179,7 @@ describe('page shell', () => {
     ['/dashboard/no-shows', 'No-show workspace'],
     ['/dashboard/no-shows/2026-09', 'No-show workspace'],
     ['/dashboard/no-shows/2026-09/rows/1/suspend', 'No-show workspace'],
+    ['/dashboard/hosts/requests', 'Host requests'],
     ['/dashboard/hall-of-fame', 'Hall of Fame'],
     ['/dashboard/hall-of-fame/2026-09', 'Hall of Fame'],
     ['/dashboard/no-show-history', 'No-show history'],

@@ -64,6 +64,9 @@ import {
 import { OrganizerLoginDeps } from '../../../src/web/routes/organizerLogin.js';
 import { SessionStore } from '../../../src/web/session.js';
 import { FakeCache } from '../fakeCache.js';
+import type { PublishOutcome } from '../../../src/lib/hosts/publishRequest.js';
+import type { EventRequest } from '../../../src/lib/repositories/postgresEventRequestRepository.js';
+import type { StaffRequestStore } from '../../../src/web/routes/hostRequests.js';
 
 export const PAGE_NOW = new Date('2026-10-05T16:15:00Z');
 export const SEPT: Period = { year: 2026, month: 9 };
@@ -772,6 +775,90 @@ export function fakeBanActions() {
   } satisfies BanActions;
 }
 
+/** An event request row for the staff queue. */
+export function eventRequestRow(
+  over: Partial<EventRequest> = {},
+): EventRequest {
+  return {
+    id: '1',
+    meetupMemberId: '4242',
+    discordUserId: null,
+    hostName: 'Hana',
+    tier: 'regular',
+    kind: 'fresh',
+    sourceEventId: null,
+    title: 'Board game night',
+    description: 'desc',
+    startLocal: '2026-11-20T19:00',
+    duration: 'PT2H',
+    rsvpLimit: 12,
+    guestLimit: 1,
+    featuredPhotoId: null,
+    venueId: null,
+    howToFindUs: null,
+    status: 'pending',
+    denyReason: null,
+    failure: null,
+    decidedBy: null,
+    decidedAt: null,
+    meetupEventId: null,
+    eventUrl: null,
+    version: 1,
+    createdAt: PAGE_NOW,
+    updatedAt: PAGE_NOW,
+    ...over,
+  };
+}
+
+/** The queue's store over fixed rows; deny and resolve change a row at its version, as Postgres does. */
+export function fakeEventRequests(rows: EventRequest[] = [eventRequestRow()]) {
+  return {
+    get: vi.fn(async (id: string) => rows.find((r) => r.id === id)),
+    listByStatus: vi.fn(async (statuses: string[]) =>
+      rows.filter((r) => statuses.includes(r.status)),
+    ),
+    listDecided: vi.fn(async () =>
+      rows.filter((r) => r.status === 'published' || r.status === 'denied'),
+    ),
+    deny: vi.fn(
+      async (id: string, version: number, actor: string, reason: string) => {
+        const row = rows.find((r) => r.id === id);
+        const deniable =
+          row?.status === 'pending' ||
+          (row?.status === 'failed' && row.meetupEventId === null);
+        if (!row || row.version !== version || !deniable) {
+          return undefined;
+        }
+        Object.assign(row, {
+          status: 'denied',
+          denyReason: reason,
+          decidedBy: actor,
+          version: row.version + 1,
+        });
+        return { ...row };
+      },
+    ),
+    resolve: vi.fn(async (id: string, version: number, actor: string) => {
+      const row = rows.find((r) => r.id === id);
+      if (
+        !row ||
+        row.version !== version ||
+        row.status !== 'failed' ||
+        row.meetupEventId === null
+      ) {
+        return undefined;
+      }
+      Object.assign(row, {
+        status: 'published',
+        failure: null,
+        decidedBy: actor,
+        version: row.version + 1,
+      });
+      return { ...row };
+    }),
+  } satisfies StaffRequestStore;
+}
+
 /** The default seed: a September 2026 Hall of Fame row. */
 export const SEED: SeedRow[] = [seedRow('hall_of_fame', SEPT, hofPayload())];
 
@@ -823,6 +910,12 @@ export function fakePageDeps(
     rebuild: vi.fn(async (): Promise<PageRebuildResult> => ({
       status: 'started',
       done: Promise.resolve({ ok: true }),
+    })),
+    eventRequests: async () => fakeEventRequests(),
+    findExistingEvent: vi.fn(async () => undefined),
+    publishRequest: vi.fn(async (): Promise<PublishOutcome> => ({
+      code: 'published',
+      request: eventRequestRow({ status: 'published' }),
     })),
     ...overrides,
   };

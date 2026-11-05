@@ -7,6 +7,11 @@ export const createEvent = gql`
         id
         eventUrl
       }
+      errors {
+        code
+        field
+        message
+      }
     }
   }
 `;
@@ -18,6 +23,11 @@ export const editEvent = gql`
         id
         eventUrl
       }
+      errors {
+        code
+        field
+        message
+      }
     }
   }
 `;
@@ -27,6 +37,11 @@ export const closeEventRsvps = gql`
     closeEventRsvps(input: $input) {
       event {
         id
+      }
+      errors {
+        code
+        field
+        message
       }
     }
   }

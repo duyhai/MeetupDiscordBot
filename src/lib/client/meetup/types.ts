@@ -287,6 +287,7 @@ export interface CreateEventInput {
     enabled: boolean;
   };
   groupUrlname: string;
+  howToFindUs?: string;
   isCopy: boolean;
   publishStatus: string;
   question: string;
@@ -300,16 +301,30 @@ export interface CreateEventInput {
   startDateTime: string;
   title: string;
   topics: number[];
+  venueId?: string;
+}
+
+/** A validation error Meetup returns inside a mutation's payload (not a GraphQL error). */
+export interface PayloadError {
+  code: string;
+  field?: string | null;
+  message: string;
 }
 
 export interface CreateEventResponse {
-  createEvent: { event: { eventUrl: string; id: string } };
+  createEvent: {
+    event: { eventUrl: string; id: string } | null;
+    errors?: PayloadError[] | null;
+  };
 }
 
 export type EditEventInput = Partial<CreateEventInput> & { eventId: string };
 
 export interface EditEventResponse {
-  editEvent: { event: { eventUrl: string; id: string } };
+  editEvent: {
+    event: { eventUrl: string; id: string } | null;
+    errors?: PayloadError[] | null;
+  };
 }
 
 export interface MeetupGroupMember {
@@ -342,6 +357,24 @@ export type GetGroupMembershipsInput = {
   urlname: string;
 };
 
+export interface GetEventForCopyResponse {
+  event: {
+    id: string;
+    eventUrl: string | null;
+    title: string | null;
+    description: string | null;
+    group: { urlname: string } | null;
+    dateTime: string;
+    duration: string | null;
+    maxTickets: number | null;
+    guestLimit: number | null;
+    howToFindUs: string | null;
+    featuredEventPhoto: { id: string } | null;
+    venue: { id: string } | null;
+    eventHosts: { member: { id: string } | null }[] | null;
+  } | null;
+}
+
 export interface GetEventResponse {
   event: { description: string; id: string; title: string };
 }
@@ -351,7 +384,10 @@ export interface CloseEventRsvpsInput {
 }
 
 export interface CloseEventRsvpsResponse {
-  closeEventRsvps: { event: { id: string } };
+  closeEventRsvps: {
+    event: { id: string } | null;
+    errors?: PayloadError[] | null;
+  };
 }
 
 export interface PublishEventDraftInput {

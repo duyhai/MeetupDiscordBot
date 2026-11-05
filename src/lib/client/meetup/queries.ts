@@ -311,6 +311,40 @@ export const getGroupMemberships = gql`
   }
 `;
 
+/**
+ * What copying an event needs: its content, settings and hosts (the copy
+ * is refused unless the signed-in host is one of them). No RSVPs, no names.
+ */
+export const getEventForCopy = gql`
+  query ($eventId: ID!) {
+    event(id: $eventId) {
+      id
+      eventUrl
+      title
+      description
+      dateTime
+      duration
+      group {
+        urlname
+      }
+      maxTickets
+      guestLimit
+      howToFindUs
+      featuredEventPhoto {
+        id
+      }
+      venue {
+        id
+      }
+      eventHosts {
+        member {
+          id
+        }
+      }
+    }
+  }
+`;
+
 export const getEvent = gql`
   query ($eventId: ID!) {
     event(id: $eventId) {

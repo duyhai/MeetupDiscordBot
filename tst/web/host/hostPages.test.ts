@@ -126,14 +126,17 @@ describe('host calendar', () => {
       /<td class="cal past">\s*<span class="cal-day"\s*>2</,
     );
     expect(res.text).toMatch(
-      /<td class="cal busy3">\s*<span class="cal-day"\s*>7</,
+      new RegExp(
+        '<td class="cal busy3">\\s*<a class="cal-day" href="/host/create\\?day=2026-11-07"\\s*>' +
+          '<span class="sr-only">Host an event on </span>7<',
+      ),
     );
     // Named from the title on Nov 28, never marked on Thanksgiving (Nov 26).
     expect(res.text).toMatch(
-      /<td class="cal busy1">\s*<span class="cal-day"\s*>28<\/span\s*>(?:(?!<\/td>)[^])*Thanksgiving/,
+      /<td class="cal busy1">\s*<a class="cal-day"[^>]*>(?:(?!<\/td>)[^])*>28<\/a\s*>(?:(?!<\/td>)[^])*Thanksgiving/,
     );
     expect(res.text).not.toMatch(
-      /<span class="cal-day"\s*>26<\/span\s*>(?:(?!<\/td>)[^])*Thanksgiving/,
+      /<\/span>26<\/a\s*>(?:(?!<\/td>)[^])*Thanksgiving/,
     );
     expect(res.text).toContain('<span class="badge info">Thanksgiving</span>');
     expect(res.text).toContain('3 events');

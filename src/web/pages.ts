@@ -208,7 +208,18 @@ td.cal{vertical-align:top;height:76px;padding:var(--s1) var(--s2);font-size:var(
 overflow-wrap:anywhere}
 td.cal span{display:block}
 .cal-day{font-weight:700}
+a.cal-day{position:relative;display:inline-flex;align-items:center;min-width:var(--tap);min-height:var(--tap)}
 .cal-date{font-weight:600;font-style:italic}
+.sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+form.request-form label.field{margin:0 0 var(--s3)}
+form.request-form label.field input,form.request-form label.field select{display:block;width:100%;max-width:24rem;margin-top:var(--s1)}
+form.request-form details.more-options{margin:0 0 var(--s3);padding-bottom:var(--s1);
+  border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
+form.request-form details.more-options textarea{max-width:40rem}
+.desc-text{white-space:pre-line;overflow-wrap:anywhere;max-height:24rem;overflow-y:auto;padding:var(--s2) var(--s3);
+  background:var(--raised);border-radius:8px;font-size:var(--t-sm)}
+.wrap-anywhere{overflow-wrap:anywhere}
+.field-error{display:block;margin-top:var(--s1);color:var(--attn-ink);font-size:var(--t-sm);font-weight:600}
 td.cal.past{color:var(--muted);background:var(--bg)}
 td.busy0,.swatch.busy0{background:var(--ok-soft)}
 td.busy1,.swatch.busy1{background:var(--surface)}
@@ -233,6 +244,11 @@ const NAV_ITEMS = [
     key: 'workspace',
     path: dashboardPath(DASHBOARD_PATHS.workspace),
     label: 'No-show workspace',
+  },
+  {
+    key: 'hostRequests',
+    path: dashboardPath(DASHBOARD_PATHS.hostRequests),
+    label: 'Host requests',
   },
   {
     key: 'hallOfFame',

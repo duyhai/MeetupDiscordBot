@@ -3,14 +3,13 @@ import { Client } from 'discord.js';
 import express from 'express';
 import { Logger } from 'tslog';
 
-import { SERVER_ROLES } from '../../constants.js';
 import { exchangeMeetupCode } from '../../lib/client/oauth/providers.js';
-import { HostResolveDeps, resolveHost } from '../../lib/hosts/eligibility.js';
+import { resolveHost } from '../../lib/hosts/eligibility.js';
 import { organizerGroupEvents } from '../../lib/hosts/hostEvents.js';
 import { LogEntry, logActivity } from '../../lib/helpers/discordLogger.js';
 import { withOrganizerMeetup } from '../../lib/reports/organizerMeetup.js';
-import { PostgresMemberRepository } from '../../lib/repositories/postgresMemberRepository.js';
-import { PostgresPromotedHostRepository } from '../../lib/repositories/postgresPromotedHostRepository.js';
+import { PostgresEventRequestRepository } from '../../lib/repositories/postgresEventRequestRepository.js';
+import { getRandomTip } from '../../util/tips.js';
 import { ApplicationCache } from '../../util/cache.js';
 import { baseSecurityHeaders } from '../dashboardRouter.js';
 import { dashboardDisabledReason, dashboardOrigin } from '../dashboardDeps.js';
@@ -21,11 +20,16 @@ import {
   hostRedirectUri,
 } from '../discordOAuth.js';
 import { html } from '../html.js';
-import { discordRoleCheck } from '../roleGate.js';
 import { timedCacheFactory } from '../timedCache.js';
 import { hostLayout } from './hostLayout.js';
 import { registerHostPages } from './hostPages.js';
 import { createHostRouter } from './hostRouter.js';
+import { registerCreatePages } from './createPage.js';
+import {
+  alertVia,
+  hostResolveDeps,
+  productionPublisher,
+} from './hostServices.js';
 import { buildHostMeetupAuthUrl, fetchMeetupSelf } from './meetupSignIn.js';
 
 const logger = new Logger({ name: 'hostDashboard' });
@@ -40,34 +44,6 @@ export function setHostClient(client: Client | undefined) {
 
 /** The shared cache behind the dashboard's 2 s deadline (sessions only). */
 const hostCache = timedCacheFactory(ApplicationCache);
-
-/** Production lookups for resolveHost. Each throws when its source is down. */
-export function hostResolveDeps(
-  getClient: () => Client | undefined = () => discordClient,
-): HostResolveDeps {
-  const guestHost = discordRoleCheck(getClient, SERVER_ROLES.guest_host);
-  return {
-    discordIdForMeetup: async (meetupId) =>
-      (
-        await (
-          await PostgresMemberRepository.instance()
-        ).findByMeetupId(meetupId)
-      )?.discordUserId,
-    meetupIdForDiscord: async (discordId) =>
-      (
-        await (
-          await PostgresMemberRepository.instance()
-        ).findByDiscordId(discordId)
-      )?.meetupId ?? undefined,
-    hasGuestHostRole: guestHost,
-    pastHostedCount: (meetupId) =>
-      withOrganizerMeetup(getClient(), (meetup) =>
-        meetup.getGroupEventsCount({ status: ['PAST'], hostId: meetupId }),
-      ),
-    isPromoted: async (meetupId) =>
-      (await PostgresPromotedHostRepository.instance()).isPromoted(meetupId),
-  };
-}
 
 const auditActivity = async (entry: LogEntry) => {
   if (!discordClient) {
@@ -108,7 +84,8 @@ export function hostRouterFromEnv(
     logger.warn(`Host dashboard disabled: ${reason}`);
     return notConfiguredRouter();
   }
-  const resolveDeps = hostResolveDeps();
+  const resolveDeps = hostResolveDeps(() => discordClient);
+  const publish = productionPublisher(() => discordClient);
   const events = {
     fetchGroupEvents: organizerGroupEvents(() => discordClient),
     now: () => new Date(),
@@ -133,6 +110,27 @@ export function hostRouterFromEnv(
     origin: dashboardOrigin(),
     requireHttps: dashboardOrigin().startsWith('https://'),
     audit: auditActivity,
-    pages: (router) => registerHostPages(router, { events }),
+    pages: (router) => {
+      registerHostPages(router, {
+        events,
+        requests: () => PostgresEventRequestRepository.instance(),
+      });
+      registerCreatePages(
+        router,
+        {
+          now: () => new Date(),
+          requests: () => PostgresEventRequestRepository.instance(),
+          copySource: async (eventId) =>
+            (await withOrganizerMeetup(discordClient, (meetup) =>
+              meetup.getEventForCopy(eventId),
+            )) ?? undefined,
+          publish: (id, version, actor) =>
+            publish(id, version, actor, ['pending']),
+          alert: alertVia(() => discordClient),
+          tip: getRandomTip,
+        },
+        dashboardOrigin(),
+      );
+    },
   });
 }

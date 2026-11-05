@@ -9,11 +9,10 @@ import {
   MessageActionRowComponentBuilder,
 } from 'discord.js';
 import { ButtonComponent, Discord, Slash, SlashOption } from 'discordx';
-import { ClientError } from 'graphql-request';
 import { Logger } from 'tslog';
 
 import { GUEST_HOST_PREFIX } from '../../constants.js';
-import { GqlMeetupClient } from '../../lib/client/meetup/gqlClient.js';
+import { createEventWithPhotoFallback } from '../../lib/client/meetup/createEventWithPhotoFallback.js';
 import { getPaginatedData } from '../../lib/client/meetup/paginationHelper.js';
 import {
   GUEST_HOST_EVENT_DESCRIPTION,
@@ -25,7 +24,6 @@ import {
   requireModOrOrganizer,
 } from '../../util/discord.js';
 import { withLock } from '../../util/lock.js';
-import { CreateEventInput } from '../../lib/client/meetup/types.js';
 import { withMeetupClient } from '../../util/meetup.js';
 import { getRandomTip } from '../../util/tips.js';
 
@@ -35,36 +33,6 @@ const DEFAULT_START_TIME = 19;
 const DATE_FORMAT = 'YYYY-MM-DD';
 const TITLE_MAX_LENGTH = 80;
 const TEMPLATE_TITLE = 'Organizer Event Template';
-
-/**
- * The featured photo is a fixed Meetup photo id. If that photo is ever
- * deleted, Meetup's GraphQL error names the photo; the event is then created
- * without one rather than not at all. Any other error is rethrown untouched,
- * so a failure that may already have created the event is never retried.
- */
-async function createEventWithPhotoFallback(
-  meetupClient: GqlMeetupClient,
-  input: CreateEventInput,
-) {
-  try {
-    return await meetupClient.createEvent(input);
-  } catch (error: unknown) {
-    const photoRejected =
-      error instanceof ClientError &&
-      (error.response.errors ?? []).some(({ message }) =>
-        /photo/i.test(message),
-      );
-    if (!photoRejected) {
-      throw error;
-    }
-    logger.warn(
-      `createEvent rejected featured photo ${input.featuredPhotoId}; retrying without it`,
-    );
-    const withoutPhoto = { ...input };
-    delete withoutPhoto.featuredPhotoId;
-    return meetupClient.createEvent(withoutPhoto);
-  }
-}
 
 @Discord()
 export class MeetupCreateEventCommands {

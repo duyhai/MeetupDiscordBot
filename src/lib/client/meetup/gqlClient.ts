@@ -15,8 +15,10 @@ import {
   editEvent,
   publishEventDraft,
 } from './mutations.js';
+import { throwOnPayloadErrors } from './payloadErrors.js';
 import {
   getEvent,
+  getEventForCopy,
   getEventRsvps,
   getGroupEvents,
   getGroupEventsCount,
@@ -41,6 +43,7 @@ import {
   EditEventInput,
   EditEventResponse,
   EventSummary,
+  GetEventForCopyResponse,
   GetEventResponse,
   GetEventRsvpsInput,
   GetEventRsvpsResponse,
@@ -625,6 +628,17 @@ export class GqlMeetupClient {
     }
   }
 
+  /** The source of a copy; undefined when Meetup has no such event. Not logged: it carries the description. */
+  public async getEventForCopy(
+    eventId: string,
+  ): Promise<GetEventForCopyResponse['event']> {
+    const result = await this.client.request<GetEventForCopyResponse>(
+      getEventForCopy,
+      { eventId },
+    );
+    return result.event;
+  }
+
   public async createEvent(input: CreateEventInput) {
     logger.info(`Calling createEvent with input: ${JSON.stringify({ input })}`);
     try {
@@ -633,6 +647,11 @@ export class GqlMeetupClient {
         { input },
       );
       logger.info(`createEvent result: ${JSON.stringify(result)}`);
+      // An event that exists is returned even with errors alongside it, so
+      // the caller records it rather than creating a second one.
+      if (!result.createEvent?.event) {
+        throwOnPayloadErrors('createEvent', result.createEvent?.errors);
+      }
       return result;
     } catch (error) {
       logger.error(error);
@@ -647,6 +666,7 @@ export class GqlMeetupClient {
         input,
       });
       logger.info(`editEvent result: ${JSON.stringify(result)}`);
+      throwOnPayloadErrors('editEvent', result.editEvent?.errors);
       return result;
     } catch (error) {
       logger.error(error);
@@ -664,6 +684,7 @@ export class GqlMeetupClient {
         { input },
       );
       logger.info(`closeEventRsvps result: ${JSON.stringify(result)}`);
+      throwOnPayloadErrors('closeEventRsvps', result.closeEventRsvps?.errors);
       return result;
     } catch (error) {
       logger.error(error);

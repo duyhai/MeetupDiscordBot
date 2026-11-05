@@ -1,5 +1,5 @@
 import dayjs from 'dayjs';
-import express, { RequestHandler, Response } from 'express';
+import express, { RequestHandler } from 'express';
 import { Logger } from 'tslog';
 
 import {
@@ -18,19 +18,33 @@ import {
   pacificDay,
 } from '../../lib/hosts/hostEvents.js';
 import { matchHolidays } from '../../lib/hosts/holidays.js';
-import { tz } from '../../util/timezone.js';
 import { SafeHtml, html, memberText, pageLink, safeHref } from '../html.js';
 import { eventLink } from '../links.js';
 import { PAGE_SIZE, pageNav, parsePage } from '../paging.js';
 import { heatMap as heatMapFor } from './heatMap.js';
-import { HostNavKey, hostLayout } from './hostLayout.js';
 import { hostLocals } from './hostRouter.js';
+import { EventRequest } from '../../lib/repositories/postgresEventRequestRepository.js';
+import {
+  HostRequestStore,
+  copyLink,
+  createDayLink,
+  requestsCard,
+} from './createPage.js';
+import {
+  dateLabel,
+  dayLabel,
+  hostPage,
+  timeLabel,
+  unavailable,
+} from './hostPageKit.js';
 import { HOST_BASE, HostSession } from './hostSession.js';
 
 const logger = new Logger({ name: 'hostDashboard' });
 
 export interface HostPageDeps {
   events: HostEventsDeps;
+  /** The host's requests for the home page; a failure hides only that card. */
+  requests?: () => Promise<Pick<HostRequestStore, 'listForMember'>>;
 }
 
 export const HOST_PATHS = {
@@ -38,56 +52,13 @@ export const HOST_PATHS = {
   history: `${HOST_BASE}/history`,
 } as const;
 
+const CREATE_PAGE = `${HOST_BASE}/create`;
+/** How many of the host's requests the home page lists. */
+const HOME_REQUESTS_SHOWN = 10;
+
 /** How many quiet days the home page suggests. */
 const QUIET_DAYS_SHOWN = 5;
 const QUIET_WINDOW_DAYS = 14;
-
-function hostPage(
-  res: Response,
-  page: {
-    title: string;
-    current?: HostNavKey;
-    body: SafeHtml;
-    status?: number;
-  },
-) {
-  const { session, nonce } = hostLocals(res);
-  res
-    .status(page.status ?? 200)
-    .type('html')
-    .send(
-      hostLayout({
-        title: page.title,
-        nonce,
-        user: session,
-        current: page.current,
-        body: page.body,
-      }),
-    );
-}
-
-/** A Meetup outage: never a partial page. */
-function unavailable(res: Response, error: unknown) {
-  logger.warn(
-    `Host page Meetup read failed: ${error instanceof Error ? error.name : 'Error'}`,
-  );
-  hostPage(res, {
-    title: 'Unavailable',
-    status: 503,
-    body: html`<div class="card">
-      <h1>Unavailable</h1>
-      <p>
-        Events cannot be loaded from Meetup right now. Please try again in a few
-        minutes.
-      </p>
-    </div>`,
-  });
-}
-
-const dayLabel = (day: string) => dayjs(day).format('ddd, MMM D');
-const timeLabel = (dateTime: string) => tz(dayjs(dateTime)).format('h:mm A');
-const dateLabel = (dateTime: string) =>
-  tz(dayjs(dateTime)).format('ddd, MMM D, YYYY');
 
 /** The tier as a pill: green for Community Host, grey for a regular host. */
 function tierBadge(session: HostSession): SafeHtml {
@@ -142,6 +113,7 @@ function homeBody(
   upcoming: HostEvent[],
   calendar: CalendarDay[],
   today: string,
+  requests: EventRequest[] | undefined,
 ): SafeHtml {
   const quiet = quietDays(calendar, today).slice(0, QUIET_DAYS_SHOWN);
   const linkNudge =
@@ -170,7 +142,11 @@ function homeBody(
       <h1>Hi, ${memberText(session.username)}</h1>
       <p>${tierBadge(session)}</p>
       ${linkNudge}
+      <div class="actions">
+        <a class="button" href="${pageLink(CREATE_PAGE)}">Host an event</a>
+      </div>
     </div>
+    ${requestsCard(requests)}
     <div class="card">
       <h2>Your upcoming events</h2>
       ${
@@ -199,7 +175,12 @@ function homeBody(
           ? html`<p>Every day in the next two weeks already has an event.</p>`
           : html`<p>Quiet days in the next two weeks:</p>
               <ul>
-                ${quiet.map((d) => html`<li>${dayLabel(d.day)}</li>`)}
+                ${quiet.map(
+                  (d) =>
+                    html`<li>
+                      <a href="${createDayLink(d.day)}">${dayLabel(d.day)}</a>
+                    </li>`,
+                )}
               </ul>`
       }
       <div class="actions">
@@ -219,9 +200,16 @@ function homeBody(
  */
 function calendarCell(day: CalendarDay, today: string): SafeHtml {
   const past = day.day < today;
-  const label = html`<span class="cal-day"
-    >${dayjs(day.day).format(day.day.endsWith('-01') ? 'MMM D' : 'D')}</span
-  >`;
+  const dayText = dayjs(day.day).format(
+    day.day.endsWith('-01') ? 'MMM D' : 'D',
+  );
+  // From tomorrow, the day number opens the create form for that day.
+  const label =
+    day.day > today
+      ? html`<a class="cal-day" href="${createDayLink(day.day)}"
+          ><span class="sr-only">Host an event on </span>${dayText}</a
+        >`
+      : html`<span class="cal-day">${dayText}</span>`;
   const count = day.events.length;
   const countText = html`<span class="cal-count"
     >${count === 0 ? 'Free' : count === 1 ? '1 event' : `${count} events`}</span
@@ -264,6 +252,13 @@ function calendarBody(days: CalendarDay[], today: string): SafeHtml {
     (d) =>
       html`<li>
         <h3>${dayLabel(d.day)}</h3>
+        ${
+          d.day > today
+            ? html`<p>
+                <a href="${createDayLink(d.day)}">Host on this day</a>
+              </p>`
+            : ''
+        }
         <ul>
           ${d.events.map(
             (e) =>
@@ -379,6 +374,7 @@ function historyBody(
         <td data-label="Actions">
           <div class="actions">
             ${meetupButton(event)}${attendanceButton(event)}
+            <a class="button ghost" href="${copyLink(event.id)}">Copy</a>
           </div>
         </td>
       </tr>`,
@@ -443,10 +439,23 @@ export function registerHostPages(
       unavailable(res, error);
       return;
     }
+    let requests: EventRequest[] | undefined = [];
+    if (deps.requests) {
+      try {
+        requests = await (
+          await deps.requests()
+        ).listForMember(session.userId, HOME_REQUESTS_SHOWN);
+      } catch (error: unknown) {
+        logger.warn(
+          `Host requests read failed: ${error instanceof Error ? error.name : 'Error'}`,
+        );
+        requests = undefined;
+      }
+    }
     hostPage(res, {
       title: 'Home',
       current: 'home',
-      body: homeBody(session, upcoming, calendar, today()),
+      body: homeBody(session, upcoming, calendar, today(), requests),
     });
   }) as RequestHandler);
 
