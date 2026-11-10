@@ -66,13 +66,15 @@ $$;
 -- One "your Wrapped is ready" notice per year (src/lib/wrapped/announce.ts):
 -- claimed_at / posted_at work exactly as dashboard_notices above; channel_id
 -- and message_id say where the post went (message_id is NULL when a retry
--- found the notice already in the channel).
+-- found the notice already in the channel); retry_after is the backoff
+-- after a failed post (the job waits for it, Post now does not).
 CREATE TABLE IF NOT EXISTS wrapped_announcements (
-  year       INTEGER PRIMARY KEY CHECK (year BETWEEN 2013 AND 2100),
-  claimed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  posted_at  TIMESTAMPTZ,
-  channel_id TEXT CHECK (channel_id ~ '^[0-9]{17,20}$'),
-  message_id TEXT CHECK (message_id ~ '^[0-9]{17,20}$')
+  year        INTEGER PRIMARY KEY CHECK (year BETWEEN 2013 AND 2100),
+  claimed_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  posted_at   TIMESTAMPTZ,
+  retry_after TIMESTAMPTZ,
+  channel_id  TEXT CHECK (channel_id ~ '^[0-9]{17,20}$'),
+  message_id  TEXT CHECK (message_id ~ '^[0-9]{17,20}$')
 );
 -- Per-member no-show lookups: payload @> '{"cases":[{"member":{"id":"…"}}]}'
 -- (and the cleared/departed forms). Partial: only current no-show rows are

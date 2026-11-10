@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { GET_VERIFIED_CHANNEL_ID } from '../../../src/constants.js';
 import {
   announceDueAt,
+  announceSchedule,
   announceYear,
   isAnnounceDue,
   WRAPPED_ANNOUNCE_DEFAULT_DATE,
@@ -45,7 +46,7 @@ describe('wrappedAnnounceConfig', () => {
     expect(warn).not.toHaveBeenCalled();
   });
 
-  it('a malformed date, hour or channel warns by name (never the value) and falls back', () => {
+  it('a malformed date disables the post (no default date nobody chose); hour falls back; channel disables', () => {
     const warn = vi.fn();
     expect(
       wrappedAnnounceConfig(
@@ -57,7 +58,7 @@ describe('wrappedAnnounceConfig', () => {
         warn,
       ),
     ).toEqual({
-      date: WRAPPED_ANNOUNCE_DEFAULT_DATE,
+      date: undefined,
       hour: WRAPPED_ANNOUNCE_DEFAULT_HOUR,
       channelId: undefined,
     });
@@ -78,7 +79,7 @@ describe('wrappedAnnounceConfig', () => {
     }
   });
 
-  it('a date that looks right but does not exist (Feb 30) falls back', () => {
+  it('a date that looks right but does not exist (Feb 30) disables the post', () => {
     const warn = vi.fn();
     expect(
       wrappedAnnounceConfig(
@@ -88,14 +89,66 @@ describe('wrappedAnnounceConfig', () => {
         },
         warn,
       ).date,
+    ).toBeUndefined();
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(String(warn.mock.calls[0][0])).toContain('WRAPPED_ANNOUNCE_DATE');
+  });
+
+  it('a well-formed date in a past Pacific year is kept but warns at boot (it can never post)', () => {
+    const warn = vi.fn();
+    const config = wrappedAnnounceConfig(
+      {
+        WRAPPED_ANNOUNCE_DATE: '2025-12-01',
+        WRAPPED_ANNOUNCE_CHANNEL_ID: CHANNEL,
+      },
+      warn,
+      new Date('2026-11-10T20:00:00Z'),
+    );
+    expect(config.date).toBe('2025-12-01');
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(String(warn.mock.calls[0][0])).toMatch(
+      /WRAPPED_ANNOUNCE_DATE.*past year/,
+    );
+    // Not for this year's date, and not for the default.
+    expect(
+      wrappedAnnounceConfig(
+        { WRAPPED_ANNOUNCE_CHANNEL_ID: CHANNEL },
+        warn,
+        new Date('2026-11-10T20:00:00Z'),
+      ).date,
     ).toBe(WRAPPED_ANNOUNCE_DEFAULT_DATE);
     expect(warn).toHaveBeenCalledTimes(1);
+  });
+
+  it('the past-year check is Pacific: 31 Dec 2026 23:30 Pacific is still 2026', () => {
+    const warn = vi.fn();
+    wrappedAnnounceConfig(
+      {
+        WRAPPED_ANNOUNCE_DATE: '2026-12-01',
+        WRAPPED_ANNOUNCE_CHANNEL_ID: CHANNEL,
+      },
+      warn,
+      new Date('2027-01-01T07:30:00Z'),
+    );
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it('announceSchedule is defined only with both a date and a channel', () => {
+    expect(
+      announceSchedule({ date: '2026-12-01', hour: 17, channelId: CHANNEL }),
+    ).toEqual({ date: '2026-12-01', hour: 17, channelId: CHANNEL });
+    expect(
+      announceSchedule({ date: undefined, hour: 17, channelId: CHANNEL }),
+    ).toBeUndefined();
+    expect(
+      announceSchedule({ date: '2026-12-01', hour: 17, channelId: undefined }),
+    ).toBeUndefined();
   });
 });
 
 describe('announceDueAt', () => {
   const at = (date: string, hour = 17) =>
-    announceDueAt({ date, hour, channelId: CHANNEL }).toISOString();
+    announceDueAt({ date, hour }).toISOString();
 
   it('is the configured hour on the configured date in Pacific time', () => {
     // 1 Dec 2026 is PST (UTC-8): 17:00 Pacific is 01:00 UTC the next day.
@@ -112,13 +165,17 @@ describe('announceDueAt', () => {
     expect(at('2026-11-01')).toBe('2026-11-02T01:00:00.000Z');
   });
 
+  it('a DST-change hour is one instant: the repeated 01:00 is its second (standard-time) occurrence, the skipped 02:00 is 03:00', () => {
+    // 1 Nov 2026: 01:00 PDT is 08:00Z and 01:00 PST is 09:00Z. One of them,
+    // never both, and dayjs picks the second: an hour late, never twice.
+    expect(at('2026-11-01', 1)).toBe('2026-11-01T09:00:00.000Z');
+    // 8 Mar 2026: 02:00 does not exist; it lands on 03:00 PDT.
+    expect(at('2026-03-08', 2)).toBe('2026-03-08T10:00:00.000Z');
+  });
+
   it('the announced year is the configured date’s year', () => {
-    expect(
-      announceYear({ date: '2026-12-01', hour: 17, channelId: CHANNEL }),
-    ).toBe(2026);
-    expect(
-      announceYear({ date: '2027-01-02', hour: 17, channelId: CHANNEL }),
-    ).toBe(2027);
+    expect(announceYear({ date: '2026-12-01' })).toBe(2026);
+    expect(announceYear({ date: '2027-01-02' })).toBe(2027);
   });
 });
 

@@ -9,10 +9,9 @@ import {
 
 const client = {} as Client;
 const CHANNEL = '123456789012345678';
-const ENV = {
-  DATABASE_URL: 'postgres://fake',
-  WRAPPED_ANNOUNCE_CHANNEL_ID: CHANNEL,
-};
+const ENV = { DATABASE_URL: 'postgres://fake' };
+const CONFIG = { date: '2026-12-01', hour: 17, channelId: CHANNEL };
+const config = () => CONFIG;
 
 const fakeLog = () => ({ error: vi.fn(), warn: vi.fn(), info: vi.fn() });
 const settle = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
@@ -28,10 +27,12 @@ function captureInterval() {
 
 const neverDue: WrappedAnnounceDeps = {
   now: () => new Date('2026-06-01T00:00:00Z'),
-  config: () => ({ date: '2026-12-01', hour: 17, channelId: CHANNEL }),
+  config,
   store: () => Promise.reject(new Error('not reached')),
+  cache: () => Promise.reject(new Error('not reached')),
   post: () => Promise.reject(new Error('not reached')),
   recentTitles: () => Promise.resolve(undefined),
+  alert: () => Promise.resolve(true),
 };
 
 describe('startWrappedAnnounceScheduler', () => {
@@ -44,6 +45,7 @@ describe('startWrappedAnnounceScheduler', () => {
     const makeDeps = vi.fn(() => neverDue);
     startWrappedAnnounceScheduler(client, makeDeps, {
       env: ENV,
+      config,
       setIntervalFn,
       log: fakeLog(),
     });
@@ -62,7 +64,8 @@ describe('startWrappedAnnounceScheduler', () => {
     const makeDeps = vi.fn(() => neverDue);
     const log = fakeLog();
     startWrappedAnnounceScheduler(client, makeDeps, {
-      env: { WRAPPED_ANNOUNCE_CHANNEL_ID: CHANNEL },
+      env: {},
+      config,
       setIntervalFn,
       log,
     });
@@ -73,21 +76,49 @@ describe('startWrappedAnnounceScheduler', () => {
     );
   });
 
-  it('does not start without a channel: one boot warning, no ticks', () => {
+  it.each([
+    ['channel', { ...CONFIG, channelId: undefined }],
+    ['date', { ...CONFIG, date: undefined }],
+  ])(
+    'does not start without a %s: the config already warned, so one info line and no ticks',
+    (_what, disabled) => {
+      const { setIntervalFn } = captureInterval();
+      const makeDeps = vi.fn(() => neverDue);
+      const log = fakeLog();
+      startWrappedAnnounceScheduler(client, makeDeps, {
+        env: ENV,
+        config: () => disabled,
+        setIntervalFn,
+        log,
+      });
+      expect(setIntervalFn).not.toHaveBeenCalled();
+      expect(makeDeps).not.toHaveBeenCalled();
+      expect(log.warn).not.toHaveBeenCalled();
+      expect(log.info).toHaveBeenCalledTimes(1);
+      expect(String(log.info.mock.calls[0][0])).toContain('disabled');
+    },
+  );
+
+  it('without an injected config, reads process.env once at boot and warns through its log', async () => {
     const { setIntervalFn } = captureInterval();
-    const makeDeps = vi.fn(() => neverDue);
     const log = fakeLog();
-    startWrappedAnnounceScheduler(client, makeDeps, {
-      env: { DATABASE_URL: 'postgres://fake' },
+    const { loadWrappedAnnounceConfig } =
+      await import('../../../src/lib/wrapped/announce.js');
+    // process.env has no WRAPPED_ANNOUNCE_* in tests: the channel warning is
+    // the boot warning, and the memoized config never warns again.
+    startWrappedAnnounceScheduler(client, () => neverDue, {
+      env: ENV,
       setIntervalFn,
       log,
     });
     expect(setIntervalFn).not.toHaveBeenCalled();
-    expect(makeDeps).not.toHaveBeenCalled();
     expect(log.warn).toHaveBeenCalledTimes(1);
     expect(String(log.warn.mock.calls[0][0])).toContain(
       'WRAPPED_ANNOUNCE_CHANNEL_ID',
     );
+    const again = vi.fn();
+    expect(loadWrappedAnnounceConfig(again).channelId).toBeUndefined();
+    expect(again).not.toHaveBeenCalled();
   });
 
   it('a failing tick is logged, never thrown, and the next tick still runs', async () => {
@@ -100,6 +131,7 @@ describe('startWrappedAnnounceScheduler', () => {
     }));
     startWrappedAnnounceScheduler(client, makeDeps, {
       env: ENV,
+      config,
       setIntervalFn,
       log,
     });
@@ -121,6 +153,7 @@ describe('startWrappedAnnounceScheduler', () => {
     }));
     startWrappedAnnounceScheduler(client, makeDeps, {
       env: ENV,
+      config,
       setIntervalFn,
       log: fakeLog(),
     });
@@ -146,6 +179,7 @@ describe('startWrappedAnnounceScheduler', () => {
     }));
     startWrappedAnnounceScheduler(client, makeDeps, {
       env: ENV,
+      config,
       setIntervalFn,
       log,
     });

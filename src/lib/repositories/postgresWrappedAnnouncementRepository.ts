@@ -2,15 +2,27 @@ import pg from 'pg';
 
 import { dashboardPool } from './dashboardPool.js';
 
-/** An unposted claim older than this is taken to be a crash and is reclaimed. */
+/**
+ * An unposted claim older than this is taken to be a crash and is reclaimed.
+ * The window stops two live processes from posting together; what stops a
+ * reclaimed retry from posting twice is the channel-history read before it
+ * posts (runWrappedAnnounce), since a send that timed out can still land.
+ */
 export const WRAPPED_RECLAIM_AFTER_MS = 30 * 60 * 1000;
 
 /**
  * 'fresh': this caller inserted the year's row. 'retry': it took over an
  * unposted claim (crashed or released); the notice may already be in the
- * channel. false: posted, or someone else holds a live claim.
+ * channel. false: posted, someone else holds a live claim, or the row is
+ * backing off after a failed post (unless ignoreBackoff).
  */
 export type WrappedClaim = 'fresh' | 'retry' | false;
+
+export interface WrappedClaimOptions {
+  reclaimAfterMs?: number;
+  /** Post now: a released row is retried at once instead of after its backoff. */
+  ignoreBackoff?: boolean;
+}
 
 export interface WrappedAnnouncementRecord {
   year: number;
@@ -27,7 +39,8 @@ export interface WrappedAnnouncementRecord {
  * posting (so two processes, or the job and the Post now button, cannot both
  * post), the post once it landed (final), and reclaim of a claim that crashed
  * or failed. The same shape as PostgresDashboardNoticeRepository, keyed by
- * year and recording where the post went.
+ * year, recording where the post went, with a retry_after for the backoff
+ * after a failed post.
  */
 export class PostgresWrappedAnnouncementRepository {
   private static singleton:
@@ -53,21 +66,30 @@ export class PostgresWrappedAnnouncementRepository {
     return this.singleton;
   }
 
-  /** See WrappedClaim. Staleness uses the database clock, so two dynos agree. */
+  /**
+   * See WrappedClaim. Staleness and the backoff use the database clock, so
+   * two dynos agree. Two concurrent reclaims: the second re-checks the WHERE
+   * against the first's new claimed_at and gets no row.
+   */
   async claim(
     year: number,
-    reclaimAfterMs = WRAPPED_RECLAIM_AFTER_MS,
+    options: WrappedClaimOptions = {},
   ): Promise<WrappedClaim> {
     const result = await this.pool.query<{
       claimed_at: string;
       fresh: boolean;
     }>(
       `INSERT INTO wrapped_announcements AS w (year) VALUES ($1)
-       ON CONFLICT (year) DO UPDATE SET claimed_at = now()
+       ON CONFLICT (year) DO UPDATE SET claimed_at = now(), retry_after = NULL
          WHERE w.posted_at IS NULL
            AND w.claimed_at < now() - make_interval(secs => $2::double precision / 1000)
+           AND ($3::boolean OR w.retry_after IS NULL OR w.retry_after <= now())
        RETURNING claimed_at::text AS claimed_at, (xmax = 0) AS fresh`,
-      [year, reclaimAfterMs],
+      [
+        year,
+        options.reclaimAfterMs ?? WRAPPED_RECLAIM_AFTER_MS,
+        options.ignoreBackoff === true,
+      ],
     );
     if (result.rowCount !== 1) {
       return false;
@@ -95,16 +117,21 @@ export class PostgresWrappedAnnouncementRepository {
     return result.rowCount === 1;
   }
 
-  /** A failed post: this instance's unposted claim becomes retryable at once. */
-  async release(year: number): Promise<void> {
+  /**
+   * A failed post: this instance's unposted claim becomes retryable, after
+   * retryAfterMs (the job's backoff; Post now ignores it) or at once.
+   */
+  async release(year: number, retryAfterMs = 0): Promise<void> {
     const claimedAt = this.claimed.get(year);
     if (claimedAt === undefined) {
       return;
     }
     await this.pool.query(
-      `UPDATE wrapped_announcements SET claimed_at = '-infinity'
+      `UPDATE wrapped_announcements
+          SET claimed_at = '-infinity',
+              retry_after = now() + make_interval(secs => $3::double precision / 1000)
         WHERE year = $1 AND claimed_at = $2::timestamptz AND posted_at IS NULL`,
-      [year, claimedAt],
+      [year, claimedAt, retryAfterMs],
     );
     this.claimed.delete(year);
   }

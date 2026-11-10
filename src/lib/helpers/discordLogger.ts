@@ -1,4 +1,10 @@
-import { Client, EmbedBuilder, TextChannel, escapeMarkdown } from 'discord.js';
+import {
+  Client,
+  EmbedBuilder,
+  NewsChannel,
+  TextChannel,
+  escapeMarkdown,
+} from 'discord.js';
 import { Logger } from 'tslog';
 
 import {
@@ -36,6 +42,11 @@ function describeSendError(error: unknown): string {
   return `${error.name}${safeCode}${httpStatus}`;
 }
 
+/** A guild text channel or an announcement (news) channel: where a bot posts an embed. */
+function isPostable(channel: unknown): channel is TextChannel | NewsChannel {
+  return channel instanceof TextChannel || channel instanceof NewsChannel;
+}
+
 function logPostFailure(channelId: string, entry: LogEntry, error: unknown) {
   // Channel ids are all digits, so they are safe to log.
   logger.warn(
@@ -63,7 +74,7 @@ export async function postEmbed(
 ): Promise<PostedEmbed | undefined> {
   try {
     const channel = await client.channels.fetch(channelId);
-    if (!(channel instanceof TextChannel)) {
+    if (!isPostable(channel)) {
       logger.warn(`Log channel ${channelId} is missing or not a text channel`);
       return undefined;
     }
@@ -161,7 +172,7 @@ export async function recentEmbedTitles(
       return undefined;
     }
     const channel = await client.channels.fetch(channelId);
-    if (!(channel instanceof TextChannel)) {
+    if (!isPostable(channel)) {
       return undefined;
     }
     const messages = await channel.messages.fetch({ limit });

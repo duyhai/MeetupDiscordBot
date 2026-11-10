@@ -5,7 +5,7 @@
  * once per year, across restarts and processes, by the same claim / mark
  * posted / release pattern as the report-ready notice (buildJob.ts): a
  * Postgres row per year, claimed before posting, final once posted, and
- * retried only when the post failed.
+ * retried only when the post failed (after a backoff, with one alert a day).
  *
  * No DMs. The post text is a function so a DM variant can reuse it later.
  */
@@ -18,13 +18,17 @@ import {
   GET_VERIFIED_CHANNEL_ID,
   PUBLIC_APP_ORIGIN,
 } from '../../constants.js';
+import { ApplicationCache } from '../../util/cache.js';
 import { tz } from '../../util/timezone.js';
+import { KeyValueCache } from '../cache/base.js';
 import {
   LogEntry,
+  logAlert,
   postEmbed,
   PostedEmbed,
   recentEmbedTitles,
 } from '../helpers/discordLogger.js';
+import { utcDay } from '../reports/period.js';
 import { PostgresWrappedAnnouncementRepository } from '../repositories/postgresWrappedAnnouncementRepository.js';
 
 const logger = new Logger({ name: 'wrappedAnnounce' });
@@ -40,33 +44,63 @@ const HOUR_PATTERN = /^\d{1,2}$/;
 const SNOWFLAKE = /^[0-9]{17,20}$/;
 
 export interface WrappedAnnounceConfig {
-  /** 'YYYY-MM-DD', a real calendar date, read in Pacific time. */
-  date: string;
+  /**
+   * 'YYYY-MM-DD', a real calendar date, read in Pacific time. Undefined when
+   * WRAPPED_ANNOUNCE_DATE is set but malformed: nothing is posted on a date
+   * nobody chose.
+   */
+  date: string | undefined;
   /** 0-23, Pacific. */
   hour: number;
   /** The channel to post in; undefined disables the post entirely. */
   channelId: string | undefined;
 }
 
+/** The post is possible: a date and a channel. */
+export type WrappedAnnounceSchedule = WrappedAnnounceConfig & {
+  date: string;
+  channelId: string;
+};
+
+export function announceSchedule(
+  config: WrappedAnnounceConfig,
+): WrappedAnnounceSchedule | undefined {
+  return config.date !== undefined && config.channelId !== undefined
+    ? { date: config.date, hour: config.hour, channelId: config.channelId }
+    : undefined;
+}
+
 /**
  * WRAPPED_ANNOUNCE_DATE (default 2026-12-01), WRAPPED_ANNOUNCE_HOUR (default
  * 17) and WRAPPED_ANNOUNCE_CHANNEL_ID (no default: unset means no post).
- * A malformed value warns by name only, never the value, and falls back.
+ * Every warning names the variable, never its value. A malformed date or
+ * channel disables the post; a malformed hour falls back to 17. A date in a
+ * past Pacific year is well-formed but can never post, so it warns too.
  */
 export function wrappedAnnounceConfig(
   env: Record<string, string | undefined>,
   warn: (message: string) => void = (message) => logger.warn(message),
+  now: Date = new Date(),
 ): WrappedAnnounceConfig {
-  let date = WRAPPED_ANNOUNCE_DEFAULT_DATE;
+  let date: string | undefined = WRAPPED_ANNOUNCE_DEFAULT_DATE;
   const rawDate = env.WRAPPED_ANNOUNCE_DATE?.trim();
   if (rawDate) {
     if (DATE_PATTERN.test(rawDate) && isRealDate(rawDate)) {
       date = rawDate;
     } else {
+      date = undefined;
       warn(
-        `WRAPPED_ANNOUNCE_DATE is not a real YYYY-MM-DD date; using ${WRAPPED_ANNOUNCE_DEFAULT_DATE}`,
+        'WRAPPED_ANNOUNCE_DATE is not a real YYYY-MM-DD date; the Wrapped announcement will not be posted',
       );
     }
+  }
+  if (
+    date !== undefined &&
+    announceYear({ date }) < tz(dayjs(now), PACIFIC).year()
+  ) {
+    warn(
+      'WRAPPED_ANNOUNCE_DATE is in a past year, so the Wrapped announcement will never be posted; set it to a date this year',
+    );
   }
   let hour = WRAPPED_ANNOUNCE_DEFAULT_HOUR;
   const rawHour = env.WRAPPED_ANNOUNCE_HOUR?.trim();
@@ -109,21 +143,32 @@ function isRealDate(value: string): boolean {
 
 let loaded: WrappedAnnounceConfig | undefined;
 
-/** process.env's config, parsed (and warned about) once per process. */
-export function loadWrappedAnnounceConfig(): WrappedAnnounceConfig {
+/**
+ * process.env's config, parsed once per process: the scheduler reads it at
+ * boot (so the warnings are boot warnings, through its log), and the
+ * dashboard gets the same object with no second warning.
+ */
+export function loadWrappedAnnounceConfig(
+  warn?: (message: string) => void,
+): WrappedAnnounceConfig {
   if (loaded === undefined) {
-    loaded = wrappedAnnounceConfig(process.env);
+    loaded = wrappedAnnounceConfig(process.env, warn);
   }
   return loaded;
 }
 
 /** The year the notice is about: the configured date's. */
-export function announceYear(config: WrappedAnnounceConfig): number {
+export function announceYear(config: { date: string }): number {
   return Number(config.date.slice(0, 4));
 }
 
-/** The instant of the configured hour on the configured date, Pacific (DST-aware). */
-export function announceDueAt(config: WrappedAnnounceConfig): Date {
+/**
+ * The instant of the configured hour on the configured date, Pacific. Across
+ * a DST change the hour is read as the clock there: the repeated 01:00 of the
+ * fall-back day is its second occurrence (standard time), the skipped 02:00
+ * of the spring-forward day is 03:00 daylight time; either way one instant.
+ */
+export function announceDueAt(config: { date: string; hour: number }): Date {
   const hh = String(config.hour).padStart(2, '0');
   return dayjs.tz(`${config.date} ${hh}:00:00`, PACIFIC).toDate();
 }
@@ -135,7 +180,7 @@ export function announceDueAt(config: WrappedAnnounceConfig): Date {
  */
 export function isAnnounceDue(
   now: Date,
-  config: WrappedAnnounceConfig,
+  config: { date: string; hour: number },
 ): boolean {
   return (
     now.getTime() >= announceDueAt(config).getTime() &&
@@ -170,50 +215,101 @@ export type WrappedAnnounceStore = Pick<
   'claim' | 'markPosted' | 'release' | 'get'
 >;
 
+/** After a failed post the job waits this long before trying again (Post now does not wait). */
+export const WRAPPED_RETRY_BACKOFF_MS = 60 * 60 * 1000;
+/** The failure alert is said once per UTC day. */
+export const FAILED_ALERT_TTL_SEC = 26 * 60 * 60;
+export const failedAlertKey = (day: string) =>
+  `wrapped-announce-failed-alert:${day}`;
+
 export interface WrappedAnnounceDeps {
   now(): Date;
   config(): WrappedAnnounceConfig;
   store(): Promise<WrappedAnnounceStore>;
+  /** Dedupes the failure alert (exclusive_set). */
+  cache(): Promise<KeyValueCache>;
   /** Sends the embed to the channel; the landed post (postEmbed), undefined when it did not land. May reject. */
   post(channelId: string, entry: LogEntry): Promise<PostedEmbed | undefined>;
   /** This bot's embed titles among the channel's recent messages; undefined when unreadable. Only read on a retry. */
   recentTitles(channelId: string): Promise<string[] | undefined>;
+  /** #meetup-bot-alerts (plain, no pings): the post keeps failing. May reject. */
+  alert(entry: LogEntry): Promise<unknown>;
 }
 
 export type WrappedAnnounceOutcome =
-  /** No channel configured. */
+  /** No channel, or no usable date, configured. */
   | 'disabled'
   /** Before the configured instant (or after that Pacific year). */
   | 'not-due'
   | 'already-posted'
-  /** Another process holds a live claim. */
+  /** Another process holds a live claim, or the job is backing off after a failed post. */
   | 'in-progress'
   | 'posted'
-  /** The post did not land; the claim is released for the next tick. */
+  /** The post did not land; the claim is released for a later tick (after the backoff). */
   | 'failed';
+
+/** Fixed text plus the channel id (digits): nothing from Discord's error, which is in the process log. */
+export function failedAlertEntry(year: number, channelId: string): LogEntry {
+  return {
+    title: 'Wrapped announcement not posted',
+    description:
+      `The "your Wrapped ${year} is ready" notice could not be posted to channel ${channelId}. ` +
+      'Check that the bot can see and post in that channel (WRAPPED_ANNOUNCE_CHANNEL_ID). ' +
+      'It is tried again every hour, or at once from the staff dashboard; this is said once a day. ' +
+      'Details are in the process log.',
+  };
+}
+
+/** Says once a day (deduped in Redis) that the post keeps failing. Never throws. */
+async function alertFailure(
+  deps: WrappedAnnounceDeps,
+  year: number,
+  channelId: string,
+): Promise<void> {
+  try {
+    const cache = await deps.cache();
+    if (
+      !(await cache.exclusive_set(
+        failedAlertKey(utcDay(deps.now())),
+        '1',
+        FAILED_ALERT_TTL_SEC,
+      ))
+    ) {
+      return;
+    }
+    await deps.alert(failedAlertEntry(year, channelId));
+  } catch (error) {
+    logger.warn(
+      `Wrapped announcement failure alert skipped: ${error instanceof Error ? error.name : 'Error'}`,
+    );
+  }
+}
 
 /**
  * One attempt: the job's tick, or the staff dashboard's Post now with
- * `force` (which skips the clock, not the dedupe). Delivery is at least once:
- * the claim comes before the post, a failed post releases it, and a retry
- * first looks for the notice in the channel (a timed-out send can still
- * land) before posting again. Store errors propagate.
+ * `force` (which skips the clock and the backoff, not the dedupe). Delivery
+ * is at least once: the claim comes before the post, a failed post releases
+ * it (with a backoff and one alert a day), and a retry first looks for the
+ * notice in the channel (a timed-out send can still land) before posting
+ * again. Store errors propagate.
  */
 export async function runWrappedAnnounce(
   deps: WrappedAnnounceDeps,
   options: { force?: boolean } = {},
 ): Promise<WrappedAnnounceOutcome> {
-  const config = deps.config();
-  const { channelId } = config;
-  if (channelId === undefined) {
+  const schedule = announceSchedule(deps.config());
+  if (schedule === undefined) {
     return 'disabled';
   }
-  if (!options.force && !isAnnounceDue(deps.now(), config)) {
+  const { channelId } = schedule;
+  if (!options.force && !isAnnounceDue(deps.now(), schedule)) {
     return 'not-due';
   }
-  const year = announceYear(config);
+  const year = announceYear(schedule);
   const store = await deps.store();
-  const claim = await store.claim(year);
+  const claim = await store.claim(year, {
+    ignoreBackoff: options.force === true,
+  });
   if (!claim) {
     return (await store.get(year))?.postedAt ? 'already-posted' : 'in-progress';
   }
@@ -251,19 +347,21 @@ export async function runWrappedAnnounce(
     }
     return 'posted';
   }
-  await store.release(year);
+  await store.release(year, WRAPPED_RETRY_BACKOFF_MS);
+  await alertFailure(deps, year, channelId);
   return 'failed';
 }
 
-/** Production deps: the shared dashboard pool's repository, and the bot client for the post. */
+/** Production deps: the shared dashboard pool's repository, the shared cache, and the bot client for the posts. */
 export function productionWrappedAnnounceDeps(
   getClient: () => Client | undefined,
-  config: () => WrappedAnnounceConfig = loadWrappedAnnounceConfig,
+  config: () => WrappedAnnounceConfig = () => loadWrappedAnnounceConfig(),
 ): WrappedAnnounceDeps {
   return {
     now: () => new Date(),
     config,
     store: () => PostgresWrappedAnnouncementRepository.instance(),
+    cache: () => ApplicationCache(),
     post: async (channelId, entry) => {
       const client = getClient();
       return client
@@ -274,6 +372,10 @@ export function productionWrappedAnnounceDeps(
       const client = getClient();
       return client ? recentEmbedTitles(client, channelId) : undefined;
     },
+    alert: async (entry) => {
+      const client = getClient();
+      return client ? logAlert(client, entry) : false;
+    },
   };
 }
 
@@ -281,6 +383,8 @@ export const WRAPPED_ANNOUNCE_TICK_MS = 15 * 60 * 1000;
 
 export interface WrappedAnnounceSchedulerOptions {
   env?: Record<string, string | undefined>;
+  /** The parsed config (tests). Left out: process.env, parsed once, warning through `log`. */
+  config?: () => WrappedAnnounceConfig;
   setIntervalFn?: typeof setInterval;
   log?: Pick<Logger<unknown>, 'warn' | 'error' | 'info'>;
 }
@@ -289,8 +393,9 @@ export interface WrappedAnnounceSchedulerOptions {
  * Ticks once now and every 15 minutes; runWrappedAnnounce decides whether
  * the post is due. A tick still running when the next fires is skipped (the
  * Postgres claim covers other processes). Without DATABASE_URL there is no
- * row to claim, and without WRAPPED_ANNOUNCE_CHANNEL_ID nothing to post, so
- * it never starts: one warning at boot either way.
+ * row to claim, and without a channel or a usable date nothing to post, so
+ * it never starts. The config's own warnings are the boot warnings; this
+ * adds one line saying the job is off.
  */
 export function startWrappedAnnounceScheduler(
   _client: Client,
@@ -303,10 +408,12 @@ export function startWrappedAnnounceScheduler(
     log.warn('Wrapped announcement disabled: DATABASE_URL is not set');
     return;
   }
-  if (!env.WRAPPED_ANNOUNCE_CHANNEL_ID?.trim()) {
-    log.warn(
-      'Wrapped announcement disabled: WRAPPED_ANNOUNCE_CHANNEL_ID is not set',
-    );
+  const config = (
+    options.config ??
+    (() => loadWrappedAnnounceConfig((message) => log.warn(message)))
+  )();
+  if (announceSchedule(config) === undefined) {
+    log.info('Wrapped announcement disabled: see the warning above');
     return;
   }
   let running = false;

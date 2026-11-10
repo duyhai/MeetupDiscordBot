@@ -77,8 +77,10 @@ const pause = (ms: number) =>
       });
       expect(row?.postedAt).toBeInstanceOf(Date);
       await pause(20);
-      expect(await repo.claim(2026, 0)).toBe(false);
-      expect(await another().claim(2026, 0)).toBe(false);
+      expect(await repo.claim(2026, { reclaimAfterMs: 0 })).toBe(false);
+      expect(
+        await another().claim(2026, { reclaimAfterMs: 0, ignoreBackoff: true }),
+      ).toBe(false);
       // A second markPosted (no claim held) changes nothing.
       expect(
         await repo.markPosted(2026, { channelId: CHANNEL, messageId: '1' }),
@@ -96,12 +98,59 @@ const pause = (ms: number) =>
       ).toBe(false);
     });
 
+    it('a release with a backoff is retried by the job only once it has passed, by Post now at once', async () => {
+      expect(await repo.claim(2026)).toBe('fresh');
+      await repo.release(2026, 60_000);
+      expect(await another().claim(2026)).toBe(false);
+      expect(await another().claim(2026, { ignoreBackoff: true })).toBe(
+        'retry',
+      );
+      // The reclaimed row is live again: nobody else gets it, backoff or not.
+      expect(await another().claim(2026, { ignoreBackoff: true })).toBe(false);
+      await repo.release(2026); // not this instance's claim any more: no-op
+      expect(await another().claim(2026, { ignoreBackoff: true })).toBe(false);
+    });
+
+    it('a short backoff passes on the database clock', async () => {
+      expect(await repo.claim(2026)).toBe('fresh');
+      await repo.release(2026, 10);
+      await pause(30);
+      expect(await another().claim(2026)).toBe('retry');
+    });
+
+    it('exactly one of many concurrent claims across two instances is fresh', async () => {
+      const a = another();
+      const b = another();
+      const results = await Promise.all(
+        Array.from({ length: 12 }, (_, i) => (i % 2 ? a : b).claim(2026)),
+      );
+      expect(results.filter((r) => r === 'fresh')).toHaveLength(1);
+      expect(results.filter((r) => r === false)).toHaveLength(11);
+      // And once the winner posted, every later claim from anyone is refused.
+      const winner = results.indexOf('fresh') % 2 ? a : b;
+      expect(
+        await winner.markPosted(2026, {
+          channelId: CHANNEL,
+          messageId: MESSAGE,
+        }),
+      ).toBe(true);
+      const later = await Promise.all(
+        Array.from({ length: 6 }, (_, i) =>
+          (i % 2 ? a : b).claim(2026, {
+            reclaimAfterMs: 0,
+            ignoreBackoff: true,
+          }),
+        ),
+      );
+      expect(later).toEqual(Array.from({ length: 6 }, () => false));
+    });
+
     it('a stale unposted claim (crash) is reclaimed after the reclaim window', async () => {
       expect(await repo.claim(2026)).toBe('fresh');
       const second = another();
-      expect(await second.claim(2026, 60_000)).toBe(false);
+      expect(await second.claim(2026, { reclaimAfterMs: 60_000 })).toBe(false);
       await pause(20);
-      expect(await second.claim(2026, 10)).toBe('retry');
+      expect(await second.claim(2026, { reclaimAfterMs: 10 })).toBe('retry');
       // The old holder's markPosted misses: the claim moved on.
       expect(
         await repo.markPosted(2026, { channelId: CHANNEL, messageId: MESSAGE }),

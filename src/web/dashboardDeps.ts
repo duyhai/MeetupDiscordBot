@@ -345,11 +345,15 @@ export function dashboardPageDeps(): DashboardPageDeps {
         request,
       ),
     wrappedAnnounce: {
-      config: loadWrappedAnnounceConfig,
-      status: async () =>
-        (await PostgresWrappedAnnouncementRepository.instance()).get(
-          announceYear(loadWrappedAnnounceConfig()),
-        ),
+      config: () => loadWrappedAnnounceConfig(),
+      status: async () => {
+        const { date } = loadWrappedAnnounceConfig();
+        return date === undefined
+          ? undefined
+          : (await PostgresWrappedAnnouncementRepository.instance()).get(
+              announceYear({ date }),
+            );
+      },
       // The job's own deps and claim: Post now can never post twice.
       postNow: () =>
         runWrappedAnnounce(

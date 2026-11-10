@@ -1,7 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  failedAlertEntry,
+  failedAlertKey,
+  FAILED_ALERT_TTL_SEC,
   runWrappedAnnounce,
+  WRAPPED_RETRY_BACKOFF_MS,
   WrappedAnnounceDeps,
   WrappedAnnounceStore,
   wrappedAnnounceEntry,
@@ -9,7 +13,9 @@ import {
 import {
   WrappedAnnouncementRecord,
   WrappedClaim,
+  WrappedClaimOptions,
 } from '../../../src/lib/repositories/postgresWrappedAnnouncementRepository.js';
+import { FakeCache } from '../../web/fakeCache.js';
 
 const CHANNEL = '123456789012345678';
 const MESSAGE = '987654321098765432';
@@ -21,9 +27,12 @@ const EARLY = new Date('2026-12-02T00:55:00Z');
 /**
  * The repository's contract in memory, shared by every "process" in a test:
  * one row per year, claimed before posting, final once posted, retryable
- * after a release.
+ * after a release (after its backoff, unless ignoreBackoff). `clock` stands
+ * in for the database clock.
  */
 class FakeStore implements WrappedAnnounceStore {
+  clock = DUE.getTime();
+
   readonly rows = new Map<
     number,
     {
@@ -31,10 +40,16 @@ class FakeStore implements WrappedAnnounceStore {
       channelId?: string;
       messageId?: string;
       released: boolean;
+      retryAfter?: number;
     }
   >();
 
-  async claim(year: number): Promise<WrappedClaim> {
+  readonly releases: number[] = [];
+
+  async claim(
+    year: number,
+    options: WrappedClaimOptions = {},
+  ): Promise<WrappedClaim> {
     const row = this.rows.get(year);
     if (!row) {
       this.rows.set(year, { released: false });
@@ -43,7 +58,15 @@ class FakeStore implements WrappedAnnounceStore {
     if (row.postedAt || !row.released) {
       return false;
     }
+    if (
+      !options.ignoreBackoff &&
+      row.retryAfter !== undefined &&
+      row.retryAfter > this.clock
+    ) {
+      return false;
+    }
     row.released = false;
+    row.retryAfter = undefined;
     return 'retry';
   }
 
@@ -61,10 +84,12 @@ class FakeStore implements WrappedAnnounceStore {
     return true;
   }
 
-  async release(year: number): Promise<void> {
+  async release(year: number, retryAfterMs = 0): Promise<void> {
+    this.releases.push(retryAfterMs);
     const row = this.rows.get(year);
     if (row && !row.postedAt) {
       row.released = true;
+      row.retryAfter = this.clock + retryAfterMs;
     }
   }
 
@@ -85,6 +110,7 @@ class FakeStore implements WrappedAnnounceStore {
 function makeDeps(
   overrides: Partial<WrappedAnnounceDeps> = {},
   store = new FakeStore(),
+  cache = new FakeCache(),
 ) {
   const post = vi
     .fn<WrappedAnnounceDeps['post']>()
@@ -92,16 +118,24 @@ function makeDeps(
   const recentTitles = vi
     .fn<WrappedAnnounceDeps['recentTitles']>()
     .mockResolvedValue([]);
+  const alert = vi.fn<WrappedAnnounceDeps['alert']>().mockResolvedValue(true);
   const deps: WrappedAnnounceDeps = {
     now: () => DUE,
     config: () => CONFIG,
     store: async () => store,
+    cache: async () => cache,
     post,
     recentTitles,
+    alert,
     ...overrides,
   };
-  return { deps, store, post, recentTitles };
+  return { deps, store, cache, post, recentTitles, alert };
 }
+
+/** The next tick, after the job's backoff has passed (Post now does not wait). */
+const afterBackoff = (store: FakeStore) => {
+  store.clock += WRAPPED_RETRY_BACKOFF_MS;
+};
 
 describe('runWrappedAnnounce', () => {
   it('posts the notice once it is due, then records channel and message', async () => {
@@ -127,6 +161,18 @@ describe('runWrappedAnnounce', () => {
     const storeSpy = vi.fn<WrappedAnnounceDeps['store']>();
     const { deps, post } = makeDeps({
       config: () => ({ ...CONFIG, channelId: undefined }),
+      store: storeSpy,
+    });
+    expect(await runWrappedAnnounce(deps)).toBe('disabled');
+    expect(await runWrappedAnnounce(deps, { force: true })).toBe('disabled');
+    expect(post).not.toHaveBeenCalled();
+    expect(storeSpy).not.toHaveBeenCalled();
+  });
+
+  it('with a malformed date (no date), posts nothing even when forced', async () => {
+    const storeSpy = vi.fn<WrappedAnnounceDeps['store']>();
+    const { deps, post } = makeDeps({
+      config: () => ({ ...CONFIG, date: undefined }),
       store: storeSpy,
     });
     expect(await runWrappedAnnounce(deps)).toBe('disabled');
@@ -161,20 +207,67 @@ describe('runWrappedAnnounce', () => {
     expect(button.post).toHaveBeenCalledTimes(1);
   });
 
-  it('a failed post releases the claim and the next tick retries', async () => {
+  it('a failed post releases the claim with the backoff; the job retries once it has passed', async () => {
     const { deps, store, post } = makeDeps();
     post.mockResolvedValueOnce(undefined);
     expect(await runWrappedAnnounce(deps)).toBe('failed');
+    expect(store.releases).toEqual([WRAPPED_RETRY_BACKOFF_MS]);
     expect((await store.get(2026))?.postedAt).toBeUndefined();
+    // The next 15-minute tick is inside the backoff: nothing.
+    expect(await runWrappedAnnounce(deps)).toBe('in-progress');
+    expect(post).toHaveBeenCalledTimes(1);
+    afterBackoff(store);
     expect(await runWrappedAnnounce(deps)).toBe('posted');
     expect(post).toHaveBeenCalledTimes(2);
     expect((await store.get(2026))?.messageId).toBe(MESSAGE);
   });
 
-  it('a post that throws counts as failed and is retried', async () => {
+  it('Post now (force) retries at once, through the backoff', async () => {
     const { deps, post } = makeDeps();
+    post.mockResolvedValueOnce(undefined);
+    expect(await runWrappedAnnounce(deps)).toBe('failed');
+    expect(await runWrappedAnnounce(deps, { force: true })).toBe('posted');
+    expect(post).toHaveBeenCalledTimes(2);
+  });
+
+  it('a failed post alerts #meetup-bot-alerts once a day: fixed text and the channel id, no pings', async () => {
+    const { deps, store, post, alert, cache } = makeDeps();
+    post.mockResolvedValue(undefined);
+    expect(await runWrappedAnnounce(deps)).toBe('failed');
+    expect(alert).toHaveBeenCalledTimes(1);
+    const entry = failedAlertEntry(2026, CHANNEL);
+    expect(alert).toHaveBeenCalledWith(entry);
+    expect(entry.description).toContain(CHANNEL);
+    expect(`${entry.title}\n${entry.description ?? ''}`).not.toMatch(
+      /@everyone|@here|<@/,
+    );
+    expect(cache.ttls.get(failedAlertKey('2026-12-02'))).toBe(
+      FAILED_ALERT_TTL_SEC,
+    );
+    // A second failure the same day: no second alert.
+    afterBackoff(store);
+    expect(await runWrappedAnnounce(deps)).toBe('failed');
+    expect(alert).toHaveBeenCalledTimes(1);
+  });
+
+  it('an alert that cannot be deduped or sent never breaks the tick', async () => {
+    const { deps, post } = makeDeps({
+      cache: () => Promise.reject(new Error('redis down')),
+    });
+    post.mockResolvedValueOnce(undefined);
+    expect(await runWrappedAnnounce(deps)).toBe('failed');
+    const { deps: deps2, post: post2 } = makeDeps({
+      alert: () => Promise.reject(new Error('discord down')),
+    });
+    post2.mockResolvedValueOnce(undefined);
+    expect(await runWrappedAnnounce(deps2)).toBe('failed');
+  });
+
+  it('a post that throws counts as failed and is retried', async () => {
+    const { deps, store, post } = makeDeps();
     post.mockRejectedValueOnce(new Error('Discord 503'));
     expect(await runWrappedAnnounce(deps)).toBe('failed');
+    afterBackoff(store);
     expect(await runWrappedAnnounce(deps)).toBe('posted');
   });
 
@@ -182,6 +275,7 @@ describe('runWrappedAnnounce', () => {
     const { deps, store, post, recentTitles } = makeDeps();
     post.mockResolvedValueOnce(undefined);
     expect(await runWrappedAnnounce(deps)).toBe('failed');
+    afterBackoff(store);
     // The timed-out send landed after all.
     recentTitles.mockResolvedValueOnce([wrappedAnnounceEntry(2026).title]);
     expect(await runWrappedAnnounce(deps)).toBe('posted');
@@ -201,9 +295,10 @@ describe('runWrappedAnnounce', () => {
   });
 
   it('an unreadable history on a retry posts anyway', async () => {
-    const { deps, post, recentTitles } = makeDeps();
+    const { deps, store, post, recentTitles } = makeDeps();
     post.mockResolvedValueOnce(undefined);
     await runWrappedAnnounce(deps);
+    afterBackoff(store);
     recentTitles.mockRejectedValueOnce(new Error('Missing Access'));
     expect(await runWrappedAnnounce(deps)).toBe('posted');
     expect(post).toHaveBeenCalledTimes(2);

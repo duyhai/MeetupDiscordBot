@@ -20,7 +20,11 @@ import {
   PARKED_STATUSES,
   WorkspaceStatus,
 } from '../../lib/workspace/types.js';
-import { announceDueAt, announceYear } from '../../lib/wrapped/announce.js';
+import {
+  announceDueAt,
+  announceSchedule,
+  announceYear,
+} from '../../lib/wrapped/announce.js';
 import type { HomeReportsView } from '../dashboardRouter.js';
 import { SafeHtml, html, localUrl } from '../html.js';
 import { monthCell, pacificDateTime, zeroNoShowNote } from '../pageKit.js';
@@ -196,7 +200,7 @@ async function wrappedCard(
   view: Partial<HomeReportsView>,
 ): Promise<SafeHtml> {
   const config = deps.wrappedAnnounce.config();
-  const year = announceYear(config);
+  const schedule = announceSchedule(config);
   const status = await deps.wrappedAnnounce.status();
   const posted = status?.postedAt !== undefined;
   const state = posted
@@ -206,18 +210,26 @@ async function wrappedCard(
           status.messageId ? html` (message ${status.messageId})` : ''
         }.
       </p>`
-    : html`<p>Not posted yet for ${year}.</p>`;
-  const where =
-    config.channelId === undefined
-      ? html`<p class="muted">
-          WRAPPED_ANNOUNCE_CHANNEL_ID is not set: nothing will be posted.
-        </p>`
-      : html`<p class="muted">
-          Scheduled for ${pacificDateTime(announceDueAt(config))} Pacific in
-          channel ${config.channelId}.
-        </p>`;
+    : config.date !== undefined
+      ? html`<p>Not posted yet for ${announceYear({ date: config.date })}.</p>`
+      : '';
+  let where: SafeHtml;
+  if (config.date === undefined) {
+    where = html`<p class="muted">
+      WRAPPED_ANNOUNCE_DATE is not a real date: nothing will be posted.
+    </p>`;
+  } else if (schedule === undefined) {
+    where = html`<p class="muted">
+      WRAPPED_ANNOUNCE_CHANNEL_ID is not set: nothing will be posted.
+    </p>`;
+  } else {
+    where = html`<p class="muted">
+      Scheduled for ${pacificDateTime(announceDueAt(schedule))} Pacific in
+      channel ${schedule.channelId}.
+    </p>`;
+  }
   const form =
-    !posted && config.channelId !== undefined && view.csrfToken !== undefined
+    !posted && schedule !== undefined && view.csrfToken !== undefined
       ? html`<form method="post" action="${localUrl(WRAPPED_ANNOUNCE_PATH)}">
           <input type="hidden" name="_csrf" value="${view.csrfToken}" />
           <button type="submit" class="ghost">Post now</button>

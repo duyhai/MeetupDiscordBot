@@ -101,6 +101,16 @@ describe('Home Wrapped card', () => {
     expect(out).not.toContain('Post now');
   });
 
+  it('with a malformed date, says so and offers no button', async () => {
+    const out = await render(
+      control({ config: () => ({ ...CONFIG, date: undefined }) }),
+    );
+    expect(out).toContain('WRAPPED_ANNOUNCE_DATE');
+    expect(out).toContain('not a real date');
+    expect(out).not.toContain('Post now');
+    expect(out).not.toContain('Not posted yet');
+  });
+
   it('renders a known notice code and nothing for an unknown one', async () => {
     const out = await render(control(), { csrfToken: 'tok', notice: 'posted' });
     expect(out).toContain(WRAPPED_NOTICES.posted);

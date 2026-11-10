@@ -4,7 +4,7 @@
   @typescript-eslint/no-unsafe-assignment,
   @typescript-eslint/unbound-method
 */
-import { Client, Collection, TextChannel } from 'discord.js';
+import { Client, Collection, NewsChannel, TextChannel } from 'discord.js';
 import { Logger } from 'tslog';
 import {
   MockInstance,
@@ -170,6 +170,30 @@ describe('discordLogger', () => {
           title: 'x',
         }),
       ).resolves.toBeUndefined();
+    });
+
+    it('posts to an announcement (news) channel too, and reads its history', async () => {
+      sendMock.mockResolvedValue({ id: '987654321098765432' });
+      const channel = Object.create(NewsChannel.prototype) as NewsChannel;
+      (channel as any).send = sendMock;
+      (channel as any).messages = {
+        fetch: vi
+          .fn()
+          .mockResolvedValue(
+            new Collection([['1', message('1', BOT_ID, ['Ready'])]]),
+          ),
+      };
+      const client = {
+        user: { id: BOT_ID },
+        channels: { fetch: vi.fn().mockResolvedValue(channel) },
+      } as unknown as Client;
+      await expect(
+        postEmbed(client, CHANNEL, 1, { title: 'Ready' }),
+      ).resolves.toEqual({ messageId: '987654321098765432' });
+      expect(sendMock.mock.calls[0][0].allowedMentions).toEqual({ parse: [] });
+      await expect(recentEmbedTitles(client, CHANNEL)).resolves.toEqual([
+        'Ready',
+      ]);
     });
 
     it('a landed post whose reply carries no id is still a post, without an id', async () => {
