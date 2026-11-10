@@ -185,6 +185,36 @@ describe('decisionLine', () => {
     expect(line).toContain('⚠️');
     expect(line).toContain('retrying on the website');
   });
+
+  it('tells the two deciders apart: the host themself by name, a leader by Discord mention', () => {
+    const base = {
+      meetupMemberId: '4242',
+      hostName: 'Hana',
+      eventUrl: 'https://www.meetup.com/x/events/9/',
+    };
+    const self = decisionLine(
+      eventRequestRow({ ...base, status: 'published', decidedBy: '4242' }),
+    );
+    const approved = decisionLine(
+      eventRequestRow({ ...base, status: 'published', decidedBy: LEADER }),
+    );
+    const denied = decisionLine(
+      eventRequestRow({
+        ...base,
+        status: 'denied',
+        decidedBy: LEADER,
+        denyReason: 'Too soon',
+      }),
+    );
+    expect(self).toMatch(/^✅ Published by Hana\./);
+    expect(approved).toMatch(
+      new RegExp(`^✅ Request approved by <@${LEADER}>\\.`),
+    );
+    expect(denied).toMatch(new RegExp(`^❌ Request denied by <@${LEADER}>\\.`));
+    expect(self).not.toContain('<@');
+    expect(approved).not.toContain('Hana');
+    expect(denied).not.toContain('Hana');
+  });
 });
 
 type SendPayload = Parameters<PostTarget['send']>[0];

@@ -13,6 +13,7 @@ import {
 } from '../../../src/lib/hosts/recreateEvent.js';
 import { OrganizerTokenUnavailableError } from '../../../src/lib/reports/organizerMeetup.js';
 import { createEventTemplate } from '../../../src/templates/createEventTemplate.js';
+import { FakeCache } from '../../web/fakeCache.js';
 
 const HOST = { meetupMemberId: '4242', name: 'Ann *N*' };
 const CO_HOST = '5151';
@@ -108,6 +109,7 @@ function setup(
 ) {
   const calls: string[] = [];
   const recreations = memoryRecreations(options.existing);
+  const cache = new FakeCache();
   const createEvent = vi.fn(async () => {
     calls.push('create');
     if (options.create) {
@@ -136,6 +138,7 @@ function setup(
           }
         }),
     recreations: async () => recreations,
+    cache: async () => cache,
     announce: vi.fn(async () => {
       calls.push('announce');
       if (options.announce instanceof Error) {
@@ -419,6 +422,15 @@ describe('recreateAndAnnounce', () => {
     expect(alerts()).toContain('died mid-way');
   });
 
+  it('a stale claim clicked again is alerted once a day; the host is still told to check', async () => {
+    const { deps, run } = setup({
+      existing: { newEventId: null, stale: true },
+    });
+    await expect(run()).resolves.toEqual({ code: 'recreate-needs-check' });
+    await expect(run()).resolves.toEqual({ code: 'recreate-needs-check' });
+    expect(deps.alert).toHaveBeenCalledTimes(1);
+  });
+
   it('the copy’s announcement request throwing is a failed announcement: the old event stays', async () => {
     const { deps, calls, alerts, run } = setup({
       announce: new Error('pg down'),
@@ -483,5 +495,15 @@ describe('surelyNotCreated', () => {
     expect(surelyNotCreated(client(200))).toBe(false);
     expect(surelyNotCreated(client(503))).toBe(false);
     expect(surelyNotCreated(new Error('socket hang up'))).toBe(false);
+  });
+
+  it('a ClientError without a response is not sure (and does not throw)', async () => {
+    const { ClientError } = await import('graphql-request');
+    const noResponse = new ClientError(
+      { status: 400, errors: [{ message: 'x' }] as never } as never,
+      { query: 'mutation' },
+    );
+    Object.assign(noResponse, { response: undefined });
+    expect(surelyNotCreated(noResponse)).toBe(false);
   });
 });

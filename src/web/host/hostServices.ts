@@ -450,6 +450,7 @@ export function productionAnnouncer(
         get: (oldId) => store.recreationOf(oldId),
       };
     },
+    cache: () => ApplicationCache(),
     announce: (host, event) => requestAnnouncement(deps, host, event),
     alert: alertVia(getClient),
     audit: async (entry) => {

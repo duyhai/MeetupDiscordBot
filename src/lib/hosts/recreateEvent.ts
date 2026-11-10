@@ -19,6 +19,7 @@ import {
 } from '../client/meetup/createEventWithPhotoFallback.js';
 import { MeetupPayloadError } from '../client/meetup/payloadErrors.js';
 import { CreateEventInput } from '../client/meetup/types.js';
+import { KeyValueCache } from '../cache/base.js';
 import { OrganizerTokenUnavailableError } from '../reports/organizerMeetup.js';
 import { RecreationClaim } from '../repositories/postgresEventAnnouncementRepository.js';
 import { LogEntry, alertText } from '../helpers/discordLogger.js';
@@ -35,6 +36,11 @@ import { classifyEventType } from './eventTypes.js';
 import { HostEvent, pacificDay } from './hostEvents.js';
 
 const logger = new Logger({ name: 'recreateEvent' });
+
+/** A stale claim found again is alerted once a day per old event. */
+export const STALE_ALERT_TTL_SEC = 24 * 60 * 60;
+export const staleAlertKey = (oldEventId: string) =>
+  `recreate-stale-alert:${oldEventId}`;
 
 export type RecreateCode =
   | 'recreated'
@@ -95,6 +101,8 @@ export interface RecreateDeps {
    */
   cancelEvent: ((meetupEventId: string) => Promise<void>) | undefined;
   recreations: () => Promise<RecreationStore>;
+  /** Redis, for the once-a-day dedupe of the stale-claim alert. */
+  cache: () => Promise<KeyValueCache>;
   /** requestAnnouncement for the new event (the hold rules apply). */
   announce: (
     host: { meetupMemberId: string; name: string },
@@ -143,8 +151,9 @@ export function surelyNotCreated(error: unknown): boolean {
     return true;
   }
   if (error instanceof ClientError) {
-    const { status } = error.response;
-    return status >= 400 && status < 500;
+    // A ClientError made from a dropped connection carries no response.
+    const status = error.response?.status;
+    return typeof status === 'number' && status >= 400 && status < 500;
   }
   return false;
 }
@@ -176,6 +185,24 @@ export async function recreatable(
     return { ok: false, reason: 'has-rsvps' };
   }
   return { ok: true };
+}
+
+/** Takes the day's stale-claim alert for the old event; false when it went already or Redis is down. */
+async function staleAlertDue(
+  deps: Pick<RecreateDeps, 'cache'>,
+  oldEventId: string,
+): Promise<boolean> {
+  try {
+    const cache = await deps.cache();
+    return await cache.exclusive_set(
+      staleAlertKey(oldEventId),
+      '1',
+      STALE_ALERT_TTL_SEC,
+    );
+  } catch (error: unknown) {
+    logger.warn(`Stale-alert dedupe failed: ${errorName(error)}`);
+    return false;
+  }
 }
 
 /**
@@ -222,14 +249,18 @@ export async function recreateAndAnnounce(
     return { code: 'recreate-in-progress' };
   }
   if (claim === 'stale') {
-    tell({
-      title: 'A recreation died mid-way: check Meetup for a copy',
-      description:
-        'An earlier recreate-and-announce of this event never recorded its copy. ' +
-        'Meetup may have made one: look in the group’s upcoming events for a ' +
-        'second copy, then announce or cancel by hand. Nothing more was done.',
-      fields: oldFields,
-    });
+    // Every click lands here, so the alert is said once a day per event.
+    if (await staleAlertDue(deps, old.id)) {
+      tell({
+        title: 'A recreation died mid-way: check Meetup for a copy',
+        description:
+          'An earlier recreate-and-announce of this event never recorded its copy. ' +
+          'Meetup may have made one: look in the group’s upcoming events for a ' +
+          'second copy, then announce or cancel by hand. Nothing more was done; ' +
+          'this is said once a day.',
+        fields: oldFields,
+      });
+    }
     return { code: 'recreate-needs-check' };
   }
   const release = async () => {
