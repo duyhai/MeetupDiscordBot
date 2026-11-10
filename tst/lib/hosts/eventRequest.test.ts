@@ -302,6 +302,8 @@ describe('fresh events', () => {
 
 const stored = (over: Partial<EventRequest> = {}): EventRequest => ({
   id: '1',
+  source: 'web',
+  discordPost: null,
   meetupMemberId: '4242',
   discordUserId: null,
   hostName: 'Hana',

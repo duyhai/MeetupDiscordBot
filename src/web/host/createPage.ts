@@ -4,7 +4,6 @@ import dayjs from 'dayjs';
 import express, { RequestHandler, Response } from 'express';
 import { Logger } from 'tslog';
 
-import { DASHBOARD_BASE } from '../../lib/reports/dashboardPaths.js';
 import {
   CopySource,
   DEFAULT_DURATION,
@@ -15,6 +14,7 @@ import {
   FormField,
   GUEST_LIMIT_RANGE,
   MAX_DAYS_AHEAD,
+  MAX_PENDING,
   RSVP_LIMIT_RANGE,
   START_TIMES,
   copyDefaults,
@@ -32,7 +32,11 @@ import {
 } from '../../templates/createEventTemplate.js';
 import { pacificDay } from '../../lib/hosts/hostEvents.js';
 import { PublishOutcome } from '../../lib/hosts/publishRequest.js';
-import { LogEntry, alertText } from '../../lib/helpers/discordLogger.js';
+import {
+  newRequestAlert,
+  publishedAlert,
+} from '../../lib/hosts/requestPost.js';
+import { LogEntry } from '../../lib/helpers/discordLogger.js';
 import {
   EventRequest,
   NewEventRequest,
@@ -64,8 +68,7 @@ export const CREATE_PATHS = {
  */
 const PUBLISH_DEADLINE_MS = 20_000;
 
-/** A regular host may have at most this many requests waiting for leadership. */
-export const MAX_PENDING = 5;
+export { MAX_PENDING };
 
 // Meetup ids are numeric, but older recurring events have letters too.
 const EVENT_ID = /^[A-Za-z0-9]{1,40}$/;
@@ -113,6 +116,12 @@ export interface CreatePageDeps {
   tip: () => string;
   /** Tests only: how long a Community Host's publish holds the page. */
   publishDeadlineMs?: number;
+  /**
+   * Posts a regular host's new request in the Discord requests channel
+   * (postRequestToChannel). Fire and forget; absent when no channel is
+   * configured.
+   */
+  postToDiscord?: (request: EventRequest) => Promise<unknown>;
 }
 
 interface FormView {
@@ -484,35 +493,6 @@ function startDay(value: unknown, today: string): string {
     : '';
 }
 
-/** The new-request alert: plain text, no mentions, markdown escaped. */
-function newRequestAlert(origin: string, request: EventRequest): LogEntry {
-  return {
-    title: 'New host event request',
-    description: `Review it at ${origin}${DASHBOARD_BASE}/hosts/requests`,
-    fields: [
-      { name: 'Host', value: alertText(request.hostName), inline: true },
-      { name: 'When', value: whenLabel(request.startLocal), inline: true },
-      { name: 'Title', value: alertText(request.title) },
-    ],
-  };
-}
-
-/** A Community Host's published event: plain text, markdown escaped. */
-function publishedAlert(
-  created: EventRequest,
-  published: EventRequest,
-): LogEntry {
-  return {
-    title: 'Community Host published an event',
-    description: published.eventUrl ?? '',
-    fields: [
-      { name: 'Host', value: alertText(created.hostName), inline: true },
-      { name: 'When', value: whenLabel(created.startLocal), inline: true },
-      { name: 'Title', value: alertText(created.title) },
-    ],
-  };
-}
-
 /**
  * GET/POST /host/create and GET /host/requests/:id. The router's session
  * gate and unsafe-method guard (rate limit, Origin, CSRF) run first.
@@ -747,6 +727,11 @@ export function registerCreatePages(
     }
     if (session.tier === 'regular') {
       deps.alert(newRequestAlert(origin, created)).catch(() => undefined);
+      deps.postToDiscord?.(created).catch((error: unknown) => {
+        logger.warn(
+          `Request post threw: ${error instanceof Error ? error.name : 'Error'}`,
+        );
+      });
     } else {
       // The alert rides on the publish itself, not on the page's deadline:
       // a slow publish that finishes after the page moved on still alerts.

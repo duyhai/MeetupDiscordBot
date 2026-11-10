@@ -1,4 +1,5 @@
 import { Client } from 'discord.js';
+import { Logger } from 'tslog';
 
 import { GUILD_ID, SERVER_ROLES } from '../../constants.js';
 import { GqlMeetupClient } from '../../lib/client/meetup/gqlClient.js';
@@ -7,13 +8,32 @@ import {
   existingEventFilter,
   isEventFor,
 } from '../../lib/hosts/eventRequest.js';
-import { HostResolveDeps, resolveHost } from '../../lib/hosts/eligibility.js';
+import {
+  HostResolveDeps,
+  publishTier,
+  resolveHost,
+} from '../../lib/hosts/eligibility.js';
 import { announceHostEvent } from '../../lib/hosts/announceEvent.js';
 import { HostEventsDeps, hostedEvents } from '../../lib/hosts/hostEvents.js';
 import { PostgresEventAnnouncementRepository } from '../../lib/repositories/postgresEventAnnouncementRepository.js';
 import type { AnnounceRouteDeps } from './announcePage.js';
 import { PublishDeps, publishRequest } from '../../lib/hosts/publishRequest.js';
-import { LogEntry, logAlert } from '../../lib/helpers/discordLogger.js';
+import { DiscordRequestDeps } from '../../lib/hosts/discordRequests.js';
+import {
+  DecisionDeps,
+  REFUSAL_AUDIT_WINDOW_MS,
+  decideRequest,
+} from '../../lib/hosts/requestDecision.js';
+import {
+  RequestPostDeps,
+  mirrorDecision,
+  postRequest,
+} from '../../lib/hosts/requestPost.js';
+import {
+  LogEntry,
+  logActivity,
+  logAlert,
+} from '../../lib/helpers/discordLogger.js';
 import { getBadges } from '../../lib/helpers/getBadges.js';
 import { getUserRoles } from '../../lib/helpers/getUserRoles.js';
 import { selfOnboardUser } from '../../lib/helpers/onboardUser.js';
@@ -24,14 +44,91 @@ import {
   OrganizerTokenUnavailableError,
   withOrganizerMeetup,
 } from '../../lib/reports/organizerMeetup.js';
-import { PostgresEventRequestRepository } from '../../lib/repositories/postgresEventRequestRepository.js';
+import {
+  DISCORD_ID,
+  EventRequest,
+  PostgresEventRequestRepository,
+} from '../../lib/repositories/postgresEventRequestRepository.js';
 import { PostgresMemberRepository } from '../../lib/repositories/postgresMemberRepository.js';
 import { PostgresPromotedHostRepository } from '../../lib/repositories/postgresPromotedHostRepository.js';
 import { ApplicationCache } from '../../util/cache.js';
+import { getRandomTip } from '../../util/tips.js';
+import { dashboardOrigin } from '../dashboardDeps.js';
+import { FixedWindowLimiter } from '../rateLimit.js';
 import { discordRoleCheck } from '../roleGate.js';
 import { SessionStore } from '../session.js';
 import { timedCacheFactory } from '../timedCache.js';
 import { HOST_SESSION_OPTIONS, HostSession } from './hostSession.js';
+
+const logger = new Logger({ name: 'hostServices' });
+
+/**
+ * EVENT_REQUESTS_CHANNEL_ID, trimmed: the Discord channel website requests
+ * are posted in. undefined when unset or not a channel id; either warns
+ * once, by name (never the value), and website requests are then not
+ * posted (everything else works). Discord requests post where the command
+ * ran, whatever this says.
+ */
+export function requestsChannelId(
+  env: Record<string, string | undefined>,
+  warn: (message: string) => void = (message) => logger.warn(message),
+): string | undefined {
+  const value = env.EVENT_REQUESTS_CHANNEL_ID?.trim();
+  if (!value) {
+    warn(
+      'EVENT_REQUESTS_CHANNEL_ID is not set; website requests are not posted in Discord',
+    );
+    return undefined;
+  }
+  if (!DISCORD_ID.test(value)) {
+    warn(
+      'EVENT_REQUESTS_CHANNEL_ID is not a Discord channel id (17-20 digits); website requests are not posted',
+    );
+    return undefined;
+  }
+  return value;
+}
+
+/**
+ * postRequest into a fixed channel, for requests made on the website. The
+ * send failing (bot offline, channel gone, no access) is postRequest's
+ * alert; nothing is thrown.
+ */
+export function postRequestToChannel(
+  getClient: () => Client | undefined,
+  channelId: string,
+  deps: RequestPostDeps,
+): (request: EventRequest) => Promise<void> {
+  return (request) =>
+    postRequest(deps, request, {
+      send: async (payload) => {
+        const client = getClient();
+        if (!client) {
+          throw new Error('Discord client is not ready');
+        }
+        const channel = await client.channels.fetch(channelId);
+        if (!channel?.isSendable()) {
+          throw new Error('Requests channel is missing or not sendable');
+        }
+        const message = await channel.send(payload);
+        return { id: message.id, channelId: message.channelId };
+      },
+    });
+}
+
+/** The post module's production deps: the request store, the organizer's hosted count, alerts. */
+export function productionRequestPostDeps(
+  getClient: () => Client | undefined,
+): RequestPostDeps {
+  return {
+    store: () => PostgresEventRequestRepository.instance(),
+    pastHostedCount: hostResolveDeps(getClient).pastHostedCount,
+    alert: alertVia(getClient),
+    origin: dashboardOrigin(),
+    mirror: (request) =>
+      mirrorDecision({ getClient, alert: alertVia(getClient) }, request),
+  };
+}
 
 /** Production lookups for resolveHost. Each throws when its source is down. */
 export function hostResolveDeps(
@@ -117,10 +214,8 @@ export function productionPublishDeps(
         ? { id: String(match.id), eventUrl: String(match.eventUrl) }
         : undefined;
     },
-    tierOf: async (meetupMemberId) => {
-      const resolution = await resolveHost(resolveDeps, { meetupMemberId });
-      return resolution.kind === 'host' ? resolution.tier : 'not-a-host';
-    },
+    tierOf: async (meetupMemberId) =>
+      publishTier(await resolveHost(resolveDeps, { meetupMemberId })),
     alert: alertVia(getClient),
     now: () => new Date(),
   };
@@ -201,6 +296,8 @@ export async function revokeHostSessions(
   ).revokeUser(meetupMemberId);
 }
 
+let decisionDeps: DecisionDeps | undefined;
+
 /**
  * The Announce button's production deps: the announcements table, the
  * host's own upcoming events (the site's 5-minute list), and announceEvent
@@ -238,5 +335,58 @@ export function productionAnnouncer(
       announceHostEvent(deps, host, meetupEventId, hooks),
     announcements: async (ids) =>
       (await PostgresEventAnnouncementRepository.instance()).forEvents(ids),
+  };
+}
+
+/**
+ * Production deps for decideRequest: the live Leadership check, the
+ * activity log, the request store, the publisher and the Discord mirror.
+ * Shared by the staff queue and the Discord buttons. One instance per
+ * process (the first `getClient` is kept; there is one bot client), so the
+ * refusal-audit limiter holds across button presses.
+ */
+export function productionDecisionDeps(
+  getClient: () => Client | undefined,
+): DecisionDeps {
+  if (decisionDeps !== undefined) {
+    return decisionDeps;
+  }
+  const alert = alertVia(getClient);
+  decisionDeps = {
+    now: () => new Date(),
+    isLeadership: discordRoleCheck(getClient, SERVER_ROLES.leadership),
+    audit: async (entry) => {
+      const client = getClient();
+      return client ? logActivity(client, entry) : false;
+    },
+    store: () => PostgresEventRequestRepository.instance(),
+    publishRequest: productionPublisher(getClient),
+    findExistingEvent: productionPublishDeps(getClient).findExisting,
+    mirror: (request) => mirrorDecision({ getClient, alert }, request),
+    refusals: new FixedWindowLimiter(1, REFUSAL_AUDIT_WINDOW_MS),
+  };
+  return decisionDeps;
+}
+
+/** Production deps for the Discord request command and buttons. */
+export function productionDiscordRequestDeps(
+  getClient: () => Client | undefined,
+): DiscordRequestDeps {
+  const resolveDeps = hostResolveDeps(getClient);
+  const decisionDeps = productionDecisionDeps(getClient);
+  const publish = productionPublisher(getClient);
+  return {
+    now: () => new Date(),
+    meetupIdForDiscord: resolveDeps.meetupIdForDiscord,
+    resolve: (who) => resolveHost(resolveDeps, who),
+    store: () => PostgresEventRequestRepository.instance(),
+    pastHostedCount: resolveDeps.pastHostedCount,
+    publish: (id, version, actor) => publish(id, version, actor, ['pending']),
+    decide: (input) => decideRequest(decisionDeps, input),
+    tip: getRandomTip,
+    alert: alertVia(getClient),
+    origin: dashboardOrigin(),
+    mirror: (request) =>
+      mirrorDecision({ getClient, alert: alertVia(getClient) }, request),
   };
 }

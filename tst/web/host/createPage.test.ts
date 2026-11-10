@@ -53,6 +53,8 @@ function memoryStore() {
           const row: EventRequest = {
             ...input,
             id: String(rows.length + 1),
+            source: input.source ?? 'web',
+            discordPost: null,
             status: 'pending',
             denyReason: null,
             failure: null,
@@ -290,6 +292,29 @@ describe('submitting a request', () => {
     const page = await get(req, sid, '/host/requests/1');
     expect(page.status).toBe(200);
     expect(page.text).toContain('Waiting for approval');
+  });
+
+  it('a regular host’s request is posted to Discord; a Community Host’s is not', async () => {
+    const postToDiscord = vi.fn().mockResolvedValue(undefined);
+    const regular = await app({ postToDiscord });
+    await regular.post(good);
+    expect(postToDiscord).toHaveBeenCalledTimes(1);
+    expect(postToDiscord.mock.calls[0][0]).toMatchObject({
+      id: '1',
+      title: 'Board game night',
+      source: 'web',
+    });
+    const promoted = await app({ postToDiscord: vi.fn() }, 'promoted');
+    await promoted.post(good);
+    expect(promoted.deps.postToDiscord).not.toHaveBeenCalled();
+  });
+
+  it('a Discord post that fails leaves the request page unaffected', async () => {
+    const postToDiscord = vi.fn().mockRejectedValue(new Error('no channel'));
+    const { post } = await app({ postToDiscord });
+    const res = await post(good);
+    expect(res.status).toBe(303);
+    expect(res.headers.location).toBe('/host/requests/1');
   });
 
   it('a Community Host’s request is published at once', async () => {

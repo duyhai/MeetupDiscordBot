@@ -87,3 +87,18 @@ export async function resolveHost(
     ...(hostedCount !== undefined ? { hostedCount } : {}),
   };
 }
+
+/**
+ * The tier a request is published at, from the host's resolution now. A
+ * member who is neither blacklisted nor (yet) a host publishes as a regular
+ * host: a first-time host's Discord request has no role and no past event,
+ * and leadership's approval is the gate. Only a blacklisting refuses.
+ */
+export function publishTier(
+  resolution: HostResolution,
+): HostTier | 'not-a-host' {
+  if (resolution.kind === 'host') {
+    return resolution.tier;
+  }
+  return resolution.reason === 'blacklisted' ? 'not-a-host' : 'regular';
+}

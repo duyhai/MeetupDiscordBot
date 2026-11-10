@@ -25,6 +25,7 @@ import {
   WORKSPACE_ACTIONS,
   WorkspaceAction,
 } from '../../lib/workspace/types.js';
+import { WorkspaceDeadlineError, withDeadline } from '../../util/deadline.js';
 import { dashboardLocals } from '../dashboardRouter.js';
 import { SafeHtml, html, localUrl } from '../html.js';
 import {
@@ -59,34 +60,7 @@ export const WORKSPACE_REQUEST_DEADLINE_MS = 20_000;
 /** How long the live Leadership check may take; past it, Discord counts as unreachable. */
 export const LEADERSHIP_CHECK_DEADLINE_MS = 5_000;
 
-export class WorkspaceDeadlineError extends Error {
-  constructor(ms: number) {
-    super(`workspace request took over ${ms} ms`);
-    this.name = 'WorkspaceDeadlineError';
-  }
-}
-
-/**
- * fn's answer, or a WorkspaceDeadlineError after `ms`. The timer is unref'd
- * and always cleared. Promise.race subscribes to the work, so a rejection
- * after the deadline is still handled (never an unhandled rejection).
- */
-export async function withDeadline<T>(
-  ms: number,
-  fn: () => Promise<T>,
-): Promise<T> {
-  let timer: NodeJS.Timeout | undefined;
-  try {
-    const work = fn();
-    const deadline = new Promise<never>((_resolve, reject) => {
-      timer = setTimeout(() => reject(new WorkspaceDeadlineError(ms)), ms);
-      timer.unref();
-    });
-    return await Promise.race([work, deadline]);
-  } finally {
-    clearTimeout(timer);
-  }
-}
+export { WorkspaceDeadlineError, withDeadline };
 
 /** The live Leadership check's answer for a page (see leadershipOf). */
 export type LeadershipAnswer = 'leader' | 'not-leader' | 'unreachable';

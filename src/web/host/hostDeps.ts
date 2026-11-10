@@ -40,8 +40,11 @@ import {
 import {
   alertVia,
   hostResolveDeps,
+  postRequestToChannel,
   productionAnnouncer,
   productionPublisher,
+  productionRequestPostDeps,
+  requestsChannelId,
   verifyRunner,
 } from './hostServices.js';
 import { buildHostMeetupAuthUrl, fetchMeetupSelf } from './meetupSignIn.js';
@@ -100,6 +103,15 @@ export function hostRouterFromEnv(
   }
   const resolveDeps = hostResolveDeps(() => discordClient);
   const publish = productionPublisher(() => discordClient);
+  const channelId = requestsChannelId(env);
+  const postToDiscord =
+    channelId === undefined
+      ? undefined
+      : postRequestToChannel(
+          () => discordClient,
+          channelId,
+          productionRequestPostDeps(() => discordClient),
+        );
   const events = {
     fetchGroupEvents: organizerGroupEvents(() => discordClient),
     now: () => new Date(),
@@ -174,6 +186,7 @@ export function hostRouterFromEnv(
             publish(id, version, actor, ['pending']),
           alert: alertVia(() => discordClient),
           tip: getRandomTip,
+          ...(postToDiscord === undefined ? {} : { postToDiscord }),
         },
         dashboardOrigin(),
       );

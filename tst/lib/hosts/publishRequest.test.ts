@@ -18,6 +18,8 @@ const URL = 'https://www.meetup.com/1-5genasians/events/317000001/';
 
 const base = (over: Partial<EventRequest> = {}): EventRequest => ({
   id: '7',
+  source: 'web',
+  discordPost: null,
   meetupMemberId: '4242',
   discordUserId: null,
   hostName: 'Hana',

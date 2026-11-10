@@ -55,9 +55,10 @@ import {
   fetchDiscordIdentity,
 } from './discordOAuth.js';
 import { html } from './html.js';
+import { mirrorDecision } from '../lib/hosts/requestPost.js';
 import {
-  productionPublishDeps,
   alertVia,
+  productionPublishDeps,
   productionPublisher,
   revokeHostSessions,
 } from './host/hostServices.js';
@@ -318,6 +319,14 @@ export function dashboardPageDeps(): DashboardPageDeps {
     ...promotionReads(() => discordClient),
     revokeHostSessions,
     hostAlert: alertVia(() => discordClient),
+    mirrorRequest: (request) =>
+      mirrorDecision(
+        {
+          getClient: () => discordClient,
+          alert: alertVia(() => discordClient),
+        },
+        request,
+      ),
   };
 }
 

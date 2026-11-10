@@ -423,5 +423,58 @@ const request = (over: Partial<NewEventRequest> = {}): NewEventRequest => ({
         repo.create(request({ meetupMemberId: 'abc' })),
       ).rejects.toThrow();
     });
+    it('stores the source and reads it back; rows made without one are web', async () => {
+      const web = await repo.create(request());
+      const discord = await repo.create(
+        request({ source: 'discord', submitToken: '1'.repeat(18) }),
+      );
+      expect(web?.source).toBe('web');
+      expect(discord?.source).toBe('discord');
+      expect(web?.discordPost).toBeNull();
+    });
+
+    it('records the Discord post once, without bumping the version or history', async () => {
+      const created = await repo.create(request());
+      const posted = await repo.setDiscordPost(
+        created.id,
+        '1'.repeat(19),
+        '2'.repeat(19),
+      );
+      expect(posted?.discordPost).toEqual({
+        channelId: '1'.repeat(19),
+        messageId: '2'.repeat(19),
+      });
+      expect(posted?.version).toBe(1);
+      expect(
+        await repo.setDiscordPost(created.id, '3'.repeat(19), '4'.repeat(19)),
+      ).toBeUndefined();
+      expect((await repo.get(created.id))?.discordPost?.messageId).toBe(
+        '2'.repeat(19),
+      );
+      expect(await historyOf(created.id)).toHaveLength(1);
+    });
+
+    it('refuses a malformed message id for the post pointer', async () => {
+      const created = await repo.create(request());
+      expect(
+        await repo.setDiscordPost(created.id, 'abc', '2'.repeat(19)),
+      ).toBeUndefined();
+      expect(
+        await repo.setDiscordPost('0', '1'.repeat(19), '2'.repeat(19)),
+      ).toBeUndefined();
+    });
+
+    it('a repeated Discord interaction id makes one row', async () => {
+      const token = '123456789012345678';
+      const first = await repo.create(
+        request({ source: 'discord', submitToken: token }),
+      );
+      const second = await repo.create(
+        request({ source: 'discord', submitToken: token }),
+      );
+      expect(first).toBeDefined();
+      expect(second).toBeUndefined();
+      expect((await repo.findBySubmitToken(HOST, token))?.id).toBe(first.id);
+    });
   },
 );

@@ -37,6 +37,9 @@ export const DEFAULT_TIME = '19:00';
 /** How far ahead a host may ask for an event. */
 export const MAX_DAYS_AHEAD = 365;
 
+/** A regular host may have at most this many requests waiting for leadership. */
+export const MAX_PENDING = 5;
+
 /** 15-minute steps, HH:MM, 24-hour. */
 export const START_TIMES: readonly string[] = Array.from(
   { length: 96 },

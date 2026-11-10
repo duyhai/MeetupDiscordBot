@@ -1,6 +1,5 @@
 import dayjs from 'dayjs';
 import express, { RequestHandler, Response } from 'express';
-import { Logger } from 'tslog';
 
 import {
   ExistingEvent,
@@ -11,7 +10,14 @@ import {
   canRetry,
   startHasPassed,
 } from '../../lib/hosts/publishRequest.js';
-import { LogEntry, alertText } from '../../lib/helpers/discordLogger.js';
+import {
+  DECISION_ACTIONS,
+  DECISION_MESSAGES,
+  DecisionAction,
+  REFUSAL_AUDIT_WINDOW_MS,
+  StaffRequestStore,
+  decideRequest,
+} from '../../lib/hosts/requestDecision.js';
 import {
   DASHBOARD_PATHS,
   dashboardPath,
@@ -19,65 +25,25 @@ import {
 import {
   DENY_REASON_MAX,
   EventRequest,
-  EventRequestStatus,
   PublishFrom,
 } from '../../lib/repositories/postgresEventRequestRepository.js';
 import {
   GUEST_HOST_EVENT_DESCRIPTION,
   createEventTemplate,
 } from '../../templates/createEventTemplate.js';
-import { DASHBOARD_LOCK_TIMEOUT_MS } from '../../lib/repositories/dashboardPool.js';
 import { dashboardLocals } from '../dashboardRouter.js';
 import { SafeHtml, html, localUrl, memberText, safeHref } from '../html.js';
 import { dashboardPage, load, notFound } from '../pageKit.js';
 import { FixedWindowLimiter } from '../rateLimit.js';
 import type { DashboardPageDeps } from './dashboardPages.js';
-import {
-  LeadershipAnswer,
-  WORKSPACE_REFUSAL_POST_WINDOW_MS,
-  WORKSPACE_REQUEST_DEADLINE_MS,
-  WorkspaceDeadlineError,
-  leadershipOf,
-  withDeadline,
-} from './workspaceActions.js';
-
-const logger = new Logger({ name: 'dashboard' });
+import { LeadershipAnswer, leadershipOf } from './workspaceActions.js';
 
 const REQUEST_ID = /^[1-9][0-9]{0,17}$/;
-/**
- * How long Deny waits for Meetup to say whether a failed request's event
- * exists. Well inside the page's own deadline, so a slow answer refuses
- * the deny (fails closed) and leaves time to write one that is allowed.
- */
-const DENY_CHECK_DEADLINE_MS = 8_000;
 const VERSION = /^[1-9][0-9]{0,8}$/;
 const RECENT_DECIDED = 20;
 
-/** The request store's reads and the deny write the queue uses. */
-export interface StaffRequestStore {
-  get: (id: string) => Promise<EventRequest | undefined>;
-  listByStatus: (
-    statuses: EventRequestStatus[],
-    limit?: number,
-  ) => Promise<EventRequest[]>;
-  listDecided: (limit?: number) => Promise<EventRequest[]>;
-  /**
-   * `lockTimeoutMs` bounds how long the write may wait on a row lock, so a
-   * deny cannot commit long after the page gave up on it.
-   */
-  deny: (
-    id: string,
-    seenVersion: number,
-    actor: string,
-    reason: string,
-    options?: { lockTimeoutMs?: number },
-  ) => Promise<EventRequest | undefined>;
-  resolve: (
-    id: string,
-    seenVersion: number,
-    actor: string,
-  ) => Promise<EventRequest | undefined>;
-}
+/** The store the queue reads and the decision service writes (requestDecision.ts). */
+export type { StaffRequestStore } from '../../lib/hosts/requestDecision.js';
 
 /** The queue's dependencies, on DashboardPageDeps. */
 export interface HostRequestDeps {
@@ -99,38 +65,20 @@ export interface HostRequestDeps {
   ) => Promise<ExistingEvent | undefined>;
   /** Tests only: how long the pre-deny Meetup check may take. */
   denyCheckDeadlineMs?: number;
+  /**
+   * Shows a decision on the request's Discord post (requestPost.ts). Fire
+   * and forget; absent in tests that have no Discord.
+   */
+  mirrorRequest?: (request: EventRequest) => Promise<unknown>;
 }
 
-const ACTIONS = ['approve', 'deny', 'retry', 'resolve'] as const;
-type QueueAction = (typeof ACTIONS)[number];
+type QueueAction = DecisionAction;
 
-/** Every code a queue POST can send back in `?result=`. Fixed text only. */
+/** Every code a queue POST can send back in `?result=`: the service's texts plus the page's own. */
 export const HOST_REQUEST_RESULT_MESSAGES = {
-  published: 'Approved and published on Meetup.',
-  failed:
-    'Approved, but publishing failed. The card says what exists on Meetup; fix it or Retry.',
-  denied: 'Denied. The host sees your reason on their dashboard.',
-  'still-publishing':
-    'Meetup is slow to answer. The request stays "publishing"; reload in a minute. If it is still stuck after 10 minutes, Retry.',
-  'deny-slow':
-    'The database is slow, so the deny may still save. Reload the queue in a minute ' +
-    'to see where the request stands; the activity log notes it if it saves.',
-  'reason-required': 'Write a reason for the host, then deny again.',
-  'reason-too-long': `Keep the reason to ${DENY_REASON_MAX} characters.`,
-  'deny-event-exists':
-    'This request’s event is on Meetup, so it was not denied. Retry to finish ' +
-    'it, or delete it on Meetup first.',
-  'deny-check-failed':
-    'Meetup could not be asked whether this request’s event exists, so it was ' +
-    'not denied. Try again in a few minutes.',
-  resolved: 'Marked resolved. The host sees the event as published.',
+  ...DECISION_MESSAGES,
   invalid:
     'That request could not be understood. Reload the page and try again.',
-  'not-leadership':
-    'Only the 1.5 Leadership Team can approve or deny host requests. Nothing was changed.',
-  'leadership-unavailable':
-    'Discord could not be reached to check your role. Nothing was changed; try again in a minute.',
-  error: 'That did not save. Please try again in a minute.',
 } as const;
 export type HostRequestResultCode = keyof typeof HOST_REQUEST_RESULT_MESSAGES;
 
@@ -472,12 +420,11 @@ export function registerHostRequestRoutes(
     | 'publishRequest'
     | 'findExistingEvent'
     | 'denyCheckDeadlineMs'
+    | 'mirrorRequest'
   >,
 ): void {
-  const refusalPosts = new FixedWindowLimiter(
-    1,
-    WORKSPACE_REFUSAL_POST_WINDOW_MS,
-    () => deps.now().getTime(),
+  const refusalPosts = new FixedWindowLimiter(1, REFUSAL_AUDIT_WINDOW_MS, () =>
+    deps.now().getTime(),
   );
   const back = (res: Response, code: HostRequestResultCode) =>
     res.redirect(303, `${queuePath()}?result=${code}`);
@@ -514,223 +461,44 @@ export function registerHostRequestRoutes(
     if (
       typeof id !== 'string' ||
       !REQUEST_ID.test(id) ||
-      !(ACTIONS as readonly string[]).includes(action)
+      !(DECISION_ACTIONS as readonly string[]).includes(action)
     ) {
       notFound(res);
       return;
     }
-    const verb = action as QueueAction;
     const { session } = dashboardLocals(res);
-    // Live, on every request: the session's cached roles never decide this.
-    const leadership = await leadershipOf(deps.isLeadership, session.userId);
-    if (leadership !== 'leader') {
-      if (refusalPosts.take(session.userId)) {
-        deps
-          .audit({
-            title: 'Host request action refused',
-            description: `<@${session.userId}> tried to ${verb} host request #${id} without the 1.5 Leadership Team role (${leadership}).`,
-          })
-          .catch(() => undefined);
-      }
-      back(
-        res,
-        leadership === 'not-leader'
-          ? 'not-leadership'
-          : 'leadership-unavailable',
-      );
-      return;
-    }
     const body = req.body as unknown;
     const versionText = field(body, 'version');
     if (versionText === undefined || !VERSION.test(versionText)) {
       back(res, 'invalid');
       return;
     }
-    const version = Number(versionText);
-    let store: StaffRequestStore;
-    try {
-      store = await deps.eventRequests();
-    } catch (error: unknown) {
-      logger.warn(
-        `Host request store failed: ${error instanceof Error ? error.name : 'Error'}`,
-      );
-      back(res, 'error');
-      return;
-    }
-    const auditLine = (what: string, request: EventRequest | undefined) => {
-      deps
-        .audit({
-          title: `Host request ${what}`,
-          fields: [
-            { name: 'Request', value: `#${id}`, inline: true },
-            { name: 'By', value: `<@${session.userId}>`, inline: true },
-            ...(request
-              ? [{ name: 'Title', value: alertText(request.title) }]
-              : []),
-          ],
-        } satisfies LogEntry)
-        .catch(() => undefined);
-    };
-
-    if (verb === 'deny') {
-      // Browsers send a textarea's line breaks as CRLF but count them as one
-      // character for maxlength; so does this, and so is it stored.
-      const reason = (field(body, 'reason') ?? '')
-        .replace(/\r\n?/g, '\n')
-        .trim();
-      if (reason === '') {
-        back(res, 'reason-required');
-        return;
-      }
-      if (Array.from(reason).length > DENY_REASON_MAX) {
-        back(res, 'reason-too-long');
-        return;
-      }
-      // Each step has its own deadline, and the deny is written only while
-      // the page is still waiting: withDeadline does not cancel the work, so
-      // one deadline around all three could commit a deny after the page had
-      // said it failed.
-      const pageDeadline = deps.now().getTime() + WORKSPACE_REQUEST_DEADLINE_MS;
-      let denied: EventRequest | undefined;
-      let write: Promise<EventRequest | undefined> | undefined;
-      try {
-        // Checked at this version; deny's compare-and-set on the same
-        // version means the row cannot have changed in between.
-        const current = await withDeadline(WORKSPACE_REQUEST_DEADLINE_MS, () =>
-          store.get(id),
-        );
-        if (
-          current === undefined ||
-          current.version !== version ||
-          !canDeny(current)
-        ) {
-          denied = undefined;
-        } else {
-          if (current.status === 'failed') {
-            // Several failures mean the event may be on Meetup unrecorded:
-            // denying it would leave a live event the host is told was
-            // refused, with no Retry left. No answer in time is no answer.
-            let existing: ExistingEvent | undefined | 'unknown';
-            try {
-              existing = await withDeadline(
-                deps.denyCheckDeadlineMs ?? DENY_CHECK_DEADLINE_MS,
-                () => deps.findExistingEvent(current),
-              );
-            } catch (error: unknown) {
-              logger.warn(
-                `Host request deny check failed: ${error instanceof Error ? error.name : 'Error'}`,
-              );
-              existing = 'unknown';
-            }
-            if (existing === 'unknown') {
-              back(res, 'deny-check-failed');
-              return;
-            }
-            if (existing !== undefined) {
-              back(res, 'deny-event-exists');
-              return;
-            }
-          }
-          const left = pageDeadline - deps.now().getTime();
-          if (left <= 0) {
-            throw new WorkspaceDeadlineError(WORKSPACE_REQUEST_DEADLINE_MS);
-          }
-          // The write gets only the time the page has left: its row-lock
-          // wait is bounded by it too, not just the page's wait for it.
-          // The pool wait and BEGIN come before the lock timeout starts, so
-          // a write can still land after the page answers: then the page
-          // says it may still save, and the late write is logged when done.
-          // Never longer than the pool's usual 15 s lock wait, though.
-          const lockTimeoutMs = Math.max(
-            1,
-            Math.floor(Math.min(left, DASHBOARD_LOCK_TIMEOUT_MS)),
-          );
-          write = store.deny(id, version, session.userId, reason, {
-            lockTimeoutMs,
-          });
-          const pending = write;
-          denied = await withDeadline(left, () => pending);
-        }
-      } catch (error: unknown) {
-        if (error instanceof WorkspaceDeadlineError && write !== undefined) {
-          write
-            .then((late) => {
-              if (late !== undefined) {
-                auditLine('denied (saved after the page timed out)', late);
-              }
-            })
-            .catch((late: unknown) => {
-              logger.warn(
-                `Host request deny failed after the page timed out: ${late instanceof Error ? late.name : 'Error'}`,
-              );
-            });
-          back(res, 'deny-slow');
-          return;
-        }
-        logger.warn(
-          `Host request deny failed: ${error instanceof Error ? error.name : 'Error'}`,
-        );
-        back(res, 'error');
-        return;
-      }
-      if (denied === undefined) {
-        stalePage(res);
-        return;
-      }
-      auditLine('denied', denied);
-      back(res, 'denied');
-      return;
-    }
-
-    if (verb === 'resolve') {
-      let resolved: EventRequest | undefined;
-      try {
-        resolved = await withDeadline(WORKSPACE_REQUEST_DEADLINE_MS, () =>
-          store.resolve(id, version, session.userId),
-        );
-      } catch (error: unknown) {
-        logger.warn(
-          `Host request resolve failed: ${error instanceof Error ? error.name : 'Error'}`,
-        );
-        back(res, 'error');
-        return;
-      }
-      if (resolved === undefined) {
-        stalePage(res);
-        return;
-      }
-      auditLine('marked resolved', resolved);
-      back(res, 'resolved');
-      return;
-    }
-
-    const from: PublishFrom[] =
-      verb === 'approve' ? ['pending'] : ['failed', 'publishing'];
-    let outcome: PublishOutcome;
-    try {
-      outcome = await withDeadline(WORKSPACE_REQUEST_DEADLINE_MS, () =>
-        deps.publishRequest(id, version, session.userId, from),
-      );
-    } catch (error: unknown) {
-      if (error instanceof WorkspaceDeadlineError) {
-        auditLine(
-          `${verb === 'approve' ? 'approval' : 'retry'} started (still publishing)`,
-          undefined,
-        );
-        back(res, 'still-publishing');
-        return;
-      }
-      logger.warn(
-        `Host request publish failed: ${error instanceof Error ? error.name : 'Error'}`,
-      );
-      back(res, 'error');
-      return;
-    }
+    // The one decision path, shared with the Discord buttons: the live
+    // Leadership check, the deny rules and the publish are all in there.
+    const outcome = await decideRequest(
+      {
+        now: deps.now,
+        isLeadership: deps.isLeadership,
+        audit: deps.audit,
+        store: deps.eventRequests,
+        publishRequest: deps.publishRequest,
+        findExistingEvent: deps.findExistingEvent,
+        mirror: deps.mirrorRequest,
+        refusals: refusalPosts,
+        denyCheckDeadlineMs: deps.denyCheckDeadlineMs,
+      },
+      {
+        id,
+        version: Number(versionText),
+        actor: session.userId,
+        action: action as QueueAction,
+        reason: field(body, 'reason'),
+      },
+    );
     if (outcome.code === 'stale') {
       stalePage(res);
       return;
     }
-    auditLine(verb === 'approve' ? 'approved' : 'retried', outcome.request);
     back(res, outcome.code);
   }) as RequestHandler);
 }
