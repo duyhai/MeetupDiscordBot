@@ -430,6 +430,21 @@ function requestCard(
   </div>`;
 }
 
+/** "Denied (2)", or "Denied (showing 100 of 250)" when the page lists fewer than the table holds. */
+function filteredHeading(view: {
+  status: EventRequestStatus;
+  listed: EventRequest[];
+  counts: Map<EventRequestStatus, number> | undefined;
+}): string {
+  const listed = view.listed.length;
+  const total = view.counts?.get(view.status);
+  const count =
+    total === undefined || total <= listed
+      ? String(listed)
+      : `showing ${listed} of ${total}`;
+  return `${STATUS_LABELS[view.status]} (${count})`;
+}
+
 /** The default view (waiting, needing attention, recently decided) or one status's list. */
 type QueueView = {
   checklists: Map<string, ChecklistKey[]>;
@@ -474,7 +489,7 @@ function queueBody(
               ? html`<p class="muted">Nothing yet.</p>`
               : view.decided.map(card)
           }`
-      : html`<h2>${STATUS_LABELS[view.status]} (${view.listed.length})</h2>
+      : html`<h2>${filteredHeading(view)}</h2>
           ${
             view.listed.length === 0
               ? html`<p class="muted">
@@ -549,7 +564,25 @@ export function registerHostRequestRoutes(
       'host requests',
       async (): Promise<QueueView> => {
         const store = await deps.eventRequests();
-        const counting = store.countByStatus?.();
+        // The chip counts are decoration: a failure shows the chips bare. The
+        // promise never rejects, since the list queries run before it is
+        // awaited and a rejection meanwhile would otherwise be unhandled.
+        const countsOf = async (): Promise<
+          Map<EventRequestStatus, number> | undefined
+        > => {
+          if (!store.countByStatus) {
+            return undefined;
+          }
+          try {
+            return await store.countByStatus();
+          } catch (error: unknown) {
+            logger.warn(
+              `Request counts read failed: ${error instanceof Error ? error.name : 'Error'}`,
+            );
+            return undefined;
+          }
+        };
+        const counting = countsOf();
         // The checklists are a note on the cards: a failure hides them only.
         const checklistsOf = async (rows: EventRequest[]) => {
           if (!store.reviewChecklists) {

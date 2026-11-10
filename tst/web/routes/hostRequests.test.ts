@@ -505,7 +505,7 @@ describe('queue status filter', () => {
     }
   });
 
-  it('a store without counts shows the chips bare; a count failure is a 503', async () => {
+  it('a store without counts, or a count that fails, shows the chips bare', async () => {
     const bare = await setup({ rows: MIXED });
     bare.store.countByStatus = undefined;
     const res = await bare.get(QUEUE);
@@ -515,7 +515,55 @@ describe('queue status filter', () => {
 
     const down = await setup({ rows: MIXED });
     vi.mocked(down.store.countByStatus).mockRejectedValue(new Error('pg down'));
-    expect((await down.get(QUEUE)).status).toBe(503);
+    const page = await down.get(QUEUE);
+    expect(page.status).toBe(200);
+    expect(page.text).toContain('Waiting (2)</h2>');
+    expect(page.text).toContain(`href="${QUEUE}?status=denied">Denied<`);
+    expect(page.text).not.toContain('Denied (2)');
+  });
+
+  it('a count that fails while the lists are still loading is handled, not fatal', async () => {
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => {
+      unhandled.push(reason);
+    };
+    process.on('unhandledRejection', onUnhandled);
+    try {
+      const { get, store } = await setup({ rows: MIXED });
+      // The count rejects at once; the list answers later, so the await of
+      // the count comes after its rejection.
+      vi.mocked(store.countByStatus).mockRejectedValue(new Error('pg down'));
+      const rows = MIXED.filter((r) => r.status === 'denied');
+      vi.mocked(store.listByStatus).mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            setTimeout(() => resolve(rows), 50);
+          }),
+      );
+      const page = await get(`${QUEUE}?status=denied`);
+      expect(page.status).toBe(200);
+      expect(page.text).toContain('Denied (2)</h2>');
+      // Bare chips: the count never arrived.
+      expect(page.text).toContain(`href="${QUEUE}?status=pending">Waiting<`);
+      expect(page.text).not.toContain('Waiting (2)');
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off('unhandledRejection', onUnhandled);
+    }
+  });
+
+  it('the filtered heading says "showing" when the page lists fewer than the count', async () => {
+    const { get, store } = await setup({ rows: MIXED });
+    vi.mocked(store.countByStatus).mockResolvedValue(
+      new Map([
+        ['denied', 250],
+        ['pending', 2],
+      ]),
+    );
+    const page = await get(`${QUEUE}?status=denied`);
+    expect(page.text).toMatch(/Denied\s*\(showing 2 of 250\)\s*<\/h2>/);
+    expect(page.text).toContain('Denied (250)<');
   });
 });
 
