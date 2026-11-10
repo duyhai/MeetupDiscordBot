@@ -229,10 +229,15 @@ function homeBody(
     (event) =>
       html`<tr>
           <td data-label="Date">
-            ${dateLabel(event.dateTime)}, ${timeLabel(event.dateTime)}
+            <span class="when">${dateLabel(event.dateTime)},</span>
+            <span class="when">${timeLabel(event.dateTime)}</span>
           </td>
-          <td data-label="Event">${eventLink(event)}${excludedBadge(event)}</td>
-          <td data-label="Type">${EVENT_TYPE_LABELS[event.type]}</td>
+          <td class="event" data-label="Event">
+            ${eventLink(event)}${excludedBadge(event)}
+          </td>
+          <td class="type" data-label="Type">
+            ${EVENT_TYPE_LABELS[event.type]}
+          </td>
           <td data-label="Status">
             <span class="badge ok">Published</span>
             ${
@@ -293,7 +298,7 @@ function homeBody(
       ${
         upcoming.length === 0
           ? html`<p class="muted">You have no upcoming events on Meetup.</p>`
-          : html`<table class="stack">
+          : html`<table class="stack upcoming">
               <thead>
                 <tr>
                   <th>Date</th>
@@ -741,9 +746,13 @@ function historyBody(
   const rows = slice.map(
     (event) =>
       html`<tr>
-        <td data-label="Date">${dateLabel(event.dateTime)}</td>
-        <td data-label="Event">${eventLink(event)}${excludedBadge(event)}</td>
-        <td data-label="Type">${EVENT_TYPE_LABELS[event.type]}</td>
+        <td data-label="Date">
+          <span class="when">${dateLabel(event.dateTime)}</span>
+        </td>
+        <td class="event" data-label="Event">
+          ${eventLink(event)}${excludedBadge(event)}
+        </td>
+        <td class="type" data-label="Type">${EVENT_TYPE_LABELS[event.type]}</td>
         <td data-label="Actions">
           <div class="actions">
             ${meetupButton(event)}${attendanceButton(event)}

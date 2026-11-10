@@ -154,6 +154,37 @@ describe('decisionLine', () => {
     expect(line).not.toContain('<@');
   });
 
+  it('tells the two deciders apart side by side: the host by name, a leader by mention', () => {
+    const base = {
+      status: 'published' as const,
+      meetupMemberId: '4242',
+      hostName: 'Hana',
+      eventUrl: 'https://www.meetup.com/x/events/9/',
+    };
+    const self = decisionLine(eventRequestRow({ ...base, decidedBy: '4242' }));
+    const leader = decisionLine(
+      eventRequestRow({ ...base, decidedBy: LEADER }),
+    );
+    expect(self).toMatch(/^✅ Published by Hana\./);
+    expect(self).not.toContain('<@');
+    expect(leader).toMatch(
+      new RegExp(`^✅ Request approved by <@${LEADER}>\\.`),
+    );
+    expect(leader).not.toContain('Hana');
+    // A denial and a failure name a leader the same way.
+    for (const status of ['denied', 'failed'] as const) {
+      const line = decisionLine(
+        eventRequestRow({
+          ...base,
+          status,
+          decidedBy: LEADER,
+          denyReason: 'x',
+        }),
+      );
+      expect(line).toContain(`<@${LEADER}>`);
+    }
+  });
+
   it('shortens a long deny reason and points at the website', () => {
     const line = decisionLine(
       eventRequestRow({

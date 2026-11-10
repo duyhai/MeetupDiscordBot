@@ -143,7 +143,11 @@ describe('/meetup_run_noshow_report Meetup calls', () => {
       'No Show report 2026-9.txt',
       'suggested_suspensions_2026-9.csv',
     ]);
-    // The command never shows the hosted flag, so no per-host listing is made.
+    // The command never shows the hosted flag, so no per-host listing is
+    // made; the month's own listing is, so this cannot pass on no calls.
+    expect(
+      responder.calls.filter((call) => call.name === 'getGroupEvents').length,
+    ).toBeGreaterThan(0);
     expect(
       responder.calls.filter(
         (call) =>

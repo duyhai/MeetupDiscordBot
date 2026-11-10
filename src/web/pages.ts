@@ -202,6 +202,20 @@ form[data-ban-photo] input[type="file"]{width:100%;min-width:0}
 table.bans th{overflow-wrap:normal}
 table.bans td.ban-date{white-space:nowrap;overflow-wrap:normal}
 table.bans td.ban-fixed{overflow-wrap:normal}
+/* Host event tables (Date / Event / Type / ...). With columns (640px up), Date and Type break only
+between words, never mid-word. On desktop (1024px up, the page at its full width) the Type label keeps
+to one line and the date and time stack on two. In the upcoming-events table a row's buttons also stay
+on one line at their size, and Event (width:100%) is the one column that takes the rest and wraps; a
+row with a note under its buttons (announce-early) still wraps, with the note at a readable width
+rather than widening the column. (History's three buttons are too wide for that, so they keep wrapping.)
+Below 640px the rows are stacked and none of this applies. */
+@media (min-width:640px){td.type,td .when{overflow-wrap:normal}}
+@media (min-width:1024px){td.type,td .when{white-space:nowrap}
+table.stack td .when{display:block}
+table.upcoming td.event{width:100%}
+table.upcoming td .actions:not(:has(.note)){flex-wrap:nowrap}
+table.upcoming td .actions:not(:has(.note))>*{flex:none;white-space:nowrap}
+table.upcoming td .actions .note{max-width:20rem}}
 form.ban-add label.field{margin:0 0 var(--s3)}
 form.ban-add label.field input{display:block;width:100%;max-width:24rem;margin-top:var(--s1)}
 code{overflow-wrap:anywhere}
@@ -499,6 +513,11 @@ const NAV_ITEMS = [
     key: 'identity',
     path: dashboardPath(DASHBOARD_PATHS.identity),
     label: 'Identity changes',
+  },
+  {
+    key: 'eventChanges',
+    path: dashboardPath(DASHBOARD_PATHS.eventChanges),
+    label: 'Event changes',
   },
   {
     key: 'linkProgress',

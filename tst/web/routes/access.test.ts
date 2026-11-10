@@ -77,6 +77,7 @@ const SAMPLE_PARAMS: Record<string, string> = {
   side: 'old',
   rowId: '1',
   action: 'approve',
+  eventId: '311000001',
 };
 
 /** Statuses other than 200 that a signed-in, allowed GET is expected to answer. */
@@ -108,6 +109,8 @@ const EXPECTED_UNSAFE_ALLOWED: Record<string, number> = {
   'POST /hosts/promotion/:memberId': 303,
   // A fake Leadership check says no: refused, back to the home page.
   'POST /wrapped/announce': 303,
+  // Snapshot now: a fake job says started, back to the list.
+  'POST /events/snapshot': 303,
 };
 
 function concrete(path: string): string {

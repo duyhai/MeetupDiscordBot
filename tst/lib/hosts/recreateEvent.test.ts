@@ -8,7 +8,9 @@ import {
   RecreateDeps,
   recreatable,
   recreateAndAnnounce,
+  STALE_ALERT_TTL_SEC,
   recreateInput,
+  staleRecreationAlertKey,
   surelyNotCreated,
 } from '../../../src/lib/hosts/recreateEvent.js';
 import { OrganizerTokenUnavailableError } from '../../../src/lib/reports/organizerMeetup.js';
@@ -107,6 +109,7 @@ function setup(
   } = {},
 ) {
   const calls: string[] = [];
+  const seen = new Set<string>();
   const recreations = memoryRecreations(options.existing);
   const createEvent = vi.fn(async () => {
     calls.push('create');
@@ -145,6 +148,13 @@ function setup(
     }),
     alert: vi.fn().mockResolvedValue(true),
     audit: vi.fn().mockResolvedValue(true),
+    firstWithin: vi.fn(async (key: string) => {
+      if (seen.has(key)) {
+        return false;
+      }
+      seen.add(key);
+      return true;
+    }),
   };
   return {
     deps,
@@ -417,6 +427,24 @@ describe('recreateAndAnnounce', () => {
     expect(deps.copySource).not.toHaveBeenCalled();
     expect(calls).toEqual([]);
     expect(alerts()).toContain('died mid-way');
+    // Clicks after that make no more alerts that day.
+    await expect(run()).resolves.toEqual({ code: 'recreate-needs-check' });
+    await expect(run()).resolves.toEqual({ code: 'recreate-needs-check' });
+    expect(deps.alert).toHaveBeenCalledTimes(1);
+    expect(deps.firstWithin).toHaveBeenCalledWith(
+      staleRecreationAlertKey(OLD.id),
+      STALE_ALERT_TTL_SEC,
+    );
+  });
+
+  it('the stale alert still goes out when Redis cannot dedupe it', async () => {
+    const { deps, run } = setup({
+      existing: { newEventId: null, stale: true },
+    });
+    vi.mocked(deps.firstWithin).mockRejectedValue(new Error('redis down'));
+    await expect(run()).resolves.toEqual({ code: 'recreate-needs-check' });
+    await expect(run()).resolves.toEqual({ code: 'recreate-needs-check' });
+    expect(deps.alert).toHaveBeenCalledTimes(2);
   });
 
   it('the copy’s announcement request throwing is a failed announcement: the old event stays', async () => {
@@ -483,5 +511,11 @@ describe('surelyNotCreated', () => {
     expect(surelyNotCreated(client(200))).toBe(false);
     expect(surelyNotCreated(client(503))).toBe(false);
     expect(surelyNotCreated(new Error('socket hang up'))).toBe(false);
+    // A ClientError with no response says nothing, and must not throw.
+    const bare = Object.create(ClientError.prototype) as InstanceType<
+      typeof ClientError
+    >;
+    expect(() => surelyNotCreated(bare)).not.toThrow();
+    expect(surelyNotCreated(bare)).toBe(false);
   });
 });

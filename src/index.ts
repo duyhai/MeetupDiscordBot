@@ -9,6 +9,7 @@ import app, { setOAuthAlertClient } from './app.js';
 import Configuration from './configuration.js';
 import { startIdentityDigestScheduler } from './lib/helpers/identity/digest.js';
 import { registerMemberLeaveListener } from './lib/helpers/memberLeave.js';
+import { startEventAuditScheduler } from './lib/eventAudit/job.js';
 import { startAnnounceScheduler } from './lib/hosts/announceTick.js';
 import { startReportBuildScheduler } from './lib/reports/buildJob.js';
 import {
@@ -62,6 +63,7 @@ client.once('clientReady', async () => {
 
   startIdentityDigestScheduler(client);
   startReportBuildScheduler(client);
+  startEventAuditScheduler(client);
   startAnnounceScheduler(client, () =>
     productionAnnounceTickDeps(() => client),
   );

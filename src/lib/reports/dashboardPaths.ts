@@ -43,6 +43,9 @@ export const DASHBOARD_PATHS = {
   hostPromotion: '/hosts/promotion',
   hostMember: '/hosts/promotion/:memberId',
   wrappedAnnounce: '/wrapped/announce',
+  eventChanges: '/events',
+  eventHistory: '/events/:eventId',
+  eventSnapshot: '/events/snapshot',
 } as const;
 
 export type DashboardPathTemplate =
@@ -167,4 +170,15 @@ export function dashboardPath(path: ParamFreeDashboardPath): string {
     throw new RangeError('dashboardPath takes a path without parameters');
   }
   return `${DASHBOARD_BASE}${path}`;
+}
+
+/**
+ * '/dashboard/events/311000001': one event's audit history. Only from an
+ * all-digit id (1-20 digits); anything else is undefined, so a link is never
+ * built from other text.
+ */
+export function eventHistoryPath(eventId: string): string | undefined {
+  return typeof eventId === 'string' && MEMBER_ID.test(eventId)
+    ? `${DASHBOARD_BASE}/events/${eventId}`
+    : undefined;
 }
