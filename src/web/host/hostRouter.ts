@@ -389,9 +389,11 @@ export function createHostRouter(deps: HostRouterDeps): express.Router {
    * The end of "Link your Discord account": the signed-in host proved they
    * own this Discord account, so link it to their Meetup account (the same
    * duplicate rules as Verify), take it into the session and go home with a
-   * fixed notice. No server roles are given. Eligibility is checked live
-   * before the write (this route is outside the session gate) and again
-   * after it, since a Discord account can be the blacklisted part; a
+   * fixed notice. No server roles are given. A blacklisted Discord account
+   * is refused before anything is written (the eligibility check reads the
+   * current link, so it cannot see the one about to be made). Eligibility
+   * is checked live before the write (this route is outside the session
+   * gate) and again after it, to read the tier through the new link; a
    * refusal ends every session of the host, and an outage changes nothing.
    */
   async function linkCallback(
