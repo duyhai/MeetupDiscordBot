@@ -83,12 +83,21 @@ export type EmbedView =
   | { kind: 'shared'; displayNames: Record<string, string> };
 
 /**
- * A display name as inert text: no markdown, no mention or channel link.
- * Angle brackets go too, so a nickname written as "<@123>" can't render as
- * a tag in the public post.
+ * A display name as inert text: no markdown (links, headings and lists
+ * included), no mention or channel link. Angle brackets go too, so a
+ * nickname written as "<@123>" can't render as a tag in the public post.
  */
 function plainName(name: string): string {
-  return neutralizeMentions(escapeMarkdown(name.replace(/[<>]/g, '')));
+  const escaped = escapeMarkdown(name.replace(/[<>]/g, ''), {
+    // Off by default in discord.js 14: a nickname "[free nitro](https://…)"
+    // would otherwise render as a live link in the public post.
+    maskedLink: true,
+    heading: true,
+    bulletedList: true,
+    numberedList: true,
+  });
+  // Belt and braces for the link syntax: "](" can't pair up any more.
+  return neutralizeMentions(escaped.replace(/\]\(/g, ']\u200b('));
 }
 
 function companionsText(wrapped: CachedWrapped, view: EmbedView): string {

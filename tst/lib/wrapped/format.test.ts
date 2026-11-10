@@ -132,6 +132,32 @@ describe('wrappedEmbed shared view', () => {
     expect(field(embed, 'Went with the most')).toContain('5 other members');
   });
 
+  it.each([
+    // A masked link needs "](" intact to render.
+    ['[free nitro](https://evil.example)', [/\]\(/]],
+    // Headings and list items only render at the start of a line.
+    ['# Big', [/^# /m]],
+    ['- item', [/^- /m]],
+    ['1. item', [/^1\. /m]],
+    ['@everyone', [/@everyone/]],
+    ['<@&1>', [/<@/]],
+    ['<#1>', [/<#/]],
+  ])('renders the hostile nickname %s as inert text', (nickname, forbidden) => {
+    const value = field(
+      wrappedEmbed('Jane', full, {
+        kind: 'shared',
+        displayNames: { d1: nickname, d2: 'Sam' },
+      }),
+      'Went with the most',
+    );
+
+    forbidden.forEach((pattern) => {
+      expect(value).not.toMatch(pattern);
+    });
+    // Still names them, in some neutralised form.
+    expect(value).toContain('(4 events)');
+  });
+
   it('folds a companion whose name could not be resolved into the count', () => {
     const embed = wrappedEmbed('Jane', full, {
       kind: 'shared',

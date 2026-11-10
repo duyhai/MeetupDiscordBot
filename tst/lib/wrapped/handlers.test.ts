@@ -393,14 +393,12 @@ describe('runWrapped', () => {
       }),
     );
     await link(h.repo);
+    const release = vi.spyOn(h.deps.limiter, 'release');
     const interaction = commandInteraction();
 
-    await expect(
-      runWrapped(interaction, { year: 2026, refresh: false }, h.deps),
-    ).rejects.toMatchObject({
-      message: replies.buildFailed,
-      alertHandled: true,
-    });
+    // Handled in place: no "reach out to a moderator" framing for a
+    // transient failure whose slot is refunded.
+    await runWrapped(interaction, { year: 2026, refresh: false }, h.deps);
 
     const everything = JSON.stringify([
       interaction.editReply.mock.calls,
@@ -408,11 +406,43 @@ describe('runWrapped', () => {
       h.alert.mock.calls,
     ]);
     expect(everything).not.toContain(SENTINEL);
+    expect(contents(interaction.editReply).at(-1)).toBe(replies.buildFailed);
+    expect(interaction.followUp).not.toHaveBeenCalled();
     expect(h.alert).toHaveBeenCalledTimes(1);
     expect(JSON.stringify(h.alert.mock.calls[0])).toContain('HTTP 500');
     expect(await readWrapped(h.cache, 'u1', 2026, 'me')).toBeUndefined();
     // A transient failure must not lock the member out for an hour.
+    expect(release).toHaveBeenCalledTimes(1);
     expect(h.deps.limiter.take('u1')).toBe(true);
+  });
+
+  it('keeps the slot when the build succeeds', async () => {
+    await link(h.repo);
+    const release = vi.spyOn(h.deps.limiter, 'release');
+
+    await runWrapped(
+      commandInteraction(),
+      { year: 2026, refresh: false },
+      h.deps,
+    );
+
+    expect(release).not.toHaveBeenCalled();
+    expect(h.deps.limiter.take('u1')).toBe(false);
+  });
+
+  it('refunds and answers in place when delivering the result fails', async () => {
+    await link(h.repo);
+    const release = vi.spyOn(h.deps.limiter, 'release');
+    const interaction = commandInteraction();
+    interaction.followUp.mockRejectedValueOnce(
+      new Error('Unknown interaction'),
+    );
+
+    await runWrapped(interaction, { year: 2026, refresh: false }, h.deps);
+
+    expect(release).toHaveBeenCalledTimes(1);
+    expect(h.alert).toHaveBeenCalledTimes(1);
+    expect(contents(interaction.editReply).at(-1)).toBe(replies.buildFailed);
   });
 
   it('rebuilds when the member has linked a different Meetup account since', async () => {
@@ -482,6 +512,23 @@ describe('runWrapped', () => {
     expect(cacheJson).not.toContain('424242');
     expect(cacheJson).not.toContain('Zed');
     expect(cacheJson).not.toContain('777');
+    expect(cacheJson).not.toContain('Linked Pal');
+
+    // The same Wrapped, shared: the pal by server display name, nobody tagged,
+    // and still no Meetup name or id of anyone.
+    const share = buttonInteraction();
+    await runShare(share.interaction, h.deps);
+    const sharedJson = JSON.stringify(
+      (
+        share.send.mock.calls[0][0] as { embeds: { toJSON(): unknown }[] }
+      ).embeds.map((e) => e.toJSON()),
+    );
+    expect(sharedJson).toContain('Pal pal (1 event)');
+    expect(sharedJson).not.toContain('<@');
+    expect(sharedJson).not.toContain('424242');
+    expect(sharedJson).not.toContain('Zed Unlinked');
+    expect(sharedJson).not.toContain('Linked Pal');
+    expect(sharedJson).not.toContain('777');
   });
 
   it('offers no share button when run in a DM', async () => {

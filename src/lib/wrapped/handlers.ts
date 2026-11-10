@@ -74,21 +74,6 @@ export const defaultWrappedDeps: WrappedHandlerDeps = {
   slowAfterMs: SLOW_BUILD_MS,
 };
 
-/**
- * What the member sees when Meetup (or the organizer credential) failed
- * mid-build. The wrapper would otherwise post the raw error, which for a
- * graphql-request ClientError embeds Meetup's response body (issue #112);
- * this one carries a fixed message and marks the alert as already posted.
- */
-export class WrappedBuildError extends Error {
-  readonly alertHandled = true;
-
-  constructor() {
-    super(replies.buildFailed);
-    this.name = 'WrappedBuildError';
-  }
-}
-
 export interface WrappedOptions {
   year: number;
   refresh: boolean;
@@ -206,9 +191,8 @@ async function buildAndReply(
     }, deps.slowAfterMs);
 
     let claimed = false;
-    let result: BuildResult;
     try {
-      result = await buildWrapped(
+      const result: BuildResult = await buildWrapped(
         {
           meetup,
           // Taken only with the token in hand and the history readable: a
@@ -249,12 +233,52 @@ async function buildAndReply(
         year,
         Configuration.meetup.groupId,
       );
+
+      if (result.kind === 'account-mismatch') {
+        logger.warn(
+          `Wrapped: token account ${result.tokenMeetupId} is not the linked account for Discord user ${userId}`,
+        );
+        await answerInPlace(interaction, { content: replies.accountMismatch });
+        return;
+      }
+      if (result.kind === 'not-in-group') {
+        await answerInPlace(interaction, { content: replies.notInGroup });
+        return;
+      }
+      if (result.kind === 'rate-limited') {
+        const minutes = Math.ceil(deps.limiter.retryAfterSec(userId) / 60);
+        await answerInPlace(interaction, {
+          content: replies.rateLimited(minutes),
+          embeds: cached
+            ? [wrappedEmbed(displayNameOf(interaction), cached)]
+            : [],
+        });
+        return;
+      }
+
+      await writeWrapped(cache, userId, year, result.wrapped, deps.now());
+      const payload = wrappedPayload(interaction, result.wrapped);
+      if (slow) {
+        try {
+          await interaction.user.send(payload);
+          return;
+        } catch (error) {
+          logger.warn(
+            `Could not DM a Wrapped, using the follow-up: ${String(error)}`,
+          );
+        }
+      }
+      await interaction.followUp({ ...payload, ephemeral: true });
     } catch (error) {
-      clearTimeout(slowTimer);
+      // Covers the Meetup reads, the cache write and the delivery alike.
       if (claimed) {
         // The member got nothing for the slot; don't lock them out an hour.
         deps.limiter.release(userId);
       }
+      // Full error to the process log only; Discord gets a composed summary
+      // (a graphql-request ClientError's message embeds Meetup's response
+      // body, issue #112) and the member a fixed line, in place: a transient
+      // failure is not "reach out to a moderator".
       logger.error(error);
       await deps.alert(interaction.client, {
         title: '/wrapped failed',
@@ -262,45 +286,10 @@ async function buildAndReply(
           `User: ${interaction.user.toString()} (${interaction.user.username})\n` +
           `Error: ${describeBuildError(error)}`,
       });
-      throw new WrappedBuildError();
+      await answerInPlace(interaction, { content: replies.buildFailed });
+    } finally {
+      clearTimeout(slowTimer);
     }
-    clearTimeout(slowTimer);
-
-    if (result.kind === 'account-mismatch') {
-      logger.warn(
-        `Wrapped: token account ${result.tokenMeetupId} is not the linked account for Discord user ${userId}`,
-      );
-      await answerInPlace(interaction, { content: replies.accountMismatch });
-      return;
-    }
-    if (result.kind === 'not-in-group') {
-      await answerInPlace(interaction, { content: replies.notInGroup });
-      return;
-    }
-    if (result.kind === 'rate-limited') {
-      const minutes = Math.ceil(deps.limiter.retryAfterSec(userId) / 60);
-      await answerInPlace(interaction, {
-        content: replies.rateLimited(minutes),
-        embeds: cached
-          ? [wrappedEmbed(displayNameOf(interaction), cached)]
-          : [],
-      });
-      return;
-    }
-
-    await writeWrapped(cache, userId, year, result.wrapped, deps.now());
-    const payload = wrappedPayload(interaction, result.wrapped);
-    if (slow) {
-      try {
-        await interaction.user.send(payload);
-        return;
-      } catch (error) {
-        logger.warn(
-          `Could not DM a Wrapped, using the follow-up: ${String(error)}`,
-        );
-      }
-    }
-    await interaction.followUp({ ...payload, ephemeral: true });
   }
 }
 
