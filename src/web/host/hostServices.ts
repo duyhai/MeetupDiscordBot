@@ -1,4 +1,5 @@
 import { Client } from 'discord.js';
+import { Logger } from 'tslog';
 
 import { GUILD_ID, SERVER_ROLES } from '../../constants.js';
 import { GqlMeetupClient } from '../../lib/client/meetup/gqlClient.js';
@@ -23,7 +24,11 @@ import {
   REFUSAL_AUDIT_WINDOW_MS,
   decideRequest,
 } from '../../lib/hosts/requestDecision.js';
-import { mirrorDecision } from '../../lib/hosts/requestPost.js';
+import {
+  RequestPostDeps,
+  mirrorDecision,
+  postRequest,
+} from '../../lib/hosts/requestPost.js';
 import {
   LogEntry,
   logActivity,
@@ -39,7 +44,11 @@ import {
   OrganizerTokenUnavailableError,
   withOrganizerMeetup,
 } from '../../lib/reports/organizerMeetup.js';
-import { PostgresEventRequestRepository } from '../../lib/repositories/postgresEventRequestRepository.js';
+import {
+  DISCORD_ID,
+  EventRequest,
+  PostgresEventRequestRepository,
+} from '../../lib/repositories/postgresEventRequestRepository.js';
 import { PostgresMemberRepository } from '../../lib/repositories/postgresMemberRepository.js';
 import { PostgresPromotedHostRepository } from '../../lib/repositories/postgresPromotedHostRepository.js';
 import { ApplicationCache } from '../../util/cache.js';
@@ -50,6 +59,74 @@ import { discordRoleCheck } from '../roleGate.js';
 import { SessionStore } from '../session.js';
 import { timedCacheFactory } from '../timedCache.js';
 import { HOST_SESSION_OPTIONS, HostSession } from './hostSession.js';
+
+const logger = new Logger({ name: 'hostServices' });
+
+/**
+ * EVENT_REQUESTS_CHANNEL_ID, trimmed: the Discord channel website requests
+ * are posted in. undefined when unset or not a channel id; either warns
+ * once, by name (never the value), and website requests are then not
+ * posted (everything else works). Discord requests post where the command
+ * ran, whatever this says.
+ */
+export function requestsChannelId(
+  env: Record<string, string | undefined>,
+  warn: (message: string) => void = (message) => logger.warn(message),
+): string | undefined {
+  const value = env.EVENT_REQUESTS_CHANNEL_ID?.trim();
+  if (!value) {
+    warn(
+      'EVENT_REQUESTS_CHANNEL_ID is not set; website requests are not posted in Discord',
+    );
+    return undefined;
+  }
+  if (!DISCORD_ID.test(value)) {
+    warn(
+      'EVENT_REQUESTS_CHANNEL_ID is not a Discord channel id (17-20 digits); website requests are not posted',
+    );
+    return undefined;
+  }
+  return value;
+}
+
+/**
+ * postRequest into a fixed channel, for requests made on the website. The
+ * send failing (bot offline, channel gone, no access) is postRequest's
+ * alert; nothing is thrown.
+ */
+export function postRequestToChannel(
+  getClient: () => Client | undefined,
+  channelId: string,
+  deps: RequestPostDeps,
+): (request: EventRequest) => Promise<void> {
+  return (request) =>
+    postRequest(deps, request, {
+      send: async (payload) => {
+        const client = getClient();
+        if (!client) {
+          throw new Error('Discord client is not ready');
+        }
+        const channel = await client.channels.fetch(channelId);
+        if (!channel?.isSendable()) {
+          throw new Error('Requests channel is missing or not sendable');
+        }
+        const message = await channel.send(payload);
+        return { id: message.id, channelId: message.channelId };
+      },
+    });
+}
+
+/** The post module's production deps: the request store, the organizer's hosted count, alerts. */
+export function productionRequestPostDeps(
+  getClient: () => Client | undefined,
+): RequestPostDeps {
+  return {
+    store: () => PostgresEventRequestRepository.instance(),
+    pastHostedCount: hostResolveDeps(getClient).pastHostedCount,
+    alert: alertVia(getClient),
+    origin: dashboardOrigin(),
+  };
+}
 
 /** Production lookups for resolveHost. Each throws when its source is down. */
 export function hostResolveDeps(

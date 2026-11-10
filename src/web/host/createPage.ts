@@ -113,6 +113,12 @@ export interface CreatePageDeps {
   tip: () => string;
   /** Tests only: how long a Community Host's publish holds the page. */
   publishDeadlineMs?: number;
+  /**
+   * Posts a regular host's new request in the Discord requests channel
+   * (postRequestToChannel). Fire and forget; absent when no channel is
+   * configured.
+   */
+  postToDiscord?: (request: EventRequest) => Promise<unknown>;
 }
 
 interface FormView {
@@ -734,6 +740,11 @@ export function registerCreatePages(
     }
     if (session.tier === 'regular') {
       deps.alert(newRequestAlert(origin, created)).catch(() => undefined);
+      deps.postToDiscord?.(created).catch((error: unknown) => {
+        logger.warn(
+          `Request post threw: ${error instanceof Error ? error.name : 'Error'}`,
+        );
+      });
     } else {
       // The alert rides on the publish itself, not on the page's deadline:
       // a slow publish that finishes after the page moved on still alerts.
