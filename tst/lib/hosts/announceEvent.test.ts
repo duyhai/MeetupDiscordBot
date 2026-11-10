@@ -25,6 +25,7 @@ const EVENT: HostEvent = {
   dateTime: '2026-11-28T19:00:00-08:00',
   eventUrl: 'https://www.meetup.com/g/events/311111111/',
   type: 'games',
+  counted: true,
   hosts: [{ id: HOST.meetupMemberId, name: HOST.name }],
 };
 const DETAILS: AnnounceEventDetails = {

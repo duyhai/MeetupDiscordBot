@@ -13,6 +13,7 @@ import {
   HostEvent,
   HostEventsDeps,
   attendanceUrl,
+  countedOnly,
   groupCalendar,
   monthCalendar,
   hostedEvents,
@@ -20,6 +21,7 @@ import {
 } from '../../lib/hosts/hostEvents.js';
 import { MAX_DAYS_AHEAD } from '../../lib/hosts/eventRequest.js';
 import { matchHolidays } from '../../lib/hosts/holidays.js';
+import { hostedExclusion } from '../../lib/helpers/countedEvents.js';
 import {
   SafeHtml,
   html,
@@ -229,7 +231,7 @@ function homeBody(
           <td data-label="Date">
             ${dateLabel(event.dateTime)}, ${timeLabel(event.dateTime)}
           </td>
-          <td data-label="Event">${eventLink(event)}</td>
+          <td data-label="Event">${eventLink(event)}${excludedBadge(event)}</td>
           <td data-label="Type">${EVENT_TYPE_LABELS[event.type]}</td>
           <td data-label="Status">
             <span class="badge ok">Published</span>
@@ -578,41 +580,62 @@ interface HistoryView {
   day: string | undefined;
   /** The earliest year with a shown event: where Prev stops. */
   earliest: number;
+  /** `?all=1`: the events that do not count (cancelled, Open House) are shown too. */
+  showExcluded: boolean;
 }
 
-/** A history link that keeps the filters the caller passes. */
-function historyLink(params: {
+interface HistoryLinkParams {
   type?: EventType;
   year?: number;
   day?: string;
-}): ReturnType<typeof pageLink> {
+  all?: boolean;
+}
+
+/** A history link that keeps the filters the caller passes. */
+function historyLink(params: HistoryLinkParams): ReturnType<typeof pageLink> {
   return pageLink(HOST_PATHS.history, {
     type: params.type,
     year: params.year === undefined ? undefined : String(params.year),
     day: params.day,
+    all: params.all ? '1' : undefined,
   });
+}
+
+/** The excluded events' badge: why this one does not count. */
+function excludedBadge(event: HostEvent): SafeHtml | '' {
+  switch (hostedExclusion(event)) {
+    case 'cancelled':
+      return html` <span class="badge neutral">Not counted: cancelled</span>`;
+    case 'open-house':
+      return html` <span class="badge neutral">Not counted: Open House</span>`;
+    default:
+      return '';
+  }
 }
 
 function typeFilter(
   selected: EventType | undefined,
   counts: Map<EventType, number>,
   year: number,
+  all: boolean,
 ): SafeHtml {
   const links = EVENT_TYPES.filter((t) => (counts.get(t) ?? 0) > 0).map((t) => {
     const text = `${EVENT_TYPE_LABELS[t]} (${counts.get(t) ?? 0})`;
     return t === selected
-      ? html`<a href="${historyLink({ type: t, year })}" aria-current="page"
+      ? html`<a
+          href="${historyLink({ type: t, year, all })}"
+          aria-current="page"
           ><strong>${text}</strong></a
         >`
-      : html`<a href="${historyLink({ type: t, year })}">${text}</a>`;
+      : html`<a href="${historyLink({ type: t, year, all })}">${text}</a>`;
   });
-  const all = selected
-    ? html`<a href="${historyLink({ year })}">All types</a>`
-    : html`<a href="${historyLink({ year })}" aria-current="page"
+  const every = selected
+    ? html`<a href="${historyLink({ year, all })}">All types</a>`
+    : html`<a href="${historyLink({ year, all })}" aria-current="page"
         ><strong>All types</strong></a
       >`;
   return html`<nav class="type-filter" aria-label="Event type">
-    ${all}${links}
+    ${every}${links}
   </nav>`;
 }
 
@@ -626,7 +649,11 @@ function yearNav(
     view.year > earliest
       ? html`<a
           class="button ghost"
-          href="${historyLink({ type: view.selected, year: view.year - 1 })}"
+          href="${historyLink({
+            type: view.selected,
+            year: view.year - 1,
+            all: view.showExcluded,
+          })}"
           >← ${String(view.year - 1)}</a
         >`
       : html`<span class="button ghost disabled"
@@ -638,7 +665,11 @@ function yearNav(
     view.year < current
       ? html`<a
           class="button ghost"
-          href="${historyLink({ type: view.selected, year: view.year + 1 })}"
+          href="${historyLink({
+            type: view.selected,
+            year: view.year + 1,
+            all: view.showExcluded,
+          })}"
           >${String(view.year + 1)} →</a
         >`
       : html`<span class="button ghost disabled"
@@ -679,11 +710,16 @@ function dayParam(value: unknown): string | undefined {
 }
 
 function historyBody(
-  past: HostEvent[],
+  everything: HostEvent[],
   view: HistoryView,
   today: string,
 ): SafeHtml {
-  const { selected, page, year, day } = view;
+  const { selected, page, year, day, showExcluded } = view;
+  // Counts, the type filter and the map follow the shared rule; the host
+  // can show the excluded events too.
+  const counted = countedOnly(everything);
+  const past = showExcluded ? everything : counted;
+  const excludedCount = everything.length - counted.length;
   const counts = new Map<EventType, number>();
   for (const event of past) {
     counts.set(event.type, (counts.get(event.type) ?? 0) + 1);
@@ -706,7 +742,7 @@ function historyBody(
     (event) =>
       html`<tr>
         <td data-label="Date">${dateLabel(event.dateTime)}</td>
-        <td data-label="Event">${eventLink(event)}</td>
+        <td data-label="Event">${eventLink(event)}${excludedBadge(event)}</td>
         <td data-label="Type">${EVENT_TYPE_LABELS[event.type]}</td>
         <td data-label="Actions">
           <div class="actions">
@@ -718,7 +754,7 @@ function historyBody(
         </td>
       </tr>`,
   );
-  if (past.length === 0) {
+  if (everything.length === 0) {
     return html`<div class="card">
       <h1>My hosting history</h1>
       <p class="muted">No past events yet.</p>
@@ -728,23 +764,44 @@ function historyBody(
   const dayFilter = day
     ? html`<p class="day-filter">
         Showing ${dayLabel(day)}, ${day.slice(0, 4)} ·
-        <a href="${historyLink({ type: selected, year })}">Clear</a>
+        <a href="${historyLink({ type: selected, year, all: showExcluded })}"
+          >Clear</a
+        >
       </p>`
     : '';
+  const excludedNote =
+    excludedCount === 0
+      ? ''
+      : showExcluded
+        ? html` ${excludedCount} shown that
+            ${excludedCount === 1 ? 'does' : 'do'} not count (cancelled, or an
+            Open House) ·
+            <a href="${historyLink({ type: selected, year })}"
+              >Hide excluded</a
+            >`
+        : html` ${excludedCount} more ${excludedCount === 1 ? 'is' : 'are'} not
+            counted (cancelled, or an Open House) ·
+            <a href="${historyLink({ type: selected, year, all: true })}"
+              >Show excluded</a
+            >`;
   return html`<div class="card">
       <h1>My hosting history</h1>
       <p>
-        ${past.length} hosted ${past.length === 1 ? 'event' : 'events'} in all.
+        ${`${counted.length} hosted ${counted.length === 1 ? 'event' : 'events'} in all.`}${excludedNote}
       </p>
-      ${typeFilter(selected, counts, year)}
+      ${typeFilter(selected, counts, year, showExcluded)}
       ${yearNav(view, view.earliest, currentYear)}
       ${heatMapYear({
         byDay,
         year,
         today,
-        dayLink: (d) => historyLink({ type: selected, year, day: d }),
+        dayLink: (d) =>
+          historyLink({ type: selected, year, day: d, all: showExcluded }),
       })}
-      <p class="muted">Types are guessed from event titles.</p>
+      <p class="muted">
+        Types are guessed from event titles. Cancelled events and Open Houses
+        are not counted as hosted.
+      </p>
     </div>
     <div class="card">
       <h2>${selected ? EVENT_TYPE_LABELS[selected] : 'Past events'}</h2>
@@ -777,6 +834,7 @@ function historyBody(
         type: selected,
         year: String(year),
         day,
+        all: showExcluded ? '1' : undefined,
       })}
     </div>`;
 }
@@ -900,14 +958,20 @@ export function registerHostPages(
     }
     const now = today();
     const current = Number(now.slice(0, 4));
-    const shown = selected ? past.filter((e) => e.type === selected) : past;
+    const showExcluded = req.query.all === '1';
+    const base = showExcluded ? past : countedOnly(past);
+    const shown = selected ? base.filter((e) => e.type === selected) : base;
     const day = dayParam(req.query.day);
     const earliest = earliestYear(shown, current);
     const year = historyYear(req.query.year, day, earliest, current);
     hostPage(res, {
       title: 'My hosting history',
       current: 'history',
-      body: historyBody(past, { selected, page, year, day, earliest }, now),
+      body: historyBody(
+        past,
+        { selected, page, year, day, earliest, showExcluded },
+        now,
+      ),
       script: HISTORY_SCRIPT,
     });
   }) as RequestHandler);

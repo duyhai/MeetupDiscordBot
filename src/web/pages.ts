@@ -348,6 +348,9 @@ form.request-form details.more-options textarea{max-width:40rem}
 .desc-text{white-space:pre-line;overflow-wrap:anywhere;max-height:24rem;overflow-y:auto;padding:var(--s2) var(--s3);
   background:var(--raised);border-radius:var(--radius-ctl);font-size:var(--t-sm)}
 ul.copy-details{margin:0 0 var(--s2);padding-left:1.2rem;overflow-wrap:anywhere}
+fieldset.review-checklist{border:1px solid var(--line);border-radius:var(--radius-ctl);padding:var(--s2) var(--s3);margin:0 0 var(--s3)}
+fieldset.review-checklist legend{font-size:var(--t-sm);color:var(--muted);padding:0 var(--s1)}
+fieldset.review-checklist label.check{display:flex;gap:var(--s2);align-items:center;min-height:44px}
 details.announce-guidelines{margin:0 0 var(--s3);font-size:var(--t-sm)}
 details.announce-guidelines ul{margin:var(--s1) 0 0;padding-left:1.2rem}
 .announce-early{margin:0 0 var(--s2);font-size:var(--t-sm)}

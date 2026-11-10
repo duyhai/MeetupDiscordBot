@@ -1,7 +1,7 @@
 import { Logger } from 'tslog';
 import { GUEST_HOST_BLACKLIST } from '../../constants.js';
 import { GqlMeetupClient } from '../client/meetup/gqlClient.js';
-import { getPaginatedData } from '../client/meetup/paginationHelper.js';
+import { countHostedEvents } from './countHostedEvents.js';
 import { addServerRole } from './onboardUser.js';
 import { VerifyContext } from './verifyContext.js';
 
@@ -48,20 +48,12 @@ export async function getUserRoles(
     logger.info(`Organizer and guest host roles added to: ${username}`);
   } else if (!isBlacklisted) {
     const userInfo = await meetupClient.getUserInfo();
-    const getUserHostedEvents = await getPaginatedData(
-      async (paginationInput) => {
-        const result = await meetupClient.getGroupEvents(paginationInput, {
-          status: ['PAST'],
-          hostId: userInfo.self.id,
-        });
-        return result.groupByUrlname.events;
-      },
-    );
+    // Counted hosted events only: cancelled events and Open Houses do not
+    // make a Guest Host.
+    const hostedCount = await countHostedEvents(meetupClient, userInfo.self.id);
 
-    logger.info(
-      `Number of hosted events by ${username}: ${getUserHostedEvents.length}`,
-    );
-    if (getUserHostedEvents.length > 0) {
+    logger.info(`Number of hosted events by ${username}: ${hostedCount}`);
+    if (hostedCount > 0) {
       await addServerRole(guild, userId, 'guest_host');
       rolesGranted.push('Guest Host');
       logger.info(`Guest host role added to: ${username}`);

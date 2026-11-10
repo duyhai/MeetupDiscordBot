@@ -94,8 +94,12 @@ describe('buildMonthReports', () => {
 
     const reports = await build(client);
 
-    expect(getGroupEvents).toHaveBeenCalledTimes(1);
-    expect(getGroupEvents.mock.calls[0][1]).toMatchObject({
+    // One month fetch; the other calls are per-host counted-event listings.
+    const monthFetches = getGroupEvents.mock.calls.filter(
+      ([, f]) => f.hostId === undefined,
+    );
+    expect(monthFetches).toHaveLength(1);
+    expect(monthFetches[0][1]).toMatchObject({
       afterDateTime: '2026-09-01T07:00:00.000Z',
     });
     expect(getEventRsvps).toHaveBeenCalledTimes(2);

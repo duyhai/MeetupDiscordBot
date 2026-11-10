@@ -45,6 +45,7 @@ export interface PublishDeps {
       actor: string,
       from: PublishFrom[],
       stuckBefore?: Date,
+      detail?: string | null,
     ) => Promise<EventRequest | undefined>;
     recordCreated: (
       id: string,
@@ -186,6 +187,8 @@ export async function publishRequest(
   seenVersion: number,
   actor: string,
   from: PublishFrom[],
+  /** `detail` goes on the claim's history row (the reviewer checklist). */
+  options: { detail?: string | null } = {},
 ): Promise<PublishOutcome> {
   const claimed = await deps.requests.startPublishing(
     id,
@@ -193,6 +196,7 @@ export async function publishRequest(
     actor,
     from,
     new Date(deps.now().getTime() - STUCK_PUBLISHING_MS),
+    options.detail ?? null,
   );
   if (claimed === undefined) {
     return { code: 'stale' };

@@ -95,13 +95,51 @@ describe('decideRequest', () => {
     const { decide, publishRequest, audit, mirror } = setup();
     const outcome = await decide();
     expect(outcome.code).toBe('published');
-    expect(publishRequest).toHaveBeenCalledWith('1', 1, LEADER, ['pending']);
+    expect(publishRequest).toHaveBeenCalledWith(
+      '1',
+      1,
+      LEADER,
+      ['pending'],
+      {},
+    );
     expect(JSON.stringify(audit.mock.calls.at(-1)?.[0])).toContain(
       'Host request approved',
     );
     await settle();
     expect(mirror).toHaveBeenCalledTimes(1);
     expect(mirror.mock.calls[0][0].status).toBe('published');
+  });
+
+  it('an approval records the reviewer checklist; a retry or a Discord approval records none', async () => {
+    const { decide, publishRequest } = setup();
+    await decide({ checklist: ['location', 'rsvps'] });
+    expect(publishRequest).toHaveBeenLastCalledWith(
+      '1',
+      1,
+      LEADER,
+      ['pending'],
+      {
+        detail: '{"checklist":["location","rsvps"]}',
+      },
+    );
+    await decide({ checklist: [] });
+    expect(publishRequest).toHaveBeenLastCalledWith(
+      '1',
+      1,
+      LEADER,
+      ['pending'],
+      {
+        detail: '{"checklist":[]}',
+      },
+    );
+    await decide({ action: 'retry', checklist: ['photo'] });
+    expect(publishRequest).toHaveBeenLastCalledWith(
+      '1',
+      1,
+      LEADER,
+      ['failed', 'publishing'],
+      {},
+    );
   });
 
   it('a stale approval mirrors nothing', async () => {
@@ -116,10 +154,13 @@ describe('decideRequest', () => {
       rows: [eventRequestRow({ status: 'failed', failure: 'x', version: 2 })],
     });
     await decide({ action: 'retry', version: 2 });
-    expect(publishRequest).toHaveBeenCalledWith('1', 2, LEADER, [
-      'failed',
-      'publishing',
-    ]);
+    expect(publishRequest).toHaveBeenCalledWith(
+      '1',
+      2,
+      LEADER,
+      ['failed', 'publishing'],
+      {},
+    );
   });
 
   it('deny needs a reason within the limit', async () => {

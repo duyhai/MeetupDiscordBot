@@ -56,8 +56,10 @@ pieces hosts feed into.
    marks as it does today.
 9. Leadership side:
    - **Approval queue.**
-   - **Promotion candidates list**: regular hosts with **20+ hosted events**.
-     Leadership decides; the list is there to look at.
+   - **Promotion candidates list**: regular hosts with **20+ counted hosted
+     events in the last 18 months** who have been group members for a year
+     or more; organizers are left out (leadership, 2026-11-10). Leadership
+     decides; the list is there to look at.
    - **Promote / demote**, with a recorded reason, who did it, and when.
    - **Flagged comments**: comments on hosts' events that read like
      complaints are flagged (by Hai's scheduled task, see below). Flagged ones
@@ -322,11 +324,38 @@ Approve, deny, promote and demote are **1.5 Leadership Team only** (Hai,
 workspace's record/link/void are. Everyone else let into the staff dashboard
 (Moderators) can view the queue, candidates and flagged comments.
 
+## What counts as a hosted event
+
+One rule, in `src/lib/helpers/countedEvents.ts`, everywhere a host's events
+are counted: the monthly reports, the Guest Host badge count and role, the
+host dashboard (history, heat maps, candidates), Where-have-we-met and
+Wrapped (leadership, 2026-11-10). An event counts as hosted unless it is
+cancelled (Meetup's cancelled statuses, or a title saying "cancelled") or
+an **Open House**: a drop-in session the group tags in the title,
+"[Open House] …" or "… (Open House)". The tag form was verified against
+every past group event on 2026-11-10 (73 of the 74 titles containing "open
+house" carry it; "Theodor Jacobsen Observatory Open House", an outing, keeps
+counting). Attended events exclude only cancelled ones: going to an Open
+House is still going to a group event (builder's call). My history shows
+the counted events and offers "show excluded". The 18-month and one-year
+windows below are computed in UTC on purpose: a local-time month subtraction
+across a DST change moves the window by an hour.
+
 ## Promotion
 
-- **Candidates list** (leadership): regular hosts with 20+ hosted events,
-  each with their heat map, count, last hosted date, and issues (flagged
-  comments first, "show all" to expand).
+- **Candidates list** (leadership): regular hosts with 20+ counted hosted
+  events in the last 18 months who joined the group a year or more ago,
+  less organizers (Meetup LEADER status or the Organizer Discord role).
+  Each with their heat map, the 18-month and all-time counts, when they
+  joined, last hosted date, and issues (flagged comments first, "show all"
+  to expand). Decided 2026-11-10 (was: 20+ hosted events all time among
+  the past year's hosts).
+- **Reviewer checklist** on each queue card (2026-11-10): five tick-boxes
+  the reviewer confirms before approving: exact location in the title,
+  non-default photo, RSVPs open, starts 7 or more days out, title and
+  description reasonable. A memory aid, not a gate: Approve stays enabled.
+  The ticked set is recorded with the decision (`event_request_events`
+  detail) and shown in the request's history. No automatic detection.
 - **Promote / demote**: leadership only, with a required reason. Stored with
   who and when (append-only history, like the no-show workspace).
 - Demotion stops direct publishing within the 10-minute tier re-check.

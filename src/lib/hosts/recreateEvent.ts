@@ -329,6 +329,7 @@ export async function recreateAndAnnounce(
     dateTime: source.dateTime,
     eventUrl: String(created.eventUrl ?? ''),
     type: classifyEventType(source.title ?? old.title),
+    counted: true,
     hosts: old.hosts,
   };
   try {

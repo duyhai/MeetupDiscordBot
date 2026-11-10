@@ -5,32 +5,8 @@
  */
 import dayjs from 'dayjs';
 
-import { BaseUserInfo, Event, EventStatus } from '../client/meetup/types.js';
+import { BaseUserInfo, Event } from '../client/meetup/types.js';
 import { tz } from '../../util/timezone.js';
-
-const CANCELLED_TITLE = /cancell?ed/i;
-const CANCELLED_STATUSES: EventStatus[] = [
-  'CANCELLED',
-  'CANCELLED_PERM',
-  'AUTOSCHED_CANCELLED',
-];
-
-export function hasCancelledTitle(title: string): boolean {
-  return CANCELLED_TITLE.test(title);
-}
-
-/**
- * Hosts sometimes rename an event "cancelled" instead of cancelling it on
- * the platform, so the title check matters even though the group-events
- * query never requests cancelled statuses.
- */
-export function isCancelledEvent(
-  event: Pick<Event, 'title' | 'status'>,
-): boolean {
-  return (
-    hasCancelledTitle(event.title) || CANCELLED_STATUSES.includes(event.status)
-  );
-}
 
 export interface HostStats {
   host: BaseUserInfo;
@@ -38,23 +14,13 @@ export interface HostStats {
 }
 
 /**
- * Whether an event counts toward the Hall of Fame. Cancelled events never
- * happened, and an [Open House] is not a hosted event in the stats' sense --
- * it isn't invalid, it just doesn't count.
- */
-export function isCountableEvent(
-  event: Pick<Event, 'title' | 'status'>,
-): boolean {
-  return !isCancelledEvent(event) && !event.title.includes('[Open House]');
-}
-
-/**
  * Groups events by host, deduping hosts within a single event. totalEvents
  * counts each event once regardless of how many hosts it has.
  *
  * Does no filtering: it counts every event it is given. Callers filter with
- * isCountableEvent first, so the rule for what counts stays visible at the
- * call site rather than hidden inside a function named for grouping.
+ * countsAsHosted (countedEvents.ts) first, so the rule for what counts
+ * stays visible at the call site rather than hidden inside a function named
+ * for grouping.
  */
 export function collectHostStats(events: Event[]): {
   hostStats: HostStats[];

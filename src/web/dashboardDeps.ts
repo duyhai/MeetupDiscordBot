@@ -225,6 +225,7 @@ const CANDIDATES_READ_TIMEOUT_MS = 2 * 60 * 1000;
 function promotionReads(getClient: () => Client | undefined) {
   const fetchGroupEvents = organizerGroupEvents(getClient);
   const now = () => new Date();
+  const isOrganizerRole = discordRoleCheck(getClient, SERVER_ROLES.organizer);
   return {
     promotionCandidates: singleFlight(
       () =>
@@ -232,13 +233,22 @@ function promotionReads(getClient: () => Client | undefined) {
           {
             fetchGroupEvents,
             now,
-            pastHostedCount: (meetupId) =>
+            pastHostedEvents: (meetupId) =>
+              hostedEvents({ fetchGroupEvents, now }, meetupId, 'past'),
+            memberships: (meetupIds) =>
               withOrganizerMeetup(getClient(), (meetup) =>
-                meetup.getGroupEventsCount({
-                  status: ['PAST'],
-                  hostId: meetupId,
-                }),
+                meetup.getGroupMembershipsByIds(meetupIds),
               ),
+            // The Organizer Discord role, through the identity link; an
+            // unlinked member is judged by Meetup's LEADER status alone.
+            isOrganizer: async (meetupId) => {
+              const linked = await (
+                await PostgresMemberRepository.instance()
+              ).findByMeetupId(meetupId);
+              return linked?.discordUserId
+                ? isOrganizerRole(linked.discordUserId)
+                : false;
+            },
           },
           new Set(),
         ),

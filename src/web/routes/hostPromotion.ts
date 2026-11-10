@@ -7,8 +7,13 @@ import {
   GUEST_HOST_MEETUP_BLACKLIST,
 } from '../../constants.js';
 import { LogEntry, alertText } from '../../lib/helpers/discordLogger.js';
-import { HostEvent, pacificDay } from '../../lib/hosts/hostEvents.js';
 import {
+  HostEvent,
+  countedOnly,
+  pacificDay,
+} from '../../lib/hosts/hostEvents.js';
+import {
+  CANDIDATE_WINDOW_MONTHS,
   CandidateList,
   HostSeen,
   PROMOTION_MIN_EVENTS,
@@ -79,9 +84,9 @@ export interface HostPromotionDeps {
   /** Rejects when Postgres cannot answer. */
   promotedHosts: () => Promise<PromotionStore>;
   /**
-   * Hosts of the past year's events with 20+ past hosted events, and every
-   * host seen (for names). Promoted hosts are not left out here; the page
-   * leaves out the active ones. Slow when cold.
+   * Regular hosts meeting the promotion criteria (promotionCandidates.ts),
+   * and every host seen (for names). Promoted hosts are not left out here;
+   * the page leaves out the active ones. Slow when cold.
    */
   promotionCandidates: () => Promise<CandidateList>;
   /** One member's PAST hosted events, newest first (organizer read). */
@@ -215,16 +220,16 @@ function candidatesSection(
       : '';
   if (loaded.value.length === 0) {
     return html`${partial}
-      <p class="muted">
-        No regular host has ${PROMOTION_MIN_EVENTS} or more past events yet.
-      </p>`;
+      <p class="muted">No regular host meets the criteria yet.</p>`;
   }
   return html`${partial}
     <table class="stack">
       <thead>
         <tr>
           <th>Host</th>
-          <th>Past events</th>
+          <th>Last 18 months</th>
+          <th>All time</th>
+          <th>Member since</th>
           <th>Last hosted</th>
         </tr>
       </thead>
@@ -233,7 +238,9 @@ function candidatesSection(
           (c) =>
             html`<tr>
               <td data-label="Host">${hostLink(c.meetupMemberId, seen)}</td>
-              <td data-label="Past events">${c.pastCount}</td>
+              <td data-label="Last 18 months">${c.recentCount}</td>
+              <td data-label="All time">${c.pastCount}</td>
+              <td data-label="Member since">${dayText(c.memberSince)}</td>
               <td data-label="Last hosted">${dayText(c.lastHosted)}</td>
             </tr>`,
         )}
@@ -315,10 +322,13 @@ function memberBody(view: {
   day: string | undefined;
   notice: SafeHtml | '';
 }): SafeHtml {
-  const { id, past, row } = view;
-  const name = past
+  const { id, row } = view;
+  const name = view.past
     .flatMap((e) => e.hosts)
     .find((h) => h.id === id && h.name)?.name;
+  // Counts and the heat map follow the shared rule; the excluded are a note.
+  const past = countedOnly(view.past);
+  const excluded = view.past.length - past.length;
   const byDay = new Map<string, HostEvent[]>();
   for (const event of past) {
     const day = pacificDay(event.dateTime);
@@ -352,7 +362,11 @@ function memberBody(view: {
         ${past.length} past hosted
         ${past.length === 1 ? 'event' : 'events'}${
           past[0] ? `, last on ${dayText(past[0].dateTime)}` : ''
-        }.
+        }.${
+          excluded > 0
+            ? ` ${excluded} more ${excluded === 1 ? 'is' : 'are'} not counted (cancelled or an Open House).`
+            : ''
+        }
         ${
           meetupProfile
             ? html`<a
@@ -481,8 +495,11 @@ export function registerHostPromotionRoutes(
         <div class="card">
           <h2>Candidates</h2>
           <p class="muted">
-            Guest Hosts of the past year with ${PROMOTION_MIN_EVENTS} or more
-            past hosted events. Open one to see their hosting and promote them.
+            Guest Hosts with ${PROMOTION_MIN_EVENTS} or more counted hosted
+            events in the last ${CANDIDATE_WINDOW_MONTHS} months who joined the
+            group a year or more ago. Organizers are left out. Cancelled events
+            and Open Houses do not count. Open one to see their hosting and
+            promote them.
           </p>
           ${candidatesSection(candidates, seen)}
         </div>

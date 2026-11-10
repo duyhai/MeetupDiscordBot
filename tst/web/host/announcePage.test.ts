@@ -44,6 +44,7 @@ const ev = (
   dateTime,
   eventUrl: `https://www.meetup.com/g/events/${id}/`,
   type: 'social',
+  counted: true,
   hosts: [{ id: hostId, name: 'Ann' }],
 });
 

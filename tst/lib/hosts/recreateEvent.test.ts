@@ -22,6 +22,7 @@ const OLD: HostEvent = {
   dateTime: '2026-11-14T19:00:00-08:00',
   eventUrl: 'https://www.meetup.com/g/events/311111111/',
   type: 'food',
+  counted: true,
   hosts: [
     { id: HOST.meetupMemberId, name: HOST.name },
     { id: CO_HOST, name: 'Bo' },

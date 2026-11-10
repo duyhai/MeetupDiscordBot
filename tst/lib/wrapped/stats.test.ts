@@ -155,6 +155,23 @@ describe('computeWrapped', () => {
     expect(companions).toEqual([]);
   });
 
+  it('an Open House hosted counts as attended but not as hosted (the shared rule)', () => {
+    const openHouse = ev(
+      '8',
+      '2026-05-01T19:00:00-07:00',
+      '[Open House] Pickleball',
+    );
+    const { stats } = computeWrapped(
+      input({
+        attended: [],
+        hosted: [openHouse, trivia],
+        attendeesByEvent: {},
+      }),
+    );
+    expect(stats.attendedThisYear).toBe(2);
+    expect(stats.hosting).toEqual({ thisYear: 1, allTime: 1 });
+  });
+
   it('ranks companions by shared count, then by Meetup id, excluding self', () => {
     const e1 = ev('e1', '2026-02-01T19:00:00-08:00');
     const e2 = ev('e2', '2026-03-01T19:00:00-08:00');

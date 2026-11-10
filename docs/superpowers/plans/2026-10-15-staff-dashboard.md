@@ -2762,7 +2762,7 @@ CREATE TABLE IF NOT EXISTS dashboard_notices (
   - `asOf` is stored in the payload and shown on pages.
   - The slash commands keep using `now` and keep their output.
 - **Upcoming RSVPs, act-by dates and 💵 marks are live**, computed at render time (PR 4) with the organizer client and cached in Redis for at most 12 h. They are never frozen in a snapshot.
-- **Every case carries `priorSuspensions`** (as of `asOf`; the warning template needs the next penalty) and `hostedPastEvent` (`getGroupEventsCount({ hostId, status: ['PAST'], beforeDateTime: asOf }) > 0`).
+- **Every case carries `priorSuspensions`** (as of `asOf`; the warning template needs the next penalty) and `hostedPastEvent` (`countHostedEvents(client, hostId, { before: asOf }) > 0`: one listing of the member's own PAST events per case, a few pages at most, filtered by the shared counted-event rule; Meetup's `totalCount` would count cancelled events and Open Houses).
 - **`source_complete`** is false when the month has events and none of their RSVPs is `ATTENDED` or `NO_SHOW` (attendance never taken).
 - **Summary.** The payload carries a small `summary` object (`events`, `hosts`, `newHosts`, `warnings`, `suspensionCandidates`, `noShows`), so trends read `payload->'summary'` without loading whole payloads.
 

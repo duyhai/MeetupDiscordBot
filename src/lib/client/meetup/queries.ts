@@ -231,6 +231,29 @@ export const getGroupMembersByIds = gql`
   ${UserFragment}
 `;
 
+/**
+ * These members' standing in the group: status (LEADER is an organizer)
+ * and when they joined. No names: ids only, for the promotion candidates.
+ */
+export const getGroupMembershipsByIds = gql`
+  query ($urlname: String!, $memberIds: [Int!], $first: Int!) {
+    groupByUrlname(urlname: $urlname) {
+      id
+      memberships(first: $first, filter: { memberIds: $memberIds }) {
+        edges {
+          metadata {
+            status
+            joinTime
+          }
+          node {
+            id
+          }
+        }
+      }
+    }
+  }
+`;
+
 // One member's RSVPs in this group, reached through the group's member list
 // (there is no root query by member ID). Meetup honours groupId and the
 // statuses, but not reliably startDate/endDate, so callers filter by date.

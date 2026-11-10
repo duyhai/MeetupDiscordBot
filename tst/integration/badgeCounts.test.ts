@@ -46,8 +46,26 @@ describe('getBadgeCounts (integration)', () => {
               id: OUR_GROUP,
               events: {
                 pageInfo: { hasNextPage: false, endCursor: null },
-                totalCount: 2,
-                edges: [{ node: { id: 'e1' } }, { node: { id: 'e2' } }],
+                totalCount: 4,
+                edges: [
+                  { node: { id: 'e1', title: 'Trivia', status: 'PAST' } },
+                  { node: { id: 'e2', title: 'Hike', status: 'PAST' } },
+                  // Not hosted events under the shared rule (countedEvents.ts).
+                  {
+                    node: {
+                      id: 'e3',
+                      title: '[Open House] Pickleball',
+                      status: 'PAST',
+                    },
+                  },
+                  {
+                    node: {
+                      id: 'e4',
+                      title: 'Cancelled: Boba',
+                      status: 'PAST',
+                    },
+                  },
+                ],
               },
             },
           },

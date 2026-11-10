@@ -42,6 +42,7 @@ const pastEvent = (
   dateTime,
   eventUrl: `https://www.meetup.com/g/events/${id}/`,
   type: 'games',
+  counted: true,
   hosts: [{ id: HOST, name }],
 });
 
@@ -52,7 +53,9 @@ const candidate = (
 ): PromotionCandidate => ({
   meetupMemberId: id,
   name,
+  recentCount: pastCount,
   pastCount,
+  memberSince: '2024-02-01T12:00:00-08:00',
   lastHosted: '2026-08-20T19:00:00-07:00',
 });
 

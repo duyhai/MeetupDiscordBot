@@ -21,7 +21,7 @@ import {
 } from '../client/meetup/paginationHelper.js';
 import { EventSummary } from '../client/meetup/types.js';
 import { MemberRecord } from '../repositories/types.js';
-import { hasCancelledTitle } from './hallOfFame.js';
+import { countsAsAttended } from './countedEvents.js';
 
 // Beyond this, the list shows the earliest and most recent ends.
 const FULL_LIST_LIMIT = 10;
@@ -120,7 +120,7 @@ export async function findSharedEvents(
   // the platform; nobody met at those.
   const mine = [
     ...new Map(events.map((event) => [event.id, event])).values(),
-  ].filter((event) => !hasCancelledTitle(event.title));
+  ].filter(countsAsAttended);
   let theyWent: (event: EventSummary) => Promise<boolean>;
   if (lookup === 'member-rsvps') {
     const theirs = await deps.theirPastEvents(theirMeetupId);

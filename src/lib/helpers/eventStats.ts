@@ -22,8 +22,12 @@ export function countAttendedEvents(
   ).length;
 }
 
-/** Number of events the member is listed as a host of. */
-export function countHostedEvents(
+/**
+ * Number of these events the member is listed as a host of. Not the
+ * member's hosted-event count under the shared rule: that is
+ * countHostedEvents in countHostedEvents.ts.
+ */
+export function countHostedEventsByHost(
   events: { eventHosts: HasMemberId[] }[],
   memberId: string,
 ): number {
