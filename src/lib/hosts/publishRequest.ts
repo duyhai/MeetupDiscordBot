@@ -93,8 +93,7 @@ export const PUBLISH_FAILURES = {
     'attempt may have created it: check the group’s past events on Meetup, ' +
     'then Deny the request with a note to the host.',
   notAHost:
-    'The member is no longer a host (no Guest Host role and no hosted events, ' +
-    'or blacklisted). Nothing was created on Meetup.',
+    'The member is blacklisted as a host. Nothing was created on Meetup.',
   tierUnknown:
     "The host's role could not be checked (Discord, Postgres or Meetup did " +
     'not answer). Nothing was created on Meetup. Retry in a few minutes.',

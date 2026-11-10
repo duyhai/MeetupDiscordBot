@@ -7,7 +7,11 @@ import {
   existingEventFilter,
   isEventFor,
 } from '../../lib/hosts/eventRequest.js';
-import { HostResolveDeps, resolveHost } from '../../lib/hosts/eligibility.js';
+import {
+  HostResolveDeps,
+  publishTier,
+  resolveHost,
+} from '../../lib/hosts/eligibility.js';
 import { announceHostEvent } from '../../lib/hosts/announceEvent.js';
 import { HostEventsDeps, hostedEvents } from '../../lib/hosts/hostEvents.js';
 import { PostgresEventAnnouncementRepository } from '../../lib/repositories/postgresEventAnnouncementRepository.js';
@@ -117,10 +121,8 @@ export function productionPublishDeps(
         ? { id: String(match.id), eventUrl: String(match.eventUrl) }
         : undefined;
     },
-    tierOf: async (meetupMemberId) => {
-      const resolution = await resolveHost(resolveDeps, { meetupMemberId });
-      return resolution.kind === 'host' ? resolution.tier : 'not-a-host';
-    },
+    tierOf: async (meetupMemberId) =>
+      publishTier(await resolveHost(resolveDeps, { meetupMemberId })),
     alert: alertVia(getClient),
     now: () => new Date(),
   };

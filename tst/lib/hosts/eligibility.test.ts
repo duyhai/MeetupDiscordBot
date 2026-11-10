@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { GUEST_HOST_BLACKLIST } from '../../../src/constants.js';
 import {
   HostResolveDeps,
+  publishTier,
   resolveHost,
 } from '../../../src/lib/hosts/eligibility.js';
 
@@ -138,6 +139,32 @@ describe('resolveHost', () => {
     });
     await expect(resolveHost(d, { meetupMemberId: MEETUP })).rejects.toThrow(
       'meetup down',
+    );
+  });
+});
+
+describe('publishTier', () => {
+  it('publishes a host at their tier', () => {
+    expect(
+      publishTier({ kind: 'host', meetupMemberId: '1', tier: 'promoted' }),
+    ).toBe('promoted');
+    expect(
+      publishTier({ kind: 'host', meetupMemberId: '1', tier: 'regular' }),
+    ).toBe('regular');
+  });
+
+  it('a first-time host (no role, no past events) publishes as a regular host', () => {
+    expect(publishTier({ kind: 'refused', reason: 'not-a-host' })).toBe(
+      'regular',
+    );
+    expect(publishTier({ kind: 'refused', reason: 'not-linked' })).toBe(
+      'regular',
+    );
+  });
+
+  it('a blacklisted member is refused', () => {
+    expect(publishTier({ kind: 'refused', reason: 'blacklisted' })).toBe(
+      'not-a-host',
     );
   });
 });
