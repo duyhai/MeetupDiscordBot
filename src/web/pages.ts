@@ -218,7 +218,8 @@ td.cal{vertical-align:top;height:76px;padding:var(--s1) var(--s2);font-size:var(
 overflow-wrap:anywhere}
 td.cal .cal-head span,details.cal-pop>summary>span{display:block}
 .cal-day{font-weight:700}
-.cal-head{display:flex;align-items:center;justify-content:space-between;gap:var(--s1)}
+.cal-head{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:var(--s1)}
+td.cal .cal-day{white-space:nowrap;overflow-wrap:normal}
 a.cal-add{display:inline-flex;align-items:center;justify-content:center;width:40px;height:40px;flex:none;
   border:1px solid var(--field);border-radius:8px;background:var(--surface);font-weight:700;text-decoration:none}
 a.cal-add:hover{background:var(--sel)}

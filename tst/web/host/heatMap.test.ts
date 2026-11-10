@@ -46,6 +46,10 @@ describe('heatMapYear', () => {
     expect(out.match(/<rect\b/g)).toHaveLength(307);
     // A month two columns old is labelled.
     expect(map(new Map(), 2026, '2026-11-09')).toMatch(/>Nov<\/text/);
+    // Early January still has its label, inside the map.
+    const jan = map(new Map(), 2027, '2027-01-02');
+    expect(jan).toMatch(/>Jan<\/text/);
+    expect(jan).toContain('width="58"');
   });
 
   it('links only days with events, labelled with each event’s time and title, escaped', () => {

@@ -365,6 +365,8 @@ interface HistoryView {
   year: number;
   /** YYYY-MM-DD: only this day's events are listed. */
   day: string | undefined;
+  /** The earliest year with a shown event: where Prev stops. */
+  earliest: number;
 }
 
 /** A history link that keeps the filters the caller passes. */
@@ -512,7 +514,6 @@ function historyBody(
     </div>`;
   }
   const currentYear = Number(today.slice(0, 4));
-  const earliest = earliestYear(shown, currentYear);
   const dayFilter = day
     ? html`<p class="day-filter">
         Showing ${dayLabel(day)}, ${day.slice(0, 4)} ·
@@ -525,7 +526,7 @@ function historyBody(
         ${past.length} hosted ${past.length === 1 ? 'event' : 'events'} in all.
       </p>
       ${typeFilter(selected, counts, year)}
-      ${yearNav(view, earliest, currentYear)}
+      ${yearNav(view, view.earliest, currentYear)}
       ${heatMapYear({
         byDay,
         year,
@@ -649,16 +650,12 @@ export function registerHostPages(
     const current = Number(now.slice(0, 4));
     const shown = selected ? past.filter((e) => e.type === selected) : past;
     const day = dayParam(req.query.day);
-    const year = historyYear(
-      req.query.year,
-      day,
-      earliestYear(shown, current),
-      current,
-    );
+    const earliest = earliestYear(shown, current);
+    const year = historyYear(req.query.year, day, earliest, current);
     hostPage(res, {
       title: 'My hosting history',
       current: 'history',
-      body: historyBody(past, { selected, page, year, day }, now),
+      body: historyBody(past, { selected, page, year, day, earliest }, now),
       script: HISTORY_SCRIPT,
     });
   }) as RequestHandler);

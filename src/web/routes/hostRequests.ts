@@ -26,6 +26,7 @@ import {
   GUEST_HOST_EVENT_DESCRIPTION,
   createEventTemplate,
 } from '../../templates/createEventTemplate.js';
+import { DASHBOARD_LOCK_TIMEOUT_MS } from '../../lib/repositories/dashboardPool.js';
 import { dashboardLocals } from '../dashboardRouter.js';
 import { SafeHtml, html, localUrl, memberText, safeHref } from '../html.js';
 import { dashboardPage, load, notFound } from '../pageKit.js';
@@ -639,7 +640,11 @@ export function registerHostRequestRoutes(
           // The pool wait and BEGIN come before the lock timeout starts, so
           // a write can still land after the page answers: then the page
           // says it may still save, and the late write is logged when done.
-          const lockTimeoutMs = Math.max(1, Math.floor(left));
+          // Never longer than the pool's usual 15 s lock wait, though.
+          const lockTimeoutMs = Math.max(
+            1,
+            Math.floor(Math.min(left, DASHBOARD_LOCK_TIMEOUT_MS)),
+          );
           write = store.deny(id, version, session.userId, reason, {
             lockTimeoutMs,
           });
@@ -654,7 +659,11 @@ export function registerHostRequestRoutes(
                 auditLine('denied (saved after the page timed out)', late);
               }
             })
-            .catch(() => undefined);
+            .catch((late: unknown) => {
+              logger.warn(
+                `Host request deny failed after the page timed out: ${late instanceof Error ? late.name : 'Error'}`,
+              );
+            });
           back(res, 'deny-slow');
           return;
         }

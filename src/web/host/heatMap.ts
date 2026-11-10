@@ -123,8 +123,8 @@ export function heatMapYear({
     if (labelDay.month() !== lastMonth) {
       lastMonth = labelDay.month();
       // Skip a label too close to the right edge to fit ("Nov" needs two
-      // columns).
-      if (week < weeks - 1) {
+      // columns), except the first: early in January it is the only one.
+      if (week < weeks - 1 || months.length === 0) {
         months.push(
           html`<text
             x="${String(LEFT + week * (CELL + GAP))}"
@@ -174,7 +174,8 @@ export function heatMapYear({
         >${text}</text
       >`,
   );
-  const width = LEFT + weeks * (CELL + GAP);
+  // At least two columns wide, so the first month's label always fits.
+  const width = LEFT + Math.max(weeks, 2) * (CELL + GAP);
   const height = TOP + 7 * (CELL + GAP);
   return html`<div class="table-scroll heat-wrap">
       <svg

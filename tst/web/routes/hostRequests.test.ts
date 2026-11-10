@@ -531,6 +531,21 @@ describe('queue actions', () => {
     expect(JSON.stringify(audit.mock.calls)).not.toContain('denied');
   });
 
+  it('the deny write never waits on a lock longer than the usual 15 s', async () => {
+    const { post, store } = await setup({
+      rows: [
+        eventRequestRow({
+          status: 'failed',
+          version: 3,
+          failure: PUBLISH_FAILURES.createFailed,
+        }),
+      ],
+    });
+    await post(`${QUEUE}/1/deny`, { version: '3', reason: 'No' });
+    // All 20 s of the page are left, but the bound stays at 15 s.
+    expect(store.deny.mock.calls[0]?.[4]?.lockTimeoutMs).toBe(15_000);
+  });
+
   it('the deny write gets only the page’s remaining time as its lock timeout', async () => {
     const { post, store } = await setup({
       rows: [
