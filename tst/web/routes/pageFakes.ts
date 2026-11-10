@@ -786,6 +786,8 @@ export function eventRequestRow(
 ): EventRequest {
   return {
     id: '1',
+    source: 'web',
+    discordPost: null,
     meetupMemberId: '4242',
     discordUserId: null,
     hostName: 'Hana',

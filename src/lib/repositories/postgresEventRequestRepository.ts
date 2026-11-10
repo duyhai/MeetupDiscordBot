@@ -10,6 +10,8 @@ import {
 } from './dashboardPool.js';
 
 const DISCORD_ID_SQL = `'^[0-9]{17,20}$'`;
+/** A Discord snowflake (user, channel or message id). */
+export const DISCORD_ID = /^[0-9]{17,20}$/;
 const MEETUP_ID_SQL = `'^[1-9][0-9]{0,19}$'`;
 const REQUEST_ID = /^[1-9][0-9]{0,17}$/;
 /** The create form's one-time token (base64url); see `submitToken`. */
@@ -31,6 +33,16 @@ export type EventRequestStatus = (typeof EVENT_REQUEST_STATUSES)[number];
 
 /** The states a publish may start from. 'publishing' only when stuck. */
 export type PublishFrom = 'pending' | 'failed' | 'publishing';
+
+/** Where a request was made. Rows from before the column read as 'web'. */
+export type RequestSource = 'web' | 'discord';
+export const REQUEST_SOURCES: readonly RequestSource[] = ['web', 'discord'];
+
+/** The Discord post that mirrors a request (its buttons and outcome line). */
+export interface DiscordPost {
+  channelId: string;
+  messageId: string;
+}
 
 /** What a host asks for; everything Meetup needs to create the event. */
 export interface EventRequestFields {
@@ -58,10 +70,15 @@ export interface NewEventRequest extends EventRequestFields {
    * (a double click, a reload) makes one request, not two.
    */
   submitToken?: string | null;
+  /** Defaults to 'web'. */
+  source?: RequestSource;
 }
 
 export interface EventRequest extends NewEventRequest {
   id: string;
+  source: RequestSource;
+  /** null until the request has been posted in Discord (setDiscordPost). */
+  discordPost: DiscordPost | null;
   status: EventRequestStatus;
   denyReason: string | null;
   failure: string | null;
@@ -99,6 +116,9 @@ CREATE TABLE IF NOT EXISTS event_requests (
   venue_id          TEXT CHECK (length(venue_id) BETWEEN 1 AND 40),
   how_to_find_us    TEXT CHECK (length(how_to_find_us) <= 2000),
   submit_token      TEXT CHECK (submit_token ~ ${SUBMIT_TOKEN_SQL}),
+  source            TEXT NOT NULL DEFAULT 'web' CHECK (source IN ('web', 'discord')),
+  discord_channel_id TEXT CHECK (discord_channel_id ~ ${DISCORD_ID_SQL}),
+  discord_message_id TEXT CHECK (discord_message_id ~ ${DISCORD_ID_SQL}),
   status            TEXT NOT NULL DEFAULT 'pending'
                     CHECK (status IN ('pending', 'publishing', 'published', 'failed', 'denied')),
   deny_reason       TEXT CHECK (length(deny_reason) BETWEEN 1 AND ${DENY_REASON_MAX}),
@@ -113,6 +133,12 @@ CREATE TABLE IF NOT EXISTS event_requests (
 );
 ALTER TABLE event_requests
   ADD COLUMN IF NOT EXISTS submit_token TEXT CHECK (submit_token ~ ${SUBMIT_TOKEN_SQL});
+ALTER TABLE event_requests
+  ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'web' CHECK (source IN ('web', 'discord'));
+ALTER TABLE event_requests
+  ADD COLUMN IF NOT EXISTS discord_channel_id TEXT CHECK (discord_channel_id ~ ${DISCORD_ID_SQL});
+ALTER TABLE event_requests
+  ADD COLUMN IF NOT EXISTS discord_message_id TEXT CHECK (discord_message_id ~ ${DISCORD_ID_SQL});
 CREATE UNIQUE INDEX IF NOT EXISTS event_requests_submit_token_idx
   ON event_requests (meetup_member_id, submit_token)
   WHERE submit_token IS NOT NULL;
@@ -185,6 +211,9 @@ interface Row {
   venue_id: string | null;
   how_to_find_us: string | null;
   submit_token: string | null;
+  source: RequestSource;
+  discord_channel_id: string | null;
+  discord_message_id: string | null;
   status: EventRequestStatus;
   deny_reason: string | null;
   failure: string | null;
@@ -217,6 +246,11 @@ const toRequest = (r: Row): EventRequest => ({
   venueId: r.venue_id,
   howToFindUs: r.how_to_find_us,
   submitToken: r.submit_token,
+  source: r.source,
+  discordPost:
+    r.discord_channel_id !== null && r.discord_message_id !== null
+      ? { channelId: r.discord_channel_id, messageId: r.discord_message_id }
+      : null,
   status: r.status,
   denyReason: r.deny_reason,
   failure: r.failure,
@@ -350,8 +384,8 @@ export class PostgresEventRequestRepository {
            (meetup_member_id, discord_user_id, host_name, tier, kind,
             source_event_id, title, description, start_local, duration,
             rsvp_limit, guest_limit, featured_photo_id, venue_id, how_to_find_us,
-            submit_token)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+            submit_token, source)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
          ON CONFLICT (meetup_member_id, submit_token) WHERE submit_token IS NOT NULL
            DO NOTHING
          RETURNING *`,
@@ -372,6 +406,7 @@ export class PostgresEventRequestRepository {
             input.venueId,
             input.howToFindUs,
             input.submitToken ?? null,
+            input.source ?? 'web',
           ],
         );
         if (rows[0] === undefined) {
@@ -381,6 +416,34 @@ export class PostgresEventRequestRepository {
         return toRequest(rows[0]);
       },
     );
+  }
+
+  /**
+   * Records the Discord post that mirrors a request, once: undefined when
+   * the id is unknown, malformed, or a post is already recorded. Not a
+   * state change: the version is left alone (an open queue page stays
+   * current) and no history row is written.
+   */
+  async setDiscordPost(
+    id: string,
+    channelId: string,
+    messageId: string,
+  ): Promise<EventRequest | undefined> {
+    if (
+      !isRequestId(id) ||
+      !DISCORD_ID.test(channelId) ||
+      !DISCORD_ID.test(messageId)
+    ) {
+      return undefined;
+    }
+    const { rows } = await this.pool.query<Row>(
+      `UPDATE event_requests
+          SET discord_channel_id = $2, discord_message_id = $3, updated_at = now()
+        WHERE id = $1 AND discord_message_id IS NULL
+        RETURNING *`,
+      [id, channelId, messageId],
+    );
+    return rows[0] === undefined ? undefined : toRequest(rows[0]);
   }
 
   /** The host's request made by the form with this token, if any. */

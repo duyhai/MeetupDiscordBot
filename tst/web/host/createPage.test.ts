@@ -53,6 +53,8 @@ function memoryStore() {
           const row: EventRequest = {
             ...input,
             id: String(rows.length + 1),
+            source: input.source ?? 'web',
+            discordPost: null,
             status: 'pending',
             denyReason: null,
             failure: null,
