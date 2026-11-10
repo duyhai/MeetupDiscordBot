@@ -960,9 +960,13 @@ export function createHostRouter(deps: HostRouterDeps): express.Router {
       page(await inFlight);
       return;
     }
-    // Counted only here, when Verify really runs: an outage, a step backed
-    // out of, or a double click never uses up the refresh. A run that then
-    // fails (refused, roles not set) still counts.
+    // A throttle on the Refresh button (Meetup load, repeat clicks), not a
+    // security control: the Verify button in Discord has no limit. It covers
+    // that button only; Finish verification and the first link are left
+    // uncharged on purpose, so a host retrying after a failed run is never
+    // turned away. Counted only here, when Verify really runs: an outage, a
+    // step backed out of, or a double click never uses up the refresh. A
+    // run that then fails (refused, roles not set) still counts.
     if (refresh && !verifyRefreshLimiter.take(session.userId)) {
       page({ kind: 'too-soon' }, 429);
       return;
