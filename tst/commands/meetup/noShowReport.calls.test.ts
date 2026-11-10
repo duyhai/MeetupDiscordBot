@@ -143,8 +143,14 @@ describe('/meetup_run_noshow_report Meetup calls', () => {
       'No Show report 2026-9.txt',
       'suggested_suspensions_2026-9.csv',
     ]);
+    // The command never shows the hosted flag, so no per-host listing is made.
     expect(
-      responder.calls.filter((call) => call.name === 'getGroupEventsCount'),
+      responder.calls.filter(
+        (call) =>
+          call.name === 'getGroupEvents' &&
+          (call.variables as { filter?: { hostId?: string } }).filter
+            ?.hostId !== undefined,
+      ),
     ).toEqual([]);
   });
 });

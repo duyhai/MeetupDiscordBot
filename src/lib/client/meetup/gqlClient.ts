@@ -389,6 +389,11 @@ export class GqlMeetupClient {
    * this whenever a caller needs a count for an exact window -- the
    * expansion in getGroupEvents exists to catch multi-day events straddling
    * the boundary and would otherwise inflate the count.
+   *
+   * No production caller since 2026-11-10: every hosted-event count goes
+   * through countHostedEvents (a listing filtered by the shared rule),
+   * because this total counts cancelled events and Open Houses too. Kept
+   * on purpose for an exact-window count that needs no filtering.
    */
   public async getGroupEventsCount(filter?: GroupEventFilter): Promise<number> {
     logger.info(

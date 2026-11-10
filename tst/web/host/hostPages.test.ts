@@ -64,7 +64,13 @@ describe('host home', () => {
   it('lists the host’s upcoming events and quiet days, escaped', async () => {
     const req = await pagesApp(async (filter) => {
       if (filter.hostId) {
-        return [ev('1', '2026-11-10T19:00:00-08:00', HOSTILE)];
+        return [
+          ev('1', '2026-11-10T19:00:00-08:00', HOSTILE),
+          {
+            ...ev('3', '2026-11-12T19:00:00-08:00', '[Open House] Pickleball'),
+            counted: false,
+          },
+        ];
       }
       return [ev('2', '2026-11-04T19:00:00-08:00', 'Group dinner')];
     });
@@ -72,6 +78,8 @@ describe('host home', () => {
     const res = await req.get('/host').set('Cookie', sid);
     expect(res.status).toBe(200);
     noScript(res.text);
+    // An upcoming Open House says once, by its title, that it will not count.
+    expect(res.text.match(/Not counted: Open House/g)).toHaveLength(1);
     expect(res.text).toContain('<bdi>');
     expect(res.text).toContain('Guest Host');
     expect(res.text).toContain('Quiet days in the next two weeks');
