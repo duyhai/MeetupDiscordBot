@@ -238,7 +238,7 @@ function homeBody(
           <td class="type" data-label="Type">
             ${EVENT_TYPE_LABELS[event.type]}
           </td>
-          <td data-label="Status">
+          <td class="status" data-label="Status">
             <span class="badge ok">Published</span>
             ${
               announcements
@@ -246,7 +246,7 @@ function homeBody(
                 : ''
             }
           </td>
-          <td data-label="Actions">
+          <td class="buttons" data-label="Actions">
             <div class="actions">
               ${meetupButton(event)}
               ${
