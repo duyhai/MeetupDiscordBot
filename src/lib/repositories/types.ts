@@ -1,4 +1,4 @@
-/** web_link: linked by the host on the host dashboard (no server roles). */
+/** web_link: linked by "Verify on Discord" on the host dashboard (Verify's own write then follows). */
 export type OnboardMethod = 'self_onboard' | 'sync_v2' | 'manual' | 'web_link';
 
 /**

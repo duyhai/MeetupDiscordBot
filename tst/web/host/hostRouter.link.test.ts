@@ -598,8 +598,44 @@ describe('Verify on Discord: joining the server and running Verify', () => {
     options: {
       join?: { joined: boolean; pending: boolean } | Error;
       verify?: typeof SUMMARY | Error;
+      /** A member token store, with these sets already in it. */
+      tokens?: Record<string, { accessToken: string }>;
+      rows?: MemberRecord[];
     } = {},
   ) {
+    const kept = new Map(Object.entries(options.tokens ?? {}));
+    function keyOf(owner: string | { meetup: string }): string {
+      return typeof owner === 'string'
+        ? `discord:${owner}`
+        : `meetup:${owner.meetup}`;
+    }
+    const meetupTokens = options.tokens
+      ? {
+          keep: vi.fn(
+            async (
+              owner: string | { meetup: string },
+              t: { accessToken: string },
+            ) => {
+              kept.set(keyOf(owner), t);
+            },
+          ),
+          usable: vi.fn(async (owner: string | { meetup: string }) =>
+            kept.get(keyOf(owner)),
+          ),
+          move: vi.fn(
+            async (
+              from: string | { meetup: string },
+              to: string | { meetup: string },
+            ) => {
+              const t = kept.get(keyOf(from));
+              if (t) {
+                kept.set(keyOf(to), t);
+                kept.delete(keyOf(from));
+              }
+            },
+          ),
+        }
+      : undefined;
     const joinServer = vi.fn(async () => {
       if (options.join instanceof Error) {
         throw options.join;
@@ -617,9 +653,22 @@ describe('Verify on Discord: joining the server and running Verify', () => {
         `https://discord.com/oauth2/authorize?scope=identify+guilds.join&state=${state}`,
     );
     const app = await setup({
-      overrides: { joinServer, runVerify, discordVerifyUrl },
+      rows: options.rows,
+      overrides: {
+        joinServer,
+        runVerify,
+        discordVerifyUrl,
+        ...(meetupTokens ? { meetupTokens } : {}),
+      },
     });
-    return { ...app, joinServer, runVerify, discordVerifyUrl };
+    return {
+      ...app,
+      joinServer,
+      runVerify,
+      discordVerifyUrl,
+      meetupTokens,
+      kept,
+    };
   }
 
   /** Discord's step, then Meetup's: returns the result page. */
@@ -683,15 +732,18 @@ describe('Verify on Discord: joining the server and running Verify', () => {
     );
   });
 
-  it('a join Discord refuses keeps the link, alerts, and still verifies', async () => {
+  it('a join Discord refuses keeps the link, alerts, and stops before Meetup', async () => {
     const app = await verifySetup({ join: new Error('missing access') });
-    const page = await verify(app);
+    const { back } = await link(app.req, app.sid, app.session().csrfToken);
     expect(app.store.linkUnlessLinkedElsewhere).toHaveBeenCalledOnce();
     expect(JSON.stringify(app.alert.mock.calls)).toContain(
       'Could not add a member to the server (host dashboard)',
     );
-    expect(page.text).toContain('We could not add you to our Discord server');
-    expect(app.runVerify).toHaveBeenCalledOnce();
+    // Every Verify step needs them in the server: no Meetup step, no run.
+    expect(back.status).toBe(200);
+    expect(setCookie(back, 'host_oauth_meetup')).toBeUndefined();
+    expect(back.text).toContain('Linked, not in our server yet');
+    expect(app.runVerify).not.toHaveBeenCalled();
   });
 
   it('roles that fail after the link keep the link, alert, and point to Verify in Discord', async () => {
@@ -842,6 +894,93 @@ describe('Verify on Discord: joining the server and running Verify', () => {
           r.meetupId === MEETUP_SELF.id && r.discordUserId === DISCORD_USER.id,
       ),
     ).toBe(true);
+  });
+
+  it('keeps the Meetup token at sign-in and Verifies with it, without a Meetup step', async () => {
+    // Store wired, empty before sign-in: the sign-in fills it.
+    const app = await verifySetup({ tokens: {} });
+    expect(app.kept.get(`meetup:${MEETUP_SELF.id}`)).toMatchObject({
+      accessToken: 'meetup-access',
+      refreshToken: 'meetup-refresh',
+    });
+    const { back } = await link(app.req, app.sid, app.session().csrfToken);
+    // Straight to the result page from Discord's step.
+    expect(back.status).toBe(200);
+    expect(setCookie(back, 'host_oauth_meetup')).toBeUndefined();
+    expect(back.text).toContain('You are verified');
+    expect(app.runVerify).toHaveBeenCalledWith(
+      'meetup-access',
+      DISCORD_USER.id,
+    );
+    // Once linked, the set lives under the Discord id, as the bot keeps it.
+    expect(app.kept.has(`meetup:${MEETUP_SELF.id}`)).toBe(false);
+    expect(app.kept.get(`discord:${DISCORD_USER.id}`)).toBeDefined();
+  });
+
+  it('a sign-in already linked keeps its set under the Discord id, for the bot too', async () => {
+    const app = await verifySetup({ tokens: {}, rows: [member({})] });
+    expect(app.kept.get(`discord:${DISCORD_USER.id}`)).toMatchObject({
+      accessToken: 'meetup-access',
+    });
+    expect(app.kept.has(`meetup:${MEETUP_SELF.id}`)).toBe(false);
+  });
+
+  it('a set already under the Discord id is used first', async () => {
+    const app = await verifySetup({
+      tokens: { [`discord:${DISCORD_USER.id}`]: { accessToken: 'bot-token' } },
+    });
+    const { back } = await link(app.req, app.sid, app.session().csrfToken);
+    expect(back.text).toContain('You are verified');
+    expect(app.runVerify).toHaveBeenCalledWith('bot-token', DISCORD_USER.id);
+  });
+
+  it('no usable set (none kept, or its refresh failed): the Meetup step, which keeps the new one', async () => {
+    const app = await verifySetup({ tokens: {} });
+    // As if the kept set expired and Meetup refused its refresh.
+    app.kept.clear();
+    const page = await verify(app);
+    expect(page.text).toContain('You are verified');
+    expect(app.runVerify).toHaveBeenCalledWith(
+      'meetup-access',
+      DISCORD_USER.id,
+    );
+    expect(app.kept.get(`discord:${DISCORD_USER.id}`)).toMatchObject({
+      accessToken: 'meetup-access',
+    });
+  });
+
+  it('a store that cannot answer falls back to the Meetup step', async () => {
+    const app = await verifySetup({ tokens: {} });
+    app.meetupTokens?.usable.mockRejectedValue(new Error('redis down'));
+    const page = await verify(app);
+    expect(page.text).toContain('You are verified');
+  });
+
+  it('Finish verification with a kept set runs at once', async () => {
+    const app = await verifySetup({ tokens: {} });
+    app.kept.clear();
+    await verify(app, (state) => `state=${state}&error=access_denied`);
+    app.kept.set(`discord:${DISCORD_USER.id}`, { accessToken: 'later' });
+    const res = await app.req
+      .post('/host/verify/finish')
+      .set('Cookie', app.sid)
+      .set('Origin', ORIGIN)
+      .type('form')
+      .send({ _csrf: app.session().csrfToken });
+    expect(res.text).toContain('You are verified');
+    expect(app.runVerify).toHaveBeenCalledWith('later', DISCORD_USER.id);
+  });
+
+  it('a member who was already linked but just joined the server is reported', async () => {
+    const app = await verifySetup({
+      join: { joined: true, pending: false },
+      tokens: {},
+    });
+    app.store.rows.push(member({}));
+    await link(app.req, app.sid, app.session().csrfToken);
+    expect(JSON.stringify(vi.mocked(app.deps.audit).mock.calls)).toContain(
+      'Joined the server (host dashboard)',
+    );
   });
 
   it('only this flow asks guilds.join: a Discord sign-in uses the plain login URL', async () => {

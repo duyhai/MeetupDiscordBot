@@ -25,7 +25,7 @@ export type WebLinkOutcome =
  * in the server, except that a Discord account already linked to another
  * Meetup account is refused rather than moved: nothing on the website
  * confirms the switch on the Discord side. A row left by a manual onboard
- * (no Meetup id) is upgraded. No server roles: that stays with Verify.
+ * (no Meetup id) is upgraded. Roles are Verify's job, which runs after this.
  * Throws when the store cannot answer.
  */
 export async function linkDiscordFromWeb(

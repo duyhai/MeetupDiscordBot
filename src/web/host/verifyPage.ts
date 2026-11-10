@@ -54,7 +54,9 @@ export type VerifyResult =
   /** Linked, but the roles and badges step failed. */
   | { kind: 'roles-failed' }
   /** A Verify run for this host is already in progress. */
-  | { kind: 'busy' };
+  | { kind: 'busy' }
+  /** Linked, but Discord would not let us add them to the server. */
+  | { kind: 'not-in-server' };
 
 function serverNote(join: ServerJoinResult): SafeHtml | '' {
   if (join === 'failed') {
@@ -157,6 +159,16 @@ function resultBody(
           be updated. Try again, or press Verify in our Discord server.
         </p>
         ${serverNote(join)} ${finish(session)} ${home}
+      </div>`;
+    case 'not-in-server':
+      return html`<div class="card">
+        <h1>Linked, not in our server yet</h1>
+        <p>
+          Your Meetup and Discord accounts are linked, but Discord did not let
+          us add you to our server, so your roles could not be set. Join it from
+          the link on our Meetup group page, then press Verify there.
+        </p>
+        ${home}
       </div>`;
     case 'busy':
       return html`<div class="card">

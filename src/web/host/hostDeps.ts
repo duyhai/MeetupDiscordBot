@@ -10,6 +10,11 @@ import { LogEntry, logActivity } from '../../lib/helpers/discordLogger.js';
 import { withOrganizerMeetup } from '../../lib/reports/organizerMeetup.js';
 import { PostgresEventRequestRepository } from '../../lib/repositories/postgresEventRequestRepository.js';
 import { getRandomTip } from '../../util/tips.js';
+import {
+  getUsableMeetupTokens,
+  moveMeetupTokens,
+  storeMeetupTokens,
+} from '../../lib/helpers/meetupTokens.js';
 import { ApplicationCache } from '../../util/cache.js';
 import { ApplicationMemberRepository } from '../../util/memberRepository.js';
 import { baseSecurityHeaders } from '../dashboardRouter.js';
@@ -105,8 +110,7 @@ export function hostRouterFromEnv(
     },
     meetup: {
       buildAuthUrl: buildHostMeetupAuthUrl,
-      exchangeCode: async (code) =>
-        (await exchangeMeetupCode(code)).accessToken,
+      exchangeCode: exchangeMeetupCode,
       fetchSelf: fetchMeetupSelf,
     },
     sessionSecret: secret,
@@ -130,6 +134,15 @@ export function hostRouterFromEnv(
       return { joined, pending };
     },
     runVerify: verifyRunner(() => discordClient),
+    // The bot's member token store: the same keys, TTL and refresh.
+    meetupTokens: {
+      keep: async (owner, tokens) =>
+        storeMeetupTokens(await ApplicationCache(), owner, tokens),
+      usable: async (owner) =>
+        getUsableMeetupTokens(await ApplicationCache(), owner),
+      move: async (from, to) =>
+        moveMeetupTokens(await ApplicationCache(), from, to),
+    },
     pages: (router) => {
       registerHostPages(router, {
         events,

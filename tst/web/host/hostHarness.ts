@@ -51,7 +51,11 @@ export function makeHostDeps(overrides: Partial<HostRouterDeps> = {}): {
         (state: string) =>
           `https://secure.meetup.com/oauth2/authorize?state=${state}`,
       ),
-      exchangeCode: vi.fn().mockResolvedValue('meetup-access'),
+      exchangeCode: vi.fn().mockResolvedValue({
+        accessToken: 'meetup-access',
+        refreshToken: 'meetup-refresh',
+        expiresAt: Date.now() + 60 * 60 * 1000,
+      }),
       fetchSelf: vi.fn().mockResolvedValue(MEETUP_SELF),
     },
     sessionSecret: SECRET,
