@@ -2,6 +2,7 @@ import { DiscordAPIError, RESTJSONErrorCodes } from 'discord.js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { GUEST_HOST_BLACKLIST } from '../../../src/constants.js';
+import { DuplicateMeetupAccountError } from '../../../src/lib/helpers/memberLink.js';
 import { NonMemberError } from '../../../src/lib/helpers/onboardUser.js';
 import { HostResolution } from '../../../src/lib/hosts/eligibility.js';
 import { WebLinkStore } from '../../../src/lib/hosts/webLink.js';
@@ -11,7 +12,7 @@ import {
 } from '../../../src/lib/repositories/types.js';
 import { HostRouterDeps } from '../../../src/web/host/hostRouter.js';
 import { registerHostPages } from '../../../src/web/host/hostPages.js';
-import { SESSION_MAX_SEC } from '../../../src/web/session.js';
+import { ROLE_RECHECK_MS, SESSION_MAX_SEC } from '../../../src/web/session.js';
 import {
   LoopbackClient,
   LoopbackResponse,
@@ -939,6 +940,38 @@ describe('Verify on Discord: joining the server and running Verify', () => {
         JSON.stringify(e).includes('Could not add a member to the server'),
       ),
     ).toHaveLength(1);
+  });
+
+  it('a Meetup account linked to someone else gets no Finish button', async () => {
+    const app = await verifySetup({
+      verify: new DuplicateMeetupAccountError(
+        'That Meetup account is already linked to another Discord account.',
+      ),
+    });
+    const page = await verify(app);
+    expect(page.text).toContain('Not verified');
+    expect(page.text).not.toContain('action="/host/verify/finish"');
+  });
+
+  it("a host refused at the gate's re-check loses the set kept at sign-in", async () => {
+    let clock = Date.now();
+    const forget = vi.fn().mockResolvedValue(undefined);
+    const app = await setup({
+      overrides: {
+        now: () => clock,
+        meetupTokens: {
+          keep: vi.fn().mockResolvedValue(undefined),
+          usable: vi.fn(),
+          move: vi.fn(),
+          forget,
+        },
+      },
+    });
+    app.resolve.mockResolvedValue({ kind: 'refused', reason: 'not-a-host' });
+    clock += ROLE_RECHECK_MS + 1000;
+    const res = await app.req.get('/host').set('Cookie', app.sid);
+    expect(res.status).toBe(403);
+    expect(forget).toHaveBeenCalledWith({ meetup: MEETUP_SELF.id });
   });
 
   it('a host refused at sign-in loses the set kept at an earlier sign-in', async () => {

@@ -53,8 +53,6 @@ export type VerifyResult =
   | { kind: 'unfinished' }
   /** Linked, but the roles and badges step failed. */
   | { kind: 'roles-failed' }
-  /** A Verify run for this host is already in progress. */
-  | { kind: 'busy' }
   /** Linked, but Discord would not let us add them to the server. */
   | { kind: 'not-in-server'; maxServers: boolean };
 
@@ -62,7 +60,7 @@ function serverNote(join: ServerJoinResult): SafeHtml | '' {
   if (join === 'failed') {
     return html`<p class="note attn">
       We could not add you to our Discord server. Join it from the link on our
-      Meetup group page, then press Verify there.
+      Meetup group page, then press Verify in our Discord server.
     </p>`;
   }
   if (join?.pending) {
@@ -169,24 +167,16 @@ function resultBody(
                 Your Meetup and Discord accounts are linked, but you are already
                 in as many Discord servers as Discord allows, so we could not
                 add you to ours. Leave a server first, then join ours from the
-                link on our Meetup group page and press Verify there.
+                link on our Meetup group page and press Verify in our Discord
+                server.
               </p>`
             : html`<p>
                 Your Meetup and Discord accounts are linked, but Discord did not
                 let us add you to our server, so your roles could not be set.
                 Join it from the link on our Meetup group page, then press
-                Verify there.
+                Verify in our Discord server.
               </p>`
         }
-        ${home}
-      </div>`;
-    case 'busy':
-      return html`<div class="card">
-        <h1>Already verifying</h1>
-        <p>
-          Your verification is already running. Give it a moment, then go back
-          home: your roles will be there.
-        </p>
         ${home}
       </div>`;
     default:

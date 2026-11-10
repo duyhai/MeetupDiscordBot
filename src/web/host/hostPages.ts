@@ -178,7 +178,7 @@ function homeBody(
             Your Meetup account is not linked to Discord yet. Verifying is
             optional: it links the two, adds you to our Discord server if you
             are not in it, and gives you the same roles and badges as pressing
-            Verify there.
+            Verify in our Discord server.
           </p>
           <form method="post" action="${localUrl(LINK_DISCORD_PATH)}">
             <input type="hidden" name="_csrf" value="${session.csrfToken}" />
