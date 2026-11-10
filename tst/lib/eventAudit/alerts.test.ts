@@ -50,7 +50,7 @@ describe('changeAlertEntry', () => {
     );
     expect(entry?.title).toContain('\\*\\*bold\\*\\* \\[x]');
     expect(entry?.description).toContain(
-      'Hosts: Hana <\u200b@&912474048775221270> (4242), Ken (5151)',
+      'Hosts: Hana <@\u200b&912474048775221270> (4242), Ken (5151)',
     );
     expect(entry?.description).toContain('Start: Dec 5, 2026 7:00 PM');
     expect(entry?.description).toContain(
