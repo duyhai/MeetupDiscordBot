@@ -105,6 +105,28 @@ CREATE INDEX IF NOT EXISTS event_changes_hosts_idx ON event_changes USING GIN (h
 -- Append-only (TRUNCATE, test-only, is not a row event). A change may only
 -- have alerted_at set; a snapshot never changes; both may be deleted only
 -- once older than the retention period (the prune).
+-- Columns added after the first version of these tables. Guarded by a
+-- catalog read, so a boot on an up-to-date table only reads: ALTER TABLE,
+-- even ADD COLUMN IF NOT EXISTS, takes an ACCESS EXCLUSIVE lock.
+DO $cols$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+     WHERE table_schema = current_schema()
+       AND table_name = 'event_snapshots' AND column_name = 'created_at'
+  ) THEN
+    ALTER TABLE event_snapshots ADD COLUMN created_at TIMESTAMPTZ;
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+     WHERE table_schema = current_schema()
+       AND table_name = 'event_audit_state' AND column_name = 'unconfirmed_runs'
+  ) THEN
+    ALTER TABLE event_audit_state
+      ADD COLUMN unconfirmed_runs INTEGER NOT NULL DEFAULT 0 CHECK (unconfirmed_runs >= 0);
+  END IF;
+END
+$cols$;
 CREATE OR REPLACE FUNCTION event_changes_append_only() RETURNS trigger
   LANGUAGE plpgsql AS $fn$
 BEGIN
@@ -546,12 +568,18 @@ export class PostgresEventAuditRepository {
     );
   }
 
-  /** Live events missing from the listing whose confirmation has failed at least `minRuns` runs in a row. */
-  async unconfirmable(minRuns: number): Promise<EventState[]> {
+  /**
+   * Live events missing from the listing whose confirmation has failed at
+   * least `minRuns` runs in a row and whose start is still ahead of `now`.
+   * Once the start passes the run stops trying them (they would have left
+   * the upcoming list anyway), so their streak no longer means "may be gone".
+   */
+  async unconfirmable(minRuns: number, now: Date): Promise<EventState[]> {
     const { rows } = await this.pool.query<StateRow>(
       `${STATE_SELECT} WHERE st.deleted_at IS NULL AND st.unconfirmed_runs >= $1
+          AND s.start_at > $2
         ORDER BY st.unconfirmed_runs DESC, st.meetup_event_id`,
-      [minRuns],
+      [minRuns, now],
     );
     return rows.map(toState);
   }
@@ -729,10 +757,10 @@ export class PostgresEventAuditRepository {
     if (!EVENT_ID.test(meetupId)) {
       return [];
     }
-    const limit = Math.min(
-      Math.max(1, Math.trunc(options.limit ?? 20)),
-      HOST_CHANGES_MAX,
-    );
+    const asked = Math.trunc(options.limit ?? 20);
+    const limit = Number.isFinite(asked)
+      ? Math.min(Math.max(1, asked), HOST_CHANGES_MAX)
+      : 1;
     return this.listChanges({ hostId: meetupId, from: options.since }, limit);
   }
 }

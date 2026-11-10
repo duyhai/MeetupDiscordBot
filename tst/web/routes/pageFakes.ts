@@ -1068,8 +1068,12 @@ export function fakeEventAudit(
   unconfirmed: EventState[] = [],
 ) {
   return {
-    unconfirmable: vi.fn(async (minRuns: number) =>
-      unconfirmed.filter((s) => s.unconfirmedRuns >= minRuns),
+    unconfirmable: vi.fn(async (minRuns: number, now: Date) =>
+      unconfirmed.filter(
+        (s) =>
+          s.unconfirmedRuns >= minRuns &&
+          s.latest.startAt.getTime() > now.getTime(),
+      ),
     ),
     listChanges: vi.fn(async (filter: ChangeFilter, limit: number = 50) =>
       [...changes]

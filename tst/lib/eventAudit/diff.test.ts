@@ -83,9 +83,9 @@ describe('diffEvent', () => {
     expect(diffEvent(undefined, obs({ status: 'PAST' }), live)).toEqual([]);
   });
 
-  it('a read with no hosts after one with hosts records no host change', () => {
+  it('an empty host list on either side is never a host change', () => {
     expect(diffEvent(obs(), obs({ hosts: [] }), live)).toEqual([]);
-    expect(diffEvent(obs({ hosts: [] }), obs(), live)).toHaveLength(1);
+    expect(diffEvent(obs({ hosts: [] }), obs(), live)).toEqual([]);
   });
 
   it('RSVPs leaving an event that is over are not a drop', () => {

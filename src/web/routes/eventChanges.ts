@@ -494,7 +494,9 @@ function historyBody(history: EventHistory): SafeHtml {
  */
 export function registerEventChangeRoutes(
   router: express.Router,
-  deps: Pick<EventChangesDeps, 'eventAudit' | 'snapshotNow'>,
+  deps: Pick<EventChangesDeps, 'eventAudit' | 'snapshotNow'> & {
+    now: () => Date;
+  },
 ): void {
   router.get(DASHBOARD_PATHS.eventChanges, (async (req, res) => {
     const q = parseQuery(req.query);
@@ -511,7 +513,7 @@ export function registerEventChangeRoutes(
       const [rows, run, unconfirmed] = await Promise.all([
         reader.listChanges(filter, PAGE_SIZE),
         reader.latestRun(),
-        reader.unconfirmable(UNCONFIRMED_ALERT_AFTER),
+        reader.unconfirmable(UNCONFIRMED_ALERT_AFTER, deps.now()),
       ]);
       return { rows, run, unconfirmed };
     });

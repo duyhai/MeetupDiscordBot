@@ -163,9 +163,12 @@ export class FakeEventAuditStore implements EventAuditStore {
     });
   }
 
-  async unconfirmable(minRuns: number): Promise<EventState[]> {
+  async unconfirmable(minRuns: number, now: Date): Promise<EventState[]> {
     return [...this.states.values()].filter(
-      (s) => s.deletedAt === null && s.unconfirmedRuns >= minRuns,
+      (s) =>
+        s.deletedAt === null &&
+        s.unconfirmedRuns >= minRuns &&
+        s.latest.startAt.getTime() > now.getTime(),
     );
   }
 

@@ -287,6 +287,8 @@ transaction, then alerts.
      answered); at `UNCONFIRMED_ALERT_AFTER = 3` the event is listed on the
      page's snapshot card and alerted once ("Event could not be confirmed"),
      since it may be gone and nobody would know (_my call_, from review).
+     An event whose start has passed leaves that list: the run no longer
+     tries to confirm it, so its streak stops meaning "may be gone".
 4. **Diff** (`diffEvent(previous, next)` in `diff.ts`, pure): with no
    previous snapshot → `created`, unless this is the **first run ever**
    (no state rows at all), which writes snapshots only, as the baseline
@@ -296,11 +298,13 @@ transaction, then alerts.
    rule: `prev.rsvpYes − next.rsvpYes ≥ 5` or `≥ 25 % of prev.rsvpYes`,
    with `prev.rsvpYes ≥ 4` and a drop of at least 2 people, consecutive
    snapshots only, and never once the event is over (PAST, cancelled, or
-   its start has passed: people leaving then is attrition). A `created` is
+   its start has passed, which also means no drop is recorded while an
+   event is in progress: people leaving then is attrition, by intent). A `created` is
    not recorded for an event first seen after it started or ended. A read
-   with no hosts after one with hosts records no host change (Meetup events
-   always have a host, so it is a transient read; a genuine change shows
-   when the next read has hosts again). A status
+   with no hosts records no host change and keeps the last non-empty host
+   list in the saved snapshot (Meetup events always have a host, so an
+   empty list is a transient read); the next read with hosts is compared
+   against the carried-forward list, so a genuine change still shows. A status
    becoming one of `CANCELLED`, `CANCELLED_PERM`, `AUTOSCHED_CANCELLED` from
    anything else is `cancelled`; a cancelled event is not "deleted" when it
    later vanishes, and nothing further is recorded for it.

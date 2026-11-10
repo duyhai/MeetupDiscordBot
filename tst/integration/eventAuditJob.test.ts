@@ -152,6 +152,34 @@ const obs = (overrides: Partial<EventObservation> = {}): EventObservation => ({
       ).toEqual([20]);
     });
 
+    it('a vanished event whose confirmation keeps failing is alerted once after three hourly ticks', async () => {
+      const a = obs();
+      const b = obs({ eventId: '311000002', title: 'Hike' });
+      const h = harness([a, b]);
+      await runEventAuditTick(h.deps);
+      const failing = harness([a]);
+      failing.getEvent.mockRejectedValue(new Error('502'));
+      const now = () => h.deps.now();
+      const deps = { ...failing.deps, now, cache: async () => h.cache };
+      for (let tick = 1; tick <= 4; tick += 1) {
+        h.advance(60);
+        // eslint-disable-next-line no-await-in-loop -- hourly ticks in order
+        await runEventAuditTick(deps);
+      }
+      expect(failing.getEvent).toHaveBeenCalledTimes(4);
+      expect((await repo.eventHistory('311000002'))?.state).toMatchObject({
+        unconfirmedRuns: 4,
+        deletedAt: null,
+      });
+      expect(
+        (await repo.unconfirmable(3, now())).map((s) => s.eventId),
+      ).toEqual(['311000002']);
+      expect(failing.alerts.map((e) => e.title)).toEqual([
+        'Event could not be confirmed: Hike',
+      ]);
+      expect(await repo.listChanges({})).toEqual([]);
+    });
+
     it('a held build lease keeps the tick out', async () => {
       const h = harness([obs()]);
       await h.cache.set(BUILD_LEASE_KEY, 'a report build', 60);

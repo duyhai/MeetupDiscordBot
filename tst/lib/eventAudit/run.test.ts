@@ -284,7 +284,9 @@ describe('runEventAudit', () => {
     expect(store.states.get('311000002')?.unconfirmedRuns).toBe(
       UNCONFIRMED_ALERT_AFTER,
     );
-    expect(await store.unconfirmable(UNCONFIRMED_ALERT_AFTER)).toHaveLength(1);
+    expect(
+      await store.unconfirmable(UNCONFIRMED_ALERT_AFTER, NOW),
+    ).toHaveLength(1);
     expect(first.alerts.map((a) => a.title)).toEqual([
       'Event could not be confirmed: Hike',
     ]);
@@ -301,6 +303,56 @@ describe('runEventAudit', () => {
     });
     await runEventAudit(seen.deps, 'job');
     expect(store.states.get('311000002')?.unconfirmedRuns).toBe(0);
+  });
+
+  it('an empty host read keeps the last hosts: no phantom change, and a real change after it still shows', async () => {
+    const store = await seeded();
+    const hostless = fakeDeps({
+      store: async () => store,
+      readMeetup: fakeReader([{ ...A, hosts: [] }, B, C]).readMeetup,
+    });
+    await runEventAudit(hostless.deps, 'job');
+    expect(store.states.get('311000001')?.latest.hosts).toEqual([HANA]);
+    const back = fakeDeps({
+      store: async () => store,
+      readMeetup: fakeReader([A, B, C]).readMeetup,
+    });
+    await runEventAudit(back.deps, 'job');
+    expect(store.changes).toEqual([]);
+    expect(back.alerts).toEqual([]);
+    await runEventAudit(hostless.deps, 'job');
+    const moved = fakeDeps({
+      store: async () => store,
+      readMeetup: fakeReader([{ ...A, hosts: [KEN] }, B, C]).readMeetup,
+    });
+    await runEventAudit(moved.deps, 'job');
+    expect(store.changes.map((c) => [c.kind, c.oldValue, c.newValue])).toEqual([
+      ['host_changed', { hosts: [HANA] }, { hosts: [KEN] }],
+    ]);
+  });
+
+  it('an unconfirmed event drops off the list once its start has passed', async () => {
+    const soon = obs({
+      eventId: '311000009',
+      title: 'Soon',
+      startAt: new Date(NOW.getTime() + 3 * 60 * 60_000),
+    });
+    const { deps: seedDeps, store } = fakeDeps({
+      readMeetup: fakeReader([A, soon]).readMeetup,
+    });
+    await runEventAudit(seedDeps, 'job');
+    const { readMeetup } = fakeReader([A], { '311000009': new Error('502') });
+    const failing = fakeDeps({ store: async () => store, readMeetup });
+    await runEventAudit(failing.deps, 'job');
+    await runEventAudit(failing.deps, 'job');
+    await runEventAudit(failing.deps, 'job');
+    expect(
+      await store.unconfirmable(UNCONFIRMED_ALERT_AFTER, NOW),
+    ).toHaveLength(1);
+    const later = new Date(NOW.getTime() + 4 * 60 * 60_000);
+    expect(await store.unconfirmable(UNCONFIRMED_ALERT_AFTER, later)).toEqual(
+      [],
+    );
   });
 
   it('every call of the run reads Meetup; the hourly rule is the job (job.test.ts)', async () => {

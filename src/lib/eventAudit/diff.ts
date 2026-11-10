@@ -71,9 +71,12 @@ const isOver = (o: EventObservation, now: Date) =>
  * except on the baseline run (the first run ever) or when it has already
  * started or ended (a first sight of an old event is not a creation). A
  * cancelled event stays cancelled: nothing further is recorded for it. An
- * RSVP drop on an event that is over is attrition, not a drop. A read with
- * no hosts after one with hosts is treated as transient (Meetup events
- * always have a host): no host change is recorded for it.
+ * RSVP drop on an event that is over (PAST, cancelled, or its start has
+ * passed, so also while it is in progress) is attrition, not a drop. Hosts
+ * are compared only when both reads have some: Meetup events always have a
+ * host, so an empty list is a transient read, and the run carries the last
+ * non-empty list forward (run.ts) so the read after it compares against
+ * real hosts.
  */
 export function diffEvent(
   previous: EventObservation | undefined,
@@ -111,8 +114,9 @@ export function diffEvent(
     });
   }
   if (
-    !sameHosts(previous.hosts, next.hosts) &&
-    !(next.hosts.length === 0 && previous.hosts.length > 0)
+    previous.hosts.length > 0 &&
+    next.hosts.length > 0 &&
+    !sameHosts(previous.hosts, next.hosts)
   ) {
     changes.push({
       ...base,

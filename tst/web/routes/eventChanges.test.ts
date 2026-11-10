@@ -219,7 +219,7 @@ describe('Event changes page', () => {
     expect(res.text).toContain('One event has');
     expect(res.text).toContain('(4 runs)');
     expect(res.text).not.toContain('<script>alert');
-    expect(audit.unconfirmable).toHaveBeenCalledWith(3);
+    expect(audit.unconfirmable).toHaveBeenCalledWith(3, PAGE_NOW);
   });
 
   it('is the 503 page when the store cannot answer', async () => {

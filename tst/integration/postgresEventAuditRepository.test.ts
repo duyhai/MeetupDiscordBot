@@ -98,6 +98,29 @@ const run = (overrides: Partial<RunWrite> = {}): RunWrite => ({
       await schema?.drop();
     });
 
+    it('adds the newer columns to tables created before them', async () => {
+      await pool.query('ALTER TABLE event_snapshots DROP COLUMN created_at');
+      await pool.query(
+        'ALTER TABLE event_audit_state DROP COLUMN unconfirmed_runs',
+      );
+      await ensureEventAuditSchema(pool);
+      const { rows } = await pool.query<{
+        table_name: string;
+        column_name: string;
+      }>(
+        `SELECT table_name, column_name FROM information_schema.columns
+          WHERE table_schema = current_schema()
+            AND column_name IN ('created_at', 'unconfirmed_runs')
+          ORDER BY table_name`,
+      );
+      expect(rows).toEqual([
+        { table_name: 'event_audit_state', column_name: 'unconfirmed_runs' },
+        { table_name: 'event_snapshots', column_name: 'created_at' },
+      ]);
+      await repo.saveRun(run());
+      expect((await repo.liveStates())[0].unconfirmedRuns).toBe(0);
+    });
+
     it('starts empty', async () => {
       expect(await repo.hasAnyState()).toBe(false);
       expect(await repo.latestRun()).toBeUndefined();
@@ -182,8 +205,13 @@ const run = (overrides: Partial<RunWrite> = {}): RunWrite => ({
       expect(
         (await repo.eventHistory('311000002'))?.state.unconfirmedRuns,
       ).toBe(2);
-      expect(await repo.unconfirmable(3)).toEqual([]);
-      expect((await repo.unconfirmable(2)).map((s) => s.eventId)).toEqual([
+      const NOW = new Date('2026-11-10T20:00:00Z');
+      expect(await repo.unconfirmable(3, NOW)).toEqual([]);
+      // Its start passed: no longer listed as "may be gone".
+      expect(
+        await repo.unconfirmable(2, new Date('2026-12-06T00:00:00Z')),
+      ).toEqual([]);
+      expect((await repo.unconfirmable(2, NOW)).map((s) => s.eventId)).toEqual([
         '311000002',
       ]);
       expect(
@@ -206,7 +234,7 @@ const run = (overrides: Partial<RunWrite> = {}): RunWrite => ({
       expect((await repo.eventHistory('311000002'))?.state).toMatchObject({
         unconfirmedRuns: 0,
       });
-      expect(await repo.unconfirmable(1)).toEqual([]);
+      expect(await repo.unconfirmable(1, NOW)).toEqual([]);
       expect(
         (await repo.eventHistory('311000001'))?.state.latest.createdAt,
       ).toEqual(new Date('2026-10-01T00:00:00Z'));
@@ -352,6 +380,12 @@ const run = (overrides: Partial<RunWrite> = {}): RunWrite => ({
       expect(
         await repo.recentChangesForHost('5151', { limit: 10_000 }),
       ).toHaveLength(2);
+      for (const limit of [0, -5, Number.NaN]) {
+        // eslint-disable-next-line no-await-in-loop -- one per case
+        expect(await repo.recentChangesForHost('5151', { limit })).toHaveLength(
+          1,
+        );
+      }
       expect(await repo.recentChangesForHost('9999')).toEqual([]);
       expect(await repo.recentChangesForHost('x')).toEqual([]);
     });

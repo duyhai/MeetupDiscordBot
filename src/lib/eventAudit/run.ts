@@ -224,9 +224,9 @@ async function alertUnconfirmed(
     return;
   }
   try {
-    const stuck = (await store.unconfirmable(UNCONFIRMED_ALERT_AFTER)).filter(
-      (s) => unconfirmedEventIds.includes(s.eventId),
-    );
+    const stuck = (
+      await store.unconfirmable(UNCONFIRMED_ALERT_AFTER, deps.now())
+    ).filter((s) => unconfirmedEventIds.includes(s.eventId));
     for (const state of stuck) {
       const key = unconfirmedAlertedKey(state.eventId);
       // eslint-disable-next-line no-await-in-loop -- a handful at most
@@ -299,7 +299,16 @@ export async function runEventAudit(
     const latest = new Map(
       (await store.liveStates()).map((s) => [s.eventId, s.latest]),
     );
-    changes = reads.observations.flatMap((o) =>
+    // A read with no hosts is transient (Meetup events always have one):
+    // the last known hosts are kept, so the next read is compared against
+    // them rather than against an empty list.
+    const observations = reads.observations.map((o) => {
+      const previousHosts = latest.get(o.eventId)?.hosts ?? [];
+      return o.hosts.length === 0 && previousHosts.length > 0
+        ? { ...o, hosts: previousHosts }
+        : o;
+    });
+    changes = observations.flatMap((o) =>
       diffEvent(latest.get(o.eventId), o, { baseline, now: startedAt }),
     );
     for (const id of reads.deletedEventIds) {
@@ -314,7 +323,7 @@ export async function runEventAudit(
       requestedBy,
       listed: reads.listed,
       confirmed: reads.confirmed,
-      observations: reads.observations,
+      observations,
       deletedEventIds: reads.deletedEventIds,
       unconfirmedEventIds: reads.unconfirmedEventIds,
       changes,
