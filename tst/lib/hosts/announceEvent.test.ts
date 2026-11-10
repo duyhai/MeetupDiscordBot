@@ -209,6 +209,16 @@ describe('announceHostEvent', () => {
     }
   });
 
+  it('a 4xx carrying Meetup’s "already announced" is done, like a 200 one', async () => {
+    const { store, run } = setup({
+      announce: async () => {
+        throw graphqlError('Event has already been announced.', 400);
+      },
+    });
+    await expect(run()).resolves.toBe('already');
+    expect(store.rows.get(EVENT.id)?.status).toBe('sent');
+  });
+
   it('a 4xx (a refused or expired token, a rate limit) is a refusal: failed, retryable', async () => {
     for (const status of [400, 401, 403, 429]) {
       const { store, run } = setup({

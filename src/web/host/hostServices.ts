@@ -206,9 +206,10 @@ export function productionAnnouncer(
       if (!token) {
         throw new OrganizerTokenUnavailableError();
       }
-      await new GqlMeetupClient(token, { bypassCache: true }).announceEvent({
-        eventId: meetupEventId,
-      });
+      await new GqlMeetupClient(token, { bypassCache: true }).announceEvent(
+        { eventId: meetupEventId },
+        { requireConfirmation: true },
+      );
     },
     alert: alertVia(getClient),
   };

@@ -14,7 +14,14 @@ export const ANNOUNCE_FAILURE_MAX = 1000;
 /** A `sending` row older than this is a call that was cut off. */
 export const SENDING_STALE_MS = 2 * 60 * 1000;
 
-/** True when the row's send was cut off (a restart mid-call). */
+/**
+ * True when the row's send was cut off (a restart mid-call). The page reads
+ * this with the dyno's clock, the claim with the database's now(), and at
+ * exactly 2 minutes the page offers a retry a moment before the claim takes
+ * it: that only answers "in progress" once. A call still running after 2
+ * minutes can be claimed again too; Meetup refuses a second announcement,
+ * so that is fine.
+ */
 export function isStaleSending(a: Announcement, now: Date): boolean {
   return (
     a.status === 'sending' &&

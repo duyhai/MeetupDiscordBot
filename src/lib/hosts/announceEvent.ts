@@ -88,7 +88,12 @@ function meetupAnswer(error: unknown): MeetupAnswer {
   if (error instanceof ClientError) {
     const { status } = error.response;
     const errors = error.response.errors ?? [];
-    if (status === 200 && errors.length > 0) {
+    // GraphQL errors are Meetup's answer whether it sent them with 200 or
+    // a 4xx; either may say it was already announced.
+    if (
+      (status === 200 || (status >= 400 && status < 500)) &&
+      errors.length > 0
+    ) {
       return {
         answered: true,
         already: errors.some((e) => ALREADY_MESSAGE.test(e.message.trim())),
@@ -165,6 +170,11 @@ export async function announceHostEvent(
       return 'already';
     }
     if (answer.answered) {
+      // Meetup's exact words, so a real "already announced" can be added to
+      // the matcher.
+      logger.info(
+        `Announcement refused, not read as already announced: ${answer.message}`,
+      );
       await finish('failed', answer.message);
       alert({
         title: 'A host’s announcement was refused',

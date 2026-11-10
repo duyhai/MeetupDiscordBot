@@ -74,19 +74,31 @@ describe('Meetup mutation payload errors', () => {
     ).rejects.toBeInstanceOf(MeetupPayloadError);
   });
 
-  it('announceEvent without errors but without the event is not a confirmation', async () => {
+  it('announceEvent with requireConfirmation (the dashboard) needs this event back', async () => {
+    const confirm = { requireConfirmation: true };
     answer({ announceEvent: { event: null, errors: [] } });
-    await expect(client().announceEvent({ eventId: '1' })).rejects.toThrow(
-      'did not confirm',
-    );
+    await expect(
+      client().announceEvent({ eventId: '1' }, confirm),
+    ).rejects.toThrow('did not confirm');
     answer({ announceEvent: null });
-    await expect(client().announceEvent({ eventId: '1' })).rejects.toThrow(
-      'did not confirm',
-    );
+    await expect(
+      client().announceEvent({ eventId: '1' }, confirm),
+    ).rejects.toThrow('did not confirm');
     answer({ announceEvent: { event: { id: '2' }, errors: [] } });
-    await expect(client().announceEvent({ eventId: '1' })).rejects.toThrow(
-      'did not confirm',
-    );
+    await expect(
+      client().announceEvent({ eventId: '1' }, confirm),
+    ).rejects.toThrow('did not confirm');
+    answer({ announceEvent: { event: { id: '1' }, errors: [] } });
+    await expect(
+      client().announceEvent({ eventId: '1' }, confirm),
+    ).resolves.toBeDefined();
+  });
+
+  it('announceEvent without it (the Discord command) still takes no errors as success', async () => {
+    answer({ announceEvent: { event: null, errors: [] } });
+    await expect(
+      client().announceEvent({ eventId: '1' }),
+    ).resolves.toBeDefined();
   });
 
   it('createEvent throws on errors with no event', async () => {

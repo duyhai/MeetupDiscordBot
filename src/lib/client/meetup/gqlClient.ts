@@ -709,7 +709,16 @@ export class GqlMeetupClient {
     }
   }
 
-  public async announceEvent(input: AnnounceEventInput) {
+  /**
+   * `requireConfirmation` (the host dashboard): the reply must carry this
+   * event's id, or it throws. The Discord command keeps "no payload errors
+   * is success" until a live reply confirms the shape (the result line
+   * below logs it).
+   */
+  public async announceEvent(
+    input: AnnounceEventInput,
+    options: { requireConfirmation?: boolean } = {},
+  ) {
     logger.info(
       `Calling announceEvent with input: ${JSON.stringify({ input })}`,
     );
@@ -722,7 +731,10 @@ export class GqlMeetupClient {
       // A rejected announcement (already announced, not allowed) is not sent.
       throwOnPayloadErrors('announceEvent', result.announceEvent?.errors);
       // No errors and no event back is no confirmation either.
-      if (String(result.announceEvent?.event?.id ?? '') !== input.eventId) {
+      if (
+        options.requireConfirmation &&
+        String(result.announceEvent?.event?.id ?? '') !== input.eventId
+      ) {
         throw new Error('announceEvent did not confirm the event');
       }
       return result;
