@@ -52,6 +52,12 @@ export interface BuildDeps extends CompanionDeps {
    * undefined when they are not in the group.
    */
   organizerRsvps(meetupId: string): Promise<EventSummary[] | undefined>;
+  /**
+   * Asked once the member's history is readable, right before the costly
+   * part. Returning false stops the build ('rate-limited'), so a member whose
+   * account is mismatched or out of the group never spends their hourly slot.
+   */
+  claimBuild?(): boolean;
   onProgress?(message: string): Promise<void>;
   now?: () => Date;
 }
@@ -59,7 +65,8 @@ export interface BuildDeps extends CompanionDeps {
 export type BuildResult =
   | { kind: 'built'; wrapped: CachedWrapped }
   | { kind: 'account-mismatch'; tokenMeetupId: string }
-  | { kind: 'not-in-group' };
+  | { kind: 'not-in-group' }
+  | { kind: 'rate-limited' };
 
 type History =
   | { kind: 'events'; events: EventSummary[] }
@@ -138,6 +145,9 @@ export async function buildWrapped(
   const history = await readHistory(deps, linkedMeetupId, groupId);
   if (history.kind !== 'events') {
     return history;
+  }
+  if (deps.claimBuild && !deps.claimBuild()) {
+    return { kind: 'rate-limited' };
   }
   const hosted = await readHosted(deps.meetup, linkedMeetupId);
 

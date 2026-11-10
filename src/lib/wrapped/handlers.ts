@@ -7,6 +7,7 @@
  */
 import {
   ButtonInteraction,
+  Channel,
   CommandInteraction,
   GuildMember,
   GuildTextBasedChannel,
@@ -126,19 +127,6 @@ export async function runWrapped(
   }
 
   await deps.withMeetupClient(interaction, async (meetup) => {
-    // Taken only now, with the token in hand: a member sent on the OAuth
-    // hop who never finishes keeps their slot.
-    if (!deps.limiter.take(userId)) {
-      const minutes = Math.ceil(deps.limiter.retryAfterSec(userId) / 60);
-      await answerInPlace(interaction, {
-        content: replies.rateLimited(minutes),
-        embeds: cached
-          ? [wrappedEmbed(displayNameOf(interaction), cached)]
-          : [],
-      });
-      return;
-    }
-
     let slow = false;
     const slowTimer = setTimeout(() => {
       slow = true;
@@ -154,6 +142,10 @@ export async function runWrapped(
       result = await buildWrapped(
         {
           meetup,
+          // Taken only with the token in hand and the history readable: a
+          // member sent on the OAuth hop, or told to reconnect, keeps their
+          // slot for the next attempt.
+          claimBuild: () => deps.limiter.take(userId),
           organizerRsvps: (meetupId) =>
             deps.withOrganizerMeetup(interaction.client, (organizer) =>
               organizer.getMemberRsvpEvents(
@@ -200,6 +192,16 @@ export async function runWrapped(
       await answerInPlace(interaction, { content: replies.notInGroup });
       return;
     }
+    if (result.kind === 'rate-limited') {
+      const minutes = Math.ceil(deps.limiter.retryAfterSec(userId) / 60);
+      await answerInPlace(interaction, {
+        content: replies.rateLimited(minutes),
+        embeds: cached
+          ? [wrappedEmbed(displayNameOf(interaction), cached)]
+          : [],
+      });
+      return;
+    }
 
     await writeWrapped(cache, userId, year, result.wrapped, deps.now());
     const payload = wrappedPayload(interaction, result.wrapped);
@@ -227,7 +229,14 @@ async function shareTarget(
 ): Promise<
   { channel: GuildTextBasedChannel; member: GuildMember } | undefined
 > {
-  const channel = await interaction.client.channels.fetch(channelId);
+  // Deleted, or the bot can't see it any more: the same answer as "not a
+  // channel it can post in".
+  let channel: Channel | null | undefined;
+  try {
+    channel = await interaction.client.channels.fetch(channelId);
+  } catch {
+    channel = undefined;
+  }
   if (!channel || !channel.isTextBased() || channel.isDMBased()) {
     return undefined;
   }
@@ -238,6 +247,17 @@ async function shareTarget(
     return undefined;
   }
   if (!channel.permissionsFor(member)?.has(PermissionFlagsBits.ViewChannel)) {
+    return undefined;
+  }
+  const botNeeds = [
+    PermissionFlagsBits.ViewChannel,
+    channel.isThread()
+      ? PermissionFlagsBits.SendMessagesInThreads
+      : PermissionFlagsBits.SendMessages,
+    PermissionFlagsBits.EmbedLinks,
+  ];
+  const bot = interaction.client.user;
+  if (!bot || !channel.permissionsFor(bot)?.has(botNeeds)) {
     return undefined;
   }
   return { channel, member };
@@ -277,11 +297,17 @@ export async function runShare(
     return;
   }
 
-  await target.channel.send({
-    content: sharedPostContent(userId, year),
-    embeds: [wrappedEmbed(target.member.displayName, wrapped)],
-    // Mentions render, nobody is notified.
-    allowedMentions: { parse: [] },
-  });
+  try {
+    await target.channel.send({
+      content: sharedPostContent(userId, year),
+      embeds: [wrappedEmbed(target.member.displayName, wrapped)],
+      // Mentions render, nobody is notified.
+      allowedMentions: { parse: [] },
+    });
+  } catch (error) {
+    // Nothing was posted, so the member may try again.
+    await cache.remove(guardKey);
+    throw error;
+  }
   await interaction.followUp({ content: replies.shared, ephemeral: true });
 }

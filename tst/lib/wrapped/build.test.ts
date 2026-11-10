@@ -114,8 +114,10 @@ function fakeDeps({
     Promise.resolve<EventSummary[] | undefined>(events),
   );
   const onProgress = vi.fn((_message: string) => Promise.resolve());
+  const claimBuild = vi.fn(() => true);
   const deps: BuildDeps = {
     meetup: { getSelfPastRsvpEvents, getGroupEvents, getEventRsvps },
+    claimBuild,
     organizerRsvps,
     findByMeetupId: (id) =>
       Promise.resolve(linked.includes(id) ? record(id) : undefined),
@@ -130,6 +132,7 @@ function fakeDeps({
     getEventRsvps,
     organizerRsvps,
     onProgress,
+    claimBuild,
   };
 }
 
@@ -215,6 +218,20 @@ describe('buildWrapped', () => {
     await expect(buildWrapped(f.deps, 'me', 2026, GROUP)).rejects.toThrow(
       'rsvps down',
     );
+  });
+
+  it('claims the build only once the history is readable, and stops when refused', async () => {
+    const refused = fakeDeps();
+    refused.claimBuild.mockReturnValue(false);
+
+    expect(await buildWrapped(refused.deps, 'me', 2026, GROUP)).toEqual({
+      kind: 'rate-limited',
+    });
+    expect(refused.getGroupEvents).not.toHaveBeenCalled();
+
+    const mismatch = fakeDeps({ selfMeetupId: 'other' });
+    await buildWrapped(mismatch.deps, 'me', 2026, GROUP);
+    expect(mismatch.claimBuild).not.toHaveBeenCalled();
   });
 
   it('reports progress along the way', async () => {

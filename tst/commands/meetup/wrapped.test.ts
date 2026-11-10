@@ -6,10 +6,12 @@ import {
   currentWrappedYear,
 } from '../../../src/commands/meetup/wrapped.js';
 import { runShare, runWrapped } from '../../../src/lib/wrapped/handlers.js';
+import { keepReplyVisible } from '../../../src/util/discord.js';
 
 vi.mock('../../../src/util/discord.js', () => ({
   discordCommandWrapper: (_interaction: unknown, fn: () => Promise<void>) =>
     fn(),
+  keepReplyVisible: vi.fn(),
 }));
 vi.mock('../../../src/lib/wrapped/handlers.js', () => ({
   runWrapped: vi.fn(),
@@ -51,13 +53,18 @@ describe('/wrapped', () => {
     });
   });
 
-  it('rejects a year before 2015 or after this one', async () => {
-    await expect(
-      handler.wrappedHandler(2014, undefined, interaction),
-    ).rejects.toThrow(/2015/);
-    await expect(
-      handler.wrappedHandler(currentWrappedYear() + 1, undefined, interaction),
-    ).rejects.toThrow(/2015/);
+  it('turns down a year before 2015 or after this one without alerting staff', async () => {
+    const editReply = vi.fn().mockResolvedValue(undefined);
+    const bad = { editReply } as unknown as CommandInteraction;
+
+    await handler.wrappedHandler(2014, undefined, bad);
+    await handler.wrappedHandler(currentWrappedYear() + 1, undefined, bad);
+
+    expect(editReply).toHaveBeenCalledTimes(2);
+    expect((editReply.mock.calls[0][0] as { content: string }).content).toMatch(
+      /2015/,
+    );
+    expect(keepReplyVisible).toHaveBeenCalledTimes(2);
     expect(runWrapped).not.toHaveBeenCalled();
   });
 

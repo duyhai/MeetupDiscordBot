@@ -8,7 +8,7 @@ import { ButtonComponent, Discord, Slash, SlashOption } from 'discordx';
 
 import { SHARE_BUTTON_ID_PATTERN } from '../../lib/wrapped/format.js';
 import { runShare, runWrapped } from '../../lib/wrapped/handlers.js';
-import { discordCommandWrapper } from '../../util/discord.js';
+import { discordCommandWrapper, keepReplyVisible } from '../../util/discord.js';
 import { tz } from '../../util/timezone.js';
 
 /** The group's first year on Meetup; nothing to wrap before it. */
@@ -54,9 +54,12 @@ export class WrappedCommands {
       const thisYear = currentWrappedYear();
       const chosen = year ?? thisYear;
       if (chosen < FIRST_WRAPPED_YEAR || chosen > thisYear) {
-        throw new Error(
-          `Pick a year between ${FIRST_WRAPPED_YEAR} and ${thisYear}.`,
-        );
+        // A typo, not a failure: no alert to staff.
+        await interaction.editReply({
+          content: `Pick a year between ${FIRST_WRAPPED_YEAR} and ${thisYear}.`,
+        });
+        keepReplyVisible(interaction);
+        return;
       }
       await runWrapped(interaction, {
         year: chosen,

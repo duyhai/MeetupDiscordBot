@@ -300,7 +300,10 @@ describe('runWrapped', () => {
     await runWrapped(interaction, { year: 2026, refresh: true }, h.deps);
 
     expect(h.withMeetupClient).toHaveBeenCalledTimes(2);
-    expect(h.meetup.getSelfPastRsvpEvents).toHaveBeenCalledTimes(1);
+    // The cheap history read runs (it decides whether the slot is spent at
+    // all); the costly hosted/attendee scan does not.
+    expect(h.meetup.getSelfPastRsvpEvents).toHaveBeenCalledTimes(2);
+    expect(h.meetup.getGroupEvents).toHaveBeenCalledTimes(1);
     const last = payloads(interaction.editReply).at(-1);
     expect(last?.content).toBe(replies.rateLimited(50));
     expect(last?.embeds).toHaveLength(1);
@@ -315,6 +318,8 @@ describe('runWrapped', () => {
 
     expect(contents(interaction.editReply)).toContain(replies.accountMismatch);
     expect(await readWrapped(h.cache, 'u1', 2026)).toBeUndefined();
+    // Reconnecting and trying again must not be met with "try in 59 minutes".
+    expect(h.deps.limiter.take('u1')).toBe(true);
   });
 
   it('delivers a slow build by DM with the share button carrying the channel', async () => {
@@ -363,8 +368,20 @@ function buttonInteraction({
   customId = shareCustomId(2026, CHANNEL),
   memberFetchFails = false,
   canView = true,
-}: { customId?: string; memberFetchFails?: boolean; canView?: boolean } = {}) {
-  const send = vi.fn().mockResolvedValue(undefined);
+  botCanSend = true,
+  channelFetchFails = false,
+  sendFails = false,
+}: {
+  customId?: string;
+  memberFetchFails?: boolean;
+  canView?: boolean;
+  botCanSend?: boolean;
+  channelFetchFails?: boolean;
+  sendFails?: boolean;
+} = {}) {
+  const send = sendFails
+    ? vi.fn().mockRejectedValue(new Error('Missing Permissions'))
+    : vi.fn().mockResolvedValue(undefined);
   const channel = {
     id: CHANNEL,
     isTextBased: () => true,
@@ -379,16 +396,29 @@ function buttonInteraction({
         }),
       },
     },
-    permissionsFor: () => ({
-      has: (bit: bigint) => bit === PermissionFlagsBits.ViewChannel && canView,
+    isThread: () => false,
+    permissionsFor: (who: { id: string }) => ({
+      has: (bits: bigint | bigint[]) => {
+        const wanted = Array.isArray(bits) ? bits : [bits];
+        if (who.id === 'bot') {
+          return botCanSend;
+        }
+        return (
+          wanted.every((bit) => bit === PermissionFlagsBits.ViewChannel) &&
+          canView
+        );
+      },
     }),
     send,
   };
+  const fetch = channelFetchFails
+    ? vi.fn().mockRejectedValue(new Error('Unknown Channel'))
+    : vi.fn().mockResolvedValue(channel);
   return {
     interaction: {
       customId,
       user: { id: 'u1', username: 'jane', toString: () => '<@u1>' },
-      client: { channels: { fetch: vi.fn().mockResolvedValue(channel) } },
+      client: { user: { id: 'bot' }, channels: { fetch } },
       editReply: vi.fn().mockResolvedValue(undefined),
       followUp: vi.fn().mockResolvedValue(undefined),
     } as unknown as ButtonInteraction & {
@@ -461,6 +491,34 @@ describe('runShare', () => {
 
     expect(send).not.toHaveBeenCalled();
     expect(contents(interaction.editReply)).toContain(replies.cannotShareHere);
+  });
+
+  it('refuses when the bot cannot post there and releases the guard', async () => {
+    const { interaction, send } = buttonInteraction({ botCanSend: false });
+
+    await runShare(interaction, h.deps);
+
+    expect(send).not.toHaveBeenCalled();
+    expect(contents(interaction.editReply)).toContain(replies.cannotShareHere);
+    expect(h.cache.data.has(shareGuardKey('u1', 2026, CHANNEL))).toBe(false);
+  });
+
+  it('treats a channel it cannot fetch as unshareable', async () => {
+    const { interaction } = buttonInteraction({ channelFetchFails: true });
+
+    await runShare(interaction, h.deps);
+
+    expect(contents(interaction.editReply)).toContain(replies.cannotShareHere);
+    expect(h.cache.data.has(shareGuardKey('u1', 2026, CHANNEL))).toBe(false);
+  });
+
+  it('releases the guard when the post itself fails', async () => {
+    const { interaction } = buttonInteraction({ sendFails: true });
+
+    await expect(runShare(interaction, h.deps)).rejects.toThrow(
+      'Missing Permissions',
+    );
+    expect(h.cache.data.has(shareGuardKey('u1', 2026, CHANNEL))).toBe(false);
   });
 
   it('rejects a malformed custom id', async () => {
