@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { GUEST_HOST_BLACKLIST } from '../../../src/constants.js';
 import { HostResolution } from '../../../src/lib/hosts/eligibility.js';
 import { WebLinkStore } from '../../../src/lib/hosts/webLink.js';
 import {
@@ -8,6 +9,7 @@ import {
 } from '../../../src/lib/repositories/types.js';
 import { HostRouterDeps } from '../../../src/web/host/hostRouter.js';
 import { registerHostPages } from '../../../src/web/host/hostPages.js';
+import { SESSION_MAX_SEC } from '../../../src/web/session.js';
 import {
   LoopbackClient,
   LoopbackResponse,
@@ -138,6 +140,7 @@ async function link(
   sid: string,
   csrf: string,
   callback: (state: string) => string = (state) => `state=${state}&code=c`,
+  beforeCallback: () => Promise<void> = async () => undefined,
 ) {
   const start = await req
     .post('/host/link/discord')
@@ -148,11 +151,36 @@ async function link(
   const target = continueHref(start);
   const state = target.searchParams.get('state') ?? '';
   const oauth = setCookie(start, 'host_oauth_discord') ?? '';
+  await beforeCallback();
   const back = await req
     .get(`/host/auth/discord/callback?${callback(state)}`)
     .set('Cookie', `${sid}; ${oauth}`);
   return { state, back };
 }
+
+/** Edits the one stored host session in place (a parallel request's write). */
+function patchStoredSession(
+  cache: { values: Map<string, string> },
+  patch: Record<string, unknown>,
+) {
+  const key = [...cache.values.keys()].find((k) =>
+    k.startsWith('host-session-'),
+  );
+  if (!key) {
+    throw new Error('no stored host session');
+  }
+  cache.values.set(
+    key,
+    JSON.stringify({
+      ...(JSON.parse(cache.values.get(key) ?? '{}') as object),
+      ...patch,
+    }),
+  );
+}
+
+/** The CSRF token a signed-in page carries, for a session setup() did not make. */
+const csrfOnPage = (text: string) =>
+  /name="_csrf" value="([^"]+)"/.exec(text)?.[1] ?? '';
 
 describe('Link your Discord account', () => {
   it('the start needs the CSRF token and sends a link. state to Discord', async () => {
@@ -206,7 +234,9 @@ describe('Link your Discord account', () => {
       meetupMemberId: MEETUP_SELF.id,
     });
     const home = await req.get('/host?link=linked').set('Cookie', sid);
-    expect(home.text).toContain('Your Discord account is linked.');
+    expect(home.text).toContain(
+      'Your Meetup and Discord accounts are now linked.',
+    );
     expect(home.text).not.toContain('Link your Discord account');
   });
 
@@ -392,6 +422,124 @@ describe('Link your Discord account', () => {
       .type('form')
       .send({ _csrf: linked.session().csrfToken });
     expect(res.headers.location).toBe('/host?link=already');
+  });
+
+  it('a Discord sign-in whose link is gone gets no Link button, and its POST is refused', async () => {
+    // Signed in with Discord, then unlinked (/unlink in the server): the
+    // session's username is a Discord name, so it must never become a
+    // meetup_name.
+    const { req, store } = await setup({
+      overrides: { resolve: vi.fn().mockResolvedValue(UNLINKED) },
+    });
+    const viaDiscord = await signInWithDiscord(req);
+    const home = await req.get('/host').set('Cookie', viaDiscord);
+    expect(home.status).toBe(200);
+    expect(home.text).not.toContain('Link your Discord account');
+    const start = await req
+      .post('/host/link/discord')
+      .set('Cookie', viaDiscord)
+      .set('Origin', ORIGIN)
+      .type('form')
+      .send({ _csrf: csrfOnPage(home.text) });
+    expect(start.status).toBe(403);
+    expect(setCookie(start, 'host_oauth_discord')).toBeUndefined();
+    expect(store.linkUnlessLinkedElsewhere).not.toHaveBeenCalled();
+  });
+
+  it('a blacklisted Discord account is refused before the write, like any refusal', async () => {
+    const { req, sid, session, store, resolve, deps } = await setup();
+    const csrf = session().csrfToken;
+    // eslint-disable-next-line @typescript-eslint/unbound-method -- a vi.fn
+    vi.mocked(deps.discord.fetchIdentity).mockResolvedValueOnce({
+      id: GUEST_HOST_BLACKLIST[0],
+      username: 'Blocked',
+    });
+    const { back } = await link(req, sid, csrf);
+    expect(back.status).toBe(403);
+    // Nothing saved: resolve() cannot see a Discord id that is not linked yet.
+    expect(store.linkUnlessLinkedElsewhere).not.toHaveBeenCalled();
+    expect(resolve).not.toHaveBeenCalledWith(
+      expect.objectContaining({ discordUserId: GUEST_HOST_BLACKLIST[0] }),
+    );
+    expect(JSON.stringify(vi.mocked(deps.audit).mock.calls)).toContain(
+      'Host dashboard session ended',
+    );
+    expect(setCookie(back, 'host_sid')).toBe('host_sid=');
+    expect((await req.get('/host').set('Cookie', sid)).status).toBe(302);
+  });
+
+  it('a session store outage at the callback links nothing', async () => {
+    const { req, sid, session, store, cache } = await setup();
+    const { back } = await link(
+      req,
+      sid,
+      session().csrfToken,
+      undefined,
+      async () => {
+        vi.spyOn(cache, 'get').mockRejectedValueOnce(new Error('redis down'));
+      },
+    );
+    expect(back.headers.location).toBe('/host?link=error');
+    expect(store.linkUnlessLinkedElsewhere).not.toHaveBeenCalled();
+  });
+
+  it('a session at the end of its lifetime keeps the link but is signed out', async () => {
+    let clock = Date.now();
+    const { req, sid, session, store, cache, resolve } = await setup({
+      overrides: { now: () => clock },
+    });
+    const csrf = session().csrfToken;
+    // One second before the 30-day cap at the callback's session read...
+    patchStoredSession(cache, {
+      createdAt: clock - SESSION_MAX_SEC * 1000 + 1000,
+    });
+    // ...and past it by the time the session is written back.
+    resolve.mockImplementation(async () => {
+      clock += 2000;
+      return UNLINKED;
+    });
+    const { back } = await link(req, sid, csrf);
+    expect(store.linkUnlessLinkedElsewhere).toHaveBeenCalledOnce();
+    expect(back.status).toBe(302);
+    expect(back.headers.location).toBe('/host/login');
+    expect(setCookie(back, 'host_sid')).toBe('host_sid=');
+  });
+
+  it('a callback for a session linked meanwhile links nothing more', async () => {
+    const { req, sid, session, store, cache } = await setup();
+    const { back } = await link(
+      req,
+      sid,
+      session().csrfToken,
+      undefined,
+      // A parallel link finished first, or the gate's re-check saw one.
+      async () => {
+        patchStoredSession(cache, { discordUserId: DISCORD_USER.id });
+      },
+    );
+    expect(back.headers.location).toBe('/host?link=already');
+    expect(store.linkUnlessLinkedElsewhere).not.toHaveBeenCalled();
+  });
+
+  it('a link already in the store is reported as such and taken into the session', async () => {
+    // Linked by Verify after this Meetup sign-in saw no link.
+    const { req, sid, session, store } = await setup({
+      rows: [member({})],
+      overrides: {
+        resolve: vi
+          .fn()
+          .mockResolvedValueOnce(UNLINKED)
+          .mockResolvedValue(LINKED),
+      },
+    });
+    expect(session().discordUserId).toBeNull();
+    const { back } = await link(req, sid, session().csrfToken);
+    expect(back.headers.location).toBe('/host?link=already');
+    expect(store.linkUnlessLinkedElsewhere).not.toHaveBeenCalled();
+    expect(session()).toMatchObject({
+      discordUserId: DISCORD_USER.id,
+      tier: 'promoted',
+    });
   });
 
   it('home shows the Link button to an unlinked host, and only fixed notices', async () => {

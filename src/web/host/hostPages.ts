@@ -124,7 +124,7 @@ const LINK_DISCORD_PATH = `${HOST_BASE}/link/discord`;
 const LINK_NOTICES: Record<HostLinkResult, { ok: boolean; text: string }> = {
   linked: {
     ok: true,
-    text: "Your Discord account is linked. We'll recognise you in our Discord server.",
+    text: 'Your Meetup and Discord accounts are now linked.',
   },
   already: { ok: true, text: 'Your Discord account was already linked.' },
   cancelled: { ok: false, text: 'Linking was cancelled. Nothing was changed.' },
@@ -170,9 +170,10 @@ function homeBody(
 ): SafeHtml {
   const quiet = quietDays(calendar, today).slice(0, QUIET_DAYS_SHOWN);
   // Linking here only links accounts: no server roles (that stays with
-  // Verify in the server).
+  // Verify in the server). Only for a Meetup sign-in: a Discord sign-in
+  // whose link was removed since carries a Discord name, not a Meetup one.
   const linkNudge =
-    session.discordUserId === null
+    session.discordUserId === null && session.via === 'meetup'
       ? html`<div class="note info">
           <p>
             Your Meetup account is not linked to Discord. Linking is optional,

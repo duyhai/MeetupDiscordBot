@@ -9,6 +9,7 @@ import express, {
 import { generateCodeVerifier, generateState } from 'arctic';
 import { Logger } from 'tslog';
 
+import { GUEST_HOST_BLACKLIST } from '../../constants.js';
 import { KeyValueCache } from '../../lib/cache/base.js';
 import type {
   HostIdentity,
@@ -176,6 +177,7 @@ export function createHostRouter(deps: HostRouterDeps): express.Router {
   const refusedAuditLimiter =
     deps.refusedAuditLimiter ?? new FixedWindowLimiter(1, 60 * 60 * 1000);
   // One duplicate-link alert per host and kind an hour: retries add nothing.
+  // In-memory per dyno, like refusedAuditLimiter: a few extra alerts at most.
   const linkAlertLimiter = new FixedWindowLimiter(1, 60 * 60 * 1000);
   /** The session tag a link state carries: a keyed hash, never the sid. */
   const sessionTag = (sid: string) =>
@@ -458,6 +460,13 @@ export function createHostRouter(deps: HostRouterDeps): express.Router {
       return;
     }
     const meetupId = session.userId;
+    // The eligibility check below reads the member's current link, so it
+    // cannot see the Discord account about to be linked: refuse a
+    // blacklisted one here, before anything is written.
+    if (GUEST_HOST_BLACKLIST.includes(identity.id)) {
+      await refused(meetupId, sid, 'blacklisted');
+      return;
+    }
     // Still a host, right now: the link is a write.
     try {
       const before = await deps.resolve({ meetupMemberId: meetupId });
@@ -826,6 +835,13 @@ export function createHostRouter(deps: HostRouterDeps): express.Router {
     const { session, sid, nonce } = hostLocals(res);
     if (session.discordUserId !== null) {
       res.redirect(303, `${HOST_BASE}?link=already`);
+      return;
+    }
+    // The link saves the session's username as the Meetup name, so only a
+    // Meetup sign-in may start one (a Discord sign-in unlinked since has a
+    // Discord name there). The home page shows no button for it either.
+    if (session.via !== 'meetup') {
+      fail(res, 403);
       return;
     }
     const state = `link.${generateState()}.${sessionTag(sid)}`;
