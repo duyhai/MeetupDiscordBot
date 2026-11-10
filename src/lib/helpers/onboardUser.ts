@@ -1,4 +1,4 @@
-import { Guild, CommandInteraction, User, ButtonInteraction } from 'discord.js';
+import { Guild, CommandInteraction, User } from 'discord.js';
 import { Logger } from 'tslog';
 import {
   RewardRoleLevels,
@@ -8,13 +8,14 @@ import {
   SERVER_ROLES,
 } from '../../constants.js';
 import { ApplicationCache } from '../../util/cache.js';
-import { describeInteraction, isAdmin, linkStr } from '../../util/discord.js';
+import { isAdmin, linkStr } from '../../util/discord.js';
 import { GqlMeetupClient } from '../client/meetup/gqlClient.js';
 import { MemberGender } from '../client/meetup/types.js';
 import { logAlert } from './discordLogger.js';
 import { updateBaselineSilently } from './identity/monitor.js';
 import { forgetMeetupTokens } from './meetupTokens.js';
 import { recordManualOnboard, recordMeetupLink } from './memberLink.js';
+import { VerifyContext } from './verifyContext.js';
 
 /**
  * A Meetup account that is not in the group. The alert naming the person is
@@ -131,12 +132,11 @@ export async function syncRewardRoles(
 }
 
 export async function onboardUserCommon(
-  interaction: CommandInteraction | ButtonInteraction,
+  { guild, client }: Pick<VerifyContext, 'guild' | 'client'>,
   userId: string,
   gender: MemberGender,
   nickname?: string,
 ) {
-  const { guild, client } = interaction;
   const user = await client.users.fetch(userId);
   const fullUsername = user.tag;
 
@@ -215,9 +215,13 @@ export async function onboardUser(
  */
 export async function selfOnboardUser(
   meetupClient: GqlMeetupClient,
-  interaction: CommandInteraction | ButtonInteraction,
+  member: VerifyContext,
 ): Promise<{ meetupMemberUrl: string; meetupName: string }> {
-  const { user: discordUser } = interaction;
+  const discordUser = {
+    id: member.userId,
+    username: member.username,
+    toString: () => `<@${member.userId}>`,
+  };
 
   const userInfo = await meetupClient.getUserInfo();
   const membershipInfo = await meetupClient.getUserMembershipInfo();
@@ -226,10 +230,10 @@ export async function selfOnboardUser(
 
   if (!isMeetupGroupMember) {
     const cache = await ApplicationCache();
-    await forgetMeetupTokens(cache, interaction.user.id);
+    await forgetMeetupTokens(cache, member.userId);
 
     logger.warn(
-      `Non-member user failed to onboard: ${interaction.user.username}.
+      `Non-member user failed to onboard: ${member.username}.
             Membership info: ${JSON.stringify(membershipInfo)}`,
     );
 
@@ -241,7 +245,7 @@ export async function selfOnboardUser(
       ? linkStr(meetupName, memberUrl)
       : `${meetupName} (no profile url)`;
 
-    await logAlert(interaction.client, {
+    await logAlert(member.client, {
       title: 'Non-member tried to verify',
       description: `${discordUser.toString()} (${
         discordUser.username
@@ -251,7 +255,7 @@ export async function selfOnboardUser(
         {
           inline: true,
           name: 'Attempt',
-          value: describeInteraction(interaction),
+          value: member.attempt,
         },
       ],
     });
@@ -278,7 +282,7 @@ export async function selfOnboardUser(
     `Updating ${discordUser.username}'s display name to ${cleanedName} (Meetup name: ${name}).`,
   );
   await recordMeetupLink(
-    interaction,
+    member,
     {
       meetupId: userInfo.self.id,
       meetupName: userInfo.self.name,
@@ -287,7 +291,7 @@ export async function selfOnboardUser(
     'self_onboard',
   );
   await onboardUserCommon(
-    interaction,
+    member,
     discordUser.id,
     userInfo.self.gender,
     cleanedName,

@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { GqlMeetupClient } from '../../src/lib/client/meetup/gqlClient.js';
 import { getBadges } from '../../src/lib/helpers/getBadges.js';
+import { verifyContextOf } from '../../src/lib/helpers/verifyContext.js';
 
 vi.mock('../../src/lib/helpers/onboardUser.js', () => ({
   syncRewardRoles: vi.fn().mockResolvedValue(undefined),
@@ -79,7 +80,10 @@ describe('getBadges wiring', () => {
         };
       });
 
-    await getBadges(new GqlMeetupClient('token'), fakeInteraction());
+    await getBadges(
+      new GqlMeetupClient('token'),
+      verifyContextOf(fakeInteraction()),
+    );
 
     const all = sent.join('\n');
     // The fan-out that exhausted the dyno's memory must be gone from this path.

@@ -11,6 +11,7 @@ import * as paginationHelper from '../../../src/lib/client/meetup/paginationHelp
 import { GetGroupEventsResponse } from '../../../src/lib/client/meetup/types.js';
 import { getUserRoles } from '../../../src/lib/helpers/getUserRoles.js';
 import * as onboardUser from '../../../src/lib/helpers/onboardUser.js';
+import { verifyContextOf } from '../../../src/lib/helpers/verifyContext.js';
 
 // Mocking the external dependencies.
 // Real ESM module namespaces are frozen, so mutating
@@ -74,7 +75,10 @@ describe('getUserRoles', () => {
     });
 
     const addServerRoleMock = vi.mocked(onboardUser.addServerRole);
-    const granted = await getUserRoles(meetupClient, interaction);
+    const granted = await getUserRoles(
+      meetupClient,
+      verifyContextOf(interaction),
+    );
 
     expect(addServerRoleMock).toHaveBeenCalledWith(
       interaction.guild,
@@ -109,7 +113,9 @@ describe('getUserRoles', () => {
       },
     });
 
-    await expect(getUserRoles(meetupClient, interaction)).rejects.toThrow(
+    await expect(
+      getUserRoles(meetupClient, verifyContextOf(interaction)),
+    ).rejects.toThrow(
       `You're not a member on Meetup. Please join the group and try onboarding again`,
     );
   });
@@ -154,7 +160,7 @@ describe('getUserRoles', () => {
       },
     } as unknown as GetGroupEventsResponse);
 
-    await getUserRoles(meetupClient, interaction);
+    await getUserRoles(meetupClient, verifyContextOf(interaction));
 
     expect(addServerRoleMock).toHaveBeenCalledWith(
       interaction.guild,
@@ -200,7 +206,7 @@ describe('getUserRoles', () => {
       },
     } as unknown as GetGroupEventsResponse);
 
-    await getUserRoles(meetupClient, interaction);
+    await getUserRoles(meetupClient, verifyContextOf(interaction));
 
     // Expectations for not meeting the criteria for guest_host role
     expect(addServerRoleMock).not.toHaveBeenCalledWith(
@@ -215,7 +221,7 @@ describe('getUserRoles', () => {
       },
     } as unknown as GetGroupEventsResponse);
 
-    await getUserRoles(meetupClient, interaction);
+    await getUserRoles(meetupClient, verifyContextOf(interaction));
 
     // Expectations for not meeting the criteria for guest_host role
     expect(addServerRoleMock).not.toHaveBeenCalledWith(

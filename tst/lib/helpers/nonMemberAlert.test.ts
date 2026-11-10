@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { GqlMeetupClient } from '../../../src/lib/client/meetup/gqlClient.js';
 import { logAlert } from '../../../src/lib/helpers/discordLogger.js';
 import { selfOnboardUser } from '../../../src/lib/helpers/onboardUser.js';
+import { verifyContextOf } from '../../../src/lib/helpers/verifyContext.js';
 
 vi.mock('../../../src/lib/helpers/discordLogger.js', () => ({
   logActivity: vi.fn().mockResolvedValue(undefined),
@@ -72,7 +73,10 @@ describe('non-member verification alert', () => {
 
   it('posts the Meetup profile so organizers can follow up', async () => {
     await expect(
-      selfOnboardUser(fakeClient(PROFILE_URL), fakeInteraction()),
+      selfOnboardUser(
+        fakeClient(PROFILE_URL),
+        verifyContextOf(fakeInteraction()),
+      ),
     ).rejects.toThrow(/not a member of our Meetup group/);
 
     const entry = alertPayload();
@@ -89,9 +93,29 @@ describe('non-member verification alert', () => {
     );
   });
 
+  it('works from a plain context, as the website builds it, and names where it began', async () => {
+    const { guild, client } = verifyContextOf(fakeInteraction());
+    await expect(
+      selfOnboardUser(fakeClient(PROFILE_URL), {
+        guild,
+        client,
+        userId: '123456789012345678',
+        username: 'matcha.milktea123',
+        attempt: 'host dashboard',
+      }),
+    ).rejects.toThrow(/not a member of our Meetup group/);
+    const entry = alertPayload();
+    expect(entry.description).toContain('<@123456789012345678>');
+    expect(entry.fields).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: 'Attempt', value: 'host dashboard' }),
+      ]),
+    );
+  });
+
   it('falls back to the member id when Meetup returns no profile url', async () => {
     await expect(
-      selfOnboardUser(fakeClient(''), fakeInteraction()),
+      selfOnboardUser(fakeClient(''), verifyContextOf(fakeInteraction())),
     ).rejects.toThrow(/not a member of our Meetup group/);
 
     const entry = alertPayload();
@@ -109,7 +133,10 @@ describe('non-member verification alert', () => {
   it('tells the member which account they connected and how to switch', async () => {
     let message = '';
     try {
-      await selfOnboardUser(fakeClient(PROFILE_URL), fakeInteraction());
+      await selfOnboardUser(
+        fakeClient(PROFILE_URL),
+        verifyContextOf(fakeInteraction()),
+      );
     } catch (error: unknown) {
       message = (error as Error).message;
     }
@@ -125,7 +152,7 @@ describe('non-member verification alert', () => {
   it('marks the error handled so the wrapper skips its generic alert', async () => {
     const error = await selfOnboardUser(
       fakeClient(PROFILE_URL),
-      fakeInteraction(),
+      verifyContextOf(fakeInteraction()),
     ).catch((e: unknown) => e);
 
     // Without this marker discordCommandWrapper posts a second, less useful
@@ -134,9 +161,10 @@ describe('non-member verification alert', () => {
   });
 
   it('still clears the cached tokens', async () => {
-    await selfOnboardUser(fakeClient(PROFILE_URL), fakeInteraction()).catch(
-      () => undefined,
-    );
+    await selfOnboardUser(
+      fakeClient(PROFILE_URL),
+      verifyContextOf(fakeInteraction()),
+    ).catch(() => undefined);
 
     // Pre-existing behaviour: a non-member must re-authorize next attempt
     // rather than reuse a token for an account that cannot pass the check.
@@ -154,7 +182,9 @@ describe('non-member verification alert', () => {
       },
     } as never);
 
-    await selfOnboardUser(client, fakeInteraction()).catch(() => undefined);
+    await selfOnboardUser(client, verifyContextOf(fakeInteraction())).catch(
+      () => undefined,
+    );
 
     expect(logAlert).not.toHaveBeenCalled();
   });

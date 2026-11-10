@@ -1,5 +1,4 @@
 import {
-  ButtonInteraction,
   CommandInteraction,
   MessageContextMenuCommandInteraction,
   UserContextMenuCommandInteraction,
@@ -12,6 +11,7 @@ import { ApplicationMemberRepository } from '../../util/memberRepository.js';
 import { MeetupIdConflictError } from '../repositories/types.js';
 import { logActivity, logAlert } from './discordLogger.js';
 import { forgetMeetupTokens } from './meetupTokens.js';
+import { VerifyContext } from './verifyContext.js';
 
 const logger = new Logger({ name: 'memberLink' });
 
@@ -63,11 +63,16 @@ export interface MeetupLinkInfo {
  * Returns whether the link was saved.
  */
 export async function recordMeetupLink(
-  interaction: ButtonInteraction | CommandInteraction,
+  member: Pick<VerifyContext, 'client' | 'userId' | 'username'>,
   info: MeetupLinkInfo,
   method: 'self_onboard' | 'sync_v2',
 ): Promise<boolean> {
-  const { client, user } = interaction;
+  const { client } = member;
+  const user = {
+    id: member.userId,
+    username: member.username,
+    toString: () => `<@${member.userId}>`,
+  };
   const meetupLink = linkStr(info.meetupName, info.meetupMemberUrl);
   try {
     const repo = await ApplicationMemberRepository();
