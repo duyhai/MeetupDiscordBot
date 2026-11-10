@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { staticHtml } from '../../src/web/html.js';
 import { hostLayout } from '../../src/web/host/hostLayout.js';
 import { layout } from '../../src/web/pages.js';
-import { THEME_SCRIPT } from '../../src/web/theme.js';
+import { PALETTES, THEME_SCRIPT } from '../../src/web/theme.js';
 
 const NONCE = 'bm9uY2Utbm9uY2Utbm9uY2U=';
 
@@ -43,16 +43,38 @@ describe('theme toggle', () => {
       for (const choice of ['auto', 'light', 'dark']) {
         expect(page).toContain(`data-choice="${choice}"`);
       }
+      expect(header).toMatch(
+        /<label\s+class="palette-pick"\s+data-palette-pick\s+hidden\s*>/,
+      );
+      for (const { id, label } of PALETTES) {
+        expect(header).toContain(
+          `<option value="${id}">${label.replace('&', '&amp;')}</option>`,
+        );
+      }
     },
   );
+
+  it('the script lists the same palette ids as PALETTES, in order', () => {
+    // staticRaw takes no interpolation, so the script carries its own copy.
+    const literal = /PALETTES=\[([^\]]*)\]/.exec(THEME_SCRIPT.value)?.[1];
+    expect(literal).toBeDefined();
+    const ids = (literal ?? '').split(',').map((s) => s.replace(/'/g, ''));
+    expect(ids).toEqual(PALETTES.map((p) => p.id));
+    expect(ids[0]).toBe('night');
+    // The ids become data-palette values and CSS selectors: plain words.
+    expect(ids.every((id) => /^[a-z]+$/.test(id))).toBe(true);
+  });
 });
 
 /** THEME_SCRIPT run against a fake page: <html>, the toggle, storage. */
-function runTheme(storage: {
-  getItem: (k: string) => string | null;
-  setItem: (k: string, v: string) => void;
-  removeItem: (k: string) => void;
-}) {
+function runTheme(
+  storage: {
+    getItem: (k: string) => string | null;
+    setItem: (k: string, v: string) => void;
+    removeItem: (k: string) => void;
+  },
+  { withPicker = true }: { withPicker?: boolean } = {},
+) {
   const attrs = new Map<string, string>();
   const root = {
     setAttribute: (k: string, v: string) => attrs.set(k, v),
@@ -72,11 +94,24 @@ function runTheme(storage: {
     };
   });
   const group = { hidden: true, querySelectorAll: () => buttons };
+  let onChange: (() => void) | undefined;
+  const select = {
+    value: '',
+    addEventListener: (_type: string, fn: () => void) => {
+      onChange = fn;
+    },
+  };
+  const pick = { hidden: true, querySelector: () => select };
   let onStorage: ((e: { key: string | null }) => void) | undefined;
   const document = {
     documentElement: root,
     readyState: 'complete',
-    querySelector: () => group,
+    querySelector: (selector: string) => {
+      if (selector === '[data-theme-toggle]') {
+        return group;
+      }
+      return selector === '[data-palette-pick]' && withPicker ? pick : null;
+    },
     addEventListener: () => undefined,
   };
   const window = {
@@ -98,7 +133,14 @@ function runTheme(storage: {
   const [auto, light, dark] = buttons;
   return {
     theme: () => attrs.get('data-theme'),
+    palette: () => attrs.get('data-palette'),
     group,
+    pick,
+    select,
+    choosePalette: (v: string) => {
+      select.value = v;
+      onChange?.();
+    },
     auto,
     light,
     dark,
@@ -188,5 +230,133 @@ describe('THEME_SCRIPT behaviour', () => {
     storage.data.set('dashboard-theme', 'light');
     page.storageEvent('other');
     expect(page.theme()).toBeUndefined();
+  });
+});
+
+describe('THEME_SCRIPT palettes', () => {
+  it('the default palette sets no attribute and shows the picker on Night market', () => {
+    const page = runTheme(memoryStorage());
+    expect(page.palette()).toBeUndefined();
+    expect(page.pick.hidden).toBe(false);
+    expect(page.select.value).toBe('night');
+  });
+
+  it('starts on the saved palette', () => {
+    const page = runTheme(memoryStorage({ 'dashboard-palette': 'paper' }));
+    expect(page.palette()).toBe('paper');
+    expect(page.select.value).toBe('paper');
+  });
+
+  it('ignores a saved palette the stylesheet does not define', () => {
+    const page = runTheme(memoryStorage({ 'dashboard-palette': 'neon' }));
+    expect(page.palette()).toBeUndefined();
+    expect(page.select.value).toBe('night');
+  });
+
+  it('a pick saves the palette, and Night market clears it', () => {
+    const storage = memoryStorage();
+    const page = runTheme(storage);
+    page.choosePalette('quiet');
+    expect(page.palette()).toBe('quiet');
+    expect(storage.data.get('dashboard-palette')).toBe('quiet');
+    page.choosePalette('night');
+    expect(page.palette()).toBeUndefined();
+    expect(storage.data.has('dashboard-palette')).toBe(false);
+  });
+
+  it('palette and theme are independent', () => {
+    const storage = memoryStorage();
+    const page = runTheme(storage);
+    page.choosePalette('potluck');
+    page.dark.click();
+    expect(page.palette()).toBe('potluck');
+    expect(page.theme()).toBe('dark');
+    page.auto.click();
+    expect(page.palette()).toBe('potluck');
+    expect(page.theme()).toBeUndefined();
+  });
+
+  it('follows another tab, and a cleared storage returns to Night market', () => {
+    const storage = memoryStorage();
+    const page = runTheme(storage);
+    storage.data.set('dashboard-palette', 'paper');
+    page.storageEvent('dashboard-palette');
+    expect(page.palette()).toBe('paper');
+    storage.data.clear();
+    page.storageEvent(null);
+    expect(page.palette()).toBeUndefined();
+    expect(page.select.value).toBe('night');
+  });
+
+  it('a palette that cannot be saved still applies in this tab', () => {
+    const storage = memoryStorage();
+    storage.setItem = () => {
+      throw new Error('quota');
+    };
+    const page = runTheme(storage);
+    page.choosePalette('paper');
+    expect(page.palette()).toBe('paper');
+    expect(page.select.value).toBe('paper');
+  });
+
+  it('Night market wins in this tab even when the stale palette cannot be removed', () => {
+    const storage = memoryStorage({ 'dashboard-palette': 'quiet' });
+    storage.removeItem = () => {
+      throw new Error('storage blocked');
+    };
+    const page = runTheme(storage);
+    page.choosePalette('night');
+    expect(page.palette()).toBeUndefined();
+  });
+
+  it("a theme change in another tab leaves this tab's palette pick alone", () => {
+    const storage = memoryStorage();
+    storage.setItem = () => {
+      throw new Error('quota');
+    };
+    const page = runTheme(storage);
+    page.choosePalette('potluck');
+    storage.data.set('dashboard-theme', 'dark');
+    page.storageEvent('dashboard-theme');
+    expect(page.theme()).toBe('dark');
+    expect(page.palette()).toBe('potluck');
+  });
+
+  it("a palette change in another tab leaves this tab's theme pick alone", () => {
+    const storage = memoryStorage();
+    storage.setItem = () => {
+      throw new Error('quota');
+    };
+    const page = runTheme(storage);
+    page.dark.click();
+    storage.data.set('dashboard-palette', 'quiet');
+    page.storageEvent('dashboard-palette');
+    expect(page.palette()).toBe('quiet');
+    expect(page.theme()).toBe('dark');
+  });
+
+  it('a cleared storage resets both the theme and the palette', () => {
+    const storage = memoryStorage();
+    storage.setItem = () => {
+      throw new Error('quota');
+    };
+    const page = runTheme(storage);
+    page.dark.click();
+    page.choosePalette('paper');
+    storage.data.clear();
+    page.storageEvent(null);
+    expect(page.theme()).toBeUndefined();
+    expect(page.palette()).toBeUndefined();
+    expect(page.select.value).toBe('night');
+  });
+
+  it('a page without the picker still applies the saved palette', () => {
+    const page = runTheme(memoryStorage({ 'dashboard-palette': 'paper' }), {
+      withPicker: false,
+    });
+    expect(page.palette()).toBe('paper');
+    expect(page.group.hidden).toBe(false);
+    page.dark.click();
+    expect(page.theme()).toBe('dark');
   });
 });

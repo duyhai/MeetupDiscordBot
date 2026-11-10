@@ -16,37 +16,91 @@ export interface PageUser {
 }
 
 /**
- * The one stylesheet (nonce'd; no other CSS, no web fonts). Two-Tone: blurple
- * marks what you can act on, coral what needs a person, green what is done.
+ * The one stylesheet (nonce'd; no other CSS, no web fonts). Night market: a
+ * sand page and teal buttons by day, plum-black with tangerine and magenta by
+ * night; the accent marks what you can act on, coral what needs a person,
+ * green what is done.
  * Light tokens on :root, dark ones under prefers-color-scheme: dark unless
  * the page chose light (data-theme="light"), and again for data-theme="dark"
- * (the header's theme toggle sets either; see theme.ts). Every text/background pair is
+ * (the header's theme toggle sets either; see theme.ts). Three more palettes
+ * follow under data-palette, which the header's Style picker sets. Every text/background pair is
  * checked against WCAG AA in contrast.test.ts, which also checks the two
  * dark blocks are the same.
  */
 // prettier-ignore
 export const STYLE = staticRaw`
-:root{--bg:#f5f5fa;--surface:#ffffff;--raised:#f1f1f8;--fg:#191a24;--muted:#555869;--line:#dedfea;--field:#7c7f93;
---sel:#ebecfb;--accent:#4f5bd5;--btn:#4752c4;--btn-hover:#3940a0;--btn-fg:#ffffff;--focus:#5865f2;--attn:#c9283a;
---attn-soft:#fde3e6;--attn-ink:#9c1c2c;--accent-soft:#e8e9fd;--accent-ink:#3940a0;--ok-soft:#ddf2e5;--ok-ink:#1f693d;
---rule-a:#5865f2;--rule-b:#e8414f;--heat1:#c9cdf7;--heat2:#9ca3ee;--heat3:#6b75e0;--heat4:#4752c4;
+:root{--bg:#f7efe6;--surface:#ffffff;--raised:#f1e5d6;--fg:#1d1527;--muted:#5e5468;--line:#e2d5c3;--field:#7d7186;
+--sel:#ffe5d1;--accent:#a83a0c;--btn:#0c6b74;--btn-hover:#09525a;--btn-fg:#ffffff;--focus:#c2410c;--attn:#b4232c;
+--attn-soft:#ffe0dc;--attn-ink:#8a1c24;--accent-soft:#ffe6d6;--accent-ink:#7a2a08;--ok-soft:#d8f3ea;--ok-ink:#135a4b;
+--rule-a:#ff7a1a;--rule-b:#e5007d;--heat1:#ffe0c2;--heat2:#ffb27a;--heat3:#e0640c;--heat4:#a83a0c;
 --font:system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
 --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;
 --s1:4px;--s2:8px;--s3:12px;--s4:16px;--s5:24px;--s6:32px;--t-sm:.875rem;--t-base:1rem;--t-lg:1.125rem;--t-xl:1.375rem;
 --t-2xl:1.75rem;
---radius:10px;--tap:44px;--width:1040px;color-scheme:light}
-@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#17181f;--surface:#20212b;--raised:#2a2b37;
---fg:#eeeef6;--muted:#a9abbd;
---line:#363847;--field:#7a7d93;--sel:#2f3150;--accent:#8d96ff;--btn:#5865f2;--btn-hover:#4752c4;--btn-fg:#ffffff;
---focus:#a3aaff;--attn:#ff7d88;--attn-soft:#46252c;--attn-ink:#ffbac0;--accent-soft:#30335e;--accent-ink:#cbcffd;
---ok-soft:#203a2b;--ok-ink:#8fd8ab;--rule-a:#7984ff;--rule-b:#ff6b77;--heat1:#353a6e;--heat2:#4a54b0;--heat3:#6c76f0;
---heat4:#a3aaff;color-scheme:dark}}
-:root[data-theme="dark"]{--bg:#17181f;--surface:#20212b;--raised:#2a2b37;
---fg:#eeeef6;--muted:#a9abbd;
---line:#363847;--field:#7a7d93;--sel:#2f3150;--accent:#8d96ff;--btn:#5865f2;--btn-hover:#4752c4;--btn-fg:#ffffff;
---focus:#a3aaff;--attn:#ff7d88;--attn-soft:#46252c;--attn-ink:#ffbac0;--accent-soft:#30335e;--accent-ink:#cbcffd;
---ok-soft:#203a2b;--ok-ink:#8fd8ab;--rule-a:#7984ff;--rule-b:#ff6b77;--heat1:#353a6e;--heat2:#4a54b0;--heat3:#6c76f0;
---heat4:#a3aaff;color-scheme:dark}
+--radius:14px;--tap:44px;--width:1040px;color-scheme:light}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#0b0912;--surface:#15111f;--raised:#1f1a2c;
+--fg:#f6efff;--muted:#bfb3d4;
+--line:#2d2640;--field:#8c80a6;--sel:#2a1f3a;--accent:#ffa05c;--btn:#ff8a3d;--btn-hover:#ffa05c;--btn-fg:#1a0f05;
+--focus:#4fe3d2;--attn:#ff6b9d;--attn-soft:#4a1a33;--attn-ink:#ffbcd6;--accent-soft:#4a2a1a;--accent-ink:#ffd0b0;
+--ok-soft:#103a36;--ok-ink:#7fe6d6;--rule-a:#ff8a3d;--rule-b:#ff3f9e;--heat1:#3a2a1a;--heat2:#7a4520;--heat3:#d86a2a;
+--heat4:#ffa05c;color-scheme:dark}}
+:root[data-theme="dark"]{--bg:#0b0912;--surface:#15111f;--raised:#1f1a2c;
+--fg:#f6efff;--muted:#bfb3d4;
+--line:#2d2640;--field:#8c80a6;--sel:#2a1f3a;--accent:#ffa05c;--btn:#ff8a3d;--btn-hover:#ffa05c;--btn-fg:#1a0f05;
+--focus:#4fe3d2;--attn:#ff6b9d;--attn-soft:#4a1a33;--attn-ink:#ffbcd6;--accent-soft:#4a2a1a;--accent-ink:#ffd0b0;
+--ok-soft:#103a36;--ok-ink:#7fe6d6;--rule-a:#ff8a3d;--rule-b:#ff3f9e;--heat1:#3a2a1a;--heat2:#7a4520;--heat3:#d86a2a;
+--heat4:#ffa05c;color-scheme:dark}
+/* Palettes the header picker offers besides the default (Night market, above): one light block, then the same dark
+   tokens twice, as for the default. Non-colour tokens sit in the light block and hold in both modes. */
+:root[data-palette="paper"]{
+--bg:#f6efe4;--surface:#fffaf2;--raised:#f0e6d6;--fg:#2a221c;--muted:#665a4e;--line:#e3d6c2;--field:#8a7a68;
+--sel:#f5e9d2;--accent:#962d22;--btn:#962d22;--btn-hover:#742118;--btn-fg:#ffffff;--focus:#9c6a14;--attn:#962d22;
+--attn-soft:#f8dcd4;--attn-ink:#6a1c14;--accent-soft:#f3e2c8;--accent-ink:#6a1c14;--ok-soft:#e1ead6;--ok-ink:#3a5528;
+--rule-a:#962d22;--rule-b:#b8893a;--heat1:#eedcb8;--heat2:#d9b36b;--heat3:#a67624;--heat4:#7a5418;--radius:6px;
+--s4:20px;--s5:28px;--s6:40px}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"])[data-palette="paper"]{
+--bg:#1d1a17;--surface:#272320;--raised:#332e29;--fg:#f3eadc;--muted:#c6b9a7;--line:#443d36;--field:#8f8274;
+--sel:#3d342c;--accent:#e8b86d;--btn:#c0453a;--btn-hover:#a8382e;--btn-fg:#ffffff;--focus:#e8b86d;--attn:#ff9a90;
+--attn-soft:#4a2520;--attn-ink:#ffc9c2;--accent-soft:#4a3a22;--accent-ink:#f5d9a8;--ok-soft:#2c3a24;--ok-ink:#b5d9a0;
+--rule-a:#c0453a;--rule-b:#e8b86d;--heat1:#4a3a22;--heat2:#7a5c2a;--heat3:#b8893a;--heat4:#e8b86d}}
+:root[data-theme="dark"][data-palette="paper"]{
+--bg:#1d1a17;--surface:#272320;--raised:#332e29;--fg:#f3eadc;--muted:#c6b9a7;--line:#443d36;--field:#8f8274;
+--sel:#3d342c;--accent:#e8b86d;--btn:#c0453a;--btn-hover:#a8382e;--btn-fg:#ffffff;--focus:#e8b86d;--attn:#ff9a90;
+--attn-soft:#4a2520;--attn-ink:#ffc9c2;--accent-soft:#4a3a22;--accent-ink:#f5d9a8;--ok-soft:#2c3a24;--ok-ink:#b5d9a0;
+--rule-a:#c0453a;--rule-b:#e8b86d;--heat1:#4a3a22;--heat2:#7a5c2a;--heat3:#b8893a;--heat4:#e8b86d}
+:root[data-palette="potluck"]{
+--bg:#fff6e5;--surface:#ffffff;--raised:#fff0cc;--fg:#2b1d14;--muted:#6b5343;--line:#f0d9a8;--field:#8a6a52;
+--sel:#ffe7b3;--accent:#b83a0a;--btn:#b83a0a;--btn-hover:#8f2c06;--btn-fg:#ffffff;--focus:#a85a00;--attn:#b4232c;
+--attn-soft:#ffe1e0;--attn-ink:#8a1620;--accent-soft:#ffe3c2;--accent-ink:#7a2a08;--ok-soft:#dff3d0;--ok-ink:#2a6120;
+--rule-a:#f59e0b;--rule-b:#ef4444;--heat1:#fde68a;--heat2:#fbbf24;--heat3:#e0640c;--heat4:#b83a0a;--radius:22px;
+--font:ui-rounded,"SF Pro Rounded","Hiragino Maru Gothic ProN","Arial Rounded MT Bold",
+system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"])[data-palette="potluck"]{
+--bg:#221a1f;--surface:#2d2329;--raised:#3a2d33;--fg:#fff3e6;--muted:#d2c0b0;--line:#4e3e45;--field:#a08c7e;
+--sel:#4a3338;--accent:#ffa26b;--btn:#ff8a4c;--btn-hover:#ffa26b;--btn-fg:#2b1d14;--focus:#ffd166;--attn:#ff8f8f;
+--attn-soft:#5a2a2e;--attn-ink:#ffc6c6;--accent-soft:#5a3a2a;--accent-ink:#ffd3b8;--ok-soft:#2d4a2a;--ok-ink:#b7e8a3;
+--rule-a:#ffb347;--rule-b:#ff6b6b;--heat1:#5a4120;--heat2:#8a5a1a;--heat3:#e08a3a;--heat4:#ffa26b}}
+:root[data-theme="dark"][data-palette="potluck"]{
+--bg:#221a1f;--surface:#2d2329;--raised:#3a2d33;--fg:#fff3e6;--muted:#d2c0b0;--line:#4e3e45;--field:#a08c7e;
+--sel:#4a3338;--accent:#ffa26b;--btn:#ff8a4c;--btn-hover:#ffa26b;--btn-fg:#2b1d14;--focus:#ffd166;--attn:#ff8f8f;
+--attn-soft:#5a2a2e;--attn-ink:#ffc6c6;--accent-soft:#5a3a2a;--accent-ink:#ffd3b8;--ok-soft:#2d4a2a;--ok-ink:#b7e8a3;
+--rule-a:#ffb347;--rule-b:#ff6b6b;--heat1:#5a4120;--heat2:#8a5a1a;--heat3:#e08a3a;--heat4:#ffa26b}
+:root[data-palette="quiet"]{
+--bg:#f4f1ec;--surface:#fbfaf7;--raised:#ebe7df;--fg:#2b2924;--muted:#66625a;--line:#dcd7cd;--field:#878278;
+--sel:#e9e4da;--accent:#4f5e42;--btn:#2b2924;--btn-hover:#44413a;--btn-fg:#f8f6f2;--focus:#4f5e42;--attn:#954535;
+--attn-soft:#f1dfd8;--attn-ink:#6b2f22;--accent-soft:#e6e9df;--accent-ink:#3a4530;--ok-soft:#e3e8dc;--ok-ink:#3a4530;
+--rule-a:#dcd7cd;--rule-b:#dcd7cd;--heat1:#e3e0d6;--heat2:#c5c0b2;--heat3:#878278;--heat4:#4f5e42;--radius:0px;
+--s5:32px;--s6:48px}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"])[data-palette="quiet"]{
+--bg:#1b1a18;--surface:#201f1c;--raised:#2a2825;--fg:#ebe7df;--muted:#aaa59b;--line:#35332f;--field:#807b72;
+--sel:#2f2d29;--accent:#aab89a;--btn:#ebe7df;--btn-hover:#ffffff;--btn-fg:#1b1a18;--focus:#aab89a;--attn:#e0917f;
+--attn-soft:#432a24;--attn-ink:#f2c3b8;--accent-soft:#2d3228;--accent-ink:#cdd7c2;--ok-soft:#2a3326;--ok-ink:#bfd0b0;
+--rule-a:#35332f;--rule-b:#35332f;--heat1:#3d3b36;--heat2:#5e5b52;--heat3:#8f8a80;--heat4:#aab89a}}
+:root[data-theme="dark"][data-palette="quiet"]{
+--bg:#1b1a18;--surface:#201f1c;--raised:#2a2825;--fg:#ebe7df;--muted:#aaa59b;--line:#35332f;--field:#807b72;
+--sel:#2f2d29;--accent:#aab89a;--btn:#ebe7df;--btn-hover:#ffffff;--btn-fg:#1b1a18;--focus:#aab89a;--attn:#e0917f;
+--attn-soft:#432a24;--attn-ink:#f2c3b8;--accent-soft:#2d3228;--accent-ink:#cdd7c2;--ok-soft:#2a3326;--ok-ink:#bfd0b0;
+--rule-a:#35332f;--rule-b:#35332f;--heat1:#3d3b36;--heat2:#5e5b52;--heat3:#8f8a80;--heat4:#aab89a}
 *,*::before,*::after{box-sizing:border-box}
 html{-webkit-text-size-adjust:100%;text-size-adjust:100%}
 body{margin:0;font-family:var(--font);font-size:var(--t-base);line-height:1.5;color:var(--fg);background:var(--bg)}
@@ -78,6 +132,9 @@ header.site form{margin:0}
   font:inherit;font-size:var(--t-sm);cursor:pointer}
 .theme-toggle button:hover{color:var(--fg);background:var(--sel)}
 .theme-toggle button[aria-pressed="true"]{color:var(--accent-ink);background:var(--accent-soft);font-weight:600}
+.palette-pick{display:inline-flex;align-items:center;gap:var(--s2);font-size:var(--t-sm);color:var(--muted)}
+.palette-pick[hidden]{display:none}
+.palette-pick select{min-height:32px;padding:0 var(--s2);border-radius:999px;font-size:var(--t-sm);color:var(--fg)}
 nav.site{background:var(--surface);border-bottom:1px solid var(--line);overflow-x:auto;scrollbar-width:thin}
 nav.site .tabs{display:flex;gap:var(--s1);max-width:var(--width);margin:0 auto;padding:0 var(--s2)}
 nav.site a{flex:0 0 auto;display:inline-flex;align-items:center;min-height:var(--tap);padding:0 var(--s3);
