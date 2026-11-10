@@ -1357,6 +1357,61 @@ describe('Verify on Discord: joining the server and running Verify', () => {
       expect(app.store.linkUnlessLinkedElsewhere).not.toHaveBeenCalled();
     });
 
+    /** A refresh with no kept token, through the Meetup step and back. */
+    async function viaMeetup(app: Awaited<ReturnType<typeof linkedSetup>>) {
+      const res = await refresh(app);
+      const href =
+        /<a class="button" href="([^"]+)">Continue to Meetup<\/a>/.exec(
+          res.text,
+        )?.[1];
+      const url = new URL((href ?? '').replace(/&amp;/g, '&'));
+      return app.req
+        .get(
+          `/host/auth/meetup/complete?state=${url.searchParams.get('state') ?? ''}&code=m`,
+        )
+        .set(
+          'Cookie',
+          `${app.sid}; ${setCookie(res, 'host_oauth_meetup') ?? ''}`,
+        );
+    }
+
+    it('a refresh through Meetup counts against the limit too', async () => {
+      const app = await linkedSetup(true, { keptToken: false });
+      expect((await viaMeetup(app)).text).toContain('You are verified');
+      const again = await viaMeetup(app);
+      expect(again.status).toBe(429);
+      expect(again.text).toContain('You refreshed recently');
+      expect(app.runVerify).toHaveBeenCalledTimes(1);
+    });
+
+    it('Finish verification through Meetup is not limited', async () => {
+      const app = await linkedSetup(true, { keptToken: false });
+      const finish = async () => {
+        const res = await app.req
+          .post('/host/verify/finish')
+          .set('Cookie', app.sid)
+          .set('Origin', ORIGIN)
+          .type('form')
+          .send({ _csrf: app.session().csrfToken });
+        const href =
+          /<a class="button" href="([^"]+)">Continue to Meetup<\/a>/.exec(
+            res.text,
+          )?.[1];
+        const url = new URL((href ?? '').replace(/&amp;/g, '&'));
+        return app.req
+          .get(
+            `/host/auth/meetup/complete?state=${url.searchParams.get('state') ?? ''}&code=m`,
+          )
+          .set(
+            'Cookie',
+            `${app.sid}; ${setCookie(res, 'host_oauth_meetup') ?? ''}`,
+          );
+      };
+      expect((await finish()).text).toContain('You are verified');
+      expect((await finish()).text).toContain('You are verified');
+      expect(app.runVerify).toHaveBeenCalledTimes(2);
+    });
+
     it('someone no longer in the server goes through Discord, with guilds.join', async () => {
       const app = await linkedSetup(false);
       const url = continueHref(await refresh(app));
@@ -1377,6 +1432,27 @@ describe('Verify on Discord: joining the server and running Verify', () => {
       expect(app.store.linkUnlessLinkedElsewhere).not.toHaveBeenCalled();
       expect(JSON.stringify(app.alert.mock.calls)).toContain(
         'a different Discord account',
+      );
+    });
+
+    it('the mismatch page says "your linked account" when the name cannot be found', async () => {
+      const app = await linkedSetup(false);
+      app.discordUsername.mockRejectedValueOnce(new Error('discord down'));
+      const thrown = await viaDiscord(app, {
+        id: '223456789012345678',
+        username: 'Someone else',
+      });
+      expect(thrown.status).toBe(403);
+      expect(thrown.text).toMatch(
+        /Sign in to Discord as\s+your linked account,/,
+      );
+      app.discordUsername.mockResolvedValueOnce(undefined);
+      const unnamed = await viaDiscord(app, {
+        id: '223456789012345678',
+        username: 'Someone else',
+      });
+      expect(unnamed.text).toMatch(
+        /Sign in to Discord as\s+your linked account,/,
       );
     });
 

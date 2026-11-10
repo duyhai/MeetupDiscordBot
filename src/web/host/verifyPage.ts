@@ -17,10 +17,12 @@ export type ServerJoinResult =
 /**
  * The sealed Meetup cookie's marker for "Verify on Discord": this session's
  * tag, the Discord account just linked, and the join result as two flags
- * (j/- joined, p/- pending), "f" (failed) or "x" (not attempted).
+ * (j/- joined, p/- pending), "f" (failed) or "x" (not attempted); then
+ * ".r" when the run is a "Refresh roles and badges" (counted against its
+ * limit at the Meetup callback).
  */
 export const VERIFY_MARK =
-  /^verify\.([A-Za-z0-9_-]{22})\.([0-9]{17,20})\.(f|x|[j-][p-])$/;
+  /^verify\.([A-Za-z0-9_-]{22})\.([0-9]{17,20})\.(f|x|[j-][p-])(\.r)?$/;
 
 export function joinFlags(join: ServerJoinResult): string {
   if (join === undefined) {

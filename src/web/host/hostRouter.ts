@@ -796,17 +796,11 @@ export function createHostRouter(deps: HostRouterDeps): express.Router {
         );
         return;
       }
+      // A host already linked before this step is refreshing.
+      const refreshing = session.discordUserId !== null;
       const stored = await storedMeetupToken(identity.id, meetupId);
       if (stored) {
-        // A host already linked before this step is refreshing.
-        await runAndShow(
-          res,
-          session,
-          identity.id,
-          stored,
-          join,
-          session.discordUserId !== null,
-        );
+        await runAndShow(res, session, identity.id, stored, join, refreshing);
         return;
       }
       const state = newHostState();
@@ -814,7 +808,7 @@ export function createHostRouter(deps: HostRouterDeps): express.Router {
         res,
         HOST_MEETUP_OAUTH_COOKIE,
         state,
-        `verify.${sessionTag(sid)}.${identity.id}.${joinFlags(join)}`,
+        `verify.${sessionTag(sid)}.${identity.id}.${joinFlags(join)}${refreshing ? '.r' : ''}`,
       );
       res.redirect(302, deps.meetup.buildAuthUrl(state));
     };
@@ -862,7 +856,7 @@ export function createHostRouter(deps: HostRouterDeps): express.Router {
       fail(res, 400);
       return;
     }
-    const [, tag, discordUserId, flags] = parsed;
+    const [, tag, discordUserId, flags, refreshMark] = parsed;
     const join = joinOf(flags);
     let read: Awaited<ReturnType<typeof readSession>>;
     try {
@@ -926,7 +920,14 @@ export function createHostRouter(deps: HostRouterDeps): express.Router {
         );
       }
     }
-    await runAndShow(res, session, discordUserId, tokens.accessToken, join);
+    await runAndShow(
+      res,
+      session,
+      discordUserId,
+      tokens.accessToken,
+      join,
+      refreshMark !== undefined,
+    );
   }
 
   /**
@@ -960,7 +961,8 @@ export function createHostRouter(deps: HostRouterDeps): express.Router {
       return;
     }
     // Counted only here, when Verify really runs: an outage, a step backed
-    // out of, or a double click never uses up the refresh.
+    // out of, or a double click never uses up the refresh. A run that then
+    // fails (refused, roles not set) still counts.
     if (refresh && !verifyRefreshLimiter.take(session.userId)) {
       page({ kind: 'too-soon' }, 429);
       return;
@@ -1041,9 +1043,14 @@ export function createHostRouter(deps: HostRouterDeps): express.Router {
   /**
    * The Meetup step on its own, for a host already linked: a page that
    * LINKS to Meetup (form-action 'self'), with a sealed, session-bound
-   * cookie for the Discord account.
+   * cookie for the Discord account (and whether it is a refresh, counted
+   * when Meetup sends them back).
    */
-  function meetupHopPage(res: Response, discordUserId: string) {
+  function meetupHopPage(
+    res: Response,
+    discordUserId: string,
+    refresh = false,
+  ) {
     const { session, sid, nonce } = hostLocals(res);
     const state = newHostState();
     const href = safeHref(deps.meetup.buildAuthUrl(state));
@@ -1056,7 +1063,7 @@ export function createHostRouter(deps: HostRouterDeps): express.Router {
       res,
       HOST_MEETUP_OAUTH_COOKIE,
       state,
-      `verify.${sessionTag(sid)}.${discordUserId}.x`,
+      `verify.${sessionTag(sid)}.${discordUserId}.x${refresh ? '.r' : ''}`,
     );
     send(
       res,
@@ -1408,7 +1415,7 @@ export function createHostRouter(deps: HostRouterDeps): express.Router {
       await runAndShow(res, session, discordUserId, stored, undefined, true);
       return;
     }
-    meetupHopPage(res, discordUserId);
+    meetupHopPage(res, discordUserId, true);
   }
 
   /** Discord's sign-in for "Verify on Discord": a page that LINKS to it. */

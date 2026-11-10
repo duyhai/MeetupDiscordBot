@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { GUILD_ID } from '../../../src/constants.js';
 import {
+  discordUsername,
   ensureServerMember,
   isServerMember,
 } from '../../../src/web/host/serverJoin.js';
@@ -133,5 +134,32 @@ describe('Unknown User', () => {
       (await ensureServerMember(() => join.client, USER, 'oauth')).joined,
     ).toBe(true);
     expect(join.add).toHaveBeenCalled();
+  });
+});
+
+describe('discordUsername', () => {
+  const withUsers = (fetch: () => Promise<{ username: string }>) =>
+    ({ users: { fetch: vi.fn(fetch) } }) as unknown as Client;
+
+  it('names the account, or nothing if Discord does not know it or the bot is not ready', async () => {
+    const known = withUsers(async () => ({ username: 'dee.linked' }));
+    expect(await discordUsername(() => known, USER)).toBe('dee.linked');
+    const unknown = withUsers(async () => {
+      throw new Error('Unknown User');
+    });
+    expect(await discordUsername(() => unknown, USER)).toBeUndefined();
+    expect(await discordUsername(() => undefined, USER)).toBeUndefined();
+  });
+
+  it('gives up after its timeout rather than wait on a slow Discord', async () => {
+    const slow = withUsers(
+      async () =>
+        new Promise(() => {
+          // never answers
+        }),
+    );
+    const started = Date.now();
+    expect(await discordUsername(() => slow, USER, 20)).toBeUndefined();
+    expect(Date.now() - started).toBeLessThan(1000);
   });
 });

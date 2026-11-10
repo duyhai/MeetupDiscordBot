@@ -94,18 +94,34 @@ export async function isServerMember(
   }
 }
 
-/** The Discord username for an id, asked with the bot; undefined if Discord does not know it. */
+/**
+ * The Discord username for an id, asked with the bot; undefined if Discord
+ * does not know it or takes longer than `timeoutMs` (it only names an
+ * account on an error page, which an outage must not slow down).
+ */
 export async function discordUsername(
   getClient: () => Client | undefined,
   discordUserId: string,
+  timeoutMs = 2000,
 ): Promise<string | undefined> {
   const client = getClient();
   if (!client) {
     return undefined;
   }
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<undefined>((resolve) => {
+    timer = setTimeout(() => {
+      resolve(undefined);
+    }, timeoutMs);
+  });
   try {
-    return (await client.users.fetch(discordUserId)).username;
+    return await Promise.race([
+      client.users.fetch(discordUserId).then((user) => user.username),
+      timeout,
+    ]);
   } catch {
     return undefined;
+  } finally {
+    clearTimeout(timer);
   }
 }
