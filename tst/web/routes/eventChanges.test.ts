@@ -183,6 +183,19 @@ describe('Event changes page', () => {
     expect(other.text).not.toContain('<script>alert');
   });
 
+  it('a row with no readable hosts and no URL renders plainly, never a link', async () => {
+    const { get } = await setup({
+      changes: [
+        eventChangeRow({ hosts: [], eventUrl: null, title: 'Mystery' }),
+      ],
+    });
+    const res = await get(PAGE);
+    expect(res.status).toBe(200);
+    expect(res.text).toContain('unknown hosts');
+    expect(res.text).toContain('Mystery');
+    expect(res.text).not.toContain('href="https://www.meetup.com');
+  });
+
   it('is the 503 page when the store cannot answer', async () => {
     const { get } = await setup({ broken: true });
     const res = await get(PAGE);
