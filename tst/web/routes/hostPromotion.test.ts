@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { GUEST_HOST_MEETUP_BLACKLIST } from '../../../src/constants.js';
+
 import { HostEvent } from '../../../src/lib/hosts/hostEvents.js';
 import { PromotionCandidate } from '../../../src/lib/hosts/promotionCandidates.js';
 import { PromotedHost } from '../../../src/lib/repositories/postgresPromotedHostRepository.js';
@@ -79,6 +81,7 @@ async function setup(
     rows?: PromotedHost[];
     past?: HostEvent[];
     candidates?: PromotionCandidate[] | 'never';
+    uncounted?: number;
     revoke?: Error;
   } = {},
 ) {
@@ -113,9 +116,13 @@ async function setup(
           },
         ]),
       ),
+      uncounted: options.uncounted ?? 0,
     };
   });
-  const hostPastEvents = vi.fn(async () => options.past ?? []);
+  // A host with one past event unless a test says otherwise.
+  const hostPastEvents = vi.fn(
+    async () => options.past ?? [pastEvent('1', '2026-01-10T19:00:00-08:00')],
+  );
   const { req } = await makeApp({
     now: () => PAGE_NOW.getTime(),
     protectedRoutes: (r) =>
@@ -193,6 +200,16 @@ describe('host promotion page', () => {
     expect(res.text).toContain('Reload in');
   }, 15_000);
 
+  it('hosts Meetup gave no count for are noted, the rest still listed', async () => {
+    const { get } = await setup({
+      candidates: [candidate('777', 31)],
+      uncounted: 2,
+    });
+    const res = await get(PAGE);
+    expect(res.text).toMatch(/did not give the count for 2\s+hosts/);
+    expect(res.text).toContain(`href="${PAGE}/777"`);
+  });
+
   it('demoted hosts are listed apart, not deleted', async () => {
     const { get } = await setup({
       rows: [promotedRow({ active: false, reason: 'Stepped back' })],
@@ -256,7 +273,7 @@ describe('a host’s page', () => {
     });
     const res = await get(MEMBER);
     expect(res.text).not.toContain('<script>alert');
-    const none = await setup();
+    const none = await setup({ past: [] });
     expect((await none.get(MEMBER)).status).toBe(404);
     expect((await none.get(`${PAGE}/0123`)).status).toBe(404);
   });
@@ -264,7 +281,7 @@ describe('a host’s page', () => {
 
 describe('promote and demote', () => {
   it('promote: recorded, the host signed out, logged and alerted with no pings', async () => {
-    const app = await setup({ past: [] });
+    const app = await setup();
     const res = await app.post({
       change: 'promote',
       version: '0',
@@ -398,15 +415,39 @@ describe('promote and demote', () => {
     expect(down.store.change).not.toHaveBeenCalled();
   });
 
-  it('a failed sign-out still records the change (the 10-minute re-check catches up)', async () => {
+  it('a failed sign-out still records the change, and says it applies within 10 minutes', async () => {
     const app = await setup({ revoke: new Error('redis down') });
     const res = await app.post({
       change: 'promote',
       version: '0',
       reason: 'x',
     });
-    expect(resultOf(res.headers.location)).toBe('promoted');
+    expect(resultOf(res.headers.location)).toBe('promoted-no-signout');
     expect(app.store.rows).toHaveLength(1);
+    const page = await app.get(res.headers.location ?? '');
+    expect(page.text).toContain('applies within 10 minutes');
+    expect(page.text).not.toContain('so it takes effect now');
+  });
+
+  it('someone the page would 404 (no row, history or past event) is 404 on POST too', async () => {
+    const app = await setup({ past: [] });
+    const res = await app.post({
+      change: 'promote',
+      version: '0',
+      reason: 'x',
+    });
+    expect(res.status).toBe(404);
+    expect(app.store.change).not.toHaveBeenCalled();
+  });
+
+  it('a blacklisted host cannot be promoted', async () => {
+    const app = await setup();
+    const res = await app.post(
+      { change: 'promote', version: '0', reason: 'x' },
+      `${PAGE}/${GUEST_HOST_MEETUP_BLACKLIST[0]}`,
+    );
+    expect(resultOf(res.headers.location)).toBe('blacklisted');
+    expect(app.store.change).not.toHaveBeenCalled();
   });
 
   it('a store failure says it did not save', async () => {

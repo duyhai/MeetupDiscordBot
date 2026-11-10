@@ -217,6 +217,8 @@ function banActions(
 
 /** The candidates are kept 30 minutes: a cold read is a year of events plus a count per host. */
 const CANDIDATES_TTL_MS = 30 * 60 * 1000;
+/** A hung Meetup read gives up after this, so the next load starts afresh. */
+const CANDIDATES_READ_TIMEOUT_MS = 2 * 60 * 1000;
 
 /** The promotion pages' organizer reads, shared by every request. */
 function promotionReads(getClient: () => Client | undefined) {
@@ -240,6 +242,12 @@ function promotionReads(getClient: () => Client | undefined) {
           new Set(),
         ),
       CANDIDATES_TTL_MS,
+      {
+        // A list missing some hosts is shown, not kept: the next load asks
+        // Meetup again.
+        keep: (list) => list.uncounted === 0,
+        timeoutMs: CANDIDATES_READ_TIMEOUT_MS,
+      },
     ),
     hostPastEvents: (meetupId: string) =>
       hostedEvents({ fetchGroupEvents, now }, meetupId, 'past'),

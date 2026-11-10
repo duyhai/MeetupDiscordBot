@@ -83,9 +83,17 @@ describe('promotionCandidates', () => {
     expect(seen.get('111')?.name).toBe('Ann');
   });
 
-  it('a count that fails fails the list', async () => {
-    const d = deps([event('1', '2026-03-01T19:00:00-08:00', [A])]);
+  it('a count that fails leaves that host out and is counted, not the whole list', async () => {
+    const d = deps([event('1', '2026-03-01T19:00:00-08:00', [A, B])]);
     d.pastHostedCount.mockRejectedValueOnce(new Error('meetup down'));
+    const list = await promotionCandidates(d, new Set());
+    expect(list.uncounted).toBe(1);
+    expect(list.candidates).toHaveLength(1);
+  });
+
+  it('the event read failing fails the list', async () => {
+    const d = deps([]);
+    d.fetchGroupEvents.mockRejectedValueOnce(new Error('meetup down'));
     await expect(promotionCandidates(d, new Set())).rejects.toThrow(
       'meetup down',
     );
@@ -102,7 +110,7 @@ describe('singleFlight', () => {
           release = resolve;
         }),
     );
-    const get = singleFlight(read, 1000, () => clock);
+    const get = singleFlight(read, 1000, { now: () => clock });
     const one = get();
     const two = get();
     release?.(7);
@@ -122,8 +130,33 @@ describe('singleFlight', () => {
       .fn<() => Promise<number>>()
       .mockRejectedValueOnce(new Error('down'))
       .mockResolvedValueOnce(5);
-    const get = singleFlight(read, 1000, () => 0);
+    const get = singleFlight(read, 1000, { now: () => 0 });
     await expect(get()).rejects.toThrow('down');
     expect(await get()).toBe(5);
+  });
+
+  it('a value keep refuses is returned but not kept', async () => {
+    const read = vi
+      .fn<() => Promise<number>>()
+      .mockResolvedValueOnce(1)
+      .mockResolvedValueOnce(2);
+    const get = singleFlight(read, 1000, {
+      now: () => 0,
+      keep: (v) => v > 1,
+    });
+    expect(await get()).toBe(1);
+    expect(await get()).toBe(2);
+    expect(await get()).toBe(2);
+    expect(read).toHaveBeenCalledTimes(2);
+  });
+
+  it('a hung read times out and frees the slot for the next caller', async () => {
+    const read = vi
+      .fn<() => Promise<number>>()
+      .mockImplementationOnce(() => new Promise<number>(() => undefined))
+      .mockResolvedValueOnce(9);
+    const get = singleFlight(read, 1000, { timeoutMs: 20 });
+    await expect(get()).rejects.toThrow('timed out');
+    expect(await get()).toBe(9);
   });
 });

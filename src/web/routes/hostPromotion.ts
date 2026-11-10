@@ -2,10 +2,14 @@ import dayjs from 'dayjs';
 import express, { RequestHandler, Response } from 'express';
 import { Logger } from 'tslog';
 
-import { COMMUNITY_HOST_PREFIX } from '../../constants.js';
+import {
+  COMMUNITY_HOST_PREFIX,
+  GUEST_HOST_MEETUP_BLACKLIST,
+} from '../../constants.js';
 import { LogEntry, alertText } from '../../lib/helpers/discordLogger.js';
 import { HostEvent, pacificDay } from '../../lib/hosts/hostEvents.js';
 import {
+  CandidateList,
   HostSeen,
   PROMOTION_MIN_EVENTS,
   PromotionCandidate,
@@ -24,7 +28,13 @@ import { dashboardLocals } from '../dashboardRouter.js';
 import { heatMapYear } from '../host/heatMap.js';
 import { SafeHtml, html, localUrl, memberText, safeHref } from '../html.js';
 import { discordUserLink, eventLink } from '../links.js';
-import { dashboardPage, load, loadOptional, notFound } from '../pageKit.js';
+import {
+  dashboardPage,
+  load,
+  loadOptional,
+  notFound,
+  pacificDate,
+} from '../pageKit.js';
 import { FixedWindowLimiter } from '../rateLimit.js';
 import {
   LeadershipAnswer,
@@ -73,10 +83,7 @@ export interface HostPromotionDeps {
    * host seen (for names). Promoted hosts are not left out here; the page
    * leaves out the active ones. Slow when cold.
    */
-  promotionCandidates: () => Promise<{
-    candidates: PromotionCandidate[];
-    seen: Map<string, HostSeen>;
-  }>;
+  promotionCandidates: () => Promise<CandidateList>;
   /** One member's PAST hosted events, newest first (organizer read). */
   hostPastEvents: (meetupMemberId: string) => Promise<HostEvent[]>;
   /** Ends the member's host-dashboard sessions, so a new tier applies at once. */
@@ -95,6 +102,16 @@ export const PROMOTION_RESULT_MESSAGES = {
     'Demoted. Their next events go through approval again; events already ' +
     'published stay. They were signed out of the host dashboard so it takes ' +
     'effect now.',
+  'promoted-no-signout':
+    'Promoted. Their next events publish without approval, titled ' +
+    `"${COMMUNITY_HOST_PREFIX}…". They could not be signed out of the host ` +
+    'dashboard, so it applies within 10 minutes.',
+  'demoted-no-signout':
+    'Demoted. Their next events go through approval again; events already ' +
+    'published stay. They could not be signed out of the host dashboard, so ' +
+    'it applies within 10 minutes.',
+  blacklisted:
+    'They are on the Guest Host blacklist, so they cannot be promoted. Nothing was changed.',
   unchanged: 'Nothing to change: they were already that.',
   'never-promoted': 'They were never promoted, so there is nothing to demote.',
   'reason-required': 'Write a reason, then try again.',
@@ -108,6 +125,13 @@ export const PROMOTION_RESULT_MESSAGES = {
 } as const;
 export type PromotionResultCode = keyof typeof PROMOTION_RESULT_MESSAGES;
 
+const DONE: ReadonlySet<PromotionResultCode> = new Set([
+  'promoted',
+  'demoted',
+  'promoted-no-signout',
+  'demoted-no-signout',
+]);
+
 const isResultCode = (code: unknown): code is PromotionResultCode =>
   typeof code === 'string' && Object.hasOwn(PROMOTION_RESULT_MESSAGES, code);
 
@@ -115,7 +139,7 @@ function resultNotice(code: unknown): SafeHtml | '' {
   if (!isResultCode(code)) {
     return '';
   }
-  return code === 'promoted' || code === 'demoted'
+  return DONE.has(code)
     ? html`<p class="note info">${PROMOTION_RESULT_MESSAGES[code]}</p>`
     : html`<p class="note attn">${PROMOTION_RESULT_MESSAGES[code]}</p>`;
 }
@@ -128,7 +152,10 @@ function field(body: unknown, name: string): string | undefined {
   return typeof value === 'string' ? value : undefined;
 }
 
-const dayText = (value: Date | string) => dayjs(value).format('MMM D, YYYY');
+/** A moment's day in the group's timezone (dynos run UTC). */
+const dayText = (value: Date | string) => pacificDate(value);
+/** A YYYY-MM-DD day as it is (already a Pacific day). */
+const plainDay = (day: string) => dayjs(day).format('MMM D, YYYY');
 
 function hostName(id: string, seen: Map<string, HostSeen>): SafeHtml {
   const name = seen.get(id)?.name;
@@ -167,7 +194,9 @@ function promotedTable(
 }
 
 function candidatesSection(
-  loaded: { ok: true; value: PromotionCandidate[] } | { ok: false },
+  loaded:
+    | { ok: true; value: PromotionCandidate[]; uncounted: number }
+    | { ok: false },
   seen: Map<string, HostSeen>,
 ): SafeHtml {
   if (!loaded.ok) {
@@ -176,30 +205,40 @@ function candidatesSection(
       a minute.
     </p>`;
   }
+  const partial =
+    loaded.uncounted > 0
+      ? html`<p class="note attn">
+          Meetup did not give the count for ${loaded.uncounted}
+          ${loaded.uncounted === 1 ? 'host' : 'hosts'}, so the list may be
+          missing someone. Reload later to ask again.
+        </p>`
+      : '';
   if (loaded.value.length === 0) {
-    return html`<p class="muted">
-      No regular host has ${PROMOTION_MIN_EVENTS} or more past events yet.
-    </p>`;
+    return html`${partial}
+      <p class="muted">
+        No regular host has ${PROMOTION_MIN_EVENTS} or more past events yet.
+      </p>`;
   }
-  return html`<table class="stack">
-    <thead>
-      <tr>
-        <th>Host</th>
-        <th>Past events</th>
-        <th>Last hosted</th>
-      </tr>
-    </thead>
-    <tbody>
-      ${loaded.value.map(
-        (c) =>
-          html`<tr>
-            <td data-label="Host">${hostLink(c.meetupMemberId, seen)}</td>
-            <td data-label="Past events">${c.pastCount}</td>
-            <td data-label="Last hosted">${dayText(c.lastHosted)}</td>
-          </tr>`,
-      )}
-    </tbody>
-  </table>`;
+  return html`${partial}
+    <table class="stack">
+      <thead>
+        <tr>
+          <th>Host</th>
+          <th>Past events</th>
+          <th>Last hosted</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${loaded.value.map(
+          (c) =>
+            html`<tr>
+              <td data-label="Host">${hostLink(c.meetupMemberId, seen)}</td>
+              <td data-label="Past events">${c.pastCount}</td>
+              <td data-label="Last hosted">${dayText(c.lastHosted)}</td>
+            </tr>`,
+        )}
+      </tbody>
+    </table>`;
 }
 
 /** The leader's form: Promote for a regular host, Demote for a Community Host. */
@@ -338,7 +377,7 @@ function memberBody(view: {
       <h2>Hosting</h2>
       ${maps}
       <h3>
-        ${view.day ? `Events on ${dayText(view.day)}` : 'Latest past events'}
+        ${view.day ? `Events on ${plainDay(view.day)}` : 'Latest past events'}
       </h3>
       ${
         listed.length === 0
@@ -417,6 +456,7 @@ export function registerHostPromotionRoutes(
           value: read.value.candidates.filter(
             (c) => !activeIds.has(c.meetupMemberId),
           ),
+          uncounted: read.value.uncounted,
         }
       : { ok: false as const };
     dashboardPage(res, {
@@ -553,11 +593,34 @@ export function registerHostPromotionRoutes(
       back('reason-too-long');
       return;
     }
+    if (change === 'promote' && GUEST_HOST_MEETUP_BLACKLIST.includes(id)) {
+      back('blacklisted');
+      return;
+    }
     let result: PromotionChange;
     try {
-      result = await (
-        await deps.promotedHosts()
-      ).change(change, id, Number(versionText), session.userId, reason);
+      const store = await deps.promotedHosts();
+      // Only someone the page would show: a row, a history, or a past
+      // hosted event (as the GET's 404).
+      const [row, history] = await Promise.all([
+        store.get(id),
+        store.history(id, 1),
+      ]);
+      if (
+        row === undefined &&
+        history.length === 0 &&
+        (await deps.hostPastEvents(id)).length === 0
+      ) {
+        notFound(res);
+        return;
+      }
+      result = await store.change(
+        change,
+        id,
+        Number(versionText),
+        session.userId,
+        reason,
+      );
     } catch (error: unknown) {
       logger.warn(
         `Host promotion change failed: ${error instanceof Error ? error.name : 'Error'}`,
@@ -574,11 +637,15 @@ export function registerHostPromotionRoutes(
       return;
     }
     // The 10-minute tier re-check is the backstop if this fails.
-    await deps.revokeHostSessions(id).catch((error: unknown) => {
-      logger.warn(
-        `Host session revoke after ${change} failed: ${error instanceof Error ? error.name : 'Error'}`,
-      );
-    });
+    const signedOut = await deps.revokeHostSessions(id).then(
+      () => true,
+      (error: unknown) => {
+        logger.warn(
+          `Host session revoke after ${change} failed: ${error instanceof Error ? error.name : 'Error'}`,
+        );
+        return false;
+      },
+    );
     const entry: LogEntry = {
       title:
         change === 'promote'
@@ -592,6 +659,7 @@ export function registerHostPromotionRoutes(
     };
     deps.audit(entry).catch(() => undefined);
     deps.hostAlert(entry).catch(() => undefined);
-    back(change === 'promote' ? 'promoted' : 'demoted');
+    const done = change === 'promote' ? 'promoted' : 'demoted';
+    back(signedOut ? done : `${done}-no-signout`);
   }) as RequestHandler);
 }

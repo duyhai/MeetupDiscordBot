@@ -1,6 +1,7 @@
 import pg from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
+import { MEMBER_LOCK_CLASS } from '../../src/lib/repositories/dashboardPool.js';
 import {
   ensureEventRequestSchema,
   NewEventRequest,
@@ -96,21 +97,72 @@ const request = (over: Partial<NewEventRequest> = {}): NewEventRequest => ({
       ]);
     });
 
-    it('with maxPending, two submits at the same moment cannot both pass the cap', async () => {
-      await repo.create(request({ submitToken: 'a'.repeat(16) }));
-      const results = await Promise.all([
-        repo.create(request({ submitToken: 'b'.repeat(16) }), {
-          maxPending: 2,
-        }),
-        repo.create(request({ submitToken: 'c'.repeat(16) }), {
-          maxPending: 2,
-        }),
-      ]);
-      expect(results.filter((r) => r === 'full')).toHaveLength(1);
+    it('with maxPending, the count waits for a submit holding the host lock', async () => {
+      // One request waiting, cap 2. Another submit holds the host's lock and
+      // has inserted the second without committing yet: without the lock,
+      // create would not see that row and would insert a third.
+      const first = await repo.create(request({ submitToken: 'a'.repeat(16) }));
+      const holder = await pool.connect();
+      try {
+        await holder.query('BEGIN');
+        await holder.query('SELECT pg_advisory_xact_lock($1, hashtext($2))', [
+          MEMBER_LOCK_CLASS,
+          `event-request:${HOST}`,
+        ]);
+        await holder.query(
+          `INSERT INTO event_requests
+             (meetup_member_id, discord_user_id, host_name, tier, kind,
+              source_event_id, title, description, start_local, duration,
+              rsvp_limit, guest_limit, featured_photo_id, venue_id,
+              how_to_find_us, submit_token)
+           SELECT meetup_member_id, discord_user_id, host_name, tier, kind,
+                  source_event_id, title, description, start_local, duration,
+                  rsvp_limit, guest_limit, featured_photo_id, venue_id,
+                  how_to_find_us, $2
+             FROM event_requests WHERE id = $1`,
+          [first?.id, 'b'.repeat(16)],
+        );
+        let settled = false;
+        const third = repo
+          .create(request({ submitToken: 'c'.repeat(16) }), { maxPending: 2 })
+          .finally(() => {
+            settled = true;
+          });
+        await new Promise((resolve) => {
+          setTimeout(resolve, 300);
+        });
+        expect(settled).toBe(false);
+        await holder.query('COMMIT');
+        await expect(third).resolves.toBe('full');
+      } finally {
+        await holder.query('ROLLBACK').catch(() => undefined);
+        holder.release();
+      }
       const { rows } = await pool.query<{ n: string }>(
         `SELECT count(*) AS n FROM event_requests WHERE status = 'pending'`,
       );
       expect(Number(rows[0].n)).toBe(2);
+    });
+
+    it('ten submits at once with cap 2: exactly two are made', async () => {
+      const results = await Promise.all(
+        Array.from({ length: 10 }, (_, i) =>
+          repo.create(request({ submitToken: `${'t'.repeat(15)}${i}` }), {
+            maxPending: 2,
+          }),
+        ),
+      );
+      expect(
+        results.filter((r) => r !== 'full' && r !== undefined),
+      ).toHaveLength(2);
+    });
+
+    it('at the cap, the same form sent again goes to its request, not "full"', async () => {
+      const token = 'd'.repeat(16);
+      await repo.create(request({ submitToken: token }), { maxPending: 1 });
+      await expect(
+        repo.create(request({ submitToken: token }), { maxPending: 1 }),
+      ).resolves.toBeUndefined();
     });
 
     it('get refuses an id that cannot be a request id', async () => {

@@ -74,8 +74,11 @@ const DAY = /^\d{4}-\d{2}-\d{2}$/;
 
 /** The request store's host-side reads and writes. */
 export interface HostRequestStore {
-  /** undefined when the host already sent this form (same submitToken). */
-  /** 'full': the host is at `maxPending` waiting requests (checked under a lock). */
+  /**
+   * undefined when the host already sent this form (same submitToken);
+   * 'full' when they are at `maxPending` waiting requests (counted under a
+   * per-host lock).
+   */
   create: (
     input: NewEventRequest,
     options?: { maxPending?: number },

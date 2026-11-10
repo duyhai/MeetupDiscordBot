@@ -994,6 +994,7 @@ export function fakePageDeps(
     promotionCandidates: vi.fn(async () => ({
       candidates: [],
       seen: new Map(),
+      uncounted: 0,
     })),
     // The access matrix opens member 123456's page: one past event.
     hostPastEvents: vi.fn(async (id: string) => [

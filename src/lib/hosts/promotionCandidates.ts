@@ -57,15 +57,23 @@ export function hostsSeen(events: HostEvent[]): Map<string, HostSeen> {
   return seen;
 }
 
+export interface CandidateList {
+  candidates: PromotionCandidate[];
+  seen: Map<string, HostSeen>;
+  /** Hosts whose count Meetup did not give: they may be missing. */
+  uncounted: number;
+}
+
 /**
  * Regular hosts with PROMOTION_MIN_EVENTS or more past hosted events, most
  * first: hosts of the past year's events, less anyone in `excluded` (the
- * active Community Hosts) or on the Meetup blacklist.
+ * active Community Hosts) or on the Meetup blacklist. A host whose count
+ * fails is left out and counted in `uncounted`, not the whole list.
  */
 export async function promotionCandidates(
   deps: CandidateDeps,
   excluded: ReadonlySet<string>,
-): Promise<{ candidates: PromotionCandidate[]; seen: Map<string, HostSeen> }> {
+): Promise<CandidateList> {
   const now = dayjs(deps.now());
   const events = await deps.fetchGroupEvents({
     status: ['PAST'],
@@ -81,33 +89,53 @@ export async function promotionCandidates(
   const counted = await mapWithConcurrency(
     toCount,
     COUNT_CONCURRENCY,
-    async (host) => ({
-      ...host,
-      pastCount: await deps.pastHostedCount(host.meetupMemberId),
-    }),
+    async (host) => {
+      try {
+        return {
+          ...host,
+          pastCount: await deps.pastHostedCount(host.meetupMemberId),
+        };
+      } catch {
+        return undefined;
+      }
+    },
   );
   const candidates = counted
-    .filter((c) => c.pastCount >= PROMOTION_MIN_EVENTS)
+    .filter(
+      (c): c is PromotionCandidate =>
+        c !== undefined && c.pastCount >= PROMOTION_MIN_EVENTS,
+    )
     .sort(
       (a, b) =>
         b.pastCount - a.pastCount ||
         a.name.localeCompare(b.name) ||
         a.meetupMemberId.localeCompare(b.meetupMemberId),
     );
-  return { candidates, seen };
+  return {
+    candidates,
+    seen,
+    uncounted: counted.filter((c) => c === undefined).length,
+  };
 }
 
 /**
  * `read` kept for `ttlMs`, one read at a time (a second caller awaits the
- * first). A failure is not kept, so the next call reads again. The read
- * carries on after a caller stops waiting, so a slow first read is ready
- * for the reload.
+ * first). A failure is not kept, so the next call reads again; nor is a
+ * value `keep` refuses. A read slower than `timeoutMs` fails its callers
+ * and frees the slot, so a hung read never pins every later caller. The
+ * read carries on after a caller stops waiting, so a slow first read is
+ * ready for the reload.
  */
 export function singleFlight<T>(
   read: () => Promise<T>,
   ttlMs: number,
-  now: () => number = Date.now,
+  options: {
+    now?: () => number;
+    timeoutMs?: number;
+    keep?: (value: T) => boolean;
+  } = {},
 ): () => Promise<T> {
+  const now = options.now ?? Date.now;
   let kept: { at: number; value: T } | undefined;
   let inFlight: Promise<T> | undefined;
   return async () => {
@@ -115,15 +143,32 @@ export function singleFlight<T>(
       return kept.value;
     }
     if (inFlight === undefined) {
-      const pending = read()
-        .then((value) => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const reading = read().then((value) => {
+        if (options.keep?.(value) ?? true) {
           kept = { at: now(), value };
-          return value;
-        })
-        .finally(() => {
+        }
+        return value;
+      });
+      const limited =
+        options.timeoutMs === undefined
+          ? reading
+          : Promise.race([
+              reading,
+              new Promise<never>((_resolve, reject) => {
+                timer = setTimeout(() => {
+                  reject(new Error('read timed out'));
+                }, options.timeoutMs);
+              }),
+            ]);
+      const pending = limited.finally(() => {
+        clearTimeout(timer);
+        if (inFlight === pending) {
           inFlight = undefined;
-        });
-      // A caller that gave up still leaves this handled.
+        }
+      });
+      // A caller that gave up still leaves these handled.
+      reading.catch(() => undefined);
       pending.catch(() => undefined);
       inFlight = pending;
     }

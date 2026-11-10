@@ -324,6 +324,18 @@ export class PostgresEventRequestRepository {
             MEMBER_LOCK_CLASS,
             `event-request:${input.meetupMemberId}`,
           ]);
+          // The same form sent again is not a new request: it goes to the
+          // one it made (undefined), even at the cap.
+          if (input.submitToken) {
+            const sent = await c.query(
+              `SELECT 1 FROM event_requests
+                WHERE meetup_member_id = $1 AND submit_token = $2`,
+              [input.meetupMemberId, input.submitToken],
+            );
+            if (sent.rows.length > 0) {
+              return undefined;
+            }
+          }
           const pending = await c.query<{ n: string }>(
             `SELECT count(*) AS n FROM event_requests
             WHERE meetup_member_id = $1 AND status = 'pending'`,
