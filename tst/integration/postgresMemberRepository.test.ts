@@ -84,6 +84,42 @@ const freshMember = () => ({
       ).rejects.toThrow(MeetupIdConflictError); // unique violation on meetup_id
     });
 
+    it('linkUnlessLinkedElsewhere never moves a Discord account off another Meetup account', async () => {
+      // New row, then a repeat of the same link: written both times.
+      const member = { ...freshMember(), onboardMethod: 'web_link' as const };
+      expect(await repo.linkUnlessLinkedElsewhere(member)).toMatchObject({
+        meetupId: member.meetupId,
+        onboardMethod: 'web_link',
+      });
+      expect(await repo.linkUnlessLinkedElsewhere(member)).toBeDefined();
+      // The same Discord user, another Meetup id: nothing written.
+      const moved = { ...member, meetupId: `meetup-${crypto.randomUUID()}` };
+      expect(await repo.linkUnlessLinkedElsewhere(moved)).toBeUndefined();
+      expect((await repo.findByDiscordId(member.discordUserId))?.meetupId).toBe(
+        member.meetupId,
+      );
+      // A manual row (no Meetup id) is upgraded.
+      const manual = {
+        ...freshMember(),
+        meetupId: null,
+        onboardMethod: 'manual' as const,
+      };
+      await repo.upsert(manual);
+      const upgraded = await repo.linkUnlessLinkedElsewhere({
+        ...manual,
+        meetupId: `meetup-${crypto.randomUUID()}`,
+        onboardMethod: 'web_link',
+      });
+      expect(upgraded?.onboardMethod).toBe('web_link');
+      // A Meetup id linked to someone else: the unique key, as upsert.
+      await expect(
+        repo.linkUnlessLinkedElsewhere({
+          ...freshMember(),
+          meetupId: member.meetupId,
+        }),
+      ).rejects.toThrow(MeetupIdConflictError);
+    });
+
     it('remove deletes the row', async () => {
       const member = freshMember();
       await repo.upsert(member);

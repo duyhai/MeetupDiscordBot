@@ -30,7 +30,7 @@ function store(rows: MemberRecord[] = []) {
     findByDiscordId: vi.fn(async (id: string) =>
       rows.find((r) => r.discordUserId === id),
     ),
-    upsert: vi.fn(
+    linkUnlessLinkedElsewhere: vi.fn(
       async (m: Omit<MemberRecord, 'firstOnboardedAt' | 'lastSyncedAt'>) =>
         row(m),
     ),
@@ -41,7 +41,7 @@ describe('linkDiscordFromWeb', () => {
   it('links a Meetup account with no link to a Discord account with none', async () => {
     const s = store();
     expect(await linkDiscordFromWeb(s, LINK)).toEqual({ kind: 'linked' });
-    expect(s.upsert).toHaveBeenCalledWith({
+    expect(s.linkUnlessLinkedElsewhere).toHaveBeenCalledWith({
       discordUserId: DISCORD,
       meetupId: '4242',
       meetupName: 'Ann',
@@ -54,7 +54,7 @@ describe('linkDiscordFromWeb', () => {
   it('a link that is already there is left alone', async () => {
     const s = store([row({})]);
     expect(await linkDiscordFromWeb(s, LINK)).toEqual({ kind: 'already' });
-    expect(s.upsert).not.toHaveBeenCalled();
+    expect(s.linkUnlessLinkedElsewhere).not.toHaveBeenCalled();
   });
 
   it('refuses a Meetup account linked to another Discord account', async () => {
@@ -63,7 +63,7 @@ describe('linkDiscordFromWeb', () => {
       kind: 'meetup-taken',
       otherDiscordId: OTHER_DISCORD,
     });
-    expect(s.upsert).not.toHaveBeenCalled();
+    expect(s.linkUnlessLinkedElsewhere).not.toHaveBeenCalled();
   });
 
   it('refuses, rather than moves, a Discord account linked to another Meetup account', async () => {
@@ -72,21 +72,32 @@ describe('linkDiscordFromWeb', () => {
       kind: 'discord-taken',
       otherMeetupId: '9999',
     });
-    expect(s.upsert).not.toHaveBeenCalled();
+    expect(s.linkUnlessLinkedElsewhere).not.toHaveBeenCalled();
   });
 
   it('upgrades a manual-onboard row that has no Meetup id', async () => {
     const s = store([row({ meetupId: null, onboardMethod: 'manual' })]);
     expect(await linkDiscordFromWeb(s, LINK)).toEqual({ kind: 'linked' });
-    expect(s.upsert).toHaveBeenCalledOnce();
+    expect(s.linkUnlessLinkedElsewhere).toHaveBeenCalledOnce();
   });
 
   it('a concurrent link caught by the unique key counts as taken', async () => {
     const s = store();
-    s.upsert.mockRejectedValue(new MeetupIdConflictError('taken'));
+    s.linkUnlessLinkedElsewhere.mockRejectedValue(
+      new MeetupIdConflictError('taken'),
+    );
     expect(await linkDiscordFromWeb(s, LINK)).toEqual({
       kind: 'meetup-taken',
       otherDiscordId: undefined,
+    });
+  });
+
+  it('a Discord link made elsewhere in between is not moved', async () => {
+    const s = store();
+    s.linkUnlessLinkedElsewhere.mockResolvedValue(undefined);
+    expect(await linkDiscordFromWeb(s, LINK)).toEqual({
+      kind: 'discord-taken',
+      otherMeetupId: undefined,
     });
   });
 

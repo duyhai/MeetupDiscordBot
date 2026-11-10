@@ -44,6 +44,16 @@ export class InMemoryMemberRepository implements MemberRepository {
     return { ...record };
   }
 
+  async linkUnlessLinkedElsewhere(
+    member: MemberUpsert,
+  ): Promise<MemberRecord | undefined> {
+    const existing = this.members.get(member.discordUserId);
+    if (existing?.meetupId && existing.meetupId !== member.meetupId) {
+      return undefined;
+    }
+    return this.upsert(member);
+  }
+
   async findByDiscordId(
     discordUserId: string,
   ): Promise<MemberRecord | undefined> {

@@ -6,7 +6,7 @@ import {
 /** The member store reads and the one write the website link needs. */
 export type WebLinkStore = Pick<
   MemberRepository,
-  'findByMeetupId' | 'findByDiscordId' | 'upsert'
+  'findByMeetupId' | 'findByDiscordId' | 'linkUnlessLinkedElsewhere'
 >;
 
 export type WebLinkOutcome =
@@ -17,7 +17,7 @@ export type WebLinkOutcome =
   /** The Meetup account is linked to a different Discord account. */
   | { kind: 'meetup-taken'; otherDiscordId: string | undefined }
   /** The Discord account is linked to a different Meetup account. */
-  | { kind: 'discord-taken'; otherMeetupId: string };
+  | { kind: 'discord-taken'; otherMeetupId: string | undefined };
 
 /**
  * Links a signed-in host's Meetup account to the Discord account they just
@@ -42,8 +42,9 @@ export async function linkDiscordFromWeb(
   if (byDiscord?.meetupId && byDiscord.meetupId !== link.meetupId) {
     return { kind: 'discord-taken', otherMeetupId: byDiscord.meetupId };
   }
+  let saved: Awaited<ReturnType<WebLinkStore['linkUnlessLinkedElsewhere']>>;
   try {
-    await store.upsert({
+    saved = await store.linkUnlessLinkedElsewhere({
       discordUserId: link.discordUserId,
       meetupId: link.meetupId,
       meetupName: link.meetupName,
@@ -57,6 +58,10 @@ export async function linkDiscordFromWeb(
       return { kind: 'meetup-taken', otherDiscordId: undefined };
     }
     throw error;
+  }
+  // Verify linked this Discord account elsewhere after the check above.
+  if (saved === undefined) {
+    return { kind: 'discord-taken', otherMeetupId: undefined };
   }
   return { kind: 'linked' };
 }

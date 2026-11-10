@@ -149,6 +149,50 @@ export class PostgresMemberRepository implements MemberRepository {
     }
   }
 
+  async linkUnlessLinkedElsewhere(
+    member: MemberUpsert,
+  ): Promise<MemberRecord | undefined> {
+    try {
+      const result = await this.pool.query<MemberRow>(
+        `INSERT INTO members
+           (discord_user_id, meetup_id, meetup_name, meetup_member_url, onboard_method, onboarded_by)
+         VALUES ($1, $2, $3, $4, $5, $6)
+         ON CONFLICT (discord_user_id) DO UPDATE SET
+           meetup_id = EXCLUDED.meetup_id,
+           meetup_name = EXCLUDED.meetup_name,
+           meetup_member_url = EXCLUDED.meetup_member_url,
+           onboard_method = EXCLUDED.onboard_method,
+           onboarded_by = EXCLUDED.onboarded_by,
+           last_synced_at = now()
+         WHERE members.meetup_id IS NULL
+            OR members.meetup_id = EXCLUDED.meetup_id
+         RETURNING *`,
+        [
+          member.discordUserId,
+          member.meetupId,
+          member.meetupName,
+          member.meetupMemberUrl,
+          member.onboardMethod,
+          member.onboardedBy,
+        ],
+      );
+      return result.rows[0] === undefined
+        ? undefined
+        : toRecord(result.rows[0]);
+    } catch (error) {
+      if (
+        error instanceof pg.DatabaseError &&
+        error.code === '23505' &&
+        error.constraint === 'members_meetup_id_key'
+      ) {
+        throw new MeetupIdConflictError(
+          `meetup id ${member.meetupId} is already linked to another member`,
+        );
+      }
+      throw error;
+    }
+  }
+
   async findByDiscordId(
     discordUserId: string,
   ): Promise<MemberRecord | undefined> {

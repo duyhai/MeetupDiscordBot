@@ -26,6 +26,16 @@ export type MemberUpsert = Omit<
 
 export interface MemberRepository {
   upsert(member: MemberUpsert): Promise<MemberRecord>;
+  /**
+   * As upsert, but never moves a Discord account off another Meetup
+   * account: when this Discord user's row already has a different Meetup
+   * id, nothing is written and undefined comes back. Atomic, so a link made
+   * in between by Verify is not overwritten. Throws MeetupIdConflictError
+   * like upsert.
+   */
+  linkUnlessLinkedElsewhere(
+    member: MemberUpsert,
+  ): Promise<MemberRecord | undefined>;
   findByDiscordId(discordUserId: string): Promise<MemberRecord | undefined>;
   findByMeetupId(meetupId: string): Promise<MemberRecord | undefined>;
   listAll(): Promise<MemberRecord[]>;

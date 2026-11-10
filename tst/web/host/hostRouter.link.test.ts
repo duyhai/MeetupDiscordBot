@@ -58,7 +58,7 @@ function memberStore(rows: MemberRecord[] = []) {
     findByDiscordId: vi.fn(async (id: string) =>
       rows.find((r) => r.discordUserId === id),
     ),
-    upsert: vi.fn(
+    linkUnlessLinkedElsewhere: vi.fn(
       async (m: Omit<MemberRecord, 'firstOnboardedAt' | 'lastSyncedAt'>) => {
         const saved = member(m);
         rows.push(saved);
@@ -142,7 +142,8 @@ describe('Link your Discord account', () => {
       .send({ _csrf: 'wrong' });
     expect(refused.status).toBe(403);
     const { state } = await link(req, sid, session().csrfToken);
-    expect(state).toMatch(/^link\.[A-Za-z0-9_-]{16,}$/);
+    // A random part, then a tag of the session that started it.
+    expect(state).toMatch(/^link\.[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{22}$/);
   });
 
   it('links, logs it, updates the session at once and says so at home', async () => {
@@ -152,7 +153,7 @@ describe('Link your Discord account', () => {
     expect(locationOf(back).pathname + locationOf(back).search).toBe(
       '/host?link=linked',
     );
-    expect(store.upsert).toHaveBeenCalledWith(
+    expect(store.linkUnlessLinkedElsewhere).toHaveBeenCalledWith(
       expect.objectContaining({
         discordUserId: DISCORD_USER.id,
         meetupId: MEETUP_SELF.id,
@@ -191,7 +192,7 @@ describe('Link your Discord account', () => {
     );
     const failed = await link(req, sid, session().csrfToken);
     expect(failed.back.headers.location).toBe('/host?link=error');
-    expect(store.upsert).not.toHaveBeenCalled();
+    expect(store.linkUnlessLinkedElsewhere).not.toHaveBeenCalled();
     expect(session().discordUserId).toBeNull();
   });
 
@@ -205,7 +206,7 @@ describe('Link your Discord account', () => {
     });
     const { back } = await link(req, sid, session().csrfToken);
     expect(back.headers.location).toBe('/host?link=meetup-taken');
-    expect(store.upsert).not.toHaveBeenCalled();
+    expect(store.linkUnlessLinkedElsewhere).not.toHaveBeenCalled();
     expect(JSON.stringify(alert.mock.calls)).toContain(
       'Duplicate Meetup link blocked (host dashboard)',
     );
@@ -217,7 +218,7 @@ describe('Link your Discord account', () => {
     });
     const { back } = await link(req, sid, session().csrfToken);
     expect(back.headers.location).toBe('/host?link=discord-taken');
-    expect(store.upsert).not.toHaveBeenCalled();
+    expect(store.linkUnlessLinkedElsewhere).not.toHaveBeenCalled();
     expect(JSON.stringify(alert.mock.calls)).toContain(
       'Duplicate Discord link blocked (host dashboard)',
     );
@@ -226,7 +227,9 @@ describe('Link your Discord account', () => {
 
   it('a race lost to the unique key, or a store outage, links nothing', async () => {
     const { req, sid, session, store } = await setup();
-    store.upsert.mockRejectedValueOnce(new MeetupIdConflictError('taken'));
+    store.linkUnlessLinkedElsewhere.mockRejectedValueOnce(
+      new MeetupIdConflictError('taken'),
+    );
     expect(
       (await link(req, sid, session().csrfToken)).back.headers.location,
     ).toBe('/host?link=meetup-taken');
@@ -252,13 +255,13 @@ describe('Link your Discord account', () => {
       .get(`/host/auth/discord/callback?state=${state}&code=c`)
       .set('Cookie', oauth);
     expect(back.headers.location).toBe('/host/login');
-    expect(store.upsert).not.toHaveBeenCalled();
+    expect(store.linkUnlessLinkedElsewhere).not.toHaveBeenCalled();
   });
 
   it('a plain Discord sign-in never links, and linking is off without a store', async () => {
     const { req, store } = await setup();
     await signInWithDiscord(req);
-    expect(store.upsert).not.toHaveBeenCalled();
+    expect(store.linkUnlessLinkedElsewhere).not.toHaveBeenCalled();
     const off = await setup({ members: false });
     const res = await off.req
       .post('/host/link/discord')
@@ -267,6 +270,97 @@ describe('Link your Discord account', () => {
       .type('form')
       .send({ _csrf: off.session().csrfToken });
     expect(res.status).toBe(404);
+  });
+
+  it('a host refused before the write links nothing and loses every session', async () => {
+    const { req, sid, session, store, resolve } = await setup();
+    const csrf = session().csrfToken;
+    resolve.mockResolvedValue({ kind: 'refused', reason: 'blacklisted' });
+    const { back } = await link(req, sid, csrf);
+    expect(back.status).toBe(403);
+    expect(store.linkUnlessLinkedElsewhere).not.toHaveBeenCalled();
+    expect((await req.get('/host').set('Cookie', sid)).status).toBe(302);
+  });
+
+  it('a Discord account that makes the host refused ends the session after the write', async () => {
+    const { req, sid, session, store, resolve, deps } = await setup();
+    const csrf = session().csrfToken;
+    resolve
+      .mockResolvedValueOnce(UNLINKED)
+      .mockResolvedValueOnce({ kind: 'refused', reason: 'blacklisted' });
+    const { back } = await link(req, sid, csrf);
+    expect(back.status).toBe(403);
+    expect(store.linkUnlessLinkedElsewhere).toHaveBeenCalledOnce();
+    expect(JSON.stringify(vi.mocked(deps.audit).mock.calls)).toContain(
+      'Host dashboard session ended',
+    );
+    expect((await req.get('/host').set('Cookie', sid)).status).toBe(302);
+  });
+
+  it('an outage before the write changes nothing; after it, the session is left for the gate', async () => {
+    const { req, sid, session, store, resolve } = await setup();
+    const csrf = session().csrfToken;
+    resolve.mockRejectedValueOnce(new Error('discord down'));
+    expect((await link(req, sid, csrf)).back.headers.location).toBe(
+      '/host?link=error',
+    );
+    expect(store.linkUnlessLinkedElsewhere).not.toHaveBeenCalled();
+    resolve
+      .mockResolvedValueOnce(UNLINKED)
+      .mockRejectedValueOnce(new Error('discord down'));
+    const before = session();
+    expect((await link(req, sid, csrf)).back.headers.location).toBe(
+      '/host?link=linked',
+    );
+    expect(store.linkUnlessLinkedElsewhere).toHaveBeenCalledOnce();
+    // Untouched: the gate's next re-check picks the link up by Meetup id.
+    expect(session()).toEqual(before);
+  });
+
+  it('a link finishing in a different session links nothing', async () => {
+    const { req, sid, session, store } = await setup();
+    const start = await req
+      .post('/host/link/discord')
+      .set('Cookie', sid)
+      .set('Origin', ORIGIN)
+      .type('form')
+      .send({ _csrf: session().csrfToken });
+    const state =
+      new URL(start.headers.location).searchParams.get('state') ?? '';
+    const oauth = setCookie(start, 'host_oauth_discord') ?? '';
+    // Someone else signs in with Meetup on this browser meanwhile.
+    const other = await signInWithMeetup(req);
+    const back = await req
+      .get(`/host/auth/discord/callback?state=${state}&code=c`)
+      .set('Cookie', `${other}; ${oauth}`);
+    expect(back.headers.location).toBe('/host?link=error');
+    expect(store.linkUnlessLinkedElsewhere).not.toHaveBeenCalled();
+  });
+
+  it('a host already linked is not linked again, and duplicate alerts are capped', async () => {
+    const { req, sid, session, alert } = await setup({
+      rows: [member({ meetupId: '9999' })],
+    });
+    const csrf = session().csrfToken;
+    await link(req, sid, csrf);
+    await link(req, sid, csrf);
+    expect(
+      alert.mock.calls.filter(([e]) =>
+        JSON.stringify(e).includes('Duplicate Discord link blocked'),
+      ),
+    ).toHaveLength(1);
+    // A session that already has a link: the button's POST says so.
+    const linked = await setup({
+      overrides: { resolve: vi.fn().mockResolvedValue(LINKED) },
+    });
+    expect(linked.session().discordUserId).toBe(DISCORD_USER.id);
+    const res = await linked.req
+      .post('/host/link/discord')
+      .set('Cookie', linked.sid)
+      .set('Origin', ORIGIN)
+      .type('form')
+      .send({ _csrf: linked.session().csrfToken });
+    expect(res.headers.location).toBe('/host?link=already');
   });
 
   it('home shows the Link button to an unlinked host, and only fixed notices', async () => {
