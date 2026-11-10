@@ -87,6 +87,14 @@ describe('host home', () => {
     expect(res.text).not.toContain('Wed, Nov 4</li>');
     expect(res.text).toContain('Thu, Nov 5');
     expect(res.text).toContain('aria-current="page">Home');
+    // Type, and each half of Date, keep to one line on desktop; Event is the
+    // column that wraps.
+    expect(res.text).toContain('<table class="stack upcoming">');
+    expect(res.text).toContain('<td class="type" data-label="Type">');
+    expect(res.text).toContain('<td class="event" data-label="Event">');
+    expect(res.text).toMatch(
+      /<span class="when">Tue, Nov 10, 2026,<\/span>\s*<span class="when">7:00 PM<\/span>/,
+    );
   });
 
   it('nudges an unlinked Meetup sign-in to link Discord, and shows Community Host', async () => {
@@ -300,6 +308,9 @@ describe('host history', () => {
     expect(res.text).toMatch(/<strong>2026<\/strong>/);
     // Every row can be copied.
     expect(res.text.match(/>Copy this event<\/a/g)).toHaveLength(3);
+    expect(res.text).toContain('<td class="type" data-label="Type">');
+    expect(res.text).toContain('<td class="event" data-label="Event">');
+    expect(res.text).toContain('<span class="when">Thu, Oct 1, 2026</span>');
   });
 
   it('counts only what counts, and shows the excluded on request', async () => {
