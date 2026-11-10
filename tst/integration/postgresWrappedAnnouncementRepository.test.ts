@@ -111,11 +111,53 @@ const pause = (ms: number) =>
       expect(await another().claim(2026, { ignoreBackoff: true })).toBe(false);
     });
 
-    it('a short backoff passes on the database clock', async () => {
+    it('a short backoff passes on the database clock, and get() reports it', async () => {
       expect(await repo.claim(2026)).toBe('fresh');
       await repo.release(2026, 10);
+      expect((await repo.get(2026))?.retryAfter).toBeInstanceOf(Date);
       await pause(30);
       expect(await another().claim(2026)).toBe('retry');
+      expect((await repo.get(2026))?.retryAfter).toBeUndefined();
+    });
+
+    it('exactly one of many concurrent reclaims of a released row wins', async () => {
+      expect(await repo.claim(2026)).toBe('fresh');
+      await repo.release(2026);
+      const a = another();
+      const b = another();
+      const results = await Promise.all(
+        Array.from({ length: 12 }, (_, i) => (i % 2 ? a : b).claim(2026)),
+      );
+      expect(results.filter((r) => r === 'retry')).toHaveLength(1);
+      expect(results.filter((r) => r === false)).toHaveLength(11);
+    });
+
+    it('exactly one of many concurrent reclaims of a stale (crashed) claim wins', async () => {
+      expect(await repo.claim(2026)).toBe('fresh');
+      await pause(20);
+      const a = another();
+      const b = another();
+      const results = await Promise.all(
+        Array.from({ length: 12 }, (_, i) =>
+          (i % 2 ? a : b).claim(2026, { reclaimAfterMs: 10 }),
+        ),
+      );
+      expect(results.filter((r) => r === 'retry')).toHaveLength(1);
+      expect(results.filter((r) => r === false)).toHaveLength(11);
+    });
+
+    it('the retry_after column is added to a table created without it', async () => {
+      await pool.query('DROP TABLE wrapped_announcements');
+      await pool.query(
+        `CREATE TABLE wrapped_announcements (
+           year INTEGER PRIMARY KEY, claimed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+           posted_at TIMESTAMPTZ, channel_id TEXT, message_id TEXT)`,
+      );
+      await ensureDashboardSchema(pool);
+      const repo2 = another();
+      expect(await repo2.claim(2026)).toBe('fresh');
+      await repo2.release(2026, 60_000);
+      expect((await repo2.get(2026))?.retryAfter).toBeInstanceOf(Date);
     });
 
     it('exactly one of many concurrent claims across two instances is fresh', async () => {

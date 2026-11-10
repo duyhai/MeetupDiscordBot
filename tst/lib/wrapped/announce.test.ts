@@ -133,16 +133,37 @@ describe('wrappedAnnounceConfig', () => {
     expect(warn).not.toHaveBeenCalled();
   });
 
-  it('announceSchedule is defined only with both a date and a channel', () => {
+  it('announceSchedule needs a date in this Pacific year or later, and a channel', () => {
+    const now = new Date('2026-11-10T20:00:00Z');
     expect(
-      announceSchedule({ date: '2026-12-01', hour: 17, channelId: CHANNEL }),
+      announceSchedule(
+        { date: '2026-12-01', hour: 17, channelId: CHANNEL },
+        now,
+      ),
     ).toEqual({ date: '2026-12-01', hour: 17, channelId: CHANNEL });
     expect(
-      announceSchedule({ date: undefined, hour: 17, channelId: CHANNEL }),
+      announceSchedule({ date: undefined, hour: 17, channelId: CHANNEL }, now),
     ).toBeUndefined();
     expect(
-      announceSchedule({ date: '2026-12-01', hour: 17, channelId: undefined }),
+      announceSchedule(
+        { date: '2026-12-01', hour: 17, channelId: undefined },
+        now,
+      ),
     ).toBeUndefined();
+    // A past year can never post, not even from Post now.
+    expect(
+      announceSchedule(
+        { date: '2025-12-01', hour: 17, channelId: CHANNEL },
+        now,
+      ),
+    ).toBeUndefined();
+    // 31 Dec 2026 23:30 Pacific: 2026 is still this year.
+    expect(
+      announceSchedule(
+        { date: '2026-12-01', hour: 17, channelId: CHANNEL },
+        new Date('2027-01-01T07:30:00Z'),
+      ),
+    ).toBeDefined();
   });
 });
 

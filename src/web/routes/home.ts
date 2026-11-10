@@ -24,6 +24,7 @@ import {
   announceDueAt,
   announceSchedule,
   announceYear,
+  isPastYear,
 } from '../../lib/wrapped/announce.js';
 import type { HomeReportsView } from '../dashboardRouter.js';
 import { SafeHtml, html, localUrl } from '../html.js';
@@ -196,11 +197,11 @@ async function workspaceCard(
  * so they are shown as text, never as links.
  */
 async function wrappedCard(
-  deps: Pick<DashboardPageDeps, 'wrappedAnnounce'>,
+  deps: Pick<DashboardPageDeps, 'now' | 'wrappedAnnounce'>,
   view: Partial<HomeReportsView>,
 ): Promise<SafeHtml> {
   const config = deps.wrappedAnnounce.config();
-  const schedule = announceSchedule(config);
+  const schedule = announceSchedule(config, deps.now());
   const status = await deps.wrappedAnnounce.status();
   const posted = status?.postedAt !== undefined;
   const state = posted
@@ -217,6 +218,11 @@ async function wrappedCard(
   if (config.date === undefined) {
     where = html`<p class="muted">
       WRAPPED_ANNOUNCE_DATE is not a real date: nothing will be posted.
+    </p>`;
+  } else if (isPastYear({ date: config.date }, deps.now())) {
+    where = html`<p class="muted">
+      WRAPPED_ANNOUNCE_DATE is in a past year: nothing will be posted. Set it to
+      a date this year.
     </p>`;
   } else if (schedule === undefined) {
     where = html`<p class="muted">

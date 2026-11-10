@@ -56,16 +56,29 @@ export interface WrappedAnnounceConfig {
   channelId: string | undefined;
 }
 
-/** The post is possible: a date and a channel. */
+/** The post is possible: a date in this Pacific year or later, and a channel. */
 export type WrappedAnnounceSchedule = WrappedAnnounceConfig & {
   date: string;
   channelId: string;
 };
 
+/** The calendar year in the group's timezone. */
+export function pacificYear(now: Date): number {
+  return tz(dayjs(now), PACIFIC).year();
+}
+
+/** A well-formed date whose year is already over: it can never be due, and Post now must not post it either. */
+export function isPastYear(config: { date: string }, now: Date): boolean {
+  return announceYear(config) < pacificYear(now);
+}
+
 export function announceSchedule(
   config: WrappedAnnounceConfig,
+  now: Date,
 ): WrappedAnnounceSchedule | undefined {
-  return config.date !== undefined && config.channelId !== undefined
+  return config.date !== undefined &&
+    config.channelId !== undefined &&
+    !isPastYear({ date: config.date }, now)
     ? { date: config.date, hour: config.hour, channelId: config.channelId }
     : undefined;
 }
@@ -94,10 +107,7 @@ export function wrappedAnnounceConfig(
       );
     }
   }
-  if (
-    date !== undefined &&
-    announceYear({ date }) < tz(dayjs(now), PACIFIC).year()
-  ) {
+  if (date !== undefined && isPastYear({ date }, now)) {
     warn(
       'WRAPPED_ANNOUNCE_DATE is in a past year, so the Wrapped announcement will never be posted; set it to a date this year',
     );
@@ -184,7 +194,7 @@ export function isAnnounceDue(
 ): boolean {
   return (
     now.getTime() >= announceDueAt(config).getTime() &&
-    tz(dayjs(now), PACIFIC).year() === announceYear(config)
+    pacificYear(now) === announceYear(config)
   );
 }
 
@@ -232,7 +242,7 @@ export interface WrappedAnnounceDeps {
   post(channelId: string, entry: LogEntry): Promise<PostedEmbed | undefined>;
   /** This bot's embed titles among the channel's recent messages; undefined when unreadable. Only read on a retry. */
   recentTitles(channelId: string): Promise<string[] | undefined>;
-  /** #meetup-bot-alerts (plain, no pings): the post keeps failing. May reject. */
+  /** #meetup-bot-alerts (plain, no pings): the post keeps failing. Resolves false when it did not land; may reject. */
   alert(entry: LogEntry): Promise<unknown>;
 }
 
@@ -242,8 +252,10 @@ export type WrappedAnnounceOutcome =
   /** Before the configured instant (or after that Pacific year). */
   | 'not-due'
   | 'already-posted'
-  /** Another process holds a live claim, or the job is backing off after a failed post. */
+  /** Another process holds a live claim. */
   | 'in-progress'
+  /** A failed post's backoff is still running; the job waits, Post now does not. */
+  | 'backing-off'
   | 'posted'
   /** The post did not land; the claim is released for a later tick (after the backoff). */
   | 'failed';
@@ -260,7 +272,12 @@ export function failedAlertEntry(year: number, channelId: string): LogEntry {
   };
 }
 
-/** Says once a day (deduped in Redis) that the post keeps failing. Never throws. */
+/**
+ * Says once a day (deduped in Redis) that the post keeps failing. The day's
+ * key is taken before the alert, so two processes cannot both say it; an
+ * alert that did not land (false: the alerts channel unreadable, the client
+ * not ready) gives the key back, so the next failure says it. Never throws.
+ */
 async function alertFailure(
   deps: WrappedAnnounceDeps,
   year: number,
@@ -268,16 +285,22 @@ async function alertFailure(
 ): Promise<void> {
   try {
     const cache = await deps.cache();
-    if (
-      !(await cache.exclusive_set(
-        failedAlertKey(utcDay(deps.now())),
-        '1',
-        FAILED_ALERT_TTL_SEC,
-      ))
-    ) {
+    const key = failedAlertKey(utcDay(deps.now()));
+    if (!(await cache.exclusive_set(key, '1', FAILED_ALERT_TTL_SEC))) {
       return;
     }
-    await deps.alert(failedAlertEntry(year, channelId));
+    let sent: unknown;
+    try {
+      sent = await deps.alert(failedAlertEntry(year, channelId));
+    } catch (error) {
+      sent = false;
+      logger.warn(
+        `Wrapped announcement failure alert threw: ${error instanceof Error ? error.name : 'Error'}`,
+      );
+    }
+    if (sent === false) {
+      await cache.remove(key);
+    }
   } catch (error) {
     logger.warn(
       `Wrapped announcement failure alert skipped: ${error instanceof Error ? error.name : 'Error'}`,
@@ -297,12 +320,13 @@ export async function runWrappedAnnounce(
   deps: WrappedAnnounceDeps,
   options: { force?: boolean } = {},
 ): Promise<WrappedAnnounceOutcome> {
-  const schedule = announceSchedule(deps.config());
+  const now = deps.now();
+  const schedule = announceSchedule(deps.config(), now);
   if (schedule === undefined) {
     return 'disabled';
   }
   const { channelId } = schedule;
-  if (!options.force && !isAnnounceDue(deps.now(), schedule)) {
+  if (!options.force && !isAnnounceDue(now, schedule)) {
     return 'not-due';
   }
   const year = announceYear(schedule);
@@ -311,7 +335,14 @@ export async function runWrappedAnnounce(
     ignoreBackoff: options.force === true,
   });
   if (!claim) {
-    return (await store.get(year))?.postedAt ? 'already-posted' : 'in-progress';
+    const row = await store.get(year);
+    if (row?.postedAt) {
+      return 'already-posted';
+    }
+    return row?.retryAfter !== undefined &&
+      row.retryAfter.getTime() > now.getTime()
+      ? 'backing-off'
+      : 'in-progress';
   }
   const entry = wrappedAnnounceEntry(year);
   if (claim === 'retry') {
@@ -412,7 +443,7 @@ export function startWrappedAnnounceScheduler(
     options.config ??
     (() => loadWrappedAnnounceConfig((message) => log.warn(message)))
   )();
-  if (announceSchedule(config) === undefined) {
+  if (announceSchedule(config, new Date()) === undefined) {
     log.info('Wrapped announcement disabled: see the warning above');
     return;
   }
@@ -432,7 +463,11 @@ export function startWrappedAnnounceScheduler(
     }
     pending
       .then((outcome) => {
-        if (outcome !== 'not-due' && outcome !== 'already-posted') {
+        if (
+          outcome !== 'not-due' &&
+          outcome !== 'already-posted' &&
+          outcome !== 'backing-off'
+        ) {
           log.info(`Wrapped announcement: ${outcome}`);
         }
       })

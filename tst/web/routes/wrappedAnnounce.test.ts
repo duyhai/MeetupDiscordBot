@@ -35,6 +35,7 @@ const posted: WrappedAnnouncementRecord = {
   postedAt: new Date('2026-12-02T01:05:30Z'),
   channelId: CHANNEL,
   messageId: MESSAGE,
+  retryAfter: undefined,
 };
 
 function control(
@@ -98,6 +99,15 @@ describe('Home Wrapped card', () => {
     );
     expect(out).toContain('WRAPPED_ANNOUNCE_CHANNEL_ID');
     expect(out).toContain('not set');
+    expect(out).not.toContain('Post now');
+  });
+
+  it('with a date in a past year, says so and offers no button (force would post a stale year)', async () => {
+    const out = await render(
+      control({ config: () => ({ ...CONFIG, date: '2025-12-01' }) }),
+    );
+    expect(out).toContain('WRAPPED_ANNOUNCE_DATE is in a past year');
+    expect(out).not.toContain('Scheduled for');
     expect(out).not.toContain('Post now');
   });
 
@@ -206,20 +216,23 @@ describe('POST /dashboard/wrapped/announce', () => {
     );
   });
 
-  it.each(['already-posted', 'in-progress', 'failed', 'disabled'] as const)(
-    'relays the outcome %s as its own notice',
-    async (outcome) => {
-      const { req, isLeadership, audit } = await setup({
-        postNow: async () => outcome,
-      });
-      isLeadership.mockResolvedValue(true);
-      const res = await pressPostNow(req, await signIn(req));
-      expect(res.headers.location).toBe(`/dashboard?wrapped=${outcome}`);
-      expect(audit).not.toHaveBeenCalledWith(
-        expect.objectContaining({ title: 'Wrapped announcement posted' }),
-      );
-    },
-  );
+  it.each([
+    'already-posted',
+    'in-progress',
+    'backing-off',
+    'failed',
+    'disabled',
+  ] as const)('relays the outcome %s as its own notice', async (outcome) => {
+    const { req, isLeadership, audit } = await setup({
+      postNow: async () => outcome,
+    });
+    isLeadership.mockResolvedValue(true);
+    const res = await pressPostNow(req, await signIn(req));
+    expect(res.headers.location).toBe(`/dashboard?wrapped=${outcome}`);
+    expect(audit).not.toHaveBeenCalledWith(
+      expect.objectContaining({ title: 'Wrapped announcement posted' }),
+    );
+  });
 
   it('a Discord failure on the role check changes nothing', async () => {
     const { req, isLeadership, postNow } = await setup();
@@ -263,6 +276,7 @@ describe('POST /dashboard/wrapped/announce', () => {
     expect(Object.keys(WRAPPED_NOTICES).sort()).toEqual(
       [
         'already-posted',
+        'backing-off',
         'disabled',
         'error',
         'failed',

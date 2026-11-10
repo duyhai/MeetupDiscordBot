@@ -32,6 +32,8 @@ export interface WrappedAnnouncementRecord {
   channelId: string | undefined;
   /** Unknown when a retry found the notice already in the channel. */
   messageId: string | undefined;
+  /** Set by a release after a failed post: the job retries no earlier than this. */
+  retryAfter: Date | undefined;
 }
 
 /**
@@ -143,8 +145,9 @@ export class PostgresWrappedAnnouncementRepository {
       posted_at: Date | null;
       channel_id: string | null;
       message_id: string | null;
+      retry_after: Date | null;
     }>(
-      `SELECT year, claimed_at, posted_at, channel_id, message_id
+      `SELECT year, claimed_at, posted_at, channel_id, message_id, retry_after
          FROM wrapped_announcements WHERE year = $1`,
       [year],
     );
@@ -158,6 +161,7 @@ export class PostgresWrappedAnnouncementRepository {
       postedAt: row.posted_at ?? undefined,
       channelId: row.channel_id ?? undefined,
       messageId: row.message_id ?? undefined,
+      retryAfter: row.retry_after ?? undefined,
     };
   }
 }

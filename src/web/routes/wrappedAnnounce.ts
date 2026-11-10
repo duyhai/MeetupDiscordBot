@@ -27,6 +27,8 @@ export const WRAPPED_NOTICES = {
     'The Wrapped announcement for this year was already posted; nothing was sent.',
   'in-progress':
     'Another process is posting the Wrapped announcement right now; reload in a minute.',
+  'backing-off':
+    'The last post failed and the job is waiting before it retries; Post now did not get past that, reload and try again.',
   failed:
     'The post did not land. Nothing is recorded, so the job (or Post now) will try again.',
   disabled:

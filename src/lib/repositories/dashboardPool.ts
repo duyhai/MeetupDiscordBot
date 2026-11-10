@@ -76,6 +76,20 @@ CREATE TABLE IF NOT EXISTS wrapped_announcements (
   channel_id  TEXT CHECK (channel_id ~ '^[0-9]{17,20}$'),
   message_id  TEXT CHECK (message_id ~ '^[0-9]{17,20}$')
 );
+-- retry_after came after the table's first shape. Guarded by a catalog read
+-- like dashboard_notices above, so a boot on a table that has it only reads.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+     WHERE table_schema = current_schema()
+       AND table_name = 'wrapped_announcements'
+       AND column_name = 'retry_after'
+  ) THEN
+    ALTER TABLE wrapped_announcements ADD COLUMN retry_after TIMESTAMPTZ;
+  END IF;
+END
+$$;
 -- Per-member no-show lookups: payload @> '{"cases":[{"member":{"id":"…"}}]}'
 -- (and the cleared/departed forms). Partial: only current no-show rows are
 -- searched, and queries must state this predicate literally to use it.
