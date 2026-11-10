@@ -235,7 +235,12 @@ export function wrappedBody({
       <h1>
         🎁 ${memberText(session.username)}'s 1.5 Gen Wrapped ${String(year)}
       </h1>
-      ${yearNav(years, year)} ${noticeHtml}
+      ${yearNav(years, year)}
+      <p class="muted">
+        A past year is built on the same once-an-hour limit as this one, here or
+        in Discord.
+      </p>
+      ${noticeHtml}
       ${
         thisYear === 0
           ? html`<p>
@@ -619,12 +624,16 @@ export function registerWrappedPage(
     }
     const discordUserId = session.discordUserId;
     const cache = await deps.cache();
-    const retry =
-      typeof req.query.retry === 'string' && /^\d{1,3}$/.test(req.query.retry)
-        ? Number(req.query.retry)
-        : 0;
+    // Minutes from the limiter itself, never the URL: it is in-process and
+    // the source of truth, and a hand-typed notice can't say "0 minutes".
     const noticeHtml = isNoticeCode(req.query.notice)
-      ? notice(req.query.notice, retry)
+      ? notice(
+          req.query.notice,
+          Math.max(
+            1,
+            Math.ceil(deps.limiter.retryAfterSec(discordUserId) / 60),
+          ),
+        )
       : '';
     const cached = await readWrapped(
       cache,
@@ -677,12 +686,7 @@ export function registerWrappedPage(
         back();
         return;
       case 'rate-limited':
-        back({
-          notice: 'rate-limited',
-          retry: String(
-            Math.ceil(deps.limiter.retryAfterSec(discordUserId) / 60),
-          ),
-        });
+        back({ notice: 'rate-limited' });
         return;
       case 'account-mismatch':
         back({ notice: 'mismatch' });

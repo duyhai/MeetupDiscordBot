@@ -1,7 +1,11 @@
+import type express from 'express';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { HostResolution } from '../../../src/lib/hosts/eligibility.js';
+import { registerCreatePages } from '../../../src/web/host/createPage.js';
 import { hostLayout } from '../../../src/web/host/hostLayout.js';
+import { registerHostPages } from '../../../src/web/host/hostPages.js';
+import { registerWrappedPage } from '../../../src/web/host/wrappedPage.js';
 import { MEMBER_PATHS } from '../../../src/web/host/hostRouter.js';
 import { HostSession } from '../../../src/web/host/hostSession.js';
 import { html } from '../../../src/web/html.js';
@@ -17,6 +21,12 @@ import {
 } from './hostHarness.js';
 
 afterEach(closeServers);
+
+/** One registered route of an Express router, as its stack lists it. */
+interface Route {
+  path: string;
+  methods: Record<string, boolean>;
+}
 
 const MEMBER: HostResolution = {
   kind: 'member',
@@ -213,6 +223,80 @@ describe('an unlinked Meetup sign-in who is not a host', () => {
     expect(res.headers['set-cookie'] ?? []).not.toContainEqual(
       expect.stringContaining('host_sid='),
     );
+  });
+});
+
+describe('the member gate against the real route table', () => {
+  it('refuses every registered host route to a member, and only those', async () => {
+    // The real page modules, with deps that are never reached: the gate
+    // answers first. A new host route registered later lands here.
+    const never = new Proxy<Record<string, unknown>>(
+      {},
+      {
+        get: () => vi.fn().mockRejectedValue(new Error('not reached')),
+      },
+    );
+    let table: express.Router | undefined;
+    const { req } = await makeHostApp({
+      resolve: vi.fn().mockResolvedValue(MEMBER),
+      pages: (router) => {
+        table = router;
+        registerHostPages(router, {
+          events: { fetchGroupEvents: vi.fn(), now: () => new Date() },
+          requests: async () => never as never,
+          announce: never as never,
+        });
+        registerCreatePages(router, never as never, ORIGIN);
+        registerWrappedPage(router, never as never);
+      },
+    });
+    const routes = (table?.stack ?? [])
+      .map((layer) => (layer as unknown as { route?: Route }).route)
+      .filter((route): route is Route => route !== undefined)
+      .flatMap((route) =>
+        Object.keys(route.methods)
+          .filter((m) => m === 'get' || m === 'post')
+          .map((method) => ({ method, path: route.path })),
+      );
+    // The gate sees the path with its params filled in.
+    const concrete = (path: string) => path.replace(/:[A-Za-z]+/g, '1');
+    expect(
+      routes.map((r) => `${r.method.toUpperCase()} ${r.path}`).sort(),
+    ).toEqual(
+      [
+        'GET /',
+        'GET /calendar',
+        'GET /create',
+        'GET /history',
+        'GET /requests/:id',
+        'GET /wrapped',
+        'POST /create',
+        'POST /events/:eventId/announce',
+        'POST /events/:eventId/announce/cancel',
+        'POST /events/:eventId/recreate',
+        'POST /link/discord',
+        'POST /logout',
+        'POST /verify/finish',
+        'POST /wrapped/rebuild',
+      ].sort(),
+    );
+    const sid = await signInWithDiscord(req);
+    const statuses = await Promise.all(
+      routes
+        .filter((r) => !MEMBER_PATHS.includes(r.path))
+        .map(async (r) => {
+          const res =
+            r.method === 'get'
+              ? await req.get(`/host${concrete(r.path)}`).set('Cookie', sid)
+              : await req
+                  .post(`/host${concrete(r.path)}`)
+                  .set('Cookie', sid)
+                  .set('Origin', ORIGIN);
+          return `${r.method.toUpperCase()} ${r.path} → ${res.status}`;
+        }),
+    );
+    expect(statuses).toEqual(statuses.map((s) => s.replace(/\d+$/, '403')));
+    expect(statuses).toHaveLength(8);
   });
 });
 

@@ -293,6 +293,9 @@ describe('GET /host/wrapped', () => {
     expect(text).toContain('href="/host/wrapped?year=2025"');
     expect(text).toContain('href="/host/wrapped?year=2024"');
     expect(text).toContain('aria-current="page">2026');
+    expect(text).toContain(
+      'A past year is built on the same once-an-hour limit',
+    );
     expect(h.deps.memberToken).not.toHaveBeenCalled();
     expect(h.meetup.getSelfPastRsvpEvents).not.toHaveBeenCalled();
     expect(res.headers['content-security-policy']).toContain(
@@ -489,7 +492,8 @@ describe('after a rebuild that did not build', () => {
       .get('/host/wrapped?year=2026&notice=rate-limited&retry=30')
       .set('Cookie', sid);
     expect(res.status).toBe(200);
-    expect(res.text).toContain('30 minutes');
+    // From the limiter, not the query: a hand-typed URL cannot say 0 or 30.
+    expect(res.text).toContain('60 minutes');
     expect(h.meetup.getSelfPastRsvpEvents).not.toHaveBeenCalled();
   });
 
@@ -554,10 +558,10 @@ describe('POST /host/wrapped/rebuild', () => {
       .send({ _csrf: h.csrf(), year: '2026' });
     expect(res.status).toBe(303);
     expect(res.headers.location).toBe(
-      '/host/wrapped?year=2026&notice=rate-limited&retry=60',
+      '/host/wrapped?year=2026&notice=rate-limited',
     );
     const shown = await h.req
-      .get('/host/wrapped?year=2026&notice=rate-limited&retry=60')
+      .get('/host/wrapped?year=2026&notice=rate-limited')
       .set('Cookie', sid);
     expect(shown.text).toContain('less than an hour ago');
     expect(shown.text).toContain('60 minutes');
