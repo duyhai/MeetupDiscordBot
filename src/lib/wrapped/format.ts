@@ -173,6 +173,10 @@ export const replies = {
     'Press **Link Meetup Account** to reconnect, then run `/wrapped` again.',
   notInGroup:
     "I can't see your Meetup history. Are you still a member of the Meetup group?",
+  buildFailed:
+    "Couldn't build your Wrapped right now — try again in a little while.",
+  alreadyBuilding:
+    "Your Wrapped is already being built — hang on, it's on its way.",
   stillBuilding:
     "Still building your Wrapped — you've been busy! I'll DM you when it's ready.",
   shareExpired: 'Your Wrapped has expired; run `/wrapped` again to share it.',

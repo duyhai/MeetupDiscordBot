@@ -24,6 +24,17 @@ describe('FixedWindowLimiter', () => {
     expect(limiter.retryAfterSec('a')).toBe(8);
   });
 
+  it('release gives a taken slot back within the window', () => {
+    const limiter = new FixedWindowLimiter(1, 10_000, () => 0);
+    expect(limiter.take('a')).toBe(true);
+    limiter.release('a');
+    expect(limiter.take('a')).toBe(true);
+    expect(limiter.take('a')).toBe(false);
+    // Releasing an unknown key is a no-op.
+    limiter.release('zzz');
+    expect(limiter.size).toBe(1);
+  });
+
   it('stays bounded under many distinct keys', () => {
     const limiter = new FixedWindowLimiter(1, 60_000, () => 0, 3);
     ['a', 'b', 'c', 'd', 'e'].forEach((key) => limiter.take(key));

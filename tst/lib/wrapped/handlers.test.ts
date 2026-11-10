@@ -3,6 +3,7 @@ import {
   CommandInteraction,
   PermissionFlagsBits,
 } from 'discord.js';
+import { ClientError } from 'graphql-request';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { KeyValueCache } from '../../../src/lib/cache/base.js';
@@ -85,7 +86,15 @@ function fakeMeetup({
     ev('2', '2026-05-10T19:00:00-07:00', 'Trivia'),
   ],
   delayMs = 0,
-}: { meetupId?: string; events?: EventSummary[]; delayMs?: number } = {}) {
+  attendees = {},
+  rsvpsError,
+}: {
+  meetupId?: string;
+  events?: EventSummary[];
+  delayMs?: number;
+  attendees?: Record<string, { id: string; name: string }[]>;
+  rsvpsError?: Error;
+} = {}) {
   const wait = () =>
     new Promise((resolve) => {
       setTimeout(resolve, delayMs);
@@ -98,13 +107,27 @@ function fakeMeetup({
     getGroupEvents: vi.fn(() =>
       Promise.resolve({ groupByUrlname: { id: GROUP, events: page([]) } }),
     ),
-    getEventRsvps: vi.fn((eventId: string) =>
-      Promise.resolve({ event: { id: eventId, rsvps: page([]) } }),
-    ),
+    getEventRsvps: vi.fn((eventId: string) => {
+      if (rsvpsError) {
+        return Promise.reject(rsvpsError);
+      }
+      return Promise.resolve({
+        event: {
+          id: eventId,
+          rsvps: page(
+            (attendees[eventId] ?? []).map(({ id, name }) => ({
+              status: 'YES' as const,
+              member: { id, name, memberUrl: '', gender: 'NONE' as never },
+            })),
+          ),
+        },
+      });
+    }),
   };
 }
 
 const cached: CachedWrapped = {
+  meetupId: 'me',
   stats: {
     year: 2026,
     firstEvent: null,
@@ -127,6 +150,7 @@ interface Harness {
   clock: { now: number };
   withMeetupClient: ReturnType<typeof vi.fn>;
   withOrganizerMeetup: ReturnType<typeof vi.fn>;
+  alert: ReturnType<typeof vi.fn>;
 }
 
 function harness(meetup = fakeMeetup()): Harness {
@@ -143,7 +167,9 @@ function harness(meetup = fakeMeetup()): Harness {
     ) => fn(meetup as unknown as GqlMeetupClient, { accessToken: 't' }),
   );
   const withOrganizerMeetup = vi.fn();
+  const alert = vi.fn().mockResolvedValue(true);
   const deps: WrappedHandlerDeps = {
+    alert,
     cache: () => Promise.resolve(cache),
     members: () => Promise.resolve(repo),
     withMeetupClient,
@@ -160,6 +186,7 @@ function harness(meetup = fakeMeetup()): Harness {
     clock,
     withMeetupClient,
     withOrganizerMeetup,
+    alert,
   };
 }
 
@@ -257,7 +284,7 @@ describe('runWrapped', () => {
       shareCustomId(2026, CHANNEL),
     );
     expect(
-      (await readWrapped(h.cache, 'u1', 2026))?.stats.attendedThisYear,
+      (await readWrapped(h.cache, 'u1', 2026, 'me'))?.stats.attendedThisYear,
     ).toBe(1);
     expect(h.withOrganizerMeetup).not.toHaveBeenCalled();
   });
@@ -282,7 +309,7 @@ describe('runWrapped', () => {
     await runWrapped(interaction, { year: 2026, refresh: true }, h.deps);
 
     expect(h.withMeetupClient).toHaveBeenCalledTimes(1);
-    expect((await readWrapped(h.cache, 'u1', 2026))?.builtAt).toBe(
+    expect((await readWrapped(h.cache, 'u1', 2026, 'me'))?.builtAt).toBe(
       '2026-12-10T20:00:00.000Z',
     );
   });
@@ -317,7 +344,7 @@ describe('runWrapped', () => {
     await runWrapped(interaction, { year: 2026, refresh: false }, h.deps);
 
     expect(contents(interaction.editReply)).toContain(replies.accountMismatch);
-    expect(await readWrapped(h.cache, 'u1', 2026)).toBeUndefined();
+    expect(await readWrapped(h.cache, 'u1', 2026, 'me')).toBeUndefined();
     // Reconnecting and trying again must not be met with "try in 59 minutes".
     expect(h.deps.limiter.take('u1')).toBe(true);
   });
@@ -350,6 +377,113 @@ describe('runWrapped', () => {
     expect(embedTitles(interaction.followUp)).toHaveLength(1);
   });
 
+  it('never shows Meetup response text to members or staff, and refunds the slot', async () => {
+    const SENTINEL = 'RAW-MEETUP-BODY-7f3a';
+    h = harness(
+      fakeMeetup({
+        rsvpsError: new ClientError(
+          {
+            status: 500,
+            headers: new Headers(),
+            body: SENTINEL,
+            errors: [{ message: SENTINEL }],
+          } as never,
+          { query: 'q' },
+        ),
+      }),
+    );
+    await link(h.repo);
+    const interaction = commandInteraction();
+
+    await expect(
+      runWrapped(interaction, { year: 2026, refresh: false }, h.deps),
+    ).rejects.toMatchObject({
+      message: replies.buildFailed,
+      alertHandled: true,
+    });
+
+    const everything = JSON.stringify([
+      interaction.editReply.mock.calls,
+      interaction.followUp.mock.calls,
+      h.alert.mock.calls,
+    ]);
+    expect(everything).not.toContain(SENTINEL);
+    expect(h.alert).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(h.alert.mock.calls[0])).toContain('HTTP 500');
+    expect(await readWrapped(h.cache, 'u1', 2026, 'me')).toBeUndefined();
+    // A transient failure must not lock the member out for an hour.
+    expect(h.deps.limiter.take('u1')).toBe(true);
+  });
+
+  it('rebuilds when the member has linked a different Meetup account since', async () => {
+    await link(h.repo);
+    await writeWrapped(h.cache, 'u1', 2026, { ...cached, meetupId: 'old' });
+    const interaction = commandInteraction();
+
+    await runWrapped(interaction, { year: 2026, refresh: false }, h.deps);
+
+    expect(h.withMeetupClient).toHaveBeenCalledTimes(1);
+    expect((await readWrapped(h.cache, 'u1', 2026, 'me'))?.meetupId).toBe('me');
+  });
+
+  it('tells a second concurrent run that a build is already under way', async () => {
+    // Slow enough to overlap, under the 50 ms slow-build threshold.
+    h = harness(fakeMeetup({ delayMs: 20 }));
+    await link(h.repo);
+    const first = commandInteraction();
+    const second = commandInteraction();
+
+    await Promise.all([
+      runWrapped(first, { year: 2026, refresh: false }, h.deps),
+      runWrapped(second, { year: 2026, refresh: false }, h.deps),
+    ]);
+
+    expect(h.meetup.getSelfPastRsvpEvents).toHaveBeenCalledTimes(1);
+    expect(contents(second.editReply)).toContain(replies.alreadyBuilding);
+    expect(embedTitles(first.followUp)).toHaveLength(1);
+    // The lease is released once the build is done.
+    expect([...h.cache.data.keys()].some((k) => k.includes('building'))).toBe(
+      false,
+    );
+  });
+
+  it("never lets an unlinked attendee's Meetup name or id reach the embed or the cache", async () => {
+    h = harness(
+      fakeMeetup({
+        attendees: {
+          '2': [
+            { id: 'me', name: 'Jane' },
+            { id: '424242', name: 'Zed Unlinked' },
+            { id: '777', name: 'Linked Pal' },
+          ],
+        },
+      }),
+    );
+    await link(h.repo);
+    await h.repo.upsert({
+      discordUserId: 'pal',
+      meetupId: '777',
+      meetupName: 'Linked Pal',
+      meetupMemberUrl: null,
+      onboardMethod: 'self_onboard',
+      onboardedBy: null,
+    });
+    const interaction = commandInteraction();
+
+    await runWrapped(interaction, { year: 2026, refresh: false }, h.deps);
+
+    const embedJson = JSON.stringify(payloads(interaction.followUp));
+    expect(embedJson).toContain('<@pal>');
+    expect(embedJson).toContain('1 other member');
+    expect(embedJson).not.toContain('424242');
+    expect(embedJson).not.toContain('Zed Unlinked');
+    expect(embedJson).not.toContain('Linked Pal');
+    const cacheJson = JSON.stringify([...h.cache.data.values()]);
+    expect(cacheJson).not.toContain('424242');
+    expect(cacheJson).not.toContain('Zed');
+    expect(cacheJson).not.toContain('777');
+  });
+
   it('offers no share button when run in a DM', async () => {
     await link(h.repo);
     const interaction = commandInteraction({ inGuild: false });
@@ -368,6 +502,7 @@ function buttonInteraction({
   customId = shareCustomId(2026, CHANNEL),
   memberFetchFails = false,
   canView = true,
+  memberCanSend = true,
   botCanSend = true,
   channelFetchFails = false,
   sendFails = false,
@@ -375,6 +510,7 @@ function buttonInteraction({
   customId?: string;
   memberFetchFails?: boolean;
   canView?: boolean;
+  memberCanSend?: boolean;
   botCanSend?: boolean;
   channelFetchFails?: boolean;
   sendFails?: boolean;
@@ -403,10 +539,15 @@ function buttonInteraction({
         if (who.id === 'bot') {
           return botCanSend;
         }
-        return (
-          wanted.every((bit) => bit === PermissionFlagsBits.ViewChannel) &&
-          canView
-        );
+        return wanted.every((bit) => {
+          if (bit === PermissionFlagsBits.ViewChannel) {
+            return canView;
+          }
+          if (bit === PermissionFlagsBits.SendMessages) {
+            return memberCanSend;
+          }
+          return false;
+        });
       },
     }),
     send,
@@ -434,6 +575,7 @@ describe('runShare', () => {
 
   beforeEach(async () => {
     h = harness();
+    await link(h.repo);
     await writeWrapped(h.cache, 'u1', 2026, cached);
   });
 
@@ -491,6 +633,16 @@ describe('runShare', () => {
 
     expect(send).not.toHaveBeenCalled();
     expect(contents(interaction.editReply)).toContain(replies.cannotShareHere);
+  });
+
+  it('refuses when the clicker cannot post in the channel', async () => {
+    const { interaction, send } = buttonInteraction({ memberCanSend: false });
+
+    await runShare(interaction, h.deps);
+
+    expect(send).not.toHaveBeenCalled();
+    expect(contents(interaction.editReply)).toContain(replies.cannotShareHere);
+    expect(h.cache.data.has(shareGuardKey('u1', 2026, CHANNEL))).toBe(false);
   });
 
   it('refuses when the bot cannot post there and releases the guard', async () => {

@@ -1,3 +1,4 @@
+import { ClientError } from 'graphql-request';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
@@ -136,6 +137,13 @@ function fakeDeps({
   };
 }
 
+function meetupError(status: number): ClientError {
+  return new ClientError(
+    { status, headers: new Headers(), body: '', errors: [] },
+    { query: 'q' },
+  );
+}
+
 describe('buildWrapped', () => {
   it("builds from the member's own history and this year's attendee lists", async () => {
     const f = fakeDeps({
@@ -162,6 +170,7 @@ describe('buildWrapped', () => {
       otherCount: 1,
     });
     expect(result.wrapped.builtAt).toBe('2026-12-10T20:00:00.000Z');
+    expect(result.wrapped.meetupId).toBe('me');
 
     expect(f.getSelfPastRsvpEvents).toHaveBeenCalledWith(GROUP);
     expect(f.getGroupEvents.mock.calls[0][1]).toEqual({
@@ -193,8 +202,8 @@ describe('buildWrapped', () => {
     expect(f.getEventRsvps).not.toHaveBeenCalled();
   });
 
-  it('falls back to the organizer read only when the member read throws', async () => {
-    const f = fakeDeps({ selfError: new Error('Meetup said no') });
+  it('falls back to the organizer read only when the member token is refused', async () => {
+    const f = fakeDeps({ selfError: meetupError(401) });
 
     const result = await buildWrapped(f.deps, 'me', 2026, GROUP);
 
@@ -202,8 +211,16 @@ describe('buildWrapped', () => {
     expect(f.organizerRsvps).toHaveBeenCalledWith('me');
   });
 
+  it('lets any other member-read failure propagate instead of falling back', async () => {
+    const f = fakeDeps({ selfError: meetupError(500) });
+
+    await expect(buildWrapped(f.deps, 'me', 2026, GROUP)).rejects.toThrow();
+    expect(f.organizerRsvps).not.toHaveBeenCalled();
+    expect(f.claimBuild).not.toHaveBeenCalled();
+  });
+
   it('is not-in-group when the fallback cannot see the member', async () => {
-    const f = fakeDeps({ selfError: new Error('Meetup said no') });
+    const f = fakeDeps({ selfError: meetupError(401) });
     f.organizerRsvps.mockResolvedValue(undefined);
 
     const result = await buildWrapped(f.deps, 'me', 2026, GROUP);

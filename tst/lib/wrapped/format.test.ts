@@ -12,6 +12,7 @@ import {
 } from '../../../src/lib/wrapped/format.js';
 
 const full: CachedWrapped = {
+  meetupId: 'm1',
   stats: {
     year: 2026,
     firstEvent: {
@@ -41,6 +42,7 @@ const full: CachedWrapped = {
 };
 
 const quiet: CachedWrapped = {
+  meetupId: 'm1',
   stats: {
     ...full.stats,
     attendedThisYear: 0,

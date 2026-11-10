@@ -5,6 +5,7 @@
  */
 import { Logger } from 'tslog';
 
+import { isMeetupUnauthorized } from '../helpers/organizerMeetupClient.js';
 import {
   getPaginatedData,
   mapWithConcurrency,
@@ -86,8 +87,17 @@ async function readHistory(
     }
     return { kind: 'events', events };
   } catch (error) {
+    // Only a refused token means the member's own view can't see the data.
+    // Anything else (network, 5xx, GraphQL error) propagates: falling back
+    // would skip the account check and the build would then carry on with
+    // the same failing token anyway.
+    if (!isMeetupUnauthorized(error)) {
+      throw error;
+    }
+    // Name and status only: a Meetup body never reaches a log line here.
     logger.warn(
-      `Member read of RSVP history failed, falling back to the organizer credential: ${String(error)}`,
+      'Member token refused (HTTP 401) reading RSVP history; ' +
+        'falling back to the organizer credential',
     );
     const events = await deps.organizerRsvps(linkedMeetupId);
     return events ? { kind: 'events', events } : { kind: 'not-in-group' };
@@ -172,6 +182,7 @@ export async function buildWrapped(
   return {
     kind: 'built',
     wrapped: {
+      meetupId: linkedMeetupId,
       stats,
       companions: named,
       builtAt: (deps.now ?? (() => new Date()))().toISOString(),

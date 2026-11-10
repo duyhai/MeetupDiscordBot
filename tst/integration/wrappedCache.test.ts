@@ -20,6 +20,7 @@ if (!REDIS_AVAILABLE) {
 }
 
 const wrapped: CachedWrapped = {
+  meetupId: 'm1',
   stats: {
     year: 2026,
     firstEvent: {
@@ -57,11 +58,11 @@ const wrapped: CachedWrapped = {
       expect(await readWrapped(cache, userId, 2026)).toBeUndefined();
 
       await writeWrapped(cache, userId, 2026, wrapped);
-      expect(await readWrapped(cache, userId, 2026)).toEqual(wrapped);
+      expect(await readWrapped(cache, userId, 2026, 'm1')).toEqual(wrapped);
 
       const rebuilt = { ...wrapped, builtAt: '2026-12-11T20:00:00.000Z' };
       await writeWrapped(cache, userId, 2026, rebuilt);
-      expect(await readWrapped(cache, userId, 2026)).toEqual(rebuilt);
+      expect(await readWrapped(cache, userId, 2026, 'm1')).toEqual(rebuilt);
       // A different year is a different Wrapped.
       expect(await readWrapped(cache, userId, 2025)).toBeUndefined();
     });

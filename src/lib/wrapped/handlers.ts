@@ -8,6 +8,7 @@
 import {
   ButtonInteraction,
   Channel,
+  Client,
   CommandInteraction,
   GuildMember,
   GuildTextBasedChannel,
@@ -17,7 +18,9 @@ import { Logger } from 'tslog';
 
 import Configuration from '../../configuration.js';
 import { KeyValueCache } from '../cache/base.js';
+import { LogEntry, logAlert } from '../helpers/discordLogger.js';
 import { MemberRepository } from '../repositories/types.js';
+import { describeBuildError } from '../reports/buildJob.js';
 import { withOrganizerMeetup } from '../reports/organizerMeetup.js';
 import { ApplicationCache } from '../../util/cache.js';
 import { keepReplyVisible } from '../../util/discord.js';
@@ -26,8 +29,10 @@ import { ApplicationMemberRepository } from '../../util/memberRepository.js';
 import { FixedWindowLimiter } from '../../web/rateLimit.js';
 import { BuildResult, buildWrapped } from './build.js';
 import {
+  BUILDING_LEASE_TTL_SEC,
   CachedWrapped,
   SHARE_GUARD_TTL_SEC,
+  buildingKey,
   readWrapped,
   shareGuardKey,
   wrappedBuildLimiter,
@@ -47,6 +52,8 @@ const logger = new Logger({ name: 'wrapped' });
 export const SLOW_BUILD_MS = 10_000;
 
 export interface WrappedHandlerDeps {
+  /** Plain alert to #meetup-bot-alerts (never a Meetup response body). */
+  alert(client: Client, entry: LogEntry): Promise<boolean>;
   cache(): Promise<KeyValueCache>;
   members(): Promise<MemberRepository>;
   withMeetupClient: typeof withMeetupClient;
@@ -57,6 +64,7 @@ export interface WrappedHandlerDeps {
 }
 
 export const defaultWrappedDeps: WrappedHandlerDeps = {
+  alert: logAlert,
   cache: ApplicationCache,
   members: ApplicationMemberRepository,
   withMeetupClient,
@@ -65,6 +73,21 @@ export const defaultWrappedDeps: WrappedHandlerDeps = {
   now: () => new Date(),
   slowAfterMs: SLOW_BUILD_MS,
 };
+
+/**
+ * What the member sees when Meetup (or the organizer credential) failed
+ * mid-build. The wrapper would otherwise post the raw error, which for a
+ * graphql-request ClientError embeds Meetup's response body (issue #112);
+ * this one carries a fixed message and marks the alert as already posted.
+ */
+export class WrappedBuildError extends Error {
+  readonly alertHandled = true;
+
+  constructor() {
+    super(replies.buildFailed);
+    this.name = 'WrappedBuildError';
+  }
+}
 
 export interface WrappedOptions {
   year: number;
@@ -117,7 +140,8 @@ export async function runWrapped(
   }
 
   const cache = await deps.cache();
-  const cached = await readWrapped(cache, userId, year);
+  // A copy built for a since-replaced Meetup account is a miss.
+  const cached = await readWrapped(cache, userId, year, linkedMeetupId);
   if (cached && !refresh) {
     await interaction.followUp({
       ...wrappedPayload(interaction, cached),
@@ -126,7 +150,51 @@ export async function runWrapped(
     return;
   }
 
-  await deps.withMeetupClient(interaction, async (meetup) => {
+  // One build at a time per member and year: a double invoke would otherwise
+  // reach the limiter and be told it built "less than an hour ago".
+  const lease = buildingKey(userId, year);
+  if (
+    !(await cache.exclusive_set(
+      lease,
+      deps.now().toISOString(),
+      BUILDING_LEASE_TTL_SEC,
+    ))
+  ) {
+    await answerInPlace(interaction, { content: replies.alreadyBuilding });
+    return;
+  }
+  try {
+    await deps.withMeetupClient(interaction, (meetup) =>
+      buildAndReply(interaction, deps, {
+        meetup,
+        members,
+        cache,
+        cached,
+        linkedMeetupId,
+        year,
+      }),
+    );
+  } finally {
+    await cache.remove(lease);
+  }
+}
+
+interface BuildContext {
+  meetup: Parameters<Parameters<typeof withMeetupClient>[1]>[0];
+  members: MemberRepository;
+  cache: KeyValueCache;
+  cached: CachedWrapped | undefined;
+  linkedMeetupId: string;
+  year: number;
+}
+
+async function buildAndReply(
+  interaction: CommandInteraction,
+  deps: WrappedHandlerDeps,
+  { meetup, members, cache, cached, linkedMeetupId, year }: BuildContext,
+): Promise<void> {
+  const userId = interaction.user.id;
+  {
     let slow = false;
     const slowTimer = setTimeout(() => {
       slow = true;
@@ -137,6 +205,7 @@ export async function runWrapped(
         });
     }, deps.slowAfterMs);
 
+    let claimed = false;
     let result: BuildResult;
     try {
       result = await buildWrapped(
@@ -145,7 +214,10 @@ export async function runWrapped(
           // Taken only with the token in hand and the history readable: a
           // member sent on the OAuth hop, or told to reconnect, keeps their
           // slot for the next attempt.
-          claimBuild: () => deps.limiter.take(userId),
+          claimBuild: () => {
+            claimed = deps.limiter.take(userId);
+            return claimed;
+          },
           organizerRsvps: (meetupId) =>
             deps.withOrganizerMeetup(interaction.client, (organizer) =>
               organizer.getMemberRsvpEvents(
@@ -177,9 +249,22 @@ export async function runWrapped(
         year,
         Configuration.meetup.groupId,
       );
-    } finally {
+    } catch (error) {
       clearTimeout(slowTimer);
+      if (claimed) {
+        // The member got nothing for the slot; don't lock them out an hour.
+        deps.limiter.release(userId);
+      }
+      logger.error(error);
+      await deps.alert(interaction.client, {
+        title: '/wrapped failed',
+        description:
+          `User: ${interaction.user.toString()} (${interaction.user.username})\n` +
+          `Error: ${describeBuildError(error)}`,
+      });
+      throw new WrappedBuildError();
     }
+    clearTimeout(slowTimer);
 
     if (result.kind === 'account-mismatch') {
       logger.warn(
@@ -216,7 +301,7 @@ export async function runWrapped(
       }
     }
     await interaction.followUp({ ...payload, ephemeral: true });
-  });
+  }
 }
 
 /**
@@ -246,18 +331,29 @@ async function shareTarget(
   } catch {
     return undefined;
   }
-  if (!channel.permissionsFor(member)?.has(PermissionFlagsBits.ViewChannel)) {
+  const sendBit = channel.isThread()
+    ? PermissionFlagsBits.SendMessagesInThreads
+    : PermissionFlagsBits.SendMessages;
+  // The clicker must be able to post there themselves: the bot posts on
+  // their behalf, never into a channel they couldn't write to.
+  if (
+    !channel
+      .permissionsFor(member)
+      ?.has([PermissionFlagsBits.ViewChannel, sendBit])
+  ) {
     return undefined;
   }
-  const botNeeds = [
-    PermissionFlagsBits.ViewChannel,
-    channel.isThread()
-      ? PermissionFlagsBits.SendMessagesInThreads
-      : PermissionFlagsBits.SendMessages,
-    PermissionFlagsBits.EmbedLinks,
-  ];
   const bot = interaction.client.user;
-  if (!bot || !channel.permissionsFor(bot)?.has(botNeeds)) {
+  if (
+    !bot ||
+    !channel
+      .permissionsFor(bot)
+      ?.has([
+        PermissionFlagsBits.ViewChannel,
+        sendBit,
+        PermissionFlagsBits.EmbedLinks,
+      ])
+  ) {
     return undefined;
   }
   return { channel, member };
@@ -275,8 +371,13 @@ export async function runShare(
   const userId = interaction.user.id;
   const cache = await deps.cache();
 
-  // Always the clicker's own Wrapped, whichever message the button sits on.
-  const wrapped = await readWrapped(cache, userId, year);
+  // Always the clicker's own Wrapped, whichever message the button sits on,
+  // and only one built for the Meetup account they are linked to now.
+  const linkedMeetupId = (await (await deps.members()).findByDiscordId(userId))
+    ?.meetupId;
+  const wrapped = linkedMeetupId
+    ? await readWrapped(cache, userId, year, linkedMeetupId)
+    : undefined;
   if (!wrapped) {
     await answerInPlace(interaction, { content: replies.shareExpired });
     return;

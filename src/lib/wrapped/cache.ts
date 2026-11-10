@@ -15,12 +15,19 @@ import { WrappedStats } from './stats.js';
 const logger = new Logger({ name: 'wrappedCache' });
 
 /** Bump whenever CachedWrapped's shape changes. */
-export const WRAPPED_CACHE_VERSION = 'v1';
+export const WRAPPED_CACHE_VERSION = 'v2';
 export const BUILD_WINDOW_MS = 60 * 60 * 1000;
 export const SHARE_GUARD_TTL_SEC = 24 * 60 * 60;
+/**
+ * How long one build may hold the "already building" lease: the OAuth hop
+ * alone can take three minutes, and the interaction token lasts fifteen.
+ */
+export const BUILDING_LEASE_TTL_SEC = 15 * 60;
 const MIN_TTL_SEC = 24 * 60 * 60;
 
 export interface CachedWrapped {
+  /** The Meetup account this was built for; a relink makes it a miss. */
+  meetupId: string;
   stats: WrappedStats;
   companions: NamedCompanions;
   builtAt: string;
@@ -28,6 +35,10 @@ export interface CachedWrapped {
 
 export function wrappedCacheKey(discordUserId: string, year: number): string {
   return `wrapped:${WRAPPED_CACHE_VERSION}:${discordUserId}:${year}`;
+}
+
+export function buildingKey(discordUserId: string, year: number): string {
+  return `wrapped:building:${discordUserId}:${year}`;
 }
 
 export function shareGuardKey(
@@ -54,21 +65,32 @@ export function wrappedTtlSec(year: number, now: Date): number {
   return Math.max(MIN_TTL_SEC, untilSeasonEnd);
 }
 
+/**
+ * The cached Wrapped, or undefined when there is none, it is unparseable, or
+ * it was built for a Meetup account other than `meetupId` (the member has
+ * unlinked and relinked since).
+ */
 export async function readWrapped(
   cache: KeyValueCache,
   discordUserId: string,
   year: number,
+  meetupId?: string,
 ): Promise<CachedWrapped | undefined> {
   const raw = await cache.get(wrappedCacheKey(discordUserId, year));
   if (raw === undefined) {
     return undefined;
   }
+  let wrapped: CachedWrapped;
   try {
-    return JSON.parse(raw) as CachedWrapped;
+    wrapped = JSON.parse(raw) as CachedWrapped;
   } catch {
     logger.warn(`Unparseable cached Wrapped for ${discordUserId}/${year}`);
     return undefined;
   }
+  if (meetupId !== undefined && wrapped.meetupId !== meetupId) {
+    return undefined;
+  }
+  return wrapped;
 }
 
 export async function writeWrapped(
