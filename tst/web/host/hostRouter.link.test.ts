@@ -116,27 +116,11 @@ async function setup(
   return { ...app, store, resolve, alert, sid, session };
 }
 
-/**
- * The Discord authorize URL the start page links to. The start answers with
- * a page that LINKS to Discord, never a redirect: browsers apply the host
- * pages' `form-action 'self'` to every redirect after a form POST.
- */
-/**
- * Where a step sends the host to Meetup: the "Continue to Meetup" link on
- * its page, or its redirect. Returns the state and the sealed cookie.
- */
-function meetupStart(start: LoopbackResponse): {
-  state: string;
-  cookie: string;
-} {
-  const href =
-    start.headers.location ??
-    /<a class="button" href="([^"]+)">Continue to Meetup<\/a>/
-      .exec(start.text)?.[1]
-      ?.replace(/&amp;/g, '&');
-  if (!href) {
-    throw new Error(`no Meetup step: ${start.text.slice(0, 400)}`);
-  }
+/** The state and sealed cookie of a Meetup authorize URL. */
+function meetupStep(
+  href: string,
+  start: LoopbackResponse,
+): { state: string; cookie: string } {
   const url = new URL(href);
   expect(url.origin + url.pathname).toBe(
     'https://secure.meetup.com/oauth2/authorize',
@@ -147,6 +131,42 @@ function meetupStart(start: LoopbackResponse): {
   };
 }
 
+/**
+ * The Meetup step a page links to ("Continue to Meetup"). Like Discord's,
+ * a page that LINKS, never a redirect: these follow a form POST.
+ */
+function meetupStart(start: LoopbackResponse): {
+  state: string;
+  cookie: string;
+} {
+  expect(start.status).toBe(200);
+  expect(start.headers.location).toBeUndefined();
+  const href = /<a class="button" href="([^"]+)">Continue to Meetup<\/a>/.exec(
+    start.text,
+  )?.[1];
+  if (!href) {
+    throw new Error(`no Continue to Meetup link: ${start.text.slice(0, 400)}`);
+  }
+  return meetupStep(href.replace(/&amp;/g, '&'), start);
+}
+
+/**
+ * The Meetup step Discord's callback redirects to: a GET, not a form POST,
+ * so a redirect is allowed there.
+ */
+function meetupRedirect(start: LoopbackResponse): {
+  state: string;
+  cookie: string;
+} {
+  expect(start.status).toBe(302);
+  return meetupStep(start.headers.location ?? '', start);
+}
+
+/**
+ * The Discord authorize URL the start page links to. The start answers with
+ * a page that LINKS to Discord, never a redirect: browsers apply the host
+ * pages' `form-action 'self'` to every redirect after a form POST.
+ */
 function continueHref(start: LoopbackResponse): URL {
   expect(start.status).toBe(200);
   expect(start.headers.location).toBeUndefined();
@@ -1301,9 +1321,8 @@ describe('Verify on Discord: joining the server and running Verify', () => {
     /** Meetup sends the host back from the step `start` began. */
     async function backFromMeetup(
       app: Awaited<ReturnType<typeof linkedSetup>>,
-      start: LoopbackResponse,
+      { state, cookie }: { state: string; cookie: string },
     ) {
-      const { state, cookie } = meetupStart(start);
       return app.req
         .get(`/host/auth/meetup/complete?state=${state}&code=m`)
         .set('Cookie', `${app.sid}; ${cookie}`);
@@ -1357,7 +1376,7 @@ describe('Verify on Discord: joining the server and running Verify', () => {
       const res = await refresh(app);
       expect(res.status).toBe(200);
       expect(res.text).not.toContain('discord.com/oauth2');
-      const page = await backFromMeetup(app, res);
+      const page = await backFromMeetup(app, meetupStart(res));
       expect(page.text).toContain('You are verified');
       expect(page.text).not.toContain('We added you');
       expect(app.runVerify).toHaveBeenCalledWith(
@@ -1370,7 +1389,7 @@ describe('Verify on Discord: joining the server and running Verify', () => {
 
     /** A refresh with no kept token, through the Meetup step and back. */
     const viaMeetup = async (app: Awaited<ReturnType<typeof linkedSetup>>) =>
-      backFromMeetup(app, await refresh(app));
+      backFromMeetup(app, meetupStart(await refresh(app)));
 
     it('a refresh through Meetup counts against the limit too', async () => {
       const app = await linkedSetup(true, { keptToken: false });
@@ -1386,12 +1405,14 @@ describe('Verify on Discord: joining the server and running Verify', () => {
       const finish = async () =>
         backFromMeetup(
           app,
-          await app.req
-            .post('/host/verify/finish')
-            .set('Cookie', app.sid)
-            .set('Origin', ORIGIN)
-            .type('form')
-            .send({ _csrf: app.session().csrfToken }),
+          meetupStart(
+            await app.req
+              .post('/host/verify/finish')
+              .set('Cookie', app.sid)
+              .set('Origin', ORIGIN)
+              .type('form')
+              .send({ _csrf: app.session().csrfToken }),
+          ),
         );
       expect((await finish()).text).toContain('You are verified');
       expect((await finish()).text).toContain('You are verified');
@@ -1423,9 +1444,15 @@ describe('Verify on Discord: joining the server and running Verify', () => {
 
     it('a refresh through Discord, then Meetup, counts against the limit too', async () => {
       const app = await linkedSetup(false, { keptToken: false });
-      const first = await backFromMeetup(app, await viaDiscord(app));
+      const first = await backFromMeetup(
+        app,
+        meetupRedirect(await viaDiscord(app)),
+      );
       expect(first.text).toContain('You are verified');
-      const again = await backFromMeetup(app, await viaDiscord(app));
+      const again = await backFromMeetup(
+        app,
+        meetupRedirect(await viaDiscord(app)),
+      );
       expect(again.status).toBe(429);
       expect(again.text).toContain('You refreshed recently');
       expect(app.runVerify).toHaveBeenCalledTimes(1);
