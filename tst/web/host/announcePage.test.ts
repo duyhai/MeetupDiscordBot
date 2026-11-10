@@ -412,6 +412,17 @@ describe('the hold', () => {
     expect(noticeOf((await cancel(THEIRS)).headers.location)).toBe('not-yours');
   });
 
+  it('a held announcement past its time says it is going out shortly', async () => {
+    const { rows, home, now } = await setup();
+    rows.set(
+      MINE,
+      row(MINE, 'held', { dueAt: new Date(now.getTime() - 5 * 60 * 1000) }),
+    );
+    const text = await home();
+    expect(text).toContain('Announcement going out shortly');
+    expect(text).toContain('Cancel the announcement');
+  });
+
   it('an event within 3 days goes out at once even in work hours', async () => {
     const { announce, deps } = await setup({ now: NOW });
     expect(noticeOf((await announce(SOON)).headers.location)).toBe('sent');
@@ -467,6 +478,15 @@ describe('pre-checks on the page', () => {
     expect(text).not.toContain(`action="/host/events/${MINE}/recreate"`);
   });
 
+  it('a recreation under way or stuck is said, with no button', async () => {
+    const { home } = await setup({
+      recreatable: { ok: false, reason: 'in-progress' },
+    });
+    const text = await home(`?announce=too-late&event=${MINE}`);
+    expect(text).toContain('under way or needs checking');
+    expect(text).not.toContain(`action="/host/events/${MINE}/recreate"`);
+  });
+
   it('the recreatable check failing shows a reload note, and a stranger’s event id shows nothing', async () => {
     const { home } = await setup({ recreatable: new Error('meetup down') });
     expect(await home(`?announce=too-late&event=${MINE}`)).toContain(
@@ -506,6 +526,7 @@ describe('Recreate and announce', () => {
       'already-recreated',
       'announce-failed',
       'cancel-failed',
+      'recreate-needs-check',
     ] as const) {
       // eslint-disable-next-line no-await-in-loop
       const { recreatePost, home } = await setup({ recreate: { code } });

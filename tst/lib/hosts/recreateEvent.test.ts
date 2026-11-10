@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
+import { MeetupPayloadError } from '../../../src/lib/client/meetup/payloadErrors.js';
 import { AnnounceCode } from '../../../src/lib/hosts/announceEvent.js';
 import { CopySource } from '../../../src/lib/hosts/eventRequest.js';
 import { HostEvent } from '../../../src/lib/hosts/hostEvents.js';
@@ -8,7 +9,9 @@ import {
   recreatable,
   recreateAndAnnounce,
   recreateInput,
+  surelyNotCreated,
 } from '../../../src/lib/hosts/recreateEvent.js';
+import { OrganizerTokenUnavailableError } from '../../../src/lib/reports/organizerMeetup.js';
 import { createEventTemplate } from '../../../src/templates/createEventTemplate.js';
 
 const HOST = { meetupMemberId: '4242', name: 'Ann *N*' };
@@ -44,20 +47,34 @@ const SOURCE: CopySource = {
 };
 const NEW_URL = 'https://www.meetup.com/g/events/322222222/';
 
-/** The recreations table in memory, with Postgres's one-row claim. */
-function memoryRecreations(existing?: string) {
-  const rows = new Map<string, { newEventId: string | null; by: string }>();
+/** The recreations table in memory, with Postgres's claim states. */
+function memoryRecreations(existing?: {
+  newEventId: string | null;
+  stale?: boolean;
+}) {
+  const rows = new Map<
+    string,
+    { newEventId: string | null; by: string; stale: boolean }
+  >();
   if (existing) {
-    rows.set(OLD.id, { newEventId: existing, by: 'someone' });
+    rows.set(OLD.id, {
+      newEventId: existing.newEventId,
+      by: 'someone',
+      stale: existing.stale ?? false,
+    });
   }
   return {
     rows,
     claim: vi.fn(async (oldId: string, by: string) => {
-      if (rows.has(oldId)) {
-        return false;
+      const row = rows.get(oldId);
+      if (row === undefined) {
+        rows.set(oldId, { newEventId: null, by, stale: false });
+        return 'claimed' as const;
       }
-      rows.set(oldId, { newEventId: null, by });
-      return true;
+      if (row.newEventId !== null) {
+        return 'done' as const;
+      }
+      return row.stale ? ('stale' as const) : ('pending' as const);
     }),
     fill: vi.fn(async (oldId: string, newId: string) => {
       const row = rows.get(oldId);
@@ -65,8 +82,9 @@ function memoryRecreations(existing?: string) {
         row.newEventId = newId;
       }
     }),
-    release: vi.fn(async (oldId: string) => {
-      if (rows.get(oldId)?.newEventId === null) {
+    release: vi.fn(async (oldId: string, by: string) => {
+      const row = rows.get(oldId);
+      if (row?.newEventId === null && row.by === by) {
         rows.delete(oldId);
       }
     }),
@@ -77,11 +95,12 @@ function memoryRecreations(existing?: string) {
 function setup(
   options: {
     others?: boolean;
-    existing?: string;
+    existing?: { newEventId: string | null; stale?: boolean };
     source?: CopySource | undefined;
     create?: () => Promise<unknown>;
-    announce?: AnnounceCode;
+    announce?: AnnounceCode | Error;
     cancelFails?: boolean;
+    organizerFails?: boolean;
     /** The flag off: no cancel on Meetup. */
     noCancel?: boolean;
   } = {},
@@ -101,7 +120,12 @@ function setup(
     copySource: vi.fn(async () => {
       return 'source' in options ? options.source : SOURCE;
     }),
-    organizer: async () => ({ createEvent: createEvent as never }),
+    organizer: async () => {
+      if (options.organizerFails) {
+        throw new OrganizerTokenUnavailableError();
+      }
+      return { createEvent: createEvent as never };
+    },
     cancelEvent: options.noCancel
       ? undefined
       : vi.fn(async () => {
@@ -113,6 +137,9 @@ function setup(
     recreations: async () => recreations,
     announce: vi.fn(async () => {
       calls.push('announce');
+      if (options.announce instanceof Error) {
+        throw options.announce;
+      }
       return options.announce ?? 'sent';
     }),
     alert: vi.fn().mockResolvedValue(true),
@@ -185,8 +212,15 @@ describe('recreatable', () => {
       recreatable(setup({ others: true }).deps, HOST, OLD.id),
     ).resolves.toEqual({ ok: false, reason: 'has-rsvps' });
     await expect(
-      recreatable(setup({ existing: '300000000' }).deps, HOST, OLD.id),
+      recreatable(
+        setup({ existing: { newEventId: '300000000' } }).deps,
+        HOST,
+        OLD.id,
+      ),
     ).resolves.toEqual({ ok: false, reason: 'already-recreated' });
+    await expect(
+      recreatable(setup({ existing: { newEventId: null } }).deps, HOST, OLD.id),
+    ).resolves.toEqual({ ok: false, reason: 'in-progress' });
   });
 });
 
@@ -202,7 +236,7 @@ describe('recreateAndAnnounce', () => {
     });
     expect(calls).toEqual(['create', 'announce', 'cancel']);
     expect(recreations.claim).toHaveBeenCalledWith(OLD.id, HOST.meetupMemberId);
-    expect(recreations.rows.get(OLD.id)).toEqual({
+    expect(recreations.rows.get(OLD.id)).toMatchObject({
       newEventId: '322222222',
       by: HOST.meetupMemberId,
     });
@@ -243,7 +277,7 @@ describe('recreateAndAnnounce', () => {
       expect(createEvent).toHaveBeenCalledTimes(1);
     });
     const two = await recreateAndAnnounce(deps, HOST, OLD.id);
-    expect(two).toEqual({ code: 'already-recreated' });
+    expect(two).toEqual({ code: 'recreate-in-progress' });
     release?.();
     expect((await one).code).toBe('recreated');
     expect(createEvent).toHaveBeenCalledTimes(1);
@@ -301,7 +335,9 @@ describe('recreateAndAnnounce', () => {
     await expect(
       recreateAndAnnounce(setup().deps, HOST, '999'),
     ).resolves.toEqual({ code: 'not-yours' });
-    await expect(setup({ existing: '300000000' }).run()).resolves.toEqual({
+    await expect(
+      setup({ existing: { newEventId: '300000000' } }).run(),
+    ).resolves.toEqual({
       code: 'already-recreated',
     });
     const noSource = setup({ source: undefined });
@@ -314,10 +350,12 @@ describe('recreateAndAnnounce', () => {
     await expect(notHost.run()).resolves.toEqual({ code: 'no-source' });
   });
 
-  it('the copy failing to create releases the claim and leaves the old event untouched, alerted', async () => {
+  it('Meetup refusing the copy releases the claim and leaves the old event untouched', async () => {
     const { deps, calls, recreations, alerts, run } = setup({
       create: async () => {
-        throw new Error('meetup down');
+        throw new MeetupPayloadError('createEvent', [
+          { code: 'INVALID', field: 'title', message: 'bad' },
+        ]);
       },
     });
     await expect(run()).resolves.toEqual({ code: 'create-failed' });
@@ -326,14 +364,72 @@ describe('recreateAndAnnounce', () => {
     expect(deps.cancelEvent).not.toHaveBeenCalled();
     expect(deps.announce).not.toHaveBeenCalled();
     expect(alerts()).toContain('old event is untouched');
-    // So a retry can claim again.
+    // So the host can try again.
     await expect(run()).resolves.toEqual({ code: 'create-failed' });
+    expect(calls).toEqual(['create', 'create']);
+  });
+
+  it('no organizer login: nothing called, claim released', async () => {
+    const { calls, recreations, alerts, run } = setup({ organizerFails: true });
+    await expect(run()).resolves.toEqual({ code: 'create-failed' });
+    expect(calls).toEqual([]);
+    expect(recreations.rows.has(OLD.id)).toBe(false);
+    expect(alerts()).toContain('organizer login is not usable');
+  });
+
+  it('a create that may have reached Meetup keeps the claim: no retry makes a second copy', async () => {
+    const { ClientError } = await import('graphql-request');
+    for (const thrown of [
+      new Error('socket hang up'),
+      new ClientError(
+        { status: 502, errors: [], headers: new Headers() } as never,
+        { query: 'mutation' },
+      ),
+    ]) {
+      const { calls, recreations, alerts, run } = setup({
+        create: async () => {
+          throw thrown;
+        },
+      });
+      // eslint-disable-next-line no-await-in-loop
+      await expect(run()).resolves.toEqual({ code: 'recreate-needs-check' });
+      expect(recreations.rows.get(OLD.id)?.newEventId).toBeNull();
+      expect(alerts()).toContain('Look in the group’s upcoming events');
+      // A retry finds the claim and creates nothing.
+      // eslint-disable-next-line no-await-in-loop
+      await expect(run()).resolves.toEqual({ code: 'recreate-in-progress' });
+      expect(calls).toEqual(['create']);
+    }
     const none = setup({
       create: async () => ({ createEvent: { event: null } }),
     });
-    await expect(none.run()).resolves.toEqual({ code: 'create-failed' });
-    expect(none.calls).toEqual(['create']);
-    expect(none.recreations.rows.has(OLD.id)).toBe(false);
+    await expect(none.run()).resolves.toEqual({ code: 'recreate-needs-check' });
+    expect(none.recreations.rows.has(OLD.id)).toBe(true);
+  });
+
+  it('a stale claim is never taken over: no copy is made, leadership is asked to check', async () => {
+    const { calls, createEvent, deps, alerts, run } = setup({
+      existing: { newEventId: null, stale: true },
+    });
+    await expect(run()).resolves.toEqual({ code: 'recreate-needs-check' });
+    expect(createEvent).not.toHaveBeenCalled();
+    expect(deps.copySource).not.toHaveBeenCalled();
+    expect(calls).toEqual([]);
+    expect(alerts()).toContain('died mid-way');
+  });
+
+  it('the copy’s announcement request throwing is a failed announcement: the old event stays', async () => {
+    const { deps, calls, alerts, run } = setup({
+      announce: new Error('pg down'),
+    });
+    await expect(run()).resolves.toMatchObject({
+      code: 'announce-failed',
+      announce: 'failed',
+      newEvent: { id: '322222222' },
+    });
+    expect(calls).toEqual(['create', 'announce']);
+    expect(deps.cancelEvent).not.toHaveBeenCalled();
+    expect(alerts()).toContain('NOT cancelled');
   });
 
   it('a copy whose announcement did not go out leaves the old event in place; the record stays', async () => {
@@ -358,5 +454,33 @@ describe('recreateAndAnnounce', () => {
       announce: 'sent',
     });
     expect(alerts()).toContain('did not cancel the old event');
+  });
+});
+
+describe('surelyNotCreated', () => {
+  it('only a missing login, payload errors or a 4xx are sure', async () => {
+    const { ClientError } = await import('graphql-request');
+    const client = (status: number) =>
+      new ClientError(
+        {
+          status,
+          errors: [{ message: 'x' }] as never,
+          headers: new Headers(),
+        } as never,
+        { query: 'mutation' },
+      );
+    expect(surelyNotCreated(new OrganizerTokenUnavailableError())).toBe(true);
+    expect(
+      surelyNotCreated(
+        new MeetupPayloadError('createEvent', [
+          { code: 'X', field: null, message: 'y' },
+        ]),
+      ),
+    ).toBe(true);
+    expect(surelyNotCreated(client(400))).toBe(true);
+    expect(surelyNotCreated(client(429))).toBe(true);
+    expect(surelyNotCreated(client(200))).toBe(false);
+    expect(surelyNotCreated(client(503))).toBe(false);
+    expect(surelyNotCreated(new Error('socket hang up'))).toBe(false);
   });
 });

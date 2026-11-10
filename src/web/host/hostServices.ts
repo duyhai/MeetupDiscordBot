@@ -443,7 +443,7 @@ export function productionAnnouncer(
       return {
         claim: (oldId, by) => store.claimRecreation(oldId, by),
         fill: (oldId, newId) => store.fillRecreation(oldId, newId),
-        release: (oldId) => store.releaseRecreation(oldId),
+        release: (oldId, by) => store.releaseRecreation(oldId, by),
         get: (oldId) => store.recreationOf(oldId),
       };
     },

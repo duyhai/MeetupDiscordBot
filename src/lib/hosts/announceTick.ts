@@ -38,18 +38,18 @@ export const STUCK_ALERT_TTL_SEC = 24 * 60 * 60;
 export const stuckAlertKey = (meetupEventId: string) =>
   `announce-stuck-alert:${meetupEventId}`;
 
-export interface TickStore extends Pick<
-  AnnounceStore,
-  'finish' | 'otherTimes'
-> {
+/** How many due rows a tick looks at, to get past one it cannot read. */
+export const DUE_PER_TICK = 5;
+
+export interface TickStore extends Pick<AnnounceStore, 'finish'> {
   /** Held rows whose time has come, earliest first, at most `limit`. */
   due: (now: Date, limit: number) => Promise<Announcement[]>;
   /** held → sending, only while still held and due; false otherwise. */
   claimHeld: (meetupEventId: string, now: Date) => Promise<boolean>;
-  /** A held row's new due time (the spacing rule at send time). */
-  defer: (meetupEventId: string, dueAt: Date) => Promise<void>;
   /** sending → held again, keeping its due time (the credential was gone). */
   unclaim: (meetupEventId: string) => Promise<void>;
+  /** When announcements actually went or are going out from `since` on. */
+  recentSends: (since: Date) => Promise<Date[]>;
 }
 
 export interface AnnounceTickDeps extends Pick<
@@ -68,11 +68,13 @@ export interface TickResult {
 }
 
 /**
- * One tick. Takes the earliest due row: deferred when another announcement
- * went out within SPACING_MS; left held (and alerted once a day once it is
- * STUCK_AFTER_MS late) when Meetup or the organizer credential cannot be
- * reached; finished as failed with an alert when Meetup no longer has the
- * event; else sent.
+ * One tick. Nothing is sent while another announcement went out within
+ * SPACING_MS (the due rows wait, in order). Otherwise it takes the
+ * earliest of up to DUE_PER_TICK due rows that Meetup can tell it about:
+ * a row it cannot read stays held (alerted once a day once it is
+ * STUCK_AFTER_MS late) and the next is tried, so one bad event never
+ * blocks the rest. Meetup no longer having the event finishes the row as
+ * failed with an alert; else it is sent. At most one row a tick.
  */
 export async function runAnnounceTick(
   deps: AnnounceTickDeps,
@@ -92,10 +94,7 @@ export async function runAnnounceTick(
   try {
     const store = await deps.announcements();
     const now = deps.now();
-    const [row] = await store.due(now, 1);
-    if (row !== undefined) {
-      sent = await sendHeld(deps, cache, store, row, now);
-    }
+    sent = await sendNextDue(deps, cache, store, now);
   } finally {
     await releaseOwnedKey(cache, ANNOUNCE_LEASE_KEY, lease).catch(
       (error: unknown) => {
@@ -154,43 +153,58 @@ async function alertStuck(
     .catch(() => undefined);
 }
 
-async function sendHeld(
+async function sendNextDue(
   deps: AnnounceTickDeps,
   cache: KeyValueCache,
   store: TickStore,
-  row: Announcement,
   now: Date,
 ): Promise<number> {
-  const id = row.meetupEventId;
-  // The spacing rule at send time: another one went out (or is going)
-  // within the last 30 minutes → this one waits 30 minutes after it.
+  // The spacing rule at send time: only real sends count, not held rows,
+  // however overdue. The due rows keep their times and their order.
   const recent = (
-    await store.otherTimes(id, new Date(now.getTime() - SPACING_MS))
+    await store.recentSends(new Date(now.getTime() - SPACING_MS))
   ).filter((t) => {
     const ago = now.getTime() - t.getTime();
     return ago >= 0 && ago < SPACING_MS;
   });
   if (recent.length > 0) {
-    const last = Math.max(...recent.map((t) => t.getTime()));
-    await store.defer(id, new Date(last + SPACING_MS));
     return 0;
   }
-  let details: Awaited<ReturnType<AnnounceDeps['eventDetails']>>;
-  try {
-    details = await deps.eventDetails(id);
-  } catch (error: unknown) {
-    // Left held: the next tick asks again. The organizer credential being
-    // gone surfaces here too (the read needs it), before any claim.
-    const why =
-      error instanceof OrganizerTokenUnavailableError
-        ? 'the Meetup organizer login is not usable (renew it on the dashboard).'
-        : 'Meetup could not be asked about the event.';
-    logger.warn(
-      `Held announcement ${id}: event read failed (${error instanceof Error ? error.name : 'Error'})`,
-    );
-    await alertStuck(deps, cache, row, now, why);
-    return 0;
+  for (const row of await store.due(now, DUE_PER_TICK)) {
+    let details: Awaited<ReturnType<AnnounceDeps['eventDetails']>>;
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      details = await deps.eventDetails(row.meetupEventId);
+    } catch (error: unknown) {
+      // Left held: a later tick asks again. The organizer credential
+      // being gone surfaces here too (the read needs it), before any claim.
+      const why =
+        error instanceof OrganizerTokenUnavailableError
+          ? 'the Meetup organizer login is not usable (renew it on the dashboard).'
+          : 'Meetup could not be asked about the event.';
+      logger.warn(
+        `Held announcement ${row.meetupEventId}: event read failed (${error instanceof Error ? error.name : 'Error'})`,
+      );
+      // eslint-disable-next-line no-await-in-loop
+      await alertStuck(deps, cache, row, now, why);
+      continue;
+    }
+    // The first readable row is the one this tick handles.
+
+    return sendRow(deps, cache, store, row, details, now);
   }
+  return 0;
+}
+
+async function sendRow(
+  deps: AnnounceTickDeps,
+  cache: KeyValueCache,
+  store: TickStore,
+  row: Announcement,
+  details: Awaited<ReturnType<AnnounceDeps['eventDetails']>>,
+  now: Date,
+): Promise<number> {
+  const id = row.meetupEventId;
   if (!(await store.claimHeld(id, now))) {
     return 0;
   }

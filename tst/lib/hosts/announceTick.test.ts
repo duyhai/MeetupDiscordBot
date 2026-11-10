@@ -86,23 +86,18 @@ function setup(
         }
       },
     ),
-    defer: vi.fn(async (id: string, dueAt: Date) => {
-      const row = rows.get(id);
-      if (row?.status === 'held') {
-        rows.set(id, { ...row, dueAt });
-      }
-    }),
     unclaim: vi.fn(async (id: string) => {
       const row = rows.get(id);
       if (row?.status === 'sending') {
         rows.set(id, { ...row, status: 'held' });
       }
     }),
-    otherTimes: vi.fn(async (except: string, since: Date) =>
+    // Real sends only: sent rows at completed_at, never held ones.
+    recentSends: vi.fn(async (since: Date) =>
       [
         ...(options.others ?? []),
         ...[...rows.values()]
-          .filter((r) => r.meetupEventId !== except && r.status === 'sent')
+          .filter((r) => r.status === 'sent')
           .map((r) => r.completedAt),
       ].filter((t) => t.getTime() >= since.getTime()),
     ),
@@ -144,36 +139,58 @@ describe('runAnnounceTick', () => {
     expect(cache.values.has(ANNOUNCE_LEASE_KEY)).toBe(false);
   });
 
-  it('the next due row waits 30 minutes after the one that just went out', async () => {
-    const { rows, deps, store } = setup({ held: ['1', '2'] });
+  it('the next due row waits 30 minutes after the one that just went out, keeping its place', async () => {
+    const { rows, deps } = setup({ held: ['1', '2', '3'] });
     await runAnnounceTick(deps);
     await expect(runAnnounceTick(deps)).resolves.toEqual({
       sent: 0,
       skipped: false,
     });
     expect(deps.announce).toHaveBeenCalledTimes(1);
-    expect(store.defer).toHaveBeenCalledWith(
-      '2',
-      new Date(NOW.getTime() + 30 * 60 * 1000),
-    );
-    expect(rows.get('2')?.status).toBe('held');
-    // Still held, now later: a tick at that time sends it.
+    // Nothing is rescheduled: the waiting rows keep their times and order.
+    const before = rows.get('2')?.dueAt;
+    expect(rows.get('2')).toMatchObject({ status: 'held', dueAt: before });
     deps.now = () => new Date(NOW.getTime() + 30 * 60 * 1000);
     await expect(runAnnounceTick(deps)).resolves.toMatchObject({ sent: 1 });
-    expect(deps.announce).toHaveBeenCalledWith('2');
+    expect(vi.mocked(deps.announce).mock.calls.map(([id]) => id)).toEqual([
+      '1',
+      '2',
+    ]);
   });
 
-  it('a send by a click within the last 30 minutes defers the due row too', async () => {
-    const { deps, store } = setup({
+  it('a send by a click within the last 30 minutes holds the due row back', async () => {
+    const { rows, deps } = setup({
       held: ['1'],
       others: [new Date(NOW.getTime() - 10 * 60 * 1000)],
     });
-    await runAnnounceTick(deps);
+    await expect(runAnnounceTick(deps)).resolves.toEqual({
+      sent: 0,
+      skipped: false,
+    });
     expect(deps.announce).not.toHaveBeenCalled();
-    expect(store.defer).toHaveBeenCalledWith(
-      '1',
-      new Date(NOW.getTime() + 20 * 60 * 1000),
-    );
+    expect(rows.get('1')?.status).toBe('held');
+  });
+
+  it('overdue held rows are not sends: after an outage the backlog goes in order', async () => {
+    // Three rows all an hour overdue; nothing was sent in that hour.
+    const { deps } = setup({ held: ['1', '2', '3'], dueAgoMs: 60 * 60 * 1000 });
+    await expect(runAnnounceTick(deps)).resolves.toMatchObject({ sent: 1 });
+    expect(deps.announce).toHaveBeenCalledWith('1');
+  });
+
+  it('an unreadable first row does not block the next: the second is sent', async () => {
+    const { rows, deps, alerts } = setup({
+      held: ['1', '2'],
+      readFails: ['1'],
+      dueAgoMs: STUCK_AFTER_MS,
+    });
+    await expect(runAnnounceTick(deps)).resolves.toMatchObject({ sent: 1 });
+    expect(deps.announce).toHaveBeenCalledTimes(1);
+    expect(deps.announce).toHaveBeenCalledWith('2');
+    expect(rows.get('1')?.status).toBe('held');
+    expect(rows.get('2')?.status).toBe('sent');
+    // The stuck one is still said, once.
+    expect(alerts()).toContain('scheduled announcement is stuck');
   });
 
   it('another process holding the lease: skipped, nothing sent', async () => {

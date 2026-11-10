@@ -66,8 +66,20 @@ export interface Recreation {
   createdAt: Date;
 }
 
-/** A recreation claim whose copy never arrived this long ago may be taken over. */
+/**
+ * A recreation claim whose copy never arrived this long ago is stale: its
+ * maker died, possibly after Meetup made the copy. It is never taken over;
+ * leadership checks Meetup by hand.
+ */
 export const RECREATION_STALE_MS = 10 * 60 * 1000;
+
+/**
+ * - claimed: this caller now owns the recreation;
+ * - done: the old event was recreated (the copy is recorded);
+ * - pending: another recreation of it is under way;
+ * - stale: a recreation of it died mid-way; a copy may exist unrecorded.
+ */
+export type RecreationClaim = 'claimed' | 'done' | 'pending' | 'stale';
 
 /**
  * Idempotent; runs under the dashboard schema lock. One row per Meetup
@@ -270,16 +282,21 @@ export class PostgresEventAnnouncementRepository {
     return (rowCount ?? 0) > 0;
   }
 
-  /** A held row's new due time (the tick's spacing at send time). */
-  async defer(meetupEventId: string, dueAt: Date): Promise<void> {
-    if (!EVENT_ID.test(meetupEventId)) {
-      return;
-    }
-    await this.pool.query(
-      `UPDATE event_announcements SET due_at = $2
-        WHERE meetup_event_id = $1 AND status = 'held'`,
-      [meetupEventId, dueAt],
+  /**
+   * When announcements actually went or are going out from `since` on, for
+   * the tick's spacing check: sent rows at completed_at, sending rows at
+   * when the send started. Held rows are not sends, however overdue.
+   */
+  async recentSends(since: Date): Promise<Date[]> {
+    const { rows } = await this.pool.query<{ at: Date }>(
+      `SELECT CASE WHEN status = 'sent' THEN COALESCE(completed_at, requested_at)
+                   ELSE requested_at END AS at
+         FROM event_announcements
+        WHERE (status = 'sent' AND COALESCE(completed_at, requested_at) >= $1)
+           OR (status = 'sending' AND requested_at >= $1)`,
+      [since],
     );
+    return rows.map((r) => r.at);
   }
 
   /** sending → held again, due time kept (the tick could not send after all). */
@@ -295,10 +312,11 @@ export class PostgresEventAnnouncementRepository {
   }
 
   /**
-   * When other announcements go or went out, for the spacing rule: held
-   * ones at their due time, sends under way at their start, sent ones at
-   * the time they went out (completed_at, whatever they were due), from
-   * `since` on. Never this event's own row.
+   * When other announcements go or went out, for the spacing rule at
+   * request time: held and sending rows at their due time (a click's send,
+   * which has none, at when it was requested), sent ones at the time they
+   * went out (completed_at, whatever they were due), from `since` on. Never
+   * this event's own row.
    */
   async otherTimes(exceptEventId: string, since: Date): Promise<Date[]> {
     const { rows } = await this.pool.query<{ at: Date }>(
@@ -357,27 +375,45 @@ export class PostgresEventAnnouncementRepository {
   }
 
   /**
-   * Takes `oldEventId` for a recreation: a new row with no copy yet. False
-   * when a row exists, unless it is a claim with no copy older than
-   * RECREATION_STALE_MS (its maker died), which is taken over.
+   * Takes `oldEventId` for a recreation: a new row with no copy yet. When a
+   * row exists, says whether it is done, under way, or stale; a stale claim
+   * is never taken over (its copy may exist on Meetup unrecorded).
    */
   async claimRecreation(
     oldEventId: string,
     requestedBy: string,
-  ): Promise<boolean> {
+  ): Promise<RecreationClaim> {
     if (!EVENT_ID.test(oldEventId)) {
       throw new RangeError('not a Meetup event id');
     }
-    const { rowCount } = await this.pool.query(
+    const inserted = await this.pool.query(
       `INSERT INTO event_recreations (old_event_id, requested_by)
        VALUES ($1, $2)
-       ON CONFLICT (old_event_id) DO UPDATE
-         SET requested_by = EXCLUDED.requested_by, created_at = now()
-         WHERE event_recreations.new_event_id IS NULL
-           AND event_recreations.created_at < now() - make_interval(secs => $3)`,
-      [oldEventId, requestedBy, RECREATION_STALE_MS / 1000],
+       ON CONFLICT (old_event_id) DO NOTHING
+       RETURNING old_event_id`,
+      [oldEventId, requestedBy],
     );
-    return (rowCount ?? 0) > 0;
+    if ((inserted.rowCount ?? 0) > 0) {
+      return 'claimed';
+    }
+    const { rows } = await this.pool.query<{
+      new_event_id: string | null;
+      stale: boolean;
+    }>(
+      `SELECT new_event_id,
+              created_at < now() - make_interval(secs => $2) AS stale
+         FROM event_recreations WHERE old_event_id = $1`,
+      [oldEventId, RECREATION_STALE_MS / 1000],
+    );
+    const row = rows[0];
+    if (row === undefined) {
+      // Released between the two statements: someone else's to retry.
+      return 'pending';
+    }
+    if (row.new_event_id !== null) {
+      return 'done';
+    }
+    return row.stale ? 'stale' : 'pending';
   }
 
   /** Fills the claim with the copy Meetup made. */
@@ -392,15 +428,21 @@ export class PostgresEventAnnouncementRepository {
     );
   }
 
-  /** Drops a claim whose copy was never made; a filled row stays. */
-  async releaseRecreation(oldEventId: string): Promise<void> {
+  /**
+   * Drops the caller's own claim whose copy was surely never made; a
+   * filled row, or someone else's claim, stays.
+   */
+  async releaseRecreation(
+    oldEventId: string,
+    requestedBy: string,
+  ): Promise<void> {
     if (!EVENT_ID.test(oldEventId)) {
       return;
     }
     await this.pool.query(
       `DELETE FROM event_recreations
-        WHERE old_event_id = $1 AND new_event_id IS NULL`,
-      [oldEventId],
+        WHERE old_event_id = $1 AND new_event_id IS NULL AND requested_by = $2`,
+      [oldEventId, requestedBy],
     );
   }
 

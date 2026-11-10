@@ -145,6 +145,17 @@ export const ANNOUNCE_NOTICES: Record<
       'Someone other than the hosts has RSVPed, so the event was not recreated. ' +
       'Ask an organizer if you still want it announced.',
   },
+  'recreate-in-progress': {
+    ok: true,
+    text: 'That event is being recreated right now. Reload in a minute to see how it went.',
+  },
+  'recreate-needs-check': {
+    ok: false,
+    text:
+      'Meetup did not say whether the copy was made, so nothing more was done ' +
+      'and your old event is untouched. The organizers have been asked to check ' +
+      'Meetup and finish it by hand; please do not try again.',
+  },
   'already-recreated': {
     ok: false,
     text: 'That event was already recreated once. The copy is in your upcoming events.',
@@ -238,10 +249,15 @@ export function announceBadge(
     case 'sent':
       return html`<span class="badge ok">Announced</span>`;
     case 'held':
-      return html`<span class="badge info wrap"
-        >Announcement scheduled for
-        ${a?.dueAt ? dueLabel(a.dueAt) : 'later'}</span
-      >`;
+      // Past its time: waiting on the spacing rule or a Meetup outage.
+      return a?.dueAt && a.dueAt.getTime() <= now.getTime()
+        ? html`<span class="badge info wrap"
+            >Announcement going out shortly</span
+          >`
+        : html`<span class="badge info wrap"
+            >Announcement scheduled for
+            ${a?.dueAt ? dueLabel(a.dueAt) : 'later'}</span
+          >`;
     case 'sending':
       return html`<span class="badge info">Announcing</span>`;
     case 'unknown':
@@ -309,7 +325,7 @@ export function announceButton(
 
 function reasonOf(
   offer: Recreatable | undefined,
-): 'not-yours' | 'has-rsvps' | 'already-recreated' | undefined {
+): Exclude<Recreatable, { ok: true }>['reason'] | undefined {
   if (offer === undefined || offer.ok === true) {
     return undefined;
   }
@@ -351,6 +367,10 @@ export function recreateOffer(
       'It cannot be recreated here because someone other than the hosts has ' +
       'already RSVPed: cancelling it would drop their RSVP. Ask an organizer ' +
       'if you still want it announced.';
+  } else if (reason === 'in-progress') {
+    why =
+      'A recreation of it is under way or needs checking; ask an organizer ' +
+      'before trying anything else.';
   } else if (reason === 'already-recreated') {
     why = 'It was already recreated once; the copy is in your upcoming events.';
   } else {
