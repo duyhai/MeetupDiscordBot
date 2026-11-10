@@ -50,6 +50,13 @@ describe('open house', () => {
     }
   });
 
+  it('any case and spacing inside the tag', () => {
+    expect(isOpenHouseEvent({ title: '[open house] pickleball' })).toBe(true);
+    expect(isOpenHouseEvent({ title: '[ Open House ] Bouldering' })).toBe(true);
+    expect(isOpenHouseEvent({ title: 'Bouldering (open house)' })).toBe(true);
+    expect(isOpenHouseEvent({ title: '[OPEN  HOUSE] Swing' })).toBe(true);
+  });
+
   it('is the tag, not the words: an outing at a venue’s open house counts', () => {
     expect(isOpenHouseEvent({ title: OPEN_HOUSE_UNTAGGED })).toBe(false);
     expect(

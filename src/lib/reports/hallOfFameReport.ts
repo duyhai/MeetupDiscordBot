@@ -2,6 +2,7 @@ import dayjs from 'dayjs';
 
 import { GqlMeetupClient } from '../client/meetup/gqlClient.js';
 import { mapWithConcurrency } from '../client/meetup/paginationHelper.js';
+import { countHostedEvents } from '../helpers/countHostedEvents.js';
 import { countsAsHosted } from '../helpers/countedEvents.js';
 import {
   collectHostStats,
@@ -25,14 +26,12 @@ import {
 } from './types.js';
 
 /**
- * A host is "new" when the group has no PAST event of theirs before the
- * report window. One first:1 totalCount query per host, run in parallel.
- * Live-schema introspection (2026-09-25) confirmed GroupEventFilter accepts
- * hostId + beforeDateTime + status; see the design spec for the fallback if
- * the resolver ignores the combination.
+ * A host is "new" when the group has no counted PAST event of theirs before
+ * the report window (countHostedEvents: cancelled events and Open Houses
+ * do not make a host). One listing per host, run in parallel.
  */
 export async function findNewHostIds(
-  meetupClient: Pick<GqlMeetupClient, 'getGroupEventsCount'>,
+  meetupClient: Pick<GqlMeetupClient, 'getGroupEvents'>,
   hostIds: string[],
   beforeIso: string,
 ): Promise<Set<string>> {
@@ -40,10 +39,8 @@ export async function findNewHostIds(
     hostIds,
     RSVP_FETCH_CONCURRENCY,
     async (hostId) => {
-      const priorCount = await meetupClient.getGroupEventsCount({
-        hostId,
-        beforeDateTime: beforeIso,
-        status: ['PAST'],
+      const priorCount = await countHostedEvents(meetupClient, hostId, {
+        before: new Date(beforeIso),
       });
       return { hostId, priorCount };
     },
@@ -54,7 +51,7 @@ export async function findNewHostIds(
 }
 
 export async function buildHallOfFameReport(
-  meetupClient: Pick<GqlMeetupClient, 'getGroupEventsCount'>,
+  meetupClient: Pick<GqlMeetupClient, 'getGroupEvents'>,
   window: ReportWindow,
   data: MonthData,
   asOf: Date,

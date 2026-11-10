@@ -18,8 +18,9 @@ export interface HostStats {
  * counts each event once regardless of how many hosts it has.
  *
  * Does no filtering: it counts every event it is given. Callers filter with
- * countsAsHosted (countedEvents.ts) first, so the rule for what counts stays visible at the
- * call site rather than hidden inside a function named for grouping.
+ * countsAsHosted (countedEvents.ts) first, so the rule for what counts
+ * stays visible at the call site rather than hidden inside a function named
+ * for grouping.
  */
 export function collectHostStats(events: Event[]): {
   hostStats: HostStats[];

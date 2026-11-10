@@ -228,7 +228,7 @@ function homeBody(
         <td data-label="Event">${eventLink(event)}${excludedBadge(event)}</td>
         <td data-label="Type">${EVENT_TYPE_LABELS[event.type]}</td>
         <td data-label="Status">
-          <span class="badge ok">Published</span>
+          <span class="badge ok">Published</span>${excludedBadge(event)}
           ${
             announcements ? announceBadge(announcements.get(event.id), now) : ''
           }

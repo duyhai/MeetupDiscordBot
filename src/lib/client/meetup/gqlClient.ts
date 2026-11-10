@@ -472,7 +472,13 @@ export class GqlMeetupClient {
         memberIds: page.map(Number),
         first: page.length,
       });
-      for (const edge of result.groupByUrlname?.memberships?.edges ?? []) {
+      const edges = result.groupByUrlname?.memberships?.edges;
+      if (!Array.isArray(edges)) {
+        // Not "nobody is a member": the read is unusable, and the
+        // candidates page must say so rather than list no one.
+        throw new Error('getGroupMembershipsByIds returned no memberships');
+      }
+      for (const edge of edges) {
         if (edge.metadata && edge.node?.id !== undefined) {
           out.set(String(edge.node.id), {
             status: String(edge.metadata.status),

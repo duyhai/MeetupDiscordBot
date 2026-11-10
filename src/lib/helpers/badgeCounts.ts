@@ -2,8 +2,7 @@ import { Logger } from 'tslog';
 
 import Configuration from '../../configuration.js';
 import { GqlMeetupClient } from '../client/meetup/gqlClient.js';
-import { getPaginatedData } from '../client/meetup/paginationHelper.js';
-import { countsAsHosted } from './countedEvents.js';
+import { countHostedEvents } from './countHostedEvents.js';
 
 const logger = new Logger({ name: 'badgeCounts' });
 
@@ -40,19 +39,11 @@ export async function getBadgeCounts(
   const attendedCount = await meetupClient.getSelfPastRsvpCount(groupId);
 
   // Server-filtered by hostId, so this pages over the member's own hosted
-  // events rather than the group's history. Same query getUserRoles already
-  // relies on for the guest_host role.
-  const hostedEvents = await getPaginatedData(async (paginationInput) => {
-    const result = await meetupClient.getGroupEvents(paginationInput, {
-      status: ['PAST'],
-      hostId: userInfo.self.id,
-    });
-    return result.groupByUrlname.events;
-  });
-
-  // The shared rule: cancelled events and Open Houses are not hosted.
+  // events rather than the group's history, then the shared rule (no
+  // cancelled events, no Open Houses). Same count getUserRoles relies on
+  // for the guest_host role.
   const counts = {
-    hostedCount: hostedEvents.filter(countsAsHosted).length,
+    hostedCount: await countHostedEvents(meetupClient, userInfo.self.id),
     attendedCount,
   };
   logger.info(`Badge counts: ${JSON.stringify(counts)}`);

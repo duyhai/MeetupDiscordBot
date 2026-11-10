@@ -1,11 +1,69 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  hostResolveDeps,
   postRequestToChannel,
   productionDecisionDeps,
   requestsChannelId,
 } from '../../../src/web/host/hostServices.js';
 import { eventRequestRow } from '../../web/routes/pageFakes.js';
+
+const organizer = vi.hoisted(() => ({
+  getGroupEvents: vi.fn(),
+}));
+
+// The organizer read: fn runs on a fake client, no token or Redis involved.
+vi.mock(
+  '../../../src/lib/reports/organizerMeetup.js',
+  async (importOriginal) => ({
+    ...(await importOriginal<object>()),
+    withOrganizerMeetup: (
+      _client: unknown,
+      fn: (meetup: typeof organizer) => Promise<unknown>,
+    ) => fn(organizer),
+  }),
+);
+
+describe('hostResolveDeps.pastHostedCount', () => {
+  it('lists the member’s PAST events with the organizer credential and counts only what counts', async () => {
+    organizer.getGroupEvents.mockResolvedValue({
+      groupByUrlname: {
+        id: 'g',
+        events: {
+          pageInfo: { hasNextPage: false, endCursor: null },
+          totalCount: 3,
+          edges: [
+            { node: { id: '1', title: 'Hike', status: 'PAST', dateTime: 'x' } },
+            {
+              node: {
+                id: '2',
+                title: '[Open House] Pickleball',
+                status: 'PAST',
+                dateTime: 'x',
+              },
+            },
+            {
+              node: {
+                id: '3',
+                title: 'Boba',
+                status: 'CANCELLED',
+                dateTime: 'x',
+              },
+            },
+          ],
+        },
+      },
+    });
+    const count = await hostResolveDeps(() => undefined).pastHostedCount(
+      '4242',
+    );
+    expect(count).toBe(1);
+    expect(organizer.getGroupEvents).toHaveBeenCalledWith(expect.anything(), {
+      status: ['PAST'],
+      hostId: '4242',
+    });
+  });
+});
 
 const CHANNEL = '1'.repeat(19);
 

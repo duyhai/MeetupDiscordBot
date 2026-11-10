@@ -104,6 +104,17 @@ describe('resolveHost', () => {
     ).resolves.toEqual({ kind: 'refused', reason: 'not-a-host' });
   });
 
+  it('a Meetup sign-in with no Discord link and no counted hosted event is refused', async () => {
+    const d = deps({
+      discordIdForMeetup: vi.fn().mockResolvedValue(undefined),
+    });
+    await expect(resolveHost(d, { meetupMemberId: '4242' })).resolves.toEqual({
+      kind: 'refused',
+      reason: 'not-a-host',
+    });
+    expect(d.pastHostedCount).toHaveBeenCalledWith('4242');
+  });
+
   it('discord path with no linked Meetup account: not linked', async () => {
     const d = deps({
       meetupIdForDiscord: vi.fn().mockResolvedValue(undefined),
