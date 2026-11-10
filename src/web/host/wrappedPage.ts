@@ -338,7 +338,16 @@ function messageBody(
   </div>`;
 }
 
-type Outcome = BuildResult | { kind: 'slow' } | { kind: 'failed' };
+type Outcome =
+  BuildResult | { kind: 'building' } | { kind: 'slow' } | { kind: 'failed' };
+
+/** Notices whose rebuild would be refused anyway: shown, nothing built. */
+const FINAL_NOTICES: readonly NoticeCode[] = [
+  'rate-limited',
+  'mismatch',
+  'not-in-group',
+  'no-token',
+];
 
 export function registerWrappedPage(
   router: express.Router,
@@ -368,10 +377,7 @@ export function registerWrappedPage(
         BUILDING_LEASE_TTL_SEC,
       ))
     ) {
-      return {
-        kind: 'rate-limited',
-        ...{ kind: 'building' as const },
-      } as never;
+      return { kind: 'building' };
     }
     let claimed = false;
     const run = (async (): Promise<Outcome> => {
@@ -473,7 +479,12 @@ export function registerWrappedPage(
     const current =
       year === thisYear
         ? undefined
-        : await readWrapped(cache, session.discordUserId ?? '', thisYear);
+        : await readWrapped(
+            cache,
+            session.discordUserId ?? '',
+            thisYear,
+            session.userId,
+          );
     hostPage(res, {
       title: `Wrapped ${year}`,
       current: 'wrapped',
@@ -513,7 +524,7 @@ export function registerWrappedPage(
     session: HostSession,
     discordUserId: string,
     year: number,
-    outcome: Exclude<Outcome, { kind: 'built' }> | { kind: 'building' },
+    outcome: Exclude<Outcome, { kind: 'built' }>,
     cache: KeyValueCache,
   ) {
     const minutes = Math.ceil(deps.limiter.retryAfterSec(discordUserId) / 60);
@@ -625,8 +636,14 @@ export function registerWrappedPage(
       await render(res, session, year, cached, cache, noticeHtml);
       return;
     }
-    if (noticeHtml) {
-      // Back from a rebuild that did not build: say so, build nothing.
+    if (
+      noticeHtml &&
+      isNoticeCode(req.query.notice) &&
+      FINAL_NOTICES.includes(req.query.notice)
+    ) {
+      // Back from a rebuild that was refused: say so, build nothing. After
+      // a slow, in-flight or failed one the page says to reload, so a
+      // reload builds (the lease answers while one is still in flight).
       message(res, session, year, noticeHtml);
       return;
     }

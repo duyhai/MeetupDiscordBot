@@ -463,6 +463,66 @@ describe('GET /host/wrapped', () => {
   });
 });
 
+describe('after a rebuild that did not build', () => {
+  it('a ?notice=failed page builds again when reloaded, as it says to', async () => {
+    const meetup = fakeMeetup();
+    meetup.getEventRsvps.mockRejectedValueOnce(new Error('one-off'));
+    const h = await harness({ meetup });
+    const sid = await signInWithDiscord(h.req);
+    const failed = await h.req
+      .get('/host/wrapped?year=2026')
+      .set('Cookie', sid);
+    expect(failed.status).toBe(503);
+    const again = await h.req
+      .get('/host/wrapped?year=2026&notice=failed')
+      .set('Cookie', sid);
+    expect(again.status).toBe(200);
+    expect(strip(again.text)).toContain('Events in 2026</dt> <dd>2</dd>');
+    expect(await readWrapped(h.wrappedCache, USER, 2026, ME)).toBeDefined();
+  });
+
+  it('a ?notice=rate-limited page does not try again', async () => {
+    const h = await harness();
+    h.deps.limiter.take(USER);
+    const sid = await signInWithDiscord(h.req);
+    const res = await h.req
+      .get('/host/wrapped?year=2026&notice=rate-limited&retry=30')
+      .set('Cookie', sid);
+    expect(res.status).toBe(200);
+    expect(res.text).toContain('30 minutes');
+    expect(h.meetup.getSelfPastRsvpEvents).not.toHaveBeenCalled();
+  });
+
+  it('the year picker ignores a this-year copy built for another Meetup account', async () => {
+    const h = await harness();
+    await writeWrapped(
+      h.wrappedCache,
+      USER,
+      2024,
+      {
+        ...cached,
+        stats: { ...cached.stats, year: 2024, activeYears: [2024] },
+      },
+      NOW,
+    );
+    await writeWrapped(
+      h.wrappedCache,
+      USER,
+      2026,
+      {
+        ...cached,
+        meetupId: 'someone-else',
+        stats: { ...cached.stats, activeYears: [2019, 2024, 2026] },
+      },
+      NOW,
+    );
+    const sid = await signInWithDiscord(h.req);
+    const res = await h.req.get('/host/wrapped?year=2024').set('Cookie', sid);
+    expect(res.text).toContain('aria-current="page">2024');
+    expect(res.text).not.toContain('?year=2019');
+  });
+});
+
 describe('POST /host/wrapped/rebuild', () => {
   it('rebuilds past the cached copy and comes back to the page', async () => {
     const h = await harness();

@@ -360,7 +360,9 @@ signed out.
 ### What a member may reach
 
 Inside the gated router, before the pages, a member-role request is allowed
-only to `GET /` (home), `GET /host/wrapped`, `POST /host/wrapped/rebuild` and
+only to `GET /` (home), `GET /host/wrapped`, `POST /host/wrapped/rebuild`,
+the Verify refresh the home page offers (`POST /link/discord` and its retry
+`POST /verify/finish`; a member is linked, so these only re-run Verify) and
 `POST /logout`. Anything else answers the existing 403 ("The host dashboard
 is for members who have hosted an event with us."). Hosts are untouched: every
 route they have today, plus `/host/wrapped`.

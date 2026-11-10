@@ -113,14 +113,19 @@ describe('a linked member who is not a host', () => {
       'GET /history': 403,
       'GET /create': 403,
       'POST /wrapped/rebuild': 200,
-      'POST /link/discord': 403,
-      'POST /verify/finish': 403,
+      // The refresh flow is a member's too (the home page offers it): past
+      // the gate, these answer as they do for a host of this harness (no
+      // members store: 404; no verify runner: 303 home).
+      'POST /link/discord': 404,
+      'POST /verify/finish': 303,
       'POST /events/1/announce': 403,
     });
     expect(MEMBER_PATHS).toEqual([
       '/',
       '/wrapped',
       '/wrapped/rebuild',
+      '/link/discord',
+      '/verify/finish',
       '/logout',
     ]);
   });

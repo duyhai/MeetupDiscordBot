@@ -108,12 +108,17 @@ export type HostLinkResult = (typeof HOST_LINK_RESULTS)[number];
 
 /**
  * Inside the gate, what a member (linked, never hosted) may reach: home,
- * Wrapped and sign-out. Every other path is a host's and answers 403.
+ * Wrapped, the Verify refresh the home page offers (a Meetup sign-in's
+ * "Refresh roles and badges": /link/discord re-resolves them, and
+ * /verify/finish is its retry), and sign-out. Every other path is a
+ * host's and answers 403.
  */
 export const MEMBER_PATHS: readonly string[] = [
   '/',
   '/wrapped',
   '/wrapped/rebuild',
+  '/link/discord',
+  '/verify/finish',
   '/logout',
 ];
 
