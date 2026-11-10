@@ -187,8 +187,10 @@ of Express, unchanged in behaviour:
    `deps.mirror(request)` fire-and-forget: the Discord post edit (below).
 
 The route becomes a thin wrapper: parse params, call the service, map the
-code to today's redirect or 409 page. `HOST_REQUEST_RESULT_MESSAGES` stay
-in the route. `withDeadline` and `WorkspaceDeadlineError` move to
+code to today's redirect or 409 page. The codes' fixed texts live with the
+service (`DECISION_MESSAGES`, so the Discord replies can use them without
+`lib` importing `web`); the route's `HOST_REQUEST_RESULT_MESSAGES` spreads
+them in and adds its own `invalid`. `withDeadline` and `WorkspaceDeadlineError` move to
 `src/util/deadline.ts` (re-exported from `workspaceActions.ts`), so `lib`
 does not import `web`.
 

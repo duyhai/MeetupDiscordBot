@@ -152,11 +152,10 @@ function decider(request: EventRequest): string {
     : alertText(request.hostName);
 }
 
-const DECISION_MARKS = [
-  '\n✅ Request approved by',
-  '\n❌ Request denied by',
-  '\n⚠️ Approved by',
-];
+/** A post with one of these carries its final outcome; nothing is appended after. */
+const FINAL_MARKS = ['\n✅ Request approved by', '\n❌ Request denied by'];
+/** The failed line may be followed by a final outcome (Retry, Resolve, Deny), but never by itself again. */
+const FAILED_MARK = '\n⚠️ Approved by';
 
 /** The outcome line appended to the post, or undefined while the request is open. */
 export function decisionLine(request: EventRequest): string | undefined {
@@ -286,7 +285,10 @@ export async function mirrorDecision(
       return;
     }
     const message = await channel.messages.fetch(post.messageId);
-    if (DECISION_MARKS.some((mark) => message.content.includes(mark))) {
+    if (
+      FINAL_MARKS.some((mark) => message.content.includes(mark)) ||
+      (request.status === 'failed' && message.content.includes(FAILED_MARK))
+    ) {
       return;
     }
     await message.edit({

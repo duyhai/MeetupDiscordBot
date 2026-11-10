@@ -294,6 +294,8 @@ export async function revokeHostSessions(
   ).revokeUser(meetupMemberId);
 }
 
+let decisionDeps: DecisionDeps | undefined;
+
 /**
  * The Announce button's production deps: the announcements table, the
  * host's own upcoming events (the site's 5-minute list), and announceEvent
@@ -337,13 +339,18 @@ export function productionAnnouncer(
 /**
  * Production deps for decideRequest: the live Leadership check, the
  * activity log, the request store, the publisher and the Discord mirror.
- * Shared by the staff queue and the Discord buttons.
+ * Shared by the staff queue and the Discord buttons. One instance per
+ * process (the first `getClient` is kept; there is one bot client), so the
+ * refusal-audit limiter holds across button presses.
  */
 export function productionDecisionDeps(
   getClient: () => Client | undefined,
 ): DecisionDeps {
+  if (decisionDeps !== undefined) {
+    return decisionDeps;
+  }
   const alert = alertVia(getClient);
-  return {
+  decisionDeps = {
     now: () => new Date(),
     isLeadership: discordRoleCheck(getClient, SERVER_ROLES.leadership),
     audit: async (entry) => {
@@ -356,6 +363,7 @@ export function productionDecisionDeps(
     mirror: (request) => mirrorDecision({ getClient, alert }, request),
     refusals: new FixedWindowLimiter(1, REFUSAL_AUDIT_WINDOW_MS),
   };
+  return decisionDeps;
 }
 
 /** Production deps for the Discord request command and buttons. */

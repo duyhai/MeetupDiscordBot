@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import {
   postRequestToChannel,
+  productionDecisionDeps,
   requestsChannelId,
 } from '../../../src/web/host/hostServices.js';
 import { eventRequestRow } from '../../web/routes/pageFakes.js';
@@ -68,5 +69,16 @@ describe('postRequestToChannel', () => {
     expect(JSON.stringify(alert.mock.calls[0][0])).toContain(
       'Could not post request #1',
     );
+  });
+});
+
+describe('productionDecisionDeps', () => {
+  it('is one instance per process, so the refusal audit is once a minute per actor', () => {
+    const first = productionDecisionDeps(() => undefined);
+    const second = productionDecisionDeps(() => undefined);
+    expect(second).toBe(first);
+    expect(first.refusals.take('223456789012345678')).toBe(true);
+    expect(first.refusals.take('223456789012345678')).toBe(false);
+    expect(first.refusals.take('323456789012345678')).toBe(true);
   });
 });

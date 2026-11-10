@@ -319,6 +319,45 @@ describe('mirrorDecision', () => {
     expect(alert).toHaveBeenCalledTimes(1);
   });
 
+  it('a failed post gets the final outcome when the request is retried or denied later', async () => {
+    const failedPost =
+      'original\n⚠️ Approved by <@x>, but publishing failed; leadership is retrying on the website.';
+    const published = fakeClient({
+      message: { content: failedPost, edit: vi.fn(async () => undefined) },
+    });
+    await mirrorDecision(
+      { getClient: () => published.client, alert: vi.fn() },
+      eventRequestRow({
+        status: 'published',
+        decidedBy: LEADER,
+        eventUrl: 'https://www.meetup.com/x/events/9/',
+        discordPost: { channelId: '8'.repeat(18), messageId: '9'.repeat(18) },
+      }),
+    );
+    const message = (await published.messages.fetch()) as {
+      edit: ReturnType<typeof vi.fn>;
+    };
+    const payload = message.edit.mock.calls[0]?.[0] as { content: string };
+    expect(payload.content).toContain('✅ Request approved by');
+    // A second failure does not stack a second warning.
+    const again = fakeClient({
+      message: { content: failedPost, edit: vi.fn() },
+    });
+    await mirrorDecision(
+      { getClient: () => again.client, alert: vi.fn() },
+      eventRequestRow({
+        status: 'failed',
+        failure: 'x',
+        decidedBy: LEADER,
+        discordPost: { channelId: '8'.repeat(18), messageId: '9'.repeat(18) },
+      }),
+    );
+    expect(
+      ((await again.messages.fetch()) as { edit: ReturnType<typeof vi.fn> })
+        .edit,
+    ).not.toHaveBeenCalled();
+  });
+
   it('does not edit the post a second time once it carries a decision', async () => {
     const { client, edit } = fakeClient({
       message: {
