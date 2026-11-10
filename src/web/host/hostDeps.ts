@@ -32,7 +32,7 @@ import { hostLayout } from './hostLayout.js';
 import { registerHostPages } from './hostPages.js';
 import { createHostRouter } from './hostRouter.js';
 import { registerCreatePages } from './createPage.js';
-import { ensureServerMember } from './serverJoin.js';
+import { ensureServerMember, isServerMember } from './serverJoin.js';
 import {
   alertVia,
   hostResolveDeps,
@@ -135,6 +135,8 @@ export function hostRouterFromEnv(
       return { joined, pending };
     },
     runVerify: verifyRunner(() => discordClient),
+    isServerMember: (discordUserId) =>
+      isServerMember(() => discordClient, discordUserId),
     // The bot's member token store: the same keys, TTL and refresh.
     meetupTokens: {
       keep: async (owner, tokens) =>

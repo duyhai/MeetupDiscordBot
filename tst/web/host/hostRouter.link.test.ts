@@ -508,20 +508,24 @@ describe('Verify on Discord', () => {
     expect(setCookie(back, 'host_sid')).toBe('host_sid=');
   });
 
-  it('a callback for a session linked meanwhile links nothing more', async () => {
-    const { req, sid, session, store, cache } = await setup();
+  it('a callback for a session linked meanwhile to ANOTHER Discord account changes nothing', async () => {
+    const { req, sid, session, store, cache, alert } = await setup();
     const { back } = await link(
       req,
       sid,
       session().csrfToken,
       undefined,
-      // A parallel link finished first, or the gate's re-check saw one.
+      // A parallel link to another account finished first.
       async () => {
-        patchStoredSession(cache, { discordUserId: DISCORD_USER.id });
+        patchStoredSession(cache, { discordUserId: '223456789012345678' });
       },
     );
-    expect(back.headers.location).toBe('/host?link=already');
+    expect(back.status).toBe(403);
+    expect(back.text).toContain('A different Discord account');
     expect(store.linkUnlessLinkedElsewhere).not.toHaveBeenCalled();
+    expect(JSON.stringify(alert.mock.calls)).toContain(
+      'a different Discord account',
+    );
   });
 
   it('a callback for a session that is no longer a Meetup sign-in links nothing', async () => {
@@ -1182,6 +1186,131 @@ describe('Verify on Discord: joining the server and running Verify', () => {
     expect(JSON.stringify(vi.mocked(app.deps.audit).mock.calls)).toContain(
       'Joined the server (host dashboard)',
     );
+  });
+
+  describe('Refresh roles and badges (already linked)', () => {
+    async function linkedSetup(inServer: boolean | Error) {
+      const isServerMember = vi.fn(async () => {
+        if (inServer instanceof Error) {
+          throw inServer;
+        }
+        return inServer;
+      });
+      const app = await verifySetup({ tokens: {}, rows: [member({})] });
+      // The Discord step and the refresh share deps: add the member check.
+      const refreshApp = await setup({
+        rows: [member({})],
+        overrides: {
+          joinServer: app.joinServer,
+          runVerify: app.runVerify,
+          discordVerifyUrl: app.discordVerifyUrl,
+          meetupTokens: app.meetupTokens,
+          isServerMember,
+        },
+      });
+      // The shared fakes come from verifySetup; everything the router
+      // itself holds (deps, store, alert, session) from the refresh app.
+      return { ...app, ...refreshApp, isServerMember };
+    }
+
+    const refresh = async (app: Awaited<ReturnType<typeof linkedSetup>>) =>
+      app.req
+        .post('/host/link/discord')
+        .set('Cookie', app.sid)
+        .set('Origin', ORIGIN)
+        .type('form')
+        .send({ _csrf: app.session().csrfToken });
+
+    it('home offers it to a linked Meetup sign-in, and the first link to an unlinked one', async () => {
+      const linked = await linkedSetup(true);
+      expect(linked.session().discordUserId).toBe(DISCORD_USER.id);
+      const home = await linked.req.get('/host').set('Cookie', linked.sid);
+      expect(home.text).toContain('Refresh roles and badges');
+      expect(home.text).toContain(
+        'Re-run Verify to update your Guest Host role',
+      );
+      expect(home.text).not.toContain('>Verify on Discord<');
+      const unlinked = await setup();
+      const first = await unlinked.req.get('/host').set('Cookie', unlinked.sid);
+      expect(first.text).toContain('Verify on Discord');
+      expect(first.text).not.toContain('Refresh roles and badges');
+    });
+
+    it('a server member runs Verify at once: no Discord sign-in', async () => {
+      const app = await linkedSetup(true);
+      const res = await refresh(app);
+      expect(res.status).toBe(200);
+      expect(res.text).toContain('You are verified');
+      expect(res.text).not.toContain('discord.com/oauth2');
+      expect(app.isServerMember).toHaveBeenCalledWith(DISCORD_USER.id);
+      expect(app.runVerify).toHaveBeenCalledWith(
+        'meetup-access',
+        DISCORD_USER.id,
+      );
+      // No join, so no "added you" note.
+      expect(res.text).not.toContain('We added you');
+    });
+
+    it('someone no longer in the server goes through Discord, with guilds.join', async () => {
+      const app = await linkedSetup(false);
+      const res = await refresh(app);
+      const url = continueHref(res);
+      expect(url.searchParams.get('scope')).toBe('identify guilds.join');
+      expect(app.runVerify).not.toHaveBeenCalled();
+    });
+
+    it('coming back from Discord as another account: 403, an alert, no join, no write', async () => {
+      const app = await linkedSetup(false);
+      const res = await refresh(app);
+      const state = continueHref(res).searchParams.get('state') ?? '';
+      const oauth = setCookie(res, 'host_oauth_discord') ?? '';
+      // eslint-disable-next-line @typescript-eslint/unbound-method -- a vi.fn
+      vi.mocked(app.deps.discord.fetchIdentity).mockResolvedValueOnce({
+        id: '223456789012345678',
+        username: 'Someone else',
+      });
+      const back = await app.req
+        .get(`/host/auth/discord/callback?state=${state}&code=c`)
+        .set('Cookie', `${app.sid}; ${oauth}`);
+      expect(back.status).toBe(403);
+      expect(back.text).toContain('A different Discord account');
+      expect(app.joinServer).not.toHaveBeenCalled();
+      expect(app.store.linkUnlessLinkedElsewhere).not.toHaveBeenCalled();
+      expect(JSON.stringify(app.alert.mock.calls)).toContain(
+        'a different Discord account',
+      );
+    });
+
+    it('the same account comes back, is added to the server and verified', async () => {
+      const app = await linkedSetup(false);
+      const res = await refresh(app);
+      const state = continueHref(res).searchParams.get('state') ?? '';
+      const oauth = setCookie(res, 'host_oauth_discord') ?? '';
+      const back = await app.req
+        .get(`/host/auth/discord/callback?state=${state}&code=c`)
+        .set('Cookie', `${app.sid}; ${oauth}`);
+      expect(app.joinServer).toHaveBeenCalledWith(
+        DISCORD_USER.id,
+        'discord-access',
+      );
+      expect(back.text).toContain('You are verified');
+    });
+
+    it('one refresh per host every 10 minutes', async () => {
+      const app = await linkedSetup(true);
+      expect((await refresh(app)).text).toContain('You are verified');
+      const again = await refresh(app);
+      expect(again.status).toBe(429);
+      expect(again.text).toContain('Verified a few minutes ago');
+      expect(app.runVerify).toHaveBeenCalledTimes(1);
+    });
+
+    it('a server check Discord cannot answer changes nothing', async () => {
+      const app = await linkedSetup(new Error('discord down'));
+      const res = await refresh(app);
+      expect(res.headers.location).toBe('/host?link=error');
+      expect(app.runVerify).not.toHaveBeenCalled();
+    });
   });
 
   it('only this flow asks guilds.join: a Discord sign-in uses the plain login URL', async () => {

@@ -62,3 +62,31 @@ export async function ensureServerMember(
     added ?? (await guild.members.fetch({ user: discordUserId, force: true }));
   return { joined: added !== null, pending: Boolean(member.pending), member };
 }
+
+/**
+ * Whether the Discord user is in our server, asked of Discord with the bot.
+ * Throws when Discord cannot answer.
+ */
+export async function isServerMember(
+  getClient: () => Client | undefined,
+  discordUserId: string,
+): Promise<boolean> {
+  const client = getClient();
+  if (!client) {
+    throw new Error('Discord client is not ready');
+  }
+  const guild = await client.guilds.fetch(GUILD_ID);
+  try {
+    await guild.members.fetch({ user: discordUserId, force: true });
+    return true;
+  } catch (error: unknown) {
+    if (
+      error instanceof DiscordAPIError &&
+      (error.code === RESTJSONErrorCodes.UnknownMember ||
+        error.code === RESTJSONErrorCodes.UnknownUser)
+    ) {
+      return false;
+    }
+    throw error;
+  }
+}

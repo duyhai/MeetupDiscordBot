@@ -150,6 +150,12 @@ export interface HostRouterDeps {
     accessToken: string,
   ) => Promise<{ joined: boolean; pending: boolean }>;
   /**
+   * Whether the Discord account is in our server, asked with the bot. A
+   * refresh for a member needs no Discord sign-in. Throws when Discord
+   * cannot answer. Without it every refresh goes through Discord.
+   */
+  isServerMember?: (discordUserId: string) => Promise<boolean>;
+  /**
    * The Verify button's steps (link, nickname, lounge, roles, badges) for
    * this Discord account, with the member's fresh Meetup access token, used
    * once. Throws NonMemberError, DuplicateMeetupAccountError, or anything
@@ -237,6 +243,9 @@ export function createHostRouter(deps: HostRouterDeps): express.Router {
   // A second request (a double click) waits for the run in flight and shows
   // its result, rather than guessing.
   const verifyInFlight = new Map<string, Promise<VerifyResult>>();
+  // "Refresh roles and badges": one per host every 10 minutes (a first link
+  // is not limited). In-memory per dyno, like the other limiters.
+  const verifyRefreshLimiter = new FixedWindowLimiter(1, 10 * 60 * 1000);
   /** The session tag a link state carries: a keyed hash, never the sid. */
   const sessionTag = (sid: string) =>
     crypto
@@ -576,10 +585,6 @@ export function createHostRouter(deps: HostRouterDeps): express.Router {
       fail(res, 404);
       return;
     }
-    if (session.discordUserId !== null) {
-      back('already');
-      return;
-    }
     // As at the start: the link saves the session's name as the Meetup
     // name, so only a Meetup sign-in may finish one, however it started.
     if (session.via !== 'meetup') {
@@ -606,6 +611,33 @@ export function createHostRouter(deps: HostRouterDeps): express.Router {
     }
     if (!DISCORD_ID.test(identity.id)) {
       back('error');
+      return;
+    }
+    // A host already linked (refreshing roles while out of the server) must
+    // come back as THAT Discord account: another one is never linked,
+    // joined or verified.
+    if (
+      session.discordUserId !== null &&
+      identity.id !== session.discordUserId
+    ) {
+      if (linkAlertLimiter.take(`${session.userId}:mismatch`)) {
+        alert({
+          title: 'Verify on the host dashboard: a different Discord account',
+          description:
+            `Meetup member ${session.userId}, linked to <@${session.discordUserId}>, ` +
+            `came back from Discord as <@${identity.id}>. Nothing was changed.`,
+        });
+      }
+      send(
+        res,
+        403,
+        verifyResultPage(
+          locals(res).nonce,
+          session,
+          { kind: 'discord-mismatch' },
+          undefined,
+        ),
+      );
       return;
     }
     const meetupId = session.userId;
@@ -950,7 +982,7 @@ export function createHostRouter(deps: HostRouterDeps): express.Router {
    * same `form-action 'self'` reason as the Discord start.
    */
   async function finishStart(res: Response) {
-    const { session, sid, nonce } = hostLocals(res);
+    const { session } = hostLocals(res);
     if (!deps.runVerify || session.via !== 'meetup') {
       res.redirect(303, HOST_BASE);
       return;
@@ -978,6 +1010,16 @@ export function createHostRouter(deps: HostRouterDeps): express.Router {
       await runAndShow(res, session, discordUserId, stored, undefined);
       return;
     }
+    meetupHopPage(res, discordUserId);
+  }
+
+  /**
+   * The Meetup step on its own, for a host already linked: a page that
+   * LINKS to Meetup (form-action 'self'), with a sealed, session-bound
+   * cookie for the Discord account.
+   */
+  function meetupHopPage(res: Response, discordUserId: string) {
+    const { session, sid, nonce } = hostLocals(res);
     const state = newHostState();
     const href = safeHref(deps.meetup.buildAuthUrl(state));
     if (!href) {
@@ -1287,16 +1329,12 @@ export function createHostRouter(deps: HostRouterDeps): express.Router {
   // Answers with a page that LINKS to Discord rather than a redirect:
   // browsers apply the host pages' `form-action 'self'` to every redirect
   // after a form POST, so a 303 to discord.com would be blocked.
-  protectedRouter.post('/link/discord', (_req, res) => {
+  protectedRouter.post('/link/discord', (async (_req, res) => {
     if (!deps.members) {
       fail(res, 404);
       return;
     }
-    const { session, sid, nonce } = hostLocals(res);
-    if (session.discordUserId !== null) {
-      res.redirect(303, `${HOST_BASE}?link=already`);
-      return;
-    }
+    const { session } = hostLocals(res);
     // The link saves the session's username as the Meetup name, so only a
     // Meetup sign-in may start one (a Discord sign-in unlinked since has a
     // Discord name there). The home page shows no button for it either.
@@ -1304,6 +1342,61 @@ export function createHostRouter(deps: HostRouterDeps): express.Router {
       fail(res, 403);
       return;
     }
+    if (session.discordUserId !== null) {
+      await refreshStart(res, session.discordUserId);
+      return;
+    }
+    discordContinuePage(res);
+  }) as RequestHandler);
+
+  /**
+   * "Refresh roles and badges" for a host already linked: Verify again, as
+   * the Discord button does. In our server: straight to the Verify steps
+   * (kept Meetup token, else the Meetup step). Not in it: Discord's
+   * sign-in, which can add them (and must come back as the linked
+   * account). At most one refresh per host every 10 minutes.
+   */
+  async function refreshStart(res: Response, discordUserId: string) {
+    const { session, nonce } = hostLocals(res);
+    if (!deps.runVerify) {
+      res.redirect(303, `${HOST_BASE}?link=already`);
+      return;
+    }
+    if (!verifyRefreshLimiter.take(session.userId)) {
+      send(
+        res,
+        429,
+        verifyResultPage(nonce, session, { kind: 'too-soon' }, undefined),
+      );
+      return;
+    }
+    let inServer: boolean;
+    try {
+      inServer = deps.isServerMember
+        ? await deps.isServerMember(discordUserId)
+        : true;
+    } catch (error: unknown) {
+      logger.warn(
+        `Host refresh server check failed: ${error instanceof Error ? error.name : 'Error'}`,
+      );
+      res.redirect(303, `${HOST_BASE}?link=error`);
+      return;
+    }
+    if (!inServer) {
+      discordContinuePage(res);
+      return;
+    }
+    const stored = await storedMeetupToken(discordUserId, session.userId);
+    if (stored) {
+      await runAndShow(res, session, discordUserId, stored, undefined);
+      return;
+    }
+    meetupHopPage(res, discordUserId);
+  }
+
+  /** Discord's sign-in for "Verify on Discord": a page that LINKS to it. */
+  function discordContinuePage(res: Response) {
+    const { session, sid, nonce } = hostLocals(res);
     const state = `link.${generateState()}.${sessionTag(sid)}`;
     const verifier = generateCodeVerifier();
     // Only Discord's authorize endpoint passes safeHref; anything else is a
@@ -1340,7 +1433,7 @@ export function createHostRouter(deps: HostRouterDeps): express.Router {
         </div>`,
       }),
     );
-  });
+  }
 
   protectedRouter.post('/verify/finish', (async (_req, res) => {
     await finishStart(res);

@@ -2,7 +2,10 @@ import { Client, DiscordAPIError, RESTJSONErrorCodes } from 'discord.js';
 import { describe, expect, it, vi } from 'vitest';
 
 import { GUILD_ID } from '../../../src/constants.js';
-import { ensureServerMember } from '../../../src/web/host/serverJoin.js';
+import {
+  ensureServerMember,
+  isServerMember,
+} from '../../../src/web/host/serverJoin.js';
 
 const USER = '123456789012345678';
 
@@ -89,5 +92,21 @@ describe('ensureServerMember', () => {
     await expect(
       ensureServerMember(() => undefined, USER, 'oauth'),
     ).rejects.toThrow('not ready');
+  });
+});
+
+describe('isServerMember', () => {
+  it('a member is in; Unknown Member is out; anything else is thrown', async () => {
+    const member = fakeClient({ member: { pending: false } });
+    expect(await isServerMember(() => member.client, USER)).toBe(true);
+    const gone = fakeClient({ fetchError: unknownMember() });
+    expect(await isServerMember(() => gone.client, USER)).toBe(false);
+    const down = fakeClient({ fetchError: new Error('discord down') });
+    await expect(isServerMember(() => down.client, USER)).rejects.toThrow(
+      'discord down',
+    );
+    await expect(isServerMember(() => undefined, USER)).rejects.toThrow(
+      'not ready',
+    );
   });
 });

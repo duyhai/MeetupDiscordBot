@@ -169,23 +169,35 @@ function homeBody(
   linkResult?: HostLinkResult,
 ): SafeHtml {
   const quiet = quietDays(calendar, today).slice(0, QUIET_DAYS_SHOWN);
-  // "Verify on Discord": the same Verify as the button in the server. Only for a Meetup sign-in: a Discord sign-in
-  // whose link was removed since carries a Discord name, not a Meetup one.
-  const linkNudge =
-    session.discordUserId === null && session.via === 'meetup'
-      ? html`<div class="note info">
-          <p>
-            Your Meetup account is not linked to Discord yet. Verifying is
-            optional: it links the two, adds you to our Discord server if you
-            are not in it, and gives you the same roles and badges as pressing
-            Verify in our Discord server.
-          </p>
-          <form method="post" action="${localUrl(LINK_DISCORD_PATH)}">
-            <input type="hidden" name="_csrf" value="${session.csrfToken}" />
-            <button type="submit">Verify on Discord</button>
-          </form>
-        </div>`
-      : '';
+  // "Verify on Discord": the same Verify as the button in the server, and
+  // once linked, "Refresh roles and badges" runs it again. Only for a
+  // Meetup sign-in: a Discord sign-in whose link was removed since carries
+  // a Discord name, not a Meetup one.
+  const verifyForm = (label: string) =>
+    html`<form method="post" action="${localUrl(LINK_DISCORD_PATH)}">
+      <input type="hidden" name="_csrf" value="${session.csrfToken}" />
+      <button type="submit">${label}</button>
+    </form>`;
+  let linkNudge: SafeHtml | '' = '';
+  if (session.via === 'meetup' && session.discordUserId === null) {
+    linkNudge = html`<div class="note info">
+      <p>
+        Your Meetup account is not linked to Discord yet. Verifying is optional:
+        it links the two, adds you to our Discord server if you are not in it,
+        and gives you the same roles and badges as pressing Verify in our
+        Discord server.
+      </p>
+      ${verifyForm('Verify on Discord')}
+    </div>`;
+  } else if (session.via === 'meetup') {
+    linkNudge = html`<div class="note info">
+      <p>
+        Re-run Verify to update your Guest Host role and badges from your Meetup
+        activity.
+      </p>
+      ${verifyForm('Refresh roles and badges')}
+    </div>`;
+  }
   const notice = linkResult ? linkNotice(linkResult) : '';
   const rows = upcoming.map(
     (event) =>
