@@ -32,8 +32,11 @@ import {
 } from '../../templates/createEventTemplate.js';
 import { pacificDay } from '../../lib/hosts/hostEvents.js';
 import { PublishOutcome } from '../../lib/hosts/publishRequest.js';
-import { newRequestAlert } from '../../lib/hosts/requestPost.js';
-import { LogEntry, alertText } from '../../lib/helpers/discordLogger.js';
+import {
+  newRequestAlert,
+  publishedAlert,
+} from '../../lib/hosts/requestPost.js';
+import { LogEntry } from '../../lib/helpers/discordLogger.js';
 import {
   EventRequest,
   NewEventRequest,
@@ -488,22 +491,6 @@ function startDay(value: unknown, today: string): string {
   return dayjs(value).format('YYYY-MM-DD') === value && value > today
     ? value
     : '';
-}
-
-/** A Community Host's published event: plain text, markdown escaped. */
-function publishedAlert(
-  created: EventRequest,
-  published: EventRequest,
-): LogEntry {
-  return {
-    title: 'Community Host published an event',
-    description: published.eventUrl ?? '',
-    fields: [
-      { name: 'Host', value: alertText(created.hostName), inline: true },
-      { name: 'When', value: whenLabel(created.startLocal), inline: true },
-      { name: 'Title', value: alertText(created.title) },
-    ],
-  };
 }
 
 /**

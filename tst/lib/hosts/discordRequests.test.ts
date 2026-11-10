@@ -134,6 +134,7 @@ function setup(
     );
   });
   const alert = vi.fn().mockResolvedValue(true);
+  const mirror = vi.fn(async (_request: EventRequest) => undefined);
   const publish = vi.fn(async (id: string): Promise<PublishOutcome> => ({
     code: 'published',
     request: {
@@ -157,8 +158,9 @@ function setup(
     tip: () => 'Start small',
     alert,
     origin: ORIGIN,
+    mirror,
   };
-  return { deps, store, decide, alert, publish };
+  return { deps, store, decide, alert, publish, mirror };
 }
 
 type Payload = Record<string, unknown>;
@@ -224,6 +226,29 @@ describe('/meetup_request_event → the shared request row', () => {
       channelId: SENT.channelId,
       messageId: SENT.id,
     });
+  });
+
+  it('uses the hosted count resolveHost already read, so there is no second organizer read', async () => {
+    const { deps } = setup();
+    const pastHostedCount = vi.fn(async () => 7);
+    const { interaction, followUp } = commandInteraction();
+    await handleRequestCommand({ ...deps, pastHostedCount }, interaction, GOOD);
+    expect(pastHostedCount).not.toHaveBeenCalled();
+    expect(
+      (followUp.mock.calls[0]?.[0] as { content: string }).content,
+    ).toContain('**Number of hosted events**: 3');
+  });
+
+  it("a Community Host's publish alerts with host, when and title", async () => {
+    const { deps, alert } = setup({
+      resolution: { ...HOST, tier: 'promoted' },
+    });
+    const { interaction } = commandInteraction();
+    await handleRequestCommand(deps, interaction, GOOD);
+    const text = JSON.stringify(alert.mock.calls[0][0]);
+    expect(text).toContain('Community Host published an event');
+    expect(text).toContain('Board game night');
+    expect(text).toContain('dee');
   });
 
   it('alerts leadership once, plainly', async () => {
@@ -344,7 +369,7 @@ describe('/meetup_request_event → the shared request row', () => {
       content: string;
       components: { toJSON: () => { components: { disabled?: boolean }[] } }[];
     };
-    expect(payload.content).toContain('✅ Request approved by dee');
+    expect(payload.content).toContain('✅ Published by dee.');
     expect(
       payload.components[0].toJSON().components.every((c) => c.disabled),
     ).toBe(true);
@@ -408,6 +433,50 @@ describe('Approve button', () => {
     expect(replyText(second.followUp)).toContain(
       'Someone just acted on this request',
     );
+  });
+
+  it('a stale press still brings the post up to date', async () => {
+    const decidedRow = eventRequestRow({
+      id: '17',
+      status: 'denied',
+      version: 2,
+      decidedBy: LEADER,
+      denyReason: 'No',
+    });
+    const { deps, mirror } = setup({
+      rows: [decidedRow],
+      decide: () => ({ code: 'stale' }),
+    });
+    await handleApprovePress(
+      deps,
+      buttonInteraction('request-approve:17').interaction,
+    );
+    expect(mirror).toHaveBeenCalledTimes(1);
+    expect(mirror.mock.calls[0]?.[0]).toMatchObject({
+      id: '17',
+      status: 'denied',
+    });
+  });
+
+  it('refuses to approve a request whose start has passed, without touching it', async () => {
+    const { deps, decide } = setup({
+      rows: [eventRequestRow({ id: '17', startLocal: '2026-11-01T19:00' })],
+    });
+    const { interaction, followUp } = buttonInteraction('request-approve:17');
+    await handleApprovePress(deps, interaction);
+    expect(decide).not.toHaveBeenCalled();
+    expect(replyText(followUp)).toContain('start time has passed');
+  });
+
+  it('points a deny of a request whose event exists at the website', async () => {
+    const { deps } = setup({
+      rows: [eventRequestRow({ id: '17' })],
+      decide: () => ({ code: 'deny-event-exists' }),
+    });
+    const { interaction, followUp } = buttonInteraction('request-approve:17');
+    await handleApprovePress(deps, interaction);
+    expect(replyText(followUp)).toContain(`${ORIGIN}/dashboard/hosts/requests`);
+    expect(replyText(followUp)).not.toMatch(/^.*Retry to finish/);
   });
 
   it('tells a non-leader plainly', async () => {

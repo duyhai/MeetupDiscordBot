@@ -125,6 +125,8 @@ export function productionRequestPostDeps(
     pastHostedCount: hostResolveDeps(getClient).pastHostedCount,
     alert: alertVia(getClient),
     origin: dashboardOrigin(),
+    mirror: (request) =>
+      mirrorDecision({ getClient, alert: alertVia(getClient) }, request),
   };
 }
 
@@ -384,5 +386,7 @@ export function productionDiscordRequestDeps(
     tip: getRandomTip,
     alert: alertVia(getClient),
     origin: dashboardOrigin(),
+    mirror: (request) =>
+      mirrorDecision({ getClient, alert: alertVia(getClient) }, request),
   };
 }

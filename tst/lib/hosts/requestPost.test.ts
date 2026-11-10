@@ -11,6 +11,7 @@ import {
   requestIdFrom,
   requestPostContent,
 } from '../../../src/lib/hosts/requestPost.js';
+import { EventRequest } from '../../../src/lib/repositories/postgresEventRequestRepository.js';
 import { GUEST_HOST_EVENT_DESCRIPTION } from '../../../src/templates/createEventTemplate.js';
 import { eventRequestRow } from '../../web/routes/pageFakes.js';
 
@@ -83,6 +84,14 @@ describe('requestPostContent', () => {
   });
 });
 
+describe('requestPostContent with an outcome', () => {
+  it('drops the approve-or-deny line when the outcome is attached', () => {
+    const text = requestPostContent(pending, 3, LINKS, { decided: true });
+    expect(text).not.toContain('Organizers, please approve or deny below:');
+    expect(text).toContain('**Event Title**: Board game night');
+  });
+});
+
 describe('buttons', () => {
   it('names the request in the custom ids and reads it back', () => {
     expect(APPROVE_ID('17')).toBe('request-approve:17');
@@ -130,17 +139,31 @@ describe('decisionLine', () => {
     );
   });
 
-  it('names a host who published their own request', () => {
+  it('says a host published their own request', () => {
     const line = decisionLine(
       eventRequestRow({
         status: 'published',
+        meetupMemberId: '4242',
         decidedBy: '4242',
         hostName: 'Hana',
         eventUrl: 'https://www.meetup.com/x/events/9/',
       }),
     );
-    expect(line).toContain('approved by Hana');
+    expect(line).toContain('✅ Published by Hana.');
+    expect(line).not.toContain('approved');
     expect(line).not.toContain('<@');
+  });
+
+  it('shortens a long deny reason and points at the website', () => {
+    const line = decisionLine(
+      eventRequestRow({
+        status: 'denied',
+        decidedBy: LEADER,
+        denyReason: 'x'.repeat(500),
+      }),
+    );
+    expect(line?.length ?? 0).toBeLessThan(400);
+    expect(line).toContain('… (the full reason is on the website)');
   });
 
   it('shows a denial with its reason, escaped', () => {
@@ -233,8 +256,58 @@ describe('postRequest', () => {
       { send },
     );
     const payload = send.mock.calls[0]?.[0];
-    expect(payload?.content).toContain('✅ Request approved by');
+    expect(payload?.content).toContain('✅ Published by Hana.');
+    expect(payload?.content).not.toContain('Organizers, please approve');
     expect(disabledAll(payload)).toBe(true);
+  });
+
+  it('mirrors at once when the request was decided before the post was recorded', async () => {
+    const { deps, setDiscordPost } = postDeps();
+    // The website denied it while the post was being sent: the pointer
+    // write returns the row as it is now.
+    setDiscordPost.mockResolvedValueOnce(
+      eventRequestRow({
+        id: '17',
+        status: 'denied',
+        decidedBy: LEADER,
+        denyReason: 'No',
+        discordPost: { channelId: '8'.repeat(18), messageId: '9'.repeat(18) },
+      }),
+    );
+    const mirror = vi.fn<(request: EventRequest) => Promise<undefined>>(
+      async () => undefined,
+    );
+    await postRequest({ ...deps, mirror }, pending, { send: sender() });
+    expect(mirror).toHaveBeenCalledTimes(1);
+    expect(mirror.mock.calls[0]?.[0]).toMatchObject({ status: 'denied' });
+  });
+
+  it('does not mirror a request that is still open after posting', async () => {
+    const { deps } = postDeps();
+    const mirror = vi.fn(async () => undefined);
+    await postRequest({ ...deps, mirror }, pending, { send: sender() });
+    expect(mirror).not.toHaveBeenCalled();
+  });
+
+  it('takes a known hosted count instead of reading it again', async () => {
+    const count = vi.fn(async () => 99);
+    const { deps } = postDeps({ count });
+    const send = sender();
+    await postRequest(deps, pending, { send }, 3);
+    expect(count).not.toHaveBeenCalled();
+    expect(send.mock.calls[0]?.[0].content).toContain(
+      '**Number of hosted events**: 3',
+    );
+  });
+
+  it('says the post exists but is untracked when only the pointer write fails', async () => {
+    const { deps, alert, setDiscordPost } = postDeps();
+    setDiscordPost.mockRejectedValueOnce(new Error('db down'));
+    await postRequest(deps, pending, { send: sender() });
+    const text = JSON.stringify(alert.mock.calls[0][0]);
+    expect(text).toContain('posted');
+    expect(text).toContain('not recorded');
+    expect(text).not.toContain('Could not post');
   });
 
   it('alerts and does not throw when the post cannot be sent', async () => {

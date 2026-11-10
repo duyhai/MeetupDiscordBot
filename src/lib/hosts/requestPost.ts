@@ -124,6 +124,7 @@ export function requestPostContent(
   request: EventRequest,
   hostedCount: number | undefined,
   links: PostLinks,
+  options: { decided?: boolean } = {},
 ): string {
   const [day, time] = request.startLocal.split('T');
   const tip = TIP_LINE.exec(request.description)?.[1];
@@ -140,16 +141,38 @@ export function requestPostContent(
     ``,
     ...(tip === undefined ? [] : [`💡 **Host Tip**: ${tip} 💡`]),
     `Please reach out to us if you have any questions while setting up your event.`,
-    `Organizers, please approve or deny below:`,
+    ...(options.decided ? [] : [`Organizers, please approve or deny below:`]),
   ];
   return lines.join('\n');
 }
 
-/** The decider: a mention for a Discord id (leadership), else the host's name (their own publish). */
-function decider(request: EventRequest): string {
-  return request.decidedBy !== null && DISCORD_ID.test(request.decidedBy)
-    ? `<@${request.decidedBy}>`
-    : alertText(request.hostName);
+/** The most of a deny reason the post shows; the host's page has all of it. */
+export const POST_REASON_MAX = 200;
+
+function shortReason(reason: string): string {
+  const chars = Array.from(alertText(reason));
+  return chars.length <= POST_REASON_MAX
+    ? chars.join('')
+    : `${chars.slice(0, POST_REASON_MAX).join('')} … (the full reason is on the website)`;
+}
+
+/**
+ * Who decided: the host themself (a promoted host's publish records their
+ * own Meetup id), a leader (a Discord id, mentioned without a ping), or a
+ * name for anything else.
+ */
+function decider(request: EventRequest): {
+  kind: 'self' | 'leader' | 'other';
+  text: string;
+} {
+  const by = request.decidedBy;
+  if (by !== null && by === request.meetupMemberId) {
+    return { kind: 'self', text: alertText(request.hostName) };
+  }
+  if (by !== null && DISCORD_ID.test(by)) {
+    return { kind: 'leader', text: `<@${by}>` };
+  }
+  return { kind: 'other', text: alertText(request.hostName) };
 }
 
 /** A post with one of these carries its final outcome; nothing is appended after. */
@@ -160,18 +183,22 @@ const FAILED_MARK = '\n⚠️ Approved by';
 /** The outcome line appended to the post, or undefined while the request is open. */
 export function decisionLine(request: EventRequest): string | undefined {
   switch (request.status) {
-    case 'published':
-      return (
-        `✅ Request approved by ${decider(request)}.` +
-        (request.eventUrl ? `\nLink to event: <${request.eventUrl}>` : '')
-      );
+    case 'published': {
+      const by = decider(request);
+      const link = request.eventUrl
+        ? `\nLink to event: <${request.eventUrl}>`
+        : '';
+      return by.kind === 'self'
+        ? `✅ Published by ${by.text}.${link}`
+        : `✅ Request approved by ${by.text}.${link}`;
+    }
     case 'denied':
       return (
-        `❌ Request denied by ${decider(request)}.` +
-        `\nReason: ${alertText(request.denyReason ?? '')}`
+        `❌ Request denied by ${decider(request).text}.` +
+        `\nReason: ${shortReason(request.denyReason ?? '')}`
       );
     case 'failed':
-      return `⚠️ Approved by ${decider(request)}, but publishing failed; leadership is retrying on the website.`;
+      return `⚠️ Approved by ${decider(request).text}, but publishing failed; leadership is retrying on the website.`;
     default:
       return undefined;
   }
@@ -193,6 +220,27 @@ export interface RequestPostDeps {
   /** #meetup-bot-alerts, plain; fire and forget. */
   alert: (entry: LogEntry) => Promise<unknown>;
   origin: string;
+  /**
+   * mirrorDecision, for a request decided between the send and the pointer
+   * write (a decision made then found no post to edit). Fire and forget.
+   */
+  mirror?: (request: EventRequest) => Promise<unknown>;
+}
+
+/** A Community Host's published event, for #meetup-bot-alerts: plain text, markdown escaped. */
+export function publishedAlert(
+  created: EventRequest,
+  published: EventRequest,
+): LogEntry {
+  return {
+    title: 'Community Host published an event',
+    description: published.eventUrl ?? '',
+    fields: [
+      { name: 'Host', value: alertText(created.hostName), inline: true },
+      { name: 'When', value: whenLabel(created.startLocal), inline: true },
+      { name: 'Title', value: alertText(created.title) },
+    ],
+  };
 }
 
 function errorName(error: unknown): string {
@@ -209,36 +257,65 @@ export async function postRequest(
   deps: RequestPostDeps,
   request: EventRequest,
   target: PostTarget,
+  knownHostedCount?: number,
 ): Promise<void> {
-  let hostedCount: number | undefined;
-  try {
-    hostedCount = await deps.pastHostedCount(request.meetupMemberId);
-  } catch (error: unknown) {
-    logger.warn(`Hosted count unavailable for the post: ${errorName(error)}`);
+  let hostedCount = knownHostedCount;
+  if (hostedCount === undefined) {
+    try {
+      hostedCount = await deps.pastHostedCount(request.meetupMemberId);
+    } catch (error: unknown) {
+      logger.warn(`Hosted count unavailable for the post: ${errorName(error)}`);
+    }
   }
   const outcome = decisionLine(request);
+  const decided = outcome !== undefined;
   const content =
-    requestPostContent(request, hostedCount, { origin: deps.origin }) +
-    (outcome === undefined ? '' : `\n${outcome}`);
+    requestPostContent(
+      request,
+      hostedCount,
+      { origin: deps.origin },
+      { decided },
+    ) + (decided ? `\n${outcome}` : '');
+  const alert = (title: string, description: string) =>
+    deps.alert({ title, description }).catch(() => undefined);
+  let sent: { id: string; channelId: string };
   try {
-    const sent = await target.send({
+    sent = await target.send({
       content,
-      components: [requestButtons(request.id, outcome !== undefined)],
+      components: [requestButtons(request.id, decided)],
       allowedMentions: { parse: [] },
     });
-    await (
+  } catch (error: unknown) {
+    logger.warn(`Request post failed for #${request.id}: ${errorName(error)}`);
+    void alert(
+      'Host request post failed',
+      `Could not post request #${request.id} to Discord (${errorName(error)}). ` +
+        'The request itself is saved; decide it on the website.',
+    );
+    return;
+  }
+  let recorded: EventRequest | undefined;
+  try {
+    recorded = await (
       await deps.store()
     ).setDiscordPost(request.id, sent.channelId, sent.id);
   } catch (error: unknown) {
-    logger.warn(`Request post failed for #${request.id}: ${errorName(error)}`);
-    deps
-      .alert({
-        title: 'Host request post failed',
-        description:
-          `Could not post request #${request.id} to Discord (${errorName(error)}). ` +
-          'The request itself is saved; decide it on the website.',
-      })
-      .catch(() => undefined);
+    logger.warn(
+      `Request post not recorded for #${request.id}: ${errorName(error)}`,
+    );
+    void alert(
+      'Host request post not recorded',
+      `Request #${request.id} was posted in Discord but the post was not recorded ` +
+        `(${errorName(error)}), so its buttons will not be updated by a decision made on the website.`,
+    );
+    return;
+  }
+  // Decided on the website while the post was going out: that decision
+  // found no post to edit, so it is shown now.
+  if (recorded !== undefined && decisionLine(recorded) !== undefined) {
+    deps.mirror?.(recorded).catch((error: unknown) => {
+      logger.warn(`Request post mirror threw: ${errorName(error)}`);
+    });
   }
 }
 

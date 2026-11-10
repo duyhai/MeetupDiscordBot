@@ -26,7 +26,7 @@ import {
   parseRequestForm,
 } from './eventRequest.js';
 import { pacificDay } from './hostEvents.js';
-import { PublishOutcome } from './publishRequest.js';
+import { PublishOutcome, startHasPassed } from './publishRequest.js';
 import {
   DECISION_MESSAGES,
   DecisionCode,
@@ -39,6 +39,7 @@ import {
   hostRequestUrl,
   newRequestAlert,
   postRequest,
+  publishedAlert,
   queueUrl,
   requestIdFrom,
 } from './requestPost.js';
@@ -83,6 +84,8 @@ export interface DiscordRequestDeps {
   alert: (entry: LogEntry) => Promise<unknown>;
   /** The site's origin, for the links in posts and replies. */
   origin: string;
+  /** mirrorDecision: brings a post up to date after a stale press or a pre-pointer decision. */
+  mirror: (request: EventRequest) => Promise<unknown>;
 }
 
 export const UNLINKED_NUDGE = (origin: string) =>
@@ -98,7 +101,12 @@ const postDeps = (deps: DiscordRequestDeps): RequestPostDeps => ({
   pastHostedCount: deps.pastHostedCount,
   alert: deps.alert,
   origin: deps.origin,
+  mirror: deps.mirror,
 });
+
+/** The website's wording for a request whose start has passed; publishing would only fail. */
+export const START_PASSED =
+  'The start time has passed, so this can no longer be published. Deny it with a note to the host.';
 
 /**
  * /meetup_request_event, inside discordCommandWrapper: the same row the
@@ -119,7 +127,8 @@ export async function handleRequestCommand(
     keepReplyVisible(interaction);
     return;
   }
-  const tier = publishTier(await deps.resolve({ meetupMemberId }));
+  const resolution = await deps.resolve({ meetupMemberId });
+  const tier = publishTier(resolution);
   if (tier === 'not-a-host') {
     throw new Error('Your account cannot request events.');
   }
@@ -202,22 +211,24 @@ export async function handleRequestCommand(
     }
     if (outcome.code === 'published') {
       deps
-        .alert({
-          title: 'Community Host published an event',
-          description: outcome.request.eventUrl ?? '',
-          fields: [{ name: 'Request', value: `#${created.id}`, inline: true }],
-        })
+        .alert(publishedAlert(created, outcome.request))
         .catch(() => undefined);
     }
   } else {
     deps.alert(newRequestAlert(deps.origin, created)).catch(() => undefined);
   }
-  await postRequest(postDeps(deps), toPost, {
-    send: async (payload) => {
-      const message = await interaction.followUp(payload);
-      return { id: message.id, channelId: message.channelId };
+  await postRequest(
+    postDeps(deps),
+    toPost,
+    {
+      send: async (payload) => {
+        const message = await interaction.followUp(payload);
+        return { id: message.id, channelId: message.channelId };
+      },
     },
-  });
+    // resolveHost read the count already unless the role decided.
+    resolution.kind === 'host' ? resolution.hostedCount : undefined,
+  );
 }
 
 /** Discord's own texts where the website's say "reload the queue". */
@@ -232,6 +243,9 @@ export const DISCORD_RESULT_MESSAGES = (
     'Meetup is slow to answer. The request stays "publishing"; this post is updated when it finishes.',
   'deny-slow':
     'The database is slow, so the deny may still save. This post is updated if it does.',
+  'deny-event-exists':
+    'This request’s event is on Meetup, so it was not denied. Finish it with Retry ' +
+    `on the website, or delete it on Meetup first: <${queueUrl(origin)}>`,
 });
 
 function resultText(origin: string, code: DecisionCode): string {
@@ -252,6 +266,15 @@ async function decideFromDiscord(
   if (current === undefined) {
     throw new Error('That request no longer exists.');
   }
+  // As the website hides Approve for one: publishing would only fail.
+  if (
+    action === 'approve' &&
+    current.status === 'pending' &&
+    startHasPassed(current.startLocal, deps.now())
+  ) {
+    await interaction.followUp({ content: START_PASSED, ephemeral: true });
+    return;
+  }
   // The version read here is what the compare-and-set checks: a second
   // press after a decision (or the website deciding first) is stale.
   const outcome = await deps.decide({
@@ -265,6 +288,14 @@ async function decideFromDiscord(
     content: resultText(deps.origin, outcome.code),
     ephemeral: true,
   });
+  if (outcome.code === 'stale') {
+    // Someone else decided it (perhaps before the post was recorded): make
+    // sure the post shows that decision. Idempotent and cheap.
+    const now = await (await deps.store()).get(id);
+    if (now !== undefined) {
+      deps.mirror(now).catch(() => undefined);
+    }
+  }
   // The service wrote the audit line; the wrapper's generic one is skipped.
   markActivityLogged(interaction);
 }
