@@ -1,12 +1,14 @@
 import { SafeHtml, html } from './html.js';
 
 /**
- * Fixed series colours. A series colour is used only when it is a hex
- * constant like these. Each meets 3:1 on both --surface values (#ffffff
- * and #20212b), and the green sits well apart in lightness from the
- * blurple and the coral, so the first three still differ under common
- * colour-vision deficiencies. Line series also get a dash pattern each
- * (see `line`).
+ * Fallback series colours, written into fill/stroke attributes. On a styled
+ * page the stylesheet's per-palette tokens (--chart-1 to --chart-5, via the
+ * literal series classes s1 to s5 set by `seriesGroup` and `legendSwatch`)
+ * override them, light and dark; the attributes still colour the SVG when
+ * it is viewed on its own. A series colour given by the caller is used only
+ * when it is a hex constant like these, and then no class is set, so the
+ * caller's colour stands. Line series also get a dash pattern each (see
+ * `line`).
  */
 export const CHART_COLORS: readonly string[] = [
   '#5462ec', // blurple
@@ -103,6 +105,62 @@ function line(si: number, points: string, color: string): SafeHtml {
 const LINE_GLYPHS: readonly string[] = ['━', '╍', '┅', '─·'];
 
 /**
+ * A series' marks in a <g> carrying its literal class (the html subset
+ * takes no data in class), so the stylesheet can colour them per palette;
+ * a caller-coloured series gets a plain <g>.
+ */
+function seriesGroup(
+  si: number,
+  own: boolean,
+  marks: SafeHtml | SafeHtml[],
+): SafeHtml {
+  if (own) {
+    return html`<g>${marks}</g>`;
+  }
+  switch (si % 5) {
+    case 1:
+      return html`<g class="s2">${marks}</g>`;
+    case 2:
+      return html`<g class="s3">${marks}</g>`;
+    case 3:
+      return html`<g class="s4">${marks}</g>`;
+    case 4:
+      return html`<g class="s5">${marks}</g>`;
+    default:
+      return html`<g class="s1">${marks}</g>`;
+  }
+}
+
+/** The legend's swatch glyph, classed like its series (see `seriesGroup`). */
+function legendSwatch(
+  si: number,
+  own: boolean,
+  color: string,
+  glyph: string,
+): SafeHtml {
+  if (si === 0) {
+    return own
+      ? html`<tspan fill="${color}">${glyph}</tspan>`
+      : html`<tspan class="s1" fill="${color}">${glyph}</tspan>`;
+  }
+  if (own) {
+    return html`<tspan dx="12" fill="${color}">${glyph}</tspan>`;
+  }
+  switch (si % 5) {
+    case 1:
+      return html`<tspan class="s2" dx="12" fill="${color}">${glyph}</tspan>`;
+    case 2:
+      return html`<tspan class="s3" dx="12" fill="${color}">${glyph}</tspan>`;
+    case 3:
+      return html`<tspan class="s4" dx="12" fill="${color}">${glyph}</tspan>`;
+    case 4:
+      return html`<tspan class="s5" dx="12" fill="${color}">${glyph}</tspan>`;
+    default:
+      return html`<tspan class="s1" dx="12" fill="${color}">${glyph}</tspan>`;
+  }
+}
+
+/**
  * Server-drawn SVG under the strict html subset: drawing elements and
  * presentation attributes only (never style=), every label escaped text,
  * no script. Charts hold counts only.
@@ -125,11 +183,14 @@ export function chart(input: ChartInput): SafeHtml {
   const y = (v: number) => baseline - (clean(v) / yMax) * plotH;
   const slot = plotW / n;
   const x = (i: number) => pad.left + slot * (i + 0.5);
-  const colorOf = (s: ChartSeries, i: number): string => {
+  const colorOf = (
+    s: ChartSeries,
+    i: number,
+  ): { color: string; own: boolean } => {
     if (s.color && HEX.test(s.color)) {
-      return s.color;
+      return { color: s.color, own: true };
     }
-    return CHART_COLORS[i % CHART_COLORS.length];
+    return { color: CHART_COLORS[i % CHART_COLORS.length], own: false };
   };
   // No minimum width: each group stays inside the middle 80% of its slot,
   // so groups never overlap, even at 240 months.
@@ -139,10 +200,10 @@ export function chart(input: ChartInput): SafeHtml {
   const tooltips = n <= MAX_TOOLTIP_CATEGORIES;
 
   const marks = input.series.map((s, si) => {
-    const color = colorOf(s, si);
+    const { color, own } = colorOf(s, si);
     const values = s.values.slice(0, n);
     if (input.kind === 'bar') {
-      return values.map((v, i) => {
+      const bars = values.map((v, i) => {
         const bx = fmt(pad.left + slot * i + slot * 0.1 + barW * si);
         if (!tooltips) {
           return html`<rect
@@ -162,18 +223,23 @@ export function chart(input: ChartInput): SafeHtml {
           ><title>${input.categories[i]}: ${clean(v)}</title></rect
         >`;
       });
+      return seriesGroup(si, own, bars);
     }
     if (values.length === 1) {
-      return html`<circle
-        cx="${fmt(x(0))}"
-        cy="${fmt(y(values[0]))}"
-        r="3"
-        fill="${color}"
-        ><title>${input.categories[0]}: ${clean(values[0])}</title></circle
-      >`;
+      return seriesGroup(
+        si,
+        own,
+        html`<circle
+          cx="${fmt(x(0))}"
+          cy="${fmt(y(values[0]))}"
+          r="3"
+          fill="${color}"
+          ><title>${input.categories[0]}: ${clean(values[0])}</title></circle
+        >`,
+      );
     }
     const points = values.map((v, i) => `${fmt(x(i))},${fmt(y(v))}`).join(' ');
-    return line(si, points, color);
+    return seriesGroup(si, own, line(si, points, color));
   });
 
   const step = Math.max(1, Math.ceil(n / 12));
@@ -205,12 +271,9 @@ export function chart(input: ChartInput): SafeHtml {
   // A line's swatch draws its dash (see `line`); a bar's is a square. The
   // glyph is escaped text, not an attribute.
   const legend = input.series.map((s, si) => {
-    const color = colorOf(s, si);
+    const { color, own } = colorOf(s, si);
     const glyph = input.kind === 'line' ? LINE_GLYPHS[si % 4] : '■';
-    const swatch =
-      si === 0
-        ? html`<tspan fill="${color}">${glyph}</tspan>`
-        : html`<tspan dx="12" fill="${color}">${glyph}</tspan>`;
+    const swatch = legendSwatch(si, own, color, glyph);
     return html`${swatch}<tspan dx="4">${s.label}</tspan>`;
   });
 

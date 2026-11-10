@@ -148,6 +148,8 @@ const TEXT_PAIRS: [string, string][] = [
   ]),
   ['ok-ink', 'surface'],
   ['accent', 'ok-soft'],
+  // Potluck's notice: body text on the accent tint.
+  ['fg', 'accent-soft'],
 ];
 
 /** Non-text that carries meaning: 3:1 (WCAG 1.4.11). */
@@ -174,6 +176,7 @@ const UI_PAIRS: [string, string][] = [
 ];
 
 const PALETTES = paletteTokens(STYLE.value);
+const CHART_TOKENS = ['chart-1', 'chart-2', 'chart-3', 'chart-4', 'chart-5'];
 const THEMES = PALETTES.night;
 
 describe('colour tokens', () => {
@@ -188,6 +191,15 @@ describe('colour tokens', () => {
     );
     expect(Object.keys(THEMES.light).length).toBeGreaterThan(15);
   });
+
+  it.each(['light', 'dark'] as const)(
+    '%s: the attribute fallbacks (CHART_COLORS) meet 3:1 on the default --surface',
+    (mode) => {
+      for (const color of CHART_COLORS) {
+        expect(contrast(color, THEMES[mode].surface)).toBeGreaterThanOrEqual(3);
+      }
+    },
+  );
 
   it('offers the four palettes the header picker lists, each with every colour token', () => {
     expect(Object.keys(PALETTES).sort()).toEqual([...PALETTE_IDS].sort());
@@ -234,22 +246,26 @@ describe('colour tokens', () => {
       );
 
       describe.each(['light', 'dark'] as const)('%s', (mode) => {
-        it.each(CHART_COLORS.map((c, i) => [i + 1, c] as const))(
-          'series %i (%s) meets 3:1 on --surface',
-          (_i, color) => {
-            expect(
-              contrast(color, THEMES[mode].surface),
-            ).toBeGreaterThanOrEqual(3);
+        it.each(CHART_TOKENS)(
+          'series --%s meets 3:1 on --surface and --raised',
+          (token) => {
+            const t = THEMES[mode];
+            expect(t[token], `--${token}`).toBeDefined();
+            expect(contrast(t[token], t.surface)).toBeGreaterThanOrEqual(3);
+            expect(contrast(t[token], t.raised)).toBeGreaterThanOrEqual(3);
           },
         );
-      });
 
-      it('keeps series 3 (green) well apart in lightness from series 1 and 2', () => {
-        // Red-green and blue-green deficiencies mostly leave lightness, so
-        // the first three series must not share it.
-        const [blurple, coral, green] = CHART_COLORS.map(lightness);
-        expect(Math.abs(green - blurple)).toBeGreaterThanOrEqual(10);
-        expect(Math.abs(green - coral)).toBeGreaterThanOrEqual(10);
+        it('keeps series 3 well apart in lightness from series 1 and 2', () => {
+          // Red-green and blue-green deficiencies mostly leave lightness, so
+          // the first three series must not share it.
+          const t = THEMES[mode];
+          const [one, two, three] = CHART_TOKENS.slice(0, 3).map((k) =>
+            lightness(t[k]),
+          );
+          expect(Math.abs(three - one)).toBeGreaterThanOrEqual(10);
+          expect(Math.abs(three - two)).toBeGreaterThanOrEqual(10);
+        });
       });
 
       it.each(['light', 'dark'] as const)(
