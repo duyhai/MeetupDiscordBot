@@ -1,4 +1,10 @@
-import { Client, EmbedBuilder, TextChannel, escapeMarkdown } from 'discord.js';
+import {
+  Client,
+  EmbedBuilder,
+  NewsChannel,
+  TextChannel,
+  escapeMarkdown,
+} from 'discord.js';
 import { Logger } from 'tslog';
 
 import {
@@ -36,6 +42,11 @@ function describeSendError(error: unknown): string {
   return `${error.name}${safeCode}${httpStatus}`;
 }
 
+/** A guild text channel or an announcement (news) channel: where a bot posts an embed. */
+function isPostable(channel: unknown): channel is TextChannel | NewsChannel {
+  return channel instanceof TextChannel || channel instanceof NewsChannel;
+}
+
 function logPostFailure(channelId: string, entry: LogEntry, error: unknown) {
   // Channel ids are all digits, so they are safe to log.
   logger.warn(
@@ -43,25 +54,29 @@ function logPostFailure(channelId: string, entry: LogEntry, error: unknown) {
   );
 }
 
+/** A post that landed, with the new message's id when Discord returned one. */
+export interface PostedEmbed {
+  messageId: string | undefined;
+}
+
 /**
- * Posts an embed to a log channel. Deliberately swallows every error:
- * Discord logging must never break the command that triggered it.
- *
- * Returns whether the post actually landed. Most callers ignore it -- but a
- * caller that consumed a once-a-day claim to get here needs to know, or an
- * outage silently costs the whole day's digest with no retry.
+ * Posts an embed to a channel: the landed post, or undefined when it did not
+ * land. Deliberately swallows every error: Discord posting must never break
+ * the command or job that triggered it. The one send path for every embed
+ * this module posts: no content, and no mention type is parsed, so nothing
+ * here can ping anyone.
  */
-async function postToChannel(
+export async function postEmbed(
   client: Client,
   channelId: string,
   color: number,
   entry: LogEntry,
-): Promise<boolean> {
+): Promise<PostedEmbed | undefined> {
   try {
     const channel = await client.channels.fetch(channelId);
-    if (!(channel instanceof TextChannel)) {
+    if (!isPostable(channel)) {
       logger.warn(`Log channel ${channelId} is missing or not a text channel`);
-      return false;
+      return undefined;
     }
     const embed = new EmbedBuilder()
       .setTitle(entry.title)
@@ -73,17 +88,33 @@ async function postToChannel(
     (entry.fields ?? []).forEach((field) => {
       embed.addFields(field);
     });
-    await channel.send({
+    const sent = await channel.send({
       embeds: [embed],
       // Nothing this bot logs ever pings (Hai, 2026-10-16): embeds never
       // ping, nothing here sends content, and no mention type is parsed.
       allowedMentions: { parse: [] },
     });
-    return true;
+    const id: unknown = (sent as { id?: unknown } | undefined)?.id;
+    return { messageId: typeof id === 'string' && id !== '' ? id : undefined };
   } catch (error) {
     logPostFailure(channelId, entry, error);
-    return false;
+    return undefined;
   }
+}
+
+/**
+ * Posts an embed to a log channel; whether the post actually landed. Most
+ * callers ignore it -- but a caller that consumed a once-a-day claim to get
+ * here needs to know, or an outage silently costs the whole day's digest
+ * with no retry.
+ */
+async function postToChannel(
+  client: Client,
+  channelId: string,
+  color: number,
+  entry: LogEntry,
+): Promise<boolean> {
+  return (await postEmbed(client, channelId, color, entry)) !== undefined;
 }
 
 export async function logActivity(
@@ -141,7 +172,7 @@ export async function recentEmbedTitles(
       return undefined;
     }
     const channel = await client.channels.fetch(channelId);
-    if (!(channel instanceof TextChannel)) {
+    if (!isPostable(channel)) {
       return undefined;
     }
     const messages = await channel.messages.fetch({ limit });

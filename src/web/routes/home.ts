@@ -20,9 +20,17 @@ import {
   PARKED_STATUSES,
   WorkspaceStatus,
 } from '../../lib/workspace/types.js';
+import {
+  announceDueAt,
+  announceSchedule,
+  announceYear,
+  isPastYear,
+} from '../../lib/wrapped/announce.js';
+import type { HomeReportsView } from '../dashboardRouter.js';
 import { SafeHtml, html, localUrl } from '../html.js';
 import { monthCell, pacificDateTime, zeroNoShowNote } from '../pageKit.js';
 import type { DashboardPageDeps } from './dashboardPages.js';
+import { WRAPPED_ANNOUNCE_PATH, wrappedNotice } from './wrappedAnnounce.js';
 
 const logger = new Logger({ name: 'dashboard' });
 
@@ -182,14 +190,80 @@ async function workspaceCard(
 }
 
 /**
+ * The Wrapped announcement: what is configured (date and hour Pacific, the
+ * channel), whether this year's post went out (when, where), and Post now
+ * for Leadership while it has not. The form needs the session's CSRF token;
+ * a render without one (a bare card) shows the state only. Ids are digits,
+ * so they are shown as text, never as links.
+ */
+async function wrappedCard(
+  deps: Pick<DashboardPageDeps, 'now' | 'wrappedAnnounce'>,
+  view: Partial<HomeReportsView>,
+): Promise<SafeHtml> {
+  const config = deps.wrappedAnnounce.config();
+  const schedule = announceSchedule(config, deps.now());
+  const status = await deps.wrappedAnnounce.status();
+  const posted = status?.postedAt !== undefined;
+  const state = posted
+    ? html`<p>
+        Posted ${pacificDateTime(status.postedAt)} Pacific in channel
+        ${status.channelId ?? 'unknown'}${
+          status.messageId ? html` (message ${status.messageId})` : ''
+        }.
+      </p>`
+    : config.date !== undefined
+      ? html`<p>Not posted yet for ${announceYear({ date: config.date })}.</p>`
+      : '';
+  let where: SafeHtml;
+  if (config.date === undefined) {
+    where = html`<p class="muted">
+      WRAPPED_ANNOUNCE_DATE is not a real date: nothing will be posted.
+    </p>`;
+  } else if (isPastYear({ date: config.date }, deps.now())) {
+    where = html`<p class="muted">
+      WRAPPED_ANNOUNCE_DATE is in a past year: nothing will be posted. Set it to
+      a date this year.
+    </p>`;
+  } else if (schedule === undefined) {
+    where = html`<p class="muted">
+      WRAPPED_ANNOUNCE_CHANNEL_ID is not set: nothing will be posted.
+    </p>`;
+  } else {
+    where = html`<p class="muted">
+      Scheduled for ${pacificDateTime(announceDueAt(schedule))} Pacific in
+      channel ${schedule.channelId}.
+    </p>`;
+  }
+  const form =
+    !posted && schedule !== undefined && view.csrfToken !== undefined
+      ? html`<form method="post" action="${localUrl(WRAPPED_ANNOUNCE_PATH)}">
+          <input type="hidden" name="_csrf" value="${view.csrfToken}" />
+          <button type="submit" class="ghost">Post now</button>
+          <span class="muted">1.5 Leadership Team only.</span>
+        </form>`
+      : '';
+  return html`<div class="card">
+    <h2>Wrapped announcement</h2>
+    ${wrappedNotice(view.notice)} ${where} ${state} ${form}
+  </div>`;
+}
+
+/**
  * The Home page's report cards. Reads summaries and meta only, never a full
- * payload. Never rejects: each card degrades on its own.
+ * payload. Never rejects: each card degrades on its own. `view` carries the
+ * CSRF token for the cards' own forms and the `?wrapped=` notice code.
  */
 export async function renderHomeReports(
   deps: Pick<
     DashboardPageDeps,
-    'now' | 'snapshots' | 'identity' | 'linkProgress' | 'workspace'
+    | 'now'
+    | 'snapshots'
+    | 'identity'
+    | 'linkProgress'
+    | 'workspace'
+    | 'wrappedAnnounce'
   >,
+  view: Partial<HomeReportsView> = {},
 ): Promise<SafeHtml> {
   let timer: NodeJS.Timeout | undefined;
   try {
@@ -206,7 +280,7 @@ export async function renderHomeReports(
     const workspaceMonthsShown = [finished, open].filter((p) =>
       isWorkspaceMonth(p, now),
     );
-    const [workspace, finishedCard, openCard, identityCard, linkCard] =
+    const [workspace, finishedCard, openCard, identityCard, linkCard, wrapped] =
       await Promise.all([
         card('workspace', deadline, () =>
           workspaceCard(deps, workspaceMonthsShown),
@@ -250,9 +324,10 @@ export async function renderHomeReports(
             }
           </div>`;
         }),
+        card('wrapped', deadline, () => wrappedCard(deps, view)),
       ]);
     // The workspace card first: it is what staff act on.
-    return html`${workspace}${finishedCard}${openCard}${identityCard}${linkCard}`;
+    return html`${workspace}${finishedCard}${openCard}${identityCard}${linkCard}${wrapped}`;
   } catch (error) {
     logger.warn(
       `Dashboard home reports failed: ${error instanceof Error ? error.name : 'Error'}`,

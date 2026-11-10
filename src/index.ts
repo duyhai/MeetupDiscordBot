@@ -12,6 +12,10 @@ import { registerMemberLeaveListener } from './lib/helpers/memberLeave.js';
 import { startEventAuditScheduler } from './lib/eventAudit/job.js';
 import { startAnnounceScheduler } from './lib/hosts/announceTick.js';
 import { startReportBuildScheduler } from './lib/reports/buildJob.js';
+import {
+  productionWrappedAnnounceDeps,
+  startWrappedAnnounceScheduler,
+} from './lib/wrapped/announce.js';
 import { productionAnnounceTickDeps } from './web/host/hostServices.js';
 import { setDashboardClient } from './web/dashboardDeps.js';
 import { setHostClient } from './web/host/hostDeps.js';
@@ -62,6 +66,9 @@ client.once('clientReady', async () => {
   startEventAuditScheduler(client);
   startAnnounceScheduler(client, () =>
     productionAnnounceTickDeps(() => client),
+  );
+  startWrappedAnnounceScheduler(client, () =>
+    productionWrappedAnnounceDeps(() => client),
   );
   // The express OAuth routes run outside discordCommandWrapper, so without a
   // client their failures reach nobody. Hand it over now that we can post.

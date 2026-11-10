@@ -404,6 +404,7 @@ function within<T>(promise: Promise<T>, ms: number): Promise<T> {
             'dashboard_notices',
             'link_progress_daily',
             'report_snapshots',
+            'wrapped_announcements',
           ]);
         } finally {
           // The schema is dropped first, in its own try, so a failure in
