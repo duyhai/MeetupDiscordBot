@@ -34,6 +34,7 @@ const DETAILS: AnnounceEventDetails = {
   dateTime: EVENT.dateTime,
   createdTime: '2026-11-01T12:00:00-08:00',
   rsvpState: 'RSVP',
+  rsvpsClosed: false,
   hosts: EVENT.hosts,
 };
 
@@ -162,13 +163,25 @@ describe('announceHostEvent', () => {
 
   describe('pre-checks', () => {
     it('refuses while RSVPs are not open, before any claim', async () => {
-      for (const rsvpState of ['NOT_OPEN_YET', 'CLOSED']) {
-        const { store, deps, run } = setup({ details: { rsvpState } });
+      for (const details of [
+        { rsvpState: 'NOT_OPEN_YET' },
+        { rsvpState: 'CLOSED' },
+        { rsvpsClosed: true },
+      ]) {
+        const { store, deps, run } = setup({ details });
         // eslint-disable-next-line no-await-in-loop
         await expect(run()).resolves.toBe('rsvps-closed');
         expect(store.claim).not.toHaveBeenCalled();
         expect(deps.announce).not.toHaveBeenCalled();
       }
+    });
+
+    it('Meetup saying nothing about RSVPs is unknown, not open', async () => {
+      const { store, run } = setup({
+        details: { rsvpState: null, rsvpsClosed: null },
+      });
+      await expect(run()).resolves.toBe('rsvps-unknown');
+      expect(store.claim).not.toHaveBeenCalled();
     });
 
     it('refuses an event within 7 days that was created more than 7 days before it', async () => {

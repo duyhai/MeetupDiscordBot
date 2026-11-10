@@ -148,6 +148,7 @@ function announceApp(
             ? '2026-11-02T12:00:00-08:00'
             : '2026-10-01T12:00:00-07:00',
         rsvpState: 'RSVP',
+        rsvpsClosed: false,
         hosts: event.hosts,
         ...options.details,
       };
@@ -486,6 +487,17 @@ describe('Recreate and announce', () => {
     expect(await home('?announce=recreated')).toContain(
       'your event was recreated',
     );
+    for (const code of ['recreated-scheduled', 'recreated-old-kept'] as const) {
+      // eslint-disable-next-line no-await-in-loop
+      const text = await home(`?announce=${code}`);
+      expect(text).toContain('note info');
+    }
+    expect(await home('?announce=recreated-scheduled')).toContain(
+      'goes out at the time shown',
+    );
+    expect(await home('?announce=recreated-old-kept')).toContain(
+      'asked to cancel it',
+    );
   });
 
   it('every refusal has its own notice', async () => {
@@ -493,6 +505,7 @@ describe('Recreate and announce', () => {
       'has-rsvps',
       'already-recreated',
       'announce-failed',
+      'cancel-failed',
     ] as const) {
       // eslint-disable-next-line no-await-in-loop
       const { recreatePost, home } = await setup({ recreate: { code } });

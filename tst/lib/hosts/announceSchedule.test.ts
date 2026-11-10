@@ -7,7 +7,7 @@ import {
   isHeldHour,
   isImmediate,
   pastMeetupCutoff,
-  rsvpsOpen,
+  rsvpOpenness,
 } from '../../../src/lib/hosts/announceSchedule.js';
 
 // Tue 10 Nov 2026: PST (UTC-8).
@@ -73,10 +73,48 @@ describe('announceDueAt', () => {
     expect(announceDueAt(now, notSoon, [])).toEqual(at('2026-11-10T16:00:00'));
   });
 
-  it('isImmediate: now or within a minute', () => {
+  it('a push that lands inside work hours is held, then spaced again', () => {
+    // 09:45 Tue, another at 09:50: pushed to 10:20, inside the hold → 16:00.
+    const now = at('2026-11-10T09:45:00');
+    expect(announceDueAt(now, START, [at('2026-11-10T09:50:00')])).toEqual(
+      at('2026-11-10T16:00:00'),
+    );
+    // And one already at 16:00 that day pushes it to 16:30.
+    expect(
+      announceDueAt(now, START, [
+        at('2026-11-10T09:50:00'),
+        at('2026-11-10T16:00:00'),
+      ]),
+    ).toEqual(at('2026-11-10T16:30:00'));
+  });
+
+  it('isImmediate: now, never a push', () => {
     const now = at('2026-11-10T19:30:00');
     expect(isImmediate(now, now)).toBe(true);
-    expect(isImmediate(at('2026-11-10T19:31:30'), now)).toBe(false);
+    expect(isImmediate(at('2026-11-10T19:30:30'), now)).toBe(false);
+  });
+
+  it('holds across DST: spring forward and fall back days', () => {
+    // Sun 8 Mar 2026 02:00 PST → PDT. Mon 9 Mar 11:00 PDT is UTC-7.
+    const springMonday = new Date('2026-03-09T18:00:00Z'); // 11:00 PDT
+    expect(isHeldHour(springMonday)).toBe(true);
+    expect(announceDueAt(springMonday, START, [])).toEqual(
+      new Date('2026-03-09T23:00:00Z'), // 16:00 PDT
+    );
+    // Sun 1 Nov 2026 02:00 PDT → PST. Mon 2 Nov 11:00 PST is UTC-8.
+    const fallMonday = new Date('2026-11-02T19:00:00Z'); // 11:00 PST
+    expect(isHeldHour(fallMonday)).toBe(true);
+    expect(announceDueAt(fallMonday, START, [])).toEqual(
+      new Date('2026-11-03T00:00:00Z'), // 16:00 PST
+    );
+    // The 7-day cutoff is 7×24 h, so a DST day counts the same.
+    expect(
+      pastMeetupCutoff(
+        new Date('2026-11-01T12:00:00Z'),
+        new Date('2026-11-07T12:00:00Z'),
+        new Date('2026-10-01T12:00:00Z'),
+      ),
+    ).toBe(true);
   });
 });
 
@@ -106,13 +144,18 @@ describe('advice', () => {
     expect(isFarOut(at('2026-11-20T12:00:00'), START)).toBe(false);
   });
 
-  it('reads Meetup’s rsvpState: not open yet or closed means not open', () => {
-    expect(rsvpsOpen('NOT_OPEN_YET')).toBe(false);
-    expect(rsvpsOpen('CLOSED')).toBe(false);
-    expect(rsvpsOpen('RSVP')).toBe(true);
-    expect(rsvpsOpen('YES')).toBe(true);
-    expect(rsvpsOpen('FULL')).toBe(true);
-    expect(rsvpsOpen(null)).toBe(true);
+  it('RSVPs are open only when neither rsvpsClosed nor rsvpState says closed; neither known is unknown', () => {
+    const o = (rsvpsClosed: boolean | null, rsvpState: string | null) =>
+      rsvpOpenness({ rsvpsClosed, rsvpState });
+    expect(o(false, 'RSVP')).toBe('open');
+    expect(o(false, 'YES')).toBe('open');
+    expect(o(false, 'FULL')).toBe('open');
+    expect(o(true, 'RSVP')).toBe('closed');
+    expect(o(false, 'NOT_OPEN_YET')).toBe('closed');
+    expect(o(false, 'CLOSED')).toBe('closed');
+    expect(o(null, 'RSVP')).toBe('open');
+    expect(o(false, null)).toBe('open');
+    expect(o(null, null)).toBe('unknown');
   });
 
   it('labels a due time in Pacific', () => {

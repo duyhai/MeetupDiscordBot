@@ -60,10 +60,14 @@ export interface Announcement {
 /** A recreated event: the old one, cancelled, and the new one announced instead. */
 export interface Recreation {
   oldEventId: string;
-  newEventId: string;
+  /** null while the copy is being made (a claim). */
+  newEventId: string | null;
   requestedBy: string;
   createdAt: Date;
 }
+
+/** A recreation claim whose copy never arrived this long ago may be taken over. */
+export const RECREATION_STALE_MS = 10 * 60 * 1000;
 
 /**
  * Idempotent; runs under the dashboard schema lock. One row per Meetup
@@ -87,10 +91,11 @@ CREATE INDEX IF NOT EXISTS event_announcements_due_idx
   ON event_announcements (due_at) WHERE status = 'held';
 CREATE TABLE IF NOT EXISTS event_recreations (
   old_event_id TEXT PRIMARY KEY CHECK (old_event_id ~ '^[0-9]{1,20}$'),
-  new_event_id TEXT NOT NULL UNIQUE CHECK (new_event_id ~ '^[0-9]{1,20}$'),
+  new_event_id TEXT UNIQUE CHECK (new_event_id ~ '^[0-9]{1,20}$'),
   requested_by TEXT NOT NULL CHECK (requested_by ~ ${MEETUP_ID_SQL}),
   created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+ALTER TABLE event_recreations ALTER COLUMN new_event_id DROP NOT NULL;
 `;
 
 export async function ensureEventAnnouncementSchema(
@@ -236,7 +241,7 @@ export class PostgresEventAnnouncementRepository {
   }
 
   /** Held rows whose time has come, earliest first. */
-  async due(now: Date, limit = 20): Promise<Announcement[]> {
+  async due(now: Date, limit = 1): Promise<Announcement[]> {
     const { rows } = await this.pool.query<Row>(
       `SELECT * FROM event_announcements
         WHERE status = 'held' AND due_at <= $1
@@ -265,18 +270,47 @@ export class PostgresEventAnnouncementRepository {
     return (rowCount ?? 0) > 0;
   }
 
+  /** A held row's new due time (the tick's spacing at send time). */
+  async defer(meetupEventId: string, dueAt: Date): Promise<void> {
+    if (!EVENT_ID.test(meetupEventId)) {
+      return;
+    }
+    await this.pool.query(
+      `UPDATE event_announcements SET due_at = $2
+        WHERE meetup_event_id = $1 AND status = 'held'`,
+      [meetupEventId, dueAt],
+    );
+  }
+
+  /** sending → held again, due time kept (the tick could not send after all). */
+  async unclaim(meetupEventId: string): Promise<void> {
+    if (!EVENT_ID.test(meetupEventId)) {
+      return;
+    }
+    await this.pool.query(
+      `UPDATE event_announcements SET status = 'held'
+        WHERE meetup_event_id = $1 AND status = 'sending' AND due_at IS NOT NULL`,
+      [meetupEventId],
+    );
+  }
+
   /**
    * When other announcements go or went out, for the spacing rule: held
-   * ones at their due time, sends under way and sent ones at their time,
-   * from `since` on. Never this event's own row.
+   * ones at their due time, sends under way at their start, sent ones at
+   * the time they went out (completed_at, whatever they were due), from
+   * `since` on. Never this event's own row.
    */
   async otherTimes(exceptEventId: string, since: Date): Promise<Date[]> {
     const { rows } = await this.pool.query<{ at: Date }>(
-      `SELECT COALESCE(due_at, completed_at, requested_at) AS at
-         FROM event_announcements
+      `SELECT at FROM (
+         SELECT meetup_event_id, status,
+                CASE WHEN status = 'sent' THEN COALESCE(completed_at, requested_at)
+                     ELSE COALESCE(due_at, requested_at) END AS at
+           FROM event_announcements
+       ) t
         WHERE meetup_event_id <> $1
           AND status IN ('held', 'sending', 'sent')
-          AND COALESCE(due_at, completed_at, requested_at) >= $2`,
+          AND at >= $2`,
       [exceptEventId, since],
     );
     return rows.map((r) => r.at);
@@ -322,22 +356,52 @@ export class PostgresEventAnnouncementRepository {
     return rows[0] ? toAnnouncement(rows[0]) : undefined;
   }
 
-  /** Records that `newEventId` replaces `oldEventId`; false when the old one was recreated before. */
-  async recordRecreation(
+  /**
+   * Takes `oldEventId` for a recreation: a new row with no copy yet. False
+   * when a row exists, unless it is a claim with no copy older than
+   * RECREATION_STALE_MS (its maker died), which is taken over.
+   */
+  async claimRecreation(
     oldEventId: string,
-    newEventId: string,
     requestedBy: string,
   ): Promise<boolean> {
-    if (!EVENT_ID.test(oldEventId) || !EVENT_ID.test(newEventId)) {
+    if (!EVENT_ID.test(oldEventId)) {
       throw new RangeError('not a Meetup event id');
     }
     const { rowCount } = await this.pool.query(
-      `INSERT INTO event_recreations (old_event_id, new_event_id, requested_by)
-       VALUES ($1, $2, $3)
-       ON CONFLICT (old_event_id) DO NOTHING`,
-      [oldEventId, newEventId, requestedBy],
+      `INSERT INTO event_recreations (old_event_id, requested_by)
+       VALUES ($1, $2)
+       ON CONFLICT (old_event_id) DO UPDATE
+         SET requested_by = EXCLUDED.requested_by, created_at = now()
+         WHERE event_recreations.new_event_id IS NULL
+           AND event_recreations.created_at < now() - make_interval(secs => $3)`,
+      [oldEventId, requestedBy, RECREATION_STALE_MS / 1000],
     );
     return (rowCount ?? 0) > 0;
+  }
+
+  /** Fills the claim with the copy Meetup made. */
+  async fillRecreation(oldEventId: string, newEventId: string): Promise<void> {
+    if (!EVENT_ID.test(oldEventId) || !EVENT_ID.test(newEventId)) {
+      throw new RangeError('not a Meetup event id');
+    }
+    await this.pool.query(
+      `UPDATE event_recreations SET new_event_id = $2
+        WHERE old_event_id = $1 AND new_event_id IS NULL`,
+      [oldEventId, newEventId],
+    );
+  }
+
+  /** Drops a claim whose copy was never made; a filled row stays. */
+  async releaseRecreation(oldEventId: string): Promise<void> {
+    if (!EVENT_ID.test(oldEventId)) {
+      return;
+    }
+    await this.pool.query(
+      `DELETE FROM event_recreations
+        WHERE old_event_id = $1 AND new_event_id IS NULL`,
+      [oldEventId],
+    );
   }
 
   async recreationOf(oldEventId: string): Promise<Recreation | undefined> {
@@ -346,7 +410,7 @@ export class PostgresEventAnnouncementRepository {
     }
     const { rows } = await this.pool.query<{
       old_event_id: string;
-      new_event_id: string;
+      new_event_id: string | null;
       requested_by: string;
       created_at: Date;
     }>('SELECT * FROM event_recreations WHERE old_event_id = $1', [oldEventId]);

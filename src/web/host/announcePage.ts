@@ -116,8 +116,28 @@ export const ANNOUNCE_NOTICES: Record<
   recreated: {
     ok: true,
     text:
-      'Done: your event was recreated and the copy is announced (or scheduled, ' +
-      'see below); the old one is cancelled. RSVPs were open on the copy.',
+      'Done: your event was recreated and the copy is announced; the old one ' +
+      'is cancelled. RSVPs are open on the copy.',
+  },
+  'recreated-scheduled': {
+    ok: true,
+    text:
+      'Done: your event was recreated and the old one is cancelled. The copy’s ' +
+      'announcement goes out at the time shown by it below; you can cancel ' +
+      'that until then.',
+  },
+  'recreated-old-kept': {
+    ok: true,
+    text:
+      'Your event was recreated and the copy is announced (or scheduled, see ' +
+      'below). The old one is still on Meetup for now: the organizers have ' +
+      'been asked to cancel it.',
+  },
+  'rsvps-unknown': {
+    ok: false,
+    text:
+      'Meetup did not say whether RSVPs are open for that event. Check it on ' +
+      'Meetup, then try again.',
   },
   'has-rsvps': {
     ok: false,
@@ -143,8 +163,9 @@ export const ANNOUNCE_NOTICES: Record<
     ok: false,
     text:
       'The copy was created, but its announcement did not go out, so the old ' +
-      'event was left in place. The organizers have been told; they will sort ' +
-      'out which one stays.',
+      'event was left in place. The organizers have been told; they will ' +
+      'announce the copy and cancel the old one by hand. Nothing more to do ' +
+      'here.',
   },
   'cancel-failed': {
     ok: false,

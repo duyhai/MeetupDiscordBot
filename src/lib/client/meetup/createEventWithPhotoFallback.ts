@@ -19,6 +19,7 @@ const logger = new Logger({ name: 'createEventWithPhotoFallback' });
 export async function createEventWithPhotoFallback(
   meetupClient: EventCreator,
   input: CreateEventInput,
+  options: { onPhotoDropped?: () => void } = {},
 ): Promise<CreateEventResponse> {
   try {
     return await meetupClient.createEvent(input);
@@ -41,6 +42,7 @@ export async function createEventWithPhotoFallback(
     logger.warn(
       `createEvent rejected featured photo ${input.featuredPhotoId}; retrying without it`,
     );
+    options.onPhotoDropped?.();
     const withoutPhoto = { ...input };
     delete withoutPhoto.featuredPhotoId;
     return meetupClient.createEvent(withoutPhoto);

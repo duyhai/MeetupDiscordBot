@@ -367,6 +367,44 @@ export function copySettings(
   };
 }
 
+/** What a createEvent input is built from: a request's settings plus its title, time and hosts. */
+export type CreateInputFields = RequestSettings & {
+  /** As it should appear on Meetup, prefix included. */
+  title: string;
+  startLocal: string;
+  hostIds: string[];
+};
+
+/** The Meetup input for `fields`: the template plus them, published. */
+export function buildCreateInput(fields: CreateInputFields): CreateEventInput {
+  const input: CreateEventInput = {
+    ...createEventTemplate,
+    title: fields.title,
+    description: fields.description,
+    startDateTime: fields.startLocal,
+    duration: fields.duration,
+    eventHosts: fields.hostIds.map(Number),
+    rsvpSettings: {
+      ...TEMPLATE_RSVP,
+      rsvpLimit: fields.rsvpLimit,
+      guestLimit: fields.guestLimit,
+    },
+    publishStatus: 'PUBLISHED',
+  };
+  if (fields.featuredPhotoId === null) {
+    delete input.featuredPhotoId;
+  } else {
+    input.featuredPhotoId = fields.featuredPhotoId;
+  }
+  if (fields.venueId !== null) {
+    input.venueId = fields.venueId;
+  }
+  if (fields.howToFindUs !== null) {
+    input.howToFindUs = fields.howToFindUs;
+  }
+  return input;
+}
+
 /**
  * The Meetup input for a request. The prefix follows `tierAtPublish`, the
  * tier re-checked when it is published, not the one it was submitted with.
@@ -375,32 +413,11 @@ export function createInputFor(
   request: EventRequest,
   tierAtPublish: HostTier,
 ): CreateEventInput {
-  const input: CreateEventInput = {
-    ...createEventTemplate,
+  return buildCreateInput({
+    ...request,
     title: `${prefixFor(tierAtPublish)}${request.title}`,
-    description: request.description,
-    startDateTime: request.startLocal,
-    duration: request.duration,
-    eventHosts: [Number(request.meetupMemberId)],
-    rsvpSettings: {
-      ...TEMPLATE_RSVP,
-      rsvpLimit: request.rsvpLimit,
-      guestLimit: request.guestLimit,
-    },
-    publishStatus: 'PUBLISHED',
-  };
-  if (request.featuredPhotoId === null) {
-    delete input.featuredPhotoId;
-  } else {
-    input.featuredPhotoId = request.featuredPhotoId;
-  }
-  if (request.venueId !== null) {
-    input.venueId = request.venueId;
-  }
-  if (request.howToFindUs !== null) {
-    input.howToFindUs = request.howToFindUs;
-  }
-  return input;
+    hostIds: [request.meetupMemberId],
+  });
 }
 
 /**

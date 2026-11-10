@@ -14,7 +14,7 @@ import {
   dueLabel,
   isImmediate,
   pastMeetupCutoff,
-  rsvpsOpen,
+  rsvpOpenness,
 } from './announceSchedule.js';
 import { HostEvent } from './hostEvents.js';
 
@@ -31,6 +31,7 @@ const logger = new Logger({ name: 'hostAnnounce' });
  * - failed: Meetup refused it;
  * - not-yours: not one of the host's own upcoming events;
  * - rsvps-closed: RSVPs are not open yet (open them on Meetup first);
+ * - rsvps-unknown: Meetup did not say whether RSVPs are open (check by hand);
  * - too-late: within 7 days of the start and created more than 7 days
  *   before it, which Meetup refuses to announce (the page offers
  *   "Recreate and announce" when the event has no other RSVPs).
@@ -46,6 +47,7 @@ export type AnnounceCode =
   | 'failed'
   | 'not-yours'
   | 'rsvps-closed'
+  | 'rsvps-unknown'
   | 'too-late';
 
 /** What the pre-checks read about the event (the organizer credential). */
@@ -59,6 +61,8 @@ export interface AnnounceEventDetails {
   createdTime: string | null;
   /** Meetup's rsvpState, or null when it does not say. */
   rsvpState: string | null;
+  /** rsvpSettings.rsvpsClosed, or null when Meetup does not say. */
+  rsvpsClosed: boolean | null;
   hosts: { id: string; name: string }[];
 }
 
@@ -174,7 +178,19 @@ export function announceAlertFields(
   ];
 }
 
-export type DeliveryCode = 'sent' | 'already' | 'failed' | 'unconfirmed';
+export type DeliveryCode =
+  'sent' | 'already' | 'failed' | 'unconfirmed' | 'deferred';
+
+export interface DeliveryOptions {
+  /** Words the alerts only. */
+  how?: 'now' | 'scheduled';
+  /**
+   * The organizer credential could not be had, so nothing was called:
+   * when set, it runs (the tick puts the row back on hold) and the code
+   * is 'deferred'; otherwise that is a plain failure.
+   */
+  onNoToken?: () => Promise<void>;
+}
 
 /**
  * The send itself, for a row already claimed as `sending` (by a click or
@@ -186,8 +202,9 @@ export async function deliverAnnouncement(
   store: Pick<AnnounceStore, 'finish'>,
   event: { id: string; title: string; eventUrl: string },
   hostName: string,
-  how: 'now' | 'scheduled' = 'now',
+  options: DeliveryOptions = {},
 ): Promise<DeliveryCode> {
+  const how = options.how ?? 'now';
   const finish = async (
     status: Exclude<AnnouncementStatus, 'sending' | 'held' | 'cancelled'>,
     failure: string | null = null,
@@ -207,6 +224,13 @@ export async function deliverAnnouncement(
   try {
     await deps.announce(event.id);
   } catch (error: unknown) {
+    if (
+      error instanceof OrganizerTokenUnavailableError &&
+      options.onNoToken !== undefined
+    ) {
+      await options.onNoToken();
+      return 'deferred';
+    }
     const answer = meetupAnswer(error);
     if (answer.answered && answer.already) {
       await finish('sent');
@@ -280,8 +304,9 @@ export async function requestAnnouncement(
   if (details === undefined) {
     return 'not-yours';
   }
-  if (!rsvpsOpen(details.rsvpState)) {
-    return 'rsvps-closed';
+  const openness = rsvpOpenness(details);
+  if (openness !== 'open') {
+    return openness === 'closed' ? 'rsvps-closed' : 'rsvps-unknown';
   }
   const now = deps.now();
   const start = new Date(details.dateTime);
@@ -310,7 +335,9 @@ export async function requestAnnouncement(
     return codeOf(claim.current);
   }
   hooks.onClaimed?.();
-  return deliverAnnouncement(deps, store, event, host.name, 'now');
+  const code = await deliverAnnouncement(deps, store, event, host.name);
+  // 'deferred' needs onNoToken, which a click never passes.
+  return code === 'deferred' ? 'failed' : code;
 }
 
 /**

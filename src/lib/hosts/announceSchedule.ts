@@ -64,12 +64,17 @@ export function announceDueAt(
   ) {
     return now;
   }
-  let due = isHeldHour(now) ? holdEnd(now).valueOf() : now.getTime();
+  let due = now.getTime();
   const times = [...others].map((d) => d.getTime()).sort((a, b) => a - b);
-  // Each push can land on another one, so go round until clear.
+  // Each push can land on another one, or inside the work-hours hold, so
+  // go round until clear: the hold is applied after the spacing too.
   let moved = true;
   while (moved) {
     moved = false;
+    if (isHeldHour(new Date(due))) {
+      due = holdEnd(new Date(due)).valueOf();
+      moved = true;
+    }
     for (const other of times) {
       if (within(due, other, SPACING_MS)) {
         due = other + SPACING_MS;
@@ -80,9 +85,9 @@ export function announceDueAt(
   return new Date(due);
 }
 
-/** Whether the due time is now (within a minute), not a hold. */
+/** Whether the due time is now, not a hold. */
 export const isImmediate = (due: Date, now: Date): boolean =>
-  due.getTime() - now.getTime() < 60 * 1000;
+  due.getTime() <= now.getTime();
 
 /**
  * Meetup refuses to announce an event within MEETUP_CUTOFF_DAYS of its
@@ -110,8 +115,25 @@ export function isFarOut(now: Date, eventStart: Date): boolean {
 /** Meetup's rsvpState values that mean members cannot RSVP yet. */
 const RSVPS_NOT_OPEN = new Set(['NOT_OPEN_YET', 'CLOSED']);
 
-export const rsvpsOpen = (rsvpState: string | null | undefined): boolean =>
-  !RSVPS_NOT_OPEN.has(rsvpState ?? '');
+/**
+ * Whether members can RSVP, from what Meetup says: rsvpSettings.rsvpsClosed
+ * (the organizer's switch) and rsvpState (as the organizer login sees it).
+ * Open only when neither says closed; unknown when Meetup gave neither,
+ * which the caller treats as "ask Meetup by hand", never as open.
+ */
+export function rsvpOpenness(details: {
+  rsvpsClosed: boolean | null;
+  rsvpState: string | null;
+}): 'open' | 'closed' | 'unknown' {
+  const { rsvpsClosed, rsvpState } = details;
+  if (rsvpsClosed === null && rsvpState === null) {
+    return 'unknown';
+  }
+  if (rsvpsClosed === true || RSVPS_NOT_OPEN.has(rsvpState ?? '')) {
+    return 'closed';
+  }
+  return 'open';
+}
 
 /** "Tue, Nov 17 at 4:00 PM" in Pacific time. */
 export const dueLabel = (due: Date): string =>

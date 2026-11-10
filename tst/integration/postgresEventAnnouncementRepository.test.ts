@@ -173,6 +173,8 @@ const EVENT = '311111111';
         repo.claimHeld(EVENT, now),
         repo.claimHeld(EVENT, now),
       ]);
+      // One per tick by default; more on request.
+      expect(await repo.due(now, 5)).toHaveLength(0);
       expect(claims.filter(Boolean)).toHaveLength(1);
       expect(await repo.claimHeld('2', now)).toBe(false);
       expect(await repo.claimHeld('3', now)).toBe(false);
@@ -201,18 +203,70 @@ const EVENT = '311111111';
       expect(times.map((t) => t.getTime())).toContain(soon.getTime());
     });
 
-    it('records a recreation once and reads it back', async () => {
-      expect(await repo.recordRecreation(EVENT, '2', HOST)).toBe(true);
-      expect(await repo.recordRecreation(EVENT, '3', HOST)).toBe(false);
+    it('a recreation is claimed once, filled, and read back; a released claim can be taken again', async () => {
+      const claims = await Promise.all([
+        repo.claimRecreation(EVENT, HOST),
+        repo.claimRecreation(EVENT, OTHER),
+      ]);
+      expect(claims.filter(Boolean)).toHaveLength(1);
       expect(await repo.recreationOf(EVENT)).toMatchObject({
         oldEventId: EVENT,
-        newEventId: '2',
-        requestedBy: HOST,
+        newEventId: null,
+      });
+      await repo.fillRecreation(EVENT, '2');
+      expect(await repo.recreationOf(EVENT)).toMatchObject({ newEventId: '2' });
+      // Filled: never claimed again, never released.
+      expect(await repo.claimRecreation(EVENT, OTHER)).toBe(false);
+      await repo.releaseRecreation(EVENT);
+      expect(await repo.recreationOf(EVENT)).toMatchObject({ newEventId: '2' });
+      // A claim whose copy never came is released and can be taken again.
+      expect(await repo.claimRecreation('3', HOST)).toBe(true);
+      await repo.releaseRecreation('3');
+      expect(await repo.recreationOf('3')).toBeUndefined();
+      expect(await repo.claimRecreation('3', HOST)).toBe(true);
+      // A stale claim (its maker died) is taken over.
+      expect(await repo.claimRecreation('3', OTHER)).toBe(false);
+      await pool.query(
+        `UPDATE event_recreations SET created_at = now() - interval '11 minutes'
+          WHERE old_event_id = '3'`,
+      );
+      expect(await repo.claimRecreation('3', OTHER)).toBe(true);
+      expect(await repo.recreationOf('3')).toMatchObject({
+        requestedBy: OTHER,
       });
       expect(await repo.recreationOf('9')).toBeUndefined();
-      await expect(repo.recordRecreation('x', '2', HOST)).rejects.toThrow(
-        RangeError,
-      );
+      await expect(repo.claimRecreation('x', HOST)).rejects.toThrow(RangeError);
+    });
+
+    it('defer moves a held row’s time; unclaim puts a sending row back on hold', async () => {
+      const due = new Date(Date.now() - 60_000);
+      const later = new Date(Date.now() + 25 * 60_000);
+      await repo.hold(EVENT, HOST, due);
+      await repo.defer(EVENT, later);
+      expect((await repo.get(EVENT))?.dueAt).toEqual(later);
+      expect(await repo.due(new Date())).toEqual([]);
+      await repo.defer(EVENT, due);
+      expect(await repo.claimHeld(EVENT, new Date())).toBe(true);
+      await repo.unclaim(EVENT);
+      expect(await repo.get(EVENT)).toMatchObject({
+        status: 'held',
+        dueAt: due,
+      });
+      // A click's send (no due time) is not put on hold by unclaim.
+      await repo.claim('2', HOST);
+      await repo.unclaim('2');
+      expect((await repo.get('2'))?.status).toBe('sending');
+    });
+
+    it('otherTimes uses when a sent one actually went out, not when it was due', async () => {
+      const due = new Date(Date.now() - 2 * 60 * 60_000);
+      await repo.hold('2', HOST, due);
+      await repo.claimHeld('2', new Date());
+      await repo.finish('2', 'sent');
+      const since = new Date(Date.now() - 60 * 60_000);
+      const times = await repo.otherTimes(EVENT, since);
+      expect(times).toHaveLength(1);
+      expect(times[0].getTime()).toBeGreaterThan(since.getTime());
     });
 
     it('a table made before the hold column gains it and the new statuses', async () => {

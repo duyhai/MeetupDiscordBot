@@ -410,6 +410,7 @@ export interface GetEventForAnnounceResponse {
     dateTime: string;
     createdTime: string | null;
     rsvpState: string | null;
+    rsvpSettings: { rsvpsClosed: boolean | null } | null;
     status: EventStatus | null;
     eventHosts: { member: { id: string; name: string | null } | null }[] | null;
   } | null;

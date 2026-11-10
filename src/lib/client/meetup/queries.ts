@@ -359,6 +359,9 @@ export const getEventForAnnounce = gql`
       dateTime
       createdTime
       rsvpState
+      rsvpSettings {
+        rsvpsClosed
+      }
       status
       eventHosts {
         member {

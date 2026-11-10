@@ -5,13 +5,13 @@
  * copy the event (same content, photo, venue, hosts) and create the copy
  * with the organizer credential (no approval: the content is unchanged),
  * announce the copy under the usual hold rules, then cancel the old event
- * (never delete it). The link old→new is recorded. The old event is
- * untouched unless the new one exists and its announcement is on its way.
+ * (never delete it). The link old→new is claimed before the copy is made,
+ * so two clicks make one copy, and recorded. The old event is untouched
+ * unless the new one exists and its announcement is on its way.
  */
 import dayjs from 'dayjs';
 import { Logger } from 'tslog';
 
-import { createEventTemplate } from '../../templates/createEventTemplate.js';
 import {
   EventCreator,
   createEventWithPhotoFallback,
@@ -20,14 +20,22 @@ import { CreateEventInput } from '../client/meetup/types.js';
 import { LogEntry, alertText } from '../helpers/discordLogger.js';
 import { tz } from '../../util/timezone.js';
 import { AnnounceCode } from './announceEvent.js';
-import { CopySource, isHostOf } from './eventRequest.js';
+import {
+  CopySource,
+  buildCreateInput,
+  copyDefaults,
+  copySettings,
+  isHostOf,
+} from './eventRequest.js';
 import { classifyEventType } from './eventTypes.js';
-import { HostEvent } from './hostEvents.js';
+import { HostEvent, pacificDay } from './hostEvents.js';
 
 const logger = new Logger({ name: 'recreateEvent' });
 
 export type RecreateCode =
   | 'recreated'
+  | 'recreated-scheduled'
+  | 'recreated-old-kept'
   | 'not-yours'
   | 'has-rsvps'
   | 'already-recreated'
@@ -42,11 +50,29 @@ export interface RecreateOutcome {
   newEvent?: HostEvent;
   /** How the copy's announcement went. */
   announce?: AnnounceCode;
+  /** Meetup refused the featured photo, so the copy has none. */
+  photoDropped?: boolean;
 }
 
 export type Recreatable =
   | { ok: true }
   | { ok: false; reason: 'not-yours' | 'has-rsvps' | 'already-recreated' };
+
+export interface RecreationStore {
+  /**
+   * Takes the old event for a recreation now: true once; false while
+   * another recreation of it is under way or done (a pending claim older
+   * than its stale time may be taken over).
+   */
+  claim: (oldEventId: string, requestedBy: string) => Promise<boolean>;
+  /** Fills in the copy once Meetup returns it. */
+  fill: (oldEventId: string, newEventId: string) => Promise<void>;
+  /** Drops a pending claim whose copy was never made. */
+  release: (oldEventId: string) => Promise<void>;
+  get: (
+    oldEventId: string,
+  ) => Promise<{ newEventId: string | null } | undefined>;
+}
 
 export interface RecreateDeps {
   /** The host's own upcoming events: Meetup's hostId filter decides. */
@@ -57,16 +83,13 @@ export interface RecreateDeps {
   copySource: (meetupEventId: string) => Promise<CopySource | undefined>;
   /** A client on the organizer credential, made once per recreate. */
   organizer: () => Promise<EventCreator>;
-  /** Cancels (never deletes) the event with the organizer credential. */
-  cancelEvent: (meetupEventId: string) => Promise<void>;
-  recreations: () => Promise<{
-    record: (
-      oldEventId: string,
-      newEventId: string,
-      requestedBy: string,
-    ) => Promise<boolean>;
-    get: (oldEventId: string) => Promise<{ newEventId: string } | undefined>;
-  }>;
+  /**
+   * Cancels (never deletes) the event with the organizer credential.
+   * Undefined while ANNOUNCE_RECREATE_CANCEL is off: the old event is left
+   * for leadership to cancel by hand, and the alert says so.
+   */
+  cancelEvent: ((meetupEventId: string) => Promise<void>) | undefined;
+  recreations: () => Promise<RecreationStore>;
   /** requestAnnouncement for the new event (the hold rules apply). */
   announce: (
     host: { meetupMemberId: string; name: string },
@@ -78,40 +101,22 @@ export interface RecreateDeps {
   audit: (entry: LogEntry) => Promise<unknown>;
 }
 
-/** The copy's createEvent input: the source as it is, published, RSVPs open. */
+/**
+ * The copy's createEvent input: the source's settings as the copy path
+ * validates them (copySettings: limits, venue, directions, duration), the
+ * title verbatim (its prefix stays), every source host, published.
+ */
 export function recreateInput(
   source: CopySource,
   hostIds: string[],
 ): CreateEventInput {
-  const input: CreateEventInput = {
-    ...createEventTemplate,
+  const { duration } = copyDefaults(source);
+  return buildCreateInput({
+    ...copySettings(source, duration),
     title: source.title ?? '',
-    description: source.description ?? '',
-    startDateTime: tz(dayjs(source.dateTime)).format('YYYY-MM-DDTHH:mm'),
-    duration: source.duration ?? createEventTemplate.duration,
-    eventHosts: hostIds.map(Number),
-    rsvpSettings: {
-      ...createEventTemplate.rsvpSettings,
-      rsvpLimit:
-        source.maxTickets ?? createEventTemplate.rsvpSettings.rsvpLimit,
-      guestLimit:
-        source.guestLimit ?? createEventTemplate.rsvpSettings.guestLimit,
-    },
-    publishStatus: 'PUBLISHED',
-  };
-  const photo = Number(source.featuredEventPhoto?.id);
-  if (Number.isInteger(photo) && photo > 0) {
-    input.featuredPhotoId = photo;
-  } else {
-    delete input.featuredPhotoId;
-  }
-  if (source.venue?.id) {
-    input.venueId = source.venue.id;
-  }
-  if (source.howToFindUs?.trim()) {
-    input.howToFindUs = source.howToFindUs;
-  }
-  return input;
+    startLocal: tz(dayjs(source.dateTime)).format('YYYY-MM-DDTHH:mm'),
+    hostIds,
+  });
 }
 
 function errorName(error: unknown): string {
@@ -143,8 +148,9 @@ export async function recreatable(
 }
 
 /**
- * Order: guard → create the copy → record old→new → announce the copy →
- * cancel the old. A failure before the copy exists leaves the old event
+ * Order: guard → claim old→new → create the copy → fill the claim →
+ * announce the copy → cancel the old (when the flag allows). A failure
+ * before the copy exists releases the claim and leaves the old event
  * untouched. A copy whose announcement did not go out (refused or
  * unconfirmed) also leaves the old event in place: both exist, and the
  * alert says so, so leadership can sort it out by hand.
@@ -160,15 +166,29 @@ export async function recreateAndAnnounce(
   if (old === undefined) {
     return { code: 'not-yours' };
   }
-  const recreations = await deps.recreations();
-  if ((await recreations.get(old.id)) !== undefined) {
-    return { code: 'already-recreated' };
-  }
   if (await deps.othersRsvped(old.id)) {
     return { code: 'has-rsvps' };
   }
-  const source = await deps.copySource(old.id);
+  const recreations = await deps.recreations();
+  // Claimed before the slow part: a second click (or the page's "slow"
+  // redirect and a retry) finds the claim and makes no second copy.
+  if (!(await recreations.claim(old.id, host.meetupMemberId))) {
+    return { code: 'already-recreated' };
+  }
+  const release = async () => {
+    await recreations.release(old.id).catch((error: unknown) => {
+      logger.error(`Recreation release failed: ${errorName(error)}`);
+    });
+  };
+  let source: CopySource | undefined;
+  try {
+    source = await deps.copySource(old.id);
+  } catch (error: unknown) {
+    await release();
+    throw error;
+  }
   if (source === undefined || !isHostOf(source, host.meetupMemberId)) {
+    await release();
     return { code: 'no-source' };
   }
   const hostIds = (source.eventHosts ?? []).flatMap((h) => {
@@ -185,13 +205,23 @@ export async function recreateAndAnnounce(
   };
 
   let created: { id: string; eventUrl: string } | null | undefined;
+  let photoDropped = false;
   try {
     const meetup = await deps.organizer();
     created = (
-      await createEventWithPhotoFallback(meetup, recreateInput(source, hostIds))
+      await createEventWithPhotoFallback(
+        meetup,
+        recreateInput(source, hostIds),
+        {
+          onPhotoDropped: () => {
+            photoDropped = true;
+          },
+        },
+      )
     ).createEvent?.event;
   } catch (error: unknown) {
     logger.error(`Recreate of ${old.id} failed to create: ${errorName(error)}`);
+    await release();
     tell({
       title: 'A host’s recreate-and-announce failed',
       description:
@@ -202,6 +232,7 @@ export async function recreateAndAnnounce(
     return { code: 'create-failed' };
   }
   if (!created?.id) {
+    await release();
     tell({
       title: 'A host’s recreate-and-announce failed',
       description:
@@ -220,14 +251,18 @@ export async function recreateAndAnnounce(
     hosts: old.hosts,
   };
   try {
-    await recreations.record(old.id, newEvent.id, host.meetupMemberId);
+    await recreations.fill(old.id, newEvent.id);
   } catch (error: unknown) {
     // The copy exists either way; the link is for the page and the alert.
     logger.error(`Recreation record failed: ${errorName(error)}`);
   }
+  const photoNote = photoDropped
+    ? ' Meetup refused the featured photo, so the copy has none: set one by hand.'
+    : '';
   deps
     .audit({
       title: 'Host recreated an event to announce it',
+      description: `Starts ${pacificDay(newEvent.dateTime)}.${photoNote}`,
       fields: fields(newEvent),
     })
     .catch(() => undefined);
@@ -239,10 +274,25 @@ export async function recreateAndAnnounce(
       description:
         `The copy was created but its announcement ended "${announce}", so the ` +
         'old event was NOT cancelled: both are on Meetup. Announce the copy and ' +
-        'cancel the old one by hand, or the host can try announcing again.',
+        `cancel the old one by hand.${photoNote}`,
       fields: fields(newEvent),
     });
-    return { code: 'announce-failed', newEvent, announce };
+    return { code: 'announce-failed', newEvent, announce, photoDropped };
+  }
+  const copyStatus =
+    announce === 'scheduled'
+      ? 'The copy’s announcement is scheduled (the host’s page shows when).'
+      : 'The copy is announced.';
+  if (deps.cancelEvent === undefined) {
+    tell({
+      title: 'A host recreated an event: cancel the old one by hand',
+      description:
+        `${copyStatus} Cancelling on Meetup from here is switched off ` +
+        '(ANNOUNCE_RECREATE_CANCEL), so the old event is still live: cancel it ' +
+        `by hand.${photoNote}`,
+      fields: fields(newEvent),
+    });
+    return { code: 'recreated-old-kept', newEvent, announce, photoDropped };
   }
   try {
     await deps.cancelEvent(old.id);
@@ -250,19 +300,22 @@ export async function recreateAndAnnounce(
     logger.error(`Cancel of ${old.id} failed: ${errorName(error)}`);
     tell({
       title: 'A host’s old event could not be cancelled',
-      description:
-        'The copy was created and its announcement is on its way, but Meetup ' +
-        'did not cancel the old event. Cancel it by hand.',
+      description: `${copyStatus} Meetup did not cancel the old event: cancel it by hand.${photoNote}`,
       fields: fields(newEvent),
     });
-    return { code: 'cancel-failed', newEvent, announce };
+    return { code: 'cancel-failed', newEvent, announce, photoDropped };
   }
   tell({
     title: 'A host recreated an event to announce it',
     description:
       'The old event was within 7 days of its start, so Meetup would not announce ' +
-      `it. The copy is ${announce === 'scheduled' ? 'scheduled to be announced' : 'announced'}; the old event is cancelled.`,
+      `it. ${copyStatus} The old event is cancelled.${photoNote}`,
     fields: fields(newEvent),
   });
-  return { code: 'recreated', newEvent, announce };
+  return {
+    code: announce === 'scheduled' ? 'recreated-scheduled' : 'recreated',
+    newEvent,
+    announce,
+    photoDropped,
+  };
 }

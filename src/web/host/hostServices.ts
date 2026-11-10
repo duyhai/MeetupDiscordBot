@@ -310,6 +310,13 @@ export async function revokeHostSessions(
 
 let decisionDeps: DecisionDeps | undefined;
 
+/** ANNOUNCE_RECREATE_CANCEL=1 lets recreate-and-announce cancel the old event on Meetup. */
+export function recreateCancelEnabled(
+  env: Record<string, string | undefined>,
+): boolean {
+  return env.ANNOUNCE_RECREATE_CANCEL?.trim() === '1';
+}
+
 /**
  * A client on the organizer credential for one write, never re-running
  * the write on a 401. Not getting the credential (Redis down, no token)
@@ -347,6 +354,10 @@ function organizerEventDetails(
         dateTime: String(event.dateTime),
         createdTime: event.createdTime ? String(event.createdTime) : null,
         rsvpState: event.rsvpState ? String(event.rsvpState) : null,
+        rsvpsClosed:
+          typeof event.rsvpSettings?.rsvpsClosed === 'boolean'
+            ? event.rsvpSettings.rsvpsClosed
+            : null,
         hosts: (event.eventHosts ?? []).flatMap((h) => {
           return h?.member?.id
             ? [{ id: String(h.member.id), name: String(h.member.name ?? '') }]
@@ -418,15 +429,21 @@ export function productionAnnouncer(
           (await meetup.getEventForCopy(meetupEventId)) ?? undefined,
       ),
     organizer: () => organizerWriter(getClient),
-    cancelEvent: async (meetupEventId) => {
-      await (
-        await organizerWriter(getClient)
-      ).deleteEvent({ eventId: meetupEventId, removeFromCalendar: false });
-    },
+    // Off until Hai has tried deleteEvent(removeFromCalendar: false) on a
+    // throwaway event: until then the old event is left for leadership.
+    cancelEvent: recreateCancelEnabled(process.env)
+      ? async (meetupEventId) => {
+          await (
+            await organizerWriter(getClient)
+          ).deleteEvent({ eventId: meetupEventId, removeFromCalendar: false });
+        }
+      : undefined,
     recreations: async () => {
       const store = await repo();
       return {
-        record: (oldId, newId, by) => store.recordRecreation(oldId, newId, by),
+        claim: (oldId, by) => store.claimRecreation(oldId, by),
+        fill: (oldId, newId) => store.fillRecreation(oldId, newId),
+        release: (oldId) => store.releaseRecreation(oldId),
         get: (oldId) => store.recreationOf(oldId),
       };
     },
