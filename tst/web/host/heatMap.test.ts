@@ -6,6 +6,7 @@ import { heatMapYear } from '../../../src/web/host/heatMap.js';
 import {
   CALENDAR_SCRIPT,
   HISTORY_SCRIPT,
+  THEME_SCRIPT,
 } from '../../../src/web/host/hostScripts.js';
 
 const ev = (id: string, dateTime: string, title: string): HostEvent => ({
@@ -120,5 +121,12 @@ describe('CALENDAR_SCRIPT', () => {
   it('parses as JavaScript', () => {
     // eslint-disable-next-line @typescript-eslint/no-implied-eval
     expect(() => new Function(CALENDAR_SCRIPT.value)).not.toThrow();
+  });
+});
+
+describe('THEME_SCRIPT', () => {
+  it('parses as JavaScript', () => {
+    // eslint-disable-next-line @typescript-eslint/no-implied-eval
+    expect(() => new Function(THEME_SCRIPT.value)).not.toThrow();
   });
 });

@@ -108,7 +108,7 @@ describe('host home', () => {
 });
 
 describe('host calendar', () => {
-  it('shows 8 weeks with busy levels, holidays from titles, and the day list', async () => {
+  it('shows this month with busy levels, holidays from titles, and the day list', async () => {
     const req = await pagesApp(async () => [
       ev('a', '2026-11-05T19:00:00-08:00', HOSTILE),
       ev('b', '2026-11-07T19:00:00-08:00', 'One'),
@@ -120,7 +120,13 @@ describe('host calendar', () => {
     const res = await req.get('/host/calendar').set('Cookie', sid);
     expect(res.status).toBe(200);
     noScript(res.text);
-    expect(res.text.match(/<td class="cal /g)).toHaveLength(56);
+    // November 2026 as whole weeks: Mon Oct 26 to Sun Dec 6, the days
+    // around the month left blank.
+    expect(res.text.match(/<td class="cal /g)).toHaveLength(42);
+    expect(
+      res.text.match(/<td class="cal out" aria-hidden="true"><\/td>/g),
+    ).toHaveLength(12);
+    expect(res.text).toContain('<strong>November 2026</strong>');
     // Monday Nov 2 is before today: muted, not shaded.
     expect(res.text).toMatch(
       /<td class="cal past">\s*<span class="cal-day"\s*>2</,
@@ -150,6 +156,73 @@ describe('host calendar', () => {
     // A past day shows no count: only upcoming events are read.
     expect(res.text).not.toMatch(/<td class="cal past">(?:(?!<\/td>)[^])*Free/);
     expect(res.text).not.toContain('style=');
+  });
+});
+
+describe('host calendar months', () => {
+  it('pages by month from this one to a year ahead, reading only that month', async () => {
+    const fetch = vi.fn(async () => [
+      ev('d', '2026-12-10T19:00:00-08:00', 'December dinner'),
+    ]);
+    const req = await pagesApp(fetch);
+    const sid = await signInWithDiscord(req);
+    const now = await req.get('/host/calendar').set('Cookie', sid);
+    // This month: Prev disabled, Next links to December.
+    expect(now.text).toMatch(
+      /<span class="button ghost disabled"\s*>← Oct<span class="sr-only">/,
+    );
+    expect(now.text).toMatch(
+      /<a class="button ghost" href="\/host\/calendar\?month=2026-12"\s*>Dec →<\/a/,
+    );
+    const dec = await req
+      .get('/host/calendar?month=2026-12')
+      .set('Cookie', sid);
+    expect(dec.text).toContain('<strong>December 2026</strong>');
+    expect(dec.text).toContain('Day by day: December');
+    expect(dec.text).toContain('December dinner');
+    expect(dec.text).toMatch(/href="\/host\/calendar\?month=2026-11"\s*>← Nov/);
+    // Meetup was asked for Mon Nov 30 to Mon Jan 4 (Pacific midnights).
+    expect(fetch).toHaveBeenLastCalledWith({
+      status: ['ACTIVE'],
+      afterDateTime: '2026-11-30T08:00:00.000Z',
+      beforeDateTime: '2027-01-04T08:00:00.000Z',
+    });
+    // A year ahead is the last month; past, too far or malformed: this month.
+    const last = await req
+      .get('/host/calendar?month=2027-11')
+      .set('Cookie', sid);
+    expect(last.text).toContain('<strong>November 2027</strong>');
+    expect(last.text).toMatch(/<span class="button ghost disabled"\s*>Dec →/);
+    const odd = await Promise.all(
+      ['2026-10', '2027-12', '2026-13', 'x'].map((m) =>
+        req.get(`/host/calendar?month=${m}`).set('Cookie', sid),
+      ),
+    );
+    for (const res of odd) {
+      expect(res.status).toBe(200);
+      expect(res.text).toContain('<strong>November 2026</strong>');
+    }
+  });
+});
+
+describe('host theme toggle', () => {
+  it('runs the theme script in the head and ships a hidden Auto/Light/Dark toggle', async () => {
+    const req = await pagesApp(async () => []);
+    const sid = await signInWithDiscord(req);
+    const res = await req.get('/host').set('Cookie', sid);
+    const head = res.text.slice(0, res.text.indexOf('</head>'));
+    expect(head).toMatch(
+      /<script nonce="[A-Za-z0-9+/=]+">\(function\(\)\{var KEY='host-theme'/,
+    );
+    expect(res.text).toMatch(
+      /<div\s+class="theme-toggle"\s+role="group"\s+aria-label="Colour theme"\s+data-theme-toggle\s+hidden\s*>/,
+    );
+    for (const choice of ['auto', 'light', 'dark']) {
+      expect(res.text).toContain(`data-choice="${choice}"`);
+    }
+    // The sign-in page has it too.
+    const login = await req.get('/host/login');
+    expect(login.text).toContain('data-theme-toggle');
   });
 });
 

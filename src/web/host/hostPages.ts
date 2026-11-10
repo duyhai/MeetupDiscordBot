@@ -14,6 +14,7 @@ import {
   HostEventsDeps,
   attendanceUrl,
   groupCalendar,
+  monthCalendar,
   hostedEvents,
   pacificDay,
 } from '../../lib/hosts/hostEvents.js';
@@ -286,18 +287,83 @@ function calendarCell(day: CalendarDay, today: string): SafeHtml {
   }
 }
 
-function calendarBody(days: CalendarDay[], today: string): SafeHtml {
+/** How many months ahead the calendar pages (the form takes a year ahead). */
+export const CALENDAR_MONTHS_AHEAD = 12;
+
+/** `?month=YYYY-MM` when it is this month or up to a year on; else this month. */
+export function calendarMonth(query: unknown, today: string): string {
+  const current = today.slice(0, 7);
+  if (typeof query !== 'string' || !/^\d{4}-(0[1-9]|1[0-2])$/.test(query)) {
+    return current;
+  }
+  const last = dayjs(`${current}-01`)
+    .add(CALENDAR_MONTHS_AHEAD, 'month')
+    .format('YYYY-MM');
+  return query >= current && query <= last ? query : current;
+}
+
+/** Previous and next month; each is disabled text at the ends. */
+function monthNav(month: string, today: string): SafeHtml {
+  const first = dayjs(`${month}-01`);
+  const prev = first.subtract(1, 'month');
+  const next = first.add(1, 'month');
+  const current = today.slice(0, 7);
+  const last = dayjs(`${current}-01`)
+    .add(CALENDAR_MONTHS_AHEAD, 'month')
+    .format('YYYY-MM');
+  const link = (m: dayjs.Dayjs) =>
+    pageLink(HOST_PATHS.calendar, { month: m.format('YYYY-MM') });
+  const prevPart =
+    month > current
+      ? html`<a class="button ghost" href="${link(prev)}"
+          >← ${prev.format('MMM')}</a
+        >`
+      : html`<span class="button ghost disabled"
+          >← ${prev.format('MMM')}<span class="sr-only">
+            (past months are not shown)</span
+          ></span
+        >`;
+  const nextPart =
+    month < last
+      ? html`<a class="button ghost" href="${link(next)}"
+          >${next.format('MMM')} →</a
+        >`
+      : html`<span class="button ghost disabled"
+          >${next.format('MMM')} →<span class="sr-only">
+            (too far ahead)</span
+          ></span
+        >`;
+  return html`<nav class="year-nav" aria-label="Month">
+    ${prevPart}<strong>${first.format('MMMM YYYY')}</strong>${nextPart}
+  </nav>`;
+}
+
+function calendarBody(
+  days: CalendarDay[],
+  today: string,
+  month: string,
+): SafeHtml {
   const weeks: CalendarDay[][] = [];
   for (let i = 0; i < days.length; i += 7) {
     weeks.push(days.slice(i, i + 7));
   }
+  const inMonth = (d: CalendarDay) => d.day.startsWith(month);
+  // Days of the months around it are left blank.
+  const monthCell = (d: CalendarDay): SafeHtml => {
+    if (inMonth(d)) {
+      return calendarCell(d, today);
+    }
+    return html`<td class="cal out" aria-hidden="true"></td>`;
+  };
   const grid = weeks.map(
     (week) =>
       html`<tr>
-        ${week.map((d) => calendarCell(d, today))}
+        ${week.map((d) => monthCell(d))}
       </tr>`,
   );
-  const listed = days.filter((d) => d.day >= today && d.events.length > 0);
+  const listed = days.filter(
+    (d) => inMonth(d) && d.day >= today && d.events.length > 0,
+  );
   const list = listed.map(
     (d) =>
       html`<li>
@@ -317,10 +383,11 @@ function calendarBody(days: CalendarDay[], today: string): SafeHtml {
   return html`<div class="card">
       <h1>Calendar</h1>
       <p>
-        The group's published events for the next 8 weeks. Pick a free or quiet
+        The group's published events, a month at a time. Pick a free or quiet
         day for your event: open a day's count to see its events, or press + to
         host on that day.
       </p>
+      ${monthNav(month, today)}
       <p class="cal-legend">
         <span class="swatch busy0"></span> Free
         <span class="swatch busy1"></span> 1 event
@@ -347,10 +414,10 @@ function calendarBody(days: CalendarDay[], today: string): SafeHtml {
       </div>
     </div>
     <div class="card">
-      <h2>Day by day</h2>
+      <h2>Day by day: ${dayjs(`${month}-01`).format('MMMM')}</h2>
       ${
         listed.length === 0
-          ? html`<p class="muted">Nothing scheduled yet.</p>`
+          ? html`<p class="muted">Nothing scheduled this month yet.</p>`
           : html`<ol class="cal-list">
               ${list}
             </ol>`
@@ -617,10 +684,11 @@ export function registerHostPages(
     });
   }) as RequestHandler);
 
-  router.get('/calendar', (async (_req, res) => {
+  router.get('/calendar', (async (req, res) => {
+    const month = calendarMonth(req.query.month, today());
     let days: CalendarDay[];
     try {
-      days = await groupCalendar(deps.events);
+      days = await monthCalendar(deps.events, month);
     } catch (error: unknown) {
       unavailable(res, error);
       return;
@@ -628,7 +696,7 @@ export function registerHostPages(
     hostPage(res, {
       title: 'Calendar',
       current: 'calendar',
-      body: calendarBody(days, today()),
+      body: calendarBody(days, today(), month),
       script: CALENDAR_SCRIPT,
     });
   }) as RequestHandler);

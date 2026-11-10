@@ -17,8 +17,11 @@ export interface PageUser {
 /**
  * The one stylesheet (nonce'd; no other CSS, no web fonts). Two-Tone: blurple
  * marks what you can act on, coral what needs a person, green what is done.
- * Light tokens on :root, dark ones under prefers-color-scheme: dark; every
- * text/background pair is checked against WCAG AA in contrast.test.ts.
+ * Light tokens on :root, dark ones under prefers-color-scheme: dark unless
+ * the page chose light (data-theme="light"), and again for data-theme="dark"
+ * (the host site's theme toggle sets it). Every text/background pair is
+ * checked against WCAG AA in contrast.test.ts, which also checks the two
+ * dark blocks are the same.
  */
 // prettier-ignore
 export const STYLE = staticRaw`
@@ -31,11 +34,18 @@ export const STYLE = staticRaw`
 --s1:4px;--s2:8px;--s3:12px;--s4:16px;--s5:24px;--s6:32px;--t-sm:.875rem;--t-base:1rem;--t-lg:1.125rem;--t-xl:1.375rem;
 --t-2xl:1.75rem;
 --radius:10px;--tap:44px;--width:1040px;color-scheme:light}
-@media (prefers-color-scheme:dark){:root{--bg:#17181f;--surface:#20212b;--raised:#2a2b37;--fg:#eeeef6;--muted:#a9abbd;
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#17181f;--surface:#20212b;--raised:#2a2b37;
+--fg:#eeeef6;--muted:#a9abbd;
 --line:#363847;--field:#7a7d93;--sel:#2f3150;--accent:#8d96ff;--btn:#5865f2;--btn-hover:#4752c4;--btn-fg:#ffffff;
 --focus:#a3aaff;--attn:#ff7d88;--attn-soft:#46252c;--attn-ink:#ffbac0;--accent-soft:#30335e;--accent-ink:#cbcffd;
 --ok-soft:#203a2b;--ok-ink:#8fd8ab;--rule-a:#7984ff;--rule-b:#ff6b77;--heat1:#353a6e;--heat2:#4a54b0;--heat3:#6c76f0;
 --heat4:#a3aaff;color-scheme:dark}}
+:root[data-theme="dark"]{--bg:#17181f;--surface:#20212b;--raised:#2a2b37;
+--fg:#eeeef6;--muted:#a9abbd;
+--line:#363847;--field:#7a7d93;--sel:#2f3150;--accent:#8d96ff;--btn:#5865f2;--btn-hover:#4752c4;--btn-fg:#ffffff;
+--focus:#a3aaff;--attn:#ff7d88;--attn-soft:#46252c;--attn-ink:#ffbac0;--accent-soft:#30335e;--accent-ink:#cbcffd;
+--ok-soft:#203a2b;--ok-ink:#8fd8ab;--rule-a:#7984ff;--rule-b:#ff6b77;--heat1:#353a6e;--heat2:#4a54b0;--heat3:#6c76f0;
+--heat4:#a3aaff;color-scheme:dark}
 *,*::before,*::after{box-sizing:border-box}
 html{-webkit-text-size-adjust:100%;text-size-adjust:100%}
 body{margin:0;font-family:var(--font);font-size:var(--t-base);line-height:1.5;color:var(--fg);background:var(--bg)}
@@ -61,6 +71,12 @@ header.site .brand{font-size:var(--t-lg);font-weight:700}
 header.site .account{display:flex;flex-wrap:wrap;gap:var(--s2) var(--s3);align-items:center;color:var(--muted);
 font-size:var(--t-sm)}
 header.site form{margin:0}
+.theme-toggle{display:inline-flex;border:1px solid var(--line);border-radius:999px;padding:2px;gap:2px}
+.theme-toggle[hidden]{display:none}
+.theme-toggle button{min-height:32px;padding:0 var(--s3);border:0;border-radius:999px;background:transparent;color:var(--muted);
+  font:inherit;font-size:var(--t-sm);cursor:pointer}
+.theme-toggle button:hover{color:var(--fg);background:var(--sel)}
+.theme-toggle button[aria-pressed="true"]{color:var(--accent-ink);background:var(--accent-soft);font-weight:600}
 nav.site{background:var(--surface);border-bottom:1px solid var(--line);overflow-x:auto;scrollbar-width:thin}
 nav.site .tabs{display:flex;gap:var(--s1);max-width:var(--width);margin:0 auto;padding:0 var(--s2)}
 nav.site a{flex:0 0 auto;display:inline-flex;align-items:center;min-height:var(--tap);padding:0 var(--s3);
@@ -211,6 +227,7 @@ svg.heat a.hm-link rect{cursor:pointer}
 .hm-tip strong,.hm-tip span{display:block}
 nav.year-nav{display:flex;align-items:center;gap:var(--s3);flex-wrap:wrap;margin:var(--s3) 0 0}
 nav.year-nav .disabled{opacity:.45;cursor:default}
+@media (max-width:480px){nav.year-nav{justify-content:space-between}nav.year-nav strong{order:-1;flex-basis:100%}}
 p.day-filter{font-weight:600}
 table.cal-grid{table-layout:fixed;width:100%;min-width:560px}
 table.cal-grid th{text-align:center}
@@ -220,8 +237,8 @@ td.cal .cal-head span,details.cal-pop>summary>span{display:block}
 .cal-day{font-weight:700}
 .cal-head{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:var(--s1)}
 td.cal .cal-day{white-space:nowrap;overflow-wrap:normal}
-a.cal-add{display:inline-flex;align-items:center;justify-content:center;width:40px;height:40px;flex:none;
-  border:1px solid var(--field);border-radius:8px;background:var(--surface);font-weight:700;text-decoration:none}
+a.cal-add{display:inline-flex;align-items:center;justify-content:center;min-width:28px;min-height:28px;flex:none;
+  padding:0 var(--s1);border-radius:6px;color:var(--accent);font-size:1.25rem;font-weight:700;line-height:1;text-decoration:none}
 a.cal-add:hover{background:var(--sel)}
 details.cal-pop{margin:0}
 details.cal-pop>summary{position:relative;display:block;list-style:none;min-height:40px;padding:var(--s1) 0;font-weight:400}
@@ -247,6 +264,7 @@ ul.copy-details{margin:0 0 var(--s2);padding-left:1.2rem;overflow-wrap:anywhere}
 .wrap-anywhere{overflow-wrap:anywhere}
 .field-error{display:block;margin-top:var(--s1);color:var(--attn-ink);font-size:var(--t-sm);font-weight:600}
 td.cal.past{color:var(--muted);background:var(--bg)}
+td.cal.out{background:var(--bg)}
 td.busy0,.swatch.busy0{background:var(--ok-soft)}
 td.busy1,.swatch.busy1{background:var(--surface)}
 td.busy2,.swatch.busy2{background:var(--attn-soft)}

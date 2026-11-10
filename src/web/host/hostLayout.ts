@@ -1,5 +1,6 @@
 import { SafeHtml, html, localUrl, memberText } from '../html.js';
 import { STYLE } from '../pages.js';
+import { THEME_SCRIPT } from './hostScripts.js';
 import { HOST_BASE } from './hostSession.js';
 
 /** The host site's pages, in order. Links and labels are fixed. */
@@ -56,6 +57,27 @@ export function hostLayout({
       </div>`
     : '';
   const nav = user ? hostNav(current) : '';
+  // Hidden until THEME_SCRIPT runs: with no script it could do nothing.
+  const themeToggle = html`<div
+    class="theme-toggle"
+    role="group"
+    aria-label="Colour theme"
+    data-theme-toggle
+    hidden
+  >
+    <button
+      type="button"
+      data-choice="auto"
+      aria-pressed="false"
+      title="Light by day, dark at night"
+    >
+      Auto
+    </button>
+    <button type="button" data-choice="light" aria-pressed="false">
+      Light
+    </button>
+    <button type="button" data-choice="dark" aria-pressed="false">Dark</button>
+  </div>`;
   // prettier-ignore
   const scriptTag = script ? html`<script nonce="${nonce}">${script}</script>` : '';
   // prettier-ignore
@@ -67,10 +89,11 @@ export function hostLayout({
 <meta name="robots" content="noindex, nofollow">
 <title>${title} · 1.5 Gen Asians hosts</title>
 <style nonce="${nonce}">${STYLE}</style>
+<script nonce="${nonce}">${THEME_SCRIPT}</script>
 </head>
 <body>
 <a class="skip" href="#main">Skip to main content</a>
-<header class="site"><div class="bar"><strong class="brand">1.5 Gen Asians host dashboard</strong>${account}</div></header>
+<header class="site"><div class="bar"><strong class="brand">1.5 Gen Asians host dashboard</strong>${themeToggle}${account}</div></header>
 ${nav}
 <main id="main" tabindex="-1">${body}</main>
 ${scriptTag}
