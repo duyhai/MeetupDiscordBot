@@ -8,6 +8,7 @@ import {
 } from '../lib/reports/dashboardPaths.js';
 import { tz } from '../util/timezone.js';
 import { SafeHtml, html, localUrl, memberText, staticRaw } from './html.js';
+import { THEME_SCRIPT, themeToggle } from './theme.js';
 
 export interface PageUser {
   username: string;
@@ -19,7 +20,7 @@ export interface PageUser {
  * marks what you can act on, coral what needs a person, green what is done.
  * Light tokens on :root, dark ones under prefers-color-scheme: dark unless
  * the page chose light (data-theme="light"), and again for data-theme="dark"
- * (the host site's theme toggle sets it). Every text/background pair is
+ * (the header's theme toggle sets either; see theme.ts). Every text/background pair is
  * checked against WCAG AA in contrast.test.ts, which also checks the two
  * dark blocks are the same.
  */
@@ -409,10 +410,11 @@ export function layout({
 <meta name="robots" content="noindex, nofollow">
 <title>${title} · 1.5 Gen Asians staff</title>
 <style nonce="${nonce}">${STYLE}</style>
+<script nonce="${nonce}">${THEME_SCRIPT}</script>
 </head>
 <body>
 <a class="skip" href="#main">Skip to main content</a>
-<header class="site"><div class="bar"><strong class="brand">1.5 Gen Asians staff dashboard</strong>${account}</div></header>
+<header class="site"><div class="bar"><strong class="brand">1.5 Gen Asians staff dashboard</strong>${themeToggle()}${account}</div></header>
 ${nav}
 <main id="main" tabindex="-1">${body}</main>
 </body>

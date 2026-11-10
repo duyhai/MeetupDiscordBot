@@ -1,5 +1,6 @@
 import { Logger } from 'tslog';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { THEME_SCRIPT } from '../../../src/web/theme.js';
 
 import { formatHallOfFamePost } from '../../../src/lib/helpers/hallOfFame.js';
 import { formatHostingStatsText } from '../../../src/lib/reports/hallOfFameReport.js';
@@ -115,9 +116,11 @@ describe('Hall of Fame month page', () => {
     const scripts = [
       ...res.text.matchAll(/<script([^>]*)>([\s\S]*?)<\/script>/g),
     ];
-    expect(scripts).toHaveLength(1);
-    expect(scripts[0][1]).toMatch(/^ nonce="[^"]+"$/);
-    expect(scripts[0][2]).toBe(COPY_SCRIPT.value);
+    // The theme script in <head>, then the page's own; both nonce'd.
+    expect(scripts).toHaveLength(2);
+    expect(scripts[0][2]).toBe(THEME_SCRIPT.value);
+    expect(scripts[1][1]).toMatch(/^ nonce="[^"]+"$/);
+    expect(scripts[1][2]).toBe(COPY_SCRIPT.value);
   });
 
   it("copy text matches the command's ready-to-post block", async () => {

@@ -176,13 +176,19 @@ source of truth is the table either way.
 
 ## Host pages
 
+Both sites (host and staff) have an Auto / Light / Dark theme toggle in the
+header: Auto follows the device's setting; a choice is kept in that browser.
+
 1. **Home**: upcoming events they host (with status: pending approval,
    published, announced), recent comments, quick actions.
-2. **Calendar**: the next ~8 weeks of group events, a busy/quiet shading per
-   day, and US holidays (plus whatever cultural dates leadership wants to
-   add; *builder's call* on the source, a static list is fine to start).
-3. **History**: heat map of hosted events by day, filterable by event type,
-   with the list of past events below it.
+2. **Calendar**: group events a month at a time (this month to a year
+   ahead), a busy/quiet shading per day, and US holidays (plus whatever
+   cultural dates leadership wants to add; *builder's call* on the source,
+   a static list is fine to start). Each day opens a popover listing all
+   its events; a + on each day the form accepts opens the create form.
+3. **History**: heat map of hosted events by day, a calendar year at a time,
+   filterable by event type, with the list of past events below it; a day
+   on the map filters the list to that day.
    - *Builder's call:* what "event type" is. Meetup has no reliable type
      field, so start with a small fixed set of types assigned by keyword
      from the title, plus manual correction by the host or leadership.

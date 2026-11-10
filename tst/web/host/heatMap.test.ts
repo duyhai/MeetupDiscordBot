@@ -6,8 +6,8 @@ import { heatMapYear } from '../../../src/web/host/heatMap.js';
 import {
   CALENDAR_SCRIPT,
   HISTORY_SCRIPT,
-  THEME_SCRIPT,
 } from '../../../src/web/host/hostScripts.js';
+import { THEME_SCRIPT } from '../../../src/web/theme.js';
 
 const ev = (id: string, dateTime: string, title: string): HostEvent => ({
   id,

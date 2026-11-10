@@ -216,7 +216,7 @@ describe('host theme toggle', () => {
     const res = await req.get('/host').set('Cookie', sid);
     const head = res.text.slice(0, res.text.indexOf('</head>'));
     expect(head).toMatch(
-      /<script nonce="[A-Za-z0-9+/=]+">\(function\(\)\{var KEY='host-theme'/,
+      /<script nonce="[A-Za-z0-9+/=]+">\(function\(\)\{var KEY='dashboard-theme'/,
     );
     expect(res.text).toMatch(
       /<div\s+class="theme-toggle"\s+role="group"\s+aria-label="Colour theme"\s+data-theme-toggle\s+hidden\s*>/,

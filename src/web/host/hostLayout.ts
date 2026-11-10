@@ -1,6 +1,6 @@
 import { SafeHtml, html, localUrl, memberText } from '../html.js';
 import { STYLE } from '../pages.js';
-import { THEME_SCRIPT } from './hostScripts.js';
+import { THEME_SCRIPT, themeToggle as themeToggleMarkup } from '../theme.js';
 import { HOST_BASE } from './hostSession.js';
 
 /** The host site's pages, in order. Links and labels are fixed. */
@@ -57,27 +57,7 @@ export function hostLayout({
       </div>`
     : '';
   const nav = user ? hostNav(current) : '';
-  // Hidden until THEME_SCRIPT runs: with no script it could do nothing.
-  const themeToggle = html`<div
-    class="theme-toggle"
-    role="group"
-    aria-label="Colour theme"
-    data-theme-toggle
-    hidden
-  >
-    <button
-      type="button"
-      data-choice="auto"
-      aria-pressed="false"
-      title="Light by day, dark at night"
-    >
-      Auto
-    </button>
-    <button type="button" data-choice="light" aria-pressed="false">
-      Light
-    </button>
-    <button type="button" data-choice="dark" aria-pressed="false">Dark</button>
-  </div>`;
+  const themeToggle = themeToggleMarkup();
   // prettier-ignore
   const scriptTag = script ? html`<script nonce="${nonce}">${script}</script>` : '';
   // prettier-ignore
