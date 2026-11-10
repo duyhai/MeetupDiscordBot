@@ -439,6 +439,12 @@ export function createHostRouter(deps: HostRouterDeps): express.Router {
       back('already');
       return;
     }
+    // As at the start: the link saves the session's name as the Meetup
+    // name, so only a Meetup sign-in may finish one, however it started.
+    if (session.via !== 'meetup') {
+      fail(res, 403);
+      return;
+    }
     if (req.query.error || typeof req.query.code !== 'string') {
       back('cancelled');
       return;

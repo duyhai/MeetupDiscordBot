@@ -454,13 +454,13 @@ describe('Link your Discord account', () => {
       id: GUEST_HOST_BLACKLIST[0],
       username: 'Blocked',
     });
+    const resolvesBefore = resolve.mock.calls.length;
     const { back } = await link(req, sid, csrf);
     expect(back.status).toBe(403);
-    // Nothing saved: resolve() cannot see a Discord id that is not linked yet.
+    // Refused before the eligibility check and before the write: resolve()
+    // cannot see a Discord id that is not linked yet.
+    expect(resolve.mock.calls.length).toBe(resolvesBefore);
     expect(store.linkUnlessLinkedElsewhere).not.toHaveBeenCalled();
-    expect(resolve).not.toHaveBeenCalledWith(
-      expect.objectContaining({ discordUserId: GUEST_HOST_BLACKLIST[0] }),
-    );
     expect(JSON.stringify(vi.mocked(deps.audit).mock.calls)).toContain(
       'Host dashboard session ended',
     );
@@ -518,6 +518,23 @@ describe('Link your Discord account', () => {
       },
     );
     expect(back.headers.location).toBe('/host?link=already');
+    expect(store.linkUnlessLinkedElsewhere).not.toHaveBeenCalled();
+  });
+
+  it('a callback for a session that is no longer a Meetup sign-in links nothing', async () => {
+    const { req, sid, session, store, cache } = await setup();
+    const { back } = await link(
+      req,
+      sid,
+      session().csrfToken,
+      undefined,
+      // However a link got started, a Discord sign-in never writes one: its
+      // name is a Discord name, not a Meetup one.
+      async () => {
+        patchStoredSession(cache, { via: 'discord' });
+      },
+    );
+    expect(back.status).toBe(403);
     expect(store.linkUnlessLinkedElsewhere).not.toHaveBeenCalled();
   });
 
