@@ -30,9 +30,17 @@ import {
 } from '../html.js';
 import { eventLink } from '../links.js';
 import { PAGE_SIZE, pageNav, parsePage } from '../paging.js';
+import {
+  AnnounceRouteDeps,
+  announceBadge,
+  announceButton,
+  announceNotice,
+  registerAnnounceRoute,
+} from './announcePage.js';
 import { heatMapYear } from './heatMap.js';
 import { HOST_LINK_RESULTS, HostLinkResult, hostLocals } from './hostRouter.js';
 import { EventRequest } from '../../lib/repositories/postgresEventRequestRepository.js';
+import { Announcement } from '../../lib/repositories/postgresEventAnnouncementRepository.js';
 import {
   HostRequestStore,
   copyLink,
@@ -55,6 +63,8 @@ export interface HostPageDeps {
   events: HostEventsDeps;
   /** The host's requests for the home page; a failure hides only that card. */
   requests?: () => Promise<Pick<HostRequestStore, 'listForMember'>>;
+  /** The Announce button and its route; without it, no button. */
+  announce?: AnnounceRouteDeps;
 }
 
 export const HOST_PATHS = {
@@ -166,8 +176,16 @@ function homeBody(
   calendar: CalendarDay[],
   today: string,
   requests: EventRequest[] | undefined,
-  linkResult?: HostLinkResult,
+  extra: {
+    linkResult?: HostLinkResult;
+    /** Each upcoming event's announcement; undefined: no Announce button. */
+    announcements?: Map<string, Announcement>;
+    announceResult?: unknown;
+    now?: Date;
+  } = {},
 ): SafeHtml {
+  const { linkResult, announcements } = extra;
+  const now = extra.now ?? new Date();
   const quiet = quietDays(calendar, today).slice(0, QUIET_DAYS_SHOWN);
   // "Verify on Discord": the same Verify as the button in the server, and
   // once linked, "Refresh roles and badges" runs it again. Only for a
@@ -207,8 +225,27 @@ function homeBody(
         </td>
         <td data-label="Event">${eventLink(event)}</td>
         <td data-label="Type">${EVENT_TYPE_LABELS[event.type]}</td>
-        <td data-label="Status"><span class="badge ok">Published</span></td>
-        <td data-label="Actions">${meetupButton(event)}</td>
+        <td data-label="Status">
+          <span class="badge ok">Published</span>
+          ${
+            announcements ? announceBadge(announcements.get(event.id), now) : ''
+          }
+        </td>
+        <td data-label="Actions">
+          <div class="actions">
+            ${meetupButton(event)}
+            ${
+              announcements
+                ? announceButton(
+                    event,
+                    announcements.get(event.id),
+                    session.csrfToken,
+                    now,
+                  )
+                : ''
+            }
+          </div>
+        </td>
       </tr>`,
   );
   return html`<div class="card">
@@ -222,6 +259,15 @@ function homeBody(
     ${requestsCard(requests)}
     <div class="card">
       <h2>Your upcoming events</h2>
+      ${announceNotice(extra.announceResult)}
+      ${
+        announcements && upcoming.length > 0
+          ? html`<p class="muted">
+              Announce sends Meetup's announcement email about your event to the
+              group. It goes out once per event.
+            </p>`
+          : ''
+      }
       ${
         upcoming.length === 0
           ? html`<p class="muted">You have no upcoming events on Meetup.</p>`
@@ -728,6 +774,9 @@ export function registerHostPages(
   deps: HostPageDeps,
 ): void {
   const today = () => pacificDay(deps.events.now());
+  if (deps.announce) {
+    registerAnnounceRoute(router, deps.announce);
+  }
 
   router.get('/', (async (req, res) => {
     const { session } = hostLocals(res);
@@ -755,17 +804,29 @@ export function registerHostPages(
         requests = undefined;
       }
     }
+    let announcements: Map<string, Announcement> | undefined;
+    if (deps.announce) {
+      try {
+        announcements = await deps.announce.announcements(
+          upcoming.map((e) => e.id),
+        );
+      } catch (error: unknown) {
+        // The buttons still show: the server refuses a second send anyway.
+        logger.warn(
+          `Host announcements read failed: ${error instanceof Error ? error.name : 'Error'}`,
+        );
+        announcements = new Map();
+      }
+    }
     hostPage(res, {
       title: 'Home',
       current: 'home',
-      body: homeBody(
-        session,
-        upcoming,
-        calendar,
-        today(),
-        requests,
-        linkResultOf(req.query.link),
-      ),
+      body: homeBody(session, upcoming, calendar, today(), requests, {
+        linkResult: linkResultOf(req.query.link),
+        announcements,
+        announceResult: req.query.announce,
+        now: deps.events.now(),
+      }),
     });
   }) as RequestHandler);
 

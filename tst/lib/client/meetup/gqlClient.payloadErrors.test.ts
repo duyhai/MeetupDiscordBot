@@ -64,6 +64,43 @@ describe('Meetup mutation payload errors', () => {
     );
   });
 
+  it('announceEvent asks for its payload errors and throws when Meetup rejects it', async () => {
+    const ok = answer({ announceEvent: { event: { id: '1' }, errors: [] } });
+    await client().announceEvent({ eventId: '1' });
+    expect(ok.query()).toMatch(/errors\s*\{\s*code\s+field\s+message\s*\}/);
+    answer({ announceEvent: { event: null, errors: REJECTED } });
+    await expect(
+      client().announceEvent({ eventId: '1' }),
+    ).rejects.toBeInstanceOf(MeetupPayloadError);
+  });
+
+  it('announceEvent with requireConfirmation (the dashboard) needs this event back', async () => {
+    const confirm = { requireConfirmation: true };
+    answer({ announceEvent: { event: null, errors: [] } });
+    await expect(
+      client().announceEvent({ eventId: '1' }, confirm),
+    ).rejects.toThrow('did not confirm');
+    answer({ announceEvent: null });
+    await expect(
+      client().announceEvent({ eventId: '1' }, confirm),
+    ).rejects.toThrow('did not confirm');
+    answer({ announceEvent: { event: { id: '2' }, errors: [] } });
+    await expect(
+      client().announceEvent({ eventId: '1' }, confirm),
+    ).rejects.toThrow('did not confirm');
+    answer({ announceEvent: { event: { id: '1' }, errors: [] } });
+    await expect(
+      client().announceEvent({ eventId: '1' }, confirm),
+    ).resolves.toBeDefined();
+  });
+
+  it('announceEvent without it (the Discord command) still takes no errors as success', async () => {
+    answer({ announceEvent: { event: null, errors: [] } });
+    await expect(
+      client().announceEvent({ eventId: '1' }),
+    ).resolves.toBeDefined();
+  });
+
   it('createEvent throws on errors with no event', async () => {
     answer({ createEvent: { event: null, errors: REJECTED } });
     await expect(client().createEvent({} as never)).rejects.toBeInstanceOf(

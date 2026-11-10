@@ -8,6 +8,10 @@ import {
   isEventFor,
 } from '../../lib/hosts/eventRequest.js';
 import { HostResolveDeps, resolveHost } from '../../lib/hosts/eligibility.js';
+import { announceHostEvent } from '../../lib/hosts/announceEvent.js';
+import { HostEventsDeps, hostedEvents } from '../../lib/hosts/hostEvents.js';
+import { PostgresEventAnnouncementRepository } from '../../lib/repositories/postgresEventAnnouncementRepository.js';
+import type { AnnounceRouteDeps } from './announcePage.js';
 import { PublishDeps, publishRequest } from '../../lib/hosts/publishRequest.js';
 import { LogEntry, logAlert } from '../../lib/helpers/discordLogger.js';
 import { getBadges } from '../../lib/helpers/getBadges.js';
@@ -195,4 +199,44 @@ export async function revokeHostSessions(
     Date.now,
     HOST_SESSION_OPTIONS,
   ).revokeUser(meetupMemberId);
+}
+
+/**
+ * The Announce button's production deps: the announcements table, the
+ * host's own upcoming events (the site's 5-minute list), and announceEvent
+ * with the organizer credential, as the publish path makes it.
+ */
+export function productionAnnouncer(
+  getClient: () => Client | undefined,
+  events: HostEventsDeps,
+): AnnounceRouteDeps {
+  const deps = {
+    announcements: () => PostgresEventAnnouncementRepository.instance(),
+    ownUpcoming: (meetupMemberId: string) =>
+      hostedEvents(events, meetupMemberId, 'upcoming'),
+    // A client made per announce, never re-running the write on a 401.
+    // Not getting the credential (Redis down, no token) calls nothing.
+    announce: async (meetupEventId: string) => {
+      let token: string | undefined;
+      try {
+        token = await getOrganizerAccessToken({ client: getClient() });
+      } catch {
+        token = undefined;
+      }
+      if (!token) {
+        throw new OrganizerTokenUnavailableError();
+      }
+      await new GqlMeetupClient(token, { bypassCache: true }).announceEvent(
+        { eventId: meetupEventId },
+        { requireConfirmation: true },
+      );
+    },
+    alert: alertVia(getClient),
+  };
+  return {
+    announce: (host, meetupEventId, hooks) =>
+      announceHostEvent(deps, host, meetupEventId, hooks),
+    announcements: async (ids) =>
+      (await PostgresEventAnnouncementRepository.instance()).forEvents(ids),
+  };
 }

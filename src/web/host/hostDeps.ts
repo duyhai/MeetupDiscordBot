@@ -40,6 +40,7 @@ import {
 import {
   alertVia,
   hostResolveDeps,
+  productionAnnouncer,
   productionPublisher,
   verifyRunner,
 } from './hostServices.js';
@@ -158,6 +159,7 @@ export function hostRouterFromEnv(
       registerHostPages(router, {
         events,
         requests: () => PostgresEventRequestRepository.instance(),
+        announce: productionAnnouncer(() => discordClient, events),
       });
       registerCreatePages(
         router,
