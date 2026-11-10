@@ -36,9 +36,13 @@ import {
   AnnounceRouteDeps,
   announceBadge,
   announceButton,
+  announceGuidelines,
   announceNotice,
+  recreateOffer,
   registerAnnounceRoute,
+  tooLateEvent,
 } from './announcePage.js';
+import { Recreatable } from '../../lib/hosts/recreateEvent.js';
 import { heatMapYear } from './heatMap.js';
 import { HOST_LINK_RESULTS, HostLinkResult, hostLocals } from './hostRouter.js';
 import { EventRequest } from '../../lib/repositories/postgresEventRequestRepository.js';
@@ -183,6 +187,8 @@ function homeBody(
     /** Each upcoming event's announcement; undefined: no Announce button. */
     announcements?: Map<string, Announcement>;
     announceResult?: unknown;
+    /** After a too-late refusal: the event, and whether it may be recreated. */
+    tooLate?: { eventId: string; offer: Recreatable | undefined };
     now?: Date;
   } = {},
 ): SafeHtml {
@@ -222,33 +228,44 @@ function homeBody(
   const rows = upcoming.map(
     (event) =>
       html`<tr>
-        <td data-label="Date">
-          ${dateLabel(event.dateTime)}, ${timeLabel(event.dateTime)}
-        </td>
-        <td data-label="Event">${eventLink(event)}${excludedBadge(event)}</td>
-        <td data-label="Type">${EVENT_TYPE_LABELS[event.type]}</td>
-        <td data-label="Status">
-          <span class="badge ok">Published</span>
-          ${
-            announcements ? announceBadge(announcements.get(event.id), now) : ''
-          }
-        </td>
-        <td data-label="Actions">
-          <div class="actions">
-            ${meetupButton(event)}
+          <td data-label="Date">
+            ${dateLabel(event.dateTime)}, ${timeLabel(event.dateTime)}
+          </td>
+          <td data-label="Event">${eventLink(event)}${excludedBadge(event)}</td>
+          <td data-label="Type">${EVENT_TYPE_LABELS[event.type]}</td>
+          <td data-label="Status">
+            <span class="badge ok">Published</span>
             ${
               announcements
-                ? announceButton(
-                    event,
-                    announcements.get(event.id),
-                    session.csrfToken,
-                    now,
-                  )
+                ? announceBadge(announcements.get(event.id), now)
                 : ''
             }
-          </div>
-        </td>
-      </tr>`,
+          </td>
+          <td data-label="Actions">
+            <div class="actions">
+              ${meetupButton(event)}
+              ${
+                announcements
+                  ? announceButton(
+                      event,
+                      announcements.get(event.id),
+                      session.csrfToken,
+                      now,
+                    )
+                  : ''
+              }
+            </div>
+          </td>
+        </tr>
+        ${
+          extra.tooLate?.eventId === event.id
+            ? html`<tr class="offer-row">
+                <td colspan="5">
+                  ${recreateOffer(event, extra.tooLate.offer, session.csrfToken)}
+                </td>
+              </tr>`
+            : ''
+        }`,
   );
   return html`<div class="card">
       <h1>Hi, ${memberText(session.username)}</h1>
@@ -265,9 +282,12 @@ function homeBody(
       ${
         announcements && upcoming.length > 0
           ? html`<p class="muted">
-              Announce sends Meetup's announcement email about your event to the
-              group. It goes out once per event.
-            </p>`
+                Announce sends Meetup's announcement email about your event to
+                the group. It goes out once per event. A request made 10–4
+                Mon–Fri waits until 4 pm; the time is shown by the event, and
+                you can cancel it until then.
+              </p>
+              ${announceGuidelines()}`
           : ''
       }
       ${
@@ -863,6 +883,8 @@ export function registerHostPages(
       }
     }
     let announcements: Map<string, Announcement> | undefined;
+    let tooLate:
+      { eventId: string; offer: Recreatable | undefined } | undefined;
     if (deps.announce) {
       try {
         announcements = await deps.announce.announcements(
@@ -875,6 +897,21 @@ export function registerHostPages(
         );
         announcements = new Map();
       }
+      const eventId = tooLateEvent(req.query);
+      if (eventId !== undefined && upcoming.some((e) => e.id === eventId)) {
+        let offer: Recreatable | undefined;
+        try {
+          offer = await deps.announce.recreatable(
+            { meetupMemberId: session.userId, name: session.username },
+            eventId,
+          );
+        } catch (error: unknown) {
+          logger.warn(
+            `Recreatable check failed: ${error instanceof Error ? error.name : 'Error'}`,
+          );
+        }
+        tooLate = { eventId, offer };
+      }
     }
     hostPage(res, {
       title: 'Home',
@@ -883,6 +920,7 @@ export function registerHostPages(
         linkResult: linkResultOf(req.query.link),
         announcements,
         announceResult: req.query.announce,
+        tooLate,
         now: deps.events.now(),
       }),
     });

@@ -351,6 +351,15 @@ ul.copy-details{margin:0 0 var(--s2);padding-left:1.2rem;overflow-wrap:anywhere}
 fieldset.review-checklist{border:1px solid var(--line);border-radius:var(--radius-ctl);padding:var(--s2) var(--s3);margin:0 0 var(--s3)}
 fieldset.review-checklist legend{font-size:var(--t-sm);color:var(--muted);padding:0 var(--s1)}
 fieldset.review-checklist label.check{display:flex;gap:var(--s2);align-items:center;min-height:44px}
+details.announce-guidelines{margin:0 0 var(--s3);font-size:var(--t-sm)}
+details.announce-guidelines ul{margin:var(--s1) 0 0;padding-left:1.2rem}
+.announce-early{margin:0 0 var(--s2);font-size:var(--t-sm)}
+.recreate-offer{margin:0}
+tr.offer-row td{padding-top:0}
+table.stack tr.offer-row td{padding-left:0}
+table.stack tr.offer-row td::before{content:none}
+.badge.wrap{white-space:normal;text-align:left}
+.recreate-offer form{margin:var(--s2) 0 0}
 .wrap-anywhere{overflow-wrap:anywhere}
 .field-error{display:block;margin-top:var(--s1);color:var(--attn-ink);font-size:var(--t-sm);font-weight:600}
 td.cal.past{color:var(--muted);background:var(--bg)}

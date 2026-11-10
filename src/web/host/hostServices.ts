@@ -13,7 +13,19 @@ import {
   publishTier,
   resolveHost,
 } from '../../lib/hosts/eligibility.js';
-import { announceHostEvent } from '../../lib/hosts/announceEvent.js';
+import {
+  AnnounceDeps,
+  AnnounceEventDetails,
+  announceHostEvent,
+  cancelHeldAnnouncement,
+  requestAnnouncement,
+} from '../../lib/hosts/announceEvent.js';
+import { AnnounceTickDeps } from '../../lib/hosts/announceTick.js';
+import {
+  RecreateDeps,
+  recreatable,
+  recreateAndAnnounce,
+} from '../../lib/hosts/recreateEvent.js';
 import { HostEventsDeps, hostedEvents } from '../../lib/hosts/hostEvents.js';
 import { PostgresEventAnnouncementRepository } from '../../lib/repositories/postgresEventAnnouncementRepository.js';
 import type { AnnounceRouteDeps } from './announcePage.js';
@@ -301,43 +313,184 @@ export async function revokeHostSessions(
 
 let decisionDeps: DecisionDeps | undefined;
 
+/** ANNOUNCE_RECREATE_CANCEL=1 lets recreate-and-announce cancel the old event on Meetup. */
+export function recreateCancelEnabled(
+  env: Record<string, string | undefined>,
+): boolean {
+  return env.ANNOUNCE_RECREATE_CANCEL?.trim() === '1';
+}
+
 /**
- * The Announce button's production deps: the announcements table, the
- * host's own upcoming events (the site's 5-minute list), and announceEvent
- * with the organizer credential, as the publish path makes it.
+ * A client on the organizer credential for one write, never re-running
+ * the write on a 401. Not getting the credential (Redis down, no token)
+ * calls nothing: an OrganizerTokenUnavailableError.
  */
-export function productionAnnouncer(
+async function organizerWriter(
+  getClient: () => Client | undefined,
+): Promise<GqlMeetupClient> {
+  let token: string | undefined;
+  try {
+    token = await getOrganizerAccessToken({ client: getClient() });
+  } catch {
+    token = undefined;
+  }
+  if (!token) {
+    throw new OrganizerTokenUnavailableError();
+  }
+  return new GqlMeetupClient(token, { bypassCache: true });
+}
+
+/** The announce pre-checks' read of an event, with the organizer credential. */
+function organizerEventDetails(
+  getClient: () => Client | undefined,
+): AnnounceDeps['eventDetails'] {
+  return (meetupEventId) =>
+    withOrganizerMeetup(getClient(), async (meetup) => {
+      const event = await meetup.getEventForAnnounce(meetupEventId);
+      if (!event) {
+        return undefined;
+      }
+      const details: AnnounceEventDetails = {
+        id: String(event.id),
+        title: String(event.title ?? ''),
+        eventUrl: String(event.eventUrl ?? ''),
+        dateTime: String(event.dateTime),
+        createdTime: event.createdTime ? String(event.createdTime) : null,
+        rsvpState: event.rsvpState ? String(event.rsvpState) : null,
+        rsvpsClosed:
+          typeof event.rsvpSettings?.rsvpsClosed === 'boolean'
+            ? event.rsvpSettings.rsvpsClosed
+            : null,
+        hosts: (event.eventHosts ?? []).flatMap((h) => {
+          return h?.member?.id
+            ? [{ id: String(h.member.id), name: String(h.member.name ?? '') }]
+            : [];
+        }),
+      };
+      return details;
+    });
+}
+
+/** The production AnnounceDeps: the table, the host's own list, the organizer credential. */
+function productionAnnounceDeps(
   getClient: () => Client | undefined,
   events: HostEventsDeps,
-): AnnounceRouteDeps {
-  const deps = {
+): AnnounceDeps {
+  return {
     announcements: () => PostgresEventAnnouncementRepository.instance(),
     ownUpcoming: (meetupMemberId: string) =>
       hostedEvents(events, meetupMemberId, 'upcoming'),
-    // A client made per announce, never re-running the write on a 401.
-    // Not getting the credential (Redis down, no token) calls nothing.
+    eventDetails: organizerEventDetails(getClient),
     announce: async (meetupEventId: string) => {
-      let token: string | undefined;
-      try {
-        token = await getOrganizerAccessToken({ client: getClient() });
-      } catch {
-        token = undefined;
-      }
-      if (!token) {
-        throw new OrganizerTokenUnavailableError();
-      }
-      await new GqlMeetupClient(token, { bypassCache: true }).announceEvent(
+      await (
+        await organizerWriter(getClient)
+      ).announceEvent(
         { eventId: meetupEventId },
         { requireConfirmation: true },
       );
     },
     alert: alertVia(getClient),
+    now: () => new Date(),
+  };
+}
+
+/**
+ * The Announce button's production deps: the announcements table, the
+ * host's own upcoming events (the site's 5-minute list), announceEvent
+ * with the organizer credential, and recreate-and-announce (a copy made
+ * and the old event cancelled with the same credential).
+ */
+export function productionAnnouncer(
+  getClient: () => Client | undefined,
+  events: HostEventsDeps,
+): AnnounceRouteDeps {
+  const deps = productionAnnounceDeps(getClient, events);
+  const repo = () => PostgresEventAnnouncementRepository.instance();
+  const recreateDeps: RecreateDeps = {
+    ownUpcoming: deps.ownUpcoming,
+    // Fresh reads: the RSVP list decides whether an event may be cancelled.
+    othersRsvped: (meetupEventId) =>
+      withOrganizerMeetup(getClient(), async (meetup) => {
+        const event = await meetup.getEventForAnnounce(meetupEventId);
+        const hostIds = new Set(
+          (event?.eventHosts ?? []).flatMap((h) => {
+            return h?.member?.id ? [String(h.member.id)] : [];
+          }),
+        );
+        const rsvps = await getPaginatedData(async (pagination) => {
+          const result = await meetup.getEventRsvps(meetupEventId, pagination, {
+            rsvpStatus: ['YES', 'WAITLIST'],
+          });
+          return result.event.rsvps;
+        });
+        return rsvps.some((r) => !hostIds.has(String(r.member?.id)));
+      }),
+    copySource: (meetupEventId) =>
+      withOrganizerMeetup(
+        getClient(),
+        async (meetup) =>
+          (await meetup.getEventForCopy(meetupEventId)) ?? undefined,
+      ),
+    organizer: () => organizerWriter(getClient),
+    // Off until Hai has tried deleteEvent(removeFromCalendar: false) on a
+    // throwaway event: until then the old event is left for leadership.
+    cancelEvent: recreateCancelEnabled(process.env)
+      ? async (meetupEventId) => {
+          await (
+            await organizerWriter(getClient)
+          ).deleteEvent({ eventId: meetupEventId, removeFromCalendar: false });
+        }
+      : undefined,
+    recreations: async () => {
+      const store = await repo();
+      return {
+        claim: (oldId, by) => store.claimRecreation(oldId, by),
+        fill: (oldId, newId) => store.fillRecreation(oldId, newId),
+        release: (oldId, by) => store.releaseRecreation(oldId, by),
+        get: (oldId) => store.recreationOf(oldId),
+      };
+    },
+    announce: (host, event) => requestAnnouncement(deps, host, event),
+    alert: alertVia(getClient),
+    audit: async (entry) => {
+      const client = getClient();
+      return client ? logActivity(client, entry) : false;
+    },
   };
   return {
     announce: (host, meetupEventId, hooks) =>
       announceHostEvent(deps, host, meetupEventId, hooks),
-    announcements: async (ids) =>
-      (await PostgresEventAnnouncementRepository.instance()).forEvents(ids),
+    announcements: async (ids) => (await repo()).forEvents(ids),
+    cancel: async (host, meetupEventId) =>
+      cancelHeldAnnouncement(
+        deps,
+        async (id) => (await repo()).cancelHeld(id),
+        host,
+        meetupEventId,
+      ),
+    recreatable: (host, meetupEventId) =>
+      recreatable(recreateDeps, host, meetupEventId),
+    recreate: (host, meetupEventId) =>
+      recreateAndAnnounce(recreateDeps, host, meetupEventId),
+  };
+}
+
+/** The announce tick's production deps (startAnnounceScheduler). */
+export function productionAnnounceTickDeps(
+  getClient: () => Client | undefined,
+): AnnounceTickDeps {
+  const events: HostEventsDeps = {
+    fetchGroupEvents: async () => [],
+    now: () => new Date(),
+  };
+  const deps = productionAnnounceDeps(getClient, events);
+  return {
+    cache: () => ApplicationCache(),
+    announcements: () => PostgresEventAnnouncementRepository.instance(),
+    eventDetails: deps.eventDetails,
+    announce: deps.announce,
+    alert: deps.alert,
+    now: deps.now,
   };
 }
 
