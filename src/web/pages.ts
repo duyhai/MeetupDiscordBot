@@ -202,13 +202,36 @@ svg.heat rect.hm2{fill:var(--heat2)}
 svg.heat rect.hm3{fill:var(--heat3)}
 svg.heat rect.hm4{fill:var(--heat4)}
 svg.heat text{fill:var(--muted)}
+svg.heat a.hm-link:focus-visible rect{outline:2px solid var(--accent);outline-offset:1px}
+svg.heat a.hm-link rect{cursor:pointer}
+.hm-tip{position:fixed;z-index:30;max-width:min(20rem,calc(100vw - 16px));padding:var(--s2) var(--s3);
+  background:var(--fg);color:var(--bg);border-radius:8px;font-size:var(--t-sm);box-shadow:0 6px 18px rgb(0 0 0 / .25);
+  overflow-wrap:anywhere;pointer-events:none}
+.hm-tip strong,.hm-tip span{display:block}
+nav.year-nav{display:flex;align-items:center;gap:var(--s3);flex-wrap:wrap;margin:var(--s3) 0 0}
+nav.year-nav [aria-disabled="true"]{opacity:.45;cursor:default;pointer-events:none}
+p.day-filter{font-weight:600}
 table.cal-grid{table-layout:fixed;width:100%;min-width:560px}
 table.cal-grid th{text-align:center}
 td.cal{vertical-align:top;height:76px;padding:var(--s1) var(--s2);font-size:var(--t-sm);white-space:normal;
 overflow-wrap:anywhere}
 td.cal span{display:block}
 .cal-day{font-weight:700}
-a.cal-day{position:relative;display:inline-flex;align-items:center;min-width:var(--tap);min-height:var(--tap)}
+.cal-head{display:flex;align-items:center;justify-content:space-between;gap:var(--s1)}
+a.cal-add{display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;flex:none;
+  border:1px solid var(--field);border-radius:8px;background:var(--surface);font-weight:700;text-decoration:none}
+a.cal-add:hover{background:var(--sel)}
+details.cal-pop{margin:0}
+details.cal-pop>summary{display:block;list-style:none;min-height:32px;padding:var(--s1) 0;font-weight:400}
+details.cal-pop>summary::-webkit-details-marker{display:none}
+details.cal-pop>summary .cal-count{text-decoration:underline dotted;text-underline-offset:3px}
+.cal-panel{margin-top:var(--s1);padding:var(--s2);border:1px solid var(--line);border-radius:8px;background:var(--surface)}
+.cal-panel ul{margin:0 0 var(--s2);padding-left:1.1rem}
+.cal-panel li{margin:0 0 var(--s1)}
+.cal-panel p{margin:0 0 var(--s1)}
+.cal-panel-title{font-weight:700}
+table.cal-js details.cal-pop[open]>.cal-panel{position:fixed;z-index:20;margin:0;width:min(22rem,calc(100vw - 32px));
+  max-height:min(60vh,28rem);overflow:auto;box-shadow:0 8px 24px rgb(0 0 0 / .25)}
 .cal-date{font-weight:600;font-style:italic}
 .sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
 form.request-form label.field{margin:0 0 var(--s3)}

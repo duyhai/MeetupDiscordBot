@@ -36,12 +36,15 @@ export function hostLayout({
   user,
   current,
   body,
+  script,
 }: {
   title: string;
   nonce: string;
   user?: { username: string; csrfToken: string };
   current?: HostNavKey;
   body: SafeHtml;
+  /** One staticRaw constant: the page's progressive enhancement. */
+  script?: SafeHtml;
 }): string {
   const account = user
     ? html`<div class="account">
@@ -53,6 +56,8 @@ export function hostLayout({
       </div>`
     : '';
   const nav = user ? hostNav(current) : '';
+  // prettier-ignore
+  const scriptTag = script ? html`<script nonce="${nonce}">${script}</script>` : '';
   // prettier-ignore
   return html`<!doctype html>
 <html lang="en">
@@ -68,6 +73,7 @@ export function hostLayout({
 <header class="site"><div class="bar"><strong class="brand">1.5 Gen Asians host dashboard</strong>${account}</div></header>
 ${nav}
 <main id="main" tabindex="-1">${body}</main>
+${scriptTag}
 </body>
 </html>`.value;
 }

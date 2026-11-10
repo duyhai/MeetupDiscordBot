@@ -1,8 +1,9 @@
 import dayjs from 'dayjs';
 
-import { SafeHtml, html } from '../html.js';
+import { HostEvent } from '../../lib/hosts/hostEvents.js';
+import { SafeHtml, SafeUrl, html } from '../html.js';
+import { timeLabel } from './hostPageKit.js';
 
-export const HEAT_WEEKS = 53;
 const CELL = 12;
 const GAP = 3;
 const LEFT = 28;
@@ -15,11 +16,10 @@ const DAY_LABELS: [number, string][] = [
 ];
 
 /**
- * One cell. The class is one of five literals (the html guard admits no
- * interpolated class): 0, 1, 2, 3-4 and 5+ events that day.
+ * One cell's rect. The class is one of five literals (the html guard admits
+ * no interpolated class): 0, 1, 2, 3-4 and 5+ events that day.
  */
-function cell(x: number, y: number, day: string, count: number): SafeHtml {
-  const label = `${day}: ${count} ${count === 1 ? 'event' : 'events'}`;
+function rect(x: number, y: number, count: number, label: string): SafeHtml {
   const at = { x: String(x), y: String(y) };
   if (count <= 0) {
     return html`<rect
@@ -76,52 +76,91 @@ function cell(x: number, y: number, day: string, count: number): SafeHtml {
   >`;
 }
 
+/** "Sat, Mar 7, 2026", then one "7:00 PM · Title" line per event. */
+function tipLines(day: string, events: HostEvent[]): string[] {
+  return [
+    dayjs(day).format('ddd, MMM D, YYYY'),
+    ...events.map((e) => `${timeLabel(e.dateTime)} · ${e.title}`),
+  ];
+}
+
+export interface HeatYear {
+  /** The host's events by Pacific day (YYYY-MM-DD). */
+  byDay: Map<string, HostEvent[]>;
+  year: number;
+  /** Today, Pacific: the current year's map stops here. */
+  today: string;
+  /** The day filter's link for a day with events. */
+  dayLink: (day: string) => SafeUrl;
+}
+
 /**
- * GitHub-contribution style: 53 Sunday-first week columns ending with the
- * week of `endDay` (YYYY-MM-DD), one cell per day up to `endDay`. Counts
- * only, never names. The total is also written as text, so the picture is
- * never the only way to read it.
+ * One calendar year, GitHub-contribution style: Sunday-first week columns
+ * from the week of Jan 1 to Dec 31 (or today, this year). A day with
+ * events is a link to the day filter; its aria-label and title list each
+ * event's time and title, and HISTORY_SCRIPT shows the same lines as a
+ * tooltip. Empty days are plain cells, so the map adds one tab stop per
+ * hosted day, not 365. The total is also text.
  */
-export function heatMap(counts: Map<string, number>, endDay: string): SafeHtml {
-  const end = dayjs(endDay);
-  const firstSunday = end
-    .subtract(end.day(), 'day')
-    .subtract((HEAT_WEEKS - 1) * 7, 'day');
+export function heatMapYear({
+  byDay,
+  year,
+  today,
+  dayLink,
+}: HeatYear): SafeHtml {
+  const first = dayjs(`${year}-01-01`);
+  const yearEnd = dayjs(`${year}-12-31`);
+  const end = today < yearEnd.format('YYYY-MM-DD') ? dayjs(today) : yearEnd;
+  const firstSunday = first.subtract(first.day(), 'day');
+  const weeks = Math.ceil((end.diff(firstSunday, 'day') + 1) / 7);
   const cells: SafeHtml[] = [];
   const months: SafeHtml[] = [];
   let total = 0;
   let lastMonth = -1;
-  for (let week = 0; week < HEAT_WEEKS; week += 1) {
+  for (let week = 0; week < weeks; week += 1) {
     const weekStart = firstSunday.add(week * 7, 'day');
-    if (weekStart.month() !== lastMonth) {
-      lastMonth = weekStart.month();
+    const labelDay = week === 0 ? first : weekStart;
+    if (labelDay.month() !== lastMonth) {
+      lastMonth = labelDay.month();
       // Skip a label too close to the right edge to fit.
-      if (week < HEAT_WEEKS - 2) {
+      if (week < weeks - 2 || weeks < 4) {
         months.push(
           html`<text
             x="${String(LEFT + week * (CELL + GAP))}"
             y="10"
             font-size="10"
-            >${weekStart.format('MMM')}</text
+            >${labelDay.format('MMM')}</text
           >`,
         );
       }
     }
     for (let weekday = 0; weekday < 7; weekday += 1) {
       const date = weekStart.add(weekday, 'day');
+      if (date.isBefore(first, 'day')) {
+        continue;
+      }
       if (date.isAfter(end, 'day')) {
         break;
       }
       const day = date.format('YYYY-MM-DD');
-      const count = counts.get(day) ?? 0;
-      total += count;
+      const events = byDay.get(day) ?? [];
+      total += events.length;
+      const x = LEFT + week * (CELL + GAP);
+      const y = TOP + weekday * (CELL + GAP);
+      if (events.length === 0) {
+        cells.push(rect(x, y, 0, `${day}: no events`));
+        continue;
+      }
+      const lines = tipLines(day, events);
+      const label = `${lines[0]}: ${lines.slice(1).join('; ')}`;
       cells.push(
-        cell(
-          LEFT + week * (CELL + GAP),
-          TOP + weekday * (CELL + GAP),
-          day,
-          count,
-        ),
+        html`<a
+          class="hm-link"
+          href="${dayLink(day)}"
+          aria-label="${label}"
+          data-tip="${lines.join('\n')}"
+          >${rect(x, y, events.length, label)}</a
+        >`,
       );
     }
   }
@@ -134,23 +173,22 @@ export function heatMap(counts: Map<string, number>, endDay: string): SafeHtml {
         >${text}</text
       >`,
   );
-  const width = LEFT + HEAT_WEEKS * (CELL + GAP);
+  const width = LEFT + weeks * (CELL + GAP);
   const height = TOP + 7 * (CELL + GAP);
   return html`<div class="table-scroll heat-wrap">
       <svg
         class="heat"
-        role="img"
+        role="group"
+        aria-label="Events hosted per day in ${String(year)}: ${total} in total"
         viewBox="0 0 ${String(width)} ${String(height)}"
         width="${String(width)}"
         height="${String(height)}"
       >
-        <title>
-          Events hosted per day over the past year: ${total} in total
-        </title>
         ${months}${labels}${cells}
       </svg>
     </div>
     <p class="muted">
-      ${total} ${total === 1 ? 'event' : 'events'} in the past year shown.
+      ${total} ${total === 1 ? 'event' : 'events'} in ${String(year)}. Point at
+      or tap a coloured day to see its events; open it to list them below.
     </p>`;
 }
