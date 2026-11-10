@@ -209,6 +209,29 @@ describe('announceHostEvent', () => {
     }
   });
 
+  it('a 5xx, even with GraphQL errors, is no answer: unconfirmed', async () => {
+    const { store, run } = setup({
+      announce: async () => {
+        throw graphqlError('Event has already been announced.', 503);
+      },
+    });
+    await expect(run()).resolves.toBe('unconfirmed');
+    expect(store.rows.get(EVENT.id)?.status).toBe('unknown');
+  });
+
+  it('a 4xx with GraphQL errors that are not "already announced" is a refusal', async () => {
+    const { store, run } = setup({
+      announce: async () => {
+        throw graphqlError('Not authorized to announce this event', 403);
+      },
+    });
+    await expect(run()).resolves.toBe('failed');
+    expect(store.rows.get(EVENT.id)).toMatchObject({
+      status: 'failed',
+      failure: 'Not authorized to announce this event',
+    });
+  });
+
   it('a 4xx carrying Meetup’s "already announced" is done, like a 200 one', async () => {
     const { store, run } = setup({
       announce: async () => {
