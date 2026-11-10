@@ -12,6 +12,7 @@ import { UnlinkAccountCommands } from './meetup/unlinkAccount.js';
 import { MeetupVoidSuspensionCommands } from './meetup/voidSuspension.js';
 import { MeetupWhoisCommands } from './meetup/whoisAccount.js';
 import { WhereHaveWeMetCommands } from './meetup/whereHaveWeMet.js';
+import { WrappedCommands } from './meetup/wrapped.js';
 import { SendMessageCommands } from './sendMessage.js';
 
 const Commands = [
@@ -30,6 +31,7 @@ const Commands = [
   MeetupVoidSuspensionCommands,
   MeetupWhoisCommands,
   WhereHaveWeMetCommands,
+  WrappedCommands,
 ];
 
 export default Commands;

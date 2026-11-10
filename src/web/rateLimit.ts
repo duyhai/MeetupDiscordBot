@@ -38,6 +38,18 @@ export class FixedWindowLimiter {
     return entry.count <= this.limit;
   }
 
+  /**
+   * Gives one slot back inside the current window, for a caller whose
+   * attempt never got the thing the limit protects (a build that failed on
+   * the upstream's side). A key with no live window is left alone.
+   */
+  release(key: string): void {
+    const entry = this.hits.get(key);
+    if (entry && entry.resetAt > this.now() && entry.count > 0) {
+      entry.count -= 1;
+    }
+  }
+
   retryAfterSec(key: string): number {
     const entry = this.hits.get(key);
     return entry
