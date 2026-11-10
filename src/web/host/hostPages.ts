@@ -169,19 +169,20 @@ function homeBody(
   linkResult?: HostLinkResult,
 ): SafeHtml {
   const quiet = quietDays(calendar, today).slice(0, QUIET_DAYS_SHOWN);
-  // Linking here only links accounts: no server roles (that stays with
-  // Verify in the server). Only for a Meetup sign-in: a Discord sign-in
+  // "Verify on Discord": the same Verify as the button in the server. Only for a Meetup sign-in: a Discord sign-in
   // whose link was removed since carries a Discord name, not a Meetup one.
   const linkNudge =
     session.discordUserId === null && session.via === 'meetup'
       ? html`<div class="note info">
           <p>
-            Your Meetup account is not linked to Discord. Linking is optional,
-            but it lets us recognise you in our Discord server.
+            Your Meetup account is not linked to Discord yet. Verifying is
+            optional: it links the two, adds you to our Discord server if you
+            are not in it, and gives you the same roles and badges as pressing
+            Verify there.
           </p>
           <form method="post" action="${localUrl(LINK_DISCORD_PATH)}">
             <input type="hidden" name="_csrf" value="${session.csrfToken}" />
-            <button type="submit">Link your Discord account</button>
+            <button type="submit">Verify on Discord</button>
           </form>
         </div>`
       : '';

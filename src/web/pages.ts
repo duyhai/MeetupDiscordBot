@@ -230,6 +230,9 @@ nav.year-nav{display:flex;align-items:center;gap:var(--s3);flex-wrap:wrap;margin
 nav.year-nav .disabled{opacity:.45;cursor:default}
 @media (max-width:480px){nav.year-nav{justify-content:space-between}nav.year-nav strong{order:-1;flex-basis:100%}}
 p.day-filter{font-weight:600}
+dl.verify-summary{display:grid;grid-template-columns:max-content 1fr;gap:var(--s1) var(--s4);margin:var(--s3) 0}
+dl.verify-summary dt{font-weight:600;color:var(--muted)}
+dl.verify-summary dd{margin:0;overflow-wrap:anywhere}
 table.cal-grid{table-layout:fixed;width:100%;min-width:560px}
 table.cal-grid th{text-align:center}
 td.cal{vertical-align:top;height:76px;padding:var(--s1) var(--s2);font-size:var(--t-sm);white-space:normal;

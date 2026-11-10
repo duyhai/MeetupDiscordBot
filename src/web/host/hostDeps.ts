@@ -26,10 +26,12 @@ import { hostLayout } from './hostLayout.js';
 import { registerHostPages } from './hostPages.js';
 import { createHostRouter } from './hostRouter.js';
 import { registerCreatePages } from './createPage.js';
+import { ensureServerMember } from './serverJoin.js';
 import {
   alertVia,
   hostResolveDeps,
   productionPublisher,
+  verifyRunner,
 } from './hostServices.js';
 import { buildHostMeetupAuthUrl, fetchMeetupSelf } from './meetupSignIn.js';
 
@@ -114,6 +116,20 @@ export function hostRouterFromEnv(
     alert: alertVia(() => discordClient),
     // The same store Verify writes and resolveHost reads.
     members: () => ApplicationMemberRepository(),
+    discordVerifyUrl: (state, verifier) =>
+      buildDashboardLoginUrl(state, verifier, hostRedirectUri(), [
+        'identify',
+        'guilds.join',
+      ]),
+    joinServer: async (discordUserId, accessToken) => {
+      const { joined, pending } = await ensureServerMember(
+        () => discordClient,
+        discordUserId,
+        accessToken,
+      );
+      return { joined, pending };
+    },
+    runVerify: verifyRunner(() => discordClient),
     pages: (router) => {
       registerHostPages(router, {
         events,

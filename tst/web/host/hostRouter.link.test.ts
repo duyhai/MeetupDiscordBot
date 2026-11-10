@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { GUEST_HOST_BLACKLIST } from '../../../src/constants.js';
+import { NonMemberError } from '../../../src/lib/helpers/onboardUser.js';
 import { HostResolution } from '../../../src/lib/hosts/eligibility.js';
 import { WebLinkStore } from '../../../src/lib/hosts/webLink.js';
 import {
@@ -182,7 +183,7 @@ function patchStoredSession(
 const csrfOnPage = (text: string) =>
   /name="_csrf" value="([^"]+)"/.exec(text)?.[1] ?? '';
 
-describe('Link your Discord account', () => {
+describe('Verify on Discord', () => {
   it('the start needs the CSRF token and sends a link. state to Discord', async () => {
     const { req, sid, session } = await setup();
     const refused = await req
@@ -237,7 +238,7 @@ describe('Link your Discord account', () => {
     expect(home.text).toContain(
       'Your Meetup and Discord accounts are now linked.',
     );
-    expect(home.text).not.toContain('Link your Discord account');
+    expect(home.text).not.toContain('Verify on Discord');
   });
 
   it('a cancelled or failed Discord sign-in changes nothing', async () => {
@@ -434,7 +435,7 @@ describe('Link your Discord account', () => {
     const viaDiscord = await signInWithDiscord(req);
     const home = await req.get('/host').set('Cookie', viaDiscord);
     expect(home.status).toBe(200);
-    expect(home.text).not.toContain('Link your Discord account');
+    expect(home.text).not.toContain('Verify on Discord');
     const start = await req
       .post('/host/link/discord')
       .set('Cookie', viaDiscord)
@@ -566,7 +567,7 @@ describe('Link your Discord account', () => {
       new RegExp(
         '<form method="post" action="/host/link/discord">\\s*' +
           '<input type="hidden" name="_csrf" value="[^"]+" />\\s*' +
-          '<button type="submit">Link your Discord account</button>',
+          '<button type="submit">Verify on Discord</button>',
       ),
     );
     // No more sending hosts to Verify in the server for this.
@@ -581,5 +582,174 @@ describe('Link your Discord account', () => {
       'Your Meetup account is already linked to a different Discord account',
     );
     expect(session().csrfToken).toBeTruthy();
+  });
+});
+
+describe('Verify on Discord: joining the server and running Verify', () => {
+  const SUMMARY = {
+    meetupName: 'Ann <b>Nguyen</b>',
+    meetupMemberUrl: 'https://www.meetup.com/members/4242/',
+    rolesGranted: ['Guest Host'],
+    hostedCount: 3,
+    attendedCount: 12,
+  };
+
+  async function verifySetup(
+    options: {
+      join?: { joined: boolean; pending: boolean } | Error;
+      verify?: typeof SUMMARY | Error;
+    } = {},
+  ) {
+    const joinServer = vi.fn(async () => {
+      if (options.join instanceof Error) {
+        throw options.join;
+      }
+      return options.join ?? { joined: false, pending: false };
+    });
+    const runVerify = vi.fn(async () => {
+      if (options.verify instanceof Error) {
+        throw options.verify;
+      }
+      return options.verify ?? SUMMARY;
+    });
+    const discordVerifyUrl = vi.fn(
+      (state: string) =>
+        `https://discord.com/oauth2/authorize?scope=identify+guilds.join&state=${state}`,
+    );
+    const app = await setup({
+      overrides: { joinServer, runVerify, discordVerifyUrl },
+    });
+    return { ...app, joinServer, runVerify, discordVerifyUrl };
+  }
+
+  /** Discord's step, then Meetup's: returns the result page. */
+  async function verify(
+    app: Awaited<ReturnType<typeof verifySetup>>,
+    meetupParams: (state: string) => string = (state) =>
+      `state=${state}&code=m`,
+  ) {
+    const { back } = await link(app.req, app.sid, app.session().csrfToken);
+    // On to Meetup with a sealed, session-bound verify cookie.
+    const meetup = locationOf(back);
+    expect(meetup.origin + meetup.pathname).toBe(
+      'https://secure.meetup.com/oauth2/authorize',
+    );
+    const state = meetup.searchParams.get('state') ?? '';
+    const cookie = setCookie(back, 'host_oauth_meetup') ?? '';
+    expect(cookie).toBeTruthy();
+    return app.req
+      .get(`/host/auth/meetup/complete?${meetupParams(state)}`)
+      .set('Cookie', `${app.sid}; ${cookie}`);
+  }
+
+  it('asks Discord for guilds.join, links, and runs Verify with the fresh Meetup token', async () => {
+    const app = await verifySetup();
+    const page = await verify(app);
+    expect(app.discordVerifyUrl).toHaveBeenCalled();
+    expect(app.joinServer).toHaveBeenCalledWith(
+      DISCORD_USER.id,
+      'discord-access',
+    );
+    expect(app.runVerify).toHaveBeenCalledWith(
+      'meetup-access',
+      DISCORD_USER.id,
+    );
+    expect(page.status).toBe(200);
+    expect(page.text).toContain('You are verified');
+    expect(page.text).toContain('Guest Host');
+    expect(page.text).toContain('12 attended · 3 hosted — badges applied');
+    expect(page.text).toContain('href="https://www.meetup.com/members/4242/"');
+    // Host-supplied text is escaped.
+    expect(page.text).not.toContain('<b>Nguyen</b>');
+    // Already in the server: no join note, and no "joined" field.
+    expect(page.text).not.toContain('We added you');
+    expect(JSON.stringify(vi.mocked(app.deps.audit).mock.calls)).not.toContain(
+      'Joined the server',
+    );
+    // Same-origin only: no form posts anywhere else.
+    for (const [, action] of page.text.matchAll(
+      /<form[^>]*action="([^"]+)"/g,
+    )) {
+      expect(action.startsWith('/host/')).toBe(true);
+    }
+  });
+
+  it('adds a non-member to the server and asks them to accept the rules', async () => {
+    const app = await verifySetup({ join: { joined: true, pending: true } });
+    const page = await verify(app);
+    expect(page.text).toContain('accept the server rules');
+    expect(JSON.stringify(vi.mocked(app.deps.audit).mock.calls)).toContain(
+      'Joined the server',
+    );
+  });
+
+  it('a join Discord refuses keeps the link, alerts, and still verifies', async () => {
+    const app = await verifySetup({ join: new Error('missing access') });
+    const page = await verify(app);
+    expect(app.store.linkUnlessLinkedElsewhere).toHaveBeenCalledOnce();
+    expect(JSON.stringify(app.alert.mock.calls)).toContain(
+      'Could not add a member to the server (host dashboard)',
+    );
+    expect(page.text).toContain('We could not add you to our Discord server');
+    expect(app.runVerify).toHaveBeenCalledOnce();
+  });
+
+  it('roles that fail after the link keep the link, alert, and point to Verify in Discord', async () => {
+    const app = await verifySetup({ verify: new Error('discord 500') });
+    const page = await verify(app);
+    expect(app.store.linkUnlessLinkedElsewhere).toHaveBeenCalledOnce();
+    expect(page.text).toContain('Linked, not verified yet');
+    expect(page.text).toContain('Press Verify in our Discord server');
+    expect(JSON.stringify(app.alert.mock.calls)).toContain(
+      'Verify on the host dashboard did not finish',
+    );
+  });
+
+  it('a non-member is told why, with no second alert', async () => {
+    const app = await verifySetup({
+      verify: new NonMemberError("You're not a member of our Meetup group."),
+    });
+    const page = await verify(app);
+    expect(page.text).toContain('Not verified');
+    expect(page.text).toContain('not a member of our Meetup group');
+    expect(JSON.stringify(app.alert.mock.calls)).not.toContain(
+      'did not finish',
+    );
+  });
+
+  it('a different Meetup account at the Meetup step verifies nothing', async () => {
+    const app = await verifySetup();
+    // eslint-disable-next-line @typescript-eslint/unbound-method -- a vi.fn
+    vi.mocked(app.deps.meetup.fetchSelf).mockResolvedValueOnce({
+      id: '9999',
+      name: 'Someone else',
+    });
+    const page = await verify(app);
+    expect(page.text).toContain('A different Meetup account');
+    expect(app.runVerify).not.toHaveBeenCalled();
+  });
+
+  it('cancelling at Meetup leaves them linked, with a way to try again', async () => {
+    const app = await verifySetup();
+    const page = await verify(
+      app,
+      (state) => `state=${state}&error=access_denied`,
+    );
+    expect(page.text).toContain('Linked, not verified yet');
+    expect(page.text).toContain('action="/host/link/discord"');
+    expect(app.runVerify).not.toHaveBeenCalled();
+  });
+
+  it('a Meetup step that reaches a different session verifies nothing', async () => {
+    const app = await verifySetup();
+    const { back } = await link(app.req, app.sid, app.session().csrfToken);
+    const state = locationOf(back).searchParams.get('state') ?? '';
+    const cookie = setCookie(back, 'host_oauth_meetup') ?? '';
+    const other = await signInWithMeetup(app.req);
+    const page = await app.req
+      .get(`/host/auth/meetup/complete?state=${state}&code=m`)
+      .set('Cookie', `${other}; ${cookie}`);
+    expect(page.headers.location).toBe('/host?link=error');
+    expect(app.runVerify).not.toHaveBeenCalled();
   });
 });

@@ -1,6 +1,6 @@
 import { Client } from 'discord.js';
 
-import { SERVER_ROLES } from '../../constants.js';
+import { GUILD_ID, SERVER_ROLES } from '../../constants.js';
 import { GqlMeetupClient } from '../../lib/client/meetup/gqlClient.js';
 import { getPaginatedData } from '../../lib/client/meetup/paginationHelper.js';
 import {
@@ -10,6 +10,11 @@ import {
 import { HostResolveDeps, resolveHost } from '../../lib/hosts/eligibility.js';
 import { PublishDeps, publishRequest } from '../../lib/hosts/publishRequest.js';
 import { LogEntry, logAlert } from '../../lib/helpers/discordLogger.js';
+import { getBadges } from '../../lib/helpers/getBadges.js';
+import { getUserRoles } from '../../lib/helpers/getUserRoles.js';
+import { selfOnboardUser } from '../../lib/helpers/onboardUser.js';
+import { VerificationSummary } from '../../lib/helpers/verificationSummary.js';
+import { VerifyContext } from '../../lib/helpers/verifyContext.js';
 import { getOrganizerAccessToken } from '../../lib/helpers/organizerMeetupClient.js';
 import {
   OrganizerTokenUnavailableError,
@@ -121,4 +126,52 @@ export function productionPublisher(getClient: () => Client | undefined) {
       ? R
       : never
   ) => publishRequest(deps, ...args);
+}
+
+/**
+ * The Verify button's steps for "Verify on Discord" on the host dashboard:
+ * the same selfOnboardUser → getUserRoles → getBadges, run as the member
+ * with their fresh Meetup access token (used here once, never stored), on
+ * a context built from the Discord account just linked.
+ */
+export function verifyRunner(
+  getClient: () => Client | undefined,
+): (
+  meetupAccessToken: string,
+  discordUserId: string,
+) => Promise<VerificationSummary> {
+  return async (meetupAccessToken, discordUserId) => {
+    const client = getClient();
+    if (!client) {
+      throw new Error('Discord client is not ready');
+    }
+    const guild = await client.guilds.fetch(GUILD_ID);
+    const user = await client.users.fetch(discordUserId);
+    const member: VerifyContext = {
+      guild,
+      client,
+      userId: discordUserId,
+      username: user.username,
+      attempt: 'host dashboard',
+    };
+    const meetupClient = new GqlMeetupClient(meetupAccessToken, {
+      bypassCache: true,
+    });
+    const { meetupName, meetupMemberUrl } = await selfOnboardUser(
+      meetupClient,
+      member,
+    );
+    const rolesGranted = await getUserRoles(meetupClient, member);
+    const { hostedCount, attendedCount } = await getBadges(
+      meetupClient,
+      member,
+    );
+    return {
+      meetupName,
+      meetupMemberUrl,
+      rolesGranted,
+      hostedCount,
+      attendedCount,
+    };
+  };
 }

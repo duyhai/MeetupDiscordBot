@@ -16,6 +16,9 @@ import type {
   HostResolution,
 } from '../../lib/hosts/eligibility.js';
 import { LogEntry } from '../../lib/helpers/discordLogger.js';
+import { DuplicateMeetupAccountError } from '../../lib/helpers/memberLink.js';
+import { NonMemberError } from '../../lib/helpers/onboardUser.js';
+import { VerificationSummary } from '../../lib/helpers/verificationSummary.js';
 import { WebLinkStore, linkDiscordFromWeb } from '../../lib/hosts/webLink.js';
 import {
   clearCookie,
@@ -57,6 +60,14 @@ import {
   HostSession,
 } from './hostSession.js';
 import { isHostState, newHostState } from './meetupSignIn.js';
+import {
+  ServerJoinResult,
+  VERIFY_MARK,
+  VerifyResult,
+  joinFlags,
+  joinOf,
+  verifyResultPage,
+} from './verifyPage.js';
 
 const logger = new Logger({ name: 'hostDashboard' });
 
@@ -72,7 +83,7 @@ const MAX_SESSION_COOKIE_CANDIDATES = 20;
 const SAFE_METHODS = new Set(['GET', 'HEAD']);
 const DISCORD_ID = /^[0-9]{17,20}$/;
 /**
- * A Discord sign-in started by "Link your Discord account": the same
+ * A Discord sign-in started by "Verify on Discord": the same
  * redirect URI and cookie as a sign-in, told apart by this prefix (a
  * sign-in state is base64url, so it never has a dot). It ends with a tag of
  * the session that started it, so a callback reaching a different session
@@ -114,10 +125,33 @@ export interface HostRouterDeps {
   /** #meetup-bot-alerts, plain (no mentions); falls back to `audit`. */
   alert?: (entry: LogEntry) => Promise<unknown>;
   /**
-   * The member links, for "Link your Discord account". Without it the
+   * The member links, for "Verify on Discord". Without it the
    * link routes answer 404. Rejects when Postgres cannot answer.
    */
   members?: () => Promise<WebLinkStore>;
+  /**
+   * "Verify on Discord"'s authorize URL: identify plus guilds.join, so the
+   * member can be added to our server. Falls back to discord.buildLoginUrl.
+   */
+  discordVerifyUrl?: (state: string, codeVerifier: string) => string;
+  /**
+   * Adds the member to our server with their own OAuth access token when
+   * they are not in it. Throws when Discord cannot answer or refuses.
+   */
+  joinServer?: (
+    discordUserId: string,
+    accessToken: string,
+  ) => Promise<{ joined: boolean; pending: boolean }>;
+  /**
+   * The Verify button's steps (link, nickname, lounge, roles, badges) for
+   * this Discord account, with the member's fresh Meetup access token, used
+   * once. Throws NonMemberError, DuplicateMeetupAccountError, or anything
+   * Discord or Meetup throws. Without it the link ends at the home page.
+   */
+  runVerify?: (
+    meetupAccessToken: string,
+    discordUserId: string,
+  ) => Promise<VerificationSummary>;
   now?: () => number;
   loginLimiter?: FixedWindowLimiter; // default 10 per minute per IP
   actionLimiter?: FixedWindowLimiter; // default 30 per minute per host
@@ -386,7 +420,7 @@ export function createHostRouter(deps: HostRouterDeps): express.Router {
   }
 
   /**
-   * The end of "Link your Discord account": the signed-in host proved they
+   * The Discord step of "Verify on Discord": the signed-in host proved they
    * own this Discord account, so link it to their Meetup account (the same
    * duplicate rules as Verify), take it into the session and go home with a
    * fixed notice. No server roles are given. A blacklisted Discord account
@@ -450,11 +484,11 @@ export function createHostRouter(deps: HostRouterDeps): express.Router {
       return;
     }
     let identity: { id: string; username: string };
+    // Used for /users/@me and, once linked, to add them to our server;
+    // never stored.
+    let accessToken: string;
     try {
-      const accessToken = await deps.discord.exchangeCode(
-        req.query.code,
-        verifier,
-      );
+      accessToken = await deps.discord.exchangeCode(req.query.code, verifier);
       identity = await deps.discord.fetchIdentity(accessToken);
     } catch (error: unknown) {
       logger.warn(
@@ -528,13 +562,56 @@ export function createHostRouter(deps: HostRouterDeps): express.Router {
       back(outcome.kind);
       return;
     }
+    // Into our server, with their own token (guilds.join), once the link
+    // is written. A failure keeps the link: the result page says so.
+    let join: ServerJoinResult;
+    if (deps.joinServer) {
+      try {
+        join = await deps.joinServer(identity.id, accessToken);
+      } catch (error: unknown) {
+        logger.warn(
+          `Host Discord server join failed: ${error instanceof Error ? error.name : 'Error'}`,
+        );
+        join = 'failed';
+        alert({
+          title: 'Could not add a member to the server (host dashboard)',
+          description:
+            `<@${identity.id}> (Meetup member ${meetupId}) verified on the host ` +
+            'dashboard, but Discord did not let us add them to the server.',
+        });
+      }
+    }
     if (outcome.kind === 'linked') {
       audit({
         title: 'Meetup account linked (host dashboard)',
         description: `<@${identity.id}> ↔ Meetup member ${meetupId}`,
-        fields: [{ name: 'Method', value: 'web_link', inline: true }],
+        fields: [
+          { name: 'Method', value: 'web_link', inline: true },
+          ...(join !== undefined && join !== 'failed' && join.joined
+            ? [{ name: 'Joined the server', value: 'Yes', inline: true }]
+            : []),
+        ],
       });
     }
+    /**
+     * On to Meetup, so Verify runs as the member (their own Meetup token,
+     * used once) exactly as the Discord button does. The sealed cookie
+     * carries this session's tag, the Discord account and the join result.
+     */
+    const onToMeetup = () => {
+      if (!deps.runVerify) {
+        back(outcome.kind === 'linked' ? 'linked' : 'already');
+        return;
+      }
+      const state = newHostState();
+      sealedStart(
+        res,
+        HOST_MEETUP_OAUTH_COOKIE,
+        state,
+        `verify.${sessionTag(sid)}.${identity.id}.${joinFlags(join)}`,
+      );
+      res.redirect(302, deps.meetup.buildAuthUrl(state));
+    };
     // Re-checked through the new link (a Discord role can change the tier,
     // a blacklisted Discord account ends it). An outage leaves the session
     // as it was: the gate's next re-check reads the link by Meetup id.
@@ -545,7 +622,7 @@ export function createHostRouter(deps: HostRouterDeps): express.Router {
       logger.warn(
         `Host check after linking failed: ${error instanceof Error ? error.name : 'Error'}`,
       );
-      back(outcome.kind);
+      onToMeetup();
       return;
     }
     if (after.kind === 'refused') {
@@ -564,7 +641,94 @@ export function createHostRouter(deps: HostRouterDeps): express.Router {
       res.redirect(302, '/host/login');
       return;
     }
-    back(outcome.kind);
+    onToMeetup();
+  }
+
+  /**
+   * The end of "Verify on Discord": back from Meetup with the member's own
+   * token. It must be the Meetup account this session signed in with; then
+   * the Verify button's steps run with it and the page shows their summary.
+   * The link itself is already saved, so a failure here never undoes it.
+   */
+  async function verifyCallback(req: Request, res: Response, mark: string) {
+    const parsed = VERIFY_MARK.exec(mark);
+    if (!parsed) {
+      fail(res, 400);
+      return;
+    }
+    const [, tag, discordUserId, flags] = parsed;
+    const join = joinOf(flags);
+    let read: Awaited<ReturnType<typeof readSession>>;
+    try {
+      read = await readSession(req);
+    } catch (error: unknown) {
+      logger.warn(
+        `Host verify session read failed: ${error instanceof Error ? error.name : 'Error'}`,
+      );
+      res.redirect(302, `${HOST_BASE}?link=error`);
+      return;
+    }
+    const { sid, session } = read;
+    if (!sid || !session) {
+      res.redirect(302, '/host/login');
+      return;
+    }
+    if (!safeEqual(tag, sessionTag(sid)) || !deps.runVerify) {
+      res.redirect(302, `${HOST_BASE}?link=error`);
+      return;
+    }
+    const page = (result: VerifyResult) =>
+      send(
+        res,
+        200,
+        verifyResultPage(locals(res).nonce, session, result, join),
+      );
+    if (req.query.error || typeof req.query.code !== 'string') {
+      page({ kind: 'unfinished' });
+      return;
+    }
+    let meetupToken: string;
+    let self: { id: string; name: string };
+    try {
+      meetupToken = await deps.meetup.exchangeCode(req.query.code);
+      self = await deps.meetup.fetchSelf(meetupToken);
+    } catch (error: unknown) {
+      logger.warn(
+        `Host verify Meetup exchange failed: ${error instanceof Error ? error.name : 'Error'}`,
+      );
+      page({ kind: 'unfinished' });
+      return;
+    }
+    if (self.id !== session.userId) {
+      page({ kind: 'other-account' });
+      return;
+    }
+    let summary: VerificationSummary;
+    try {
+      summary = await deps.runVerify(meetupToken, discordUserId);
+    } catch (error: unknown) {
+      // Both already alerted where they were thrown.
+      if (
+        error instanceof NonMemberError ||
+        error instanceof DuplicateMeetupAccountError
+      ) {
+        page({ kind: 'refused', message: error.message });
+        return;
+      }
+      logger.warn(
+        `Host verify steps failed: ${error instanceof Error ? error.name : 'Error'}`,
+      );
+      alert({
+        title: 'Verify on the host dashboard did not finish',
+        description:
+          `<@${discordUserId}> ↔ Meetup member ${session.userId} is linked, but ` +
+          `the roles and badges could not be updated (${error instanceof Error ? error.name : 'Error'}). ` +
+          'They were told to press Verify in Discord.',
+      });
+      page({ kind: 'roles-failed' });
+      return;
+    }
+    page({ kind: 'verified', summary });
   }
 
   const router = express.Router({ caseSensitive: true });
@@ -655,6 +819,10 @@ export function createHostRouter(deps: HostRouterDeps): express.Router {
     res,
   ) => {
     const bound = boundStart(req, res, HOST_MEETUP_OAUTH_COOKIE);
+    if (bound && isHostState(bound.state) && VERIFY_MARK.test(bound.verifier)) {
+      await verifyCallback(req, res, bound.verifier);
+      return;
+    }
     if (
       !bound ||
       bound.verifier !== MEETUP_NO_VERIFIER ||
@@ -830,7 +998,7 @@ export function createHostRouter(deps: HostRouterDeps): express.Router {
     res.redirect(303, '/host/login');
   }) as RequestHandler);
 
-  // "Link your Discord account": a POST (CSRF-checked by the guard), then
+  // "Verify on Discord": a POST (CSRF-checked by the guard), then
   // Discord's sign-in, back to the Discord callback with a link. state.
   // Answers with a page that LINKS to Discord rather than a redirect:
   // browsers apply the host pages' `form-action 'self'` to every redirect
@@ -856,7 +1024,9 @@ export function createHostRouter(deps: HostRouterDeps): express.Router {
     const verifier = generateCodeVerifier();
     // Only Discord's authorize endpoint passes safeHref; anything else is a
     // wiring fault, refused rather than linked.
-    const href = safeHref(deps.discord.buildLoginUrl(state, verifier));
+    const href = safeHref(
+      (deps.discordVerifyUrl ?? deps.discord.buildLoginUrl)(state, verifier),
+    );
     if (!href) {
       logger.error(
         'Host Discord link start built a sign-in URL safeHref refused',
@@ -869,16 +1039,17 @@ export function createHostRouter(deps: HostRouterDeps): express.Router {
       res,
       200,
       hostLayout({
-        title: 'Continue to Discord',
+        title: 'Verify on Discord',
         nonce,
         user: session,
         current: 'home',
         body: html`<div class="card">
-          <h1>Continue to Discord</h1>
+          <h1>Verify on Discord</h1>
           <p>
-            Discord will ask you to sign in and to allow us to see which account
-            is yours. That account is then linked to your Meetup account.
-            Nothing else changes, and you can come back here afterwards.
+            Discord will ask you to sign in, and to let us see which account is
+            yours and add you to our server. Then Meetup confirms your account,
+            and you get the same roles and badges as pressing Verify in our
+            Discord server.
           </p>
           <p><a class="button" href="${href}">Continue to Discord</a></p>
           <p><a href="${localUrl(HOST_BASE)}">Back to home</a></p>
