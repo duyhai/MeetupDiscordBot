@@ -205,15 +205,17 @@ table.bans td.ban-fixed{overflow-wrap:normal}
 /* Host event tables (Date / Event / Type / ...). With columns (640px up), Date and Type break only
 between words, never mid-word. On desktop (1024px up, the page at its full width) the Type label keeps
 to one line and the date and time stack on two. In the upcoming-events table Status is a fixed 9rem
-(its badges stack) and Actions a fixed 20rem: room for View on Meetup and Announce side by side, while
-a wider row (Cancel the announcement, the announce-early note) wraps within it rather than widening the
-column for every row; buttons never break mid-word. Event, the one auto column, takes what is left and
-wraps. (A percentage width on Event instead would let the browser shrink Actions below its 20rem.) Below 640px the rows are stacked and
+(its badges stack and wrap, so no announcement badge widens it) and Actions a fixed 20rem: room for
+View on Meetup and Announce side by side, while a wider row (Cancel the announcement, the
+announce-early note) wraps within it rather than widening the column for every row; buttons never
+break mid-word. Event, the one auto column, takes what is left and wraps. (A percentage width on
+Event instead would let the browser shrink Actions below its 20rem.) Below 640px the rows are stacked and
 none of this applies. */
 @media (min-width:640px){td.type,td .when{overflow-wrap:normal}}
 @media (min-width:1024px){td.type,td .when{white-space:nowrap}
 table.stack td .when{display:block}
 table.upcoming td.status{width:9rem}
+table.upcoming td.status .badge{white-space:normal;text-align:left}
 table.upcoming td.buttons{width:20rem}
 table.upcoming td.buttons .actions>*{white-space:nowrap}
 table.upcoming td.buttons .note{white-space:normal}}
@@ -373,7 +375,7 @@ details.announce-guidelines ul{margin:var(--s1) 0 0;padding-left:1.2rem}
 tr.offer-row td{padding-top:0}
 table.stack tr.offer-row td{padding-left:0}
 table.stack tr.offer-row td::before{content:none}
-.badge.wrap{white-space:normal;text-align:left}
+.badge.wrap{white-space:normal;text-align:left;border-radius:var(--radius-ctl)}
 .recreate-offer form{margin:var(--s2) 0 0}
 .wrap-anywhere{overflow-wrap:anywhere}
 .field-error{display:block;margin-top:var(--s1);color:var(--attn-ink);font-size:var(--t-sm);font-weight:600}
