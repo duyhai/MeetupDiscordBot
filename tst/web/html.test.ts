@@ -74,6 +74,20 @@ describe('safeHref', () => {
     );
   });
 
+  it('allows exactly the Discord OAuth authorize endpoint, with its query', () => {
+    const url =
+      'https://discord.com/oauth2/authorize?response_type=code&client_id=k&state=link.a.b&redirect_uri=https%3A%2F%2Fx';
+    expect(hrefOf(url)).toBe(url);
+    [
+      'https://discord.com/oauth2/token',
+      'https://discord.com/oauth2/authorize/',
+      'https://discord.com/oauth2/authorizex',
+      'https://discord.com/api/oauth2/authorize',
+      'http://discord.com/oauth2/authorize',
+      'https://discord.com.evil.example/oauth2/authorize',
+    ].forEach((u) => expect(hrefOf(u)).toBeUndefined());
+  });
+
   it('refuses other secure.meetup.com paths', () => {
     [
       'https://secure.meetup.com/',

@@ -8,7 +8,10 @@ import {
 } from '../../../src/lib/repositories/types.js';
 import { HostRouterDeps } from '../../../src/web/host/hostRouter.js';
 import { registerHostPages } from '../../../src/web/host/hostPages.js';
-import { LoopbackClient } from '../../setup/loopbackServer.js';
+import {
+  LoopbackClient,
+  LoopbackResponse,
+} from '../../setup/loopbackServer.js';
 import {
   DISCORD_USER,
   MEETUP_SELF,
@@ -108,6 +111,27 @@ async function setup(
   return { ...app, store, resolve, alert, sid, session };
 }
 
+/**
+ * The Discord authorize URL the start page links to. The start answers with
+ * a page that LINKS to Discord, never a redirect: browsers apply the host
+ * pages' `form-action 'self'` to every redirect after a form POST.
+ */
+function continueHref(start: LoopbackResponse): URL {
+  expect(start.status).toBe(200);
+  expect(start.headers.location).toBeUndefined();
+  const href = /<a class="button" href="([^"]+)">Continue to Discord<\/a>/.exec(
+    start.text,
+  )?.[1];
+  if (!href) {
+    throw new Error(`no Continue to Discord link: ${start.text.slice(0, 400)}`);
+  }
+  const url = new URL(href.replace(/&amp;/g, '&'));
+  expect(url.origin + url.pathname).toBe(
+    'https://discord.com/oauth2/authorize',
+  );
+  return url;
+}
+
 /** POST the Link button, then come back from Discord with these params. */
 async function link(
   req: LoopbackClient,
@@ -121,8 +145,7 @@ async function link(
     .set('Origin', ORIGIN)
     .type('form')
     .send({ _csrf: csrf });
-  expect(start.status).toBe(303);
-  const target = new URL(start.headers.location);
+  const target = continueHref(start);
   const state = target.searchParams.get('state') ?? '';
   const oauth = setCookie(start, 'host_oauth_discord') ?? '';
   const back = await req
@@ -141,7 +164,17 @@ describe('Link your Discord account', () => {
       .type('form')
       .send({ _csrf: 'wrong' });
     expect(refused.status).toBe(403);
-    const { state } = await link(req, sid, session().csrfToken);
+    const start = await req
+      .post('/host/link/discord')
+      .set('Cookie', sid)
+      .set('Origin', ORIGIN)
+      .type('form')
+      .send({ _csrf: session().csrfToken });
+    // A 200 page in the host layout that links to Discord (see continueHref).
+    const state = continueHref(start).searchParams.get('state') ?? '';
+    expect(start.text).toContain('Signed in as');
+    expect(start.text).toContain('Discord will ask you to sign in');
+    expect(setCookie(start, 'host_oauth_discord')).toBeTruthy();
     // A random part, then a tag of the session that started it.
     expect(state).toMatch(/^link\.[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{22}$/);
   });
@@ -248,8 +281,7 @@ describe('Link your Discord account', () => {
       .set('Origin', ORIGIN)
       .type('form')
       .send({ _csrf: session().csrfToken });
-    const state =
-      new URL(start.headers.location).searchParams.get('state') ?? '';
+    const state = continueHref(start).searchParams.get('state') ?? '';
     const oauth = setCookie(start, 'host_oauth_discord') ?? '';
     const back = await req
       .get(`/host/auth/discord/callback?state=${state}&code=c`)
@@ -325,8 +357,7 @@ describe('Link your Discord account', () => {
       .set('Origin', ORIGIN)
       .type('form')
       .send({ _csrf: session().csrfToken });
-    const state =
-      new URL(start.headers.location).searchParams.get('state') ?? '';
+    const state = continueHref(start).searchParams.get('state') ?? '';
     const oauth = setCookie(start, 'host_oauth_discord') ?? '';
     // Someone else signs in with Meetup on this browser meanwhile.
     const other = await signInWithMeetup(req);

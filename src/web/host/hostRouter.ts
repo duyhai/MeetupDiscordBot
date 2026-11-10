@@ -27,6 +27,7 @@ import {
   baseSecurityHeaders,
   httpsRedirectTarget,
 } from '../dashboardRouter.js';
+import { html, localUrl, safeHref } from '../html.js';
 import { openOAuthCookie, sealOAuthCookie } from '../oauthCookie.js';
 import { FixedWindowLimiter } from '../rateLimit.js';
 import {
@@ -42,6 +43,7 @@ import {
   HostErrorStatus,
   NOT_LINKED_MESSAGE,
   hostErrorPage,
+  hostLayout,
   hostLoginPage,
   hostLogoutUnconfirmedPage,
 } from './hostLayout.js';
@@ -813,20 +815,52 @@ export function createHostRouter(deps: HostRouterDeps): express.Router {
 
   // "Link your Discord account": a POST (CSRF-checked by the guard), then
   // Discord's sign-in, back to the Discord callback with a link. state.
+  // Answers with a page that LINKS to Discord rather than a redirect:
+  // browsers apply the host pages' `form-action 'self'` to every redirect
+  // after a form POST, so a 303 to discord.com would be blocked.
   protectedRouter.post('/link/discord', (_req, res) => {
     if (!deps.members) {
       fail(res, 404);
       return;
     }
-    const { session, sid } = hostLocals(res);
+    const { session, sid, nonce } = hostLocals(res);
     if (session.discordUserId !== null) {
       res.redirect(303, `${HOST_BASE}?link=already`);
       return;
     }
     const state = `link.${generateState()}.${sessionTag(sid)}`;
     const verifier = generateCodeVerifier();
+    // Only Discord's authorize endpoint passes safeHref; anything else is a
+    // wiring fault, refused rather than linked.
+    const href = safeHref(deps.discord.buildLoginUrl(state, verifier));
+    if (!href) {
+      logger.error(
+        'Host Discord link start built a sign-in URL safeHref refused',
+      );
+      fail(res, 500);
+      return;
+    }
     sealedStart(res, HOST_DISCORD_OAUTH_COOKIE, state, verifier);
-    res.redirect(303, deps.discord.buildLoginUrl(state, verifier));
+    send(
+      res,
+      200,
+      hostLayout({
+        title: 'Continue to Discord',
+        nonce,
+        user: session,
+        current: 'home',
+        body: html`<div class="card">
+          <h1>Continue to Discord</h1>
+          <p>
+            Discord will ask you to sign in and to allow us to see which account
+            is yours. That account is then linked to your Meetup account.
+            Nothing else changes, and you can come back here afterwards.
+          </p>
+          <p><a class="button" href="${href}">Continue to Discord</a></p>
+          <p><a href="${localUrl(HOST_BASE)}">Back to home</a></p>
+        </div>`,
+      }),
+    );
   });
 
   deps.pages?.(protectedRouter);

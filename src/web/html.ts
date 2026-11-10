@@ -944,11 +944,14 @@ const LINK_TARGETS = [
 ];
 
 /**
- * Exact-path targets: Meetup's OAuth authorize endpoint, for the "Renew
- * organizer login" continue link. Any query is allowed; no other path is.
+ * Exact-path targets: the OAuth authorize endpoints of Meetup (the "Renew
+ * organizer login" continue link) and Discord (the host dashboard's "Link
+ * your Discord account" continue link). Any query is allowed; no other path
+ * is.
  */
 const EXACT_LINK_TARGETS = [
   { host: 'secure.meetup.com', pathname: '/oauth2/authorize' },
+  { host: 'discord.com', pathname: '/oauth2/authorize' },
 ];
 
 /**
