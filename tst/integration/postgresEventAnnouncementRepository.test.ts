@@ -65,7 +65,7 @@ const EVENT = '311111111';
       expect(results.filter((r) => r.claimed)).toHaveLength(1);
     });
 
-    it('a failed one can be claimed again, once; an unknown one never', async () => {
+    it('a failed or unknown one can be claimed again, once at a time', async () => {
       await repo.claim(EVENT, HOST);
       await repo.finish(EVENT, 'failed', 'Meetup said no');
       expect((await repo.get(EVENT))?.failure).toBe('Meetup said no');
@@ -76,13 +76,36 @@ const EVENT = '311111111';
       expect(retries.filter((r) => r.claimed)).toHaveLength(1);
       expect(await repo.get(EVENT)).toMatchObject({
         status: 'sending',
-        requestedBy: OTHER,
         failure: null,
       });
       await repo.finish(EVENT, 'unknown', 'socket hang up');
+      await expect(repo.claim(EVENT, OTHER)).resolves.toEqual({
+        claimed: true,
+      });
+    });
+
+    it('a "sending" row is claimed again only once it is 2 minutes old', async () => {
+      await repo.claim(EVENT, HOST);
+      expect(await repo.claim(EVENT, HOST)).toMatchObject({ claimed: false });
+      await pool.query(
+        `UPDATE event_announcements
+            SET requested_at = now() - interval '3 minutes'`,
+      );
+      await expect(repo.claim(EVENT, HOST)).resolves.toEqual({
+        claimed: true,
+      });
+    });
+
+    it('a sent one is never claimed again', async () => {
+      await repo.claim(EVENT, HOST);
+      await repo.finish(EVENT, 'sent');
+      await pool.query(
+        `UPDATE event_announcements
+            SET requested_at = now() - interval '1 day'`,
+      );
       expect(await repo.claim(EVENT, OTHER)).toMatchObject({
         claimed: false,
-        current: { status: 'unknown' },
+        current: { status: 'sent' },
       });
     });
 

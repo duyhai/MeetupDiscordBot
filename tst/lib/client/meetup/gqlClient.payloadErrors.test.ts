@@ -74,6 +74,21 @@ describe('Meetup mutation payload errors', () => {
     ).rejects.toBeInstanceOf(MeetupPayloadError);
   });
 
+  it('announceEvent without errors but without the event is not a confirmation', async () => {
+    answer({ announceEvent: { event: null, errors: [] } });
+    await expect(client().announceEvent({ eventId: '1' })).rejects.toThrow(
+      'did not confirm',
+    );
+    answer({ announceEvent: null });
+    await expect(client().announceEvent({ eventId: '1' })).rejects.toThrow(
+      'did not confirm',
+    );
+    answer({ announceEvent: { event: { id: '2' }, errors: [] } });
+    await expect(client().announceEvent({ eventId: '1' })).rejects.toThrow(
+      'did not confirm',
+    );
+  });
+
   it('createEvent throws on errors with no event', async () => {
     answer({ createEvent: { event: null, errors: REJECTED } });
     await expect(client().createEvent({} as never)).rejects.toBeInstanceOf(

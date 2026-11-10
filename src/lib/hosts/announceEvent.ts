@@ -15,12 +15,13 @@ const logger = new Logger({ name: 'hostAnnounce' });
 /**
  * How a host's Announce ended:
  * - sent: Meetup sent it now;
- * - already: it went out before (here, or Meetup says so);
- * - in-progress: another click is sending it;
- * - unconfirmed: an earlier try broke without an answer, so it may have
- *   gone out; never tried again from here;
- * - failed: Meetup refused it, nothing went out; the host may try again;
+ * - already: it went out before (recorded here, or Meetup says so);
+ * - in-progress: another click is sending it right now;
+ * - unconfirmed: Meetup did not answer; it may or may not have gone out;
+ * - failed: Meetup refused it;
  * - not-yours: not one of the host's own upcoming events.
+ * Unconfirmed and failed may be tried again: Meetup refuses a second
+ * announcement itself, so a retry after a real send comes back "already".
  */
 export type AnnounceCode =
   'sent' | 'already' | 'in-progress' | 'unconfirmed' | 'failed' | 'not-yours';
@@ -41,51 +42,67 @@ export interface AnnounceDeps {
   announcements: () => Promise<AnnounceStore>;
   /** The host's own upcoming (published) events: Meetup's hostId filter decides. */
   ownUpcoming: (meetupMemberId: string) => Promise<HostEvent[]>;
-  /** announceEvent with the organizer credential. */
+  /**
+   * announceEvent with the organizer credential. Resolves only when Meetup
+   * confirmed the event; a failure to get the credential is an
+   * OrganizerTokenUnavailableError (nothing was called).
+   */
   announce: (meetupEventId: string) => Promise<void>;
   /** #meetup-bot-alerts, plain. */
   alert: (entry: LogEntry) => Promise<unknown>;
 }
 
-/** Meetup's own words for "this was announced before". */
-const ALREADY = /already\s+(been\s+)?announced/i;
+/**
+ * Meetup's refusal of a second announcement. Unverified against a live
+ * refusal: the code, or the whole message being that phrase. Anything else
+ * reads as a plain refusal ("failed"), the safe side.
+ */
+const ALREADY_CODE = /^ALREADY_ANNOUNCED$/i;
+const ALREADY_MESSAGE =
+  /^(this |the )?event (has |was |is )?already (been )?announced\.?$/i;
+
+type MeetupAnswer =
+  | { answered: true; already: boolean; message: string }
+  | { answered: false; message: string };
 
 /**
- * Whether Meetup answered (so nothing went out unless it said so), and its
- * messages. A broken connection, a timeout or an HTTP error without a
- * GraphQL answer is no answer: the announcement may have gone out.
+ * Whether Meetup answered, so nothing went out unless it said so. A
+ * payload error, a GraphQL error, any 4xx (a refused or expired token, a
+ * rate limit) and a credential we could not get are answers. A 5xx, a
+ * timeout, a broken connection or an unconfirmed reply are not.
  */
-function meetupAnswer(
-  error: unknown,
-): { answered: true; message: string } | { answered: false; message: string } {
+function meetupAnswer(error: unknown): MeetupAnswer {
   if (error instanceof MeetupPayloadError) {
     return {
       answered: true,
+      already: error.errors.some(
+        (e) =>
+          ALREADY_CODE.test(e.code) || ALREADY_MESSAGE.test(e.message.trim()),
+      ),
       message: error.errors.map((e) => `${e.code}: ${e.message}`).join('; '),
     };
   }
   if (error instanceof OrganizerTokenUnavailableError) {
-    // Nothing was called.
-    return { answered: true, message: error.message };
+    return { answered: true, already: false, message: error.message };
   }
-  if (
-    error instanceof ClientError &&
-    error.response.status === 200 &&
-    (error.response.errors?.length ?? 0) > 0
-  ) {
-    return {
-      answered: true,
-      message: (error.response.errors ?? []).map((e) => e.message).join('; '),
-    };
+  if (error instanceof ClientError) {
+    const { status } = error.response;
+    const errors = error.response.errors ?? [];
+    if (status === 200 && errors.length > 0) {
+      return {
+        answered: true,
+        already: errors.some((e) => ALREADY_MESSAGE.test(e.message.trim())),
+        message: errors.map((e) => e.message).join('; '),
+      };
+    }
+    if (status >= 400 && status < 500) {
+      return { answered: true, already: false, message: `HTTP ${status}` };
+    }
+    return { answered: false, message: `HTTP ${status}` };
   }
   return {
     answered: false,
-    message:
-      error instanceof ClientError
-        ? `HTTP ${String(error.response.status)}`
-        : error instanceof Error
-          ? error.name
-          : 'unknown error',
+    message: error instanceof Error ? error.name : 'unknown error',
   };
 }
 
@@ -102,14 +119,16 @@ function eventFields(
 
 /**
  * Sends Meetup's announcement email for one of the host's own upcoming
- * events, at most once per event: the event's row is claimed before the
- * call (one statement, so of two clicks one claims), and only a refusal
- * Meetup answered (nothing went out) lets it be tried again.
+ * events. The event's row is claimed first (one statement), so quick
+ * repeat clicks make one call; a row already `sent` sends nothing. Any
+ * other ending may be tried again, since Meetup refuses a second
+ * announcement itself. `onClaimed` runs once Meetup is about to be called.
  */
 export async function announceHostEvent(
   deps: AnnounceDeps,
   host: { meetupMemberId: string; name: string },
   meetupEventId: string,
+  hooks: { onClaimed?: () => void } = {},
 ): Promise<AnnounceCode> {
   const event = (await deps.ownUpcoming(host.meetupMemberId)).find(
     (e) => e.id === meetupEventId,
@@ -120,20 +139,14 @@ export async function announceHostEvent(
   const store = await deps.announcements();
   const claim = await store.claim(meetupEventId, host.meetupMemberId);
   if ('current' in claim) {
-    const codes: Record<AnnouncementStatus, AnnounceCode> = {
-      sent: 'already',
-      sending: 'in-progress',
-      unknown: 'unconfirmed',
-      // claim takes a failed row, so this is only a row changed in between.
-      failed: 'in-progress',
-    };
-    return codes[claim.current.status];
+    return claim.current.status === 'sent' ? 'already' : 'in-progress';
   }
+  hooks.onClaimed?.();
   const finish = async (
     status: Exclude<AnnouncementStatus, 'sending'>,
     failure: string | null = null,
   ) => {
-    // A row left "sending" shows as in progress; it never sends twice.
+    // A row left "sending" counts as unconfirmed after a while.
     await store.finish(meetupEventId, status, failure).catch((e: unknown) => {
       logger.warn(
         `Announcement finish failed: ${e instanceof Error ? e.name : 'Error'}`,
@@ -147,7 +160,7 @@ export async function announceHostEvent(
     await deps.announce(meetupEventId);
   } catch (error: unknown) {
     const answer = meetupAnswer(error);
-    if (answer.answered && ALREADY.test(answer.message)) {
+    if (answer.answered && answer.already) {
       await finish('sent');
       return 'already';
     }
@@ -156,7 +169,7 @@ export async function announceHostEvent(
       alert({
         title: 'A host’s announcement was refused',
         description:
-          'Meetup refused it, so nothing went out. The host can try again. ' +
+          'Meetup refused it. The host can try again. ' +
           `Meetup said: ${alertText(answer.message).slice(0, 800)}`,
         fields: eventFields(event, host.name),
       });
@@ -164,11 +177,11 @@ export async function announceHostEvent(
     }
     await finish('unknown', answer.message);
     alert({
-      title: 'A host’s announcement may not have gone out',
+      title: 'A host’s announcement was not confirmed',
       description:
-        `Meetup did not answer (${answer.message}). It may have sent it; ` +
-        'the dashboard will not send it again. Check the event on Meetup and ' +
-        'announce it by hand if it did not go out.',
+        `Meetup did not confirm it (${answer.message}); it may or may not ` +
+        'have gone out. The host can try again: Meetup refuses a second ' +
+        'announcement.',
       fields: eventFields(event, host.name),
     });
     return 'unconfirmed';

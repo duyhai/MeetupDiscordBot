@@ -3,7 +3,10 @@ import { Logger } from 'tslog';
 
 import { AnnounceCode } from '../../lib/hosts/announceEvent.js';
 import { HostEvent } from '../../lib/hosts/hostEvents.js';
-import { Announcement } from '../../lib/repositories/postgresEventAnnouncementRepository.js';
+import {
+  Announcement,
+  isStaleSending,
+} from '../../lib/repositories/postgresEventAnnouncementRepository.js';
 import { SafeHtml, html, localUrl } from '../html.js';
 import { hostLocals } from './hostRouter.js';
 import { HOST_BASE } from './hostSession.js';
@@ -12,8 +15,9 @@ const logger = new Logger({ name: 'hostDashboard' });
 
 const EVENT_ID = /^[0-9]{1,20}$/;
 /**
- * How long the page waits for Meetup. The send goes on after it stops
- * waiting; its row says "announcing" until Meetup answers.
+ * How long the page waits for Meetup once the send is under way. It goes
+ * on after the page stops waiting; its row says "announcing" until Meetup
+ * answers.
  */
 const ANNOUNCE_DEADLINE_MS = 20_000;
 
@@ -22,6 +26,7 @@ export interface AnnounceRouteDeps {
   announce: (
     host: { meetupMemberId: string; name: string },
     meetupEventId: string,
+    hooks: { onClaimed?: () => void },
   ) => Promise<AnnounceCode>;
   /** Each event's announcement, if any. */
   announcements: (
@@ -46,18 +51,17 @@ export const ANNOUNCE_NOTICES: Record<
   },
   'in-progress': {
     ok: true,
-    text: 'That announcement is already being sent. Reload in a minute to see it done.',
+    text: 'That announcement is already being sent. Reload in a minute to see how it went.',
   },
   unconfirmed: {
     ok: false,
     text:
-      'Meetup did not confirm an earlier try, so it may already have gone out. ' +
-      'It will not be sent again from here; the organizers have been told and ' +
-      'will check it on Meetup.',
+      'Meetup did not confirm the announcement, so it may or may not have ' +
+      'gone out. You can try again: Meetup refuses it if it already went out.',
   },
   failed: {
     ok: false,
-    text: 'Meetup refused the announcement, so nothing went out. You can try again; the organizers have been told.',
+    text: 'Meetup refused the announcement. You can try again; the organizers have been told.',
   },
   'not-yours': {
     ok: false,
@@ -65,7 +69,7 @@ export const ANNOUNCE_NOTICES: Record<
   },
   slow: {
     ok: true,
-    text: 'Meetup is slow to answer. The announcement is on its way; reload in a minute to see it done.',
+    text: 'Still waiting on Meetup. Reload in a minute to see whether it went out.',
   },
   error: {
     ok: false,
@@ -89,47 +93,65 @@ export function announceNotice(value: unknown): SafeHtml | '' {
 export const announcePath = (eventId: string) =>
   `${HOST_BASE}/events/${eventId}/announce`;
 
+/** What the row means now: a send cut off by a restart is unconfirmed. */
+function stateOf(
+  a: Announcement | undefined,
+  now: Date,
+): Announcement['status'] | undefined {
+  if (a === undefined) {
+    return undefined;
+  }
+  return isStaleSending(a, now) ? 'unknown' : a.status;
+}
+
 /** The event's status badge for its announcement, if any. */
-export function announceBadge(a: Announcement | undefined): SafeHtml | '' {
-  switch (a?.status) {
+export function announceBadge(
+  a: Announcement | undefined,
+  now: Date,
+): SafeHtml | '' {
+  switch (stateOf(a, now)) {
     case 'sent':
       return html`<span class="badge ok">Announced</span>`;
     case 'sending':
       return html`<span class="badge info">Announcing</span>`;
     case 'unknown':
-      return html`<span class="badge attn">Announcement unconfirmed</span>`;
+      return html`<span class="badge attn">Announcement not confirmed</span>`;
+    case 'failed':
+      return html`<span class="badge attn">Announcement refused</span>`;
     default:
       return '';
   }
 }
 
 /**
- * The event's Announce button: a form for one never announced (or refused),
- * a disabled button once it is announced or on its way, none while it is
- * unconfirmed. The server decides either way; this only saves a click.
+ * The event's Announce button: a disabled one once it is announced or on
+ * its way, else a form ("Try announcing again" after a refused or
+ * unconfirmed send). The server decides either way.
  */
 export function announceButton(
   event: HostEvent,
   a: Announcement | undefined,
   csrf: string,
+  now: Date,
 ): SafeHtml | '' {
-  if (a?.status === 'sent') {
+  const state = stateOf(a, now);
+  if (state === 'sent') {
     return html`<button type="button" class="secondary" disabled>
       Announced
     </button>`;
   }
-  if (a?.status === 'sending') {
+  if (state === 'sending') {
     return html`<button type="button" class="secondary" disabled>
       Announcing…
     </button>`;
   }
-  if (a?.status === 'unknown' || !EVENT_ID.test(event.id)) {
+  if (!EVENT_ID.test(event.id)) {
     return '';
   }
   return html`<form method="post" action="${localUrl(announcePath(event.id))}">
     <input type="hidden" name="_csrf" value="${csrf}" />
     <button type="submit">
-      ${a?.status === 'failed' ? 'Try announcing again' : 'Announce'}
+      ${state === undefined ? 'Announce' : 'Try announcing again'}
     </button>
   </form>`;
 }
@@ -152,21 +174,37 @@ export function registerAnnounceRoute(
     const { session } = hostLocals(res);
     const back = (code: AnnounceNoticeCode) =>
       res.redirect(303, `${HOST_BASE}?announce=${code}`);
+    // The deadline starts once Meetup is about to be called: a slow events
+    // read that ends in "not yours" never says "still waiting".
     let timer: NodeJS.Timeout | undefined;
+    let answered = false;
+    let startDeadline = () => undefined as void;
     const slow = new Promise<'slow'>((resolve) => {
-      timer = setTimeout(() => {
-        resolve('slow');
-      }, deps.deadlineMs ?? ANNOUNCE_DEADLINE_MS);
+      startDeadline = () => {
+        timer = setTimeout(() => {
+          resolve('slow');
+        }, deps.deadlineMs ?? ANNOUNCE_DEADLINE_MS);
+      };
     });
     const run = deps.announce(
       { meetupMemberId: session.userId, name: session.username },
       eventId,
+      { onClaimed: () => startDeadline() },
     );
-    // Still handled if it fails after the page stopped waiting.
-    run.catch(() => undefined);
+    // Still handled, and logged, if it fails after the page stopped waiting.
+    run.catch((error: unknown) => {
+      if (answered) {
+        logger.warn(
+          `Host announce failed after the page answered: ${error instanceof Error ? error.name : 'Error'}`,
+        );
+      }
+    });
     try {
-      back(await Promise.race([run, slow]));
+      const code = await Promise.race([run, slow]);
+      answered = true;
+      back(code);
     } catch (error: unknown) {
+      answered = true;
       logger.warn(
         `Host announce failed: ${error instanceof Error ? error.name : 'Error'}`,
       );

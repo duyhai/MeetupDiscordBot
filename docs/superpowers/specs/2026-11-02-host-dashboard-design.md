@@ -88,7 +88,9 @@ pieces hosts feed into.
   their name, read private comments on events they don't host).
 - The announce button sending more than once for an event because of a
   double-click or retry. Members get the email; a duplicate is noisy and
-  can't be taken back.
+  can't be taken back. (Hai, 2026-11-10: Meetup refuses a second
+  announcement itself, so it is the backstop; the dashboard records each
+  event's status and keeps quick double-clicks to one call.)
 - Approval racing: two leaders approving the same request and creating two
   events (the Discord flow already guards this with a lock; keep that
   guarantee).
@@ -232,9 +234,16 @@ header: Auto follows the device's setting; a choice is kept in that browser.
 
 - A button per upcoming event, visible to that event's host (and leadership).
 - Calls `announceEvent` with the organizer credential.
-- Sends at most once per event: record it before calling, under a lock;
-  disable the button after. If Meetup says the event is already announced,
-  treat that as done.
+- Meetup is the backstop against double announcements: it refuses a
+  second one (Hai, 2026-11-10). The dashboard records each event's status
+  (one row per event, claimed before the call, so quick repeat clicks make
+  one call) and disables the button once Meetup confirms it. Anything not
+  confirmed (refused, no answer, or a send cut off for 2 minutes) can be
+  tried again. If Meetup says the event is already announced, treat that
+  as done.
+- "Own" events are the host's ACTIVE events from Meetup's hostId filter:
+  co-hosted events count, and so does an event that has started but not
+  ended.
 - *Builder's call:* whether regular hosts can announce before approval
   (they can't; the event doesn't exist yet) and whether there's a cool-down
   or time window. Keep it simple.

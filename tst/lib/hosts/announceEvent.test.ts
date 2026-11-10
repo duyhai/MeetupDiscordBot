@@ -37,7 +37,11 @@ function memoryStore(start?: AnnouncementStatus) {
     rows,
     claim: vi.fn(async (id: string, by: string) => {
       const current = rows.get(id);
-      if (current === undefined || current.status === 'failed') {
+      if (
+        current === undefined ||
+        current.status === 'failed' ||
+        current.status === 'unknown'
+      ) {
         rows.set(id, {
           meetupEventId: id,
           requestedBy: by,
@@ -152,7 +156,9 @@ describe('announceHostEvent', () => {
       status: 'failed',
       failure: 'NOT_ALLOWED: too soon',
     });
-    expect(JSON.stringify(deps.alert.mock.calls)).toContain('nothing went out');
+    expect(JSON.stringify(deps.alert.mock.calls)).toContain(
+      'Meetup refused it',
+    );
     deps.announce.mockResolvedValueOnce(undefined);
     await expect(run()).resolves.toBe('sent');
     expect(deps.announce).toHaveBeenCalledTimes(2);
@@ -179,10 +185,11 @@ describe('announceHostEvent', () => {
     expect(store.rows.get(EVENT.id)?.status).toBe('failed');
   });
 
-  it('no answer (a dropped connection, an HTTP 502): unconfirmed, never sent again', async () => {
+  it('no answer (a dropped connection, an HTTP 502, no confirmation): unconfirmed, and it can be tried again', async () => {
     for (const thrown of [
       new Error('socket hang up'),
       graphqlError('bad gateway', 502),
+      new Error('announceEvent did not confirm the event'),
     ]) {
       const { store, deps, run } = setup({
         announce: async () => {
@@ -193,12 +200,51 @@ describe('announceHostEvent', () => {
       await expect(run()).resolves.toBe('unconfirmed');
       expect(store.rows.get(EVENT.id)?.status).toBe('unknown');
       expect(JSON.stringify(deps.alert.mock.calls)).toContain(
-        'may not have gone out',
+        'may or may not have gone out',
       );
+      deps.announce.mockResolvedValueOnce(undefined);
       // eslint-disable-next-line no-await-in-loop
-      await expect(run()).resolves.toBe('unconfirmed');
-      expect(deps.announce).toHaveBeenCalledTimes(1);
+      await expect(run()).resolves.toBe('sent');
+      expect(deps.announce).toHaveBeenCalledTimes(2);
     }
+  });
+
+  it('a 4xx (a refused or expired token, a rate limit) is a refusal: failed, retryable', async () => {
+    for (const status of [400, 401, 403, 429]) {
+      const { store, run } = setup({
+        announce: async () => {
+          throw graphqlError('nope', status);
+        },
+      });
+      // eslint-disable-next-line no-await-in-loop
+      await expect(run()).resolves.toBe('failed');
+      expect(store.rows.get(EVENT.id)?.status).toBe('failed');
+    }
+  });
+
+  it('only Meetup’s exact "already announced" counts as done; anything near it is a refusal', async () => {
+    const said = async (message: string, code = 'INVALID') => {
+      const { run } = setup({
+        announce: async () => {
+          throw new MeetupPayloadError('announceEvent', [
+            { code, field: null, message },
+          ]);
+        },
+      });
+      return run();
+    };
+    await expect(said('Event has already been announced.')).resolves.toBe(
+      'already',
+    );
+    await expect(said('anything', 'ALREADY_ANNOUNCED')).resolves.toBe(
+      'already',
+    );
+    await expect(
+      said('This event has not already been announced'),
+    ).resolves.toBe('failed');
+    await expect(
+      said('Cannot announce: event already announced by organizer today'),
+    ).resolves.toBe('failed');
   });
 
   it('a store that cannot record the result leaves it "sending": never sent twice', async () => {

@@ -35,13 +35,21 @@ const ev = (id: string, hostId = MEETUP_SELF.id): HostEvent => ({
 
 /** The real announceHostEvent on an in-memory table with Postgres's claim. */
 function announceApp(
-  options: { announce?: () => Promise<void>; readFails?: boolean } = {},
+  options: {
+    announce?: () => Promise<void>;
+    readFails?: boolean;
+    ownUpcomingDelayMs?: number;
+  } = {},
 ) {
   const rows = new Map<string, Announcement>();
   const store = {
     claim: vi.fn(async (id: string, by: string) => {
       const current = rows.get(id);
-      if (current === undefined || current.status === 'failed') {
+      if (
+        current === undefined ||
+        current.status === 'failed' ||
+        current.status === 'unknown'
+      ) {
         rows.set(id, {
           meetupEventId: id,
           requestedBy: by,
@@ -71,6 +79,9 @@ function announceApp(
     announcements: async () => store,
     // Meetup's hostId filter: only the host's own events come back.
     ownUpcoming: async (memberId) => {
+      await new Promise((resolve) => {
+        setTimeout(resolve, options.ownUpcomingDelayMs ?? 0);
+      });
       return memberId === MEETUP_SELF.id ? [ev(MINE)] : [];
     },
     announce: vi.fn(options.announce ?? (async () => undefined)),
@@ -91,7 +102,8 @@ async function setup(options: Parameters<typeof announceApp>[0] = {}) {
           now: () => NOW,
         },
         announce: {
-          announce: (host, id) => announceHostEvent(a.deps, host, id),
+          announce: (host, id, hooks) =>
+            announceHostEvent(a.deps, host, id, hooks),
           announcements: async (ids) => {
             if (a.readFails) {
               throw new Error('pg down');
@@ -168,10 +180,17 @@ describe('Announce on the host home', () => {
     });
     const two = await announce(MINE);
     expect(noticeOf(two.headers.location)).toBe('in-progress');
+    // Meetup is still silent past the page's deadline (50 ms here).
+    expect(noticeOf((await one).headers.location)).toBe('slow');
     release?.();
-    // The first waited past the page's deadline (50 ms here): "slow".
-    expect(noticeOf((await one).headers.location)).toMatch(/^(sent|slow)$/);
     expect(deps.announce).toHaveBeenCalledTimes(1);
+  });
+
+  it('a slow events read that ends in "not yours" never says "still waiting"', async () => {
+    const { announce, deps } = await setup({ ownUpcomingDelayMs: 150 });
+    const res = await announce(THEIRS);
+    expect(noticeOf(res.headers.location)).toBe('not-yours');
+    expect(deps.announce).not.toHaveBeenCalled();
   });
 
   it('someone else’s event, or a bad id: refused, nothing claimed or sent', async () => {
@@ -206,8 +225,8 @@ describe('Announce on the host home', () => {
     expect(await home()).toMatch(/Try announcing again/);
   });
 
-  it('an unconfirmed one shows no button at all', async () => {
-    const { announce, home } = await setup({
+  it('an unconfirmed one offers to try again', async () => {
+    const { announce, home, deps } = await setup({
       announce: async () => {
         throw new Error('socket hang up');
       },
@@ -216,8 +235,29 @@ describe('Announce on the host home', () => {
       'unconfirmed',
     );
     const text = await home();
-    expect(text).toContain('Announcement unconfirmed');
-    expect(text).not.toContain(`action="/host/events/${MINE}/announce"`);
+    expect(text).toContain('Announcement not confirmed');
+    expect(text).toMatch(/Try announcing again/);
+    vi.mocked(deps.announce).mockResolvedValueOnce(undefined);
+    expect(noticeOf((await announce(MINE)).headers.location)).toBe('sent');
+  });
+
+  it('a send cut off by a restart (sending for 2+ minutes) is not confirmed and retryable', async () => {
+    const { rows, home, deps } = await setup();
+    rows.set(MINE, {
+      meetupEventId: MINE,
+      requestedBy: MEETUP_SELF.id,
+      status: 'sending',
+      failure: null,
+      requestedAt: new Date(NOW.getTime() - 3 * 60 * 1000),
+      completedAt: null,
+    });
+    const text = await home();
+    expect(text).toContain('Announcement not confirmed');
+    expect(text).toContain(`action="/host/events/${MINE}/announce"`);
+    // A fresh one is still "Announcing…", disabled.
+    rows.set(MINE, { ...rows.get(MINE), requestedAt: NOW });
+    expect(await home()).toMatch(/disabled>\s*Announcing…/);
+    expect(deps.announce).not.toHaveBeenCalled();
   });
 
   it('a store outage on the home page still shows the page and the button', async () => {

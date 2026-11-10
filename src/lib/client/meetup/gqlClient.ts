@@ -721,6 +721,10 @@ export class GqlMeetupClient {
       logger.info(`announceEvent result: ${JSON.stringify(result)}`);
       // A rejected announcement (already announced, not allowed) is not sent.
       throwOnPayloadErrors('announceEvent', result.announceEvent?.errors);
+      // No errors and no event back is no confirmation either.
+      if (String(result.announceEvent?.event?.id ?? '') !== input.eventId) {
+        throw new Error('announceEvent did not confirm the event');
+      }
       return result;
     } catch (error) {
       logger.error(error);

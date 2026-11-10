@@ -181,9 +181,11 @@ function homeBody(
     /** Each upcoming event's announcement; undefined: no Announce button. */
     announcements?: Map<string, Announcement>;
     announceResult?: unknown;
+    now?: Date;
   } = {},
 ): SafeHtml {
   const { linkResult, announcements } = extra;
+  const now = extra.now ?? new Date();
   const quiet = quietDays(calendar, today).slice(0, QUIET_DAYS_SHOWN);
   // "Verify on Discord": the same Verify as the button in the server, and
   // once linked, "Refresh roles and badges" runs it again. Only for a
@@ -225,7 +227,9 @@ function homeBody(
         <td data-label="Type">${EVENT_TYPE_LABELS[event.type]}</td>
         <td data-label="Status">
           <span class="badge ok">Published</span>
-          ${announcements ? announceBadge(announcements.get(event.id)) : ''}
+          ${
+            announcements ? announceBadge(announcements.get(event.id), now) : ''
+          }
         </td>
         <td data-label="Actions">
           <div class="actions">
@@ -236,6 +240,7 @@ function homeBody(
                     event,
                     announcements.get(event.id),
                     session.csrfToken,
+                    now,
                   )
                 : ''
             }
@@ -820,6 +825,7 @@ export function registerHostPages(
         linkResult: linkResultOf(req.query.link),
         announcements,
         announceResult: req.query.announce,
+        now: deps.events.now(),
       }),
     });
   }) as RequestHandler);

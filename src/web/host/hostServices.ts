@@ -195,8 +195,14 @@ export function productionAnnouncer(
     ownUpcoming: (meetupMemberId: string) =>
       hostedEvents(events, meetupMemberId, 'upcoming'),
     // A client made per announce, never re-running the write on a 401.
+    // Not getting the credential (Redis down, no token) calls nothing.
     announce: async (meetupEventId: string) => {
-      const token = await getOrganizerAccessToken({ client: getClient() });
+      let token: string | undefined;
+      try {
+        token = await getOrganizerAccessToken({ client: getClient() });
+      } catch {
+        token = undefined;
+      }
       if (!token) {
         throw new OrganizerTokenUnavailableError();
       }
@@ -207,8 +213,8 @@ export function productionAnnouncer(
     alert: alertVia(getClient),
   };
   return {
-    announce: (host, meetupEventId) =>
-      announceHostEvent(deps, host, meetupEventId),
+    announce: (host, meetupEventId, hooks) =>
+      announceHostEvent(deps, host, meetupEventId, hooks),
     announcements: async (ids) =>
       (await PostgresEventAnnouncementRepository.instance()).forEvents(ids),
   };

@@ -11,13 +11,26 @@ import {
 const EVENT_ID = /^[0-9]{1,20}$/;
 const MEETUP_ID_SQL = `'^[1-9][0-9]{0,19}$'`;
 export const ANNOUNCE_FAILURE_MAX = 1000;
+/** A `sending` row older than this is a call that was cut off. */
+export const SENDING_STALE_MS = 2 * 60 * 1000;
+
+/** True when the row's send was cut off (a restart mid-call). */
+export function isStaleSending(a: Announcement, now: Date): boolean {
+  return (
+    a.status === 'sending' &&
+    now.getTime() - a.requestedAt.getTime() >= SENDING_STALE_MS
+  );
+}
 
 /**
- * - sending: claimed, Meetup not answered yet (or the dyno stopped mid-call).
+ * - sending: claimed, Meetup not answered yet (or the dyno stopped mid-call:
+ *   after SENDING_STALE_MS it counts as unconfirmed).
  * - sent: Meetup announced it (or said it already was).
- * - failed: Meetup refused it, so nothing went out; it may be tried again.
- * - unknown: the call broke without an answer; it may have gone out, so it
- *   is never tried again from the dashboard.
+ * - failed: Meetup refused it.
+ * - unknown: the call broke without an answer.
+ * Anything but `sent` may be tried again: Meetup refuses a second
+ * announcement itself, so the row is a record for the page and the alerts,
+ * not a lock. It only keeps quick repeat clicks to one call.
  */
 export type AnnouncementStatus = 'sending' | 'sent' | 'failed' | 'unknown';
 
@@ -32,8 +45,7 @@ export interface Announcement {
 
 /**
  * Idempotent; runs under the dashboard schema lock. One row per Meetup
- * event, ever: the primary key is what makes an announcement go out at most
- * once, whatever the browser sends.
+ * event: its latest announcement and how it went.
  */
 export const EVENT_ANNOUNCEMENT_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS event_announcements (
@@ -107,10 +119,10 @@ export class PostgresEventAnnouncementRepository {
   }
 
   /**
-   * Claims the event's one announcement: a new row as `sending`, or a
-   * `failed` one back to `sending`. One statement, so of two clicks at once
-   * exactly one claims. Otherwise the row as it stands (the caller sends
-   * nothing).
+   * Claims a send: a new row as `sending`, or any row not `sent` and not
+   * freshly `sending` back to `sending`. One statement, so of clicks at
+   * once exactly one calls Meetup. Otherwise the row as it stands (sent, or
+   * another send under way); the caller sends nothing.
    */
   async claim(
     meetupEventId: string,
@@ -125,9 +137,12 @@ export class PostgresEventAnnouncementRepository {
        ON CONFLICT (meetup_event_id) DO UPDATE
          SET status = 'sending', requested_by = EXCLUDED.requested_by,
              requested_at = now(), failure = NULL, completed_at = NULL
-         WHERE event_announcements.status = 'failed'
+         WHERE event_announcements.status IN ('failed', 'unknown')
+            OR (event_announcements.status = 'sending'
+                AND event_announcements.requested_at
+                    < now() - make_interval(secs => $3))
        RETURNING *`,
-      [meetupEventId, requestedBy],
+      [meetupEventId, requestedBy, SENDING_STALE_MS / 1000],
     );
     if (rows[0] !== undefined) {
       return { claimed: true };
