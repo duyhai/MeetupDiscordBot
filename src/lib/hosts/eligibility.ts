@@ -29,6 +29,11 @@ export type HostResolution =
       /** Undefined when the Guest Host role decided and the count was not read. */
       hostedCount?: number;
     }
+  /**
+   * Linked (both ids), on neither blacklist, but not a host: admitted to the
+   * member area (home and Wrapped) only.
+   */
+  | { kind: 'member'; meetupMemberId: string; discordUserId: string }
   | { kind: 'refused'; reason: 'not-linked' | 'blacklisted' | 'not-a-host' };
 
 export type HostIdentity =
@@ -45,7 +50,8 @@ const isBlacklisted = (meetupId: string, discordId: string | undefined) =>
  * is keyed by it); a Meetup sign-in may have no Discord link. A host holds
  * the Guest Host role or has at least one past hosted event, and is on
  * neither blacklist (checked first, before any Meetup read). Promoted is a
- * row in promoted_hosts.
+ * row in promoted_hosts. A linked member who is not a host is a `member`
+ * (Wrapped addendum): the member area only.
  */
 export async function resolveHost(
   deps: HostResolveDeps,
@@ -73,7 +79,12 @@ export async function resolveHost(
   if (!hasRole) {
     hostedCount = await deps.pastHostedCount(meetupMemberId);
     if (hostedCount < 1) {
-      return { kind: 'refused', reason: 'not-a-host' };
+      // Not a host. Linked: a member (Wrapped only). Unlinked: the next
+      // step for them is to link, so that is what the refusal says.
+      if (discordUserId === undefined) {
+        return { kind: 'refused', reason: 'not-linked' };
+      }
+      return { kind: 'member', meetupMemberId, discordUserId };
     }
   }
   const tier: HostTier = (await deps.isPromoted(meetupMemberId))
@@ -99,6 +110,9 @@ export function publishTier(
 ): HostTier | 'not-a-host' {
   if (resolution.kind === 'host') {
     return resolution.tier;
+  }
+  if (resolution.kind === 'member') {
+    return 'regular';
   }
   return resolution.reason === 'blacklisted' ? 'not-a-host' : 'regular';
 }

@@ -8,6 +8,7 @@ import {
   signInWithDiscord,
   signInWithMeetup,
 } from './hostHarness.js';
+import { HostResolution } from '../../../src/lib/hosts/eligibility.js';
 import { SESSION_MAX_SEC } from '../../../src/web/session.js';
 
 afterEach(closeServers);
@@ -22,7 +23,55 @@ const echoTier = (router: import('express').Router) => {
     };
     res.type('text').send(`${session.tier}|${String(session.discordUserId)}`);
   });
+  router.get('/wrapped', (_req, res) => {
+    const { session } = res.locals as { session: { role: string } };
+    res.type('text').send(`role=${session.role}`);
+  });
 };
+
+const MEMBER: HostResolution = {
+  kind: 'member',
+  meetupMemberId: '4242',
+  discordUserId: HOST.kind === 'host' ? (HOST.discordUserId ?? '') : '',
+};
+
+describe('host role', () => {
+  it('a session written before roles existed reads as a host', async () => {
+    const { req, cache } = await makeHostApp({ pages: echoTier });
+    const sid = await signInWithDiscord(req);
+    for (const [key, raw] of cache.values) {
+      if (key.startsWith('host-session-')) {
+        const { role, ...rest } = JSON.parse(raw) as { role?: string };
+        expect(role).toBe('host');
+        cache.values.set(key, JSON.stringify(rest));
+      }
+    }
+    expect((await req.get('/host/wrapped').set('Cookie', sid)).text).toBe(
+      'role=host',
+    );
+  });
+
+  it('a host who is no longer one but is linked becomes a member at the re-check, and back', async () => {
+    let now = 0;
+    const resolve = vi.fn().mockResolvedValue(HOST);
+    const { req } = await makeHostApp({
+      now: () => now,
+      pages: echoTier,
+      resolve,
+    });
+    const sid = await signInWithDiscord(req);
+    resolve.mockResolvedValue(MEMBER);
+    now = TEN_MIN;
+    const demoted = await req.get('/host/wrapped').set('Cookie', sid);
+    expect(demoted.status).toBe(200);
+    expect(demoted.text).toBe('role=member');
+    resolve.mockResolvedValue(HOST);
+    now = 2 * TEN_MIN;
+    expect((await req.get('/host/wrapped').set('Cookie', sid)).text).toBe(
+      'role=host',
+    );
+  });
+});
 
 describe('host tier re-check', () => {
   it('no re-check before 10 minutes', async () => {
