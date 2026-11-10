@@ -45,36 +45,48 @@ function memoryStore(seed: EventRequest[] = []) {
   const rows = [...seed];
   return {
     rows,
-    create: vi.fn(async (input: NewEventRequest) => {
-      await Promise.resolve();
-      if (
-        rows.some(
-          (r) =>
-            r.meetupMemberId === input.meetupMemberId &&
-            r.submitToken === input.submitToken,
-        )
-      ) {
-        return undefined;
-      }
-      const row: EventRequest = {
-        ...input,
-        id: String(rows.length + 1),
-        source: input.source ?? 'web',
-        discordPost: null,
-        status: 'pending',
-        denyReason: null,
-        failure: null,
-        decidedBy: null,
-        decidedAt: null,
-        meetupEventId: null,
-        eventUrl: null,
-        version: 1,
-        createdAt: NOW,
-        updatedAt: NOW,
-      };
-      rows.push(row);
-      return row;
-    }),
+    create: vi.fn(
+      async (input: NewEventRequest, options?: { maxPending?: number }) => {
+        await Promise.resolve();
+        if (
+          options?.maxPending !== undefined &&
+          rows.filter(
+            (r) =>
+              r.meetupMemberId === input.meetupMemberId &&
+              r.status === 'pending',
+          ).length >= options.maxPending
+        ) {
+          return 'full' as const;
+        }
+        if (
+          rows.some(
+            (r) =>
+              r.meetupMemberId === input.meetupMemberId &&
+              r.submitToken === input.submitToken,
+          )
+        ) {
+          return undefined;
+        }
+        const row: EventRequest = {
+          ...input,
+          id: String(rows.length + 1),
+          source: input.source ?? 'web',
+          discordPost: null,
+          status: 'pending',
+          denyReason: null,
+          failure: null,
+          decidedBy: null,
+          decidedAt: null,
+          meetupEventId: null,
+          eventUrl: null,
+          version: 1,
+          createdAt: NOW,
+          updatedAt: NOW,
+        };
+        rows.push(row);
+        return row;
+      },
+    ),
     findBySubmitToken: vi.fn(async (member: string, token: string) => {
       await Promise.resolve();
       return rows.find(
@@ -271,6 +283,21 @@ describe('/meetup_request_event → the shared request row', () => {
       handleRequestCommand(deps, interaction, { ...GOOD, year: 2028 }),
     ).rejects.toThrow('within the next 365 days');
     expect(store.create).not.toHaveBeenCalled();
+  });
+
+  it('counts the cap again under the per-host lock when creating', async () => {
+    const { deps, store } = setup();
+    // The pre-check saw room; another request landed before the insert.
+    store.countPending.mockResolvedValueOnce(0);
+    store.create.mockResolvedValueOnce('full');
+    const { interaction } = commandInteraction();
+    await expect(handleRequestCommand(deps, interaction, GOOD)).rejects.toThrow(
+      `${MAX_PENDING} requests waiting`,
+    );
+    expect(store.create).toHaveBeenCalledWith(
+      expect.objectContaining({ source: 'discord' }),
+      { maxPending: MAX_PENDING },
+    );
   });
 
   it('stops at the pending cap', async () => {

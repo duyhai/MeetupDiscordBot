@@ -59,7 +59,6 @@ import { mirrorDecision } from '../lib/hosts/requestPost.js';
 import {
   alertVia,
   productionPublishDeps,
-  alertVia,
   productionPublisher,
   revokeHostSessions,
 } from './host/hostServices.js';

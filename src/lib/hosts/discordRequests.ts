@@ -12,6 +12,7 @@ import { Logger } from 'tslog';
 import {
   DENY_REASON_MAX,
   EventRequest,
+  NewEventRequest,
   PostgresEventRequestRepository,
 } from '../repositories/postgresEventRequestRepository.js';
 import { LogEntry } from '../helpers/discordLogger.js';
@@ -47,18 +48,25 @@ const logger = new Logger({ name: 'discordRequests' });
 /** The modal's one field. */
 export const DENY_REASON_FIELD = 'reason';
 
+/** The request store's reads and writes the command and buttons use. */
+export interface DiscordRequestStore extends Pick<
+  PostgresEventRequestRepository,
+  'findBySubmitToken' | 'countPending' | 'get' | 'setDiscordPost'
+> {
+  /** 'full': the host is at `maxPending` waiting requests (counted under a lock). */
+  create: (
+    input: NewEventRequest,
+    options?: { maxPending?: number },
+  ) => Promise<EventRequest | undefined | 'full'>;
+}
+
 export interface DiscordRequestDeps {
   now: () => Date;
   /** The member's linked Meetup id (the members table); undefined when unlinked. */
   meetupIdForDiscord: (discordUserId: string) => Promise<string | undefined>;
   /** resolveHost for the linked member: the tier, or a refusal. */
   resolve: (who: { meetupMemberId: string }) => Promise<HostResolution>;
-  store: () => Promise<
-    Pick<
-      PostgresEventRequestRepository,
-      'create' | 'findBySubmitToken' | 'countPending' | 'get' | 'setDiscordPost'
-    >
-  >;
+  store: () => Promise<DiscordRequestStore>;
   /** PAST events hosted by the member (organizer read); may throw. */
   pastHostedCount: (meetupMemberId: string) => Promise<number>;
   /** publishRequest for a Community Host's own request (actor: their Meetup id). */
@@ -139,29 +147,37 @@ export async function handleRequestCommand(
     keepReplyVisible(interaction);
     return;
   }
-  if (
-    tier === 'regular' &&
-    (await store.countPending(meetupMemberId)) >= MAX_PENDING
-  ) {
-    throw new Error(
+  const regular = tier === 'regular';
+  const capReached = () =>
+    new Error(
       `You already have ${MAX_PENDING} requests waiting for approval. Wait for one to be reviewed before sending another.`,
     );
+  if (regular && (await store.countPending(meetupMemberId)) >= MAX_PENDING) {
+    throw capReached();
   }
-  const created = await store.create({
-    meetupMemberId,
-    discordUserId: interaction.user.id,
-    hostName: Array.from(interaction.user.username || 'Host')
-      .slice(0, 100)
-      .join(''),
-    tier,
-    kind: 'fresh',
-    sourceEventId: null,
-    title: form.title,
-    startLocal: `${form.day}T${form.time}`,
-    submitToken: interaction.id,
-    source: 'discord',
-    ...freshSettings(tier, deps.tip(), form.duration),
-  });
+  const made = await store.create(
+    {
+      meetupMemberId,
+      discordUserId: interaction.user.id,
+      hostName: Array.from(interaction.user.username || 'Host')
+        .slice(0, 100)
+        .join(''),
+      tier,
+      kind: 'fresh',
+      sourceEventId: null,
+      title: form.title,
+      startLocal: `${form.day}T${form.time}`,
+      submitToken: interaction.id,
+      source: 'discord',
+      ...freshSettings(tier, deps.tip(), form.duration),
+    },
+    // Counted again under the per-host lock: the check above can race.
+    regular ? { maxPending: MAX_PENDING } : {},
+  );
+  if (made === 'full') {
+    throw capReached();
+  }
+  const created = made;
   if (created === undefined) {
     // The same interaction landed twice at once; the other one made it.
     const raced = await already();
