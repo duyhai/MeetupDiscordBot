@@ -36,6 +36,7 @@ export const obs = (
   title: 'Board games',
   status: 'ACTIVE',
   startAt: START,
+  createdAt: new Date('2026-10-01T00:00:00Z'),
   duration: 'PT2H',
   eventUrl: 'https://www.meetup.com/g/events/311000001/',
   venueId: '27',
@@ -117,12 +118,20 @@ export class FakeEventAuditStore implements EventAuditStore {
         firstSeenAt: state?.firstSeenAt ?? write.startedAt,
         lastSeenAt: write.startedAt,
         deletedAt: null,
+        unconfirmedRuns: 0,
       });
     }
     for (const id of write.deletedEventIds) {
       const state = this.states.get(id);
       if (state && state.deletedAt === null) {
         state.deletedAt = write.finishedAt;
+        state.unconfirmedRuns = 0;
+      }
+    }
+    for (const id of write.unconfirmedEventIds) {
+      const state = this.states.get(id);
+      if (state && state.deletedAt === null) {
+        state.unconfirmedRuns += 1;
       }
     }
     const changes = write.changes.map((c): EventChange => ({
@@ -152,6 +161,12 @@ export class FakeEventAuditStore implements EventAuditStore {
       changes: null,
       outcome: 'failed',
     });
+  }
+
+  async unconfirmable(minRuns: number): Promise<EventState[]> {
+    return [...this.states.values()].filter(
+      (s) => s.deletedAt === null && s.unconfirmedRuns >= minRuns,
+    );
   }
 
   async unalerted(
@@ -215,7 +230,6 @@ export class FakeEventAuditStore implements EventAuditStore {
 export function fakeReader(
   listed: EventObservation[],
   byId: Record<string, EventObservation | null | Error> = {},
-  options: { fallback?: boolean } = {},
 ) {
   const reader = {
     listEvents: vi.fn(async () => listed),
@@ -226,7 +240,6 @@ export function fakeReader(
       }
       return answer;
     }),
-    usingFallback: () => options.fallback ?? false,
   } satisfies AuditMeetupReader;
   const readMeetup: ReadMeetup = (fn) => fn(reader);
   return { reader, readMeetup };

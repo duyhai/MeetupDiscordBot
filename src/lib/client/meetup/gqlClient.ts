@@ -19,13 +19,11 @@ import { throwOnPayloadErrors } from './payloadErrors.js';
 import {
   getEvent,
   getEventForAudit,
-  getEventForAuditCore,
   getEventForCopy,
   getEventRsvps,
   getGroupEvents,
   getGroupEventsCount,
   getGroupEventsForAudit,
-  getGroupEventsForAuditCore,
   getGroupMembersByIds,
   getGroupMemberships,
   getMemberRsvps,
@@ -40,7 +38,6 @@ import {
   AnnounceEventInput,
   AnnounceEventResponse,
   AuditEventNode,
-  AuditQueryVariant,
   BaseUserInfo,
   CloseEventRsvpsInput,
   CloseEventRsvpsResponse,
@@ -645,21 +642,19 @@ export class GqlMeetupClient {
   public async getGroupEventsForAudit(
     input: PaginationInput,
     filter: GroupEventFilter | undefined,
-    variant: AuditQueryVariant = 'full',
   ): Promise<PaginatedData<AuditEventNode>> {
     logger.info(
-      `Calling getGroupEventsForAudit (${variant}) with input: ${JSON.stringify({ input, filter })}`,
+      `Calling getGroupEventsForAudit with input: ${JSON.stringify({ input, filter })}`,
     );
     try {
       const result = await this.client.request<
         GetGroupEventsForAuditResponse,
         GetGroupEventsInput
-      >(
-        variant === 'full'
-          ? getGroupEventsForAudit
-          : getGroupEventsForAuditCore,
-        { urlname: Configuration.meetup.groupUrlName, ...input, filter },
-      );
+      >(getGroupEventsForAudit, {
+        urlname: Configuration.meetup.groupUrlName,
+        ...input,
+        filter,
+      });
       if (!result.groupByUrlname) {
         throw new MeetupGroupUnreadableError(Configuration.meetup.groupUrlName);
       }
@@ -675,32 +670,24 @@ export class GqlMeetupClient {
   }
 
   /**
-   * One event for the audit, or null when Meetup has no such event: a 200
-   * whose `event` is null, with or without GraphQL errors alongside
-   * (graphql-request throws those as a ClientError carrying the data).
-   * Anything else throws. Not logged in full: it carries host names.
+   * One event for the audit, or null when Meetup has no such event: a clean
+   * 200 whose `event` is null and no GraphQL errors (checked live with a
+   * non-existent id). A null event WITH errors alongside is a resolver
+   * failure (rate limit, permission, internal) and throws like any other
+   * error, so the caller tries again next run instead of recording a
+   * deletion. Not logged in full: it carries host names.
    */
   public async getEventForAudit(
     eventId: string,
-    variant: AuditQueryVariant = 'full',
   ): Promise<AuditEventNode | null> {
-    logger.info(`Calling getEventForAudit (${variant}) for ${eventId}`);
+    logger.info(`Calling getEventForAudit for ${eventId}`);
     try {
       const result = await this.client.request<GetEventForAuditResponse>(
-        variant === 'full' ? getEventForAudit : getEventForAuditCore,
+        getEventForAudit,
         { eventId },
       );
       return result.event;
     } catch (error) {
-      if (
-        error instanceof ClientError &&
-        error.response.status === 200 &&
-        error.response.data !== undefined &&
-        error.response.data !== null &&
-        (error.response.data as { event?: unknown }).event === null
-      ) {
-        return null;
-      }
       logger.error(error);
       throw error;
     }

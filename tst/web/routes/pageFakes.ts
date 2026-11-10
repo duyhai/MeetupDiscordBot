@@ -81,6 +81,7 @@ import type {
   ChangeFilter,
   EventAuditRun,
   EventHistory,
+  EventState,
 } from '../../../src/lib/repositories/postgresEventAuditRepository.js';
 
 export const PAGE_NOW = new Date('2026-10-05T16:15:00Z');
@@ -989,6 +990,7 @@ export function eventSnapshotRow(
     title: 'Board games',
     status: 'ACTIVE',
     startAt: EVENT_START,
+    createdAt: new Date('2026-09-01T00:00:00Z'),
     duration: 'PT2H',
     eventUrl: EVENT_URL_1,
     venueId: '27',
@@ -1017,6 +1019,7 @@ export function eventHistoryFixture(): EventHistory {
       firstSeenAt: new Date('2026-10-05T15:00:00Z'),
       lastSeenAt: new Date('2026-10-05T16:00:00Z'),
       deletedAt: null,
+      unconfirmedRuns: 0,
     },
     changes: [
       eventChangeRow({
@@ -1057,8 +1060,12 @@ export function fakeEventAudit(
   changes: EventChange[] = [],
   histories: Record<string, EventHistory> = {},
   latestRun: EventAuditRun | undefined = eventAuditRunRow(),
+  unconfirmed: EventState[] = [],
 ) {
   return {
+    unconfirmable: vi.fn(async (minRuns: number) =>
+      unconfirmed.filter((s) => s.unconfirmedRuns >= minRuns),
+    ),
     listChanges: vi.fn(async (filter: ChangeFilter, limit: number = 50) =>
       [...changes]
         .sort((a, b) => b.id - a.id)

@@ -16,6 +16,7 @@ export const obs = (
   title: 'Board games',
   status: 'ACTIVE',
   startAt: START,
+  createdAt: new Date('2026-10-01T00:00:00Z'),
   duration: 'PT2H',
   eventUrl: 'https://www.meetup.com/g/events/311000001/',
   venueId: '27',
@@ -37,13 +38,17 @@ describe('isRsvpDrop', () => {
     [null, 3, false],
     [20, null, false],
     [4, 0, true],
+    [4, 3, false],
+    [3, 0, false],
+    [8, 6, true],
   ])('%s -> %s is %s', (prev, next, expected) => {
     expect(isRsvpDrop(prev, next)).toBe(expected);
   });
 });
 
 describe('diffEvent', () => {
-  const live = { baseline: false };
+  const NOW = new Date('2026-11-10T18:00:00Z');
+  const live = { baseline: false, now: NOW };
 
   it('a new event is created, unless this is the baseline run', () => {
     const next = obs();
@@ -62,7 +67,41 @@ describe('diffEvent', () => {
         waitlist: 2,
       }),
     ]);
-    expect(diffEvent(undefined, next, { baseline: true })).toEqual([]);
+    expect(diffEvent(undefined, next, { baseline: true, now: NOW })).toEqual(
+      [],
+    );
+  });
+
+  it('an event first seen after it started or ended is not "created"', () => {
+    expect(
+      diffEvent(
+        undefined,
+        obs({ startAt: new Date('2026-11-10T17:00:00Z') }),
+        live,
+      ),
+    ).toEqual([]);
+    expect(diffEvent(undefined, obs({ status: 'PAST' }), live)).toEqual([]);
+  });
+
+  it('a read with no hosts after one with hosts records no host change', () => {
+    expect(diffEvent(obs(), obs({ hosts: [] }), live)).toEqual([]);
+    expect(diffEvent(obs({ hosts: [] }), obs(), live)).toHaveLength(1);
+  });
+
+  it('RSVPs leaving an event that is over are not a drop', () => {
+    expect(
+      diffEvent(obs(), obs({ status: 'PAST', rsvpYes: 10 }), live),
+    ).toEqual([]);
+    expect(
+      diffEvent(
+        obs(),
+        obs({ startAt: new Date('2026-11-10T17:00:00Z'), rsvpYes: 10 }),
+        live,
+      ),
+    ).toEqual([expect.objectContaining({ kind: 'start_moved' })]);
+    expect(diffEvent(obs({ rsvpYes: 4 }), obs({ rsvpYes: 0 }), live)).toEqual([
+      expect.objectContaining({ kind: 'rsvp_drop' }),
+    ]);
   });
 
   it('nothing for an unchanged event', () => {

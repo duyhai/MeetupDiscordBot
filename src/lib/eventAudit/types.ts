@@ -41,6 +41,8 @@ export interface EventObservation {
   title: string;
   status: string;
   startAt: Date;
+  /** When the event was created on Meetup (createdTime), or null. */
+  createdAt: Date | null;
   /** ISO 8601 duration as Meetup sends it, or null. */
   duration: string | null;
   /** A Meetup event URL (MEETUP_EVENT_URL), or null. */

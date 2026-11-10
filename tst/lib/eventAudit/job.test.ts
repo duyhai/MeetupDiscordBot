@@ -38,6 +38,7 @@ async function storeWithRun(startedAt: Date, outcome: 'saved' | 'failed') {
       confirmed: 0,
       observations: [],
       deletedEventIds: [],
+      unconfirmedEventIds: [],
       changes: [],
     });
   } else {

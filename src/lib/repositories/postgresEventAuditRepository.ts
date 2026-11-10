@@ -22,6 +22,8 @@ const DISCORD_ID = /^[0-9]{17,20}$/;
 /** Snapshots and changes older than this are pruned at the end of a run. */
 export const EVENT_AUDIT_RETENTION_DAYS = 180;
 const DEFAULT_PAGE = 50;
+/** The most recentChangesForHost ever returns. */
+export const HOST_CHANGES_MAX = 200;
 
 /**
  * Idempotent; runs under the dashboard schema lock. One row per run
@@ -52,6 +54,7 @@ CREATE TABLE IF NOT EXISTS event_snapshots (
   title            TEXT NOT NULL CHECK (length(title) <= 300),
   status           TEXT NOT NULL CHECK (length(status) <= 32),
   start_at         TIMESTAMPTZ NOT NULL,
+  created_at       TIMESTAMPTZ,
   duration         TEXT CHECK (duration IS NULL OR duration ~ '^P[0-9A-Z.]{1,30}$'),
   event_url        TEXT CHECK (event_url IS NULL OR length(event_url) <= 200),
   venue_id         TEXT CHECK (venue_id IS NULL OR venue_id ~ '^[0-9]{1,20}$'),
@@ -71,7 +74,10 @@ CREATE TABLE IF NOT EXISTS event_audit_state (
   latest_snapshot_id  BIGINT NOT NULL REFERENCES event_snapshots(id),
   first_seen_at       TIMESTAMPTZ NOT NULL,
   last_seen_at        TIMESTAMPTZ NOT NULL,
-  deleted_at          TIMESTAMPTZ
+  deleted_at          TIMESTAMPTZ,
+  -- Runs in a row in which the event was missing from the listing and the
+  -- confirmation read failed; 0 once it is seen or answered.
+  unconfirmed_runs    INTEGER NOT NULL DEFAULT 0 CHECK (unconfirmed_runs >= 0)
 );
 CREATE TABLE IF NOT EXISTS event_changes (
   id               BIGSERIAL PRIMARY KEY,
@@ -94,6 +100,7 @@ CREATE TABLE IF NOT EXISTS event_changes (
 );
 CREATE INDEX IF NOT EXISTS event_changes_detected_idx ON event_changes (detected_at DESC, id DESC);
 CREATE INDEX IF NOT EXISTS event_changes_event_idx ON event_changes (meetup_event_id, id DESC);
+CREATE INDEX IF NOT EXISTS event_changes_kind_idx ON event_changes (kind, id DESC);
 CREATE INDEX IF NOT EXISTS event_changes_hosts_idx ON event_changes USING GIN (hosts jsonb_path_ops);
 -- Append-only (TRUNCATE, test-only, is not a row event). A change may only
 -- have alerted_at set; a snapshot never changes; both may be deleted only
@@ -183,6 +190,8 @@ export interface EventState {
   firstSeenAt: Date;
   lastSeenAt: Date;
   deletedAt: Date | null;
+  /** Consecutive runs missing from the listing with a failed confirmation. */
+  unconfirmedRuns: number;
 }
 
 /** Everything one saved run writes, in one transaction. Snapshots are taken at startedAt; changes detected at finishedAt. */
@@ -194,6 +203,8 @@ export interface RunWrite {
   confirmed: number;
   observations: EventObservation[];
   deletedEventIds: string[];
+  /** Vanished events whose confirmation read failed this run: their streak grows. */
+  unconfirmedEventIds: string[];
   changes: NewEventChange[];
 }
 
@@ -231,6 +242,7 @@ interface SnapshotRow {
   title: string;
   status: string;
   start_at: Date;
+  created_at: Date | null;
   duration: string | null;
   event_url: string | null;
   venue_id: string | null;
@@ -246,6 +258,7 @@ interface StateRow extends SnapshotRow {
   first_seen_at: Date;
   last_seen_at: Date;
   deleted_at: Date | null;
+  unconfirmed_runs: number;
 }
 
 interface ChangeRow {
@@ -302,6 +315,7 @@ const toSnapshot = (r: SnapshotRow): EventSnapshot => ({
   title: r.title,
   status: r.status,
   startAt: r.start_at,
+  createdAt: r.created_at,
   duration: r.duration,
   eventUrl: r.event_url,
   venueId: r.venue_id,
@@ -319,6 +333,7 @@ const toState = (r: StateRow): EventState => ({
   firstSeenAt: r.first_seen_at,
   lastSeenAt: r.last_seen_at,
   deletedAt: r.deleted_at,
+  unconfirmedRuns: r.unconfirmed_runs,
 });
 
 const toChange = (r: ChangeRow): EventChange => ({
@@ -341,8 +356,8 @@ const toChange = (r: ChangeRow): EventChange => ({
 });
 
 const SNAPSHOT_COLUMNS = `s.id, s.run_id, s.meetup_event_id, s.taken_at, s.title, s.status, s.start_at,
-  s.duration, s.event_url, s.venue_id, s.photo_id, s.hosts, s.rsvp_yes, s.waitlist, s.rsvps_closed, s.last_edited_at`;
-const STATE_SELECT = `SELECT ${SNAPSHOT_COLUMNS}, st.first_seen_at, st.last_seen_at, st.deleted_at
+  s.created_at, s.duration, s.event_url, s.venue_id, s.photo_id, s.hosts, s.rsvp_yes, s.waitlist, s.rsvps_closed, s.last_edited_at`;
+const STATE_SELECT = `SELECT ${SNAPSHOT_COLUMNS}, st.first_seen_at, st.last_seen_at, st.deleted_at, st.unconfirmed_runs
   FROM event_audit_state st JOIN event_snapshots s ON s.id = st.latest_snapshot_id`;
 
 const json = (value: unknown) => JSON.stringify(value ?? null);
@@ -437,9 +452,9 @@ export class PostgresEventAuditRepository {
           // eslint-disable-next-line no-await-in-loop -- one transaction, a few dozen rows
           const snapshot = await client.query<{ id: string }>(
             `INSERT INTO event_snapshots
-             (run_id, meetup_event_id, taken_at, title, status, start_at, duration, event_url,
-              venue_id, photo_id, hosts, rsvp_yes, waitlist, rsvps_closed, last_edited_at)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12, $13, $14, $15)
+             (run_id, meetup_event_id, taken_at, title, status, start_at, created_at, duration,
+              event_url, venue_id, photo_id, hosts, rsvp_yes, waitlist, rsvps_closed, last_edited_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, $13, $14, $15, $16)
            RETURNING id`,
             [
               runId,
@@ -448,6 +463,7 @@ export class PostgresEventAuditRepository {
               o.title,
               o.status,
               o.startAt,
+              o.createdAt,
               o.duration,
               o.eventUrl,
               o.venueId,
@@ -467,15 +483,23 @@ export class PostgresEventAuditRepository {
            ON CONFLICT (meetup_event_id) DO UPDATE
              SET latest_snapshot_id = EXCLUDED.latest_snapshot_id,
                  last_seen_at = EXCLUDED.last_seen_at,
-                 deleted_at = NULL`,
+                 deleted_at = NULL,
+                 unconfirmed_runs = 0`,
             [o.eventId, Number(snapshot.rows[0].id), write.startedAt],
           );
         }
         if (write.deletedEventIds.length > 0) {
           await client.query(
-            `UPDATE event_audit_state SET deleted_at = $2
+            `UPDATE event_audit_state SET deleted_at = $2, unconfirmed_runs = 0
             WHERE meetup_event_id = ANY($1) AND deleted_at IS NULL`,
             [write.deletedEventIds, write.finishedAt],
+          );
+        }
+        if (write.unconfirmedEventIds.length > 0) {
+          await client.query(
+            `UPDATE event_audit_state SET unconfirmed_runs = unconfirmed_runs + 1
+            WHERE meetup_event_id = ANY($1) AND deleted_at IS NULL`,
+            [write.unconfirmedEventIds],
           );
         }
         const changes: EventChange[] = [];
@@ -522,6 +546,16 @@ export class PostgresEventAuditRepository {
     );
   }
 
+  /** Live events missing from the listing whose confirmation has failed at least `minRuns` runs in a row. */
+  async unconfirmable(minRuns: number): Promise<EventState[]> {
+    const { rows } = await this.pool.query<StateRow>(
+      `${STATE_SELECT} WHERE st.deleted_at IS NULL AND st.unconfirmed_runs >= $1
+        ORDER BY st.unconfirmed_runs DESC, st.meetup_event_id`,
+      [minRuns],
+    );
+    return rows.map(toState);
+  }
+
   /** Changes of these kinds not yet alerted, oldest first. */
   async unalerted(
     kinds: EventChangeKind[],
@@ -551,9 +585,9 @@ export class PostgresEventAuditRepository {
 
   /**
    * Retention, in bounded statements: superseded snapshots older than the
-   * retention period, changes older than it, then events whose latest
-   * snapshot is older than it (state and that snapshot). Returns the counts
-   * of the first three.
+   * retention period, changes older than it, events whose latest snapshot
+   * is older than it (state and that snapshot), then runs older than it
+   * that nothing references any more. Returns the counts of the first three.
    */
   async prune(
     now: Date,
@@ -594,6 +628,15 @@ export class PostgresEventAuditRepository {
         }
         return gone.rowCount ?? 0;
       },
+    );
+    await this.pool.query(
+      `DELETE FROM event_audit_runs WHERE id IN (
+         SELECT r.id FROM event_audit_runs r
+          WHERE r.started_at < $1
+            AND NOT EXISTS (SELECT 1 FROM event_snapshots s WHERE s.run_id = r.id)
+            AND NOT EXISTS (SELECT 1 FROM event_changes c WHERE c.run_id = r.id)
+          LIMIT $2)`,
+      [cutoff, limit],
     );
     return {
       snapshots: snapshots.rowCount ?? 0,
@@ -676,7 +719,8 @@ export class PostgresEventAuditRepository {
 
   /**
    * The host dashboard's hook: changes on events the member hosted (at the
-   * time of the change), newest first. No UI in this PR.
+   * time of the change), newest first, at most HOST_CHANGES_MAX. No UI in
+   * this PR.
    */
   async recentChangesForHost(
     meetupId: string,
@@ -685,9 +729,10 @@ export class PostgresEventAuditRepository {
     if (!EVENT_ID.test(meetupId)) {
       return [];
     }
-    return this.listChanges(
-      { hostId: meetupId, from: options.since },
-      options.limit ?? 20,
+    const limit = Math.min(
+      Math.max(1, Math.trunc(options.limit ?? 20)),
+      HOST_CHANGES_MAX,
     );
+    return this.listChanges({ hostId: meetupId, from: options.since }, limit);
   }
 }

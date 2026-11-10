@@ -356,18 +356,18 @@ export const getEvent = gql`
 `;
 
 /**
- * The event audit's node (src/lib/eventAudit): what a snapshot keeps. Two
- * shapes: the full one asks for the RSVP counts and open state by the
- * fields Meetup's schema documents (`going`, `waiting`, `rsvpSettings`);
- * the core one asks only for fields this repo has used live, with the yes
- * count from the RSVP connection, so a refused full query (an unknown
- * field) never stops the snapshots. No description, no member photos.
+ * The event audit's node (src/lib/eventAudit): what a snapshot keeps. Every
+ * field was checked live against gql-ext with the organizer token
+ * (2026-11-10): `going` / `waiting` do not exist on Event, so the counts
+ * come from the RSVP connection with a status filter. No description, no
+ * member photos.
  */
-const AUDIT_NODE_CORE = `
+const AUDIT_NODE = `
             id
             title
             status
             dateTime
+            createdTime
             duration
             eventUrl
             venue {
@@ -381,19 +381,18 @@ const AUDIT_NODE_CORE = `
                 id
                 name
               }
-            }`;
-const AUDIT_NODE_FULL = `${AUDIT_NODE_CORE}
-            going
-            waiting
+            }
             rsvpSettings {
               rsvpsClosed
-            }`;
-const AUDIT_NODE_FALLBACK = `${AUDIT_NODE_CORE}
-            rsvps {
-              yesCount
+            }
+            yes: rsvps(filter: { rsvpStatus: [YES] }) {
+              totalCount
+            }
+            waitlist: rsvps(filter: { rsvpStatus: [WAITLIST] }) {
+              totalCount
             }`;
 
-const groupEventsForAudit = (node: string) => gql`
+export const getGroupEventsForAudit = gql`
   query (
     $urlname: String!
     $first: Int!
@@ -411,7 +410,7 @@ const groupEventsForAudit = (node: string) => gql`
         }
         totalCount
         edges {
-          node {${node}
+          node {${AUDIT_NODE}
           }
         }
       }
@@ -419,15 +418,9 @@ const groupEventsForAudit = (node: string) => gql`
   }
 `;
 
-const eventForAudit = (node: string) => gql`
+export const getEventForAudit = gql`
   query ($eventId: ID!) {
-    event(id: $eventId) {${node}
+    event(id: $eventId) {${AUDIT_NODE}
     }
   }
 `;
-
-export const getGroupEventsForAudit = groupEventsForAudit(AUDIT_NODE_FULL);
-export const getGroupEventsForAuditCore =
-  groupEventsForAudit(AUDIT_NODE_FALLBACK);
-export const getEventForAudit = eventForAudit(AUDIT_NODE_FULL);
-export const getEventForAuditCore = eventForAudit(AUDIT_NODE_FALLBACK);

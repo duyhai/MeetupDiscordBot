@@ -482,6 +482,18 @@ Routes: GET `DASHBOARD_PATHS.eventChanges` (query: `kind` ∈ kinds, `host` digi
 - [ ] **Step 3: Full checks**: `yarn lint`, `npx tsc --noEmit -p . | grep -v '^node_modules'`, `npx prettier --check "**/*.{ts,js,json,md}"`, `yarn test`, the integration command. All green.
 - [ ] **Step 4: Commit** `docs(eventAudit): screenshots`; push; open the PR against `main` (do not merge); report the PR URL and `BASE..HEAD` SHAs to the "MeetupBot - lead" session.
 
+## Post-review amendments (2026-11-10)
+
+From the lead session's live probe and independent review: one proven query
+(`going`/`waiting` do not exist; RSVP connection counts, `rsvpsClosed` and
+`createdTime` do), the full/core fallback removed; a null event with errors
+is a failure, not a deletion; `unconfirmed_runs` streak per event, shown on
+the page and alerted once after 3; `created` suppressed for events already
+started; RSVP drop needs a base of 4 and 2 people and is skipped once the
+event is over; a hostless read records no host change; `(kind, id DESC)`
+index; `recentChangesForHost` limit clamped to 200; runs pruned; an
+end-to-end job test on Postgres (`tst/integration/eventAuditJob.test.ts`).
+
 ## Self-review notes
 
 - Spec coverage: snapshot (T2, T3, T5), diff (T1), deletion confirmation (T5), alerts and rate limit (T4, T5), scheduler and lease (T6), pages (T8), host hook (T3 `recentChangesForHost`), tests and screenshots (all, T9), retention (T3, T5).

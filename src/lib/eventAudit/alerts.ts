@@ -126,13 +126,24 @@ export function failureAlertEntry(error: unknown): LogEntry {
   };
 }
 
-/** Once a day while the reader is on the core query. Fixed text. */
-export function fallbackAlertEntry(): LogEntry {
+/**
+ * Posted once when an event has vanished from the listing but its
+ * confirmation read has failed UNCONFIRMED_ALERT_AFTER runs in a row: it may
+ * be gone, and nobody would know. Fixed text plus the event's own stored
+ * title and hosts.
+ */
+export function unconfirmedAlertEntry(
+  state: { latest: { eventId: string; title: string; hosts: EventHost[] } },
+  runs: number,
+): LogEntry {
+  const history = eventHistoryPath(state.latest.eventId);
   return {
-    title: 'Event snapshots are running without RSVP details',
+    title: `Event could not be confirmed: ${titleText(state.latest.title)}`,
     description:
-      'Meetup refused the full audit query, so snapshots are taken with the core one: ' +
-      'waitlist counts and the RSVPs-open flag are unknown until the query is fixed. ' +
-      'Deletions, cancellations and host changes are still tracked.',
+      "This event left Meetup's upcoming list, and the direct read that would " +
+      `say whether it was deleted has failed ${runs} runs in a row. ` +
+      'It may be gone; nothing is recorded until Meetup answers.\n' +
+      `Hosts: ${hostList(state.latest.hosts)}` +
+      (history ? `\nHistory: ${PUBLIC_APP_ORIGIN}${history}` : ''),
   };
 }

@@ -5,8 +5,8 @@ import {
   alertedKey,
   changeAlertEntry,
   failureAlertEntry,
-  fallbackAlertEntry,
   summaryAlertEntry,
+  unconfirmedAlertEntry,
 } from '../../../src/lib/eventAudit/alerts.js';
 import { EventChange } from '../../../src/lib/eventAudit/types.js';
 import { alertText } from '../../../src/lib/helpers/discordLogger.js';
@@ -139,10 +139,23 @@ describe('the other entries', () => {
     expect(entry.description).toContain('retries');
   });
 
-  it('the fallback notice is fixed text', () => {
-    expect(fallbackAlertEntry().title).toBe(
-      'Event snapshots are running without RSVP details',
+  it('the unconfirmed notice names the event, hosts and the streak', () => {
+    const entry = unconfirmedAlertEntry(
+      {
+        latest: {
+          eventId: '311000001',
+          title: '**Hike**',
+          hosts: [{ id: '4242', name: 'Hana' }],
+        },
+      },
+      3,
     );
+    expect(entry.title).toBe(
+      `Event could not be confirmed: ${alertText('**Hike**')}`,
+    );
+    expect(entry.description).toContain('failed 3 runs in a row');
+    expect(entry.description).toContain('Hosts: Hana (4242)');
+    expect(entry.description).toContain(HISTORY);
   });
 
   it('the rate-limit key is per event and kind', () => {

@@ -58,22 +58,16 @@ describe('getGroupEventsForAudit', () => {
       status: ['PAST'],
       beforeDateTime: '2026-11-10T18:00:00.000Z',
     });
-    expect(sent.query()).toMatch(/going\s+waiting/);
+    expect(sent.query()).not.toMatch(/\bgoing\b|\bwaiting\b/);
+    expect(sent.query()).toMatch(
+      /yes:\s*rsvps\(filter:\s*\{\s*rsvpStatus:\s*\[YES\]\s*\}\)\s*\{\s*totalCount\s*\}/,
+    );
+    expect(sent.query()).toMatch(
+      /waitlist:\s*rsvps\(filter:\s*\{\s*rsvpStatus:\s*\[WAITLIST\]\s*\}\)\s*\{\s*totalCount\s*\}/,
+    );
+    expect(sent.query()).toMatch(/createdTime/);
     expect(sent.query()).toMatch(/rsvpSettings\s*\{\s*rsvpsClosed\s*\}/);
     expect(sent.query()).toMatch(/featuredEventPhoto\s*\{\s*id\s*\}/);
-  });
-
-  it('the core variant asks for the proven fields only', async () => {
-    const sent = answer(200, {
-      data: { groupByUrlname: { id: 'g', events: page } },
-    });
-    await client().getGroupEventsForAudit(
-      { first: 100 },
-      { status: ['ACTIVE'] },
-      'core',
-    );
-    expect(sent.query()).not.toMatch(/going|waiting|rsvpSettings/);
-    expect(sent.query()).toMatch(/rsvps\s*\{\s*yesCount\s*\}/);
   });
 
   it('an unreadable group is the named error', async () => {
@@ -94,11 +88,19 @@ describe('getEventForAudit', () => {
     expect(sent.variables()).toEqual({ eventId: '5' });
   });
 
-  it('a null event is null, with or without errors alongside', async () => {
+  it('a clean null event is null', async () => {
     answer(200, { data: { event: null } });
     expect(await client().getEventForAudit('5')).toBeNull();
-    answer(200, { data: { event: null }, errors: [{ message: 'not found' }] });
-    expect(await client().getEventForAudit('5')).toBeNull();
+  });
+
+  it('a null event with errors alongside is a failure, not a deletion', async () => {
+    answer(200, {
+      data: { event: null },
+      errors: [{ message: 'rate limited' }],
+    });
+    await expect(client().getEventForAudit('5')).rejects.toBeInstanceOf(
+      ClientError,
+    );
   });
 
   it('anything else throws', async () => {

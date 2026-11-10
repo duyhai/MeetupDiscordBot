@@ -411,27 +411,25 @@ export interface AnnounceEventResponse {
 
 /**
  * An event as the audit queries return it (src/lib/eventAudit/meetup.ts
- * validates every field). `rsvps.yesCount` is the core query's yes count.
+ * validates every field). `yes` and `waitlist` are the RSVP connection
+ * counts by status (aliases in the query).
  */
 export interface AuditEventNode {
   id: unknown;
   title?: unknown;
   status?: unknown;
   dateTime?: unknown;
+  createdTime?: unknown;
   duration?: unknown;
   eventUrl?: unknown;
-  going?: unknown;
-  waiting?: unknown;
-  rsvps?: { yesCount?: unknown } | null;
+  yes?: { totalCount?: unknown } | null;
+  waitlist?: { totalCount?: unknown } | null;
   rsvpSettings?: { rsvpsClosed?: unknown } | null;
   venue?: { id?: unknown } | null;
   featuredEventPhoto?: { id?: unknown } | null;
   eventHosts?:
     ({ member?: { id?: unknown; name?: unknown } | null } | null)[] | null;
 }
-
-/** `full`: the documented RSVP fields; `core`: proven fields only (see queries.ts). */
-export type AuditQueryVariant = 'full' | 'core';
 
 export interface GetGroupEventsForAuditResponse {
   groupByUrlname: {

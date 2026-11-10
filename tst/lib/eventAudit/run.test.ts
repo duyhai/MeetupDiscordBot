@@ -7,9 +7,10 @@ import {
 import {
   BACKOFF_KEY,
   CONFIRM_CAP,
-  FALLBACK_ALERTED_KEY_PREFIX,
+  UNCONFIRMED_ALERT_AFTER,
   failedAlertedKey,
   runEventAudit,
+  unconfirmedAlertedKey,
 } from '../../../src/lib/eventAudit/run.js';
 import { utcDay } from '../../../src/lib/reports/period.js';
 import {
@@ -269,23 +270,47 @@ describe('runEventAudit', () => {
     expect(store.runs.at(-1)?.outcome).toBe('failed');
   });
 
-  it('running on the core query is said once a day', async () => {
+  it('a vanished event whose confirmation keeps failing is counted, shown and alerted once after three runs', async () => {
     const store = await seeded();
-    const { readMeetup } = fakeReader([A, B, C], {}, { fallback: true });
-    const { deps, alerts, cache } = fakeDeps({
-      store: async () => store,
-      readMeetup,
+    const { readMeetup } = fakeReader([A, C], {
+      '311000002': new Error('502'),
     });
-    await runEventAudit(deps, 'job');
-    await runEventAudit(deps, 'job');
-    expect(alerts.map((a) => a.title)).toEqual([
-      'Event snapshots are running without RSVP details',
+    const first = fakeDeps({ store: async () => store, readMeetup });
+    await runEventAudit(first.deps, 'job');
+    await runEventAudit(first.deps, 'job');
+    expect(store.states.get('311000002')?.unconfirmedRuns).toBe(2);
+    expect(first.alerts).toEqual([]);
+    await runEventAudit(first.deps, 'job');
+    expect(store.states.get('311000002')?.unconfirmedRuns).toBe(
+      UNCONFIRMED_ALERT_AFTER,
+    );
+    expect(await store.unconfirmable(UNCONFIRMED_ALERT_AFTER)).toHaveLength(1);
+    expect(first.alerts.map((a) => a.title)).toEqual([
+      'Event could not be confirmed: Hike',
     ]);
-    expect(
-      [...cache.values.keys()].some((k) =>
-        k.startsWith(FALLBACK_ALERTED_KEY_PREFIX),
-      ),
-    ).toBe(true);
+    expect(first.alerts[0].description).not.toContain('502');
+    expect(first.cache.values.has(unconfirmedAlertedKey('311000002'))).toBe(
+      true,
+    );
+    await runEventAudit(first.deps, 'job');
+    expect(first.alerts).toHaveLength(1);
+    // Seen again: the streak resets.
+    const seen = fakeDeps({
+      store: async () => store,
+      readMeetup: fakeReader([A, B, C]).readMeetup,
+    });
+    await runEventAudit(seen.deps, 'job');
+    expect(store.states.get('311000002')?.unconfirmedRuns).toBe(0);
+  });
+
+  it('every call of the run reads Meetup; the hourly rule is the job (job.test.ts)', async () => {
+    const store = await seeded();
+    const { reader, readMeetup } = fakeReader([A, B, C]);
+    const { deps } = fakeDeps({ store: async () => store, readMeetup });
+    await runEventAudit(deps, 'job');
+    await runEventAudit(deps, 'job');
+    expect(reader.listEvents).toHaveBeenCalledTimes(2);
+    expect(store.runs).toHaveLength(3);
   });
 
   it('a leftover unalerted change from an earlier run is alerted', async () => {
@@ -298,6 +323,7 @@ describe('runEventAudit', () => {
       confirmed: 0,
       observations: [],
       deletedEventIds: [],
+      unconfirmedEventIds: [],
       changes: [
         {
           eventId: '311000003',

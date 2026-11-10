@@ -196,6 +196,32 @@ describe('Event changes page', () => {
     expect(res.text).not.toContain('href="https://www.meetup.com');
   });
 
+  it('names events whose deletion could not be confirmed for three runs', async () => {
+    const history = eventHistoryFixture();
+    const audit = fakeEventAudit([eventChangeRow()], {}, undefined, [
+      {
+        ...history.state,
+        unconfirmedRuns: 4,
+        latest: { ...history.state.latest, title: HOSTILE },
+      },
+    ]);
+    const { req } = await makeApp({
+      now: () => PAGE_NOW.getTime(),
+      protectedRoutes: (r) =>
+        registerAllProtectedRoutes(r, {
+          organizer: fakeOrganizerDeps(),
+          pages: fakePageDeps({ eventAudit: async () => audit }),
+        }),
+    });
+    const cookie = await signIn(req);
+    const res = await req.get(PAGE).set('Cookie', cookie);
+    expect(res.status).toBe(200);
+    expect(res.text).toContain('One event has');
+    expect(res.text).toContain('(4 runs)');
+    expect(res.text).not.toContain('<script>alert');
+    expect(audit.unconfirmable).toHaveBeenCalledWith(3);
+  });
+
   it('is the 503 page when the store cannot answer', async () => {
     const { get } = await setup({ broken: true });
     const res = await get(PAGE);

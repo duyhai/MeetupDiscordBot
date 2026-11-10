@@ -11,8 +11,8 @@ import {
   alertedKey,
   changeAlertEntry,
   failureAlertEntry,
-  fallbackAlertEntry,
   summaryAlertEntry,
+  unconfirmedAlertEntry,
 } from './alerts.js';
 import { deletionChange, diffEvent } from './diff.js';
 import { AuditMeetupReader, ReadMeetup } from './meetup.js';
@@ -32,7 +32,11 @@ export const BACKOFF_KEY = 'event-audit-backoff';
 const ONCE_A_DAY_TTL_SEC = 26 * 60 * 60;
 export const failedAlertedKey = (day: string): string =>
   `event-audit-failed-alerted-${day}`;
-export const FALLBACK_ALERTED_KEY_PREFIX = 'event-audit-fallback-alerted-';
+/** Vanished events whose confirmation has failed this many runs in a row are shown on the page and alerted once. */
+export const UNCONFIRMED_ALERT_AFTER = 3;
+export const unconfirmedAlertedKey = (eventId: string): string =>
+  `event-audit-unconfirmed-alerted-${eventId}`;
+const UNCONFIRMED_ALERT_TTL_SEC = 7 * 24 * 60 * 60;
 
 export type EventAuditStore = Pick<
   PostgresEventAuditRepository,
@@ -44,6 +48,7 @@ export type EventAuditStore = Pick<
   | 'recordFailedRun'
   | 'unalerted'
   | 'markAlerted'
+  | 'unconfirmable'
   | 'prune'
 >;
 
@@ -72,9 +77,10 @@ export type RunOutcome =
 interface MeetupReads {
   observations: EventObservation[];
   deletedEventIds: string[];
+  /** Vanished events whose confirmation read failed this run. */
+  unconfirmedEventIds: string[];
   listed: number;
   confirmed: number;
-  fallback: boolean;
 }
 
 /**
@@ -104,6 +110,7 @@ async function readMeetup(
     .slice(0, CONFIRM_CAP);
   const observations = [...listed];
   const deletedEventIds: string[] = [];
+  const unconfirmedEventIds: string[] = [];
   for (const state of vanished) {
     try {
       // eslint-disable-next-line no-await-in-loop -- one read at a time, at most CONFIRM_CAP
@@ -114,6 +121,7 @@ async function readMeetup(
         observations.push(answer);
       }
     } catch (error) {
+      unconfirmedEventIds.push(state.eventId);
       // Process log only; the event is tried again next run.
       logger.warn(
         `Event audit: confirming event ${state.eventId} failed: ${error instanceof Error ? error.name : 'Error'}`,
@@ -123,9 +131,9 @@ async function readMeetup(
   return {
     observations,
     deletedEventIds,
+    unconfirmedEventIds,
     listed: listed.length,
     confirmed: vanished.length,
-    fallback: reader.usingFallback(),
   };
 }
 
@@ -201,6 +209,42 @@ async function alertChanges(
   }
 }
 
+/**
+ * One alert per event (a week's key) once its confirmation has failed
+ * UNCONFIRMED_ALERT_AFTER runs in a row; only for events that failed this
+ * run, so an old streak does not re-alert. Never throws.
+ */
+async function alertUnconfirmed(
+  deps: EventAuditDeps,
+  cache: KeyValueCache,
+  store: EventAuditStore,
+  unconfirmedEventIds: string[],
+): Promise<void> {
+  if (unconfirmedEventIds.length === 0) {
+    return;
+  }
+  try {
+    const stuck = (await store.unconfirmable(UNCONFIRMED_ALERT_AFTER)).filter(
+      (s) => unconfirmedEventIds.includes(s.eventId),
+    );
+    for (const state of stuck) {
+      const key = unconfirmedAlertedKey(state.eventId);
+      // eslint-disable-next-line no-await-in-loop -- a handful at most
+      if (await cache.exclusive_set(key, '1', UNCONFIRMED_ALERT_TTL_SEC)) {
+        const entry = unconfirmedAlertEntry(state, state.unconfirmedRuns);
+        // eslint-disable-next-line no-await-in-loop -- see above
+        const posted = await deps.alert(entry);
+        if (!posted) {
+          // eslint-disable-next-line no-await-in-loop -- see above
+          await cache.remove(key);
+        }
+      }
+    }
+  } catch (error) {
+    logger.error(`Event audit unconfirmed alerts failed: ${String(error)}`);
+  }
+}
+
 async function recordFailure(
   deps: EventAuditDeps,
   startedAt: Date,
@@ -256,7 +300,7 @@ export async function runEventAudit(
       (await store.liveStates()).map((s) => [s.eventId, s.latest]),
     );
     changes = reads.observations.flatMap((o) =>
-      diffEvent(latest.get(o.eventId), o, { baseline }),
+      diffEvent(latest.get(o.eventId), o, { baseline, now: startedAt }),
     );
     for (const id of reads.deletedEventIds) {
       const previous = latest.get(id);
@@ -272,6 +316,7 @@ export async function runEventAudit(
       confirmed: reads.confirmed,
       observations: reads.observations,
       deletedEventIds: reads.deletedEventIds,
+      unconfirmedEventIds: reads.unconfirmedEventIds,
       changes,
     });
   } catch (error) {
@@ -280,21 +325,15 @@ export async function runEventAudit(
   }
   const durationMs = deps.now().getTime() - startedAt.getTime();
   logger.info(
-    `Event audit run (${requestedBy}) listed ${reads.listed}, confirmed ${reads.confirmed}, ` +
-      `${changes.length} changes, ${reads.deletedEventIds.length} deleted, took ${durationMs} ms`,
+    `Event audit run (${requestedBy}) listed ${reads.listed}, confirmed ${reads.confirmed} ` +
+      `(${reads.unconfirmedEventIds.length} unanswered), ${changes.length} changes, ` +
+      `${reads.deletedEventIds.length} deleted, took ${durationMs} ms`,
   );
   try {
     const cache = await deps.cache();
     await cache.remove(BACKOFF_KEY);
     await alertChanges(deps, cache, store);
-    if (reads.fallback) {
-      await alertOncePerDay(
-        deps,
-        cache,
-        `${FALLBACK_ALERTED_KEY_PREFIX}${utcDay(deps.now())}`,
-        fallbackAlertEntry(),
-      );
-    }
+    await alertUnconfirmed(deps, cache, store, reads.unconfirmedEventIds);
   } catch (error) {
     logger.error(`Event audit after-save bookkeeping failed: ${String(error)}`);
   }

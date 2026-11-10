@@ -42,6 +42,9 @@ a place to see it.
 
 ## Non-goals
 
+- Cancelled-then-deleted: a cancelled event that is later deleted is
+  recorded as cancelled only (it leaves the ACTIVE listing at cancellation
+  and is never confirmed again).
 - Who made the change. Meetup's GraphQL API does not expose an editor or a
   last-edited time on events (checked against the queries this repo already
   uses; nothing in the schema the repo knows names one). The columns exist
@@ -96,16 +99,21 @@ SCHEMA_LOCK_KEY)`, `instance()` with retry on a failed ensure, an
 
 ## The Meetup read
 
-Two queries are added to `queries.ts`, both returning the same event shape
-(`AuditEventNode`):
+Two queries are added to `queries.ts`, both returning the same event node
+(`AuditEventNode`), checked live on 2026-11-10 with the organizer token
+against gql-ext by the lead session (`going` and `waiting` do not exist on
+`Event`; the RSVP connection counts, `rsvpSettings.rsvpsClosed` and
+`createdTime` do; `event(id:)` of a non-existent id answers
+`{ event: null }` with no errors):
 
 ```graphql
-id title status dateTime duration eventUrl
-going waiting
-rsvpSettings { rsvpsClosed }
+id title status dateTime createdTime duration eventUrl
 venue { id }
 featuredEventPhoto { id }
 eventHosts { member { id name } }
+rsvpSettings { rsvpsClosed }
+yes: rsvps(filter: { rsvpStatus: [YES] }) { totalCount }
+waitlist: rsvps(filter: { rsvpStatus: [WAITLIST] }) { totalCount }
 ```
 
 - `getGroupEventsForAudit($urlname, $first, $after, $filter)`: the group's
@@ -113,34 +121,14 @@ eventHosts { member { id name } }
   `status: ['ACTIVE']` (upcoming, every page) and `status: ['PAST'],
 afterDateTime: now − 2 days, beforeDateTime: now` (the recent past, so an
   event whose start passed between runs is seen leaving the upcoming list for
-  the right reason). A new `GqlMeetupClient.getGroupEventsForAudit` sends the
-  filter as given (no one-month padding, no cache: `bypassCache` is already
-  how the organizer client is made).
+  the right reason). `GqlMeetupClient.getGroupEventsForAudit` sends the
+  filter as given (no one-month padding, no cache).
 - `getEventForAudit($eventId)`: one event with the same node, or `null`
   when Meetup has no such event. Used only to confirm a vanished event.
-  **Not found** is: a 200 answer whose `data.event` is `null`, with or
-  without GraphQL `errors` alongside (graphql-request throws the latter as a
-  `ClientError`; its `response.status` is 200 and `response.data.event` is
-  `null`). Anything else (a 4xx/5xx, a network error, a 200 with no `data`)
-  is an outage: it throws, and the event is left alone this run. _My call_:
-  the repo has never seen a live deleted-event answer; `getEventForCopy`
-  documents `undefined when Meetup has no such event`. The PR asks for one
-  live check after deploy (delete a test event, watch the next run).
-
-`going`, `waiting` and `rsvpSettings.rsvpsClosed` are the fields Meetup's
-current schema documents for an event's RSVP counts and open state; the
-other fields are already used by this repo. They cannot be verified from
-this session (tests block the network, no credential here), and one unknown
-field would fail the whole listing. So the reader has a **fallback**: when
-the full query is refused as invalid (a `ClientError` with HTTP 400, or
-HTTP 200 whose `errors` mention `Cannot query field`), the run retries at
-once with `getGroupEventsForAuditCore` / `getEventForAuditCore`, the same
-node without `going`, `waiting` and `rsvpSettings` and with the proven
-`rsvps { yesCount }` for the yes count; `waitlist` and `rsvpsClosed` are
-then null. The fallback is remembered for the process (no second 400 per
-run) and alerted once a day: "Event snapshots are running without waitlist
-and RSVP-open data; the Meetup query needs a fix." Snapshots and deletion
-detection therefore never depend on the unverified fields. _My call_.
+  **Not found** is a clean 200 whose `data.event` is `null` with no GraphQL
+  errors. A null event WITH errors alongside is a resolver failure (rate
+  limit, permission, internal) and throws like any other error, so the event
+  is left alone this run rather than recorded deleted on a bad answer.
 
 ### Mapping to an observation
 
@@ -187,6 +175,7 @@ CREATE TABLE IF NOT EXISTS event_snapshots (
   title            TEXT NOT NULL CHECK (length(title) <= 300),
   status           TEXT NOT NULL CHECK (length(status) <= 32),
   start_at         TIMESTAMPTZ NOT NULL,
+  created_at       TIMESTAMPTZ,        -- Meetup's createdTime
   duration         TEXT CHECK (duration IS NULL OR duration ~ '^P[0-9A-Z.]{1,30}$'),
   event_url        TEXT CHECK (event_url IS NULL OR length(event_url) <= 200),
   venue_id         TEXT CHECK (venue_id IS NULL OR venue_id ~ '^[0-9]{1,20}$'),
@@ -207,7 +196,9 @@ CREATE TABLE IF NOT EXISTS event_audit_state (
   latest_snapshot_id  BIGINT NOT NULL REFERENCES event_snapshots(id),
   first_seen_at       TIMESTAMPTZ NOT NULL,
   last_seen_at        TIMESTAMPTZ NOT NULL,
-  deleted_at          TIMESTAMPTZ
+  deleted_at          TIMESTAMPTZ,
+  -- Runs in a row missing from the listing with a failed confirmation read.
+  unconfirmed_runs    INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS event_changes (
   id               BIGSERIAL PRIMARY KEY,
@@ -233,6 +224,7 @@ CREATE TABLE IF NOT EXISTS event_changes (
 );
 CREATE INDEX IF NOT EXISTS event_changes_detected_idx ON event_changes (detected_at DESC, id DESC);
 CREATE INDEX IF NOT EXISTS event_changes_event_idx ON event_changes (meetup_event_id, id DESC);
+CREATE INDEX IF NOT EXISTS event_changes_kind_idx ON event_changes (kind, id DESC);
 CREATE INDEX IF NOT EXISTS event_changes_hosts_idx ON event_changes USING GIN (hosts jsonb_path_ops);
 ```
 
@@ -288,17 +280,27 @@ transaction, then alerts.
      treated as listed, so it is snapshotted and diffed like any other. A
      cancelled event is found this way, since Meetup's ACTIVE filter leaves
      cancelled events out.
-   - a thrown error (outage, 5xx) → nothing recorded for that event; the
-     run continues and the event is tried again next run. The run outcome
-     is still `saved`.
+   - a thrown error (outage, 5xx, a null event with GraphQL errors) →
+     nothing recorded for that event; the run continues and the event is
+     tried again next run. The run outcome is still `saved`. Its
+     `unconfirmed_runs` streak grows by one (reset when it is seen again or
+     answered); at `UNCONFIRMED_ALERT_AFTER = 3` the event is listed on the
+     page's snapshot card and alerted once ("Event could not be confirmed"),
+     since it may be gone and nobody would know (_my call_, from review).
 4. **Diff** (`diffEvent(previous, next)` in `diff.ts`, pure): with no
    previous snapshot → `created`, unless this is the **first run ever**
    (no state rows at all), which writes snapshots only, as the baseline
    (_my call_: otherwise the first run posts every event as new). Otherwise
    each rule in the table above, in that order; one observation can yield
    several changes (a host change and a start move at once). The RSVP
-   rule: `prev.rsvpYes − next.rsvpYes ≥ 5` or `≥ 25 % of prev.rsvpYes`
-   (with `prev.rsvpYes ≥ 1`), consecutive snapshots only. A status
+   rule: `prev.rsvpYes − next.rsvpYes ≥ 5` or `≥ 25 % of prev.rsvpYes`,
+   with `prev.rsvpYes ≥ 4` and a drop of at least 2 people, consecutive
+   snapshots only, and never once the event is over (PAST, cancelled, or
+   its start has passed: people leaving then is attrition). A `created` is
+   not recorded for an event first seen after it started or ended. A read
+   with no hosts after one with hosts records no host change (Meetup events
+   always have a host, so it is a transient read; a genuine change shows
+   when the next read has hosts again). A status
    becoming one of `CANCELLED`, `CANCELLED_PERM`, `AUTOSCHED_CANCELLED` from
    anything else is `cancelled`; a cancelled event is not "deleted" when it
    later vanishes, and nothing further is recorded for it.
@@ -372,7 +374,10 @@ when the stored URL matched `MEETUP_EVENT_URL`.
 Same gate as every staff page (the dashboard router's role check), on
 `DASHBOARD_PATHS`:
 
-- `eventChanges: '/events'` (GET): "Event changes". Filters: kind
+- `eventChanges: '/events'` (GET): "Event changes", for every staff member
+  (the dashboard's role gate; Snapshot now is a read of Meetup under the
+  build lease and a two-minute cooldown, not a change to anything, so it is
+  not Leadership-only like promotion: _my call_). Filters: kind
   (select, all or one), host (Meetup id, digits), from/to (Pacific calendar
   days), `before` cursor (change id). Columns: Detected (Pacific), Change,
   Event (title linked to Meetup when the URL passed `safeHref`, else plain,

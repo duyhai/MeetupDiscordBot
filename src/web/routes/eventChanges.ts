@@ -20,9 +20,11 @@ import {
   eventHistoryPath,
 } from '../../lib/reports/dashboardPaths.js';
 import { GROUP_TIMEZONE } from '../../lib/reports/period.js';
+import { UNCONFIRMED_ALERT_AFTER } from '../../lib/eventAudit/run.js';
 import {
   EventAuditRun,
   EventHistory,
+  EventState,
   PostgresEventAuditRepository,
   parseHosts,
 } from '../../lib/repositories/postgresEventAuditRepository.js';
@@ -53,7 +55,7 @@ const SNAPSHOTS_SHOWN = 200;
 /** The page's reads: never a write. */
 export type EventAuditPageReader = Pick<
   PostgresEventAuditRepository,
-  'listChanges' | 'eventHistory' | 'latestRun'
+  'listChanges' | 'eventHistory' | 'latestRun' | 'unconfirmable'
 >;
 
 /** The event changes pages' dependencies, on DashboardPageDeps. */
@@ -335,13 +337,42 @@ function lastRunText(run: EventAuditRun | undefined): SafeHtml {
     return html`No snapshot yet.`;
   }
   return html`Last snapshot: ${pacificDateTime(run.startedAt)}
-  (${run.outcome === 'saved' ? 'saved' : run.outcome === 'failed' ? 'failed' : 'running'}${
+  (${run.outcome === 'failed' ? 'failed' : 'saved'}${
     run.listed === null ? '' : `, ${run.listed} events listed`
   }).`;
 }
 
+/** Events that left the listing but whose confirmation keeps failing: they may be gone. */
+function unconfirmedNote(states: EventState[]): SafeHtml | '' {
+  if (states.length === 0) {
+    return '';
+  }
+  return html`<div class="note attn">
+    <p>
+      ${states.length === 1 ? 'One event has' : `${states.length} events have`}
+      left Meetup's upcoming list, but the read that would confirm a deletion
+      has failed ${UNCONFIRMED_ALERT_AFTER} or more runs in a row. They may be
+      gone.
+    </p>
+    <ul>
+      ${states.map(
+        (s) =>
+          html`<li>
+            ${eventCell({
+              eventId: s.eventId,
+              title: s.latest.title,
+              eventUrl: null,
+            })}
+            (${s.unconfirmedRuns} runs)
+          </li>`,
+      )}
+    </ul>
+  </div>`;
+}
+
 function snapshotCard(
   run: EventAuditRun | undefined,
+  unconfirmed: EventState[],
   csrf: string,
   notice: SafeHtml | '',
 ): SafeHtml {
@@ -352,7 +383,7 @@ function snapshotCard(
       by a direct read before they are recorded. Dates are Pacific; the "To" day
       is included.
     </p>
-    ${notice}
+    ${notice} ${unconfirmedNote(unconfirmed)}
     <form
       method="post"
       action="${localUrl(dashboardPath(DASHBOARD_PATHS.eventSnapshot))}"
@@ -456,7 +487,7 @@ function historyBody(history: EventHistory): SafeHtml {
 }
 
 /**
- * GET /dashboard/events/changes, GET /dashboard/events/:eventId (every
+ * GET /dashboard/events, GET /dashboard/events/:eventId (every
  * staff member) and POST /dashboard/events/snapshot. CSRF, Origin,
  * Sec-Fetch-Site and the per-user action rate limit are the router's
  * unsafe-method guard, which runs before this handler.
@@ -477,11 +508,12 @@ export function registerEventChangeRoutes(
         ...(q.to === undefined ? {} : { to: pacificMidnight(q.to, 1) }),
         ...(q.before === undefined ? {} : { beforeId: Number(q.before) }),
       };
-      const [rows, run] = await Promise.all([
+      const [rows, run, unconfirmed] = await Promise.all([
         reader.listChanges(filter, PAGE_SIZE),
         reader.latestRun(),
+        reader.unconfirmable(UNCONFIRMED_ALERT_AFTER),
       ]);
-      return { rows, run };
+      return { rows, run, unconfirmed };
     });
     if (!loaded.ok) {
       return;
@@ -491,6 +523,7 @@ export function registerEventChangeRoutes(
       title: 'Event changes',
       body: html`${snapshotCard(
           loaded.value.run,
+          loaded.value.unconfirmed,
           session.csrfToken,
           resultNotice(req.query.result),
         )}

@@ -1,15 +1,10 @@
 import dayjs from 'dayjs';
 import { Client } from 'discord.js';
-import { ClientError } from 'graphql-request';
 import { Logger } from 'tslog';
 
 import { GqlMeetupClient } from '../client/meetup/gqlClient.js';
 import { getPaginatedData } from '../client/meetup/paginationHelper.js';
-import {
-  AuditEventNode,
-  AuditQueryVariant,
-  GroupEventFilter,
-} from '../client/meetup/types.js';
+import { AuditEventNode, GroupEventFilter } from '../client/meetup/types.js';
 import {
   OrganizerMeetupDeps,
   defaultOrganizerMeetupDeps,
@@ -106,68 +101,31 @@ export function toObservation(node: unknown): EventObservation | undefined {
       ? n.eventUrl
       : null;
   const rsvpsClosed = n.rsvpSettings?.rsvpsClosed;
+  const created =
+    typeof n.createdTime === 'string' ? dayjs(n.createdTime) : undefined;
   return {
     eventId,
     title: text(n.title, TITLE_MAX),
     status,
     startAt: start.toDate(),
+    createdAt: created?.isValid() ? created.toDate() : null,
     duration,
     eventUrl,
     venueId: digits(n.venue?.id),
     photoId: digits(n.featuredEventPhoto?.id),
     hosts: hosts(n.eventHosts),
-    rsvpYes: n.going !== undefined ? count(n.going) : count(n.rsvps?.yesCount),
-    waitlist: count(n.waiting),
+    rsvpYes: count(n.yes?.totalCount),
+    waitlist: count(n.waitlist?.totalCount),
     rsvpsClosed: typeof rsvpsClosed === 'boolean' ? rsvpsClosed : null,
     lastEditedAt: null,
   };
 }
-
-/**
- * Meetup refusing a query as invalid: HTTP 400, or a 200 whose GraphQL
- * errors name an unknown field. Only this switches the reader to the core
- * query; any other error is an outage and propagates.
- */
-export function isMeetupSchemaRefusal(error: unknown): boolean {
-  if (!(error instanceof ClientError)) {
-    return false;
-  }
-  const { status, errors } = error.response as {
-    status?: unknown;
-    errors?: { message?: unknown }[];
-  };
-  if (status === 400) {
-    return true;
-  }
-  return (
-    status === 200 &&
-    Array.isArray(errors) &&
-    errors.some(
-      (e) =>
-        typeof e?.message === 'string' &&
-        /Cannot query field|Unknown field|FieldUndefined|Validation error/i.test(
-          e.message,
-        ),
-    )
-  );
-}
-
-/** Process-wide: once the full query was refused, every later read uses the core one. */
-export interface AuditQueryState {
-  fallback: boolean;
-}
-
-export const createAuditQueryState = (): AuditQueryState => ({
-  fallback: false,
-});
 
 export interface AuditMeetupReader {
   /** Upcoming (ACTIVE, every page) plus PAST within RECENT_PAST_DAYS; one per id, upcoming wins. */
   listEvents(now: Date): Promise<EventObservation[]>;
   /** The event, or null when Meetup has no such event. Throws on an outage. */
   getEvent(eventId: string): Promise<EventObservation | null>;
-  /** Whether this process is on the core query (RSVP open state and waitlist unknown). */
-  usingFallback(): boolean;
 }
 
 type AuditClient = Pick<
@@ -175,35 +133,10 @@ type AuditClient = Pick<
   'getGroupEventsForAudit' | 'getEventForAudit'
 >;
 
-export function gqlAuditReader(
-  meetup: AuditClient,
-  state: AuditQueryState,
-): AuditMeetupReader {
-  function variant(): AuditQueryVariant {
-    return state.fallback ? 'core' : 'full';
-  }
-  /** Runs `read` with the current variant; a schema refusal of the full query switches to core and retries once. */
-  async function withVariant<T>(
-    read: (v: AuditQueryVariant) => Promise<T>,
-  ): Promise<T> {
-    try {
-      return await read(variant());
-    } catch (error) {
-      if (state.fallback || !isMeetupSchemaRefusal(error)) {
-        throw error;
-      }
-      logger.warn(
-        'Event audit: Meetup refused the full audit query; using the core query from now on',
-      );
-      state.fallback = true;
-      return read('core');
-    }
-  }
+export function gqlAuditReader(meetup: AuditClient): AuditMeetupReader {
   const listPages = (filter: GroupEventFilter) =>
-    withVariant((v) =>
-      getPaginatedData<AuditEventNode>((pagination) =>
-        meetup.getGroupEventsForAudit(pagination, filter, v),
-      ),
+    getPaginatedData<AuditEventNode>((pagination) =>
+      meetup.getGroupEventsForAudit(pagination, filter),
     );
   return {
     async listEvents(now) {
@@ -225,9 +158,7 @@ export function gqlAuditReader(
       return [...byId.values()];
     },
     async getEvent(eventId) {
-      const node = await withVariant((v) =>
-        meetup.getEventForAudit(eventId, v),
-      );
+      const node = await meetup.getEventForAudit(eventId);
       if (node === null) {
         return null;
       }
@@ -238,7 +169,6 @@ export function gqlAuditReader(
       }
       return observation;
     },
-    usingFallback: () => state.fallback,
   };
 }
 
@@ -248,18 +178,16 @@ export type ReadMeetup = <T>(
 
 /**
  * Production reads: the organizer credential through withOrganizerMeetup
- * (one refresh and retry on a 401; fn must only read Meetup), the query
- * state shared across runs in this process.
+ * (one refresh and retry on a 401; fn must only read Meetup).
  */
 export function organizerReadMeetup(
   getClient: () => Client | undefined,
   organizer: OrganizerMeetupDeps = defaultOrganizerMeetupDeps,
-  state: AuditQueryState = createAuditQueryState(),
 ): ReadMeetup {
   return (fn) =>
     withOrganizerMeetup(
       getClient(),
-      (meetup) => fn(gqlAuditReader(meetup, state)),
+      (meetup) => fn(gqlAuditReader(meetup)),
       organizer,
     );
 }

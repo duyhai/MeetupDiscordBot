@@ -28,6 +28,7 @@ const obs = (overrides: Partial<EventObservation> = {}): EventObservation => ({
   title: 'Board games',
   status: 'ACTIVE',
   startAt: new Date('2026-12-05T03:00:00Z'),
+  createdAt: new Date('2026-10-01T00:00:00Z'),
   duration: 'PT2H',
   eventUrl: URL_A,
   venueId: '27',
@@ -62,6 +63,7 @@ const run = (overrides: Partial<RunWrite> = {}): RunWrite => ({
   confirmed: 0,
   observations: [obs(), obs({ eventId: '311000002', title: 'Hike' })],
   deletedEventIds: [],
+  unconfirmedEventIds: [],
   changes: [],
   ...overrides,
 });
@@ -164,6 +166,50 @@ const run = (overrides: Partial<RunWrite> = {}): RunWrite => ({
         changes: 2,
         outcome: 'saved',
       });
+    });
+
+    it('an unconfirmed streak grows per run and resets when the event is seen or answered', async () => {
+      await repo.saveRun(run());
+      const missing = () =>
+        run({
+          startedAt: T2,
+          finishedAt: T2,
+          observations: [obs()],
+          unconfirmedEventIds: ['311000002'],
+        });
+      await repo.saveRun(missing());
+      await repo.saveRun(missing());
+      expect(
+        (await repo.eventHistory('311000002'))?.state.unconfirmedRuns,
+      ).toBe(2);
+      expect(await repo.unconfirmable(3)).toEqual([]);
+      expect((await repo.unconfirmable(2)).map((s) => s.eventId)).toEqual([
+        '311000002',
+      ]);
+      expect(
+        (await repo.liveStates()).find((s) => s.eventId === '311000001')
+          ?.unconfirmedRuns,
+      ).toBe(0);
+      await repo.saveRun(run({ startedAt: T2, finishedAt: T2 }));
+      expect(
+        (await repo.eventHistory('311000002'))?.state.unconfirmedRuns,
+      ).toBe(0);
+      await repo.saveRun(missing());
+      await repo.saveRun(
+        run({
+          startedAt: T2,
+          finishedAt: T2,
+          observations: [obs()],
+          deletedEventIds: ['311000002'],
+        }),
+      );
+      expect((await repo.eventHistory('311000002'))?.state).toMatchObject({
+        unconfirmedRuns: 0,
+      });
+      expect(await repo.unconfirmable(1)).toEqual([]);
+      expect(
+        (await repo.eventHistory('311000001'))?.state.latest.createdAt,
+      ).toEqual(new Date('2026-10-01T00:00:00Z'));
     });
 
     it('a failed run is recorded as failed and never counts as the latest saved run', async () => {
@@ -303,6 +349,9 @@ const run = (overrides: Partial<RunWrite> = {}): RunWrite => ({
       expect(
         await repo.recentChangesForHost('5151', { limit: 1 }),
       ).toHaveLength(1);
+      expect(
+        await repo.recentChangesForHost('5151', { limit: 10_000 }),
+      ).toHaveLength(2);
       expect(await repo.recentChangesForHost('9999')).toEqual([]);
       expect(await repo.recentChangesForHost('x')).toEqual([]);
     });
@@ -349,6 +398,11 @@ const run = (overrides: Partial<RunWrite> = {}): RunWrite => ({
         changes: 0,
         states: 0,
       });
+      // The old run row went with everything that referenced it; the fresh one stays.
+      const runs = await pool.query<{ n: number }>(
+        'SELECT count(*)::int AS n FROM event_audit_runs',
+      );
+      expect(runs.rows[0].n).toBe(1);
     });
 
     it('hosts that are not a list of {id, name} read back as no hosts', async () => {

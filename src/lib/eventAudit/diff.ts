@@ -8,14 +8,21 @@ import {
 /** An RSVP drop is at least this many people, or RSVP_DROP_FRACTION of the previous count. */
 export const RSVP_DROP_MIN = 5;
 export const RSVP_DROP_FRACTION = 0.25;
+/** Below this many going, one person leaving is not a drop worth a row. */
+export const RSVP_DROP_MIN_BASE = 4;
+/** A drop is never fewer people than this. */
+export const RSVP_DROP_MIN_PEOPLE = 2;
 
 /** Between consecutive snapshots only; unknown counts never count as a drop. */
 export function isRsvpDrop(prev: number | null, next: number | null): boolean {
-  if (prev === null || next === null || prev < 1) {
+  if (prev === null || next === null || prev < RSVP_DROP_MIN_BASE) {
     return false;
   }
   const drop = prev - next;
-  return drop >= RSVP_DROP_MIN || drop >= prev * RSVP_DROP_FRACTION;
+  return (
+    drop >= RSVP_DROP_MIN_PEOPLE &&
+    (drop >= RSVP_DROP_MIN || drop >= prev * RSVP_DROP_FRACTION)
+  );
 }
 
 const hostIds = (hosts: EventHost[]) => [...hosts.map((h) => h.id)].sort();
@@ -53,19 +60,28 @@ function lastSeen(
   };
 }
 
+const isOver = (o: EventObservation, now: Date) =>
+  o.status === 'PAST' ||
+  isCancelledStatus(o.status) ||
+  o.startAt.getTime() <= now.getTime();
+
 /**
  * The changes between an event's previous snapshot and this read, in the
  * spec's table order. With no previous snapshot the event is `created`,
- * except on the baseline run (the first run ever), which records nothing.
- * A cancelled event stays cancelled: nothing further is recorded for it.
+ * except on the baseline run (the first run ever) or when it has already
+ * started or ended (a first sight of an old event is not a creation). A
+ * cancelled event stays cancelled: nothing further is recorded for it. An
+ * RSVP drop on an event that is over is attrition, not a drop. A read with
+ * no hosts after one with hosts is treated as transient (Meetup events
+ * always have a host): no host change is recorded for it.
  */
 export function diffEvent(
   previous: EventObservation | undefined,
   next: EventObservation,
-  options: { baseline: boolean },
+  options: { baseline: boolean; now: Date },
 ): NewEventChange[] {
   if (previous === undefined) {
-    if (options.baseline) {
+    if (options.baseline || isOver(next, options.now)) {
       return [];
     }
     return [
@@ -94,7 +110,10 @@ export function diffEvent(
       newValue: { status: next.status },
     });
   }
-  if (!sameHosts(previous.hosts, next.hosts)) {
+  if (
+    !sameHosts(previous.hosts, next.hosts) &&
+    !(next.hosts.length === 0 && previous.hosts.length > 0)
+  ) {
     changes.push({
       ...base,
       kind: 'host_changed',
@@ -119,7 +138,10 @@ export function diffEvent(
       newValue: { title: next.title },
     });
   }
-  if (isRsvpDrop(previous.rsvpYes, next.rsvpYes)) {
+  if (
+    !isOver(next, options.now) &&
+    isRsvpDrop(previous.rsvpYes, next.rsvpYes)
+  ) {
     changes.push({
       ...base,
       kind: 'rsvp_drop',
