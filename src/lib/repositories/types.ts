@@ -1,4 +1,5 @@
-export type OnboardMethod = 'self_onboard' | 'sync_v2' | 'manual';
+/** web_link: linked by the host on the host dashboard (no server roles). */
+export type OnboardMethod = 'self_onboard' | 'sync_v2' | 'manual' | 'web_link';
 
 /**
  * Raised by upsert when the meetup id is already claimed by a different

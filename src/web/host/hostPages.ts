@@ -20,11 +20,18 @@ import {
 } from '../../lib/hosts/hostEvents.js';
 import { MAX_DAYS_AHEAD } from '../../lib/hosts/eventRequest.js';
 import { matchHolidays } from '../../lib/hosts/holidays.js';
-import { SafeHtml, html, memberText, pageLink, safeHref } from '../html.js';
+import {
+  SafeHtml,
+  html,
+  localUrl,
+  memberText,
+  pageLink,
+  safeHref,
+} from '../html.js';
 import { eventLink } from '../links.js';
 import { PAGE_SIZE, pageNav, parsePage } from '../paging.js';
 import { heatMapYear } from './heatMap.js';
-import { hostLocals } from './hostRouter.js';
+import { HOST_LINK_RESULTS, HostLinkResult, hostLocals } from './hostRouter.js';
 import { EventRequest } from '../../lib/repositories/postgresEventRequestRepository.js';
 import {
   HostRequestStore,
@@ -111,24 +118,73 @@ const holidaysOn = (events: HostEvent[]): string[] => [
   ...new Set(events.flatMap((e) => matchHolidays(e.title))),
 ];
 
+const LINK_DISCORD_PATH = `${HOST_BASE}/link/discord`;
+
+/** The fixed text for each `?link=` result; the code itself is never shown. */
+const LINK_NOTICES: Record<HostLinkResult, { ok: boolean; text: string }> = {
+  linked: {
+    ok: true,
+    text: "Your Discord account is linked. We'll recognise you in our Discord server.",
+  },
+  already: { ok: true, text: 'Your Discord account was already linked.' },
+  cancelled: { ok: false, text: 'Linking was cancelled. Nothing was changed.' },
+  'meetup-taken': {
+    ok: false,
+    text:
+      'Your Meetup account is already linked to a different Discord account, so ' +
+      'nothing was changed. If that is not right, please contact the moderators.',
+  },
+  'discord-taken': {
+    ok: false,
+    text:
+      'That Discord account is already linked to a different Meetup account, so ' +
+      'nothing was changed. If that is not right, please contact the moderators.',
+  },
+  error: {
+    ok: false,
+    text: 'Linking did not work this time, and nothing was changed. Please try again in a minute.',
+  },
+};
+
+function linkNotice(code: HostLinkResult): SafeHtml {
+  const { ok, text } = LINK_NOTICES[code];
+  return ok
+    ? html`<p class="note info">${text}</p>`
+    : html`<p class="note attn">${text}</p>`;
+}
+
+/** A `?link=` code, or undefined for anything else. */
+function linkResultOf(value: unknown): HostLinkResult | undefined {
+  return (HOST_LINK_RESULTS as readonly unknown[]).includes(value)
+    ? (value as HostLinkResult)
+    : undefined;
+}
+
 function homeBody(
   session: HostSession,
   upcoming: HostEvent[],
   calendar: CalendarDay[],
   today: string,
   requests: EventRequest[] | undefined,
+  linkResult?: HostLinkResult,
 ): SafeHtml {
   const quiet = quietDays(calendar, today).slice(0, QUIET_DAYS_SHOWN);
+  // Linking here only links accounts: no server roles (that stays with
+  // Verify in the server).
   const linkNudge =
     session.discordUserId === null
       ? html`<div class="note info">
           <p>
             Your Meetup account is not linked to Discord. Linking is optional,
-            but it lets us recognise you in our Discord server: press
-            <strong>Verify</strong> there to link it.
+            but it lets us recognise you in our Discord server.
           </p>
+          <form method="post" action="${localUrl(LINK_DISCORD_PATH)}">
+            <input type="hidden" name="_csrf" value="${session.csrfToken}" />
+            <button type="submit">Link your Discord account</button>
+          </form>
         </div>`
       : '';
+  const notice = linkResult ? linkNotice(linkResult) : '';
   const rows = upcoming.map(
     (event) =>
       html`<tr>
@@ -144,7 +200,7 @@ function homeBody(
   return html`<div class="card">
       <h1>Hi, ${memberText(session.username)}</h1>
       <p>${tierBadge(session)}</p>
-      ${linkNudge}
+      ${notice} ${linkNudge}
       <div class="actions">
         <a class="button" href="${pageLink(CREATE_PAGE)}">Host an event</a>
       </div>
@@ -659,7 +715,7 @@ export function registerHostPages(
 ): void {
   const today = () => pacificDay(deps.events.now());
 
-  router.get('/', (async (_req, res) => {
+  router.get('/', (async (req, res) => {
     const { session } = hostLocals(res);
     let upcoming: HostEvent[];
     let calendar: CalendarDay[];
@@ -688,7 +744,14 @@ export function registerHostPages(
     hostPage(res, {
       title: 'Home',
       current: 'home',
-      body: homeBody(session, upcoming, calendar, today(), requests),
+      body: homeBody(
+        session,
+        upcoming,
+        calendar,
+        today(),
+        requests,
+        linkResultOf(req.query.link),
+      ),
     });
   }) as RequestHandler);
 

@@ -11,6 +11,7 @@ import { withOrganizerMeetup } from '../../lib/reports/organizerMeetup.js';
 import { PostgresEventRequestRepository } from '../../lib/repositories/postgresEventRequestRepository.js';
 import { getRandomTip } from '../../util/tips.js';
 import { ApplicationCache } from '../../util/cache.js';
+import { ApplicationMemberRepository } from '../../util/memberRepository.js';
 import { baseSecurityHeaders } from '../dashboardRouter.js';
 import { dashboardDisabledReason, dashboardOrigin } from '../dashboardDeps.js';
 import {
@@ -110,6 +111,9 @@ export function hostRouterFromEnv(
     origin: dashboardOrigin(),
     requireHttps: dashboardOrigin().startsWith('https://'),
     audit: auditActivity,
+    alert: alertVia(() => discordClient),
+    // The same store Verify writes and resolveHost reads.
+    members: () => ApplicationMemberRepository(),
     pages: (router) => {
       registerHostPages(router, {
         events,

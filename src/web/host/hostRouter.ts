@@ -15,6 +15,7 @@ import type {
   HostResolution,
 } from '../../lib/hosts/eligibility.js';
 import { LogEntry } from '../../lib/helpers/discordLogger.js';
+import { WebLinkStore, linkDiscordFromWeb } from '../../lib/hosts/webLink.js';
 import {
   clearCookie,
   parseCookieValues,
@@ -67,6 +68,23 @@ const MAX_SESSION_COOKIES = 3;
 const MAX_SESSION_COOKIE_CANDIDATES = 20;
 const SAFE_METHODS = new Set(['GET', 'HEAD']);
 const DISCORD_ID = /^[0-9]{17,20}$/;
+/**
+ * A Discord sign-in started by "Link your Discord account": the same
+ * redirect URI and cookie as a sign-in, told apart by this prefix (a
+ * sign-in state is base64url, so it never has a dot).
+ */
+const LINK_STATE = /^link\.[A-Za-z0-9_-]{16,128}$/;
+
+/** Every `?link=` code the home page can show; fixed texts only. */
+export const HOST_LINK_RESULTS = [
+  'linked',
+  'already',
+  'cancelled',
+  'meetup-taken',
+  'discord-taken',
+  'error',
+] as const;
+export type HostLinkResult = (typeof HOST_LINK_RESULTS)[number];
 
 export interface HostMeetupOAuth {
   buildAuthUrl(state: string): string;
@@ -88,6 +106,13 @@ export interface HostRouterDeps {
   origin: string;
   requireHttps?: boolean;
   audit: (entry: LogEntry) => Promise<unknown>;
+  /** #meetup-bot-alerts, plain (no mentions); falls back to `audit`. */
+  alert?: (entry: LogEntry) => Promise<unknown>;
+  /**
+   * The member links, for "Link your Discord account". Without it the
+   * link routes answer 404. Rejects when Postgres cannot answer.
+   */
+  members?: () => Promise<WebLinkStore>;
   now?: () => number;
   loginLimiter?: FixedWindowLimiter; // default 10 per minute per IP
   actionLimiter?: FixedWindowLimiter; // default 30 per minute per host
@@ -160,6 +185,14 @@ export function createHostRouter(deps: HostRouterDeps): express.Router {
       .then(() => deps.audit(entry))
       .catch((error: unknown) =>
         logger.warn(`Host dashboard audit post failed: ${String(error)}`),
+      );
+  };
+
+  const alert = (entry: LogEntry) => {
+    Promise.resolve()
+      .then(() => (deps.alert ?? deps.audit)(entry))
+      .catch((error: unknown) =>
+        logger.warn(`Host dashboard alert post failed: ${String(error)}`),
       );
   };
 
@@ -328,6 +361,107 @@ export function createHostRouter(deps: HostRouterDeps): express.Router {
     res.redirect(302, HOST_BASE);
   }
 
+  /**
+   * The end of "Link your Discord account": the signed-in host proved they
+   * own this Discord account, so link it to their Meetup account (the same
+   * duplicate rules as Verify), take it into the session at once and go
+   * home with a fixed notice. No server roles are given.
+   */
+  async function linkCallback(req: Request, res: Response, verifier: string) {
+    const back = (code: HostLinkResult) =>
+      res.redirect(302, `${HOST_BASE}?link=${code}`);
+    const { sid, session } = await readSession(req);
+    if (!sid || !session) {
+      res.redirect(302, '/host/login');
+      return;
+    }
+    if (!deps.members) {
+      fail(res, 404);
+      return;
+    }
+    if (req.query.error || typeof req.query.code !== 'string') {
+      back('cancelled');
+      return;
+    }
+    let identity: { id: string; username: string };
+    try {
+      const accessToken = await deps.discord.exchangeCode(
+        req.query.code,
+        verifier,
+      );
+      identity = await deps.discord.fetchIdentity(accessToken);
+    } catch (error: unknown) {
+      logger.warn(
+        `Host Discord link exchange failed: ${error instanceof Error ? error.name : 'Error'}`,
+      );
+      back('error');
+      return;
+    }
+    if (!DISCORD_ID.test(identity.id)) {
+      back('error');
+      return;
+    }
+    const meetupId = session.userId;
+    let outcome: Awaited<ReturnType<typeof linkDiscordFromWeb>>;
+    try {
+      outcome = await linkDiscordFromWeb(await deps.members(), {
+        meetupId,
+        meetupName: session.username,
+        discordUserId: identity.id,
+      });
+    } catch (error: unknown) {
+      logger.warn(
+        `Host Discord link write failed: ${error instanceof Error ? error.name : 'Error'}`,
+      );
+      back('error');
+      return;
+    }
+    if (outcome.kind === 'meetup-taken') {
+      alert({
+        title: 'Duplicate Meetup link blocked (host dashboard)',
+        description:
+          `<@${identity.id}> tried to link Meetup member ${meetupId} on the host dashboard, ` +
+          `but it is already linked to ${outcome.otherDiscordId ? `<@${outcome.otherDiscordId}>` : 'another member'}.`,
+      });
+      back('meetup-taken');
+      return;
+    }
+    if (outcome.kind === 'discord-taken') {
+      alert({
+        title: 'Duplicate Discord link blocked (host dashboard)',
+        description:
+          `Meetup member ${meetupId} tried to link <@${identity.id}> on the host dashboard, ` +
+          `but that Discord account is already linked to Meetup member ${outcome.otherMeetupId}.`,
+      });
+      back('discord-taken');
+      return;
+    }
+    if (outcome.kind === 'linked') {
+      audit({
+        title: 'Meetup account linked (host dashboard)',
+        description: `<@${identity.id}> ↔ Meetup member ${meetupId}`,
+        fields: [{ name: 'Method', value: 'web_link', inline: true }],
+      });
+    }
+    // The session takes the link now, with the tier re-checked through it
+    // (a Discord role can change the tier); an outage keeps the old tier.
+    let patch: Partial<Pick<HostSession, 'discordUserId' | 'tier'>> = {
+      discordUserId: identity.id,
+    };
+    try {
+      const resolution = await deps.resolve({ meetupMemberId: meetupId });
+      if (resolution.kind === 'host') {
+        patch = { discordUserId: identity.id, tier: resolution.tier };
+      }
+    } catch (error: unknown) {
+      logger.warn(
+        `Host tier re-check after linking failed: ${error instanceof Error ? error.name : 'Error'}`,
+      );
+    }
+    await (await sessions()).markRoleChecked(sid, session, patch);
+    back(outcome.kind === 'linked' ? 'linked' : 'already');
+  }
+
   const router = express.Router({ caseSensitive: true });
 
   router.use(function hostSecurityHeaders(_req, res, next) {
@@ -369,6 +503,10 @@ export function createHostRouter(deps: HostRouterDeps): express.Router {
     const bound = boundStart(req, res, HOST_DISCORD_OAUTH_COOKIE);
     if (!bound || bound.verifier === MEETUP_NO_VERIFIER) {
       fail(res, 400);
+      return;
+    }
+    if (LINK_STATE.test(bound.state)) {
+      await linkCallback(req, res, bound.verifier);
       return;
     }
     if (req.query.error || typeof req.query.code !== 'string') {
@@ -586,6 +724,19 @@ export function createHostRouter(deps: HostRouterDeps): express.Router {
     }
     res.redirect(303, '/host/login');
   }) as RequestHandler);
+
+  // "Link your Discord account": a POST (CSRF-checked by the guard), then
+  // Discord's sign-in, back to the Discord callback with a link. state.
+  protectedRouter.post('/link/discord', (_req, res) => {
+    if (!deps.members) {
+      fail(res, 404);
+      return;
+    }
+    const state = `link.${generateState()}`;
+    const verifier = generateCodeVerifier();
+    sealedStart(res, HOST_DISCORD_OAUTH_COOKIE, state, verifier);
+    res.redirect(303, deps.discord.buildLoginUrl(state, verifier));
+  });
 
   deps.pages?.(protectedRouter);
 
