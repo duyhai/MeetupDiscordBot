@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { GUILD_ID } from '../../../src/constants.js';
 import {
   discordUsername,
+  displayName,
   ensureServerMember,
   isServerMember,
 } from '../../../src/web/host/serverJoin.js';
@@ -161,5 +162,55 @@ describe('discordUsername', () => {
     const started = Date.now();
     expect(await discordUsername(() => slow, USER, 20)).toBeUndefined();
     expect(Date.now() - started).toBeLessThan(1000);
+  });
+});
+
+describe('displayName', () => {
+  const withGuild = (
+    cached: { displayName: string } | undefined,
+    fetch: (id: string) => Promise<{ displayName: string }>,
+  ) => {
+    const membersFetch = vi.fn(fetch);
+    const client = {
+      guilds: {
+        fetch: vi.fn().mockResolvedValue({
+          members: {
+            cache: new Map(cached ? [[USER, cached]] : []),
+            fetch: membersFetch,
+          },
+        }),
+      },
+    } as unknown as Client;
+    return { client, membersFetch };
+  };
+
+  it('reads the server nickname from the guild member cache without a fetch', async () => {
+    const { client, membersFetch } = withGuild({ displayName: 'Dee ✨' }, () =>
+      Promise.reject(new Error('should not fetch')),
+    );
+    expect(await displayName(() => client, USER)).toBe('Dee ✨');
+    expect(membersFetch).not.toHaveBeenCalled();
+  });
+
+  it('fetches a member who is not cached', async () => {
+    const { client, membersFetch } = withGuild(undefined, async () => ({
+      displayName: 'Dee',
+    }));
+    expect(await displayName(() => client, USER)).toBe('Dee');
+    expect(membersFetch).toHaveBeenCalledWith(USER);
+  });
+
+  it('is nothing for someone not on the server, a slow Discord, or no bot', async () => {
+    const gone = withGuild(undefined, () => Promise.reject(unknownMember()));
+    expect(await displayName(() => gone.client, USER)).toBeUndefined();
+    const slow = withGuild(
+      undefined,
+      () =>
+        new Promise(() => {
+          // never answers
+        }),
+    );
+    expect(await displayName(() => slow.client, USER, 20)).toBeUndefined();
+    expect(await displayName(() => undefined, USER)).toBeUndefined();
   });
 });

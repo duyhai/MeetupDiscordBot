@@ -125,3 +125,45 @@ export async function discordUsername(
     clearTimeout(timer);
   }
 }
+
+/**
+ * The server display name (nickname, else global name, else username) of a
+ * member of our server, for naming a linked Wrapped companion on the
+ * website. The bot's guild member cache first; a miss is fetched, bounded
+ * by `timeoutMs` so a slow Discord never holds a page. undefined when they
+ * are not on the server, Discord is slow or the bot is not ready: the page
+ * then counts them instead of naming them.
+ */
+export async function displayName(
+  getClient: () => Client | undefined,
+  discordUserId: string,
+  timeoutMs = 2000,
+): Promise<string | undefined> {
+  const client = getClient();
+  if (!client) {
+    return undefined;
+  }
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<undefined>((resolve) => {
+    timer = setTimeout(() => {
+      resolve(undefined);
+    }, timeoutMs);
+  });
+  try {
+    return await Promise.race([
+      (async () => {
+        const guild = await client.guilds.fetch(GUILD_ID);
+        const cached = guild.members.cache.get(discordUserId);
+        if (cached) {
+          return cached.displayName;
+        }
+        return (await guild.members.fetch(discordUserId)).displayName;
+      })(),
+      timeout,
+    ]);
+  } catch {
+    return undefined;
+  } finally {
+    clearTimeout(timer);
+  }
+}
