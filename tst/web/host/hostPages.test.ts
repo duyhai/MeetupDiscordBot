@@ -225,12 +225,12 @@ describe('host history', () => {
       /<a\s+class="button ghost"\s+href="\/host\/history\?year=2025"\s*>← 2025<\/a/,
     );
     expect(now.text).toMatch(
-      /<span class="button ghost" aria-disabled="true"\s*>2027 →<\/span/,
+      /<span class="button ghost disabled"\s*>2027 →<span class="sr-only">/,
     );
     const y2025 = await req.get('/host/history?year=2025').set('Cookie', sid);
     expect(y2025.text).toContain('1 event in 2025.');
     expect(y2025.text).toMatch(
-      /<span class="button ghost" aria-disabled="true"\s*>← 2024<\/span/,
+      /<span class="button ghost disabled"\s*>← 2024<span class="sr-only">/,
     );
     expect(y2025.text).toMatch(/href="\/host\/history\?year=2026"\s*>2026 →/);
     // Out of range or not a year: this year.
@@ -295,6 +295,16 @@ describe('host history', () => {
       .set('Cookie', sid);
     expect(alone.text).toContain('1 event in 2025.');
     expect(alone.text).toContain('Showing Wed, Jan 1, 2025');
+    // A day decides the year the map shows, whatever ?year says.
+    const mixed = await req
+      .get('/host/history?year=2026&day=2025-01-01')
+      .set('Cookie', sid);
+    expect(mixed.text).toContain('1 event in 2025.');
+    // A day with no events says so.
+    const empty = await req
+      .get('/host/history?day=2026-10-02')
+      .set('Cookie', sid);
+    expect(empty.text).toContain('No events on Fri, Oct 2.');
     const bad = await req
       .get('/host/history?day=2026-02-30')
       .set('Cookie', sid);

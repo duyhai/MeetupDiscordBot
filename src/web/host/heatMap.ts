@@ -22,6 +22,7 @@ const DAY_LABELS: [number, string][] = [
 function rect(x: number, y: number, count: number, label: string): SafeHtml {
   const at = { x: String(x), y: String(y) };
   if (count <= 0) {
+    // No title: screen readers would otherwise walk ~300 "no events" cells.
     return html`<rect
       class="hm0"
       x="${at.x}"
@@ -29,8 +30,7 @@ function rect(x: number, y: number, count: number, label: string): SafeHtml {
       width="12"
       height="12"
       rx="2"
-      ><title>${label}</title></rect
-    >`;
+    />`;
   }
   if (count === 1) {
     return html`<rect
@@ -122,8 +122,9 @@ export function heatMapYear({
     const labelDay = week === 0 ? first : weekStart;
     if (labelDay.month() !== lastMonth) {
       lastMonth = labelDay.month();
-      // Skip a label too close to the right edge to fit.
-      if (week < weeks - 2 || weeks < 4) {
+      // Skip a label too close to the right edge to fit ("Nov" needs two
+      // columns).
+      if (week < weeks - 1) {
         months.push(
           html`<text
             x="${String(LEFT + week * (CELL + GAP))}"
@@ -148,7 +149,7 @@ export function heatMapYear({
       const x = LEFT + week * (CELL + GAP);
       const y = TOP + weekday * (CELL + GAP);
       if (events.length === 0) {
-        cells.push(rect(x, y, 0, `${day}: no events`));
+        cells.push(rect(x, y, 0, ''));
         continue;
       }
       const lines = tipLines(day, events);

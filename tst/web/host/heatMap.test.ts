@@ -33,10 +33,10 @@ describe('heatMapYear', () => {
   it('draws a whole past year, Jan 1 to Dec 31, and nothing outside it', () => {
     const out = map(new Map(), 2025);
     expect(out.match(/<rect\b/g)).toHaveLength(365);
-    expect(out).toContain('<title>2025-01-01: no events</title>');
-    expect(out).toContain('<title>2025-12-31: no events</title>');
-    expect(out).not.toContain('2024-12-31');
-    expect(out).not.toContain('2026-01-01');
+    // Empty days carry no title, so screen readers skip them.
+    expect(out).not.toContain('<title>');
+    expect(out).toMatch(/>Jan<\/text/);
+    expect(out).toMatch(/>Dec<\/text/);
     expect(out).toContain('0 events in 2025.');
   });
 
@@ -44,7 +44,8 @@ describe('heatMapYear', () => {
     const out = map(new Map(), 2026, '2026-11-03');
     // Jan 1 to Nov 3, 2026: 307 days.
     expect(out.match(/<rect\b/g)).toHaveLength(307);
-    expect(out).not.toContain('2026-11-04');
+    // A month two columns old is labelled.
+    expect(map(new Map(), 2026, '2026-11-09')).toMatch(/>Nov<\/text/);
   });
 
   it('links only days with events, labelled with each event’s time and title, escaped', () => {

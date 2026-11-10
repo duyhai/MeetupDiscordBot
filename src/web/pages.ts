@@ -202,27 +202,28 @@ svg.heat rect.hm2{fill:var(--heat2)}
 svg.heat rect.hm3{fill:var(--heat3)}
 svg.heat rect.hm4{fill:var(--heat4)}
 svg.heat text{fill:var(--muted)}
-svg.heat a.hm-link:focus-visible rect{outline:2px solid var(--accent);outline-offset:1px}
+svg.heat a.hm-link:focus{outline:none}
+svg.heat a.hm-link:focus-visible rect{stroke:var(--fg);stroke-width:2px}
 svg.heat a.hm-link rect{cursor:pointer}
 .hm-tip{position:fixed;z-index:30;max-width:min(20rem,calc(100vw - 16px));padding:var(--s2) var(--s3);
   background:var(--fg);color:var(--bg);border-radius:8px;font-size:var(--t-sm);box-shadow:0 6px 18px rgb(0 0 0 / .25);
   overflow-wrap:anywhere;pointer-events:none}
 .hm-tip strong,.hm-tip span{display:block}
 nav.year-nav{display:flex;align-items:center;gap:var(--s3);flex-wrap:wrap;margin:var(--s3) 0 0}
-nav.year-nav [aria-disabled="true"]{opacity:.45;cursor:default;pointer-events:none}
+nav.year-nav .disabled{opacity:.45;cursor:default}
 p.day-filter{font-weight:600}
 table.cal-grid{table-layout:fixed;width:100%;min-width:560px}
 table.cal-grid th{text-align:center}
 td.cal{vertical-align:top;height:76px;padding:var(--s1) var(--s2);font-size:var(--t-sm);white-space:normal;
 overflow-wrap:anywhere}
-td.cal span{display:block}
+td.cal .cal-head span,details.cal-pop>summary>span{display:block}
 .cal-day{font-weight:700}
 .cal-head{display:flex;align-items:center;justify-content:space-between;gap:var(--s1)}
-a.cal-add{display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;flex:none;
+a.cal-add{display:inline-flex;align-items:center;justify-content:center;width:40px;height:40px;flex:none;
   border:1px solid var(--field);border-radius:8px;background:var(--surface);font-weight:700;text-decoration:none}
 a.cal-add:hover{background:var(--sel)}
 details.cal-pop{margin:0}
-details.cal-pop>summary{display:block;list-style:none;min-height:32px;padding:var(--s1) 0;font-weight:400}
+details.cal-pop>summary{position:relative;display:block;list-style:none;min-height:40px;padding:var(--s1) 0;font-weight:400}
 details.cal-pop>summary::-webkit-details-marker{display:none}
 details.cal-pop>summary .cal-count{text-decoration:underline dotted;text-underline-offset:3px}
 .cal-panel{margin-top:var(--s1);padding:var(--s2);border:1px solid var(--line);border-radius:8px;background:var(--surface)}

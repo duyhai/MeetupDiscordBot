@@ -111,6 +111,9 @@ export const HOST_REQUEST_RESULT_MESSAGES = {
   denied: 'Denied. The host sees your reason on their dashboard.',
   'still-publishing':
     'Meetup is slow to answer. The request stays "publishing"; reload in a minute. If it is still stuck after 10 minutes, Retry.',
+  'deny-slow':
+    'The database is slow, so the deny may still save. Reload the queue in a minute ' +
+    'to see where the request stands; the activity log notes it if it saves.',
   'reason-required': 'Write a reason for the host, then deny again.',
   'reason-too-long': `Keep the reason to ${DENY_REASON_MAX} characters.`,
   'deny-event-exists':
@@ -588,6 +591,7 @@ export function registerHostRequestRoutes(
       // said it failed.
       const pageDeadline = deps.now().getTime() + WORKSPACE_REQUEST_DEADLINE_MS;
       let denied: EventRequest | undefined;
+      let write: Promise<EventRequest | undefined> | undefined;
       try {
         // Checked at this version; deny's compare-and-set on the same
         // version means the row cannot have changed in between.
@@ -632,12 +636,28 @@ export function registerHostRequestRoutes(
           }
           // The write gets only the time the page has left: its row-lock
           // wait is bounded by it too, not just the page's wait for it.
+          // The pool wait and BEGIN come before the lock timeout starts, so
+          // a write can still land after the page answers: then the page
+          // says it may still save, and the late write is logged when done.
           const lockTimeoutMs = Math.max(1, Math.floor(left));
-          denied = await withDeadline(left, () =>
-            store.deny(id, version, session.userId, reason, { lockTimeoutMs }),
-          );
+          write = store.deny(id, version, session.userId, reason, {
+            lockTimeoutMs,
+          });
+          const pending = write;
+          denied = await withDeadline(left, () => pending);
         }
       } catch (error: unknown) {
+        if (error instanceof WorkspaceDeadlineError && write !== undefined) {
+          write
+            .then((late) => {
+              if (late !== undefined) {
+                auditLine('denied (saved after the page timed out)', late);
+              }
+            })
+            .catch(() => undefined);
+          back(res, 'deny-slow');
+          return;
+        }
         logger.warn(
           `Host request deny failed: ${error instanceof Error ? error.name : 'Error'}`,
         );

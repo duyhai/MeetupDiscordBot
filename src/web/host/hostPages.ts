@@ -416,8 +416,10 @@ function yearNav(
           href="${historyLink({ type: view.selected, year: view.year - 1 })}"
           >← ${String(view.year - 1)}</a
         >`
-      : html`<span class="button ghost" aria-disabled="true"
-          >← ${String(view.year - 1)}</span
+      : html`<span class="button ghost disabled"
+          >← ${String(view.year - 1)}<span class="sr-only">
+            (no earlier events)</span
+          ></span
         >`;
   const next =
     view.year < current
@@ -426,8 +428,10 @@ function yearNav(
           href="${historyLink({ type: view.selected, year: view.year + 1 })}"
           >${String(view.year + 1)} →</a
         >`
-      : html`<span class="button ghost" aria-disabled="true"
-          >${String(view.year + 1)} →</span
+      : html`<span class="button ghost disabled"
+          >${String(view.year + 1)} →<span class="sr-only">
+            (not yet)</span
+          ></span
         >`;
   return html`<nav class="year-nav" aria-label="Year">
     ${prev}<strong>${String(view.year)}</strong>${next}
@@ -435,8 +439,9 @@ function yearNav(
 }
 
 /**
- * The year a history page maps: `?year=` when it is between the earliest
- * hosted year and this one; else the day filter's year; else this year.
+ * The year a history page maps: the day filter's year when there is one (so
+ * the map and the list agree), else `?year=`, kept only between the
+ * earliest hosted year and this one; else this year.
  */
 export function historyYear(
   query: unknown,
@@ -444,12 +449,11 @@ export function historyYear(
   earliest: number,
   current: number,
 ): number {
-  const wanted =
-    typeof query === 'string' && /^\d{4}$/.test(query)
+  const wanted = day
+    ? Number(day.slice(0, 4))
+    : typeof query === 'string' && /^\d{4}$/.test(query)
       ? Number(query)
-      : day
-        ? Number(day.slice(0, 4))
-        : current;
+      : current;
   return wanted >= earliest && wanted <= current ? wanted : current;
 }
 
@@ -540,7 +544,9 @@ function historyBody(
       </p>
       ${
         rows.length === 0
-          ? html`<p class="muted">No events on this page.</p>`
+          ? html`<p class="muted">
+              ${day ? `No events on ${dayLabel(day)}.` : 'No events on this page.'}
+            </p>`
           : html`<table class="stack">
               <thead>
                 <tr>

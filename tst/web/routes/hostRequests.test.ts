@@ -16,7 +16,10 @@ import {
   makeApp,
   signIn,
 } from '../dashboardHarness.js';
-import { GUEST_HOST_EVENT_DESCRIPTION } from '../../../src/templates/createEventTemplate.js';
+import {
+  GUEST_HOST_EVENT_DESCRIPTION,
+  createEventTemplate,
+} from '../../../src/templates/createEventTemplate.js';
 import {
   PAGE_NOW,
   eventRequestRow,
@@ -311,6 +314,21 @@ describe('host request queue', () => {
     expect(res.text).not.toContain('<img src=x>');
   });
 
+  it('a copy with the group’s photo says so, not a bare photo id', async () => {
+    const { get } = await setup({
+      rows: [
+        eventRequestRow({
+          kind: 'copy',
+          sourceEventId: '311111111',
+          featuredPhotoId: createEventTemplate.featuredPhotoId ?? null,
+        }),
+      ],
+    });
+    const res = await get(QUEUE);
+    expect(res.text).toContain('Photo: the group&#39;s standard photo');
+    expect(res.text).not.toContain('Meetup photo');
+  });
+
   it('a store outage is a 503', async () => {
     const { get } = await setup();
     const res = await get(QUEUE);
@@ -529,6 +547,35 @@ describe('queue actions', () => {
     // 20 s page deadline, 15 s gone: at most 5 s, and at least 1 ms.
     expect(options?.lockTimeoutMs).toBeGreaterThanOrEqual(1);
     expect(options?.lockTimeoutMs).toBeLessThanOrEqual(5_000);
+  });
+
+  it('a deny write that lands after the page gave up says so, and is logged when it lands', async () => {
+    const { post, store, audit } = await setup({
+      rows: [
+        eventRequestRow({
+          status: 'failed',
+          version: 3,
+          failure: PUBLISH_FAILURES.createFailed,
+        }),
+      ],
+      // 10 ms of the page's 20 s left after the Meetup check.
+      clockJumpAfterCheckMs: 19_990,
+    });
+    store.deny.mockImplementationOnce(
+      async () =>
+        new Promise((resolve) => {
+          setTimeout(() => {
+            resolve(eventRequestRow({ status: 'denied', version: 4 }));
+          }, 80);
+        }),
+    );
+    const res = await post(`${QUEUE}/1/deny`, { version: '3', reason: 'No' });
+    expect(res.headers.location).toBe(`${QUEUE}?result=deny-slow`);
+    await vi.waitFor(() => {
+      expect(JSON.stringify(audit.mock.calls)).toContain(
+        'saved after the page timed out',
+      );
+    });
   });
 
   it('deny of a waiting request does not ask Meetup', async () => {
