@@ -133,14 +133,29 @@ const TEXT_PAIRS: [string, string][] = [
   ['fg', 'ok-soft'],
   ['fg', 'attn-soft'],
   ['muted', 'bg'],
+  // Field errors (.field-error) sit on a card or a stacked row.
+  ['attn-ink', 'surface'],
+  ['attn-ink', 'raised'],
+  // Muted text and links inside the hover, quiet-day and busy-day fills,
+  // and the done colour on a plain card.
+  ...['sel', 'ok-soft', 'attn-soft'].map((bg) => ['muted', bg]),
+  ...['sel', 'ok-soft', 'attn-soft'].map((bg) => ['accent-ink', bg]),
+  ['ok-ink', 'surface'],
+  ['accent', 'ok-soft'],
 ];
 
 /** Non-text that carries meaning: 3:1 (WCAG 1.4.11). */
 const UI_PAIRS: [string, string][] = [
   // The focus ring, wherever a control can sit.
-  ...['bg', 'surface', 'raised', 'sel', 'attn-soft', 'accent-soft'].map(
-    (bg): [string, string] => ['focus', bg],
-  ),
+  ...[
+    'bg',
+    'surface',
+    'raised',
+    'sel',
+    'attn-soft',
+    'accent-soft',
+    'ok-soft',
+  ].map((bg): [string, string] => ['focus', bg]),
   // Form field borders.
   ...['bg', 'surface', 'raised'].map((bg): [string, string] => ['field', bg]),
   // The current tab's marker.
