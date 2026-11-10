@@ -15,7 +15,7 @@ export interface HostResolveDeps {
   meetupIdForDiscord: (discordId: string) => Promise<string | undefined>;
   /** Holds the Guest Host role, asked of Discord live. */
   hasGuestHostRole: (discordId: string) => Promise<boolean>;
-  /** PAST events in the group with this member as a host (organizer credential). */
+  /** Counted PAST events hosted by this member (countedEvents.ts; organizer credential). */
   pastHostedCount: (meetupId: string) => Promise<number>;
   isPromoted: (meetupId: string) => Promise<boolean>;
 }

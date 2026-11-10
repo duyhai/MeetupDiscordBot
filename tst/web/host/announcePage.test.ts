@@ -30,6 +30,7 @@ const ev = (id: string, hostId = MEETUP_SELF.id): HostEvent => ({
   dateTime: '2026-11-10T19:00:00-08:00',
   eventUrl: `https://www.meetup.com/g/events/${id}/`,
   type: 'social',
+  counted: true,
   hosts: [{ id: hostId, name: 'Ann' }],
 });
 

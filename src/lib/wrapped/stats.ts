@@ -7,7 +7,11 @@
  */
 import dayjs, { Dayjs } from 'dayjs';
 
-import { hasCancelledTitle } from '../helpers/hallOfFame.js';
+import {
+  CountedEventLike,
+  countsAsAttended,
+  countsAsHosted,
+} from '../helpers/countedEvents.js';
 import {
   EVENT_TYPES,
   EventType,
@@ -63,11 +67,17 @@ export function isInYear(dateTime: string, year: number): boolean {
   return at >= start.valueOf() && at < end.valueOf();
 }
 
-/** Deduped by id (first occurrence wins), cancelled titles dropped. */
-function cleanEvents(events: WrappedEvent[]): WrappedEvent[] {
+/**
+ * Deduped by id (first occurrence wins), keeping what `counts` says counts
+ * (the shared rule; these lists carry no status, so it goes by title).
+ */
+function cleanEvents(
+  events: WrappedEvent[],
+  counts: (event: CountedEventLike) => boolean,
+): WrappedEvent[] {
   const byId = new Map<string, WrappedEvent>();
   events.forEach((event) => {
-    if (!byId.has(event.id) && !hasCancelledTitle(event.title)) {
+    if (!byId.has(event.id) && counts(event)) {
       byId.set(event.id, event);
     }
   });
@@ -153,10 +163,13 @@ export function computeWrapped(input: WrappedInput): {
     dayjs(event.dateTime).valueOf() < end.valueOf();
 
   // A hosted event counts as attended, even without an RSVP.
-  const attended = cleanEvents([...input.attended, ...input.hosted])
+  const attended = cleanEvents(
+    [...input.attended, ...input.hosted],
+    countsAsAttended,
+  )
     .filter(cutoff)
     .sort(byDate);
-  const hosted = cleanEvents(input.hosted).filter(cutoff);
+  const hosted = cleanEvents(input.hosted, countsAsHosted).filter(cutoff);
   const thisYear = attended.filter((event) => isInYear(event.dateTime, year));
   const hostedThisYear = hosted.filter((event) =>
     isInYear(event.dateTime, year),

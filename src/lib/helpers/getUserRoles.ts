@@ -2,6 +2,7 @@ import { Logger } from 'tslog';
 import { GUEST_HOST_BLACKLIST } from '../../constants.js';
 import { GqlMeetupClient } from '../client/meetup/gqlClient.js';
 import { getPaginatedData } from '../client/meetup/paginationHelper.js';
+import { countsAsHosted } from './countedEvents.js';
 import { addServerRole } from './onboardUser.js';
 import { VerifyContext } from './verifyContext.js';
 
@@ -48,15 +49,15 @@ export async function getUserRoles(
     logger.info(`Organizer and guest host roles added to: ${username}`);
   } else if (!isBlacklisted) {
     const userInfo = await meetupClient.getUserInfo();
-    const getUserHostedEvents = await getPaginatedData(
-      async (paginationInput) => {
+    const getUserHostedEvents = (
+      await getPaginatedData(async (paginationInput) => {
         const result = await meetupClient.getGroupEvents(paginationInput, {
           status: ['PAST'],
           hostId: userInfo.self.id,
         });
         return result.groupByUrlname.events;
-      },
-    );
+      })
+    ).filter(countsAsHosted);
 
     logger.info(
       `Number of hosted events by ${username}: ${getUserHostedEvents.length}`,

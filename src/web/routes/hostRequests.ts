@@ -1,5 +1,6 @@
 import dayjs from 'dayjs';
 import express, { RequestHandler, Response } from 'express';
+import { Logger } from 'tslog';
 
 import {
   ExistingEvent,
@@ -18,6 +19,12 @@ import {
   StaffRequestStore,
   decideRequest,
 } from '../../lib/hosts/requestDecision.js';
+import {
+  ChecklistKey,
+  REVIEW_CHECKLIST,
+  checklistLabel,
+  parseChecklist,
+} from '../../lib/hosts/reviewChecklist.js';
 import {
   DASHBOARD_PATHS,
   dashboardPath,
@@ -38,6 +45,8 @@ import { FixedWindowLimiter } from '../rateLimit.js';
 import type { DashboardPageDeps } from './dashboardPages.js';
 import { LeadershipAnswer, leadershipOf } from './workspaceActions.js';
 
+const logger = new Logger({ name: 'dashboard' });
+
 const REQUEST_ID = /^[1-9][0-9]{0,17}$/;
 const VERSION = /^[1-9][0-9]{0,8}$/;
 const RECENT_DECIDED = 20;
@@ -55,6 +64,7 @@ export interface HostRequestDeps {
     version: number,
     actor: string,
     from: PublishFrom[],
+    options?: { detail?: string | null },
   ) => Promise<PublishOutcome>;
   /**
    * The Meetup event a failed request may have become without it being
@@ -108,6 +118,41 @@ const actionPath = (id: string, action: QueueAction) =>
 function field(body: unknown, name: string): string | undefined {
   const value = (body as Record<string, unknown> | undefined)?.[name];
   return typeof value === 'string' ? value : undefined;
+}
+
+/** A field that may repeat (checkboxes): as the body parser gives it. */
+function fieldValues(body: unknown, name: string): unknown {
+  return (body as Record<string, unknown> | undefined)?.[name];
+}
+
+/**
+ * The reviewer's checklist (reviewChecklist.ts) inside the Approve form:
+ * what to confirm by eye before approving. A memory aid: nothing is
+ * required, and Approve works however many are ticked.
+ */
+function checklistFields(): SafeHtml {
+  return html`<fieldset class="review-checklist">
+    <legend>Before approving, check on Meetup and in the request:</legend>
+    ${REVIEW_CHECKLIST.map(
+      (item) =>
+        html`<label class="check">
+          <input type="checkbox" name="check" value="${item.key}" />
+          ${item.label}
+        </label>`,
+    )}
+  </fieldset>`;
+}
+
+/** What the reviewer confirmed when they approved, from the history. */
+function checklistRecord(ticked: ChecklistKey[] | undefined): SafeHtml | '' {
+  if (ticked === undefined) {
+    return '';
+  }
+  return ticked.length === 0
+    ? html`<p class="muted">Reviewer checklist: nothing ticked.</p>`
+    : html`<p class="muted">
+        Reviewer confirmed: ${ticked.map(checklistLabel).join(' · ')}
+      </p>`;
 }
 
 const whenLabel = (startLocal: string) =>
@@ -175,7 +220,7 @@ function cardActions(
               method="post"
               action="${localUrl(actionPath(r.id, 'approve'))}"
             >
-              ${csrfField}
+              ${csrfField} ${checklistFields()}
               <button type="submit">Approve and publish</button>
             </form>`
       }
@@ -312,6 +357,7 @@ function requestCard(
   leader: boolean,
   csrf: string,
   now: Date,
+  checklist: ChecklistKey[] | undefined,
 ): SafeHtml {
   const meetup = safeHref(r.eventUrl ?? '');
   return html`<div class="card">
@@ -327,6 +373,7 @@ function requestCard(
       Request #${r.id}, sent ${dayjs(r.createdAt).format('MMM D, h:mm A')}
     </p>
     ${r.denyReason ? html`<p>Reason: ${memberText(r.denyReason)}</p>` : ''}
+    ${checklistRecord(checklist)}
     ${r.failure ? html`<p class="note attn wrap-anywhere">${r.failure}</p>` : ''}
     ${
       meetup
@@ -346,6 +393,7 @@ function queueBody(
     pending: EventRequest[];
     attention: EventRequest[];
     decided: EventRequest[];
+    checklists: Map<string, ChecklistKey[]>;
   },
   leadership: LeadershipAnswer,
   csrf: string,
@@ -353,7 +401,8 @@ function queueBody(
   notice: SafeHtml | '',
 ): SafeHtml {
   const leader = leadership === 'leader';
-  const card = (r: EventRequest) => requestCard(r, leader, csrf, now);
+  const card = (r: EventRequest) =>
+    requestCard(r, leader, csrf, now, view.checklists.get(r.id));
   return html`<div class="card">
       <h1>Host requests</h1>
       <p>
@@ -438,7 +487,20 @@ export function registerHostRequestRoutes(
         store.listByStatus(['failed', 'publishing']),
         store.listDecided(RECENT_DECIDED),
       ]);
-      return { pending, attention, decided };
+      // The checklists are a note on the cards: a failure hides them only.
+      let checklists = new Map<string, ChecklistKey[]>();
+      if (store.reviewChecklists) {
+        try {
+          checklists = await store.reviewChecklists(
+            [...attention, ...decided].map((r) => r.id),
+          );
+        } catch (error: unknown) {
+          logger.warn(
+            `Review checklists read failed: ${error instanceof Error ? error.name : 'Error'}`,
+          );
+        }
+      }
+      return { pending, attention, decided, checklists };
     });
     if (!loaded.ok) {
       return;
@@ -493,6 +555,9 @@ export function registerHostRequestRoutes(
         actor: session.userId,
         action: action as QueueAction,
         reason: field(body, 'reason'),
+        ...(action === 'approve'
+          ? { checklist: parseChecklist(fieldValues(body, 'check')) }
+          : {}),
       },
     );
     if (outcome.code === 'stale') {

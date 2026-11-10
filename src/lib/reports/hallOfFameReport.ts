@@ -2,10 +2,10 @@ import dayjs from 'dayjs';
 
 import { GqlMeetupClient } from '../client/meetup/gqlClient.js';
 import { mapWithConcurrency } from '../client/meetup/paginationHelper.js';
+import { countsAsHosted } from '../helpers/countedEvents.js';
 import {
   collectHostStats,
   formatHallOfFamePost,
-  isCountableEvent,
 } from '../helpers/hallOfFame.js';
 import { linkStr } from '../../util/discord.js';
 import { tz } from '../../util/timezone.js';
@@ -60,7 +60,7 @@ export async function buildHallOfFameReport(
   asOf: Date,
 ): Promise<HallOfFamePayload> {
   const { hostStats, totalEvents } = collectHostStats(
-    data.events.filter(isCountableEvent),
+    data.events.filter(countsAsHosted),
   );
   const newHostIds = await findNewHostIds(
     meetupClient,

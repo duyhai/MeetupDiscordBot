@@ -5,6 +5,7 @@ import {
   PUBLISH_FAILURES,
   PublishOutcome,
 } from '../../../src/lib/hosts/publishRequest.js';
+import { ChecklistKey } from '../../../src/lib/hosts/reviewChecklist.js';
 import { EventRequest } from '../../../src/lib/repositories/postgresEventRequestRepository.js';
 import { registerAllProtectedRoutes } from '../../../src/web/routes/dashboardPages.js';
 import { HOST_REQUEST_RESULT_MESSAGES } from '../../../src/web/routes/hostRequests.js';
@@ -111,7 +112,7 @@ async function setup(
   const cookie = await signIn(req);
   const token = await tokenOf(req, cookie);
   const get = (path: string) => req.get(path).set('Cookie', cookie);
-  const post = (path: string, body: Record<string, string> = {}) =>
+  const post = (path: string, body: Record<string, string | string[]> = {}) =>
     req
       .post(path)
       .set('Cookie', cookie)
@@ -143,6 +144,60 @@ describe('host request queue', () => {
     expect(res.text).toContain(`action="${QUEUE}/1/deny"`);
     expect(res.text).toContain('name="version" value="1"');
     expect(res.text).toContain('aria-current="page">Host requests');
+  });
+
+  it('the Approve form carries the five reviewer boxes, none required', async () => {
+    const { get } = await setup();
+    const res = await get(QUEUE);
+    const form = res.text.slice(
+      res.text.indexOf(`action="${QUEUE}/1/approve"`),
+      res.text.indexOf('Approve and publish'),
+    );
+    expect(form.match(/type="checkbox"/g)).toHaveLength(5);
+    expect(form).not.toContain('required');
+    expect(form).toContain('value="lead-time"');
+    expect(form).toContain('Starts 7 or more days out');
+    expect(form).toContain('Exact location in the title');
+  });
+
+  it('a decided card shows what the reviewer confirmed, or that nothing was ticked', async () => {
+    const rows = [
+      eventRequestRow({ id: '1', status: 'published', title: 'Ticked' }),
+      eventRequestRow({ id: '2', status: 'published', title: 'Blank' }),
+      eventRequestRow({ id: '3', status: 'published', title: 'Discord' }),
+    ];
+    const { get, store } = await setup({ rows });
+    store.reviewChecklists = vi.fn(
+      async () =>
+        new Map<string, ChecklistKey[]>([
+          ['1', ['location', 'content']],
+          ['2', []],
+        ]),
+    );
+    const res = await get(QUEUE);
+    expect(store.reviewChecklists).toHaveBeenCalledWith(['1', '2', '3']);
+    const card = (title: string) => {
+      const at = res.text.indexOf(`<h3><bdi>${title}</bdi></h3>`);
+      const next = res.text.indexOf('<h3>', at + 1);
+      return res.text.slice(at, next === -1 ? undefined : next);
+    };
+    expect(card('Ticked')).toMatch(
+      /Reviewer confirmed: Exact location in the title · Title and description reasonable/,
+    );
+    expect(card('Blank')).toContain('Reviewer checklist: nothing ticked.');
+    expect(card('Discord')).not.toContain('Reviewer');
+  });
+
+  it('a checklist read failing hides the checklists only', async () => {
+    const { get, store } = await setup({
+      rows: [eventRequestRow({ status: 'published' })],
+    });
+    store.reviewChecklists = vi.fn(async () => {
+      throw new Error('pg down');
+    });
+    const res = await get(QUEUE);
+    expect(res.status).toBe(200);
+    expect(res.text).not.toContain('Reviewer');
   });
 
   it('a Moderator sees the queue without buttons', async () => {
@@ -345,10 +400,24 @@ describe('queue actions', () => {
     const res = await post(`${QUEUE}/1/approve`, { version: '1' });
     expect(res.status).toBe(303);
     expect(res.headers.location).toBe(`${QUEUE}?result=published`);
-    expect(publishRequest).toHaveBeenCalledWith('1', 1, USER.id, ['pending']);
+    expect(publishRequest).toHaveBeenCalledWith('1', 1, USER.id, ['pending'], {
+      detail: '{"checklist":[]}',
+    });
     const entry = JSON.stringify(audit.mock.calls.at(-1)?.[0]);
     expect(entry).toContain('Host request approved');
     expect(entry).not.toMatch(/<@&|@everyone|@here/);
+  });
+
+  it('the ticked boxes travel with the approval, junk dropped', async () => {
+    const { post, publishRequest } = await setup();
+    const res = await post(`${QUEUE}/1/approve`, {
+      version: '1',
+      check: ['content', 'photo', 'bogus'],
+    });
+    expect(res.status).toBe(303);
+    expect(publishRequest).toHaveBeenCalledWith('1', 1, USER.id, ['pending'], {
+      detail: '{"checklist":["photo","content"]}',
+    });
   });
 
   it('a second approval of the same version is a 409', async () => {
@@ -373,10 +442,13 @@ describe('queue actions', () => {
       rows: [eventRequestRow({ status: 'failed', version: 4 })],
     });
     await post(`${QUEUE}/1/retry`, { version: '4' });
-    expect(publishRequest).toHaveBeenCalledWith('1', 4, USER.id, [
-      'failed',
-      'publishing',
-    ]);
+    expect(publishRequest).toHaveBeenCalledWith(
+      '1',
+      4,
+      USER.id,
+      ['failed', 'publishing'],
+      {},
+    );
   });
 
   it('a failed publish says so', async () => {

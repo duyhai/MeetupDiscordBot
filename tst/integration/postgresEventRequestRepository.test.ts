@@ -183,6 +183,29 @@ const request = (over: Partial<NewEventRequest> = {}): NewEventRequest => ({
       expect(winners[0]?.decidedAt).toBeInstanceOf(Date);
     });
 
+    it('keeps the approval’s detail on its history row and reads the checklists back', async () => {
+      const { id } = await repo.create(request());
+      await repo.startPublishing(
+        id,
+        1,
+        LEAD,
+        ['pending'],
+        undefined,
+        '{"checklist":["location","rsvps"]}',
+      );
+      const other = await repo.create(request());
+      await repo.startPublishing(other.id, 1, LEAD, ['pending']);
+      const { rows } = await pool.query<{ detail: string | null }>(
+        `SELECT detail FROM event_request_events
+          WHERE request_id = $1 AND action = 'start_publishing'`,
+        [id],
+      );
+      expect(rows[0]?.detail).toBe('{"checklist":["location","rsvps"]}');
+      const lists = await repo.reviewChecklists([id, other.id, 'nope']);
+      expect([...lists.entries()]).toEqual([[id, ['location', 'rsvps']]]);
+      expect(await repo.reviewChecklists([])).toEqual(new Map());
+    });
+
     it('refuses a stale version or a status outside from', async () => {
       const { id } = await repo.create(request());
       expect(await repo.startPublishing(id, 2, LEAD, ['pending'])).toBe(

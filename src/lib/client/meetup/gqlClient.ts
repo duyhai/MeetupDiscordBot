@@ -23,6 +23,7 @@ import {
   getGroupEvents,
   getGroupEventsCount,
   getGroupMembersByIds,
+  getGroupMembershipsByIds,
   getGroupMemberships,
   getMemberRsvps,
   getSelfPastRsvpCount,
@@ -52,6 +53,7 @@ import {
   GetGroupEventsInput,
   GetGroupEventsResponse,
   GetGroupMembersByIdsInput,
+  GetGroupMembershipsByIdsResponse,
   GetGroupMembershipsInput,
   GetGroupMembershipsResponse,
   GetGroupMembersByIdsResponse,
@@ -441,6 +443,45 @@ export class GqlMeetupClient {
       );
     }
     return members;
+  }
+
+  /**
+   * These members' group status and join time, by member id; a member not
+   * in the group is absent. Paged like getGroupMembersByIds; not cached (a
+   * promotion to organizer should show within the hour).
+   */
+  public async getGroupMembershipsByIds(
+    memberIds: string[],
+  ): Promise<Map<string, { status: string; joinTime: string }>> {
+    const out = new Map<string, { status: string; joinTime: string }>();
+    for (
+      let start = 0;
+      start < memberIds.length;
+      start += MEMBER_LOOKUP_PAGE_SIZE
+    ) {
+      const page = memberIds.slice(start, start + MEMBER_LOOKUP_PAGE_SIZE);
+      logger.info(
+        `Calling getGroupMembershipsByIds for ${page.length} members`,
+      );
+      // eslint-disable-next-line no-await-in-loop
+      const result = await this.client.request<
+        GetGroupMembershipsByIdsResponse,
+        GetGroupMembersByIdsInput
+      >(getGroupMembershipsByIds, {
+        urlname: Configuration.meetup.groupUrlName,
+        memberIds: page.map(Number),
+        first: page.length,
+      });
+      for (const edge of result.groupByUrlname?.memberships?.edges ?? []) {
+        if (edge.metadata && edge.node?.id !== undefined) {
+          out.set(String(edge.node.id), {
+            status: String(edge.metadata.status),
+            joinTime: String(edge.metadata.joinTime),
+          });
+        }
+      }
+    }
+    return out;
   }
 
   private async getGroupMembersPage(

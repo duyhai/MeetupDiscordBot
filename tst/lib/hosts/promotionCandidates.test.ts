@@ -1,3 +1,4 @@
+import dayjs from 'dayjs';
 import { describe, expect, it, vi } from 'vitest';
 
 import { GUEST_HOST_MEETUP_BLACKLIST } from '../../../src/constants.js';
@@ -21,6 +22,7 @@ const event = (
   dateTime,
   eventUrl: `https://www.meetup.com/g/events/${id}/`,
   type: 'social',
+  counted: true,
   hosts,
 });
 
@@ -41,62 +43,153 @@ describe('hostsSeen', () => {
 });
 
 describe('promotionCandidates', () => {
-  const counts: Record<string, number> = {
-    '111': 25,
-    '222': PROMOTION_MIN_EVENTS,
-    '333': PROMOTION_MIN_EVENTS - 1,
-  };
+  /** `n` counted events hosted by `host`, one a week back from May 2026. */
+  const weekly = (host: { id: string; name: string }, n: number, from = 20) =>
+    Array.from({ length: n }, (_, i) =>
+      event(
+        `${host.id}-${i}`,
+        dayjs('2026-05-01T19:00:00-07:00')
+          .subtract(from + i, 'week')
+          .toISOString(),
+        [host],
+      ),
+    );
+  const JOINED_LONG_AGO = '2020-01-01T12:00:00-08:00';
 
-  function deps(events: HostEvent[]) {
+  function deps(
+    events: HostEvent[],
+    options: {
+      memberships?: Record<string, { status: string; joinTime: string }>;
+      organizers?: string[];
+      allTime?: Record<string, HostEvent[]>;
+    } = {},
+  ) {
+    const memberships = options.memberships ?? {
+      '111': { status: 'ACTIVE', joinTime: JOINED_LONG_AGO },
+      '222': { status: 'ACTIVE', joinTime: JOINED_LONG_AGO },
+      '333': { status: 'ACTIVE', joinTime: JOINED_LONG_AGO },
+    };
     return {
       now: () => NOW,
       fetchGroupEvents: vi.fn(async () => events),
-      pastHostedCount: vi.fn(async (id: string) => counts[id] ?? 0),
+      pastHostedEvents: vi.fn(async (id: string) => {
+        return (
+          options.allTime?.[id] ??
+          events.filter((e) => e.hosts.some((h) => h.id === id))
+        );
+      }),
+      memberships: vi.fn(async (ids: string[]) => {
+        const found = ids.filter((id) => memberships[id] !== undefined);
+        return new Map(found.map((id) => [id, memberships[id]] as const));
+      }),
+      isOrganizer: vi.fn(async (id: string) =>
+        (options.organizers ?? []).includes(id),
+      ),
     };
   }
 
-  it('reads the past year of PAST events, counts every host and keeps 20+, most first', async () => {
-    const d = deps([
-      event('1', '2026-03-01T19:00:00-08:00', [B, C]),
-      event('2', '2026-09-01T19:00:00-07:00', [A]),
-    ]);
+  it('reads 18 months of PAST events and lists hosts with 20+ counted ones, most recent events first', async () => {
+    const d = deps(
+      [
+        ...weekly(A, 25),
+        ...weekly(B, PROMOTION_MIN_EVENTS),
+        ...weekly(C, PROMOTION_MIN_EVENTS - 1),
+      ],
+      { allTime: { '111': weekly(A, 40, 0) } },
+    );
     const { candidates } = await promotionCandidates(d, new Set());
     expect(d.fetchGroupEvents).toHaveBeenCalledWith({
       status: ['PAST'],
-      afterDateTime: '2025-11-10T20:00:00.000Z',
+      afterDateTime: '2025-05-10T20:00:00.000Z',
       beforeDateTime: NOW.toISOString(),
     });
-    expect(candidates.map((c) => [c.meetupMemberId, c.pastCount])).toEqual([
-      ['111', 25],
-      ['222', 20],
+    expect(
+      candidates.map((c) => [c.meetupMemberId, c.recentCount, c.pastCount]),
+    ).toEqual([
+      ['111', 25, 40],
+      ['222', 20, 20],
     ]);
+    expect(candidates[0].memberSince).toBe(JOINED_LONG_AGO);
+    // Only the hosts with enough events are looked up any further.
+    expect(d.memberships).toHaveBeenCalledWith(['111', '222']);
+    expect(d.pastHostedEvents).not.toHaveBeenCalledWith('333');
   });
 
-  it('leaves out the excluded and the blacklisted without counting them', async () => {
+  it('cancelled events and Open Houses do not count toward the 20', async () => {
+    const counted = weekly(A, PROMOTION_MIN_EVENTS - 1);
+    const d = deps([
+      ...counted,
+      { ...event('x', '2026-04-01T19:00:00-07:00', [A]), counted: false },
+      { ...event('y', '2026-04-02T19:00:00-07:00', [A]), counted: false },
+    ]);
+    const { candidates } = await promotionCandidates(d, new Set());
+    expect(candidates).toEqual([]);
+  });
+
+  it('leaves out organizers: Meetup LEADER status, or the Organizer Discord role', async () => {
+    const d = deps([...weekly(A, 25), ...weekly(B, 25)], {
+      memberships: {
+        '111': { status: 'LEADER', joinTime: JOINED_LONG_AGO },
+        '222': { status: 'ACTIVE', joinTime: JOINED_LONG_AGO },
+      },
+      organizers: ['222'],
+    });
+    const { candidates, uncounted } = await promotionCandidates(d, new Set());
+    expect(candidates).toEqual([]);
+    expect(uncounted).toBe(0);
+    // A LEADER is settled by Meetup alone; nothing else is read for them.
+    expect(d.isOrganizer).not.toHaveBeenCalledWith('111');
+    expect(d.pastHostedEvents).not.toHaveBeenCalledWith('222');
+  });
+
+  it('needs a year of membership, and a host who left the group is not listed', async () => {
+    const d = deps([...weekly(A, 25), ...weekly(B, 25), ...weekly(C, 25)], {
+      memberships: {
+        '111': { status: 'ACTIVE', joinTime: '2025-11-11T00:00:00Z' },
+        '222': { status: 'ACTIVE', joinTime: '2025-11-09T00:00:00Z' },
+      },
+    });
+    const { candidates } = await promotionCandidates(d, new Set());
+    expect(candidates.map((c) => c.meetupMemberId)).toEqual(['222']);
+  });
+
+  it('leaves out the excluded and the blacklisted without looking them up', async () => {
     const banned = { id: GUEST_HOST_MEETUP_BLACKLIST[0], name: 'Banned' };
-    const d = deps([event('1', '2026-03-01T19:00:00-08:00', [A, B, banned])]);
+    const d = deps([...weekly(A, 25), ...weekly(B, 25), ...weekly(banned, 25)]);
     const { candidates, seen } = await promotionCandidates(d, new Set(['111']));
     expect(candidates.map((c) => c.meetupMemberId)).toEqual(['222']);
-    expect(d.pastHostedCount).not.toHaveBeenCalledWith('111');
-    expect(d.pastHostedCount).not.toHaveBeenCalledWith(banned.id);
+    expect(d.memberships).toHaveBeenCalledWith(['222']);
+    expect(d.pastHostedEvents).not.toHaveBeenCalledWith('111');
     // Still known by name, for the Community Hosts table.
     expect(seen.get('111')?.name).toBe('Ann');
   });
 
-  it('a count that fails leaves that host out and is counted, not the whole list', async () => {
-    const d = deps([event('1', '2026-03-01T19:00:00-08:00', [A, B])]);
-    d.pastHostedCount.mockRejectedValueOnce(new Error('meetup down'));
+  it('a host whose own lookup fails is left out and counted, not the whole list', async () => {
+    const d = deps([...weekly(A, 25), ...weekly(B, 25)]);
+    d.pastHostedEvents.mockRejectedValueOnce(new Error('meetup down'));
     const list = await promotionCandidates(d, new Set());
     expect(list.uncounted).toBe(1);
     expect(list.candidates).toHaveLength(1);
   });
 
-  it('the event read failing fails the list', async () => {
-    const d = deps([]);
+  it('the event or membership read failing fails the list', async () => {
+    const d = deps(weekly(A, 25));
     d.fetchGroupEvents.mockRejectedValueOnce(new Error('meetup down'));
     await expect(promotionCandidates(d, new Set())).rejects.toThrow(
       'meetup down',
     );
+    const e = deps(weekly(A, 25));
+    e.memberships.mockRejectedValueOnce(new Error('meetup down'));
+    await expect(promotionCandidates(e, new Set())).rejects.toThrow(
+      'meetup down',
+    );
+  });
+
+  it('nobody with enough events: no membership read at all', async () => {
+    const d = deps(weekly(A, 3));
+    const list = await promotionCandidates(d, new Set());
+    expect(list.candidates).toEqual([]);
+    expect(d.memberships).not.toHaveBeenCalled();
   });
 });
 

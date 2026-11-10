@@ -30,6 +30,7 @@ const ev = (
   dateTime,
   eventUrl: `https://www.meetup.com/g/events/${id}/`,
   type,
+  counted: true,
   hosts: [{ id: '4242', name: HOSTILE }],
 });
 
@@ -291,6 +292,44 @@ describe('host history', () => {
     expect(res.text).toMatch(/<strong>2026<\/strong>/);
     // Every row can be copied.
     expect(res.text.match(/>Copy this event<\/a/g)).toHaveLength(3);
+  });
+
+  it('counts only what counts, and shows the excluded on request', async () => {
+    const withExcluded = [
+      ...past,
+      {
+        ...ev('4', '2026-08-01T19:00:00-07:00', '[Open House] Pickleball'),
+        counted: false,
+      },
+      {
+        ...ev('5', '2026-07-01T19:00:00-07:00', 'Cancelled: Boba'),
+        counted: false,
+      },
+    ];
+    const req = await pagesApp(async () => withExcluded);
+    const sid = await signInWithDiscord(req);
+    const res = await req.get('/host/history').set('Cookie', sid);
+    expect(res.text).toContain('3 hosted events in all.');
+    expect(res.text).toContain('2 more');
+    expect(res.text).toMatch(
+      /href="\/host\/history\?year=2026&amp;all=1"\s*>Show excluded/,
+    );
+    expect(res.text).not.toContain('Pickleball');
+    expect(res.text).toContain('2 events in 2026.');
+
+    const all = await req.get('/host/history?all=1').set('Cookie', sid);
+    expect(all.text).toContain('3 hosted events in all.');
+    expect(all.text).toContain('Pickleball');
+    expect(all.text).toContain('Not counted: Open House');
+    expect(all.text).toContain('Not counted: cancelled');
+    expect(all.text).toMatch(
+      /href="\/host\/history\?year=2026"\s*>Hide excluded/,
+    );
+    // The map and the filters keep the toggle.
+    expect(all.text).toContain('4 events in 2026.');
+    expect(all.text).toContain(
+      'href="/host/history?type=games&amp;year=2026&amp;all=1"',
+    );
   });
 
   it('pages the map by year: earlier years link back, never past the first hosted year', async () => {

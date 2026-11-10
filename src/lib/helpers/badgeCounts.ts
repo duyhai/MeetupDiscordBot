@@ -3,6 +3,7 @@ import { Logger } from 'tslog';
 import Configuration from '../../configuration.js';
 import { GqlMeetupClient } from '../client/meetup/gqlClient.js';
 import { getPaginatedData } from '../client/meetup/paginationHelper.js';
+import { countsAsHosted } from './countedEvents.js';
 
 const logger = new Logger({ name: 'badgeCounts' });
 
@@ -21,7 +22,9 @@ export interface BadgeCounts {
  * dyno's memory quota and flooded the log badly enough to destroy retention.
  *
  * Attendance uses self.rsvps with rsvpStatus [YES, ATTENDED], the same statuses
- * the old per-event scan filtered on, so the counts keep their meaning.
+ * the old per-event scan filtered on, so the counts keep their meaning. It is
+ * a server-side total, so the shared counting rule cannot be applied to it
+ * without listing every RSVP; hosted events are listed and filtered.
  *
  * Note for anyone extending this: self.memberEvents looks like the natural
  * source but serves only UPCOMING events -- eventStatus: PAST returns nothing
@@ -47,7 +50,11 @@ export async function getBadgeCounts(
     return result.groupByUrlname.events;
   });
 
-  const counts = { hostedCount: hostedEvents.length, attendedCount };
+  // The shared rule: cancelled events and Open Houses are not hosted.
+  const counts = {
+    hostedCount: hostedEvents.filter(countsAsHosted).length,
+    attendedCount,
+  };
   logger.info(`Badge counts: ${JSON.stringify(counts)}`);
   return counts;
 }

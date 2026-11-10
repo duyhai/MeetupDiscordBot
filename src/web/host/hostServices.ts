@@ -34,6 +34,7 @@ import {
   logActivity,
   logAlert,
 } from '../../lib/helpers/discordLogger.js';
+import { countsAsHosted } from '../../lib/helpers/countedEvents.js';
 import { getBadges } from '../../lib/helpers/getBadges.js';
 import { getUserRoles } from '../../lib/helpers/getUserRoles.js';
 import { selfOnboardUser } from '../../lib/helpers/onboardUser.js';
@@ -149,10 +150,19 @@ export function hostResolveDeps(
         ).findByDiscordId(discordId)
       )?.meetupId ?? undefined,
     hasGuestHostRole: guestHost,
+    // Listed and filtered, not Meetup's totalCount: the shared rule leaves
+    // out cancelled events and Open Houses (countedEvents.ts).
     pastHostedCount: (meetupId) =>
-      withOrganizerMeetup(getClient(), (meetup) =>
-        meetup.getGroupEventsCount({ status: ['PAST'], hostId: meetupId }),
-      ),
+      withOrganizerMeetup(getClient(), async (meetup) => {
+        const nodes = await getPaginatedData(async (pagination) => {
+          const result = await meetup.getGroupEvents(pagination, {
+            status: ['PAST'],
+            hostId: meetupId,
+          });
+          return result.groupByUrlname.events;
+        });
+        return nodes.filter(countsAsHosted).length;
+      }),
     isPromoted: async (meetupId) =>
       (await PostgresPromotedHostRepository.instance()).isPromoted(meetupId),
   };

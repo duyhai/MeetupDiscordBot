@@ -2,7 +2,8 @@ import dayjs from 'dayjs';
 import { Client } from 'discord.js';
 
 import { getPaginatedData } from '../client/meetup/paginationHelper.js';
-import { GroupEventFilter } from '../client/meetup/types.js';
+import { EventStatus, GroupEventFilter } from '../client/meetup/types.js';
+import { countsAsHosted } from '../helpers/countedEvents.js';
 import { withOrganizerMeetup } from '../reports/organizerMeetup.js';
 import { tz } from '../../util/timezone.js';
 import { EventType, classifyEventType } from './eventTypes.js';
@@ -15,7 +16,17 @@ export interface HostEvent {
   eventUrl: string;
   type: EventType;
   hosts: { id: string; name: string }[];
+  /**
+   * Whether it counts as a hosted event (countedEvents.ts): not cancelled,
+   * not an Open House. Lists keep every event; counts and heat maps use
+   * countedOnly.
+   */
+  counted: boolean;
 }
+
+/** The events that count as hosted, in the order given. */
+export const countedOnly = (events: HostEvent[]): HostEvent[] =>
+  events.filter((e) => e.counted);
 
 export interface HostEventsDeps {
   fetchGroupEvents: (filter: GroupEventFilter) => Promise<HostEvent[]>;
@@ -151,16 +162,19 @@ interface RawEventNode {
   title: string;
   dateTime: string;
   eventUrl: string;
+  status?: EventStatus | null;
   eventHosts?: { member?: { id?: unknown; name?: unknown } | null }[] | null;
 }
 
 export function toHostEvent(node: RawEventNode): HostEvent {
+  const title = String(node.title ?? '');
   return {
     id: String(node.id),
-    title: String(node.title ?? ''),
+    title,
     dateTime: String(node.dateTime),
     eventUrl: String(node.eventUrl ?? ''),
-    type: classifyEventType(String(node.title ?? '')),
+    type: classifyEventType(title),
+    counted: countsAsHosted({ title, status: node.status ?? undefined }),
     hosts: (node.eventHosts ?? [])
       .map((h) => h?.member)
       .filter((m): m is { id?: unknown; name?: unknown } => Boolean(m))

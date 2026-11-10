@@ -268,6 +268,18 @@ export type GetMemberRsvpsInput = {
   withPaymentInfo?: boolean;
 };
 
+export interface GetGroupMembershipsByIdsResponse {
+  groupByUrlname: {
+    id: string;
+    memberships: {
+      edges: {
+        metadata: { status: string; joinTime: string } | null;
+        node: { id: string };
+      }[];
+    };
+  };
+}
+
 export type GetGroupMembersByIdsInput = {
   first: number;
   memberIds: number[];
