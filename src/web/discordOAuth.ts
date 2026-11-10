@@ -29,13 +29,19 @@ const provider = (redirectUri: string) =>
     redirectUri,
   );
 
+/**
+ * Sign-ins ask only to see who you are (identify). The host dashboard's
+ * "Verify on Discord" also asks guilds.join, so it can add the member to
+ * our server; no sign-in ever asks for that.
+ */
 export function buildDashboardLoginUrl(
   state: string,
   codeVerifier: string,
   redirectUri: string = dashboardRedirectUri(),
+  scopes: readonly ('identify' | 'guilds.join')[] = ['identify'],
 ): string {
   return provider(redirectUri)
-    .createAuthorizationURL(state, codeVerifier, ['identify'])
+    .createAuthorizationURL(state, codeVerifier, [...scopes])
     .toString();
 }
 

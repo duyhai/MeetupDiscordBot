@@ -1,9 +1,9 @@
-import { ButtonInteraction, CommandInteraction } from 'discord.js';
 import { Logger } from 'tslog';
 import { GUEST_HOST_BLACKLIST } from '../../constants.js';
 import { GqlMeetupClient } from '../client/meetup/gqlClient.js';
 import { getPaginatedData } from '../client/meetup/paginationHelper.js';
 import { addServerRole } from './onboardUser.js';
+import { VerifyContext } from './verifyContext.js';
 
 const logger = new Logger({ name: 'getUserRoles' });
 
@@ -14,10 +14,14 @@ const logger = new Logger({ name: 'getUserRoles' });
  */
 export async function getUserRoles(
   meetupClient: GqlMeetupClient,
-  interaction: CommandInteraction | ButtonInteraction,
+  {
+    guild,
+    userId,
+    username,
+  }: Pick<VerifyContext, 'guild' | 'userId' | 'username'>,
 ): Promise<string[]> {
   const rolesGranted: string[] = [];
-  logger.info(`Getting user roles for ${interaction.user.username}`);
+  logger.info(`Getting user roles for ${username}`);
 
   const membershipInfo = await meetupClient.getUserMembershipInfo();
   if (!membershipInfo.groupByUrlname.isMember) {
@@ -30,20 +34,18 @@ export async function getUserRoles(
     );
   }
 
-  const isBlacklisted = GUEST_HOST_BLACKLIST.includes(interaction.user.id);
+  const isBlacklisted = GUEST_HOST_BLACKLIST.includes(userId);
 
   if (
     !isBlacklisted &&
     membershipInfo.groupByUrlname.membershipMetadata.status === 'LEADER'
   ) {
-    await addServerRole(interaction.guild, interaction.user.id, 'organizer');
+    await addServerRole(guild, userId, 'organizer');
     rolesGranted.push('Organizer');
 
-    await addServerRole(interaction.guild, interaction.user.id, 'guest_host');
+    await addServerRole(guild, userId, 'guest_host');
     rolesGranted.push('Guest Host');
-    logger.info(
-      `Organizer and guest host roles added to: ${interaction.user.username}`,
-    );
+    logger.info(`Organizer and guest host roles added to: ${username}`);
   } else if (!isBlacklisted) {
     const userInfo = await meetupClient.getUserInfo();
     const getUserHostedEvents = await getPaginatedData(
@@ -57,12 +59,12 @@ export async function getUserRoles(
     );
 
     logger.info(
-      `Number of hosted events by ${interaction.user.username}: ${getUserHostedEvents.length}`,
+      `Number of hosted events by ${username}: ${getUserHostedEvents.length}`,
     );
     if (getUserHostedEvents.length > 0) {
-      await addServerRole(interaction.guild, interaction.user.id, 'guest_host');
+      await addServerRole(guild, userId, 'guest_host');
       rolesGranted.push('Guest Host');
-      logger.info(`Guest host role added to: ${interaction.user.username}`);
+      logger.info(`Guest host role added to: ${username}`);
     }
   }
   return rolesGranted;

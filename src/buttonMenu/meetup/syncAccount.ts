@@ -15,6 +15,7 @@ import { getBadges } from '../../lib/helpers/getBadges.js';
 import { getUserRoles } from '../../lib/helpers/getUserRoles.js';
 import { selfOnboardUser } from '../../lib/helpers/onboardUser.js';
 import { buildVerificationSummary } from '../../lib/helpers/verificationSummary.js';
+import { verifyContextOf } from '../../lib/helpers/verifyContext.js';
 import { discordCommandWrapper } from '../../util/discord.js';
 import { withMeetupClient } from '../../util/meetup.js';
 
@@ -44,14 +45,15 @@ export class MeetupSyncAccountCommands {
     await discordCommandWrapper(interaction, async () => {
       await withMeetupClient(interaction, async (meetupClient) => {
         await interaction.editReply({ content: 'Sit tight! Fetching data.' });
+        const member = verifyContextOf(interaction);
         const { meetupName, meetupMemberUrl } = await selfOnboardUser(
           meetupClient,
-          interaction,
+          member,
         );
-        const rolesGranted = await getUserRoles(meetupClient, interaction);
+        const rolesGranted = await getUserRoles(meetupClient, member);
         const { hostedCount, attendedCount } = await getBadges(
           meetupClient,
-          interaction,
+          member,
         );
         // One answer at the end, rather than a result message per step.
         await interaction.followUp({

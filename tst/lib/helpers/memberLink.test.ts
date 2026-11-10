@@ -36,6 +36,15 @@ const info = {
   meetupMemberUrl: 'https://www.meetup.com/members/1/',
 };
 
+/** The member a link is recorded for, as the Verify steps pass it. */
+function memberOf(userId = 'discord-1') {
+  return {
+    client: {},
+    userId,
+    username: 'testUser',
+  } as unknown as Parameters<typeof recordMeetupLink>[0];
+}
+
 function makeInteraction(userId = 'discord-1') {
   return {
     client: {},
@@ -59,7 +68,7 @@ describe('recordMeetupLink', () => {
 
   it('stores a new link and logs activity', async () => {
     await expect(
-      recordMeetupLink(makeInteraction(), info, 'self_onboard'),
+      recordMeetupLink(memberOf(), info, 'self_onboard'),
     ).resolves.toBe(true);
 
     const row = await repo.findByDiscordId('discord-1');
@@ -73,10 +82,10 @@ describe('recordMeetupLink', () => {
   });
 
   it('blocks when the Meetup account is linked to another Discord user', async () => {
-    await recordMeetupLink(makeInteraction('discord-1'), info, 'self_onboard');
+    await recordMeetupLink(memberOf('discord-1'), info, 'self_onboard');
 
     await expect(
-      recordMeetupLink(makeInteraction('discord-2'), info, 'sync_v2'),
+      recordMeetupLink(memberOf('discord-2'), info, 'sync_v2'),
     ).rejects.toThrow(DuplicateMeetupAccountError);
 
     expect(await repo.findByDiscordId('discord-2')).toBeUndefined();
@@ -84,10 +93,10 @@ describe('recordMeetupLink', () => {
   });
 
   it('forgets the blocked account, so the retry asks which account to connect', async () => {
-    await recordMeetupLink(makeInteraction('discord-1'), info, 'self_onboard');
+    await recordMeetupLink(memberOf('discord-1'), info, 'self_onboard');
 
     await expect(
-      recordMeetupLink(makeInteraction('discord-2'), info, 'sync_v2'),
+      recordMeetupLink(memberOf('discord-2'), info, 'sync_v2'),
     ).rejects.toThrow(DuplicateMeetupAccountError);
 
     // Kept, the saved connection would be reused silently on every retry and
@@ -97,11 +106,11 @@ describe('recordMeetupLink', () => {
   });
 
   it('names the blocked account and says how to switch to the right one', async () => {
-    await recordMeetupLink(makeInteraction('discord-1'), info, 'self_onboard');
+    await recordMeetupLink(memberOf('discord-1'), info, 'self_onboard');
 
     let message = '';
     try {
-      await recordMeetupLink(makeInteraction('discord-2'), info, 'sync_v2');
+      await recordMeetupLink(memberOf('discord-2'), info, 'sync_v2');
     } catch (error: unknown) {
       message = (error as Error).message;
     }
@@ -115,13 +124,13 @@ describe('recordMeetupLink', () => {
   });
 
   it('blocks a concurrent duplicate link that slips past the pre-check', async () => {
-    await recordMeetupLink(makeInteraction('discord-1'), info, 'self_onboard');
+    await recordMeetupLink(memberOf('discord-1'), info, 'self_onboard');
     // Simulate the check-then-write race: the pre-check misses the row that
     // the repository's unique constraint will still reject.
     vi.spyOn(repo, 'findByMeetupId').mockResolvedValue(undefined);
 
     await expect(
-      recordMeetupLink(makeInteraction('discord-2'), info, 'sync_v2'),
+      recordMeetupLink(memberOf('discord-2'), info, 'sync_v2'),
     ).rejects.toThrow(DuplicateMeetupAccountError);
 
     expect(await repo.findByDiscordId('discord-2')).toBeUndefined();
@@ -132,9 +141,9 @@ describe('recordMeetupLink', () => {
   });
 
   it('alerts (but allows) when a user switches Meetup accounts', async () => {
-    await recordMeetupLink(makeInteraction(), info, 'self_onboard');
+    await recordMeetupLink(memberOf(), info, 'self_onboard');
     await recordMeetupLink(
-      makeInteraction(),
+      memberOf(),
       { ...info, meetupId: 'meetup-2' },
       'self_onboard',
     );
@@ -146,11 +155,19 @@ describe('recordMeetupLink', () => {
   });
 
   it('re-sync of the same account is activity only', async () => {
-    await recordMeetupLink(makeInteraction(), info, 'self_onboard');
-    await recordMeetupLink(makeInteraction(), info, 'self_onboard');
+    await recordMeetupLink(memberOf(), info, 'self_onboard');
+    await recordMeetupLink(memberOf(), info, 'self_onboard');
 
     expect(vi.mocked(discordLogger.logAlert)).not.toHaveBeenCalled();
     expect(vi.mocked(discordLogger.logActivity)).toHaveBeenCalledTimes(2);
+  });
+
+  it('a link from the website keeps web_link and posts no second activity line', async () => {
+    await recordMeetupLink(memberOf(), info, 'web_link');
+    expect((await repo.findByDiscordId('discord-1'))?.onboardMethod).toBe(
+      'web_link',
+    );
+    expect(discordLogger.logActivity).not.toHaveBeenCalled();
   });
 
   it('swallows repository failures and alerts instead of throwing', async () => {
@@ -159,7 +176,7 @@ describe('recordMeetupLink', () => {
     );
 
     await expect(
-      recordMeetupLink(makeInteraction(), info, 'self_onboard'),
+      recordMeetupLink(memberOf(), info, 'self_onboard'),
     ).resolves.toBe(false);
     expect(vi.mocked(discordLogger.logAlert)).toHaveBeenCalledTimes(1);
   });
@@ -189,7 +206,7 @@ describe('recordManualOnboard', () => {
   });
 
   it('does not overwrite an existing linked row', async () => {
-    await recordMeetupLink(makeInteraction('target-1'), info, 'self_onboard');
+    await recordMeetupLink(memberOf('target-1'), info, 'self_onboard');
     vi.clearAllMocks();
     vi.mocked(memberRepository.ApplicationMemberRepository).mockResolvedValue(
       repo,

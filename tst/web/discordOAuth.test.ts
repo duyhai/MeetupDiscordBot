@@ -41,6 +41,18 @@ describe('dashboard Discord OAuth', () => {
     expect(url.searchParams.get('redirect_uri')).toBe(dashboardRedirectUri());
   });
 
+  it('asks guilds.join only when the caller says so (Verify on Discord)', () => {
+    const verify = new URL(
+      buildDashboardLoginUrl(
+        'state-2',
+        'v'.repeat(43),
+        dashboardRedirectUri(),
+        ['identify', 'guilds.join'],
+      ),
+    );
+    expect(verify.searchParams.get('scope')).toBe('identify guilds.join');
+  });
+
   it('exchanges a code for an access token', async () => {
     const verifier = 'v'.repeat(43);
     let seen = '';

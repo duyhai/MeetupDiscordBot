@@ -10,6 +10,12 @@ import { LogEntry, logActivity } from '../../lib/helpers/discordLogger.js';
 import { withOrganizerMeetup } from '../../lib/reports/organizerMeetup.js';
 import { PostgresEventRequestRepository } from '../../lib/repositories/postgresEventRequestRepository.js';
 import { getRandomTip } from '../../util/tips.js';
+import {
+  forgetMeetupTokens,
+  getUsableMeetupTokens,
+  moveMeetupTokens,
+  storeMeetupTokens,
+} from '../../lib/helpers/meetupTokens.js';
 import { ApplicationCache } from '../../util/cache.js';
 import { ApplicationMemberRepository } from '../../util/memberRepository.js';
 import { baseSecurityHeaders } from '../dashboardRouter.js';
@@ -27,9 +33,15 @@ import { registerHostPages } from './hostPages.js';
 import { createHostRouter } from './hostRouter.js';
 import { registerCreatePages } from './createPage.js';
 import {
+  discordUsername,
+  ensureServerMember,
+  isServerMember,
+} from './serverJoin.js';
+import {
   alertVia,
   hostResolveDeps,
   productionPublisher,
+  verifyRunner,
 } from './hostServices.js';
 import { buildHostMeetupAuthUrl, fetchMeetupSelf } from './meetupSignIn.js';
 
@@ -103,8 +115,7 @@ export function hostRouterFromEnv(
     },
     meetup: {
       buildAuthUrl: buildHostMeetupAuthUrl,
-      exchangeCode: async (code) =>
-        (await exchangeMeetupCode(code)).accessToken,
+      exchangeCode: exchangeMeetupCode,
       fetchSelf: fetchMeetupSelf,
     },
     sessionSecret: secret,
@@ -114,6 +125,35 @@ export function hostRouterFromEnv(
     alert: alertVia(() => discordClient),
     // The same store Verify writes and resolveHost reads.
     members: () => ApplicationMemberRepository(),
+    discordVerifyUrl: (state, verifier) =>
+      buildDashboardLoginUrl(state, verifier, hostRedirectUri(), [
+        'identify',
+        'guilds.join',
+      ]),
+    joinServer: async (discordUserId, accessToken) => {
+      const { joined, pending } = await ensureServerMember(
+        () => discordClient,
+        discordUserId,
+        accessToken,
+      );
+      return { joined, pending };
+    },
+    runVerify: verifyRunner(() => discordClient),
+    isServerMember: (discordUserId) =>
+      isServerMember(() => discordClient, discordUserId),
+    discordUsername: (discordUserId) =>
+      discordUsername(() => discordClient, discordUserId),
+    // The bot's member token store: the same keys, TTL and refresh.
+    meetupTokens: {
+      keep: async (owner, tokens) =>
+        storeMeetupTokens(await ApplicationCache(), owner, tokens),
+      usable: async (owner) =>
+        getUsableMeetupTokens(await ApplicationCache(), owner),
+      move: async (from, to) =>
+        moveMeetupTokens(await ApplicationCache(), from, to),
+      forget: async (owner) =>
+        forgetMeetupTokens(await ApplicationCache(), owner),
+    },
     pages: (router) => {
       registerHostPages(router, {
         events,

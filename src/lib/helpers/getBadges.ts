@@ -1,9 +1,9 @@
-import { ButtonInteraction, CommandInteraction } from 'discord.js';
 import { Logger } from 'tslog';
 import { RewardRoleLevels } from '../../constants.js';
 import { GqlMeetupClient } from '../client/meetup/gqlClient.js';
 import { BadgeCounts, getBadgeCounts } from './badgeCounts.js';
 import { syncRewardRoles } from './onboardUser.js';
+import { VerifyContext } from './verifyContext.js';
 
 const logger = new Logger({ name: 'getUserRoles' });
 
@@ -13,10 +13,13 @@ const logger = new Logger({ name: 'getUserRoles' });
  */
 export async function getBadges(
   meetupClient: GqlMeetupClient,
-  interaction: CommandInteraction | ButtonInteraction,
+  {
+    guild,
+    userId,
+    username,
+  }: Pick<VerifyContext, 'guild' | 'userId' | 'username'>,
 ): Promise<BadgeCounts> {
-  logger.info(`Getting badges for ${interaction.user.username}`);
-  const { guild, user } = interaction;
+  logger.info(`Getting badges for ${username}`);
 
   const { hostedCount, attendedCount } = await getBadgeCounts(meetupClient);
   logger.info(JSON.stringify({ hostedCount, attendedCount }));
@@ -26,7 +29,7 @@ export async function getBadges(
   const attendanceRewards = levels.find((num) => attendedCount >= num);
   logger.info(JSON.stringify({ hostingRewards, attendanceRewards }));
 
-  await syncRewardRoles(guild, user.id, {
+  await syncRewardRoles(guild, userId, {
     hosting: hostingRewards,
     attendance: attendanceRewards,
   });

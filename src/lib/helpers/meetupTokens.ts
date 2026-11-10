@@ -31,19 +31,62 @@ export const MEETUP_TOKEN_TTL_SEC = 30 * 24 * 60 * 60;
  */
 const EXPIRY_SKEW_MS = 60 * 1000;
 
-export const meetupTokenKey = (discordUserId: string) =>
-  `${discordUserId}-meetup-tokens`;
+/**
+ * Whose Meetup token set this is. A plain string is a Discord user id: the
+ * bot's members, keyed exactly as they always were. `{ meetup }` is a host
+ * dashboard sign-in whose Meetup account has no Discord link yet; once it
+ * is linked, the set moves under the Discord id (moveMeetupTokens).
+ *
+ * Member tokens serve the Verify steps only: the bot's commands and, on the
+ * host dashboard, "Verify on Discord". Everything else on the dashboards
+ * reads Meetup with the organizer token.
+ */
+export type MeetupTokenOwner = string | { meetup: string };
+
+export function meetupTokenKey(owner: MeetupTokenOwner): string {
+  return typeof owner === 'string'
+    ? `${owner}-meetup-tokens`
+    : `meetup:${owner.meetup}-meetup-tokens`;
+}
+
+/** For logs: who a set belongs to, ids only. */
+function ownerLabel(owner: MeetupTokenOwner): string {
+  return typeof owner === 'string'
+    ? `Discord user ${owner}`
+    : `Meetup member ${owner.meetup}`;
+}
 
 export async function storeMeetupTokens(
   cache: KeyValueCache,
-  discordUserId: string,
+  owner: MeetupTokenOwner,
   tokens: Tokens,
 ): Promise<void> {
   await cache.set(
-    meetupTokenKey(discordUserId),
+    meetupTokenKey(owner),
     JSON.stringify(tokens),
     MEETUP_TOKEN_TTL_SEC,
   );
+}
+
+/**
+ * Moves a set to a new owner (a host dashboard sign-in's set, once the
+ * Meetup account is linked to a Discord account), replacing whatever the
+ * new owner had: it is the newest authorization. Nothing to move is a
+ * no-op. Not atomic (read, write, remove): a sign-in writing the old key in
+ * between would lose its set, which only costs that member one more
+ * Meetup step.
+ */
+export async function moveMeetupTokens(
+  cache: KeyValueCache,
+  from: MeetupTokenOwner,
+  to: MeetupTokenOwner,
+): Promise<void> {
+  const raw = await cache.get(meetupTokenKey(from));
+  if (!raw) {
+    return;
+  }
+  await cache.set(meetupTokenKey(to), raw, MEETUP_TOKEN_TTL_SEC);
+  await cache.remove(meetupTokenKey(from));
 }
 
 /**
@@ -53,9 +96,9 @@ export async function storeMeetupTokens(
  */
 export async function forgetMeetupTokens(
   cache: KeyValueCache,
-  discordUserId: string,
+  owner: MeetupTokenOwner,
 ): Promise<void> {
-  await cache.remove(meetupTokenKey(discordUserId));
+  await cache.remove(meetupTokenKey(owner));
 }
 
 function parseTokens(rawTokens: string): Tokens | undefined {
@@ -143,9 +186,9 @@ async function removeUnlessReplaced(
 
 async function refreshStoredTokens(
   cache: KeyValueCache,
-  discordUserId: string,
+  owner: MeetupTokenOwner,
 ): Promise<Tokens | undefined> {
-  const key = meetupTokenKey(discordUserId);
+  const key = meetupTokenKey(owner);
   // Re-read rather than trust the caller's copy: a refresh that finished
   // between the caller's read and this one has already replaced the set, and
   // if Meetup rotates refresh tokens the caller's copy is now dead.
@@ -167,7 +210,7 @@ async function refreshStoredTokens(
     const failure = describeRefreshFailure(error);
     if (isRejectedGrant(error)) {
       logger.warn(
-        `Could not refresh Meetup tokens for Discord user ${discordUserId} ` +
+        `Could not refresh Meetup tokens for ${ownerLabel(owner)} ` +
           `(${failure}); the grant was rejected, so they will be asked to reconnect`,
       );
       // A rejection is also what the loser of a deploy-overlap race sees,
@@ -175,7 +218,7 @@ async function refreshStoredTokens(
       return removeUnlessReplaced(cache, key, rawTokens);
     }
     logger.warn(
-      `Could not refresh Meetup tokens for Discord user ${discordUserId} ` +
+      `Could not refresh Meetup tokens for ${ownerLabel(owner)} ` +
         `(${failure}); keeping the connection for the next attempt`,
     );
     return undefined;
@@ -195,11 +238,11 @@ async function refreshStoredTokens(
       // connection back. Replaced: run on the replacement.
       return replacement;
     }
-    await storeMeetupTokens(cache, discordUserId, refreshed);
-    logger.info(`Refreshed Meetup tokens for Discord user ${discordUserId}`);
+    await storeMeetupTokens(cache, owner, refreshed);
+    logger.info(`Refreshed Meetup tokens for ${ownerLabel(owner)}`);
   } catch (error: unknown) {
     logger.error(
-      `Meetup tokens for Discord user ${discordUserId} were refreshed but ` +
+      `Meetup tokens for ${ownerLabel(owner)} were refreshed but ` +
         'could not be stored; this command continues on the fresh token, ' +
         'but if Meetup rotates refresh tokens the stored set is now stale: ' +
         `${error instanceof Error ? error.name : 'unknown error'}`,
@@ -225,9 +268,10 @@ const refreshesInFlight = new Map<string, Promise<Tokens | undefined>>();
  */
 export async function getUsableMeetupTokens(
   cache: KeyValueCache,
-  discordUserId: string,
+  owner: MeetupTokenOwner,
 ): Promise<Tokens | undefined> {
-  const rawTokens = await cache.get(meetupTokenKey(discordUserId));
+  const key = meetupTokenKey(owner);
+  const rawTokens = await cache.get(key);
   if (!rawTokens) {
     return undefined;
   }
@@ -236,12 +280,12 @@ export async function getUsableMeetupTokens(
     return tokens;
   }
 
-  let refresh = refreshesInFlight.get(discordUserId);
+  let refresh = refreshesInFlight.get(key);
   if (refresh === undefined) {
-    refresh = refreshStoredTokens(cache, discordUserId).finally(() => {
-      refreshesInFlight.delete(discordUserId);
+    refresh = refreshStoredTokens(cache, owner).finally(() => {
+      refreshesInFlight.delete(key);
     });
-    refreshesInFlight.set(discordUserId, refresh);
+    refreshesInFlight.set(key, refresh);
   }
   return refresh;
 }

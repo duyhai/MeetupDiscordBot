@@ -8,6 +8,7 @@ import {
   recordMeetupLink,
 } from '../../../src/lib/helpers/memberLink.js';
 import { selfOnboardUser } from '../../../src/lib/helpers/onboardUser.js';
+import { verifyContextOf } from '../../../src/lib/helpers/verifyContext.js';
 
 vi.mock('../../../src/lib/helpers/memberLink.js', async (importOriginal) => ({
   ...(await importOriginal<
@@ -85,13 +86,15 @@ describe('self link', () => {
   it('records the link, then gives the lounge role and lifts Onboarding', async () => {
     const { interaction, guildMember, rolesFetch } = fakeInteraction();
 
-    await expect(selfOnboardUser(meetupClient, interaction)).resolves.toEqual({
+    await expect(
+      selfOnboardUser(meetupClient, verifyContextOf(interaction)),
+    ).resolves.toEqual({
       meetupName: 'jane doe',
       meetupMemberUrl: 'https://www.meetup.com/members/300/',
     });
 
     expect(recordMeetupLink).toHaveBeenCalledWith(
-      interaction,
+      expect.objectContaining({ userId: USER_ID, username: 'member' }),
       {
         meetupId: '300',
         meetupName: 'jane doe',
@@ -117,7 +120,7 @@ describe('self link', () => {
   it('looks for no Reverify role: roles are fetched only by id', async () => {
     const { interaction, guildMember, rolesFetch } = fakeInteraction();
 
-    await selfOnboardUser(meetupClient, interaction);
+    await selfOnboardUser(meetupClient, verifyContextOf(interaction));
 
     for (const call of rolesFetch.mock.calls) {
       expect(call).toHaveLength(1);
@@ -138,7 +141,7 @@ describe('self link', () => {
     vi.mocked(recordMeetupLink).mockResolvedValueOnce(false);
     const { interaction, guildMember } = fakeInteraction();
 
-    await selfOnboardUser(meetupClient, interaction);
+    await selfOnboardUser(meetupClient, verifyContextOf(interaction));
 
     expect(guildMember.roles.remove).toHaveBeenCalledWith({
       id: SERVER_ROLES.onboarding,
@@ -151,9 +154,9 @@ describe('self link', () => {
     );
     const { interaction, guildMember } = fakeInteraction();
 
-    await expect(selfOnboardUser(meetupClient, interaction)).rejects.toThrow(
-      DuplicateMeetupAccountError,
-    );
+    await expect(
+      selfOnboardUser(meetupClient, verifyContextOf(interaction)),
+    ).rejects.toThrow(DuplicateMeetupAccountError);
 
     expect(guildMember.roles.add).not.toHaveBeenCalled();
     expect(guildMember.roles.remove).not.toHaveBeenCalled();
