@@ -31,7 +31,12 @@ const trivia = ev('2', '2026-05-10T19:00:00-07:00', 'Trivia');
 const hotPot = ev('3', '2026-11-20T19:00:00-08:00', 'Hot Pot');
 
 const page = <T>(nodes: T[]) => ({
-  pageInfo: { hasNextPage: false, endCursor: null as string | null },
+  pageInfo: {
+    hasNextPage: false,
+    hasPreviousPage: false,
+    startCursor: null as string | null,
+    endCursor: null as string | null,
+  },
   totalCount: nodes.length,
   edges: nodes.map((node) => ({ node })),
 });
@@ -108,7 +113,7 @@ function fakeDeps({
   const organizerRsvps = vi.fn((_meetupId: string) =>
     Promise.resolve<EventSummary[] | undefined>(events),
   );
-  const onProgress = vi.fn(() => Promise.resolve());
+  const onProgress = vi.fn((_message: string) => Promise.resolve());
   const deps: BuildDeps = {
     meetup: { getSelfPastRsvpEvents, getGroupEvents, getEventRsvps },
     organizerRsvps,
