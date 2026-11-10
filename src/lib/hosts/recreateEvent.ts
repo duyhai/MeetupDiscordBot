@@ -104,6 +104,12 @@ export interface RecreateDeps {
   alert: (entry: LogEntry) => Promise<unknown>;
   /** The activity log; fire and forget. */
   audit: (entry: LogEntry) => Promise<unknown>;
+  /**
+   * True the first time `key` is seen within `ttlSec` (Redis exclusive_set):
+   * how the stale-recreation alert is said once a day per event. Throws
+   * when Redis cannot answer.
+   */
+  firstWithin: (key: string, ttlSec: number) => Promise<boolean>;
 }
 
 /**
@@ -143,11 +149,17 @@ export function surelyNotCreated(error: unknown): boolean {
     return true;
   }
   if (error instanceof ClientError) {
-    const { status } = error.response;
-    return status >= 400 && status < 500;
+    // A ClientError built without a response says nothing about Meetup.
+    const status = (error.response as { status?: unknown } | undefined)?.status;
+    return typeof status === 'number' && status >= 400 && status < 500;
   }
   return false;
 }
+
+/** The stale-recreation alert's once-a-day key, per old event. */
+export const staleRecreationAlertKey = (oldEventId: string) =>
+  `recreate-stale-alert:${oldEventId}`;
+export const STALE_ALERT_TTL_SEC = 24 * 60 * 60;
 
 /**
  * Whether the page may offer "Recreate and announce" for this event, and
@@ -222,6 +234,17 @@ export async function recreateAndAnnounce(
     return { code: 'recreate-in-progress' };
   }
   if (claim === 'stale') {
+    // Once a day per event: every click after an ambiguous create lands
+    // here. Redis failing says it anyway: this alert is worth a repeat.
+    const first = await deps
+      .firstWithin(staleRecreationAlertKey(old.id), STALE_ALERT_TTL_SEC)
+      .catch((error: unknown) => {
+        logger.warn(`Stale-alert dedupe failed: ${errorName(error)}`);
+        return true;
+      });
+    if (!first) {
+      return { code: 'recreate-needs-check' };
+    }
     tell({
       title: 'A recreation died mid-way: check Meetup for a copy',
       description:

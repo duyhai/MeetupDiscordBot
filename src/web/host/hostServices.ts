@@ -456,6 +456,8 @@ export function productionAnnouncer(
       const client = getClient();
       return client ? logActivity(client, entry) : false;
     },
+    firstWithin: async (key, ttlSec) =>
+      (await ApplicationCache()).exclusive_set(key, '1', ttlSec),
   };
   return {
     announce: (host, meetupEventId, hooks) =>
