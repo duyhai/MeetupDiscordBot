@@ -245,8 +245,48 @@ header: Auto follows the device's setting; a choice is kept in that browser.
   co-hosted events count, and so does an event that has started but not
   ended.
 - *Builder's call:* whether regular hosts can announce before approval
-  (they can't; the event doesn't exist yet) and whether there's a cool-down
-  or time window. Keep it simple.
+  (they can't; the event doesn't exist yet).
+- **Guardrails (leadership, Stacey and Hai, 2026-11-10;
+  `src/lib/hosts/announceSchedule.ts`):**
+  - Pre-checks before anything is sent: refused while RSVPs are not open
+    (Meetup's `rsvpSettings.rsvpsClosed` and `rsvpState`; when Meetup gives
+    neither, the host is told to check on Meetup, never treated as open);
+    refused when the event is within 7 days of its start and was created
+    more than 7 days before it (Meetup's own rule, checked from
+    `Event.createdTime`, which the API exposes). More than 3 weeks out is a
+    warning by the button, not a block. The guidelines are shown by the
+    button: open RSVPs first, 2–3 weeks ahead, space out from other
+    announcements, not 10–4 Mon–Fri.
+  - Hold and spacing (Meetup emails the group per announcement, not as a
+    digest): a request made 10:00–16:00 Mon–Fri Pacific is held until 16:00;
+    anything within 30 minutes of another announcement (held, sending or
+    sent) goes 30 minutes after it, and a push that lands in the hold is
+    held again. An event starting within 3 days skips both. A held
+    announcement is a `held` row with `due_at` in `event_announcements`;
+    the page shows "scheduled for …" and any host of the event can cancel
+    it. A tick every minute (`announceTick.ts`: Redis lease,
+    compare-and-set claim per row, so a re-tick or a restart never sends
+    twice) sends at most one due row per tick and defers a row that would
+    go within 30 minutes of the last one actually sent; a due row that
+    cannot be read (Meetup down, organizer login gone) stays held and is
+    alerted once a day once it is 15 minutes late. Plain alert on send and
+    on failure. Approved website requests are untouched.
+  - **Recreate and announce**, for the 7-day refusal, offered only when
+    nobody but the hosts has RSVPed (YES or waitlist): claim the old event
+    in `event_recreations` (so two clicks make one copy), copy it through
+    the copy path's settings (title verbatim, description, time, all
+    hosts, limits, photo, venue, directions), create it with the organizer
+    credential (no approval: the content is unchanged; a plain alert and an
+    activity line still go out), announce the copy under the same hold
+    rules, then cancel the old event (Meetup's `deleteEvent` with
+    `removeFromCalendar: false`, which its schema documents as cancel;
+    never a delete). The cancel step is behind `ANNOUNCE_RECREATE_CANCEL=1`
+    until Hai has tried it on a throwaway event; off, the old event is left
+    and the alert asks leadership to cancel it by hand. A failure before
+    the copy exists releases the claim and leaves the old event untouched; a
+    copy whose announcement did not go out also leaves the old one in
+    place, and the alert says both exist. A dropped featured photo is said
+    in the alert.
 
 ## No-shows
 

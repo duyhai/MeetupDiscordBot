@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   postRequestToChannel,
   productionDecisionDeps,
+  recreateCancelEnabled,
   requestsChannelId,
 } from '../../../src/web/host/hostServices.js';
 import { eventRequestRow } from '../../web/routes/pageFakes.js';
@@ -80,5 +81,20 @@ describe('productionDecisionDeps', () => {
     expect(first.refusals.take('223456789012345678')).toBe(true);
     expect(first.refusals.take('223456789012345678')).toBe(false);
     expect(first.refusals.take('323456789012345678')).toBe(true);
+  });
+});
+
+describe('recreateCancelEnabled', () => {
+  it('is on only with ANNOUNCE_RECREATE_CANCEL=1', () => {
+    expect(recreateCancelEnabled({})).toBe(false);
+    expect(recreateCancelEnabled({ ANNOUNCE_RECREATE_CANCEL: '0' })).toBe(
+      false,
+    );
+    expect(recreateCancelEnabled({ ANNOUNCE_RECREATE_CANCEL: 'true' })).toBe(
+      false,
+    );
+    expect(recreateCancelEnabled({ ANNOUNCE_RECREATE_CANCEL: ' 1 ' })).toBe(
+      true,
+    );
   });
 });

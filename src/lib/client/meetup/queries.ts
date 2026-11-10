@@ -345,6 +345,34 @@ export const getEventForCopy = gql`
   }
 `;
 
+/**
+ * What the announce pre-checks need: when the event starts and was
+ * created, whether RSVPs are open (rsvpState as the organizer login sees
+ * it), and the hosts for the alerts. No description, no RSVPs.
+ */
+export const getEventForAnnounce = gql`
+  query ($eventId: ID!) {
+    event(id: $eventId) {
+      id
+      title
+      eventUrl
+      dateTime
+      createdTime
+      rsvpState
+      rsvpSettings {
+        rsvpsClosed
+      }
+      status
+      eventHosts {
+        member {
+          id
+          name
+        }
+      }
+    }
+  }
+`;
+
 export const getEvent = gql`
   query ($eventId: ID!) {
     event(id: $eventId) {

@@ -71,3 +71,22 @@ export const announceEvent = gql`
     }
   }
 `;
+
+/**
+ * removeFromCalendar: false cancels the event (Meetup's own words: "If set
+ * to false, this operation cancels the event instead of completely removing
+ * it from the group's calendar"); true deletes it. The dashboard only ever
+ * cancels.
+ */
+export const deleteEvent = gql`
+  mutation ($input: DeleteEventInput!) {
+    deleteEvent(input: $input) {
+      success
+      errors {
+        code
+        field
+        message
+      }
+    }
+  }
+`;
