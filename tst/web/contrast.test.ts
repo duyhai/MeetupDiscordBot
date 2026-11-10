@@ -2,6 +2,9 @@ import { describe, expect, it } from 'vitest';
 
 import { CHART_COLORS } from '../../src/web/charts.js';
 import { STYLE } from '../../src/web/pages.js';
+import { PALETTES as PALETTE_LIST } from '../../src/web/theme.js';
+
+const PALETTE_IDS = PALETTE_LIST.map((p) => p.id);
 
 /**
  * WCAG 2.x contrast for the dashboard's colour tokens, read out of the one
@@ -33,6 +36,38 @@ export function themeTokens(css: string): { light: Tokens; dark: Tokens } {
     );
   }
   return { light: parseTokens(light), dark: parseTokens(dark) };
+}
+
+/**
+ * Every palette's light and dark tokens: the default (no data-palette) and
+ * each `:root[data-palette="…"]` block, whose dark tokens must likewise
+ * appear twice (the media query and data-theme="dark") and match.
+ */
+export function paletteTokens(
+  css: string,
+): Record<string, { light: Tokens; dark: Tokens }> {
+  const out: Record<string, { light: Tokens; dark: Tokens }> = {
+    night: themeTokens(css),
+  };
+  for (const m of css.matchAll(
+    /:root\[data-palette="([a-z]+)"\]\{([^}]*)\}/g,
+  )) {
+    const name = m[1];
+    const esc = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const dark = new RegExp(
+      `@media \\(prefers-color-scheme:\\s*dark\\)\\{:root:not\\(\\[data-theme="light"\\]\\)\\[data-palette="${esc}"\\]\\{([^}]*)\\}`,
+    ).exec(css)?.[1];
+    const chosenDark = new RegExp(
+      `:root\\[data-theme="dark"\\]\\[data-palette="${esc}"\\]\\{([^}]*)\\}`,
+    ).exec(css)?.[1];
+    if (!dark || chosenDark !== dark) {
+      throw new Error(
+        `palette ${name} has no dark block, or two dark blocks that differ`,
+      );
+    }
+    out[name] = { light: parseTokens(m[2]), dark: parseTokens(dark) };
+  }
+  return out;
 }
 
 function luminance(hex: string): number {
@@ -117,7 +152,8 @@ const UI_PAIRS: [string, string][] = [
   ['attn', 'attn-soft'],
 ];
 
-const THEMES = themeTokens(STYLE.value);
+const PALETTES = paletteTokens(STYLE.value);
+const THEMES = PALETTES.night;
 
 describe('colour tokens', () => {
   it('parses the known reference pair (#777 on white is 4.48:1)', () => {
@@ -132,6 +168,15 @@ describe('colour tokens', () => {
     expect(Object.keys(THEMES.light).length).toBeGreaterThan(15);
   });
 
+  it('offers the four palettes the header picker lists, each with every colour token', () => {
+    expect(Object.keys(PALETTES).sort()).toEqual([...PALETTE_IDS].sort());
+    const keys = Object.keys(THEMES.light).sort();
+    for (const [name, p] of Object.entries(PALETTES)) {
+      expect(Object.keys(p.light).sort(), `${name} light`).toEqual(keys);
+      expect(Object.keys(p.dark).sort(), `${name} dark`).toEqual(keys);
+    }
+  });
+
   it('switches to the dark scheme with color-scheme: dark, unless light was chosen', () => {
     expect(STYLE.value).toMatch(
       /@media \(prefers-color-scheme:\s*dark\)\{:root:not\(\[data-theme="light"\]\)\{[^}]*color-scheme:\s*dark/,
@@ -141,70 +186,74 @@ describe('colour tokens', () => {
     );
   });
 
-  describe('charts', () => {
-    /** The token a stylesheet rule on `selector` sets `prop` to. */
-    const ruleToken = (selector: string, prop: string) => {
-      const esc = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      const rule = new RegExp(`(?:^|[}\\s])${esc}\\{([^}]*)\\}`).exec(
-        STYLE.value,
-      )?.[1];
-      return new RegExp(`${prop}:var\\(--([a-z0-9-]+)\\)`).exec(
-        rule ?? '',
-      )?.[1];
-    };
+  describe.each(Object.entries(PALETTES))('palette %s', (_name, THEMES) => {
+    describe('charts', () => {
+      /** The token a stylesheet rule on `selector` sets `prop` to. */
+      const ruleToken = (selector: string, prop: string) => {
+        const esc = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const rule = new RegExp(`(?:^|[}\\s])${esc}\\{([^}]*)\\}`).exec(
+          STYLE.value,
+        )?.[1];
+        return new RegExp(`${prop}:var\\(--([a-z0-9-]+)\\)`).exec(
+          rule ?? '',
+        )?.[1];
+      };
 
-    it.each(['light', 'dark'] as const)(
-      '%s: chart text is themed and meets 4.5:1 on --surface and --bg',
-      (mode) => {
-        const token = ruleToken('svg.chart text', 'fill');
-        expect(token, 'svg.chart text{fill:var(--…)}').toBeDefined();
-        const t = THEMES[mode];
-        expect(contrast(t[token ?? ''], t.surface)).toBeGreaterThanOrEqual(4.5);
-        expect(contrast(t[token ?? ''], t.bg)).toBeGreaterThanOrEqual(4.5);
-      },
-    );
-
-    describe.each(['light', 'dark'] as const)('%s', (mode) => {
-      it.each(CHART_COLORS.map((c, i) => [i + 1, c] as const))(
-        'series %i (%s) meets 3:1 on --surface',
-        (_i, color) => {
-          expect(contrast(color, THEMES[mode].surface)).toBeGreaterThanOrEqual(
-            3,
+      it.each(['light', 'dark'] as const)(
+        '%s: chart text is themed and meets 4.5:1 on --surface and --bg',
+        (mode) => {
+          const token = ruleToken('svg.chart text', 'fill');
+          expect(token, 'svg.chart text{fill:var(--…)}').toBeDefined();
+          const t = THEMES[mode];
+          expect(contrast(t[token ?? ''], t.surface)).toBeGreaterThanOrEqual(
+            4.5,
           );
+          expect(contrast(t[token ?? ''], t.bg)).toBeGreaterThanOrEqual(4.5);
+        },
+      );
+
+      describe.each(['light', 'dark'] as const)('%s', (mode) => {
+        it.each(CHART_COLORS.map((c, i) => [i + 1, c] as const))(
+          'series %i (%s) meets 3:1 on --surface',
+          (_i, color) => {
+            expect(
+              contrast(color, THEMES[mode].surface),
+            ).toBeGreaterThanOrEqual(3);
+          },
+        );
+      });
+
+      it('keeps series 3 (green) well apart in lightness from series 1 and 2', () => {
+        // Red-green and blue-green deficiencies mostly leave lightness, so
+        // the first three series must not share it.
+        const [blurple, coral, green] = CHART_COLORS.map(lightness);
+        expect(Math.abs(green - blurple)).toBeGreaterThanOrEqual(10);
+        expect(Math.abs(green - coral)).toBeGreaterThanOrEqual(10);
+      });
+
+      it.each(['light', 'dark'] as const)(
+        '%s: the chart axis is themed and meets 3:1 on --surface',
+        (mode) => {
+          const token = ruleToken('svg.chart line', 'stroke');
+          expect(token, 'svg.chart line{stroke:var(--…)}').toBeDefined();
+          const t = THEMES[mode];
+          expect(contrast(t[token ?? ''], t.surface)).toBeGreaterThanOrEqual(3);
         },
       );
     });
 
-    it('keeps series 3 (green) well apart in lightness from series 1 and 2', () => {
-      // Red-green and blue-green deficiencies mostly leave lightness, so
-      // the first three series must not share it.
-      const [blurple, coral, green] = CHART_COLORS.map(lightness);
-      expect(Math.abs(green - blurple)).toBeGreaterThanOrEqual(10);
-      expect(Math.abs(green - coral)).toBeGreaterThanOrEqual(10);
-    });
-
-    it.each(['light', 'dark'] as const)(
-      '%s: the chart axis is themed and meets 3:1 on --surface',
-      (mode) => {
-        const token = ruleToken('svg.chart line', 'stroke');
-        expect(token, 'svg.chart line{stroke:var(--…)}').toBeDefined();
-        const t = THEMES[mode];
-        expect(contrast(t[token ?? ''], t.surface)).toBeGreaterThanOrEqual(3);
-      },
-    );
-  });
-
-  describe.each(['light', 'dark'] as const)('%s', (mode) => {
-    const t = THEMES[mode];
-    it.each(TEXT_PAIRS)('text --%s on --%s meets 4.5:1', (fg, bg) => {
-      expect(t[fg], `--${fg}`).toBeDefined();
-      expect(t[bg], `--${bg}`).toBeDefined();
-      expect(contrast(t[fg], t[bg])).toBeGreaterThanOrEqual(4.5);
-    });
-    it.each(UI_PAIRS)('--%s against --%s meets 3:1', (fg, bg) => {
-      expect(t[fg], `--${fg}`).toBeDefined();
-      expect(t[bg], `--${bg}`).toBeDefined();
-      expect(contrast(t[fg], t[bg])).toBeGreaterThanOrEqual(3);
+    describe.each(['light', 'dark'] as const)('%s', (mode) => {
+      const t = THEMES[mode];
+      it.each(TEXT_PAIRS)('text --%s on --%s meets 4.5:1', (fg, bg) => {
+        expect(t[fg], `--${fg}`).toBeDefined();
+        expect(t[bg], `--${bg}`).toBeDefined();
+        expect(contrast(t[fg], t[bg])).toBeGreaterThanOrEqual(4.5);
+      });
+      it.each(UI_PAIRS)('--%s against --%s meets 3:1', (fg, bg) => {
+        expect(t[fg], `--${fg}`).toBeDefined();
+        expect(t[bg], `--${bg}`).toBeDefined();
+        expect(contrast(t[fg], t[bg])).toBeGreaterThanOrEqual(3);
+      });
     });
   });
 });

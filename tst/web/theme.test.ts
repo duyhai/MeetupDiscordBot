@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { staticHtml } from '../../src/web/html.js';
 import { hostLayout } from '../../src/web/host/hostLayout.js';
 import { layout } from '../../src/web/pages.js';
-import { THEME_SCRIPT } from '../../src/web/theme.js';
+import { PALETTES, THEME_SCRIPT } from '../../src/web/theme.js';
 
 const NONCE = 'bm9uY2Utbm9uY2Utbm9uY2U=';
 
@@ -43,6 +43,12 @@ describe('theme toggle', () => {
       for (const choice of ['auto', 'light', 'dark']) {
         expect(page).toContain(`data-choice="${choice}"`);
       }
+      expect(header).toMatch(
+        /<label\s+class="palette-pick"\s+data-palette-pick\s+hidden\s*>/,
+      );
+      for (const { id } of PALETTES) {
+        expect(header).toContain(`<option value="${id}">`);
+      }
     },
   );
 });
@@ -72,11 +78,24 @@ function runTheme(storage: {
     };
   });
   const group = { hidden: true, querySelectorAll: () => buttons };
+  let onChange: (() => void) | undefined;
+  const select = {
+    value: '',
+    addEventListener: (_type: string, fn: () => void) => {
+      onChange = fn;
+    },
+  };
+  const pick = { hidden: true, querySelector: () => select };
   let onStorage: ((e: { key: string | null }) => void) | undefined;
   const document = {
     documentElement: root,
     readyState: 'complete',
-    querySelector: () => group,
+    querySelector: (selector: string) => {
+      if (selector === '[data-theme-toggle]') {
+        return group;
+      }
+      return selector === '[data-palette-pick]' ? pick : null;
+    },
     addEventListener: () => undefined,
   };
   const window = {
@@ -98,7 +117,14 @@ function runTheme(storage: {
   const [auto, light, dark] = buttons;
   return {
     theme: () => attrs.get('data-theme'),
+    palette: () => attrs.get('data-palette'),
     group,
+    pick,
+    select,
+    choosePalette: (v: string) => {
+      select.value = v;
+      onChange?.();
+    },
     auto,
     light,
     dark,
@@ -188,5 +214,61 @@ describe('THEME_SCRIPT behaviour', () => {
     storage.data.set('dashboard-theme', 'light');
     page.storageEvent('other');
     expect(page.theme()).toBeUndefined();
+  });
+});
+
+describe('THEME_SCRIPT palettes', () => {
+  it('the default palette sets no attribute and shows the picker on Night market', () => {
+    const page = runTheme(memoryStorage());
+    expect(page.palette()).toBeUndefined();
+    expect(page.pick.hidden).toBe(false);
+    expect(page.select.value).toBe('night');
+  });
+
+  it('starts on the saved palette', () => {
+    const page = runTheme(memoryStorage({ 'dashboard-palette': 'paper' }));
+    expect(page.palette()).toBe('paper');
+    expect(page.select.value).toBe('paper');
+  });
+
+  it('ignores a saved palette the stylesheet does not define', () => {
+    const page = runTheme(memoryStorage({ 'dashboard-palette': 'neon' }));
+    expect(page.palette()).toBeUndefined();
+    expect(page.select.value).toBe('night');
+  });
+
+  it('a pick saves the palette, and Night market clears it', () => {
+    const storage = memoryStorage();
+    const page = runTheme(storage);
+    page.choosePalette('quiet');
+    expect(page.palette()).toBe('quiet');
+    expect(storage.data.get('dashboard-palette')).toBe('quiet');
+    page.choosePalette('night');
+    expect(page.palette()).toBeUndefined();
+    expect(storage.data.has('dashboard-palette')).toBe(false);
+  });
+
+  it('palette and theme are independent', () => {
+    const storage = memoryStorage();
+    const page = runTheme(storage);
+    page.choosePalette('potluck');
+    page.dark.click();
+    expect(page.palette()).toBe('potluck');
+    expect(page.theme()).toBe('dark');
+    page.auto.click();
+    expect(page.palette()).toBe('potluck');
+    expect(page.theme()).toBeUndefined();
+  });
+
+  it('follows another tab, and a cleared storage returns to Night market', () => {
+    const storage = memoryStorage();
+    const page = runTheme(storage);
+    storage.data.set('dashboard-palette', 'paper');
+    page.storageEvent('dashboard-palette');
+    expect(page.palette()).toBe('paper');
+    storage.data.clear();
+    page.storageEvent(null);
+    expect(page.palette()).toBeUndefined();
+    expect(page.select.value).toBe('night');
   });
 });
