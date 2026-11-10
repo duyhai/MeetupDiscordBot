@@ -72,6 +72,16 @@ import type {
   PromotionEvent,
 } from '../../../src/lib/repositories/postgresPromotedHostRepository.js';
 import type { StaffRequestStore } from '../../../src/web/routes/hostRequests.js';
+import type { EventAuditRequestResult } from '../../../src/lib/eventAudit/job.js';
+import type {
+  EventChange,
+  EventSnapshot,
+} from '../../../src/lib/eventAudit/types.js';
+import type {
+  ChangeFilter,
+  EventAuditRun,
+  EventHistory,
+} from '../../../src/lib/repositories/postgresEventAuditRepository.js';
 
 export const PAGE_NOW = new Date('2026-10-05T16:15:00Z');
 export const SEPT: Period = { year: 2026, month: 9 };
@@ -938,6 +948,136 @@ export function fakeEventRequests(rows: EventRequest[] = [eventRequestRow()]) {
 export const SEED: SeedRow[] = [seedRow('hall_of_fame', SEPT, hofPayload())];
 
 /** Page deps for route tests and the access matrix. Later tasks add fixture-backed fakes. */
+const EVENT_URL_1 = 'https://www.meetup.com/g/events/311000001/';
+const EVENT_START = new Date('2026-12-06T03:00:00Z');
+
+export function eventChangeRow(
+  overrides: Partial<EventChange> = {},
+): EventChange {
+  return {
+    id: 1,
+    runId: 1,
+    eventId: '311000001',
+    detectedAt: new Date('2026-10-05T15:05:00Z'),
+    kind: 'deleted',
+    oldValue: {
+      status: 'ACTIVE',
+      startAt: EVENT_START.toISOString(),
+      rsvpYes: 23,
+    },
+    newValue: null,
+    title: 'Board games',
+    startAt: EVENT_START,
+    eventUrl: EVENT_URL_1,
+    hosts: [{ id: '4242', name: 'Hana' }],
+    rsvpYes: 23,
+    waitlist: 2,
+    actor: null,
+    alertedAt: null,
+    ...overrides,
+  };
+}
+
+export function eventSnapshotRow(
+  overrides: Partial<EventSnapshot> = {},
+): EventSnapshot {
+  return {
+    id: 1,
+    runId: 1,
+    eventId: '311000001',
+    takenAt: new Date('2026-10-05T15:00:00Z'),
+    title: 'Board games',
+    status: 'ACTIVE',
+    startAt: EVENT_START,
+    duration: 'PT2H',
+    eventUrl: EVENT_URL_1,
+    venueId: '27',
+    photoId: null,
+    hosts: [{ id: '4242', name: 'Hana' }],
+    rsvpYes: 23,
+    waitlist: 2,
+    rsvpsClosed: false,
+    lastEditedAt: null,
+    ...overrides,
+  };
+}
+
+/** One event with two snapshots and a host change. */
+export function eventHistoryFixture(): EventHistory {
+  const latest = eventSnapshotRow({
+    id: 2,
+    runId: 2,
+    takenAt: new Date('2026-10-05T16:00:00Z'),
+    hosts: [{ id: '5151', name: 'Ken' }],
+  });
+  return {
+    state: {
+      eventId: '311000001',
+      latest,
+      firstSeenAt: new Date('2026-10-05T15:00:00Z'),
+      lastSeenAt: new Date('2026-10-05T16:00:00Z'),
+      deletedAt: null,
+    },
+    changes: [
+      eventChangeRow({
+        id: 3,
+        runId: 2,
+        kind: 'host_changed',
+        oldValue: { hosts: [{ id: '4242', name: 'Hana' }] },
+        newValue: { hosts: [{ id: '5151', name: 'Ken' }] },
+        hosts: [
+          { id: '4242', name: 'Hana' },
+          { id: '5151', name: 'Ken' },
+        ],
+        detectedAt: new Date('2026-10-05T16:00:05Z'),
+      }),
+    ],
+    snapshots: [latest, eventSnapshotRow()],
+  };
+}
+
+export function eventAuditRunRow(
+  overrides: Partial<EventAuditRun> = {},
+): EventAuditRun {
+  return {
+    id: 2,
+    startedAt: new Date('2026-10-05T16:00:00Z'),
+    finishedAt: new Date('2026-10-05T16:00:05Z'),
+    requestedBy: 'job',
+    listed: 42,
+    confirmed: 0,
+    changes: 1,
+    outcome: 'saved',
+    ...overrides,
+  };
+}
+
+/** An in-memory EventAuditPageReader; every method is a vi.fn. */
+export function fakeEventAudit(
+  changes: EventChange[] = [],
+  histories: Record<string, EventHistory> = {},
+  latestRun: EventAuditRun | undefined = eventAuditRunRow(),
+) {
+  return {
+    listChanges: vi.fn(async (filter: ChangeFilter, limit: number = 50) =>
+      [...changes]
+        .sort((a, b) => b.id - a.id)
+        .filter((c) => filter.kind === undefined || c.kind === filter.kind)
+        .filter(
+          (c) =>
+            filter.hostId === undefined ||
+            c.hosts.some((h) => h.id === filter.hostId),
+        )
+        .filter((c) => filter.from === undefined || c.detectedAt >= filter.from)
+        .filter((c) => filter.to === undefined || c.detectedAt < filter.to)
+        .filter((c) => filter.beforeId === undefined || c.id < filter.beforeId)
+        .slice(0, limit),
+    ),
+    eventHistory: vi.fn(async (eventId: string) => histories[eventId]),
+    latestRun: vi.fn(async () => latestRun),
+  };
+}
+
 export function fakePageDeps(
   overrides: Partial<DashboardPageDeps> = {},
 ): DashboardPageDeps {
@@ -1011,6 +1151,26 @@ export function fakePageDeps(
     ]),
     revokeHostSessions: vi.fn(async () => undefined),
     hostAlert: vi.fn().mockResolvedValue(true),
+    // The access matrix opens event 311000001's history.
+    eventAudit: async () =>
+      fakeEventAudit([eventChangeRow()], {
+        '311000001': eventHistoryFixture(),
+      }),
+    snapshotNow: vi.fn(
+      async (): Promise<
+        EventAuditRequestResult | { status: 'unavailable' }
+      > => ({
+        status: 'started',
+        done: Promise.resolve({
+          ok: true,
+          listed: 1,
+          confirmed: 0,
+          changes: 0,
+          deleted: 0,
+          durationMs: 1,
+        }),
+      }),
+    ),
     ...overrides,
   };
 }

@@ -30,6 +30,7 @@ import {
   registerOrganizerLoginRoutes,
 } from './organizerLogin.js';
 import { registerBanRoutes } from './bans.js';
+import { EventChangesDeps, registerEventChangeRoutes } from './eventChanges.js';
 import { registerHallOfFameRoutes } from './hallOfFame.js';
 import {
   HostPromotionDeps,
@@ -147,7 +148,8 @@ export type PageRebuildResult =
   RebuildResult | { status: 'unavailable'; message: string };
 
 /** What the read-only pages need. Each getter may reject (no DATABASE_URL, pool down): pages answer 503. */
-export interface DashboardPageDeps extends HostRequestDeps, HostPromotionDeps {
+export interface DashboardPageDeps
+  extends HostRequestDeps, HostPromotionDeps, EventChangesDeps {
   now: () => Date;
   /** The same cache and clock as the router's own session store. */
   sessionStore: () => Promise<SessionStore>;
@@ -201,6 +203,7 @@ export function registerDashboardPages(
   registerTrendsRoutes(router, deps);
   registerHostRequestRoutes(router, deps);
   registerHostPromotionRoutes(router, deps);
+  registerEventChangeRoutes(router, deps);
 }
 
 /** Production's whole protectedRoutes hook, so the access matrix tests exactly what ships. */

@@ -147,21 +147,21 @@ detection therefore never depend on the unverified fields. _My call_.
 Each node becomes an `EventObservation`, or is dropped with one process log
 line (never Discord) when it fails validation:
 
-| field          | from                        | rule                                              |
-| -------------- | --------------------------- | ------------------------------------------------- |
-| `eventId`      | `id`                        | `^[0-9]{1,20}$`, else dropped                     |
-| `title`        | `title`                     | string, trimmed, cut to 300 chars; `''` allowed   |
-| `status`       | `status`                    | one of `EventStatus`, else `'UNKNOWN'`            |
-| `startAt`      | `dateTime`                  | parses as a date, else dropped                    |
-| `duration`     | `duration`                  | `^P[0-9A-Z.]{1,30}$` (ISO 8601) or null           |
-| `eventUrl`     | `eventUrl`                  | the host dashboard's `MEETUP_EVENT_URL` or null   |
-| `venueId`      | `venue.id`                  | `^[0-9]{1,20}$` or null                           |
-| `photoId`      | `featuredEventPhoto.id`     | `^[0-9]{1,20}$` or null                           |
-| `hosts`        | `eventHosts[].member`       | `{ id, name }`, id all digits, name cut to 100    |
-| `rsvpYes`      | `going`                     | non-negative integer or null                      |
-| `waitlist`     | `waiting`                   | non-negative integer or null                      |
-| `rsvpsClosed`  | `rsvpSettings.rsvpsClosed`  | boolean or null                                   |
-| `lastEditedAt` | —                           | always null in v1 (not exposed)                   |
+| field          | from                       | rule                                            |
+| -------------- | -------------------------- | ----------------------------------------------- |
+| `eventId`      | `id`                       | `^[0-9]{1,20}$`, else dropped                   |
+| `title`        | `title`                    | string, trimmed, cut to 300 chars; `''` allowed |
+| `status`       | `status`                   | one of `EventStatus`, else `'UNKNOWN'`          |
+| `startAt`      | `dateTime`                 | parses as a date, else dropped                  |
+| `duration`     | `duration`                 | `^P[0-9A-Z.]{1,30}$` (ISO 8601) or null         |
+| `eventUrl`     | `eventUrl`                 | the host dashboard's `MEETUP_EVENT_URL` or null |
+| `venueId`      | `venue.id`                 | `^[0-9]{1,20}$` or null                         |
+| `photoId`      | `featuredEventPhoto.id`    | `^[0-9]{1,20}$` or null                         |
+| `hosts`        | `eventHosts[].member`      | `{ id, name }`, id all digits, name cut to 100  |
+| `rsvpYes`      | `going`                    | non-negative integer or null                    |
+| `waitlist`     | `waiting`                  | non-negative integer or null                    |
+| `rsvpsClosed`  | `rsvpSettings.rsvpsClosed` | boolean or null                                 |
+| `lastEditedAt` | —                          | always null in v1 (not exposed)                 |
 
 ## Schema
 
@@ -245,16 +245,16 @@ edited by a bug.
 
 `old_value` / `new_value` per kind:
 
-| kind            | old                              | new                              |
-| --------------- | -------------------------------- | -------------------------------- |
-| `created`       | null                             | `{ title, startAt, hosts }`      |
-| `cancelled`     | `{ status }`                     | `{ status }`                     |
-| `deleted`       | `{ status, startAt, rsvpYes }`   | null                             |
-| `host_changed`  | `{ hosts }`                      | `{ hosts }`                      |
-| `start_moved`   | `{ startAt }`                    | `{ startAt }`                    |
-| `title_changed` | `{ title }`                      | `{ title }`                      |
-| `rsvp_drop`     | `{ rsvpYes, waitlist }`          | `{ rsvpYes, waitlist }`          |
-| `rsvps_closed`  | `{ rsvpsClosed: false }`         | `{ rsvpsClosed: true }`          |
+| kind            | old                            | new                         |
+| --------------- | ------------------------------ | --------------------------- |
+| `created`       | null                           | `{ title, startAt, hosts }` |
+| `cancelled`     | `{ status }`                   | `{ status }`                |
+| `deleted`       | `{ status, startAt, rsvpYes }` | null                        |
+| `host_changed`  | `{ hosts }`                    | `{ hosts }`                 |
+| `start_moved`   | `{ startAt }`                  | `{ startAt }`               |
+| `title_changed` | `{ title }`                    | `{ title }`                 |
+| `rsvp_drop`     | `{ rsvpYes, waitlist }`        | `{ rsvpYes, waitlist }`     |
+| `rsvps_closed`  | `{ rsvpsClosed: false }`       | `{ rsvpsClosed: true }`     |
 
 ### Retention
 
@@ -372,7 +372,7 @@ when the stored URL matched `MEETUP_EVENT_URL`.
 Same gate as every staff page (the dashboard router's role check), on
 `DASHBOARD_PATHS`:
 
-- `eventChanges: '/events/changes'` (GET): "Event changes". Filters: kind
+- `eventChanges: '/events'` (GET): "Event changes". Filters: kind
   (select, all or one), host (Meetup id, digits), from/to (Pacific calendar
   days), `before` cursor (change id). Columns: Detected (Pacific), Change,
   Event (title linked to Meetup when the URL passed `safeHref`, else plain,

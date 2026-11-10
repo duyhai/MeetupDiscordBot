@@ -42,7 +42,7 @@ export const DASHBOARD_PATHS = {
   hostRequestAction: '/hosts/requests/:id/:action',
   hostPromotion: '/hosts/promotion',
   hostMember: '/hosts/promotion/:memberId',
-  eventChanges: '/events/changes',
+  eventChanges: '/events',
   eventHistory: '/events/:eventId',
   eventSnapshot: '/events/snapshot',
 } as const;

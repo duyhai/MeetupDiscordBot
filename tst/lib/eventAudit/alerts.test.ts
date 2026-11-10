@@ -127,7 +127,7 @@ describe('the other entries', () => {
     const entry = summaryAlertEntry(14);
     expect(entry.title).toBe('Event changes: 14 in one pass');
     expect(entry.description).toContain(
-      'https://meetup-discord-bot.herokuapp.com/dashboard/events/changes',
+      'https://meetup-discord-bot.herokuapp.com/dashboard/events',
     );
   });
 

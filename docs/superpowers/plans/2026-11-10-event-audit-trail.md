@@ -36,6 +36,7 @@
 ### Task 1: Types and the diff
 
 **Files:**
+
 - Create: `src/lib/eventAudit/types.ts`, `src/lib/eventAudit/diff.ts`
 - Test: `tst/lib/eventAudit/diff.test.ts`
 
@@ -43,33 +44,71 @@
 
 ```ts
 // types.ts
-export type EventChangeKind = 'created' | 'cancelled' | 'deleted' | 'host_changed'
-  | 'start_moved' | 'title_changed' | 'rsvp_drop' | 'rsvps_closed';
+export type EventChangeKind =
+  | 'created'
+  | 'cancelled'
+  | 'deleted'
+  | 'host_changed'
+  | 'start_moved'
+  | 'title_changed'
+  | 'rsvp_drop'
+  | 'rsvps_closed';
 export const EVENT_CHANGE_KINDS: readonly EventChangeKind[];
 export const CANCELLED_STATUSES: ReadonlySet<string>; // the three above
 export function isCancelledStatus(status: string): boolean;
-export interface EventHost { id: string; name: string }
-export interface EventObservation {
-  eventId: string; title: string; status: string; startAt: Date;
-  duration: string | null; eventUrl: string | null; venueId: string | null;
-  photoId: string | null; hosts: EventHost[]; rsvpYes: number | null;
-  waitlist: number | null; rsvpsClosed: boolean | null; lastEditedAt: Date | null;
+export interface EventHost {
+  id: string;
+  name: string;
 }
-export interface EventSnapshot extends EventObservation { id: number; runId: number; takenAt: Date }
+export interface EventObservation {
+  eventId: string;
+  title: string;
+  status: string;
+  startAt: Date;
+  duration: string | null;
+  eventUrl: string | null;
+  venueId: string | null;
+  photoId: string | null;
+  hosts: EventHost[];
+  rsvpYes: number | null;
+  waitlist: number | null;
+  rsvpsClosed: boolean | null;
+  lastEditedAt: Date | null;
+}
+export interface EventSnapshot extends EventObservation {
+  id: number;
+  runId: number;
+  takenAt: Date;
+}
 export interface NewEventChange {
-  eventId: string; kind: EventChangeKind; oldValue: unknown; newValue: unknown;
-  title: string; startAt: Date; eventUrl: string | null; hosts: EventHost[];
-  rsvpYes: number | null; waitlist: number | null;
+  eventId: string;
+  kind: EventChangeKind;
+  oldValue: unknown;
+  newValue: unknown;
+  title: string;
+  startAt: Date;
+  eventUrl: string | null;
+  hosts: EventHost[];
+  rsvpYes: number | null;
+  waitlist: number | null;
 }
 export interface EventChange extends NewEventChange {
-  id: number; runId: number; detectedAt: Date; actor: string | null; alertedAt: Date | null;
+  id: number;
+  runId: number;
+  detectedAt: Date;
+  actor: string | null;
+  alertedAt: Date | null;
 }
 // diff.ts
-export const RSVP_DROP_MIN = 5; export const RSVP_DROP_FRACTION = 0.25;
+export const RSVP_DROP_MIN = 5;
+export const RSVP_DROP_FRACTION = 0.25;
 export function isRsvpDrop(prev: number | null, next: number | null): boolean;
 /** baseline: the first run ever; a new event then yields nothing. */
-export function diffEvent(previous: EventObservation | undefined, next: EventObservation,
-  options: { baseline: boolean }): NewEventChange[];
+export function diffEvent(
+  previous: EventObservation | undefined,
+  next: EventObservation,
+  options: { baseline: boolean },
+): NewEventChange[];
 /** The deleted change for an event whose confirmation came back null. */
 export function deletionChange(previous: EventObservation): NewEventChange;
 ```
@@ -95,6 +134,7 @@ export function deletionChange(previous: EventObservation): NewEventChange;
 ### Task 2: Meetup queries, client methods and observation mapping
 
 **Files:**
+
 - Modify: `src/lib/client/meetup/queries.ts` (append `getGroupEventsForAudit`, `getEventForAudit`), `src/lib/client/meetup/types.ts` (append `AuditEventNode`, `GetGroupEventsForAuditResponse`, `GetEventForAuditResponse`), `src/lib/client/meetup/gqlClient.ts` (two methods)
 - Create: `src/lib/eventAudit/meetup.ts`
 - Test: `tst/lib/eventAudit/meetup.test.ts`
@@ -144,6 +184,7 @@ export function organizerReadMeetup(getClient: () => Client | undefined, organiz
 ### Task 3: Repository and schema
 
 **Files:**
+
 - Create: `src/lib/repositories/postgresEventAuditRepository.ts`
 - Test: `tst/integration/postgresEventAuditRepository.test.ts`
 
@@ -152,30 +193,78 @@ export function organizerReadMeetup(getClient: () => Client | undefined, organiz
 ```ts
 export const EVENT_AUDIT_RETENTION_DAYS = 180;
 export const EVENT_AUDIT_SCHEMA_SQL: string; // the spec's tables, indexes and the append-only trigger
-export async function ensureEventAuditSchema(pool: pg.Pool, options?: DashboardTransactionOptions): Promise<void>;
-export interface EventAuditRun { id: number; startedAt: Date; finishedAt: Date | null; requestedBy: string;
-  listed: number | null; confirmed: number | null; changes: number | null; outcome: 'saved' | 'failed' | null }
-export interface EventState { eventId: string; latest: EventSnapshot; firstSeenAt: Date; lastSeenAt: Date; deletedAt: Date | null }
-export interface RunWrite { startedAt: Date; finishedAt: Date; requestedBy: string; listed: number; confirmed: number;
-  observations: EventObservation[]; deletedEventIds: string[]; changes: NewEventChange[] }
-export interface ChangeFilter { kind?: EventChangeKind; hostId?: string; from?: Date; to?: Date; beforeId?: number }
-export interface EventHistory { state: EventState; changes: EventChange[]; snapshots: EventSnapshot[] }
+export async function ensureEventAuditSchema(
+  pool: pg.Pool,
+  options?: DashboardTransactionOptions,
+): Promise<void>;
+export interface EventAuditRun {
+  id: number;
+  startedAt: Date;
+  finishedAt: Date | null;
+  requestedBy: string;
+  listed: number | null;
+  confirmed: number | null;
+  changes: number | null;
+  outcome: 'saved' | 'failed' | null;
+}
+export interface EventState {
+  eventId: string;
+  latest: EventSnapshot;
+  firstSeenAt: Date;
+  lastSeenAt: Date;
+  deletedAt: Date | null;
+}
+export interface RunWrite {
+  startedAt: Date;
+  finishedAt: Date;
+  requestedBy: string;
+  listed: number;
+  confirmed: number;
+  observations: EventObservation[];
+  deletedEventIds: string[];
+  changes: NewEventChange[];
+}
+export interface ChangeFilter {
+  kind?: EventChangeKind;
+  hostId?: string;
+  from?: Date;
+  to?: Date;
+  beforeId?: number;
+}
+export interface EventHistory {
+  state: EventState;
+  changes: EventChange[];
+  snapshots: EventSnapshot[];
+}
 export class PostgresEventAuditRepository {
   static instance(): Promise<PostgresEventAuditRepository>;
   constructor(pool: pg.Pool);
-  latestRun(): Promise<EventAuditRun | undefined>;        // newest by started_at
-  liveStates(): Promise<EventState[]>;                    // deleted_at IS NULL, with latest snapshot
-  hasAnyState(): Promise<boolean>;                        // false = first run ever
+  latestRun(): Promise<EventAuditRun | undefined>; // newest by started_at
+  liveStates(): Promise<EventState[]>; // deleted_at IS NULL, with latest snapshot
+  hasAnyState(): Promise<boolean>; // false = first run ever
   saveRun(write: RunWrite): Promise<{ runId: number; changes: EventChange[] }>;
-    // one transaction: run row (outcome saved), a snapshot per observation (taken_at = startedAt),
-    // state upsert (latest, last_seen; first_seen kept), deleted_at = finishedAt for deletedEventIds, change rows (run_id, detected_at = finishedAt)
-  recordFailedRun(startedAt: Date, finishedAt: Date, requestedBy: string): Promise<void>;
+  // one transaction: run row (outcome saved), a snapshot per observation (taken_at = startedAt),
+  // state upsert (latest, last_seen; first_seen kept), deleted_at = finishedAt for deletedEventIds, change rows (run_id, detected_at = finishedAt)
+  recordFailedRun(
+    startedAt: Date,
+    finishedAt: Date,
+    requestedBy: string,
+  ): Promise<void>;
   unalerted(kinds: EventChangeKind[], limit?: number): Promise<EventChange[]>; // alerted_at IS NULL, oldest first, default 50
   markAlerted(ids: number[], at: Date): Promise<void>;
-  prune(now: Date, limit?: number): Promise<{ snapshots: number; changes: number; states: number }>; // default 5000 each
+  prune(
+    now: Date,
+    limit?: number,
+  ): Promise<{ snapshots: number; changes: number; states: number }>; // default 5000 each
   listChanges(filter: ChangeFilter, limit?: number): Promise<EventChange[]>; // newest first (id DESC), default PAGE_SIZE 50
-  eventHistory(eventId: string, snapshotLimit?: number): Promise<EventHistory | undefined>; // default 200
-  recentChangesForHost(meetupId: string, options?: { limit?: number; since?: Date }): Promise<EventChange[]>; // hosts @> [{id}], default 20
+  eventHistory(
+    eventId: string,
+    snapshotLimit?: number,
+  ): Promise<EventHistory | undefined>; // default 200
+  recentChangesForHost(
+    meetupId: string,
+    options?: { limit?: number; since?: Date },
+  ): Promise<EventChange[]>; // hosts @> [{id}], default 20
 }
 ```
 
@@ -199,16 +288,23 @@ Ids are validated (`^[0-9]{1,20}$`) and an invalid id answers `undefined`/`[]` r
 ### Task 4: Alerts
 
 **Files:**
+
 - Create: `src/lib/eventAudit/alerts.ts`
-- Modify: `src/lib/reports/dashboardPaths.ts` (add `eventChanges: '/events/changes'`, `eventHistory: '/events/:eventId'`, `eventSnapshot: '/events/snapshot'` to `DASHBOARD_PATHS`; add `eventHistoryPath(eventId: string): string | undefined` returning `${DASHBOARD_BASE}/events/${id}` only for `^[0-9]{1,20}$`)
+- Modify: `src/lib/reports/dashboardPaths.ts` (add `eventChanges: '/events'`, `eventHistory: '/events/:eventId'`, `eventSnapshot: '/events/snapshot'` to `DASHBOARD_PATHS`; add `eventHistoryPath(eventId: string): string | undefined` returning `${DASHBOARD_BASE}/events/${id}` only for `^[0-9]{1,20}$`)
 - Test: `tst/lib/eventAudit/alerts.test.ts`, `tst/lib/reports/dashboardPaths.test.ts` (one case)
 
 **Interfaces (Produces):**
 
 ```ts
-export const ALERTABLE_KINDS: readonly EventChangeKind[] = ['deleted', 'cancelled', 'host_changed'];
-export const ALERT_CAP = 10; export const ALERT_RATE_LIMIT_SEC = 6 * 60 * 60;
-export const alertedKey = (eventId: string, kind: EventChangeKind) => `event-audit-alerted-${eventId}-${kind}`;
+export const ALERTABLE_KINDS: readonly EventChangeKind[] = [
+  'deleted',
+  'cancelled',
+  'host_changed',
+];
+export const ALERT_CAP = 10;
+export const ALERT_RATE_LIMIT_SEC = 6 * 60 * 60;
+export const alertedKey = (eventId: string, kind: EventChangeKind) =>
+  `event-audit-alerted-${eventId}-${kind}`;
 export function changeAlertEntry(change: EventChange): LogEntry | undefined; // undefined for non-alertable kinds
 export function summaryAlertEntry(count: number): LogEntry;
 export function failureAlertEntry(error: unknown): LogEntry; // "Event snapshot failed: <describeBuildError>"; retries text
@@ -223,6 +319,7 @@ Entry titles: `Event deleted: <alertText(title)>`, `Event cancelled: …`, `Even
 ### Task 5: The run
 
 **Files:**
+
 - Create: `src/lib/eventAudit/run.ts`
 - Test: `tst/lib/eventAudit/run.test.ts`, `tst/lib/eventAudit/fakes.ts` (an in-memory `FakeEventAuditStore` implementing the store interface below, and `fakeReader(events, byId)`)
 
@@ -230,20 +327,45 @@ Entry titles: `Event deleted: <alertText(title)>`, `Event cancelled: …`, `Even
 
 ```ts
 export const CONFIRM_CAP = 25;
-export const FAILED_ALERT_TTL_SEC = 26 * 60 * 60; export const BACKOFF_SEC = 30 * 60;
+export const FAILED_ALERT_TTL_SEC = 26 * 60 * 60;
+export const BACKOFF_SEC = 30 * 60;
 export const BACKOFF_KEY = 'event-audit-backoff';
-export const failedAlertedKey = (day: string) => `event-audit-failed-alerted-${day}`;
-export type EventAuditStore = Pick<PostgresEventAuditRepository,
-  'latestRun' | 'liveStates' | 'hasAnyState' | 'saveRun' | 'recordFailedRun' | 'unalerted' | 'markAlerted' | 'prune'>;
+export const failedAlertedKey = (day: string) =>
+  `event-audit-failed-alerted-${day}`;
+export type EventAuditStore = Pick<
+  PostgresEventAuditRepository,
+  | 'latestRun'
+  | 'liveStates'
+  | 'hasAnyState'
+  | 'saveRun'
+  | 'recordFailedRun'
+  | 'unalerted'
+  | 'markAlerted'
+  | 'prune'
+>;
 export interface EventAuditDeps {
-  now(): Date; cache(): Promise<KeyValueCache>; store(): Promise<EventAuditStore>;
-  readMeetup: ReadMeetup; alert(entry: LogEntry): Promise<boolean>; newLeaseValue(): string;
+  now(): Date;
+  cache(): Promise<KeyValueCache>;
+  store(): Promise<EventAuditStore>;
+  readMeetup: ReadMeetup;
+  alert(entry: LogEntry): Promise<boolean>;
+  newLeaseValue(): string;
 }
 export type RunOutcome =
-  | { ok: true; listed: number; confirmed: number; changes: number; deleted: number; durationMs: number }
+  | {
+      ok: true;
+      listed: number;
+      confirmed: number;
+      changes: number;
+      deleted: number;
+      durationMs: number;
+    }
   | { ok: false; error: unknown };
 /** Never throws. Does not take the lease (job.ts does). */
-export async function runEventAudit(deps: EventAuditDeps, requestedBy: string): Promise<RunOutcome>;
+export async function runEventAudit(
+  deps: EventAuditDeps,
+  requestedBy: string,
+): Promise<RunOutcome>;
 ```
 
 Algorithm (the spec's steps 1–7): inside one `readMeetup` call: list, load states, pick vanished (`startAt > now`, status not PAST/cancelled), confirm up to `CONFIRM_CAP` oldest-start-first, returning `{ observations, deletedIds, confirmed }`; then `baseline = !(await store.hasAnyState())`; diff each observation against its state's latest; `saveRun`; then alerts: `unalerted(ALERTABLE_KINDS)` (this run's and any left over), if `> ALERT_CAP` post the summary once and mark all; else per change `cache.exclusive_set(alertedKey, '1', ALERT_RATE_LIMIT_SEC)` → post → mark (a failed post removes the key); then `prune`. On a thrown error anywhere before the save: `recordFailedRun` (best effort), `cache.set(BACKOFF_KEY, iso, BACKOFF_SEC)`, once-a-day failure alert (`failedAlertedKey(utcDay(now))`, removed if the post failed), log `String(error)` to the process log only, return `{ ok: false }`.
@@ -265,6 +387,7 @@ Algorithm (the spec's steps 1–7): inside one `readMeetup` call: list, load sta
 ### Task 6: Scheduler and manual request
 
 **Files:**
+
 - Create: `src/lib/eventAudit/job.ts`
 - Modify: `src/index.ts` (call `startEventAuditScheduler(client)` after `startReportBuildScheduler`)
 - Test: `tst/lib/eventAudit/job.test.ts`
@@ -274,18 +397,34 @@ Algorithm (the spec's steps 1–7): inside one `readMeetup` call: list, load sta
 ```ts
 export const EVENT_AUDIT_TICK_MS = 15 * 60 * 1000;
 export const EVENT_AUDIT_INTERVAL_MS = 55 * 60 * 1000;
-export const EVENT_AUDIT_COOLDOWN_SEC = 2 * 60; export const COOLDOWN_KEY = 'event-audit-cooldown';
-export async function isEventAuditDue(store: Pick<EventAuditStore,'latestRun'>, cache: KeyValueCache, now: Date): Promise<boolean>;
-  // false in backoff; true with no saved run; else latest saved run startedAt + 55 min <= now (failed runs ignored)
+export const EVENT_AUDIT_COOLDOWN_SEC = 2 * 60;
+export const COOLDOWN_KEY = 'event-audit-cooldown';
+export async function isEventAuditDue(
+  store: Pick<EventAuditStore, 'latestRun'>,
+  cache: KeyValueCache,
+  now: Date,
+): Promise<boolean>;
+// false in backoff; true with no saved run; else latest saved run startedAt + 55 min <= now (failed runs ignored)
 export async function runEventAuditTick(deps: EventAuditDeps): Promise<void>;
-  // skip in isQuietHour or identityDigestInProgress; acquireBuildLease or skip; due check; runEventAudit(deps, 'job'); releaseBuildLease in finally
-export type EventAuditRefusal = 'quiet-hour' | 'identity-sweep' | 'busy' | 'cooldown' | 'bad-requester';
-export type EventAuditRequestResult = { status: 'started'; done: Promise<RunOutcome> } | { status: EventAuditRefusal };
-export async function requestEventAudit(deps: EventAuditDeps, requestedBy: string): Promise<EventAuditRequestResult>;
-  // requestRebuild's order: requester /^[0-9]{17,20}$/, canStartMonthBuild → 'quiet-hour', digest → 'identity-sweep', lease → 'busy', cooldown exclusive_set → 'cooldown' (lease released), then the run in the background releasing the lease in finally
-export async function defaultEventAuditDeps(client: Client): Promise<EventAuditDeps>;
-export function startEventAuditScheduler(client: Client, options?: { env?; makeDeps?; setIntervalFn?; log?; now? }): void;
-  // no DATABASE_URL → warn and return; tick now and every EVENT_AUDIT_TICK_MS; one tick at a time; failures logged by String(error), never Discord
+// skip in isQuietHour or identityDigestInProgress; acquireBuildLease or skip; due check; runEventAudit(deps, 'job'); releaseBuildLease in finally
+export type EventAuditRefusal =
+  'quiet-hour' | 'identity-sweep' | 'busy' | 'cooldown' | 'bad-requester';
+export type EventAuditRequestResult =
+  | { status: 'started'; done: Promise<RunOutcome> }
+  | { status: EventAuditRefusal };
+export async function requestEventAudit(
+  deps: EventAuditDeps,
+  requestedBy: string,
+): Promise<EventAuditRequestResult>;
+// requestRebuild's order: requester /^[0-9]{17,20}$/, canStartMonthBuild → 'quiet-hour', digest → 'identity-sweep', lease → 'busy', cooldown exclusive_set → 'cooldown' (lease released), then the run in the background releasing the lease in finally
+export async function defaultEventAuditDeps(
+  client: Client,
+): Promise<EventAuditDeps>;
+export function startEventAuditScheduler(
+  client: Client,
+  options?: { env?; makeDeps?; setIntervalFn?; log?; now? },
+): void;
+// no DATABASE_URL → warn and return; tick now and every EVENT_AUDIT_TICK_MS; one tick at a time; failures logged by String(error), never Discord
 ```
 
 - [ ] **Step 1: Write the failing tests** (FakeCache, FakeEventAuditStore from Task 5, a `vi.fn` `readMeetup`): due rule (no run → true; saved run 54 min ago → false; 56 min → true; failed run 1 min ago but saved 2 h ago → true; backoff key → false); tick in the quiet hour (`2026-11-10T18:10Z`) does not read Meetup; lease held (`BUILD_LEASE_KEY` set) → no read, lease untouched; a due tick reads Meetup and releases the lease; `requestEventAudit` codes in order, `started` resolves `done` ok and releases the lease, the cooldown key has TTL 120; scheduler with no `DATABASE_URL` warns and never ticks.
@@ -295,6 +434,7 @@ export function startEventAuditScheduler(client: Client, options?: { env?; makeD
 ### Task 7: Dashboard deps and page fakes
 
 **Files:**
+
 - Modify: `src/web/routes/dashboardPages.ts` (`EventAuditPageReader = Pick<PostgresEventAuditRepository,'listChanges'|'eventHistory'|'latestRun'>`; on `DashboardPageDeps`: `eventAudit: () => Promise<EventAuditPageReader>`, `snapshotNow: (requestedBy: string) => Promise<EventAuditRequestResult | { status: 'unavailable' }>`), `src/web/dashboardDeps.ts` (wire `PostgresEventAuditRepository.instance()` and `requestEventAudit(await defaultEventAuditDeps(discordClient), id)` with the timed cache as `manualRebuildDeps` does; `{status:'unavailable'}` without a client), `tst/web/routes/pageFakes.ts` (`fakeEventAudit(changes: EventChange[], histories?: Record<string, EventHistory>, latestRun?: EventAuditRun)` with `vi.fn` methods implementing the filters in memory; `eventChangeRow(overrides)` fixture; defaults on `fakePageDeps`: one `deleted` row and `snapshotNow` resolving `{status:'started', done: Promise.resolve({ok:true,...})}`)
 - Test: existing `tst/web/routes/access.test.ts` and `tst/web/dashboardDeps.test.ts` keep passing.
 
@@ -304,16 +444,23 @@ export function startEventAuditScheduler(client: Client, options?: { env?; makeD
 ### Task 8: The pages
 
 **Files:**
+
 - Create: `src/web/routes/eventChanges.ts`
-- Modify: `src/web/routes/dashboardPages.ts` (`registerEventChangeRoutes(router, deps)`), `src/web/pages.ts` (nav item `{ key: 'eventChanges', path: dashboardPath(DASHBOARD_PATHS.eventChanges), label: 'Event changes' }` after Identity changes), `tst/web/routes/responsive.test.ts` (add `/dashboard/events/changes` to `TABLE_PAGES`)
+- Modify: `src/web/routes/dashboardPages.ts` (`registerEventChangeRoutes(router, deps)`), `src/web/pages.ts` (nav item `{ key: 'eventChanges', path: dashboardPath(DASHBOARD_PATHS.eventChanges), label: 'Event changes' }` after Identity changes), `tst/web/routes/responsive.test.ts` (add `/dashboard/events` to `TABLE_PAGES`)
 - Test: `tst/web/routes/eventChanges.test.ts`
 
 **Interfaces (Produces):**
 
 ```ts
 export const KIND_LABELS: Record<EventChangeKind, string>; // Created, Cancelled, Deleted, Hosts changed, Start moved, Title changed, RSVPs dropped, RSVPs closed
-export const SNAPSHOT_MESSAGES: Record<EventAuditRefusal | 'started' | 'error' | 'unavailable', string>; // fixed text
-export function registerEventChangeRoutes(router: express.Router, deps: Pick<DashboardPageDeps, 'now' | 'eventAudit' | 'snapshotNow'>): void;
+export const SNAPSHOT_MESSAGES: Record<
+  EventAuditRefusal | 'started' | 'error' | 'unavailable',
+  string
+>; // fixed text
+export function registerEventChangeRoutes(
+  router: express.Router,
+  deps: Pick<DashboardPageDeps, 'now' | 'eventAudit' | 'snapshotNow'>,
+): void;
 ```
 
 Routes: GET `DASHBOARD_PATHS.eventChanges` (query: `kind` ∈ kinds, `host` digits, `from`/`to` calendar days via the identity page's `calendarDay`/`pacificMidnight` logic copied or extracted, `before` ≤ 18 digits; `?result=` notice), POST `DASHBOARD_PATHS.eventSnapshot` (`deps.snapshotNow(session.userId)`, redirect 303 to the list with `?result=<code>`; a thrown `CacheTimeoutError` propagates, other errors → `error`), GET `DASHBOARD_PATHS.eventHistory` (`:eventId` digits else 404; `eventHistory` undefined → 404). Details column per kind: created `New event`; cancelled `ACTIVE → CANCELLED`; deleted `Gone from Meetup`; host_changed `Hana → Hana, Ken`; start_moved `Dec 5, 2026 7:00 PM → Dec 6, 2026 7:00 PM`; title_changed `“old” → “new”`; rsvp_drop `20 → 14 going`; rsvps_closed `RSVPs closed`. Hosts cell: `memberLink({id,name})` each, plus `Only this host` filter link. Event cell: `eventLink({title, eventUrl})` and a `History` link to `eventHistoryPath`. The Snapshot-now card shows `Last snapshot: <pacificDateTime(latestRun.startedAt)> (saved|failed)` or `No snapshot yet`.
@@ -326,6 +473,7 @@ Routes: GET `DASHBOARD_PATHS.eventChanges` (query: `kind` ∈ kinds, `host` digi
 ### Task 9: Hardening and screenshots
 
 **Files:**
+
 - Test: `tst/web/routes/eventChanges.test.ts` (a row with `hosts: []` and `eventUrl: null` renders `unknown hosts` and no link), `tst/lib/eventAudit/meetup.test.ts` (10 000-char title → 300)
 - Create: `docs/superpowers/screenshots/event-changes/README.md` + PNGs
 
