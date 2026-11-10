@@ -3,8 +3,6 @@ import { describe, expect, it } from 'vitest';
 import { BaseUserInfo, Event } from '../../../src/lib/client/meetup/types.js';
 import {
   collectHostStats,
-  isCancelledEvent,
-  isCountableEvent,
   formatHallOfFamePost,
 } from '../../../src/lib/helpers/hallOfFame.js';
 
@@ -39,52 +37,6 @@ export function host(
   };
 }
 
-describe('isCancelledEvent', () => {
-  it('matches cancelled titles in either spelling, any case', () => {
-    expect(isCancelledEvent(makeEvent({ title: 'CANCELED: Hike' }))).toBe(true);
-    expect(isCancelledEvent(makeEvent({ title: 'Trivia (cancelled)' }))).toBe(
-      true,
-    );
-    expect(isCancelledEvent(makeEvent({ title: 'Trivia Night' }))).toBe(false);
-  });
-
-  it('matches cancelled statuses', () => {
-    expect(isCancelledEvent(makeEvent({ status: 'CANCELLED' }))).toBe(true);
-    expect(isCancelledEvent(makeEvent({ status: 'CANCELLED_PERM' }))).toBe(
-      true,
-    );
-    expect(isCancelledEvent(makeEvent({ status: 'AUTOSCHED_CANCELLED' }))).toBe(
-      true,
-    );
-    expect(isCancelledEvent(makeEvent({ status: 'PAST' }))).toBe(false);
-  });
-
-  it('does not match titles merely containing "cancel"', () => {
-    expect(isCancelledEvent(makeEvent({ title: 'How to cancel plans' }))).toBe(
-      false,
-    );
-  });
-});
-
-describe('isCountableEvent', () => {
-  it('counts an ordinary event', () => {
-    expect(isCountableEvent(makeEvent({ title: 'Trivia Night' }))).toBe(true);
-  });
-
-  it('excludes events cancelled by title or by status', () => {
-    expect(isCountableEvent(makeEvent({ title: 'Canceled: Hike' }))).toBe(
-      false,
-    );
-    expect(isCountableEvent(makeEvent({ status: 'CANCELLED' }))).toBe(false);
-  });
-
-  it('excludes [Open House] events', () => {
-    expect(isCountableEvent(makeEvent({ title: '[Open House] Social' }))).toBe(
-      false,
-    );
-  });
-});
-
 describe('collectHostStats', () => {
   it('groups events by host, sorted by count descending', () => {
     const events = [
@@ -100,7 +52,7 @@ describe('collectHostStats', () => {
 
   it('groups every event it is given -- filtering is the caller’s job', () => {
     // Pins the contract: collectHostStats does no hidden filtering. Callers
-    // filter with isCountableEvent first, where the rule is visible.
+    // filter with countsAsHosted first, where the rule is visible.
     const events = [
       makeEvent({ eventHosts: [host('a')] }),
       makeEvent({ title: 'Canceled: Hike', eventHosts: [host('a')] }),

@@ -91,16 +91,45 @@ function fakeMeetup(
       ..._rest: unknown[]
     ) => Promise.resolve(histories[memberId]),
   );
-  const getGroupEventsCount = vi.fn(({ hostId }: { hostId?: string }) =>
-    Promise.resolve(hostedCounts[hostId] ?? 0),
+  // `hostedCounts[id]` plain PAST events, plus an Open House and a cancelled
+  // one for everyone: only the plain ones count as hosted.
+  const getGroupEvents = vi.fn(
+    (_pagination: unknown, filter: { hostId?: string }) =>
+      Promise.resolve({
+        groupByUrlname: {
+          id: 'g',
+          events: {
+            pageInfo: { hasNextPage: false, endCursor: null },
+            totalCount: 0,
+            edges: [
+              ...Array.from(
+                { length: hostedCounts[filter.hostId ?? ''] ?? 0 },
+                (_, i) => ['Hike', 'PAST', `h${i}`],
+              ),
+              ['[Open House] Pickleball', 'PAST', 'oh'],
+              ['Boba', 'CANCELLED', 'c'],
+            ].map(([title, status, id]) => ({
+              node: {
+                id,
+                title,
+                status,
+                dateTime: '2026-01-01T19:00:00-08:00',
+                eventUrl: '',
+                eventHosts: [],
+                maxTickets: 10,
+              },
+            })),
+          },
+        },
+      }),
   );
   return {
     client: {
       getMemberRsvpEvents,
-      getGroupEventsCount,
+      getGroupEvents,
     } as unknown as NoShowMeetup,
     getMemberRsvpEvents,
-    getGroupEventsCount,
+    getGroupEvents,
   };
 }
 
@@ -270,7 +299,7 @@ describe('buildNoShowReport', () => {
 
   it('flags members who hosted a past event', async () => {
     const data = monthData({ s12: ['1', '2'] }, [SEPT_12]);
-    const { client, getGroupEventsCount } = fakeMeetup(
+    const { client, getGroupEvents } = fakeMeetup(
       { '1': [SEPT_12], '2': [SEPT_12] },
       { '1': 1, '2': 0 },
     );
@@ -278,14 +307,15 @@ describe('buildNoShowReport', () => {
 
     const payload = await buildNoShowReport(client, window, data, opts);
 
-    expect(getGroupEventsCount).toHaveBeenCalledTimes(2);
+    expect(getGroupEvents).toHaveBeenCalledTimes(2);
     ['1', '2'].forEach((hostId) => {
-      expect(getGroupEventsCount).toHaveBeenCalledWith({
+      expect(getGroupEvents).toHaveBeenCalledWith(expect.anything(), {
         hostId,
         status: ['PAST'],
         beforeDateTime: '2026-10-01T07:00:00.000Z',
       });
     });
+    // Host 2's Open House and cancelled event did not count.
     expect(payload.cases.map((c) => [c.member.id, c.hostedPastEvent])).toEqual([
       ['1', true],
       ['2', false],
@@ -294,7 +324,7 @@ describe('buildNoShowReport', () => {
 
   it('skips the host check when includeHostFlag is false', async () => {
     const data = monthData({ s12: ['1', '2'] }, [SEPT_12]);
-    const { client, getGroupEventsCount } = fakeMeetup(
+    const { client, getGroupEvents } = fakeMeetup(
       { '1': [SEPT_12], '2': [SEPT_12] },
       { '1': 1, '2': 0 },
     );
@@ -302,7 +332,7 @@ describe('buildNoShowReport', () => {
 
     const payload = await buildNoShowReport(client, window, data, opts);
 
-    expect(getGroupEventsCount).not.toHaveBeenCalled();
+    expect(getGroupEvents).not.toHaveBeenCalled();
     expect(payload.cases.map((c) => [c.member.id, c.hostedPastEvent])).toEqual([
       ['1', false],
       ['2', false],
@@ -325,14 +355,14 @@ describe('buildNoShowReport', () => {
 
   it('a month without no-shows makes no member or group lookups', async () => {
     const data = monthData({}, [SEPT_05, SEPT_12]);
-    const { client, getMemberRsvpEvents, getGroupEventsCount } = fakeMeetup({});
+    const { client, getMemberRsvpEvents, getGroupEvents } = fakeMeetup({});
     const { repo, resolveGroupId, options: opts } = options([]);
 
     const payload = await buildNoShowReport(client, window, data, opts);
 
     expect(resolveGroupId).not.toHaveBeenCalled();
     expect(getMemberRsvpEvents).not.toHaveBeenCalled();
-    expect(getGroupEventsCount).not.toHaveBeenCalled();
+    expect(getGroupEvents).not.toHaveBeenCalled();
     expect(repo.calls).toEqual([]);
     expect(payload.summary).toEqual({
       noShows: 0,

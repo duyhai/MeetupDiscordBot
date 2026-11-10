@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   countAttendedEvents,
-  countHostedEvents,
+  countHostedEventsByHost,
 } from '../../../src/lib/helpers/eventStats.js';
 
 const rsvp = (memberId: string) => ({ member: { id: memberId } });
@@ -29,10 +29,10 @@ describe('countAttendedEvents', () => {
   });
 });
 
-describe('countHostedEvents', () => {
+describe('countHostedEventsByHost', () => {
   it('counts only events the member hosted', () => {
     const events = [event('me'), event('other'), event('other', 'me'), event()];
 
-    expect(countHostedEvents(events, 'me')).toBe(2);
+    expect(countHostedEventsByHost(events, 'me')).toBe(2);
   });
 });

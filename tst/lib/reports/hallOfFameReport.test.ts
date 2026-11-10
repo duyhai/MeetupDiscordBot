@@ -37,16 +37,51 @@ const makeEvent = (
 const rsvp = (status: string) =>
   ({ member: member('9'), status }) as unknown as Rsvp;
 
-const fakeClient = (counts: Record<string, number> = {}) => {
-  const getGroupEventsCount = vi.fn(({ hostId }: { hostId: string }) =>
-    Promise.resolve(counts[hostId] ?? 1),
+/**
+ * Each host's earlier PAST events: a count of plain ones, or [title, status]
+ * pairs; one plain event by default.
+ */
+const fakeClient = (
+  prior: Record<string, number | [string, string][]> = {},
+) => {
+  const priorOf = (hostId: string): [string, string][] => {
+    const given = prior[hostId];
+    if (given === undefined) {
+      return [['Hike', 'PAST']];
+    }
+    return typeof given === 'number'
+      ? Array.from({ length: given }, () => ['Hike', 'PAST'])
+      : given;
+  };
+  const getGroupEvents = vi.fn(
+    (_pagination: unknown, filter: { hostId?: string }) =>
+      Promise.resolve({
+        groupByUrlname: {
+          id: 'g',
+          events: {
+            pageInfo: { hasNextPage: false, endCursor: null },
+            totalCount: 0,
+            edges: priorOf(filter.hostId ?? '').map(([title, status], i) => ({
+              node: {
+                id: `p${i}`,
+                title,
+                status,
+                dateTime: '2026-01-01T19:00:00-08:00',
+                eventUrl: '',
+                eventHosts: [],
+                maxTickets: 10,
+              },
+            })),
+          },
+        },
+      }),
   );
   return {
-    client: { getGroupEventsCount } as unknown as Pick<
+    client: { getGroupEvents } as unknown as Pick<
       GqlMeetupClient,
-      'getGroupEventsCount'
+      'getGroupEvents'
     >,
-    getGroupEventsCount,
+    getGroupEvents,
   };
 };
 
@@ -78,11 +113,14 @@ describe('buildHallOfFameReport', () => {
       ],
       rsvps: new Map(),
     };
-    const { client, getGroupEventsCount } = fakeClient({ '1': 0, '2': 4 });
+    const { client, getGroupEvents } = fakeClient({
+      '1': [],
+      '2': [['Picnic', 'PAST']],
+    });
 
     const payload = await buildHallOfFameReport(client, window, data, asOf);
 
-    expect(getGroupEventsCount).toHaveBeenCalledWith({
+    expect(getGroupEvents).toHaveBeenCalledWith(expect.anything(), {
       hostId: '1',
       beforeDateTime: '2026-09-01T07:00:00.000Z',
       status: ['PAST'],
@@ -93,6 +131,22 @@ describe('buildHallOfFameReport', () => {
     ]);
     expect(payload.summary.newHosts).toBe(1);
     expect(payload.summary.hosts).toBe(2);
+  });
+
+  it('a host whose earlier events were all Open Houses or cancelled is new', async () => {
+    const data: MonthData = {
+      events: [makeEvent('e1', 'Hike', [member('1')])],
+      rsvps: new Map(),
+    };
+    const { client } = fakeClient({
+      '1': [
+        ['[Open House] Pickleball', 'PAST'],
+        ['Hike', 'CANCELLED'],
+        ['Cancelled: Boba', 'PAST'],
+      ],
+    });
+    const payload = await buildHallOfFameReport(client, window, data, asOf);
+    expect(payload.hosts[0].isNew).toBe(true);
   });
 
   it('excludes cancelled and Open House events', async () => {

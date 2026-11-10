@@ -231,6 +231,29 @@ export const getGroupMembersByIds = gql`
   ${UserFragment}
 `;
 
+/**
+ * These members' standing in the group: status (LEADER is an organizer)
+ * and when they joined. No names: ids only, for the promotion candidates.
+ */
+export const getGroupMembershipsByIds = gql`
+  query ($urlname: String!, $memberIds: [Int!], $first: Int!) {
+    groupByUrlname(urlname: $urlname) {
+      id
+      memberships(first: $first, filter: { memberIds: $memberIds }) {
+        edges {
+          metadata {
+            status
+            joinTime
+          }
+          node {
+            id
+          }
+        }
+      }
+    }
+  }
+`;
+
 // One member's RSVPs in this group, reached through the group's member list
 // (there is no root query by member ID). Meetup honours groupId and the
 // statuses, but not reliably startDate/endDate, so callers filter by date.
@@ -339,6 +362,34 @@ export const getEventForCopy = gql`
       eventHosts {
         member {
           id
+        }
+      }
+    }
+  }
+`;
+
+/**
+ * What the announce pre-checks need: when the event starts and was
+ * created, whether RSVPs are open (rsvpState as the organizer login sees
+ * it), and the hosts for the alerts. No description, no RSVPs.
+ */
+export const getEventForAnnounce = gql`
+  query ($eventId: ID!) {
+    event(id: $eventId) {
+      id
+      title
+      eventUrl
+      dateTime
+      createdTime
+      rsvpState
+      rsvpSettings {
+        rsvpsClosed
+      }
+      status
+      eventHosts {
+        member {
+          id
+          name
         }
       }
     }

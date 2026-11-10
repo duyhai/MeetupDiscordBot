@@ -6,7 +6,7 @@ import {
   mapWithConcurrency,
 } from '../client/meetup/paginationHelper.js';
 import { Event, Rsvp, RsvpFilter } from '../client/meetup/types.js';
-import { isCancelledEvent } from '../helpers/hallOfFame.js';
+import { isCancelledEvent } from '../helpers/countedEvents.js';
 import { tz } from '../../util/timezone.js';
 import { periodKey, periodStart } from './period.js';
 import { AttendanceEvidence } from './types.js';

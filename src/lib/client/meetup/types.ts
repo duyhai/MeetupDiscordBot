@@ -268,6 +268,18 @@ export type GetMemberRsvpsInput = {
   withPaymentInfo?: boolean;
 };
 
+export interface GetGroupMembershipsByIdsResponse {
+  groupByUrlname: {
+    id: string;
+    memberships: {
+      edges: {
+        metadata: { status: string; joinTime: string } | null;
+        node: { id: string };
+      }[];
+    };
+  };
+}
+
 export type GetGroupMembersByIdsInput = {
   first: number;
   memberIds: number[];
@@ -400,6 +412,33 @@ export interface PublishEventDraftResponse {
 
 export interface AnnounceEventInput {
   eventId: string;
+}
+
+export interface GetEventForAnnounceResponse {
+  event: {
+    id: string;
+    title: string | null;
+    eventUrl: string | null;
+    dateTime: string;
+    createdTime: string | null;
+    rsvpState: string | null;
+    rsvpSettings: { rsvpsClosed: boolean | null } | null;
+    status: EventStatus | null;
+    eventHosts: { member: { id: string; name: string | null } | null }[] | null;
+  } | null;
+}
+
+export interface DeleteEventInput {
+  eventId: string;
+  /** false cancels (the event stays on the calendar as cancelled); true deletes. */
+  removeFromCalendar: boolean;
+}
+
+export interface DeleteEventResponse {
+  deleteEvent: {
+    success: boolean | null;
+    errors?: PayloadError[] | null;
+  };
 }
 
 export interface AnnounceEventResponse {

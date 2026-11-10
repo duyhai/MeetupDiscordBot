@@ -12,12 +12,14 @@ import {
   announceEvent,
   closeEventRsvps,
   createEvent,
+  deleteEvent,
   editEvent,
   publishEventDraft,
 } from './mutations.js';
 import { throwOnPayloadErrors } from './payloadErrors.js';
 import {
   getEvent,
+  getEventForAnnounce,
   getEventForAudit,
   getEventForCopy,
   getEventRsvps,
@@ -25,6 +27,7 @@ import {
   getGroupEventsCount,
   getGroupEventsForAudit,
   getGroupMembersByIds,
+  getGroupMembershipsByIds,
   getGroupMemberships,
   getMemberRsvps,
   getSelfPastRsvpCount,
@@ -43,9 +46,12 @@ import {
   CloseEventRsvpsResponse,
   CreateEventInput,
   CreateEventResponse,
+  DeleteEventInput,
+  DeleteEventResponse,
   EditEventInput,
   EditEventResponse,
   EventSummary,
+  GetEventForAnnounceResponse,
   GetEventForAuditResponse,
   GetEventForCopyResponse,
   GetEventResponse,
@@ -57,6 +63,7 @@ import {
   GetGroupEventsInput,
   GetGroupEventsResponse,
   GetGroupMembersByIdsInput,
+  GetGroupMembershipsByIdsResponse,
   GetGroupMembershipsInput,
   GetGroupMembershipsResponse,
   GetGroupMembersByIdsResponse,
@@ -393,6 +400,11 @@ export class GqlMeetupClient {
    * this whenever a caller needs a count for an exact window -- the
    * expansion in getGroupEvents exists to catch multi-day events straddling
    * the boundary and would otherwise inflate the count.
+   *
+   * No production caller since 2026-11-10: every hosted-event count goes
+   * through countHostedEvents (a listing filtered by the shared rule),
+   * because this total counts cancelled events and Open Houses too. Kept
+   * on purpose for an exact-window count that needs no filtering.
    */
   public async getGroupEventsCount(filter?: GroupEventFilter): Promise<number> {
     logger.info(
@@ -447,6 +459,51 @@ export class GqlMeetupClient {
       );
     }
     return members;
+  }
+
+  /**
+   * These members' group status and join time, by member id; a member not
+   * in the group is absent. Paged like getGroupMembersByIds; not cached (a
+   * promotion to organizer should show within the hour).
+   */
+  public async getGroupMembershipsByIds(
+    memberIds: string[],
+  ): Promise<Map<string, { status: string; joinTime: string }>> {
+    const out = new Map<string, { status: string; joinTime: string }>();
+    for (
+      let start = 0;
+      start < memberIds.length;
+      start += MEMBER_LOOKUP_PAGE_SIZE
+    ) {
+      const page = memberIds.slice(start, start + MEMBER_LOOKUP_PAGE_SIZE);
+      logger.info(
+        `Calling getGroupMembershipsByIds for ${page.length} members`,
+      );
+      // eslint-disable-next-line no-await-in-loop
+      const result = await this.client.request<
+        GetGroupMembershipsByIdsResponse,
+        GetGroupMembersByIdsInput
+      >(getGroupMembershipsByIds, {
+        urlname: Configuration.meetup.groupUrlName,
+        memberIds: page.map(Number),
+        first: page.length,
+      });
+      const edges = result.groupByUrlname?.memberships?.edges;
+      if (!Array.isArray(edges)) {
+        // Not "nobody is a member": the read is unusable, and the
+        // candidates page must say so rather than list no one.
+        throw new Error('getGroupMembershipsByIds returned no memberships');
+      }
+      for (const edge of edges) {
+        if (edge.metadata && edge.node?.id !== undefined) {
+          out.set(String(edge.node.id), {
+            status: String(edge.metadata.status),
+            joinTime: String(edge.metadata.joinTime),
+          });
+        }
+      }
+    }
+    return out;
   }
 
   private async getGroupMembersPage(
@@ -687,6 +744,41 @@ export class GqlMeetupClient {
         { eventId },
       );
       return result.event;
+    } catch (error) {
+      logger.error(error);
+      throw error;
+    }
+  }
+
+  /** The announce pre-checks' view of an event; null when Meetup has no such event. Not cached: rsvpState changes. */
+  public async getEventForAnnounce(
+    eventId: string,
+  ): Promise<GetEventForAnnounceResponse['event']> {
+    logger.info(`Calling getEventForAnnounce for event ${eventId}`);
+    const result = await this.client.request<GetEventForAnnounceResponse>(
+      getEventForAnnounce,
+      { eventId },
+    );
+    return result.event;
+  }
+
+  /**
+   * Cancels an event (removeFromCalendar: false) or deletes it. Throws on
+   * a payload error or when Meetup does not say success.
+   */
+  public async deleteEvent(input: DeleteEventInput) {
+    logger.info(`Calling deleteEvent with input: ${JSON.stringify({ input })}`);
+    try {
+      const result = await this.client.request<DeleteEventResponse>(
+        deleteEvent,
+        { input },
+      );
+      logger.info(`deleteEvent result: ${JSON.stringify(result)}`);
+      throwOnPayloadErrors('deleteEvent', result.deleteEvent?.errors);
+      if (result.deleteEvent?.success !== true) {
+        throw new Error('deleteEvent did not confirm');
+      }
+      return result;
     } catch (error) {
       logger.error(error);
       throw error;

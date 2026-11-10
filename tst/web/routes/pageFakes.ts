@@ -1,6 +1,8 @@
 import crypto from 'crypto';
 import { vi } from 'vitest';
 
+import { ChecklistKey } from '../../../src/lib/hosts/reviewChecklist.js';
+
 import { BanRow, BanState } from '../../../src/lib/bans/types.js';
 import { OAuthStateRecord } from '../../../src/lib/client/oauth/state.js';
 import {
@@ -894,6 +896,9 @@ export function fakePromotedHosts(rows: PromotedHost[] = []) {
 export function fakeEventRequests(rows: EventRequest[] = [eventRequestRow()]) {
   return {
     get: vi.fn(async (id: string) => rows.find((r) => r.id === id)),
+    /** Tests set this to show checklists; absent by default, as a store without them. */
+    reviewChecklists: undefined as
+      ((ids: string[]) => Promise<Map<string, ChecklistKey[]>>) | undefined,
     listByStatus: vi.fn(async (statuses: string[]) =>
       rows.filter((r) => statuses.includes(r.status)),
     ),
@@ -1153,6 +1158,7 @@ export function fakePageDeps(
         dateTime: '2026-08-01T19:00:00-07:00',
         eventUrl: 'https://www.meetup.com/g/events/9001/',
         type: 'games' as const,
+        counted: true,
         hosts: [{ id, name: 'A Host' }],
       },
     ]),

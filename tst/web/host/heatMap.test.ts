@@ -15,6 +15,7 @@ const ev = (id: string, dateTime: string, title: string): HostEvent => ({
   dateTime,
   eventUrl: `https://www.meetup.com/g/events/${id}/`,
   type: 'social',
+  counted: true,
   hosts: [],
 });
 

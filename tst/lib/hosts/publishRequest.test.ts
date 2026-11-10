@@ -175,6 +175,31 @@ describe('publishRequest', () => {
     expect(d.alert).not.toHaveBeenCalled();
   });
 
+  it('the decision’s detail goes on the claim, and nothing else', async () => {
+    const { d } = deps(base());
+    await publishRequest(d, '7', 1, LEAD, ['pending'], {
+      detail: '{"checklist":["photo"]}',
+    });
+    expect(d.requests.startPublishing).toHaveBeenCalledWith(
+      '7',
+      1,
+      LEAD,
+      ['pending'],
+      expect.any(Date),
+      '{"checklist":["photo"]}',
+    );
+    const { d: plain } = deps(base());
+    await publishRequest(plain, '7', 1, LEAD, ['pending']);
+    expect(plain.requests.startPublishing).toHaveBeenCalledWith(
+      '7',
+      1,
+      LEAD,
+      ['pending'],
+      expect.any(Date),
+      null,
+    );
+  });
+
   it('two approvals at once create one event', async () => {
     const { d, meetup } = deps(base());
     const outcomes = await Promise.all([

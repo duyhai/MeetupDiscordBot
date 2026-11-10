@@ -10,6 +10,7 @@ import {
 import { LogEntry, alertText } from '../helpers/discordLogger.js';
 import { WorkspaceDeadlineError, withDeadline } from '../../util/deadline.js';
 import { ExistingEvent, PublishOutcome, canDeny } from './publishRequest.js';
+import { ChecklistKey, checklistDetail } from './reviewChecklist.js';
 
 const logger = new Logger({ name: 'requestDecision' });
 
@@ -99,6 +100,13 @@ export interface StaffRequestStore {
   ) => Promise<EventRequest[]>;
   listDecided: (limit?: number) => Promise<EventRequest[]>;
   /**
+   * The reviewer checklist recorded with each request's latest approval;
+   * absent where none was. Optional: a store without it shows no checklists.
+   */
+  reviewChecklists?: (
+    requestIds: string[],
+  ) => Promise<Map<string, ChecklistKey[]>>;
+  /**
    * `lockTimeoutMs` bounds how long the write may wait on a row lock, so a
    * deny cannot commit long after the caller gave up on it.
    */
@@ -130,6 +138,7 @@ export interface DecisionDeps {
     version: number,
     actor: string,
     from: PublishFrom[],
+    options?: { detail?: string | null },
   ) => Promise<PublishOutcome>;
   /**
    * The Meetup event a failed request may have become without it being
@@ -161,6 +170,11 @@ export interface DecisionInput {
   action: DecisionAction;
   /** Deny only: as typed; CRLF and surrounding space are normalised here. */
   reason?: string;
+  /**
+   * Approve only: the reviewer checklist's ticked boxes, recorded with the
+   * decision. Absent for a Discord approval; a memory aid, never a gate.
+   */
+  checklist?: ChecklistKey[];
 }
 
 function auditRefusalOnce(
@@ -355,7 +369,15 @@ export async function decideRequest(
 
   const from: PublishFrom[] =
     action === 'approve' ? ['pending'] : ['failed', 'publishing'];
-  const publishing = deps.publishRequest(id, version, actor, from);
+  const publishing = deps.publishRequest(
+    id,
+    version,
+    actor,
+    from,
+    action === 'approve' && input.checklist !== undefined
+      ? { detail: checklistDetail(input.checklist) }
+      : {},
+  );
   let outcome: PublishOutcome;
   try {
     outcome = await withDeadline(DECISION_DEADLINE_MS, () => publishing);

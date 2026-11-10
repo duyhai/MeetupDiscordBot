@@ -56,8 +56,10 @@ pieces hosts feed into.
    marks as it does today.
 9. Leadership side:
    - **Approval queue.**
-   - **Promotion candidates list**: regular hosts with **20+ hosted events**.
-     Leadership decides; the list is there to look at.
+   - **Promotion candidates list**: regular hosts with **20+ counted hosted
+     events in the last 18 months** who have been group members for a year
+     or more; organizers are left out (leadership, 2026-11-10). Leadership
+     decides; the list is there to look at.
    - **Promote / demote**, with a recorded reason, who did it, and when.
    - **Flagged comments**: comments on hosts' events that read like
      complaints are flagged (by Hai's scheduled task, see below). Flagged ones
@@ -245,8 +247,48 @@ header: Auto follows the device's setting; a choice is kept in that browser.
   co-hosted events count, and so does an event that has started but not
   ended.
 - *Builder's call:* whether regular hosts can announce before approval
-  (they can't; the event doesn't exist yet) and whether there's a cool-down
-  or time window. Keep it simple.
+  (they can't; the event doesn't exist yet).
+- **Guardrails (leadership, Stacey and Hai, 2026-11-10;
+  `src/lib/hosts/announceSchedule.ts`):**
+  - Pre-checks before anything is sent: refused while RSVPs are not open
+    (Meetup's `rsvpSettings.rsvpsClosed` and `rsvpState`; when Meetup gives
+    neither, the host is told to check on Meetup, never treated as open);
+    refused when the event is within 7 days of its start and was created
+    more than 7 days before it (Meetup's own rule, checked from
+    `Event.createdTime`, which the API exposes). More than 3 weeks out is a
+    warning by the button, not a block. The guidelines are shown by the
+    button: open RSVPs first, 2–3 weeks ahead, space out from other
+    announcements, not 10–4 Mon–Fri.
+  - Hold and spacing (Meetup emails the group per announcement, not as a
+    digest): a request made 10:00–16:00 Mon–Fri Pacific is held until 16:00;
+    anything within 30 minutes of another announcement (held, sending or
+    sent) goes 30 minutes after it, and a push that lands in the hold is
+    held again. An event starting within 3 days skips both. A held
+    announcement is a `held` row with `due_at` in `event_announcements`;
+    the page shows "scheduled for …" and any host of the event can cancel
+    it. A tick every minute (`announceTick.ts`: Redis lease,
+    compare-and-set claim per row, so a re-tick or a restart never sends
+    twice) sends at most one due row per tick and defers a row that would
+    go within 30 minutes of the last one actually sent; a due row that
+    cannot be read (Meetup down, organizer login gone) stays held and is
+    alerted once a day once it is 15 minutes late. Plain alert on send and
+    on failure. Approved website requests are untouched.
+  - **Recreate and announce**, for the 7-day refusal, offered only when
+    nobody but the hosts has RSVPed (YES or waitlist): claim the old event
+    in `event_recreations` (so two clicks make one copy), copy it through
+    the copy path's settings (title verbatim, description, time, all
+    hosts, limits, photo, venue, directions), create it with the organizer
+    credential (no approval: the content is unchanged; a plain alert and an
+    activity line still go out), announce the copy under the same hold
+    rules, then cancel the old event (Meetup's `deleteEvent` with
+    `removeFromCalendar: false`, which its schema documents as cancel;
+    never a delete). The cancel step is behind `ANNOUNCE_RECREATE_CANCEL=1`
+    until Hai has tried it on a throwaway event; off, the old event is left
+    and the alert asks leadership to cancel it by hand. A failure before
+    the copy exists releases the claim and leaves the old event untouched; a
+    copy whose announcement did not go out also leaves the old one in
+    place, and the alert says both exist. A dropped featured photo is said
+    in the alert.
 
 ## No-shows
 
@@ -282,11 +324,38 @@ Approve, deny, promote and demote are **1.5 Leadership Team only** (Hai,
 workspace's record/link/void are. Everyone else let into the staff dashboard
 (Moderators) can view the queue, candidates and flagged comments.
 
+## What counts as a hosted event
+
+One rule, in `src/lib/helpers/countedEvents.ts`, everywhere a host's events
+are counted: the monthly reports, the Guest Host badge count and role, the
+host dashboard (history, heat maps, candidates), Where-have-we-met and
+Wrapped (leadership, 2026-11-10). An event counts as hosted unless it is
+cancelled (Meetup's cancelled statuses, or a title saying "cancelled") or
+an **Open House**: a drop-in session the group tags in the title,
+"[Open House] …" or "… (Open House)". The tag form was verified against
+every past group event on 2026-11-10 (73 of the 74 titles containing "open
+house" carry it; "Theodor Jacobsen Observatory Open House", an outing, keeps
+counting). Attended events exclude only cancelled ones: going to an Open
+House is still going to a group event (builder's call). My history shows
+the counted events and offers "show excluded". The 18-month and one-year
+windows below are computed in UTC on purpose: a local-time month subtraction
+across a DST change moves the window by an hour.
+
 ## Promotion
 
-- **Candidates list** (leadership): regular hosts with 20+ hosted events,
-  each with their heat map, count, last hosted date, and issues (flagged
-  comments first, "show all" to expand).
+- **Candidates list** (leadership): regular hosts with 20+ counted hosted
+  events in the last 18 months who joined the group a year or more ago,
+  less organizers (Meetup LEADER status or the Organizer Discord role).
+  Each with their heat map, the 18-month and all-time counts, when they
+  joined, last hosted date, and issues (flagged comments first, "show all"
+  to expand). Decided 2026-11-10 (was: 20+ hosted events all time among
+  the past year's hosts).
+- **Reviewer checklist** on each queue card (2026-11-10): five tick-boxes
+  the reviewer confirms before approving: exact location in the title,
+  non-default photo, RSVPs open, starts 7 or more days out, title and
+  description reasonable. A memory aid, not a gate: Approve stays enabled.
+  The ticked set is recorded with the decision (`event_request_events`
+  detail) and shown in the request's history. No automatic detection.
 - **Promote / demote**: leadership only, with a required reason. Stored with
   who and when (append-only history, like the no-show workspace).
 - Demotion stops direct publishing within the 10-minute tier re-check.

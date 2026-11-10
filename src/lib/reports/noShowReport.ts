@@ -2,6 +2,7 @@ import dayjs from 'dayjs';
 
 import { GqlMeetupClient } from '../client/meetup/gqlClient.js';
 import { mapWithConcurrency } from '../client/meetup/paginationHelper.js';
+import { countHostedEvents } from '../helpers/countHostedEvents.js';
 import {
   NoShowCases,
   SuspensionHistory,
@@ -35,7 +36,7 @@ export type SuspensionHistorySource = Pick<
 >;
 export type NoShowMeetup = Pick<
   GqlMeetupClient,
-  'getMemberRsvpEvents' | 'getGroupEventsCount'
+  'getMemberRsvpEvents' | 'getGroupEvents'
 >;
 
 export interface NoShowBuildOptions {
@@ -123,15 +124,13 @@ export async function buildNoShowReport(
       (options.includeHostFlag ?? true)
         ? result.cases.map((c) => c.member.id)
         : [];
+    // Counted hosted events only (countHostedEvents): a member whose only
+    // hosted events were cancelled or Open Houses gets no fee waiver.
     const hostedCounts = await mapWithConcurrency(
       caseIds,
       MEETUP_CONCURRENCY,
       (hostId) =>
-        meetupClient.getGroupEventsCount({
-          hostId,
-          status: ['PAST'],
-          beforeDateTime: options.asOf.toISOString(),
-        }),
+        countHostedEvents(meetupClient, hostId, { before: options.asOf }),
     );
     hosted = new Set(caseIds.filter((_, i) => hostedCounts[i] > 0));
   }

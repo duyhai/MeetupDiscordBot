@@ -1,6 +1,11 @@
 import pg from 'pg';
 
 import {
+  ChecklistKey,
+  parseChecklistDetail,
+} from '../hosts/reviewChecklist.js';
+
+import {
   DASHBOARD_LOCK_CLASS,
   dashboardPool,
   DashboardTransactionOptions,
@@ -533,6 +538,8 @@ export class PostgresEventRequestRepository {
     actor: string,
     from: PublishFrom[],
     stuckBefore?: Date,
+    /** Kept on the history row: the reviewer checklist, as checklistDetail makes it. */
+    detail: string | null = null,
   ): Promise<EventRequest | undefined> {
     if (!isRequestId(id) || !Number.isInteger(seenVersion)) {
       return Promise.resolve(undefined);
@@ -555,9 +562,40 @@ export class PostgresEventRequestRepository {
       if (rows[0] === undefined) {
         return undefined;
       }
-      await history(c, rows[0], 'start_publishing', actor);
+      await history(c, rows[0], 'start_publishing', actor, detail);
       return rows[0];
     });
+  }
+
+  /**
+   * The reviewer checklist recorded with each request's latest approval
+   * (the newest start_publishing row carrying one); requests without one
+   * are absent.
+   */
+  async reviewChecklists(
+    requestIds: string[],
+  ): Promise<Map<string, ChecklistKey[]>> {
+    const ids = requestIds.filter(isRequestId);
+    if (ids.length === 0) {
+      return new Map();
+    }
+    const { rows } = await this.pool.query<{
+      request_id: string;
+      detail: string | null;
+    }>(
+      `SELECT request_id, detail FROM event_request_events
+        WHERE request_id = ANY($1::bigint[]) AND action = 'start_publishing'
+        ORDER BY id`,
+      [ids],
+    );
+    const out = new Map<string, ChecklistKey[]>();
+    for (const row of rows) {
+      const ticked = parseChecklistDetail(row.detail);
+      if (ticked !== undefined) {
+        out.set(String(row.request_id), ticked);
+      }
+    }
+    return out;
   }
 
   /**
