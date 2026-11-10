@@ -56,7 +56,7 @@ export type VerifyResult =
   /** Linked, but Discord would not let us add them to the server. */
   | { kind: 'not-in-server'; maxServers: boolean }
   /** Came back from Discord as a different account from the linked one. */
-  | { kind: 'discord-mismatch' }
+  | { kind: 'discord-mismatch'; linkedName: string | undefined }
   /** A refresh again within 10 minutes. */
   | { kind: 'too-soon' };
 
@@ -188,18 +188,20 @@ function resultBody(
         <h1>A different Discord account</h1>
         <p>
           Discord answered for a different account from the one linked to your
-          Meetup account, so nothing was changed. Sign in to Discord with your
-          linked account, then try again.
+          Meetup account, so nothing was changed. Sign in to Discord as
+          ${
+            result.linkedName
+              ? html`<strong>${memberText(result.linkedName)}</strong>`
+              : 'your linked account'
+          },
+          then try again.
         </p>
         ${home}
       </div>`;
     case 'too-soon':
       return html`<div class="card">
-        <h1>Verified a few minutes ago</h1>
-        <p>
-          You refreshed your roles and badges a few minutes ago. Try again a
-          little later.
-        </p>
+        <h1>Refreshed recently</h1>
+        <p>You refreshed recently. Try again in a few minutes.</p>
         ${home}
       </div>`;
     default:

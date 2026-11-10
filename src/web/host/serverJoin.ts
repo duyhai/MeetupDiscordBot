@@ -44,10 +44,13 @@ export async function ensureServerMember(
     });
     return { joined: false, pending: Boolean(member.pending), member };
   } catch (error: unknown) {
-    if (!(
+    // Not in the server (Unknown Member, or Unknown User as isServerMember
+    // also reads it): add them. Anything else is Discord failing.
+    const notInServer =
       error instanceof DiscordAPIError &&
-      error.code === RESTJSONErrorCodes.UnknownMember
-    )) {
+      (error.code === RESTJSONErrorCodes.UnknownMember ||
+        error.code === RESTJSONErrorCodes.UnknownUser);
+    if (!notInServer) {
       throw error;
     }
   }
@@ -88,5 +91,21 @@ export async function isServerMember(
       return false;
     }
     throw error;
+  }
+}
+
+/** The Discord username for an id, asked with the bot; undefined if Discord does not know it. */
+export async function discordUsername(
+  getClient: () => Client | undefined,
+  discordUserId: string,
+): Promise<string | undefined> {
+  const client = getClient();
+  if (!client) {
+    return undefined;
+  }
+  try {
+    return (await client.users.fetch(discordUserId)).username;
+  } catch {
+    return undefined;
   }
 }

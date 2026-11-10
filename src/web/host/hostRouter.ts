@@ -155,6 +155,8 @@ export interface HostRouterDeps {
    * cannot answer. Without it every refresh goes through Discord.
    */
   isServerMember?: (discordUserId: string) => Promise<boolean>;
+  /** The Discord username for an id, asked with the bot; undefined if unknown. */
+  discordUsername?: (discordUserId: string) => Promise<string | undefined>;
   /**
    * The Verify button's steps (link, nickname, lounge, roles, badges) for
    * this Discord account, with the member's fresh Meetup access token, used
@@ -628,13 +630,20 @@ export function createHostRouter(deps: HostRouterDeps): express.Router {
             `came back from Discord as <@${identity.id}>. Nothing was changed.`,
         });
       }
+      // Name the linked account, so they know which to sign in with.
+      let linkedName: string | undefined;
+      try {
+        linkedName = await deps.discordUsername?.(session.discordUserId);
+      } catch {
+        linkedName = undefined;
+      }
       send(
         res,
         403,
         verifyResultPage(
           locals(res).nonce,
           session,
-          { kind: 'discord-mismatch' },
+          { kind: 'discord-mismatch', linkedName },
           undefined,
         ),
       );
@@ -789,7 +798,15 @@ export function createHostRouter(deps: HostRouterDeps): express.Router {
       }
       const stored = await storedMeetupToken(identity.id, meetupId);
       if (stored) {
-        await runAndShow(res, session, identity.id, stored, join);
+        // A host already linked before this step is refreshing.
+        await runAndShow(
+          res,
+          session,
+          identity.id,
+          stored,
+          join,
+          session.discordUserId !== null,
+        );
         return;
       }
       const state = newHostState();
@@ -923,6 +940,8 @@ export function createHostRouter(deps: HostRouterDeps): express.Router {
     discordUserId: string,
     meetupAccessToken: string,
     join: ServerJoinResult,
+    /** A "Refresh roles and badges" run: counted against its limit. */
+    refresh = false,
   ) {
     const page = (result: VerifyResult, status = 200) =>
       send(
@@ -938,6 +957,12 @@ export function createHostRouter(deps: HostRouterDeps): express.Router {
     const inFlight = verifyInFlight.get(session.userId);
     if (inFlight !== undefined) {
       page(await inFlight);
+      return;
+    }
+    // Counted only here, when Verify really runs: an outage, a step backed
+    // out of, or a double click never uses up the refresh.
+    if (refresh && !verifyRefreshLimiter.take(session.userId)) {
+      page({ kind: 'too-soon' }, 429);
       return;
     }
     const result = (async (): Promise<VerifyResult> => {
@@ -1357,17 +1382,9 @@ export function createHostRouter(deps: HostRouterDeps): express.Router {
    * account). At most one refresh per host every 10 minutes.
    */
   async function refreshStart(res: Response, discordUserId: string) {
-    const { session, nonce } = hostLocals(res);
+    const { session } = hostLocals(res);
     if (!deps.runVerify) {
       res.redirect(303, `${HOST_BASE}?link=already`);
-      return;
-    }
-    if (!verifyRefreshLimiter.take(session.userId)) {
-      send(
-        res,
-        429,
-        verifyResultPage(nonce, session, { kind: 'too-soon' }, undefined),
-      );
       return;
     }
     let inServer: boolean;
@@ -1388,7 +1405,7 @@ export function createHostRouter(deps: HostRouterDeps): express.Router {
     }
     const stored = await storedMeetupToken(discordUserId, session.userId);
     if (stored) {
-      await runAndShow(res, session, discordUserId, stored, undefined);
+      await runAndShow(res, session, discordUserId, stored, undefined, true);
       return;
     }
     meetupHopPage(res, discordUserId);

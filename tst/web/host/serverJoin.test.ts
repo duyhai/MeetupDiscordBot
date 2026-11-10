@@ -110,3 +110,28 @@ describe('isServerMember', () => {
     );
   });
 });
+
+describe('Unknown User', () => {
+  const unknownUser = () =>
+    new DiscordAPIError(
+      { code: RESTJSONErrorCodes.UnknownUser, message: 'Unknown User' },
+      RESTJSONErrorCodes.UnknownUser,
+      404,
+      'GET',
+      '/guilds/x/members/y',
+      {},
+    );
+
+  it('reads as not a member, for both the check and the join', async () => {
+    const check = fakeClient({ fetchError: unknownUser() });
+    expect(await isServerMember(() => check.client, USER)).toBe(false);
+    const join = fakeClient({
+      fetchError: unknownUser(),
+      added: { pending: false },
+    });
+    expect(
+      (await ensureServerMember(() => join.client, USER, 'oauth')).joined,
+    ).toBe(true);
+    expect(join.add).toHaveBeenCalled();
+  });
+});
