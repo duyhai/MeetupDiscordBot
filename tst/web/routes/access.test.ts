@@ -104,6 +104,8 @@ const EXPECTED_UNSAFE_ALLOWED: Record<string, number> = {
   'POST /bans/:id/photo': 303,
   // A fake Leadership check says no: refused, back to the queue.
   'POST /hosts/requests/:id/:action': 303,
+  // A fake Leadership check says no: refused, back to the member's page.
+  'POST /hosts/promotion/:memberId': 303,
 };
 
 function concrete(path: string): string {

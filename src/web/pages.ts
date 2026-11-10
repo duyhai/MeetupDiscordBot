@@ -356,6 +356,11 @@ const NAV_ITEMS = [
     label: 'Host requests',
   },
   {
+    key: 'hostPromotion',
+    path: dashboardPath(DASHBOARD_PATHS.hostPromotion),
+    label: 'Host promotion',
+  },
+  {
     key: 'hallOfFame',
     path: dashboardPath(DASHBOARD_PATHS.hallOfFame),
     label: 'Hall of Fame',

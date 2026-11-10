@@ -40,6 +40,8 @@ export const DASHBOARD_PATHS = {
   workspaceSync: '/no-shows/:period/sync',
   hostRequests: '/hosts/requests',
   hostRequestAction: '/hosts/requests/:id/:action',
+  hostPromotion: '/hosts/promotion',
+  hostMember: '/hosts/promotion/:memberId',
 } as const;
 
 export type DashboardPathTemplate =
