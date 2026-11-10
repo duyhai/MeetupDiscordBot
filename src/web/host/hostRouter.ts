@@ -7,6 +7,7 @@ import express, {
   Response,
 } from 'express';
 import { generateCodeVerifier, generateState } from 'arctic';
+import { DiscordAPIError, RESTJSONErrorCodes } from 'discord.js';
 import { Logger } from 'tslog';
 
 import { GUEST_HOST_BLACKLIST } from '../../constants.js';
@@ -233,7 +234,9 @@ export function createHostRouter(deps: HostRouterDeps): express.Router {
   const linkAlertLimiter = new FixedWindowLimiter(1, 60 * 60 * 1000);
   // One Verify run at a time per host (Meetup id), so a double click on
   // "Finish verification" never grants roles twice. In-memory per dyno.
-  const verifyInFlight = new Set<string>();
+  // A second request (a double click) waits for the run in flight and shows
+  // its result, rather than guessing.
+  const verifyInFlight = new Map<string, Promise<VerifyResult>>();
   /** The session tag a link state carries: a keyed hash, never the sid. */
   const sessionTag = (sid: string) =>
     crypto
@@ -385,6 +388,9 @@ export function createHostRouter(deps: HostRouterDeps): express.Router {
       return;
     }
     if (resolution.kind === 'refused') {
+      if ('meetupMemberId' in identity) {
+        await forgetSignInTokens(identity.meetupMemberId);
+      }
       const key = who(identity);
       if (refusedAuditLimiter.take(key)) {
         audit({
@@ -500,9 +506,20 @@ export function createHostRouter(deps: HostRouterDeps): express.Router {
     return undefined;
   }
 
+  /**
+   * No longer a host: the Meetup set kept at their dashboard sign-in goes
+   * (one kept under a Discord id is the bot's, and stays). Best-effort.
+   */
+  async function forgetSignInTokens(meetupId: string) {
+    await deps.meetupTokens
+      ?.forget({ meetup: meetupId })
+      .catch(() => undefined);
+  }
+
   /** A refused host: every session ends, as the gate's re-check does. */
   async function endSessions(meetupId: string, reason: string) {
     await (await sessions()).revokeUser(meetupId);
+    await forgetSignInTokens(meetupId);
     audit({
       title: 'Host dashboard session ended',
       description: `Meetup member ${meetupId} is no longer eligible for the host dashboard (${reason}).`,
@@ -530,10 +547,6 @@ export function createHostRouter(deps: HostRouterDeps): express.Router {
       res.redirect(302, `${HOST_BASE}?link=${code}`);
     const refused = async (meetupId: string, sid: string, reason: string) => {
       await endSessions(meetupId, reason);
-      // No longer a host: the set kept at their dashboard sign-in goes too.
-      await deps.meetupTokens
-        ?.forget({ meetup: meetupId })
-        .catch(() => undefined);
       await (await sessions()).destroy(sid);
       res.append('Set-Cookie', clearCookie(HOST_SESSION_COOKIE, HOST_BASE));
       fail(res, 403);
@@ -659,20 +672,40 @@ export function createHostRouter(deps: HostRouterDeps): express.Router {
     // Into our server, with their own token (guilds.join), once the link
     // is written. A failure keeps the link: the result page says so.
     let join: ServerJoinResult;
+    // Discord's error code when the join failed (30001: they are already in
+    // the most servers Discord allows), for the log, the alert and the page.
+    let joinFailCode: number | string | undefined;
     if (deps.joinServer) {
       try {
         join = await deps.joinServer(identity.id, accessToken);
       } catch (error: unknown) {
+        joinFailCode =
+          error instanceof DiscordAPIError ? error.code : undefined;
         logger.warn(
-          `Host Discord server join failed: ${error instanceof Error ? error.name : 'Error'}`,
+          `Host Discord server join failed: ${error instanceof Error ? error.name : 'Error'}` +
+            `${joinFailCode === undefined ? '' : ` (code ${joinFailCode})`}`,
         );
         join = 'failed';
-        alert({
-          title: 'Could not add a member to the server (host dashboard)',
-          description:
-            `<@${identity.id}> (Meetup member ${meetupId}) verified on the host ` +
-            'dashboard, but Discord did not let us add them to the server.',
-        });
+        if (linkAlertLimiter.take(`${meetupId}:join`)) {
+          alert({
+            title: 'Could not add a member to the server (host dashboard)',
+            description:
+              `<@${identity.id}> (Meetup member ${meetupId}) verified on the host ` +
+              'dashboard, but Discord did not let us add them to the server.',
+            fields: [
+              {
+                name: 'Discord error',
+                value:
+                  joinFailCode === undefined
+                    ? error instanceof Error
+                      ? error.name
+                      : 'Error'
+                    : String(joinFailCode),
+                inline: true,
+              },
+            ],
+          });
+        }
       }
     }
     const joined = join !== undefined && join !== 'failed' && join.joined;
@@ -711,7 +744,12 @@ export function createHostRouter(deps: HostRouterDeps): express.Router {
           verifyResultPage(
             locals(res).nonce,
             session,
-            { kind: 'not-in-server' },
+            {
+              kind: 'not-in-server',
+              maxServers:
+                joinFailCode ===
+                RESTJSONErrorCodes.MaximumNumberOfGuildsReached,
+            },
             join,
           ),
         );
@@ -860,43 +898,49 @@ export function createHostRouter(deps: HostRouterDeps): express.Router {
         status,
         verifyResultPage(locals(res).nonce, session, result, join),
       );
-    if (!deps.runVerify) {
+    const run = deps.runVerify;
+    if (!run) {
       res.redirect(302, `${HOST_BASE}?link=already`);
       return;
     }
-    if (verifyInFlight.has(session.userId)) {
-      page({ kind: 'busy' }, 409);
+    const inFlight = verifyInFlight.get(session.userId);
+    if (inFlight !== undefined) {
+      page(await inFlight);
       return;
     }
-    verifyInFlight.add(session.userId);
-    let summary: VerificationSummary;
-    try {
-      summary = await deps.runVerify(meetupAccessToken, discordUserId);
-    } catch (error: unknown) {
-      // Both already alerted where they were thrown.
-      if (
-        error instanceof NonMemberError ||
-        error instanceof DuplicateMeetupAccountError
-      ) {
-        page({ kind: 'refused', message: error.message });
-        return;
+    const result = (async (): Promise<VerifyResult> => {
+      try {
+        return {
+          kind: 'verified',
+          summary: await run(meetupAccessToken, discordUserId),
+        };
+      } catch (error: unknown) {
+        // Both already alerted where they were thrown.
+        if (error instanceof NonMemberError) {
+          return { kind: 'refused', message: error.message, retry: true };
+        }
+        if (error instanceof DuplicateMeetupAccountError) {
+          return { kind: 'refused', message: error.message, retry: false };
+        }
+        logger.warn(
+          `Host verify steps failed: ${error instanceof Error ? error.name : 'Error'}`,
+        );
+        alert({
+          title: 'Verify on the host dashboard did not finish',
+          description:
+            `<@${discordUserId}> ↔ Meetup member ${session.userId} is linked, but ` +
+            `the roles and badges could not be updated (${error instanceof Error ? error.name : 'Error'}). ` +
+            'They were told to press Verify in Discord.',
+        });
+        return { kind: 'roles-failed' };
       }
-      logger.warn(
-        `Host verify steps failed: ${error instanceof Error ? error.name : 'Error'}`,
-      );
-      alert({
-        title: 'Verify on the host dashboard did not finish',
-        description:
-          `<@${discordUserId}> ↔ Meetup member ${session.userId} is linked, but ` +
-          `the roles and badges could not be updated (${error instanceof Error ? error.name : 'Error'}). ` +
-          'They were told to press Verify in Discord.',
-      });
-      page({ kind: 'roles-failed' });
-      return;
+    })();
+    verifyInFlight.set(session.userId, result);
+    try {
+      page(await result);
     } finally {
       verifyInFlight.delete(session.userId);
     }
-    page({ kind: 'verified', summary });
   }
 
   /**
@@ -1119,6 +1163,7 @@ export function createHostRouter(deps: HostRouterDeps): express.Router {
       }
       if (resolution.kind === 'refused') {
         await (await sessions()).revokeUser(memberId);
+        await forgetSignInTokens(memberId);
         audit({
           title: 'Host dashboard session ended',
           description: `Meetup member ${memberId} is no longer eligible for the host dashboard (${resolution.reason}).`,

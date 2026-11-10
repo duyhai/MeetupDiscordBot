@@ -45,6 +45,8 @@ describe('verifyRunner', () => {
       userId: '123456789012345678',
       username: 'ann.n',
       attempt: 'host dashboard',
+      // Keeps the row's method, and Verify's link step posts no second line.
+      linkMethod: 'web_link',
     };
     for (const step of [selfOnboardUser, getUserRoles, getBadges]) {
       const [meetupClient, member] = vi.mocked(step).mock.calls[0];

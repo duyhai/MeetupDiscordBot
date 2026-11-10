@@ -21,6 +21,13 @@ export interface VerifyContext {
   username: string;
   /** How the attempt began, for alerts: "button:sync_meetup_account", "host dashboard". */
   attempt: string;
+  /**
+   * Where the link came from, kept on the member row: 'self_onboard' (the
+   * Verify button, the default) or 'web_link' (the host dashboard, which
+   * has already posted its own "linked" activity line, so Verify's link
+   * step stays quiet).
+   */
+  linkMethod?: 'self_onboard' | 'web_link';
 }
 
 export function verifyContextOf(

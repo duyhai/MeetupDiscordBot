@@ -153,6 +153,7 @@ export function verifyRunner(
       userId: discordUserId,
       username: user.username,
       attempt: 'host dashboard',
+      linkMethod: 'web_link',
     };
     const meetupClient = new GqlMeetupClient(meetupAccessToken, {
       bypassCache: true,

@@ -162,6 +162,14 @@ describe('recordMeetupLink', () => {
     expect(vi.mocked(discordLogger.logActivity)).toHaveBeenCalledTimes(2);
   });
 
+  it('a link from the website keeps web_link and posts no second activity line', async () => {
+    await recordMeetupLink(memberOf(), info, 'web_link');
+    expect((await repo.findByDiscordId('discord-1'))?.onboardMethod).toBe(
+      'web_link',
+    );
+    expect(discordLogger.logActivity).not.toHaveBeenCalled();
+  });
+
   it('swallows repository failures and alerts instead of throwing', async () => {
     vi.mocked(memberRepository.ApplicationMemberRepository).mockRejectedValue(
       new Error('db down'),

@@ -58,7 +58,10 @@ describe('ensureServerMember', () => {
       pending: true,
       member: added,
     });
-    expect(add).toHaveBeenCalledWith(USER, { accessToken: 'oauth' });
+    expect(add).toHaveBeenCalledWith(USER, {
+      accessToken: 'oauth',
+      fetchWhenExisting: false,
+    });
   });
 
   it('an add that finds them already in (204) is not a join', async () => {

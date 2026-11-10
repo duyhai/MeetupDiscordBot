@@ -288,7 +288,7 @@ export async function selfOnboardUser(
       meetupName: userInfo.self.name,
       meetupMemberUrl: userInfo.self.memberUrl,
     },
-    'self_onboard',
+    member.linkMethod ?? 'self_onboard',
   );
   await onboardUserCommon(
     member,

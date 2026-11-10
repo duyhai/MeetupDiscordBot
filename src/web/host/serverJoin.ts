@@ -52,8 +52,12 @@ export async function ensureServerMember(
     }
   }
   // null when Discord says they are already a member (204): a race with
-  // their own join, so fetch them like any member.
-  const added = await guild.members.add(discordUserId, { accessToken });
+  // their own join, so fetch them like any member. fetchWhenExisting:
+  // false, or discord.js fetches them itself and the 204 looks like a join.
+  const added = await guild.members.add(discordUserId, {
+    accessToken,
+    fetchWhenExisting: false,
+  });
   const member =
     added ?? (await guild.members.fetch({ user: discordUserId, force: true }));
   return { joined: added !== null, pending: Boolean(member.pending), member };

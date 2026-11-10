@@ -65,7 +65,7 @@ export interface MeetupLinkInfo {
 export async function recordMeetupLink(
   member: Pick<VerifyContext, 'client' | 'userId' | 'username'>,
   info: MeetupLinkInfo,
-  method: 'self_onboard' | 'sync_v2',
+  method: 'self_onboard' | 'sync_v2' | 'web_link',
 ): Promise<boolean> {
   const { client } = member;
   const user = {
@@ -113,14 +113,17 @@ export async function recordMeetupLink(
       onboardedBy: null,
     });
 
-    await logActivity(client, {
-      title: 'Meetup account linked',
-      description: `${user.toString()} (${user.username}) ↔ ${meetupLink}`,
-      fields: [
-        { name: 'Meetup ID', value: info.meetupId, inline: true },
-        { name: 'Method', value: method, inline: true },
-      ],
-    });
+    // The host dashboard posts its own line for a website link.
+    if (method !== 'web_link') {
+      await logActivity(client, {
+        title: 'Meetup account linked',
+        description: `${user.toString()} (${user.username}) ↔ ${meetupLink}`,
+        fields: [
+          { name: 'Meetup ID', value: info.meetupId, inline: true },
+          { name: 'Method', value: method, inline: true },
+        ],
+      });
+    }
     return true;
   } catch (error) {
     if (error instanceof DuplicateMeetupAccountError) {

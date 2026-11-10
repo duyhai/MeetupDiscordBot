@@ -46,7 +46,7 @@ export function joinOf(flags: string): ServerJoinResult {
 export type VerifyResult =
   | { kind: 'verified'; summary: VerificationSummary }
   /** Not a group member, or the Meetup account is someone else's link. */
-  | { kind: 'refused'; message: string }
+  | { kind: 'refused'; message: string; retry: boolean }
   /** Signed in to a different Meetup account at the Meetup step. */
   | { kind: 'other-account' }
   /** Cancelled at Meetup, or Meetup did not answer. */
@@ -56,7 +56,7 @@ export type VerifyResult =
   /** A Verify run for this host is already in progress. */
   | { kind: 'busy' }
   /** Linked, but Discord would not let us add them to the server. */
-  | { kind: 'not-in-server' };
+  | { kind: 'not-in-server'; maxServers: boolean };
 
 function serverNote(join: ServerJoinResult): SafeHtml | '' {
   if (join === 'failed') {
@@ -139,7 +139,7 @@ function resultBody(
       return html`<div class="card">
         <h1>Not verified</h1>
         <p>${result.message}</p>
-        ${serverNote(join)} ${home}
+        ${serverNote(join)} ${result.retry ? finish(session) : ''} ${home}
       </div>`;
     case 'other-account':
       return html`<div class="card">
@@ -163,11 +163,21 @@ function resultBody(
     case 'not-in-server':
       return html`<div class="card">
         <h1>Linked, not in our server yet</h1>
-        <p>
-          Your Meetup and Discord accounts are linked, but Discord did not let
-          us add you to our server, so your roles could not be set. Join it from
-          the link on our Meetup group page, then press Verify there.
-        </p>
+        ${
+          result.maxServers
+            ? html`<p>
+                Your Meetup and Discord accounts are linked, but you are already
+                in as many Discord servers as Discord allows, so we could not
+                add you to ours. Leave a server first, then join ours from the
+                link on our Meetup group page and press Verify there.
+              </p>`
+            : html`<p>
+                Your Meetup and Discord accounts are linked, but Discord did not
+                let us add you to our server, so your roles could not be set.
+                Join it from the link on our Meetup group page, then press
+                Verify there.
+              </p>`
+        }
         ${home}
       </div>`;
     case 'busy':

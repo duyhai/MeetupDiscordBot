@@ -1,3 +1,4 @@
+import { DiscordAPIError, RESTJSONErrorCodes } from 'discord.js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { GUEST_HOST_BLACKLIST } from '../../../src/constants.js';
@@ -768,6 +769,8 @@ describe('Verify on Discord: joining the server and running Verify', () => {
     const page = await verify(app);
     expect(page.text).toContain('Not verified');
     expect(page.text).toContain('not a member of our Meetup group');
+    // After joining the group on Meetup, they can finish here.
+    expect(page.text).toContain('action="/host/verify/finish"');
     expect(JSON.stringify(app.alert.mock.calls)).not.toContain(
       'did not finish',
     );
@@ -853,37 +856,106 @@ describe('Verify on Discord: joining the server and running Verify', () => {
     expect(setCookie(res, 'host_oauth_meetup')).toBeUndefined();
   });
 
-  it('one Verify run at a time: a double click does not grant roles twice', async () => {
+  it('one Verify run at a time: a double click waits for the run and shows its result', async () => {
     let release: (() => void) | undefined;
+    let outcome: typeof SUMMARY | Error = SUMMARY;
     const app = await verifySetup();
     await verify(app, (state) => `state=${state}&error=access_denied`);
     app.runVerify.mockImplementation(
       async () =>
-        new Promise((resolve) => {
+        new Promise((resolve, reject) => {
           release = () => {
-            resolve(SUMMARY);
+            if (outcome instanceof Error) {
+              reject(outcome);
+            } else {
+              resolve(outcome);
+            }
           };
         }),
     );
-    const first = await finish(app);
-    const second = await finish(app);
-    // Sent now (the request is lazy until awaited or then'd).
-    const one = Promise.resolve(
-      app.req
-        .get(`/host/auth/meetup/complete?state=${first.state}&code=m`)
-        .set('Cookie', `${app.sid}; ${first.cookie}`),
-    );
+    const complete = async (flow: { state: string; cookie: string }) =>
+      // Sent now (the request is lazy until awaited or then'd).
+      Promise.resolve(
+        app.req
+          .get(`/host/auth/meetup/complete?state=${flow.state}&code=m`)
+          .set('Cookie', `${app.sid}; ${flow.cookie}`),
+      );
+    const one = complete(await finish(app));
     await vi.waitFor(() => {
       expect(app.runVerify).toHaveBeenCalledTimes(1);
     });
-    const two = await app.req
-      .get(`/host/auth/meetup/complete?state=${second.state}&code=m`)
-      .set('Cookie', `${app.sid}; ${second.cookie}`);
-    expect(two.status).toBe(409);
-    expect(two.text).toContain('Already verifying');
+    const two = complete(await finish(app));
+    // Let the second request reach the server and wait on the first run.
+    await new Promise((resolve) => {
+      setTimeout(resolve, 100);
+    });
     release?.();
-    expect((await one).text).toContain('You are verified');
+    const [first, second] = await Promise.all([one, two]);
+    expect(first.text).toContain('You are verified');
+    expect(second.text).toContain('You are verified');
     expect(app.runVerify).toHaveBeenCalledTimes(1);
+    // A failure is shown to both, never "it worked".
+    app.runVerify.mockClear();
+    outcome = new Error('discord 500');
+    const three = complete(await finish(app));
+    await vi.waitFor(() => {
+      expect(app.runVerify).toHaveBeenCalledTimes(1);
+    });
+    const four = complete(await finish(app));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 100);
+    });
+    release?.();
+    const [failed, waited] = await Promise.all([three, four]);
+    expect(failed.text).toContain('Linked, not verified yet');
+    expect(waited.text).toContain('Linked, not verified yet');
+    expect(app.runVerify).toHaveBeenCalledTimes(1);
+  });
+
+  it('a join refused for too many servers says to leave one first, with the code in the alert', async () => {
+    const tooMany = new DiscordAPIError(
+      {
+        code: RESTJSONErrorCodes.MaximumNumberOfGuildsReached,
+        message: 'Maximum number of guilds reached (100)',
+      },
+      RESTJSONErrorCodes.MaximumNumberOfGuildsReached,
+      400,
+      'PUT',
+      '/guilds/g/members/u',
+      {},
+    );
+    const app = await verifySetup({ join: tooMany });
+    const { back } = await link(app.req, app.sid, app.session().csrfToken);
+    expect(back.text).toContain('Leave a server first');
+    expect(JSON.stringify(app.alert.mock.calls)).toContain(
+      String(RESTJSONErrorCodes.MaximumNumberOfGuildsReached),
+    );
+    // A retry (from a session that never learned the link) posts no
+    // second alert within the hour.
+    patchStoredSession(app.cache, { discordUserId: null });
+    await link(app.req, app.sid, app.session().csrfToken);
+    expect(
+      app.alert.mock.calls.filter(([e]) =>
+        JSON.stringify(e).includes('Could not add a member to the server'),
+      ),
+    ).toHaveLength(1);
+  });
+
+  it('a host refused at sign-in loses the set kept at an earlier sign-in', async () => {
+    const forget = vi.fn().mockResolvedValue(undefined);
+    const app = await setup({
+      overrides: {
+        meetupTokens: {
+          keep: vi.fn().mockResolvedValue(undefined),
+          usable: vi.fn(),
+          move: vi.fn(),
+          forget,
+        },
+      },
+    });
+    app.resolve.mockResolvedValue({ kind: 'refused', reason: 'not-a-host' });
+    await expect(signInWithMeetup(app.req)).rejects.toThrow();
+    expect(forget).toHaveBeenCalledWith({ meetup: MEETUP_SELF.id });
   });
 
   it('a non-member keeps the link and is told why', async () => {
