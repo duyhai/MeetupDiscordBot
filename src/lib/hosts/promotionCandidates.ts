@@ -121,10 +121,11 @@ export async function promotionCandidates(
 /**
  * `read` kept for `ttlMs`, one read at a time (a second caller awaits the
  * first). A failure is not kept, so the next call reads again; nor is a
- * value `keep` refuses. A read slower than `timeoutMs` fails its callers
- * and frees the slot, so a hung read never pins every later caller. The
- * read carries on after a caller stops waiting, so a slow first read is
- * ready for the reload.
+ * value `keep` refuses. A caller that stops waiting (the page's own
+ * deadline) leaves the read running, and if it finishes within `timeoutMs`
+ * its result is kept for the reload. Past `timeoutMs` the read fails its
+ * callers and frees the slot: its late result is dropped and the next call
+ * starts a fresh read, so a hung read never pins later callers.
  */
 export function singleFlight<T>(
   read: () => Promise<T>,
