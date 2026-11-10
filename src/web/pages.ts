@@ -16,8 +16,10 @@ export interface PageUser {
 }
 
 /**
- * The one stylesheet (nonce'd; no other CSS, no web fonts). Two-Tone: blurple
- * marks what you can act on, coral what needs a person, green what is done.
+ * The one stylesheet (nonce'd; no other CSS, no web fonts). Night market: a
+ * sand page and teal buttons by day, plum-black with tangerine and magenta by
+ * night; the accent marks what you can act on, coral what needs a person,
+ * green what is done.
  * Light tokens on :root, dark ones under prefers-color-scheme: dark unless
  * the page chose light (data-theme="light"), and again for data-theme="dark"
  * (the header's theme toggle sets either; see theme.ts). Every text/background pair is
@@ -26,27 +28,27 @@ export interface PageUser {
  */
 // prettier-ignore
 export const STYLE = staticRaw`
-:root{--bg:#f5f5fa;--surface:#ffffff;--raised:#f1f1f8;--fg:#191a24;--muted:#555869;--line:#dedfea;--field:#7c7f93;
---sel:#ebecfb;--accent:#4f5bd5;--btn:#4752c4;--btn-hover:#3940a0;--btn-fg:#ffffff;--focus:#5865f2;--attn:#c9283a;
---attn-soft:#fde3e6;--attn-ink:#9c1c2c;--accent-soft:#e8e9fd;--accent-ink:#3940a0;--ok-soft:#ddf2e5;--ok-ink:#1f693d;
---rule-a:#5865f2;--rule-b:#e8414f;--heat1:#c9cdf7;--heat2:#9ca3ee;--heat3:#6b75e0;--heat4:#4752c4;
+:root{--bg:#f7efe6;--surface:#ffffff;--raised:#f1e5d6;--fg:#1d1527;--muted:#5e5468;--line:#e2d5c3;--field:#7d7186;
+--sel:#ffe5d1;--accent:#a83a0c;--btn:#0c6b74;--btn-hover:#09525a;--btn-fg:#ffffff;--focus:#c2410c;--attn:#b4232c;
+--attn-soft:#ffe0dc;--attn-ink:#8a1c24;--accent-soft:#ffe6d6;--accent-ink:#7a2a08;--ok-soft:#d8f3ea;--ok-ink:#135a4b;
+--rule-a:#ff7a1a;--rule-b:#e5007d;--heat1:#ffe0c2;--heat2:#ffb27a;--heat3:#e0640c;--heat4:#a83a0c;
 --font:system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
 --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;
 --s1:4px;--s2:8px;--s3:12px;--s4:16px;--s5:24px;--s6:32px;--t-sm:.875rem;--t-base:1rem;--t-lg:1.125rem;--t-xl:1.375rem;
 --t-2xl:1.75rem;
---radius:10px;--tap:44px;--width:1040px;color-scheme:light}
-@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#17181f;--surface:#20212b;--raised:#2a2b37;
---fg:#eeeef6;--muted:#a9abbd;
---line:#363847;--field:#7a7d93;--sel:#2f3150;--accent:#8d96ff;--btn:#5865f2;--btn-hover:#4752c4;--btn-fg:#ffffff;
---focus:#a3aaff;--attn:#ff7d88;--attn-soft:#46252c;--attn-ink:#ffbac0;--accent-soft:#30335e;--accent-ink:#cbcffd;
---ok-soft:#203a2b;--ok-ink:#8fd8ab;--rule-a:#7984ff;--rule-b:#ff6b77;--heat1:#353a6e;--heat2:#4a54b0;--heat3:#6c76f0;
---heat4:#a3aaff;color-scheme:dark}}
-:root[data-theme="dark"]{--bg:#17181f;--surface:#20212b;--raised:#2a2b37;
---fg:#eeeef6;--muted:#a9abbd;
---line:#363847;--field:#7a7d93;--sel:#2f3150;--accent:#8d96ff;--btn:#5865f2;--btn-hover:#4752c4;--btn-fg:#ffffff;
---focus:#a3aaff;--attn:#ff7d88;--attn-soft:#46252c;--attn-ink:#ffbac0;--accent-soft:#30335e;--accent-ink:#cbcffd;
---ok-soft:#203a2b;--ok-ink:#8fd8ab;--rule-a:#7984ff;--rule-b:#ff6b77;--heat1:#353a6e;--heat2:#4a54b0;--heat3:#6c76f0;
---heat4:#a3aaff;color-scheme:dark}
+--radius:14px;--tap:44px;--width:1040px;color-scheme:light}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#0b0912;--surface:#15111f;--raised:#1f1a2c;
+--fg:#f6efff;--muted:#bfb3d4;
+--line:#2d2640;--field:#8c80a6;--sel:#2a1f3a;--accent:#ffa05c;--btn:#ff8a3d;--btn-hover:#ffa05c;--btn-fg:#1a0f05;
+--focus:#4fe3d2;--attn:#ff6b9d;--attn-soft:#4a1a33;--attn-ink:#ffbcd6;--accent-soft:#4a2a1a;--accent-ink:#ffd0b0;
+--ok-soft:#103a36;--ok-ink:#7fe6d6;--rule-a:#ff8a3d;--rule-b:#ff3f9e;--heat1:#3a2a1a;--heat2:#7a4520;--heat3:#d86a2a;
+--heat4:#ffa05c;color-scheme:dark}}
+:root[data-theme="dark"]{--bg:#0b0912;--surface:#15111f;--raised:#1f1a2c;
+--fg:#f6efff;--muted:#bfb3d4;
+--line:#2d2640;--field:#8c80a6;--sel:#2a1f3a;--accent:#ffa05c;--btn:#ff8a3d;--btn-hover:#ffa05c;--btn-fg:#1a0f05;
+--focus:#4fe3d2;--attn:#ff6b9d;--attn-soft:#4a1a33;--attn-ink:#ffbcd6;--accent-soft:#4a2a1a;--accent-ink:#ffd0b0;
+--ok-soft:#103a36;--ok-ink:#7fe6d6;--rule-a:#ff8a3d;--rule-b:#ff3f9e;--heat1:#3a2a1a;--heat2:#7a4520;--heat3:#d86a2a;
+--heat4:#ffa05c;color-scheme:dark}
 *,*::before,*::after{box-sizing:border-box}
 html{-webkit-text-size-adjust:100%;text-size-adjust:100%}
 body{margin:0;font-family:var(--font);font-size:var(--t-base);line-height:1.5;color:var(--fg);background:var(--bg)}
