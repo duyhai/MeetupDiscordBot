@@ -458,6 +458,21 @@ describe('Approve button', () => {
     });
   });
 
+  it('a store blip after a stale reply does not fail the press', async () => {
+    const { deps, store, mirror } = setup({
+      rows: [eventRequestRow({ id: '17' })],
+      decide: () => ({ code: 'stale' }),
+    });
+    store.get.mockResolvedValueOnce(eventRequestRow({ id: '17' }));
+    store.get.mockRejectedValueOnce(new Error('db down'));
+    const { interaction, followUp } = buttonInteraction('request-approve:17');
+    await expect(
+      handleApprovePress(deps, interaction),
+    ).resolves.toBeUndefined();
+    expect(replyText(followUp)).toContain('Someone just acted');
+    expect(mirror).not.toHaveBeenCalled();
+  });
+
   it('refuses to approve a request whose start has passed, without touching it', async () => {
     const { deps, decide } = setup({
       rows: [eventRequestRow({ id: '17', startLocal: '2026-11-01T19:00' })],

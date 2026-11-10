@@ -10,7 +10,6 @@ import { Logger } from 'tslog';
 
 import { DASHBOARD_BASE } from '../reports/dashboardPaths.js';
 import {
-  DISCORD_ID,
   EventRequest,
   PostgresEventRequestRepository,
 } from '../repositories/postgresEventRequestRepository.js';
@@ -158,25 +157,25 @@ function shortReason(reason: string): string {
 
 /**
  * Who decided: the host themself (a promoted host's publish records their
- * own Meetup id), a leader (a Discord id, mentioned without a ping), or a
- * name for anything else.
+ * own Meetup id as the actor), else a leader (a Discord id, mentioned
+ * without a ping). Those are the only two actors a decision records.
  */
 function decider(request: EventRequest): {
-  kind: 'self' | 'leader' | 'other';
+  kind: 'self' | 'leader';
   text: string;
 } {
-  const by = request.decidedBy;
-  if (by !== null && by === request.meetupMemberId) {
-    return { kind: 'self', text: alertText(request.hostName) };
-  }
-  if (by !== null && DISCORD_ID.test(by)) {
-    return { kind: 'leader', text: `<@${by}>` };
-  }
-  return { kind: 'other', text: alertText(request.hostName) };
+  const by = request.decidedBy ?? '';
+  return by === request.meetupMemberId
+    ? { kind: 'self', text: alertText(request.hostName) }
+    : { kind: 'leader', text: `<@${by}>` };
 }
 
 /** A post with one of these carries its final outcome; nothing is appended after. */
-const FINAL_MARKS = ['\n✅ Request approved by', '\n❌ Request denied by'];
+const FINAL_MARKS = [
+  '\n✅ Request approved by',
+  '\n✅ Published by',
+  '\n❌ Request denied by',
+];
 /** The failed line may be followed by a final outcome (Retry, Resolve, Deny), but never by itself again. */
 const FAILED_MARK = '\n⚠️ Approved by';
 
@@ -312,7 +311,13 @@ export async function postRequest(
   }
   // Decided on the website while the post was going out: that decision
   // found no post to edit, so it is shown now.
-  if (recorded !== undefined && decisionLine(recorded) !== undefined) {
+  // A post sent already decided (a promoted host's own publish) carries its
+  // line; nothing to add.
+  if (
+    !decided &&
+    recorded !== undefined &&
+    decisionLine(recorded) !== undefined
+  ) {
     deps.mirror?.(recorded).catch((error: unknown) => {
       logger.warn(`Request post mirror threw: ${errorName(error)}`);
     });

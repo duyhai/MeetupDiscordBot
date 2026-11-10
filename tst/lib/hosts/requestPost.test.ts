@@ -282,6 +282,26 @@ describe('postRequest', () => {
     expect(mirror.mock.calls[0]?.[0]).toMatchObject({ status: 'denied' });
   });
 
+  it("does not mirror a promoted host's post that was sent already decided", async () => {
+    const { deps, setDiscordPost } = postDeps();
+    const published = eventRequestRow({
+      id: '17',
+      status: 'published',
+      meetupMemberId: '4242',
+      decidedBy: '4242',
+      eventUrl: 'https://www.meetup.com/x/events/9/',
+    });
+    setDiscordPost.mockResolvedValueOnce({
+      ...published,
+      discordPost: { channelId: '8'.repeat(18), messageId: '9'.repeat(18) },
+    });
+    const mirror = vi.fn<(request: EventRequest) => Promise<undefined>>(
+      async () => undefined,
+    );
+    await postRequest({ ...deps, mirror }, published, { send: sender() });
+    expect(mirror).not.toHaveBeenCalled();
+  });
+
   it('does not mirror a request that is still open after posting', async () => {
     const { deps } = postDeps();
     const mirror = vi.fn(async () => undefined);
@@ -390,6 +410,28 @@ describe('mirrorDecision', () => {
     expect(channels.fetch).not.toHaveBeenCalled();
     await mirrorDecision({ getClient: () => undefined, alert }, decided);
     expect(alert).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not append a second line to a self-published post', async () => {
+    const edit = vi.fn();
+    const { client } = fakeClient({
+      message: {
+        content:
+          'original\n✅ Published by Hana.\nLink to event: <https://www.meetup.com/x/events/9/>',
+        edit,
+      },
+    });
+    await mirrorDecision(
+      { getClient: () => client, alert: vi.fn() },
+      eventRequestRow({
+        status: 'published',
+        meetupMemberId: '4242',
+        decidedBy: '4242',
+        eventUrl: 'https://www.meetup.com/x/events/9/',
+        discordPost: { channelId: '8'.repeat(18), messageId: '9'.repeat(18) },
+      }),
+    );
+    expect(edit).not.toHaveBeenCalled();
   });
 
   it('a failed post gets the final outcome when the request is retried or denied later', async () => {

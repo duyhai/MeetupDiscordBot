@@ -290,10 +290,17 @@ async function decideFromDiscord(
   });
   if (outcome.code === 'stale') {
     // Someone else decided it (perhaps before the post was recorded): make
-    // sure the post shows that decision. Idempotent and cheap.
-    const now = await (await deps.store()).get(id);
-    if (now !== undefined) {
-      deps.mirror(now).catch(() => undefined);
+    // sure the post shows that decision. Idempotent and cheap; the leader
+    // already has their answer, so a store blip here is only logged.
+    try {
+      const now = await (await deps.store()).get(id);
+      if (now !== undefined) {
+        deps.mirror(now).catch(() => undefined);
+      }
+    } catch (error: unknown) {
+      logger.warn(
+        `Could not re-read request #${id} after a stale press: ${error instanceof Error ? error.name : 'Error'}`,
+      );
     }
   }
   // The service wrote the audit line; the wrapper's generic one is skipped.
