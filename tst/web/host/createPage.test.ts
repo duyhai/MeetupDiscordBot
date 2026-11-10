@@ -176,6 +176,17 @@ describe('host create form', () => {
     expect(res.text).not.toContain('style=');
   });
 
+  it('offers copying a past event from My history, on the fresh form only', async () => {
+    const { req, sid } = await app();
+    const fresh = await get(req, sid, '/host/create');
+    expect(fresh.text).toContain('Copy one of your past events');
+    expect(fresh.text).toMatch(
+      /<a href="\/host\/history"\s*>open My history<\/a/,
+    );
+    const copy = await get(req, sid, '/host/create?copy=311111111');
+    expect(copy.text).not.toContain('Copy one of your past events');
+  });
+
   it('ignores a day that is past or not a date', async () => {
     const { req, sid } = await app();
     const pages = await Promise.all(

@@ -8,6 +8,7 @@ import {
 } from '../lib/reports/dashboardPaths.js';
 import { tz } from '../util/timezone.js';
 import { SafeHtml, html, localUrl, memberText, staticRaw } from './html.js';
+import { THEME_SCRIPT, themeToggle } from './theme.js';
 
 export interface PageUser {
   username: string;
@@ -17,8 +18,11 @@ export interface PageUser {
 /**
  * The one stylesheet (nonce'd; no other CSS, no web fonts). Two-Tone: blurple
  * marks what you can act on, coral what needs a person, green what is done.
- * Light tokens on :root, dark ones under prefers-color-scheme: dark; every
- * text/background pair is checked against WCAG AA in contrast.test.ts.
+ * Light tokens on :root, dark ones under prefers-color-scheme: dark unless
+ * the page chose light (data-theme="light"), and again for data-theme="dark"
+ * (the header's theme toggle sets either; see theme.ts). Every text/background pair is
+ * checked against WCAG AA in contrast.test.ts, which also checks the two
+ * dark blocks are the same.
  */
 // prettier-ignore
 export const STYLE = staticRaw`
@@ -31,11 +35,18 @@ export const STYLE = staticRaw`
 --s1:4px;--s2:8px;--s3:12px;--s4:16px;--s5:24px;--s6:32px;--t-sm:.875rem;--t-base:1rem;--t-lg:1.125rem;--t-xl:1.375rem;
 --t-2xl:1.75rem;
 --radius:10px;--tap:44px;--width:1040px;color-scheme:light}
-@media (prefers-color-scheme:dark){:root{--bg:#17181f;--surface:#20212b;--raised:#2a2b37;--fg:#eeeef6;--muted:#a9abbd;
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#17181f;--surface:#20212b;--raised:#2a2b37;
+--fg:#eeeef6;--muted:#a9abbd;
 --line:#363847;--field:#7a7d93;--sel:#2f3150;--accent:#8d96ff;--btn:#5865f2;--btn-hover:#4752c4;--btn-fg:#ffffff;
 --focus:#a3aaff;--attn:#ff7d88;--attn-soft:#46252c;--attn-ink:#ffbac0;--accent-soft:#30335e;--accent-ink:#cbcffd;
 --ok-soft:#203a2b;--ok-ink:#8fd8ab;--rule-a:#7984ff;--rule-b:#ff6b77;--heat1:#353a6e;--heat2:#4a54b0;--heat3:#6c76f0;
 --heat4:#a3aaff;color-scheme:dark}}
+:root[data-theme="dark"]{--bg:#17181f;--surface:#20212b;--raised:#2a2b37;
+--fg:#eeeef6;--muted:#a9abbd;
+--line:#363847;--field:#7a7d93;--sel:#2f3150;--accent:#8d96ff;--btn:#5865f2;--btn-hover:#4752c4;--btn-fg:#ffffff;
+--focus:#a3aaff;--attn:#ff7d88;--attn-soft:#46252c;--attn-ink:#ffbac0;--accent-soft:#30335e;--accent-ink:#cbcffd;
+--ok-soft:#203a2b;--ok-ink:#8fd8ab;--rule-a:#7984ff;--rule-b:#ff6b77;--heat1:#353a6e;--heat2:#4a54b0;--heat3:#6c76f0;
+--heat4:#a3aaff;color-scheme:dark}
 *,*::before,*::after{box-sizing:border-box}
 html{-webkit-text-size-adjust:100%;text-size-adjust:100%}
 body{margin:0;font-family:var(--font);font-size:var(--t-base);line-height:1.5;color:var(--fg);background:var(--bg)}
@@ -61,6 +72,12 @@ header.site .brand{font-size:var(--t-lg);font-weight:700}
 header.site .account{display:flex;flex-wrap:wrap;gap:var(--s2) var(--s3);align-items:center;color:var(--muted);
 font-size:var(--t-sm)}
 header.site form{margin:0}
+.theme-toggle{display:inline-flex;border:1px solid var(--line);border-radius:999px;padding:2px;gap:2px}
+.theme-toggle[hidden]{display:none}
+.theme-toggle button{min-height:32px;padding:0 var(--s3);border:0;border-radius:999px;background:transparent;color:var(--muted);
+  font:inherit;font-size:var(--t-sm);cursor:pointer}
+.theme-toggle button:hover{color:var(--fg);background:var(--sel)}
+.theme-toggle button[aria-pressed="true"]{color:var(--accent-ink);background:var(--accent-soft);font-weight:600}
 nav.site{background:var(--surface);border-bottom:1px solid var(--line);overflow-x:auto;scrollbar-width:thin}
 nav.site .tabs{display:flex;gap:var(--s1);max-width:var(--width);margin:0 auto;padding:0 var(--s2)}
 nav.site a{flex:0 0 auto;display:inline-flex;align-items:center;min-height:var(--tap);padding:0 var(--s3);
@@ -202,13 +219,39 @@ svg.heat rect.hm2{fill:var(--heat2)}
 svg.heat rect.hm3{fill:var(--heat3)}
 svg.heat rect.hm4{fill:var(--heat4)}
 svg.heat text{fill:var(--muted)}
+svg.heat a.hm-link:focus{outline:none}
+svg.heat a.hm-link:focus-visible rect{stroke:var(--fg);stroke-width:2px}
+svg.heat a.hm-link rect{cursor:pointer}
+.hm-tip{position:fixed;z-index:30;max-width:min(20rem,calc(100vw - 16px));padding:var(--s2) var(--s3);
+  background:var(--fg);color:var(--bg);border-radius:8px;font-size:var(--t-sm);box-shadow:0 6px 18px rgb(0 0 0 / .25);
+  overflow-wrap:anywhere;pointer-events:none}
+.hm-tip strong,.hm-tip span{display:block}
+nav.year-nav{display:flex;align-items:center;gap:var(--s3);flex-wrap:wrap;margin:var(--s3) 0 0}
+nav.year-nav .disabled{opacity:.45;cursor:default}
+@media (max-width:480px){nav.year-nav{justify-content:space-between}nav.year-nav strong{order:-1;flex-basis:100%}}
+p.day-filter{font-weight:600}
 table.cal-grid{table-layout:fixed;width:100%;min-width:560px}
 table.cal-grid th{text-align:center}
 td.cal{vertical-align:top;height:76px;padding:var(--s1) var(--s2);font-size:var(--t-sm);white-space:normal;
 overflow-wrap:anywhere}
-td.cal span{display:block}
+td.cal .cal-head span,details.cal-pop>summary>span{display:block}
 .cal-day{font-weight:700}
-a.cal-day{position:relative;display:inline-flex;align-items:center;min-width:var(--tap);min-height:var(--tap)}
+.cal-head{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:var(--s1)}
+td.cal .cal-day{white-space:nowrap;overflow-wrap:normal}
+a.cal-add{display:inline-flex;align-items:center;justify-content:center;min-width:28px;min-height:28px;flex:none;
+  padding:0 var(--s1);border-radius:6px;color:var(--accent);font-size:1.25rem;font-weight:700;line-height:1;text-decoration:none}
+a.cal-add:hover{background:var(--sel)}
+details.cal-pop{margin:0}
+details.cal-pop>summary{position:relative;display:block;list-style:none;min-height:40px;padding:var(--s1) 0;font-weight:400}
+details.cal-pop>summary::-webkit-details-marker{display:none}
+details.cal-pop>summary .cal-count{text-decoration:underline dotted;text-underline-offset:3px}
+.cal-panel{margin-top:var(--s1);padding:var(--s2);border:1px solid var(--line);border-radius:8px;background:var(--surface)}
+.cal-panel ul{margin:0 0 var(--s2);padding-left:1.1rem}
+.cal-panel li{margin:0 0 var(--s1)}
+.cal-panel p{margin:0 0 var(--s1)}
+.cal-panel-title{font-weight:700}
+table.cal-js details.cal-pop[open]>.cal-panel{position:fixed;z-index:20;margin:0;width:min(22rem,calc(100vw - 32px));
+  max-height:min(60vh,28rem);overflow:auto;box-shadow:0 8px 24px rgb(0 0 0 / .25)}
 .cal-date{font-weight:600;font-style:italic}
 .sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
 form.request-form label.field{margin:0 0 var(--s3)}
@@ -218,9 +261,11 @@ form.request-form details.more-options{margin:0 0 var(--s3);padding-bottom:var(-
 form.request-form details.more-options textarea{max-width:40rem}
 .desc-text{white-space:pre-line;overflow-wrap:anywhere;max-height:24rem;overflow-y:auto;padding:var(--s2) var(--s3);
   background:var(--raised);border-radius:8px;font-size:var(--t-sm)}
+ul.copy-details{margin:0 0 var(--s2);padding-left:1.2rem;overflow-wrap:anywhere}
 .wrap-anywhere{overflow-wrap:anywhere}
 .field-error{display:block;margin-top:var(--s1);color:var(--attn-ink);font-size:var(--t-sm);font-weight:600}
 td.cal.past{color:var(--muted);background:var(--bg)}
+td.cal.out{background:var(--bg)}
 td.busy0,.swatch.busy0{background:var(--ok-soft)}
 td.busy1,.swatch.busy1{background:var(--surface)}
 td.busy2,.swatch.busy2{background:var(--attn-soft)}
@@ -365,10 +410,11 @@ export function layout({
 <meta name="robots" content="noindex, nofollow">
 <title>${title} · 1.5 Gen Asians staff</title>
 <style nonce="${nonce}">${STYLE}</style>
+<script nonce="${nonce}">${THEME_SCRIPT}</script>
 </head>
 <body>
 <a class="skip" href="#main">Skip to main content</a>
-<header class="site"><div class="bar"><strong class="brand">1.5 Gen Asians staff dashboard</strong>${account}</div></header>
+<header class="site"><div class="bar"><strong class="brand">1.5 Gen Asians staff dashboard</strong>${themeToggle()}${account}</div></header>
 ${nav}
 <main id="main" tabindex="-1">${body}</main>
 </body>

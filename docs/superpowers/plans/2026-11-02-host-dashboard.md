@@ -396,7 +396,67 @@ Order: CAS (`startPublishing`, `stuckBefore = now − 10 min`) → `tierOf` (a m
 - Full `yarn test`, `yarn lint`, `tsc`, integration suite on :55432/:56379. Browser check at 360/1280, light and dark: create (fresh and copy), request page, home requests, staff queue.
 - [ ] Commit; per-task reviewers; fix what they confirm; open PR with the attribution line.
 
-# PR 3: Promotion, comments, announcing
+# PR 3: #129 follow-ups and the calendar, history and form UI (Hai's walkthrough)
+
+Approved by Hai (via the lead session, 2026-11-09). One PR off `main` at `66d052c`. The promotion/comments/announcing work below moves to a later PR. The publish path and alerts stay unchanged. No new dependencies. Pages stay server-rendered, with one small inline script per page (nonce, `staticRaw`) that enhances markup which already works without it. Everything must work at 360 px with no sideways scroll.
+
+## Decisions (builder's calls)
+
+- **Popovers without ids.** The HTML guard never interpolates `id`, and the `popover`/`popovertarget` pair needs one. Each calendar day is therefore a `<details>` element: its `<summary>` opens it with a click, a tap, Enter or Space, natively and without JS. The script adds four things:
+  - hover opening for a mouse;
+  - one open day at a time;
+  - Escape to close (focus returns to the summary) and tap-outside to close;
+  - `position: fixed` placement clamped to the viewport, so the `.table-scroll` box never clips the panel.
+
+  Without JS, the panel opens inline inside the cell.
+- **Calendar cell:** the day number is plain text. A `+` link (`aria-label="Host an event on Fri, Nov 20"`) opens the create form for that day, on every day from tomorrow on. The popover lists every event that day (time, title link, holiday badges, hosts) and ends with **Host on this day**, the same text and target as the day-by-day list. Past days keep only their date.
+- **Heat map by year:**
+  - Each day that has events is an SVG `<a>` to `/host/history?year=Y&day=D` (keeping `type`), with `aria-label` and a native `<title>` giving the date and each event's time and title.
+  - The script replaces the native tooltip with a positioned one, shown on hover and focus. On touch, the first tap shows it and the second follows the link.
+  - Empty days stay plain rects, so the map adds about one tab stop per hosted day, not 365.
+  - `?year=` defaults to the current Pacific year. An invalid year, or one outside the earliest hosted year to the current one, falls back to the current year.
+  - Prev is shown disabled when no hosted event is earlier than that year; Next is disabled for the current year. Both are links that keep `type`.
+- **Day filter:** `?day=YYYY-MM-DD` (a real date) filters the past-events table to that day and shows "Showing <date> · Clear". Clear keeps `type` and `year`. Paging still applies.
+- **Copy:** the history action reads **Copy this event** on every row, filtered or not. The fresh form gets "Or copy one of your past events", linking to My history.
+- **Deny bound (A1):** `deny()` takes `{ lockTimeoutMs }`. The route passes the page's remaining time, floored to whole ms and at least 1 ms, after the `left <= 0` check.
+- **Copy details on the queue (A2):**
+  - The venue shows as "Venue: Meetup venue <id>", or "none (online or none set)".
+  - Directions show escaped.
+  - The photo shows as "Photo: Meetup photo <id>", "the group's standard photo" or "none". No thumbnail, because the staff CSP is `img-src 'self'`.
+  - A copied description gets the same attention badge as a host-written one: "Description from the host's event".
+- **A3:** a comment in `existingEventFilter`. The fixed ±1 day window can be off by an hour across a DST change. That is safe because `isEventFor` matches the exact Pacific start, and the window is only a prefilter that still contains it.
+
+## Tasks
+
+1. **Follow-ups (A1–A3):**
+   - Code: `postgresEventRequestRepository.deny(…, options)`, `hostRequests.ts` (bounded deny, copy details), `eventRequest.ts` comment.
+   - Tests:
+     - route: the `left <= 0` branch (now advances past the deadline after the Meetup check, so deny is never called);
+     - route: `deny` receives `lockTimeoutMs ≤` the remaining time;
+     - route: the copy card shows the venue, directions, photo and description badge, escaped;
+     - integration: deny with a short `lockTimeoutMs` while another transaction holds the row fails without committing.
+2. **Calendar (B4–B6):**
+   - Code: `hostPages.ts` cell markup and the popover panel, a `CALENDAR_SCRIPT` constant, CSS in `pages.ts`, and a script slot in `hostPage`/`hostLayout`.
+   - Tests:
+     - every future day has a `+` link with its aria-label, and day numbers are not links;
+     - each popover lists every event that day, escaped, beyond what the cell shows;
+     - future popovers carry "Host on this day" and past days have none;
+     - the script tag carries the nonce.
+3. **History (C7, C8, D9 row action):**
+   - Code: `heatMap.ts` becomes a year view, `historyBody` gets the year/day query, `HISTORY_SCRIPT`.
+   - Tests:
+     - linked dots carry their events' times and titles, escaped;
+     - empty days have no link;
+     - `?year` defaults, bounds and Prev/Next disabled states;
+     - `?day` filters the table, shows Clear and keeps `type`;
+     - every row, filtered or not, has "Copy this event".
+4. **Form (D9):** a link from the fresh form to My history; a test.
+5. **Checks:**
+   - `yarn test`, lint, `tsc`, and integration on :55432/:56379.
+   - One reviewer per task; fix what is confirmed.
+   - Browser check at 360 px and desktop, light and dark: the calendar popover (mouse, keyboard, Escape, tap outside), the heat map tooltip and filter, and year paging.
+
+# PR 4 (was PR 3): Promotion, comments, announcing
 
 - **Promotion** (`/dashboard/hosts/candidates`): regular hosts with 20+ PAST hosted events (from the identity links' Meetup ids plus hosts seen in group events), each with heat map, count, last hosted date, issues (flagged comments first, "show all"). Promote/demote with a required reason, leadership only, live check; writes `promoted_hosts` + `promoted_host_events`; first promote is `INSERT … ON CONFLICT (meetup_member_id) DO NOTHING` (no row back = a concurrent promote won), later changes `UPDATE … SET version = version + 1, changed_at = now() WHERE version = $seen`, and each history row records the version it produced; demoting someone never promoted is refused; revokes the member's host sessions so the tier changes at once (the 10-minute re-check is the backstop); plain alert. Per-host heat map page.
 - **Comments:** `event_comments` (Meetup comment id key, event id, member id, name, text, created, is_private, parent id, `flagged_at`, `flag_source`, `flag_note`). Daily sweep job (Redis lease, outside 17:45–19:00 UTC) over hosts' events from 60 days back through upcoming, `Event.comments` with replies, organizer credential. Host page `/host/comments` (own events only; private comments only to that event's hosts and leadership). **Flag write path:** a Heroku one-off script `scripts/flagComments.ts` reading JSON `{ commentId, note }[]` from stdin (no new HTTP surface). `host_issues` table for manual entries; the issues list merges both.

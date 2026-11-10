@@ -425,6 +425,10 @@ export function isEventFor(
 export function existingEventFilter(
   request: Pick<EventRequest, 'meetupMemberId' | 'startLocal'>,
 ): GroupEventFilter {
+  // A fixed 24 h either side, so across a DST change the window is off by
+  // an hour at one end. That is safe: it is only a prefilter that always
+  // still contains the start, and isEventFor then matches the exact
+  // Pacific start time.
   const start = dayjs.tz(request.startLocal, 'America/Los_Angeles');
   return {
     hostId: request.meetupMemberId,

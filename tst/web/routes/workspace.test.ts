@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { THEME_SCRIPT } from '../../../src/web/theme.js';
 
 import { Period } from '../../../src/lib/reports/period.js';
 import { NoShowPayload } from '../../../src/lib/reports/types.js';
@@ -320,12 +321,16 @@ describe('GET /dashboard/no-shows/:period (month cards)', () => {
     const scripts = [
       ...res.text.matchAll(/<script nonce="[^"]+">([\s\S]*?)<\/script>/g),
     ];
-    expect(scripts).toHaveLength(1);
-    expect(scripts[0][1]).toBe(WORKSPACE_SCRIPT.value);
-    expect(res.raw.match(/<script/g)).toHaveLength(1);
+    // The theme script in <head>, then the page's own.
+    expect(scripts).toHaveLength(2);
+    expect(scripts[0][1]).toBe(THEME_SCRIPT.value);
+    expect(scripts[1][1]).toBe(WORKSPACE_SCRIPT.value);
+    expect(res.raw.match(/<script/g)).toHaveLength(2);
     // No message text in any attribute or script.
     expect(res.text).not.toMatch(/data-text=/);
-    expect(scripts[0][1]).not.toContain('Hello');
+    for (const [, body] of scripts) {
+      expect(body).not.toContain('Hello');
+    }
   });
 
   it('warning text in the copy box is the template for that member', async () => {

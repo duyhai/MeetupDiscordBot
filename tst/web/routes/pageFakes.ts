@@ -821,7 +821,13 @@ export function fakeEventRequests(rows: EventRequest[] = [eventRequestRow()]) {
       rows.filter((r) => r.status === 'published' || r.status === 'denied'),
     ),
     deny: vi.fn(
-      async (id: string, version: number, actor: string, reason: string) => {
+      async (
+        id: string,
+        version: number,
+        actor: string,
+        reason: string,
+        _options?: { lockTimeoutMs?: number },
+      ) => {
         const row = rows.find((r) => r.id === id);
         const deniable =
           row?.status === 'pending' ||

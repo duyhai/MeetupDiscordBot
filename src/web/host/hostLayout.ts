@@ -1,5 +1,6 @@
 import { SafeHtml, html, localUrl, memberText } from '../html.js';
 import { STYLE } from '../pages.js';
+import { THEME_SCRIPT, themeToggle as themeToggleMarkup } from '../theme.js';
 import { HOST_BASE } from './hostSession.js';
 
 /** The host site's pages, in order. Links and labels are fixed. */
@@ -36,12 +37,15 @@ export function hostLayout({
   user,
   current,
   body,
+  script,
 }: {
   title: string;
   nonce: string;
   user?: { username: string; csrfToken: string };
   current?: HostNavKey;
   body: SafeHtml;
+  /** One staticRaw constant: the page's progressive enhancement. */
+  script?: SafeHtml;
 }): string {
   const account = user
     ? html`<div class="account">
@@ -53,6 +57,9 @@ export function hostLayout({
       </div>`
     : '';
   const nav = user ? hostNav(current) : '';
+  const themeToggle = themeToggleMarkup();
+  // prettier-ignore
+  const scriptTag = script ? html`<script nonce="${nonce}">${script}</script>` : '';
   // prettier-ignore
   return html`<!doctype html>
 <html lang="en">
@@ -62,12 +69,14 @@ export function hostLayout({
 <meta name="robots" content="noindex, nofollow">
 <title>${title} · 1.5 Gen Asians hosts</title>
 <style nonce="${nonce}">${STYLE}</style>
+<script nonce="${nonce}">${THEME_SCRIPT}</script>
 </head>
 <body>
 <a class="skip" href="#main">Skip to main content</a>
-<header class="site"><div class="bar"><strong class="brand">1.5 Gen Asians host dashboard</strong>${account}</div></header>
+<header class="site"><div class="bar"><strong class="brand">1.5 Gen Asians host dashboard</strong>${themeToggle}${account}</div></header>
 ${nav}
 <main id="main" tabindex="-1">${body}</main>
+${scriptTag}
 </body>
 </html>`.value;
 }

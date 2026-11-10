@@ -34,8 +34,9 @@ const mintedUrls = new WeakSet<object>();
 const mintedRaw = new WeakSet<object>();
 /**
  * Markup that must not go inside <svg>: it holds a script, style or
- * textarea, or a title with markup in it. Those parse as markup in foreign
- * content, not as the text they were checked as.
+ * textarea, or a title with markup in it (those parse as markup in foreign
+ * content, not as the text they were checked as), or any tag outside
+ * SVG_TAGS (refused inline in <svg>, so refused when composed in too).
  */
 const notForeignSafe = new WeakSet<object>();
 
@@ -229,6 +230,8 @@ const NOT_IN_SELECT = new Set(['style', 'script', 'title', 'textarea']);
 /** Inside <svg>, only these: no style, script, foreignObject, or HTML that breaks out. */
 const SVG_TAGS = new Set([
   'svg',
+  // SVG's own link: its href is a URL attribute, so it takes only a SafeUrl.
+  'a',
   'g',
   'rect',
   'line',
@@ -356,6 +359,11 @@ function tagNamed(st: Scan): void {
   }
   if (st.foreign > 0 && !SVG_TAGS.has(st.tag)) {
     unsupported(`<${st.tag}> inside <svg>`);
+  }
+  // A fragment with any tag SVG does not allow must not be composed into an
+  // <svg> later either: admitText refuses it there, as the inline tag is.
+  if (st.foreign === 0 && !SVG_TAGS.has(st.tag)) {
+    st.foreignUnsafe = true;
   }
 }
 
@@ -670,7 +678,7 @@ function admitText(st: Scan, value: HtmlValue): void {
   const unsafeInSvg = notForeignSafe.has(value);
   if (st.foreign > 0 && unsafeInSvg) {
     throw new UnsafeAttributeError(
-      'markup with a script, style, textarea or marked-up title into <svg>',
+      'markup with a script, style, textarea, marked-up title or non-SVG tag into <svg>',
     );
   }
   if (unsafeInSvg) {

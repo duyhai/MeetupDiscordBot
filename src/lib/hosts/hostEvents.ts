@@ -60,24 +60,18 @@ function busyOf(n: number): CalendarDay['busy'] {
 }
 
 /**
- * The group's published events for `weeks` weeks from the Monday of this
- * Pacific week, one entry per Pacific day.
+ * The group's published events for `days` days from `startDay`
+ * (YYYY-MM-DD, Pacific), one entry per Pacific day.
  */
-export async function groupCalendar(
+async function calendarDays(
   deps: HostEventsDeps,
-  weeks = 8,
+  startDay: string,
+  days: number,
 ): Promise<CalendarDay[]> {
-  const today = tz(dayjs(deps.now())).startOf('day');
-  // dayjs weeks start on Sunday; Monday-first: Sunday goes back 6 days.
   // Day arithmetic on calendar dates, then each end turned into Pacific
   // midnight on its own: a tz'd dayjs keeps its offset through add(), so
   // across a DST change the window would be an hour off.
-  const startDay = dayjs(today.format('YYYY-MM-DD'))
-    .subtract((today.day() + 6) % 7, 'day')
-    .format('YYYY-MM-DD');
-  const endDay = dayjs(startDay)
-    .add(weeks * 7, 'day')
-    .format('YYYY-MM-DD');
+  const endDay = dayjs(startDay).add(days, 'day').format('YYYY-MM-DD');
   const start = dayjs.tz(startDay, PACIFIC);
   const end = dayjs.tz(endDay, PACIFIC);
   const events = await deps.fetchGroupEvents({
@@ -90,7 +84,7 @@ export async function groupCalendar(
     const day = pacificDay(event.dateTime);
     byDay.set(day, [...(byDay.get(day) ?? []), event]);
   }
-  return Array.from({ length: weeks * 7 }, (_, i) => {
+  return Array.from({ length: days }, (_, i) => {
     const day = dayjs(startDay).add(i, 'day').format('YYYY-MM-DD');
     const dayEvents = byDay.get(day) ?? [];
     return {
@@ -99,6 +93,43 @@ export async function groupCalendar(
       busy: busyOf(dayEvents.length),
     };
   });
+}
+
+/** The Monday on or before a YYYY-MM-DD day. */
+const mondayOf = (day: string): string => {
+  const d = dayjs(day);
+  // dayjs weeks start on Sunday; Monday-first: Sunday goes back 6 days.
+  return d.subtract((d.day() + 6) % 7, 'day').format('YYYY-MM-DD');
+};
+
+/**
+ * The group's published events for `weeks` weeks from the Monday of this
+ * Pacific week, one entry per Pacific day.
+ */
+export async function groupCalendar(
+  deps: HostEventsDeps,
+  weeks = 8,
+): Promise<CalendarDay[]> {
+  const today = tz(dayjs(deps.now())).format('YYYY-MM-DD');
+  return calendarDays(deps, mondayOf(today), weeks * 7);
+}
+
+/**
+ * One month (YYYY-MM) as whole Monday-first weeks: from the Monday on or
+ * before the 1st to the Sunday on or after the last day. The days around
+ * the month are in the list too; the page leaves them blank.
+ */
+export async function monthCalendar(
+  deps: HostEventsDeps,
+  month: string,
+): Promise<CalendarDay[]> {
+  const first = `${month}-01`;
+  const last = dayjs(first).endOf('month').format('YYYY-MM-DD');
+  const start = mondayOf(first);
+  const end = dayjs(mondayOf(last)).add(6, 'day');
+  // Rounded hours, not diff('day'): a spring-forward day is 23 h long.
+  const days = Math.round(end.diff(dayjs(start), 'hour') / 24) + 1;
+  return calendarDays(deps, start, days);
 }
 
 const MEETUP_EVENT_URL =

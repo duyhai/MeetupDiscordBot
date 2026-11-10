@@ -250,10 +250,16 @@ function formBody(
         they are on Meetup. Pick the new date below.
       </p>`
     : html`<p>
-        The event starts with the group's standard description and limits;
-        change them under More options if you like. Once it is on Meetup you are
-        its host, so you can fill in the details there too.
-      </p>`;
+          The event starts with the group's standard description and limits;
+          change them under More options if you like. Once it is on Meetup you
+          are its host, so you can fill in the details there too.
+        </p>
+        <p class="note info">
+          Doing one again? Copy one of your past events:
+          <a href="${pageLink(`${HOST_BASE}/history`)}">open My history</a> and
+          press "Copy this event" on it. Its description, photo, venue and
+          limits come with it.
+        </p>`;
   const next = promoted
     ? html`<p class="muted">
         As a Community Host your event is published on Meetup as soon as you

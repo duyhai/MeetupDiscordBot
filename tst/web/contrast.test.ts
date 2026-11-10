@@ -18,14 +18,19 @@ function parseTokens(block: string): Tokens {
   return tokens;
 }
 
-/** The light tokens (the first :root block) and the dark ones (the :root inside the dark media query). */
+/** The light tokens (the first :root block) and the dark ones (inside the dark media query, and the same again under data-theme="dark"). */
 export function themeTokens(css: string): { light: Tokens; dark: Tokens } {
   const light = /(?:^|\})\s*:root\{([^}]*)\}/.exec(css)?.[1];
-  const dark = /@media \(prefers-color-scheme:\s*dark\)\{:root\{([^}]*)\}/.exec(
-    css,
-  )?.[1];
-  if (!light || !dark) {
-    throw new Error('STYLE has no light :root block or no dark one');
+  const dark =
+    /@media \(prefers-color-scheme:\s*dark\)\{:root:not\(\[data-theme="light"\]\)\{([^}]*)\}/.exec(
+      css,
+    )?.[1];
+  // The same tokens again, for a page that chose dark (the theme toggle).
+  const chosenDark = /:root\[data-theme="dark"\]\{([^}]*)\}/.exec(css)?.[1];
+  if (!light || !dark || chosenDark !== dark) {
+    throw new Error(
+      'STYLE has no light :root block, no dark one, or two dark blocks that differ',
+    );
   }
   return { light: parseTokens(light), dark: parseTokens(dark) };
 }
@@ -58,10 +63,17 @@ const TEXT_PAIRS: [string, string][] = [
   ]),
   ...['bg', 'surface', 'raised'].map((bg): [string, string] => ['muted', bg]),
   // Links and ghost buttons, at rest, on hover and as the current tab.
-  ...['bg', 'surface', 'raised', 'sel', 'accent-soft'].map(
-    (bg): [string, string] => ['accent', bg],
-  ),
-  ...['bg', 'surface', 'raised'].map((bg): [string, string] => [
+  // The calendar's plain + also sits on the busy shadings.
+  ...[
+    'bg',
+    'surface',
+    'raised',
+    'sel',
+    'accent-soft',
+    'ok-soft',
+    'attn-soft',
+  ].map((bg): [string, string] => ['accent', bg]),
+  ...['bg', 'surface', 'raised', 'accent-soft'].map((bg): [string, string] => [
     'accent-ink',
     bg,
   ]),
@@ -120,9 +132,12 @@ describe('colour tokens', () => {
     expect(Object.keys(THEMES.light).length).toBeGreaterThan(15);
   });
 
-  it('switches to the dark scheme with color-scheme: dark', () => {
+  it('switches to the dark scheme with color-scheme: dark, unless light was chosen', () => {
     expect(STYLE.value).toMatch(
-      /@media \(prefers-color-scheme:\s*dark\)\{:root\{[^}]*color-scheme:\s*dark/,
+      /@media \(prefers-color-scheme:\s*dark\)\{:root:not\(\[data-theme="light"\]\)\{[^}]*color-scheme:\s*dark/,
+    );
+    expect(STYLE.value).toMatch(
+      /:root\[data-theme="dark"\]\{[^}]*color-scheme:\s*dark/,
     );
   });
 

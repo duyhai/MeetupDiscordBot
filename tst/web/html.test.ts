@@ -699,6 +699,35 @@ describe('fix round 3: only a supported subset of HTML', () => {
     expect(html`<p>${styled}</p>`.value).toContain('a{}');
   });
 
+  it('a fragment with a tag SVG does not allow is refused inside svg, as inline', () => {
+    // prettier-ignore
+    expect(() => html`<svg><div>hi</div></svg>`).toThrow(UnsafeAttributeError);
+    const div = html`<div>hi</div>`;
+    // prettier-ignore
+    expect(() => html`<svg>${div}</svg>`).toThrow(UnsafeAttributeError);
+    // Nested: the inner fragment marks every fragment it goes into.
+    const wrapped = html`${[html`<span>x</span>`]}`;
+    // prettier-ignore
+    expect(() => html`<svg><g>${wrapped}</g></svg>`).toThrow(UnsafeAttributeError);
+    // The same fragments are fine outside svg.
+    expect(html`<p>${div}${wrapped}</p>`.value).toBe(
+      '<p><div>hi</div><span>x</span></p>',
+    );
+  });
+
+  it('allows SVG links, inline or composed, with a SafeUrl href only', () => {
+    const href = localUrl('/dashboard');
+    const link = html`<a class="hm" href="${href}" aria-label="${'a <b>'}"
+      ><rect width="12" height="12"><title>${'t'}</title></rect></a
+    >`;
+    // prettier-ignore
+    expect(html`<svg>${link}</svg>`.value).toContain('<svg><a class="hm" href="/dashboard" aria-label="a &lt;b&gt;"');
+    // prettier-ignore
+    expect(html`<svg><a href="${href}"><rect/></a></svg>`.value).toBe('<svg><a href="/dashboard"><rect/></a></svg>');
+    // prettier-ignore
+    expect(() => html`<svg><a href="${'javascript:x'}"><rect/></a></svg>`).toThrow(UnsafeUrlError);
+  });
+
   it('keeps the chart: fragments with text-only titles inside svg', () => {
     const c = '</title><script>alert(1)</script>';
     const rect = html`<rect

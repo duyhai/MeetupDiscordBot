@@ -14,14 +14,16 @@ import {
   HostEventsDeps,
   attendanceUrl,
   groupCalendar,
+  monthCalendar,
   hostedEvents,
   pacificDay,
 } from '../../lib/hosts/hostEvents.js';
+import { MAX_DAYS_AHEAD } from '../../lib/hosts/eventRequest.js';
 import { matchHolidays } from '../../lib/hosts/holidays.js';
 import { SafeHtml, html, memberText, pageLink, safeHref } from '../html.js';
 import { eventLink } from '../links.js';
 import { PAGE_SIZE, pageNav, parsePage } from '../paging.js';
-import { heatMap as heatMapFor } from './heatMap.js';
+import { heatMapYear } from './heatMap.js';
 import { hostLocals } from './hostRouter.js';
 import { EventRequest } from '../../lib/repositories/postgresEventRequestRepository.js';
 import {
@@ -37,6 +39,7 @@ import {
   timeLabel,
   unavailable,
 } from './hostPageKit.js';
+import { CALENDAR_SCRIPT, HISTORY_SCRIPT } from './hostScripts.js';
 import { HOST_BASE, HostSession } from './hostSession.js';
 
 const logger = new Logger({ name: 'hostDashboard' });
@@ -194,36 +197,92 @@ function homeBody(
     </div>`;
 }
 
+/** One event as a line: time, title link, holiday badges, hosts. */
+function eventLine(e: HostEvent): SafeHtml {
+  return html`${timeLabel(e.dateTime)}:
+  ${eventLink(e)}${matchHolidays(e.title).map(
+    (name) => html` <span class="badge info">${name}</span>`,
+  )}${
+    e.hosts.length
+      ? html` <span class="muted"
+          >hosted by
+          ${e.hosts.map((h, i) => html`${i ? ', ' : ''}${memberText(h.name)}`)}</span
+        >`
+      : ''
+  }`;
+}
+
+/**
+ * A day's popover: a <details> whose <summary> (the count) opens it with a
+ * click, a tap, Enter or Space, with no script. CALENDAR_SCRIPT adds
+ * hover, one-open-at-a-time, Escape, tap-outside and placement. It lists
+ * every event that day, not just what the cell has room for.
+ */
+/**
+ * Whether the create form takes this day: from tomorrow to MAX_DAYS_AHEAD
+ * days on (the calendar pages a little further than that).
+ */
+function canHostOn(day: string, today: string): boolean {
+  const last = dayjs(today).add(MAX_DAYS_AHEAD, 'day').format('YYYY-MM-DD');
+  return day > today && day <= last;
+}
+
+function dayPopover(day: CalendarDay, today: string): SafeHtml {
+  const count = day.events.length;
+  const countText =
+    count === 0 ? 'Free' : count === 1 ? '1 event' : `${count} events`;
+  const holidays = holidaysOn(day.events);
+  const label = dayLabel(day.day);
+  const events =
+    count === 0
+      ? html`<p class="muted">No events yet.</p>`
+      : html`<ul>
+          ${day.events.map((e) => html`<li>${eventLine(e)}</li>`)}
+        </ul>`;
+  const host = canHostOn(day.day, today)
+    ? html`<p><a href="${createDayLink(day.day)}">Host on this day</a></p>`
+    : '';
+  return html`<details class="cal-pop">
+    <summary>
+      <span class="sr-only">${label}: </span
+      ><span class="cal-count">${countText}</span>${
+        holidays.length
+          ? html`<span class="cal-date">${holidays.join(', ')}</span>`
+          : ''
+      }
+    </summary>
+    <div class="cal-panel" role="group" aria-label="${label}">
+      <p class="cal-panel-title">${label}</p>
+      ${events} ${host}
+    </div>
+  </details>`;
+}
+
 /**
  * One calendar cell. The busy class is one of four literals; the count is
- * also text, so the shading is never the only signal.
+ * also text, so the shading is never the only signal. From tomorrow, a +
+ * link opens the create form for that day; the day number is plain text.
  */
 function calendarCell(day: CalendarDay, today: string): SafeHtml {
-  const past = day.day < today;
   const dayText = dayjs(day.day).format(
     day.day.endsWith('-01') ? 'MMM D' : 'D',
   );
-  // From tomorrow, the day number opens the create form for that day.
-  const label =
-    day.day > today
-      ? html`<a class="cal-day" href="${createDayLink(day.day)}"
-          ><span class="sr-only">Host an event on </span>${dayText}</a
-        >`
-      : html`<span class="cal-day">${dayText}</span>`;
-  const count = day.events.length;
-  const countText = html`<span class="cal-count"
-    >${count === 0 ? 'Free' : count === 1 ? '1 event' : `${count} events`}</span
-  >`;
-  const holidays = holidaysOn(day.events);
-  const dates = holidays.length
-    ? html`<span class="cal-date">${holidays.join(', ')}</span>`
-    : '';
-  const inner = html`${label}${countText}${dates}`;
-  if (past) {
+  const number = html`<span class="cal-day">${dayText}</span>`;
+  if (day.day < today) {
     // Only published (upcoming) events are read, so a past day's count
     // would be wrong: it shows the date only.
-    return html`<td class="cal past">${label}</td>`;
+    return html`<td class="cal past">${number}</td>`;
   }
+  const add = canHostOn(day.day, today)
+    ? html`<a
+        class="cal-add"
+        href="${createDayLink(day.day)}"
+        aria-label="Host an event on ${dayLabel(day.day)}"
+        >+</a
+      >`
+    : '';
+  const inner = html`<div class="cal-head">${number}${add}</div>
+    ${dayPopover(day, today)}`;
   switch (day.busy) {
     case 0:
       return html`<td class="cal busy0">${inner}</td>`;
@@ -236,18 +295,83 @@ function calendarCell(day: CalendarDay, today: string): SafeHtml {
   }
 }
 
-function calendarBody(days: CalendarDay[], today: string): SafeHtml {
+/** How many months ahead the calendar pages (the form takes a year ahead). */
+export const CALENDAR_MONTHS_AHEAD = 12;
+
+/** `?month=YYYY-MM` when it is this month or up to a year on; else this month. */
+export function calendarMonth(query: unknown, today: string): string {
+  const current = today.slice(0, 7);
+  if (typeof query !== 'string' || !/^\d{4}-(0[1-9]|1[0-2])$/.test(query)) {
+    return current;
+  }
+  const last = dayjs(`${current}-01`)
+    .add(CALENDAR_MONTHS_AHEAD, 'month')
+    .format('YYYY-MM');
+  return query >= current && query <= last ? query : current;
+}
+
+/** Previous and next month; each is disabled text at the ends. */
+function monthNav(month: string, today: string): SafeHtml {
+  const first = dayjs(`${month}-01`);
+  const prev = first.subtract(1, 'month');
+  const next = first.add(1, 'month');
+  const current = today.slice(0, 7);
+  const last = dayjs(`${current}-01`)
+    .add(CALENDAR_MONTHS_AHEAD, 'month')
+    .format('YYYY-MM');
+  const link = (m: dayjs.Dayjs) =>
+    pageLink(HOST_PATHS.calendar, { month: m.format('YYYY-MM') });
+  const prevPart =
+    month > current
+      ? html`<a class="button ghost" href="${link(prev)}"
+          >← ${prev.format('MMM')}</a
+        >`
+      : html`<span class="button ghost disabled"
+          >← ${prev.format('MMM')}<span class="sr-only">
+            (past months are not shown)</span
+          ></span
+        >`;
+  const nextPart =
+    month < last
+      ? html`<a class="button ghost" href="${link(next)}"
+          >${next.format('MMM')} →</a
+        >`
+      : html`<span class="button ghost disabled"
+          >${next.format('MMM')} →<span class="sr-only">
+            (too far ahead)</span
+          ></span
+        >`;
+  return html`<nav class="year-nav" aria-label="Month">
+    ${prevPart}<strong>${first.format('MMMM YYYY')}</strong>${nextPart}
+  </nav>`;
+}
+
+function calendarBody(
+  days: CalendarDay[],
+  today: string,
+  month: string,
+): SafeHtml {
   const weeks: CalendarDay[][] = [];
   for (let i = 0; i < days.length; i += 7) {
     weeks.push(days.slice(i, i + 7));
   }
+  const inMonth = (d: CalendarDay) => d.day.startsWith(month);
+  // Days of the months around it are left blank.
+  const monthCell = (d: CalendarDay): SafeHtml => {
+    if (inMonth(d)) {
+      return calendarCell(d, today);
+    }
+    return html`<td class="cal out" aria-hidden="true"></td>`;
+  };
   const grid = weeks.map(
     (week) =>
       html`<tr>
-        ${week.map((d) => calendarCell(d, today))}
+        ${week.map((d) => monthCell(d))}
       </tr>`,
   );
-  const listed = days.filter((d) => d.day >= today && d.events.length > 0);
+  const listed = days.filter(
+    (d) => inMonth(d) && d.day >= today && d.events.length > 0,
+  );
   const list = listed.map(
     (d) =>
       html`<li>
@@ -260,31 +384,18 @@ function calendarBody(days: CalendarDay[], today: string): SafeHtml {
             : ''
         }
         <ul>
-          ${d.events.map(
-            (e) =>
-              html`<li>
-                ${timeLabel(e.dateTime)}:
-                ${eventLink(e)}${matchHolidays(e.title).map(
-                  (name) => html` <span class="badge info">${name}</span>`,
-                )}${
-                  e.hosts.length
-                    ? html` <span class="muted"
-                        >hosted by
-                        ${e.hosts.map((h, i) => html`${i ? ', ' : ''}${memberText(h.name)}`)}</span
-                      >`
-                    : ''
-                }
-              </li>`,
-          )}
+          ${d.events.map((e) => html`<li>${eventLine(e)}</li>`)}
         </ul>
       </li>`,
   );
   return html`<div class="card">
       <h1>Calendar</h1>
       <p>
-        The group's published events for the next 8 weeks. Pick a free or quiet
-        day for your event.
+        The group's published events, a month at a time. Pick a free or quiet
+        day for your event: open a day's count to see its events, or press + to
+        host on that day.
       </p>
+      ${monthNav(month, today)}
       <p class="cal-legend">
         <span class="swatch busy0"></span> Free
         <span class="swatch busy1"></span> 1 event
@@ -311,10 +422,10 @@ function calendarBody(days: CalendarDay[], today: string): SafeHtml {
       </div>
     </div>
     <div class="card">
-      <h2>Day by day</h2>
+      <h2>Day by day: ${dayjs(`${month}-01`).format('MMMM')}</h2>
       ${
         listed.length === 0
-          ? html`<p class="muted">Nothing scheduled yet.</p>`
+          ? html`<p class="muted">Nothing scheduled this month yet.</p>`
           : html`<ol class="cal-list">
               ${list}
             </ol>`
@@ -322,25 +433,46 @@ function calendarBody(days: CalendarDay[], today: string): SafeHtml {
     </div>`;
 }
 
+/** The history page's query: what it filters on and which year it maps. */
+interface HistoryView {
+  selected: EventType | undefined;
+  page: number;
+  year: number;
+  /** YYYY-MM-DD: only this day's events are listed. */
+  day: string | undefined;
+  /** The earliest year with a shown event: where Prev stops. */
+  earliest: number;
+}
+
+/** A history link that keeps the filters the caller passes. */
+function historyLink(params: {
+  type?: EventType;
+  year?: number;
+  day?: string;
+}): ReturnType<typeof pageLink> {
+  return pageLink(HOST_PATHS.history, {
+    type: params.type,
+    year: params.year === undefined ? undefined : String(params.year),
+    day: params.day,
+  });
+}
+
 function typeFilter(
   selected: EventType | undefined,
   counts: Map<EventType, number>,
+  year: number,
 ): SafeHtml {
   const links = EVENT_TYPES.filter((t) => (counts.get(t) ?? 0) > 0).map((t) => {
     const text = `${EVENT_TYPE_LABELS[t]} (${counts.get(t) ?? 0})`;
     return t === selected
-      ? html`<a
-          href="${pageLink(HOST_PATHS.history, { type: t })}"
-          aria-current="page"
+      ? html`<a href="${historyLink({ type: t, year })}" aria-current="page"
           ><strong>${text}</strong></a
         >`
-      : html`<a href="${pageLink(HOST_PATHS.history, { type: t })}"
-          >${text}</a
-        >`;
+      : html`<a href="${historyLink({ type: t, year })}">${text}</a>`;
   });
   const all = selected
-    ? html`<a href="${pageLink(HOST_PATHS.history)}">All types</a>`
-    : html`<a href="${pageLink(HOST_PATHS.history)}" aria-current="page"
+    ? html`<a href="${historyLink({ year })}">All types</a>`
+    : html`<a href="${historyLink({ year })}" aria-current="page"
         ><strong>All types</strong></a
       >`;
   return html`<nav class="type-filter" aria-label="Event type">
@@ -348,23 +480,92 @@ function typeFilter(
   </nav>`;
 }
 
+/** Prev and next year; each is disabled text when there is nothing there. */
+function yearNav(
+  view: HistoryView,
+  earliest: number,
+  current: number,
+): SafeHtml {
+  const prev =
+    view.year > earliest
+      ? html`<a
+          class="button ghost"
+          href="${historyLink({ type: view.selected, year: view.year - 1 })}"
+          >← ${String(view.year - 1)}</a
+        >`
+      : html`<span class="button ghost disabled"
+          >← ${String(view.year - 1)}<span class="sr-only">
+            (no earlier events)</span
+          ></span
+        >`;
+  const next =
+    view.year < current
+      ? html`<a
+          class="button ghost"
+          href="${historyLink({ type: view.selected, year: view.year + 1 })}"
+          >${String(view.year + 1)} →</a
+        >`
+      : html`<span class="button ghost disabled"
+          >${String(view.year + 1)} →<span class="sr-only">
+            (not yet)</span
+          ></span
+        >`;
+  return html`<nav class="year-nav" aria-label="Year">
+    ${prev}<strong>${String(view.year)}</strong>${next}
+  </nav>`;
+}
+
+/**
+ * The year a history page maps: the day filter's year when there is one (so
+ * the map and the list agree), else `?year=`, kept only between the
+ * earliest hosted year and this one; else this year.
+ */
+export function historyYear(
+  query: unknown,
+  day: string | undefined,
+  earliest: number,
+  current: number,
+): number {
+  const wanted = day
+    ? Number(day.slice(0, 4))
+    : typeof query === 'string' && /^\d{4}$/.test(query)
+      ? Number(query)
+      : current;
+  return wanted >= earliest && wanted <= current ? wanted : current;
+}
+
+/** A real YYYY-MM-DD date, or undefined. */
+function dayParam(value: unknown): string | undefined {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    return undefined;
+  }
+  return dayjs(value).format('YYYY-MM-DD') === value ? value : undefined;
+}
+
 function historyBody(
   past: HostEvent[],
-  selected: EventType | undefined,
-  page: number,
+  view: HistoryView,
   today: string,
 ): SafeHtml {
+  const { selected, page, year, day } = view;
   const counts = new Map<EventType, number>();
   for (const event of past) {
     counts.set(event.type, (counts.get(event.type) ?? 0) + 1);
   }
   const shown = selected ? past.filter((e) => e.type === selected) : past;
-  const perDay = new Map<string, number>();
+  const byDay = new Map<string, HostEvent[]>();
   for (const event of shown) {
-    const day = pacificDay(event.dateTime);
-    perDay.set(day, (perDay.get(day) ?? 0) + 1);
+    const key = pacificDay(event.dateTime);
+    byDay.set(key, [...(byDay.get(key) ?? []), event]);
   }
-  const slice = shown.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+  // A day's events in the order they happen.
+  for (const events of byDay.values()) {
+    events.sort(
+      (a, b) => dayjs(a.dateTime).valueOf() - dayjs(b.dateTime).valueOf(),
+    );
+  }
+  const listed = day ? (byDay.get(day) ?? []) : shown;
+  const slice = listed.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
   const rows = slice.map(
     (event) =>
       html`<tr>
@@ -374,7 +575,9 @@ function historyBody(
         <td data-label="Actions">
           <div class="actions">
             ${meetupButton(event)}${attendanceButton(event)}
-            <a class="button ghost" href="${copyLink(event.id)}">Copy</a>
+            <a class="button ghost" href="${copyLink(event.id)}"
+              >Copy this event</a
+            >
           </div>
         </td>
       </tr>`,
@@ -385,23 +588,41 @@ function historyBody(
       <p class="muted">No past events yet.</p>
     </div>`;
   }
+  const currentYear = Number(today.slice(0, 4));
+  const dayFilter = day
+    ? html`<p class="day-filter">
+        Showing ${dayLabel(day)}, ${day.slice(0, 4)} ·
+        <a href="${historyLink({ type: selected, year })}">Clear</a>
+      </p>`
+    : '';
   return html`<div class="card">
       <h1>My hosting history</h1>
       <p>
         ${past.length} hosted ${past.length === 1 ? 'event' : 'events'} in all.
       </p>
-      ${typeFilter(selected, counts)} ${heatMapFor(perDay, today)}
+      ${typeFilter(selected, counts, year)}
+      ${yearNav(view, view.earliest, currentYear)}
+      ${heatMapYear({
+        byDay,
+        year,
+        today,
+        dayLink: (d) => historyLink({ type: selected, year, day: d }),
+      })}
       <p class="muted">Types are guessed from event titles.</p>
     </div>
     <div class="card">
       <h2>${selected ? EVENT_TYPE_LABELS[selected] : 'Past events'}</h2>
+      ${dayFilter}
       <p class="muted">
         "Take attendance on Meetup" opens the event's attendee list, where hosts
-        mark who came and who did not show.
+        mark who came and who did not show. "Copy this event" starts a new
+        request with its details.
       </p>
       ${
         rows.length === 0
-          ? html`<p class="muted">No events on this page.</p>`
+          ? html`<p class="muted">
+              ${day ? `No events on ${dayLabel(day)}.` : 'No events on this page.'}
+            </p>`
           : html`<table class="stack">
               <thead>
                 <tr>
@@ -416,8 +637,20 @@ function historyBody(
               </tbody>
             </table>`
       }
-      ${pageNav(HOST_PATHS.history, page, shown.length > page * PAGE_SIZE, { type: selected })}
+      ${pageNav(HOST_PATHS.history, page, listed.length > page * PAGE_SIZE, {
+        type: selected,
+        year: String(year),
+        day,
+      })}
     </div>`;
+}
+
+/** The earliest year with a hosted event (this year when there is none). */
+function earliestYear(events: HostEvent[], current: number): number {
+  return events.reduce(
+    (min, e) => Math.min(min, Number(pacificDay(e.dateTime).slice(0, 4))),
+    current,
+  );
 }
 
 export function registerHostPages(
@@ -459,10 +692,11 @@ export function registerHostPages(
     });
   }) as RequestHandler);
 
-  router.get('/calendar', (async (_req, res) => {
+  router.get('/calendar', (async (req, res) => {
+    const month = calendarMonth(req.query.month, today());
     let days: CalendarDay[];
     try {
-      days = await groupCalendar(deps.events);
+      days = await monthCalendar(deps.events, month);
     } catch (error: unknown) {
       unavailable(res, error);
       return;
@@ -470,13 +704,15 @@ export function registerHostPages(
     hostPage(res, {
       title: 'Calendar',
       current: 'calendar',
-      body: calendarBody(days, today()),
+      body: calendarBody(days, today(), month),
+      script: CALENDAR_SCRIPT,
     });
   }) as RequestHandler);
 
   router.get('/history', (async (req, res) => {
     const { session } = hostLocals(res);
-    // An unknown type is ignored: the page shows every type.
+    // An unknown type, year or day is ignored: the page falls back to all
+    // types, this year and every day.
     const selected = isEventType(req.query.type) ? req.query.type : undefined;
     const page = parsePage(req.query.page);
     let past: HostEvent[];
@@ -486,10 +722,17 @@ export function registerHostPages(
       unavailable(res, error);
       return;
     }
+    const now = today();
+    const current = Number(now.slice(0, 4));
+    const shown = selected ? past.filter((e) => e.type === selected) : past;
+    const day = dayParam(req.query.day);
+    const earliest = earliestYear(shown, current);
+    const year = historyYear(req.query.year, day, earliest, current);
     hostPage(res, {
       title: 'My hosting history',
       current: 'history',
-      body: historyBody(past, selected, page, today()),
+      body: historyBody(past, { selected, page, year, day, earliest }, now),
+      script: HISTORY_SCRIPT,
     });
   }) as RequestHandler);
 }
