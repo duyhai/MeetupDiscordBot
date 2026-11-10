@@ -328,7 +328,9 @@ describe('GET /dashboard/no-shows/:period (month cards)', () => {
     expect(res.raw.match(/<script/g)).toHaveLength(2);
     // No message text in any attribute or script.
     expect(res.text).not.toMatch(/data-text=/);
-    expect(scripts[0][1]).not.toContain('Hello');
+    for (const [, body] of scripts) {
+      expect(body).not.toContain('Hello');
+    }
   });
 
   it('warning text in the copy box is the template for that member', async () => {

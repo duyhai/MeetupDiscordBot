@@ -119,7 +119,10 @@ describe('Hall of Fame month page', () => {
     // The theme script in <head>, then the page's own; both nonce'd.
     expect(scripts).toHaveLength(2);
     expect(scripts[0][2]).toBe(THEME_SCRIPT.value);
+    expect(scripts[0][1]).toMatch(/^ nonce="[^"]+"$/);
     expect(scripts[1][1]).toMatch(/^ nonce="[^"]+"$/);
+    // One nonce per page, matching the CSP header's.
+    expect(scripts[0][1]).toBe(scripts[1][1]);
     expect(scripts[1][2]).toBe(COPY_SCRIPT.value);
   });
 
