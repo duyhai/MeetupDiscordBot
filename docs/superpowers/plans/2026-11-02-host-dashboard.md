@@ -456,7 +456,42 @@ Approved by Hai (via the lead session, 2026-11-09). One PR off `main` at `66d052
    - One reviewer per task; fix what is confirmed.
    - Browser check at 360 px and desktop, light and dark: the calendar popover (mouse, keyboard, Escape, tap outside), the heat map tooltip and filter, and year paging.
 
-# PR 4 (was PR 3): Promotion, comments, announcing
+# PR 4: Link Discord from the host dashboard
+
+Hai's call (2026-11-09): a host who signed in with Meetup and has no linked Discord account gets a **Link your Discord account** button instead of being sent to Verify in the server. The button links accounts only. It never grants server roles; joining and roles stay with Verify and the moderators.
+
+## Decisions (builder's calls)
+
+- **No new redirect URI:** `GET /host/link/discord` (signed-in hosts only) starts Discord's sign-in. Its one-time state is `link.` + random, sealed in the same `host_oauth_discord` cookie. The existing `/host/auth/discord/callback` sees the prefix and links instead of signing in. A linking callback with no live host session is refused.
+- **Duplicates, as Verify handles them:** `linkDiscordFromWeb` in `src/lib/hosts/webLink.ts` checks both sides of the link.
+  - The Meetup account already linked to a different Discord account is refused.
+  - A Discord account already linked to a different Meetup account is also refused. On the website there is no Discord-side confirmation of a switch, so unlike Verify it does not move the link.
+  - A concurrent link caught by the unique constraint counts as Meetup taken.
+  - A `meetup_id = NULL` (manual onboard) row for that Discord user is upgraded.
+- **The written row:** `onboard_method = 'web_link'`. The Meetup name is the session's name, and the profile URL is `https://www.meetup.com/members/<id>/`.
+- **Logging and the session:**
+  - Activity log: "Meetup account linked (host dashboard)".
+  - #meetup-bot-alerts: "Duplicate Meetup link blocked (host dashboard)", plain, with no pings.
+  - The session takes the new Discord id at once, and the tier is re-checked.
+- **Home notices:** `?link=` carries fixed codes (linked, already, cancelled, meetup-taken, discord-taken, error), each with a fixed text.
+
+## Tasks
+
+1. **`webLink.ts` and its unit tests:**
+   - new link;
+   - already linked to this Discord;
+   - Meetup taken;
+   - Discord taken;
+   - a manual row upgraded;
+   - a unique-constraint race;
+   - a store failure.
+2. **Router:**
+   - Code: the start route and the callback branch, the `members` and `alert` deps, and wiring in `hostDeps.ts`.
+   - Tests: start sets a `link.` state and needs a session; the callback links, then refreshes the session and the home notice; cancel; exchange failure; each refusal plus its alert; no session; a sign-in state never links; a link state never signs in.
+3. **Home:** the nudge becomes a button, plus the notice rendering. Tests check both, escaped.
+4. **Checks:** `yarn test`, lint, `tsc`, integration; a browser check at 360 px and desktop; a review with requesting-code-review; then the PR.
+
+# PR 5 (was PR 3): Promotion, comments, announcing
 
 - **Promotion** (`/dashboard/hosts/candidates`): regular hosts with 20+ PAST hosted events (from the identity links' Meetup ids plus hosts seen in group events), each with heat map, count, last hosted date, issues (flagged comments first, "show all"). Promote/demote with a required reason, leadership only, live check; writes `promoted_hosts` + `promoted_host_events`; first promote is `INSERT … ON CONFLICT (meetup_member_id) DO NOTHING` (no row back = a concurrent promote won), later changes `UPDATE … SET version = version + 1, changed_at = now() WHERE version = $seen`, and each history row records the version it produced; demoting someone never promoted is refused; revokes the member's host sessions so the tier changes at once (the 10-minute re-check is the backstop); plain alert. Per-host heat map page.
 - **Comments:** `event_comments` (Meetup comment id key, event id, member id, name, text, created, is_private, parent id, `flagged_at`, `flag_source`, `flag_note`). Daily sweep job (Redis lease, outside 17:45–19:00 UTC) over hosts' events from 60 days back through upcoming, `Event.comments` with replies, organizer credential. Host page `/host/comments` (own events only; private comments only to that event's hosts and leadership). **Flag write path:** a Heroku one-off script `scripts/flagComments.ts` reading JSON `{ commentId, note }[]` from stdin (no new HTTP surface). `host_issues` table for manual entries; the issues list merges both.
