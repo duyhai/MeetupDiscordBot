@@ -163,6 +163,28 @@ describe('startWrappedAnnounceScheduler', () => {
     expect(makeDeps).toHaveBeenCalledTimes(1);
   });
 
+  it('a process running past New Year (disabled from a tick) logs nothing every 15 minutes', async () => {
+    const { calls, setIntervalFn } = captureInterval();
+    const log = fakeLog();
+    // Enabled at boot (2026), ticking in 2027: the date is now a past year.
+    const makeDeps = vi.fn(() => ({
+      ...neverDue,
+      now: () => new Date('2027-01-05T20:00:00Z'),
+    }));
+    startWrappedAnnounceScheduler(client, makeDeps, {
+      env: ENV,
+      config,
+      setIntervalFn,
+      log,
+    });
+    await settle();
+    calls[0].fn();
+    await settle();
+    expect(makeDeps).toHaveBeenCalledTimes(2);
+    expect(log.info).not.toHaveBeenCalled();
+    expect(log.error).not.toHaveBeenCalled();
+  });
+
   it('logs a posted outcome', async () => {
     const { setIntervalFn } = captureInterval();
     const log = fakeLog();

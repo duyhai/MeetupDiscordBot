@@ -289,6 +289,16 @@ describe('runWrappedAnnounce', () => {
     expect(storeSpy).not.toHaveBeenCalled();
   });
 
+  it('a dedupe key that cannot be given back still leaves the tick at failed', async () => {
+    const cache = new FakeCache();
+    vi.spyOn(cache, 'remove').mockRejectedValue(new Error('redis down'));
+    const { deps, post, alert } = makeDeps({}, new FakeStore(), cache);
+    post.mockResolvedValue(undefined);
+    alert.mockResolvedValueOnce(false);
+    expect(await runWrappedAnnounce(deps)).toBe('failed');
+    expect(alert).toHaveBeenCalledTimes(1);
+  });
+
   it('an alert that cannot be deduped or sent never breaks the tick', async () => {
     const { deps, post } = makeDeps({
       cache: () => Promise.reject(new Error('redis down')),

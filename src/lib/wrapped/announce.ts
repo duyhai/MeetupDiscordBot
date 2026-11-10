@@ -463,10 +463,13 @@ export function startWrappedAnnounceScheduler(
     }
     pending
       .then((outcome) => {
+        // Quiet outcomes: not due, done, waiting, or the year rolled over
+        // under a running process (disabled from then on).
         if (
           outcome !== 'not-due' &&
           outcome !== 'already-posted' &&
-          outcome !== 'backing-off'
+          outcome !== 'backing-off' &&
+          outcome !== 'disabled'
         ) {
           log.info(`Wrapped announcement: ${outcome}`);
         }
