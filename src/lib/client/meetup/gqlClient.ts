@@ -18,10 +18,14 @@ import {
 import { throwOnPayloadErrors } from './payloadErrors.js';
 import {
   getEvent,
+  getEventForAudit,
+  getEventForAuditCore,
   getEventForCopy,
   getEventRsvps,
   getGroupEvents,
   getGroupEventsCount,
+  getGroupEventsForAudit,
+  getGroupEventsForAuditCore,
   getGroupMembersByIds,
   getGroupMemberships,
   getMemberRsvps,
@@ -35,6 +39,8 @@ import {
 import {
   AnnounceEventInput,
   AnnounceEventResponse,
+  AuditEventNode,
+  AuditQueryVariant,
   BaseUserInfo,
   CloseEventRsvpsInput,
   CloseEventRsvpsResponse,
@@ -43,12 +49,14 @@ import {
   EditEventInput,
   EditEventResponse,
   EventSummary,
+  GetEventForAuditResponse,
   GetEventForCopyResponse,
   GetEventResponse,
   GetEventRsvpsInput,
   GetEventRsvpsResponse,
   GetGroupEventsCountInput,
   GetGroupEventsCountResponse,
+  GetGroupEventsForAuditResponse,
   GetGroupEventsInput,
   GetGroupEventsResponse,
   GetGroupMembersByIdsInput,
@@ -66,6 +74,7 @@ import {
   GetUserMembershipInfoResponse,
   GroupEventFilter,
   MemberRsvpFilter,
+  PaginatedData,
   PaginationInput,
   PublishEventDraftInput,
   PublishEventDraftResponse,
@@ -623,6 +632,75 @@ export class GqlMeetupClient {
       logger.info(`getEvent result: ${JSON.stringify(result)}`);
       return result;
     } catch (error) {
+      logger.error(error);
+      throw error;
+    }
+  }
+
+  /**
+   * The event audit's listing: the filter exactly as given (no month
+   * padding), never cached, one page. Logs counts only, never nodes (they
+   * carry host names). A null group is MeetupGroupUnreadableError.
+   */
+  public async getGroupEventsForAudit(
+    input: PaginationInput,
+    filter: GroupEventFilter | undefined,
+    variant: AuditQueryVariant = 'full',
+  ): Promise<PaginatedData<AuditEventNode>> {
+    logger.info(
+      `Calling getGroupEventsForAudit (${variant}) with input: ${JSON.stringify({ input, filter })}`,
+    );
+    try {
+      const result = await this.client.request<
+        GetGroupEventsForAuditResponse,
+        GetGroupEventsInput
+      >(
+        variant === 'full'
+          ? getGroupEventsForAudit
+          : getGroupEventsForAuditCore,
+        { urlname: Configuration.meetup.groupUrlName, ...input, filter },
+      );
+      if (!result.groupByUrlname) {
+        throw new MeetupGroupUnreadableError(Configuration.meetup.groupUrlName);
+      }
+      const { edges, pageInfo } = result.groupByUrlname.events;
+      logger.info(
+        `getGroupEventsForAudit page: ${edges.length} events, hasNextPage=${pageInfo.hasNextPage}`,
+      );
+      return result.groupByUrlname.events;
+    } catch (error) {
+      logger.error(error);
+      throw error;
+    }
+  }
+
+  /**
+   * One event for the audit, or null when Meetup has no such event: a 200
+   * whose `event` is null, with or without GraphQL errors alongside
+   * (graphql-request throws those as a ClientError carrying the data).
+   * Anything else throws. Not logged in full: it carries host names.
+   */
+  public async getEventForAudit(
+    eventId: string,
+    variant: AuditQueryVariant = 'full',
+  ): Promise<AuditEventNode | null> {
+    logger.info(`Calling getEventForAudit (${variant}) for ${eventId}`);
+    try {
+      const result = await this.client.request<GetEventForAuditResponse>(
+        variant === 'full' ? getEventForAudit : getEventForAuditCore,
+        { eventId },
+      );
+      return result.event;
+    } catch (error) {
+      if (
+        error instanceof ClientError &&
+        error.response.status === 200 &&
+        error.response.data !== undefined &&
+        error.response.data !== null &&
+        (error.response.data as { event?: unknown }).event === null
+      ) {
+        return null;
+      }
       logger.error(error);
       throw error;
     }

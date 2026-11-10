@@ -354,3 +354,80 @@ export const getEvent = gql`
     }
   }
 `;
+
+/**
+ * The event audit's node (src/lib/eventAudit): what a snapshot keeps. Two
+ * shapes: the full one asks for the RSVP counts and open state by the
+ * fields Meetup's schema documents (`going`, `waiting`, `rsvpSettings`);
+ * the core one asks only for fields this repo has used live, with the yes
+ * count from the RSVP connection, so a refused full query (an unknown
+ * field) never stops the snapshots. No description, no member photos.
+ */
+const AUDIT_NODE_CORE = `
+            id
+            title
+            status
+            dateTime
+            duration
+            eventUrl
+            venue {
+              id
+            }
+            featuredEventPhoto {
+              id
+            }
+            eventHosts {
+              member {
+                id
+                name
+              }
+            }`;
+const AUDIT_NODE_FULL = `${AUDIT_NODE_CORE}
+            going
+            waiting
+            rsvpSettings {
+              rsvpsClosed
+            }`;
+const AUDIT_NODE_FALLBACK = `${AUDIT_NODE_CORE}
+            rsvps {
+              yesCount
+            }`;
+
+const groupEventsForAudit = (node: string) => gql`
+  query (
+    $urlname: String!
+    $first: Int!
+    $after: String
+    $filter: GroupEventFilter
+  ) {
+    groupByUrlname(urlname: $urlname) {
+      id
+      events(first: $first, after: $after, filter: $filter) {
+        pageInfo {
+          hasNextPage
+          hasPreviousPage
+          startCursor
+          endCursor
+        }
+        totalCount
+        edges {
+          node {${node}
+          }
+        }
+      }
+    }
+  }
+`;
+
+const eventForAudit = (node: string) => gql`
+  query ($eventId: ID!) {
+    event(id: $eventId) {${node}
+    }
+  }
+`;
+
+export const getGroupEventsForAudit = groupEventsForAudit(AUDIT_NODE_FULL);
+export const getGroupEventsForAuditCore =
+  groupEventsForAudit(AUDIT_NODE_FALLBACK);
+export const getEventForAudit = eventForAudit(AUDIT_NODE_FULL);
+export const getEventForAuditCore = eventForAudit(AUDIT_NODE_FALLBACK);
