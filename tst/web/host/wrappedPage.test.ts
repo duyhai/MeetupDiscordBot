@@ -284,7 +284,7 @@ describe('GET /host/wrapped', () => {
     expect(text).toContain('40');
     expect(text).toContain('Food &amp; drink');
     expect(text).toContain('July');
-    expect(text).toContain('5 months');
+    expect(text).toMatch(/Longest streak \(months\)<\/dt> <dd> ?5 ?<\/dd>/);
     expect(text).toContain('hosted 1 event');
     expect(text).toContain('Saturday Hike &lt;b&gt;');
     expect(text).toContain('href="https://www.meetup.com/e/1/"');

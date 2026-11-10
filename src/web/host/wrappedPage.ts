@@ -255,13 +255,9 @@ export function wrappedBody({
           <dd>${String(stats.attendedAllTime)}</dd>
         </div>
         <div class="stat">
-          <dt>Longest streak</dt>
+          <dt>Longest streak (months)</dt>
           <dd>
-            ${
-              stats.longestStreakMonths > 0
-                ? html`${plural(stats.longestStreakMonths, 'month')}`
-                : html`—`
-            }
+            ${stats.longestStreakMonths > 0 ? String(stats.longestStreakMonths) : '—'}
           </dd>
         </div>
       </dl>
