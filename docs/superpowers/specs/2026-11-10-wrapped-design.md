@@ -176,21 +176,28 @@ number: **no Meetup ids or names of other people are cached.**
 
 ## Output
 
-One embed, the same for private and shared, built from the cached stats:
+One embed, built from the cached stats:
 
 - Title: `🎁 <display name>'s 1.5 Gen Wrapped <year>`
 - Fields: First event with us · This year (count, with all-time in the text)
   · Top activities · Hosting (if any) · Busiest month · Longest streak ·
-  Went with the most (mentions, with "and N others")
+  Went with the most (linked companions, with "and N others")
 - Footer: the RSVP caveat.
 - Zero events this year: the "This year" field says it was a quiet year and
   points at the all-time count and first event, so the embed still reads well.
 
-Private reply: the embed plus a **Share to this channel** button (only when
-the command was run in a server channel; run in a DM there is nothing to
-share to, so no button). Shared post: content
-`<@sharer> shared their 1.5 Gen Wrapped <year>` plus the same embed, sent
-with `allowedMentions: { parse: [] }` so no one is notified.
+**Private reply:** companions as `<@id>` mentions (only the member sees
+them), plus a **Share to this channel** button (only when the command was run
+in a server channel; run in a DM there is nothing to share to, so no button).
+
+**Shared post** (Hai, 2026-11-10): content `<@sharer> shared their 1.5 Gen
+Wrapped <year>` plus the same embed, except that companions appear as plain
+**server display names** (nickname → global name → username, resolved for
+the guild member at share time), never as tags, with markdown, angle
+brackets and mention syntax neutralised; a companion who has left the server
+since the build is folded into the count. Still linked members only;
+unlinked people stay a count. Sent with `allowedMentions: { parse: [] }` so
+no one is notified.
 
 ## Share button
 

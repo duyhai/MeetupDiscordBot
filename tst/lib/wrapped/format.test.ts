@@ -117,6 +117,39 @@ describe('wrappedEmbed', () => {
   });
 });
 
+describe('wrappedEmbed shared view', () => {
+  it('names linked companions as plain display names, never tags', () => {
+    const embed = wrappedEmbed('Jane', full, {
+      kind: 'shared',
+      displayNames: { d1: 'Alex <@999> @here', d2: 'Sam_B' },
+    });
+    const json = JSON.stringify(embed.toJSON());
+
+    expect(json).not.toContain('<@');
+    expect(json).not.toContain('@here');
+    expect(field(embed, 'Went with the most')).toContain('Alex');
+    expect(field(embed, 'Went with the most')).toContain('Sam\\_B (2 events)');
+    expect(field(embed, 'Went with the most')).toContain('5 other members');
+  });
+
+  it('folds a companion whose name could not be resolved into the count', () => {
+    const embed = wrappedEmbed('Jane', full, {
+      kind: 'shared',
+      displayNames: { d1: 'Alex' },
+    });
+
+    expect(field(embed, 'Went with the most')).toBe(
+      'Alex (4 events) and 6 other members',
+    );
+  });
+
+  it('keeps mentions in the private view', () => {
+    expect(field(wrappedEmbed('Jane', full), 'Went with the most')).toContain(
+      '<@d1>',
+    );
+  });
+});
+
 describe('share button', () => {
   it('round-trips the year and channel through the custom id', () => {
     const id = shareCustomId(2026, '123');

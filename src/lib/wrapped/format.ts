@@ -10,9 +10,11 @@ import {
   ButtonStyle,
   EmbedBuilder,
   MessageActionRowComponentBuilder,
+  escapeMarkdown,
 } from 'discord.js';
 
 import { EMBED_COLORS, GET_VERIFIED_CHANNEL_ID } from '../../constants.js';
+import { neutralizeMentions } from '../helpers/neutralizeMentions.js';
 import { EVENT_TYPE_LABELS } from '../hosts/eventTypes.js';
 import { tz } from '../../util/timezone.js';
 import { CachedWrapped } from './cache.js';
@@ -69,26 +71,59 @@ function thisYearText(wrapped: CachedWrapped): string {
   return `${plural(attendedThisYear, 'event')} in ${year} (${attendedAllTime} all-time).`;
 }
 
-function companionsText(wrapped: CachedWrapped): string {
+/**
+ * Private view: linked companions as `<@id>` mentions (only the member sees
+ * them). Shared view (Hai, 2026-11-10): the same people as plain server
+ * display names, never tags, so a public post names nobody in a way that
+ * notifies or links them; a companion whose name can't be resolved any more
+ * is folded into the count.
+ */
+export type EmbedView =
+  | { kind: 'private' }
+  | { kind: 'shared'; displayNames: Record<string, string> };
+
+/**
+ * A display name as inert text: no markdown, no mention or channel link.
+ * Angle brackets go too, so a nickname written as "<@123>" can't render as
+ * a tag in the public post.
+ */
+function plainName(name: string): string {
+  return neutralizeMentions(escapeMarkdown(name.replace(/[<>]/g, '')));
+}
+
+function companionsText(wrapped: CachedWrapped, view: EmbedView): string {
   const { named, otherCount } = wrapped.companions;
   if (named.length === 0 && otherCount === 0) {
     return 'Nobody yet — next year!';
   }
-  const mentions = named.map(
-    ({ discordUserId, sharedCount }) =>
-      `<@${discordUserId}> (${plural(sharedCount, 'event')})`,
-  );
-  const others =
-    otherCount > 0 ? `${plural(otherCount, 'other member')}` : undefined;
-  if (mentions.length === 0) {
-    return `${others} you shared events with`;
+  const shown: string[] = [];
+  let others = otherCount;
+  named.forEach(({ discordUserId, sharedCount }) => {
+    const label =
+      view.kind === 'private'
+        ? `<@${discordUserId}>`
+        : view.displayNames[discordUserId];
+    if (label === undefined) {
+      others += 1;
+      return;
+    }
+    const text = view.kind === 'private' ? label : plainName(label);
+    shown.push(`${text} (${plural(sharedCount, 'event')})`);
+  });
+  const othersText =
+    others > 0 ? `${plural(others, 'other member')}` : undefined;
+  if (shown.length === 0) {
+    return `${othersText} you shared events with`;
   }
-  return others ? `${mentions.join(', ')} and ${others}` : mentions.join(', ');
+  return othersText
+    ? `${shown.join(', ')} and ${othersText}`
+    : shown.join(', ');
 }
 
 export function wrappedEmbed(
   displayName: string,
   wrapped: CachedWrapped,
+  view: EmbedView = { kind: 'private' },
 ): EmbedBuilder {
   const { stats } = wrapped;
   const embed = new EmbedBuilder()
@@ -138,7 +173,7 @@ export function wrappedEmbed(
   });
   embed.addFields({
     name: 'Went with the most',
-    value: companionsText(wrapped),
+    value: companionsText(wrapped, view),
   });
   return embed;
 }

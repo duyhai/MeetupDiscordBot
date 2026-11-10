@@ -528,7 +528,13 @@ function buttonInteraction({
           if (memberFetchFails) {
             return Promise.reject(new Error('Unknown Member'));
           }
-          return Promise.resolve({ id, displayName: 'Jane' });
+          if (id === 'gone') {
+            return Promise.reject(new Error('Unknown Member'));
+          }
+          return Promise.resolve({
+            id,
+            displayName: id === 'u1' ? 'Jane' : `Pal ${id}`,
+          });
         }),
       },
     },
@@ -591,6 +597,33 @@ describe('runShare', () => {
     });
     expect(embedTitles(send)).toEqual(["🎁 Jane's 1.5 Gen Wrapped 2026"]);
     expect(contents(interaction.followUp)).toContain(replies.shared);
+  });
+
+  it('names companions by server display name in the public post, without tags', async () => {
+    await writeWrapped(h.cache, 'u1', 2026, {
+      ...cached,
+      companions: {
+        named: [
+          { discordUserId: 'd2', sharedCount: 4 },
+          { discordUserId: 'gone', sharedCount: 3 },
+        ],
+        otherCount: 5,
+      },
+    });
+    const { interaction, send } = buttonInteraction();
+
+    await runShare(interaction, h.deps);
+
+    const json = JSON.stringify(
+      (send.mock.calls[0][0] as { embeds: { toJSON(): unknown }[] }).embeds.map(
+        (e) => e.toJSON(),
+      ),
+    );
+    expect(json).not.toContain('<@');
+    expect(json).toContain('Pal d2 (4 events)');
+    // The one who has left the server since is folded into the count.
+    expect(json).toContain('6 other members');
+    expect(json).not.toContain('gone');
   });
 
   it('refuses a second share in the same channel that day', async () => {

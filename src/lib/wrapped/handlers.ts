@@ -398,10 +398,30 @@ export async function runShare(
     return;
   }
 
+  // Public post: companions as plain server display names, never tags
+  // (Hai, 2026-11-10). One who has left since is folded into the count.
+  const displayNames: Record<string, string> = {};
+  await Promise.all(
+    wrapped.companions.named.map(async ({ discordUserId }) => {
+      try {
+        const companion =
+          await target.channel.guild.members.fetch(discordUserId);
+        displayNames[discordUserId] = companion.displayName;
+      } catch {
+        // Not on the server any more: counted, not named.
+      }
+    }),
+  );
+
   try {
     await target.channel.send({
       content: sharedPostContent(userId, year),
-      embeds: [wrappedEmbed(target.member.displayName, wrapped)],
+      embeds: [
+        wrappedEmbed(target.member.displayName, wrapped, {
+          kind: 'shared',
+          displayNames,
+        }),
+      ],
       // Mentions render, nobody is notified.
       allowedMentions: { parse: [] },
     });
