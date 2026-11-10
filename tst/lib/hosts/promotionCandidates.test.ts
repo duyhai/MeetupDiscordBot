@@ -159,4 +159,32 @@ describe('singleFlight', () => {
     await expect(get()).rejects.toThrow('timed out');
     expect(await get()).toBe(9);
   });
+
+  it('a timed-out read that finishes late does not replace a newer list', async () => {
+    let finishLate: ((v: number) => void) | undefined;
+    const read = vi
+      .fn<() => Promise<number>>()
+      .mockImplementationOnce(
+        () =>
+          new Promise<number>((resolve) => {
+            finishLate = resolve;
+          }),
+      )
+      .mockResolvedValueOnce(2)
+      .mockResolvedValueOnce(3);
+    let clock = 0;
+    const get = singleFlight(read, 1000, { timeoutMs: 20, now: () => clock });
+    await expect(get()).rejects.toThrow('timed out');
+    expect(await get()).toBe(2);
+    // The first read answers now, long after it timed out.
+    clock = 500;
+    finishLate?.(1);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(await get()).toBe(2);
+    // The newer list's TTL was not restarted by the late one either.
+    clock = 1000;
+    expect(await get()).toBe(3);
+    expect(read).toHaveBeenCalledTimes(3);
+  });
 });

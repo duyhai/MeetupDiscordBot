@@ -144,8 +144,11 @@ export function singleFlight<T>(
     }
     if (inFlight === undefined) {
       let timer: ReturnType<typeof setTimeout> | undefined;
+      // A timed-out read is not cancelled: it runs on, and its late result
+      // is dropped, so it never overwrites a newer list or restarts the TTL.
+      let timedOut = false;
       const reading = read().then((value) => {
-        if (options.keep?.(value) ?? true) {
+        if (!timedOut && (options.keep?.(value) ?? true)) {
           kept = { at: now(), value };
         }
         return value;
@@ -157,6 +160,7 @@ export function singleFlight<T>(
               reading,
               new Promise<never>((_resolve, reject) => {
                 timer = setTimeout(() => {
+                  timedOut = true;
                   reject(new Error('read timed out'));
                 }, options.timeoutMs);
               }),
