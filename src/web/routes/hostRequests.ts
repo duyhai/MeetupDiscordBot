@@ -60,11 +60,16 @@ export interface StaffRequestStore {
     limit?: number,
   ) => Promise<EventRequest[]>;
   listDecided: (limit?: number) => Promise<EventRequest[]>;
+  /**
+   * `lockTimeoutMs` bounds how long the write may wait on a row lock, so a
+   * deny cannot commit long after the page gave up on it.
+   */
   deny: (
     id: string,
     seenVersion: number,
     actor: string,
     reason: string,
+    options?: { lockTimeoutMs?: number },
   ) => Promise<EventRequest | undefined>;
   resolve: (
     id: string,
@@ -264,6 +269,7 @@ function cardActions(
 }
 
 const DEFAULT_LIMITS = createEventTemplate.rsvpSettings;
+const TEMPLATE_PHOTO = createEventTemplate.featuredPhotoId ?? null;
 const TIP_LINE = /^💡 Host Tip: .* 💡\n\n/u;
 
 /** Which description a request carries, for the card's label. */
@@ -297,6 +303,11 @@ function requestSettings(r: EventRequest): SafeHtml {
     kind === 'custom'
       ? html`<span class="badge attn">Custom description</span>`
       : '',
+    // Hosts edit their own events on Meetup, so a copied description is
+    // host-written too: it gets the same attention.
+    kind === 'copied'
+      ? html`<span class="badge attn">Description from the host's event</span>`
+      : '',
     limitsChanged && r.kind === 'fresh'
       ? html`<span class="badge attn">Custom limits</span>`
       : '',
@@ -304,7 +315,7 @@ function requestSettings(r: EventRequest): SafeHtml {
   const summary = {
     standard: 'Description: the standard one',
     custom: 'Description: written by the host',
-    copied: 'Description: copied from the source event',
+    copied: "Description: from the host's own event",
   }[kind];
   // On one line: the block keeps the description's line breaks.
   const text = html`<div class="desc-text">${memberText(r.description)}</div>`;
@@ -313,10 +324,35 @@ function requestSettings(r: EventRequest): SafeHtml {
       ${limitText('Guests per member', r.guestLimit, DEFAULT_LIMITS.guestLimit)}
       ${badges}
     </p>
+    ${r.kind === 'copy' ? copyDetails(r) : ''}
     <details class="request-description">
       <summary>${summary}</summary>
       ${text}
     </details>`;
+}
+
+/**
+ * What else a copy publishes, taken from the host's event: the venue,
+ * the directions and the featured photo. Ids only (the staff CSP loads no
+ * Meetup images), so a leader can look them up on Meetup.
+ */
+function copyDetails(r: EventRequest): SafeHtml {
+  const photo =
+    r.featuredPhotoId === null
+      ? 'none'
+      : r.featuredPhotoId === TEMPLATE_PHOTO
+        ? "the group's standard photo"
+        : `Meetup photo ${r.featuredPhotoId}`;
+  return html`<ul class="copy-details">
+    <li>
+      Venue:
+      ${r.venueId === null ? 'none (online, or none set)' : `Meetup venue ${r.venueId}`}
+    </li>
+    <li>
+      Directions: ${r.howToFindUs === null ? 'none' : memberText(r.howToFindUs)}
+    </li>
+    <li>Photo: ${photo}</li>
+  </ul>`;
 }
 
 function requestCard(
@@ -594,8 +630,11 @@ export function registerHostRequestRoutes(
           if (left <= 0) {
             throw new WorkspaceDeadlineError(WORKSPACE_REQUEST_DEADLINE_MS);
           }
+          // The write gets only the time the page has left: its row-lock
+          // wait is bounded by it too, not just the page's wait for it.
+          const lockTimeoutMs = Math.max(1, Math.floor(left));
           denied = await withDeadline(left, () =>
-            store.deny(id, version, session.userId, reason),
+            store.deny(id, version, session.userId, reason, { lockTimeoutMs }),
           );
         }
       } catch (error: unknown) {

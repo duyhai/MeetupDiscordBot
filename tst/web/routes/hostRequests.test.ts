@@ -32,6 +32,9 @@ afterEach(() => {
 
 const QUEUE = '/dashboard/hosts/requests';
 const HOSTILE = '<script>alert(1)</script>"><img src=x>';
+const BOUNDED: unknown = expect.objectContaining({
+  lockTimeoutMs: expect.any(Number) as unknown,
+});
 
 async function tokenOf(req: Client, cookie: string): Promise<string> {
   const home = await req.get('/dashboard').set('Cookie', cookie);
@@ -52,8 +55,12 @@ async function setup(
       actor: string,
     ) => Promise<PublishOutcome>;
     existing?: ExistingEvent | Error | 'never';
+    /** How far the page clock jumps once Meetup has answered the check. */
+    clockJumpAfterCheckMs?: number;
   } = {},
 ) {
+  let clock = PAGE_NOW.getTime();
+  const now = () => new Date(clock);
   const store = fakeEventRequests(options.rows ?? [eventRequestRow()]);
   const isLeadership = vi.fn<(id: string) => Promise<boolean>>(async () => {
     if (options.leader instanceof Error) {
@@ -78,6 +85,7 @@ async function setup(
         // Meetup never answers.
         return new Promise<undefined>(() => undefined);
       }
+      clock += options.clockJumpAfterCheckMs ?? 0;
       return options.existing;
     },
   );
@@ -93,6 +101,7 @@ async function setup(
           publishRequest,
           findExistingEvent,
           denyCheckDeadlineMs: 30,
+          now,
         }),
       }),
   });
@@ -270,6 +279,38 @@ describe('host request queue', () => {
     expect(res.text.match(/Custom description/g)).toHaveLength(1);
   });
 
+  it('a copy’s card shows the venue, directions, photo and copied description', async () => {
+    const { get } = await setup({
+      rows: [
+        eventRequestRow({
+          id: '1',
+          kind: 'copy',
+          sourceEventId: '311111111',
+          description: 'Meet at the trailhead.',
+          venueId: '27000001',
+          howToFindUs: HOSTILE,
+          featuredPhotoId: 520000001,
+        }),
+        eventRequestRow({
+          id: '2',
+          kind: 'copy',
+          sourceEventId: '311111112',
+          venueId: null,
+          howToFindUs: null,
+          featuredPhotoId: null,
+        }),
+      ],
+    });
+    const res = await get(QUEUE);
+    expect(res.text).toContain('Meetup venue 27000001');
+    expect(res.text).toContain('Meetup photo 520000001');
+    expect(res.text).toContain('none (online, or none set)');
+    expect(res.text).toContain('Photo: none');
+    expect(res.text).toContain("Description from the host's event");
+    expect(res.text).not.toContain('<script>alert');
+    expect(res.text).not.toContain('<img src=x>');
+  });
+
   it('a store outage is a 503', async () => {
     const { get } = await setup();
     const res = await get(QUEUE);
@@ -351,6 +392,7 @@ describe('queue actions', () => {
       1,
       USER.id,
       'Too close to the potluck',
+      BOUNDED,
     );
     expect(JSON.stringify(audit.mock.calls.at(-1)?.[0])).toContain(
       'Host request denied',
@@ -371,6 +413,7 @@ describe('queue actions', () => {
       1,
       USER.id,
       `${'x'.repeat(248)}\n${'y'.repeat(250)}`,
+      BOUNDED,
     );
   });
 
@@ -444,7 +487,48 @@ describe('queue actions', () => {
       reason: 'Pick a new date',
     });
     expect(res.headers.location).toBe(`${QUEUE}?result=denied`);
-    expect(store.deny).toHaveBeenCalledWith('1', 3, USER.id, 'Pick a new date');
+    expect(store.deny).toHaveBeenCalledWith(
+      '1',
+      3,
+      USER.id,
+      'Pick a new date',
+      BOUNDED,
+    );
+  });
+
+  it('a deny whose Meetup check used up the page’s time is never written', async () => {
+    const { post, store, audit } = await setup({
+      rows: [
+        eventRequestRow({
+          status: 'failed',
+          version: 3,
+          failure: PUBLISH_FAILURES.createFailed,
+        }),
+      ],
+      clockJumpAfterCheckMs: 21_000,
+    });
+    const res = await post(`${QUEUE}/1/deny`, { version: '3', reason: 'No' });
+    expect(res.headers.location).toBe(`${QUEUE}?result=error`);
+    expect(store.deny).not.toHaveBeenCalled();
+    expect(JSON.stringify(audit.mock.calls)).not.toContain('denied');
+  });
+
+  it('the deny write gets only the page’s remaining time as its lock timeout', async () => {
+    const { post, store } = await setup({
+      rows: [
+        eventRequestRow({
+          status: 'failed',
+          version: 3,
+          failure: PUBLISH_FAILURES.createFailed,
+        }),
+      ],
+      clockJumpAfterCheckMs: 15_000,
+    });
+    await post(`${QUEUE}/1/deny`, { version: '3', reason: 'No' });
+    const options = store.deny.mock.calls[0]?.[4];
+    // 20 s page deadline, 15 s gone: at most 5 s, and at least 1 ms.
+    expect(options?.lockTimeoutMs).toBeGreaterThanOrEqual(1);
+    expect(options?.lockTimeoutMs).toBeLessThanOrEqual(5_000);
   });
 
   it('deny of a waiting request does not ask Meetup', async () => {

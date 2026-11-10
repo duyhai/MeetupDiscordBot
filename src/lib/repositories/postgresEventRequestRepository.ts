@@ -285,11 +285,17 @@ export class PostgresEventRequestRepository {
   private change(
     label: string,
     fn: (client: pg.PoolClient) => Promise<Row | undefined>,
+    options: DashboardTransactionOptions = {},
   ): Promise<EventRequest | undefined> {
-    return inDashboardTransaction(this.pool, label, async (client) => {
-      const row = await fn(client);
-      return row === undefined ? undefined : toRequest(row);
-    });
+    return inDashboardTransaction(
+      this.pool,
+      label,
+      async (client) => {
+        const row = await fn(client);
+        return row === undefined ? undefined : toRequest(row);
+      },
+      options,
+    );
   }
 
   /**
@@ -524,26 +530,31 @@ export class PostgresEventRequestRepository {
     seenVersion: number,
     actor: string,
     reason: string,
+    options: DashboardTransactionOptions = {},
   ): Promise<EventRequest | undefined> {
     if (!isRequestId(id) || !Number.isInteger(seenVersion)) {
       return Promise.resolve(undefined);
     }
-    return this.change('event request deny', async (c) => {
-      const { rows } = await c.query<Row>(
-        `UPDATE event_requests
+    return this.change(
+      'event request deny',
+      async (c) => {
+        const { rows } = await c.query<Row>(
+          `UPDATE event_requests
             SET status = 'denied', deny_reason = $4, decided_by = $3,
                 decided_at = now(), version = version + 1, updated_at = now()
           WHERE id = $1 AND version = $2
             AND (status = 'pending'
                  OR (status = 'failed' AND meetup_event_id IS NULL))
           RETURNING *`,
-        [id, seenVersion, actor, reason],
-      );
-      if (rows[0] !== undefined) {
-        await history(c, rows[0], 'deny', actor, reason);
-      }
-      return rows[0];
-    });
+          [id, seenVersion, actor, reason],
+        );
+        if (rows[0] !== undefined) {
+          await history(c, rows[0], 'deny', actor, reason);
+        }
+        return rows[0];
+      },
+      options,
+    );
   }
 
   /**

@@ -227,6 +227,30 @@ const request = (over: Partial<NewEventRequest> = {}): NewEventRequest => ({
       );
     });
 
+    it('a deny blocked by a row lock gives up within its lock timeout, writing nothing', async () => {
+      const created = await repo.create(request());
+      if (created === undefined) {
+        throw new Error('no request');
+      }
+      const holder = await pool.connect();
+      try {
+        await holder.query('BEGIN');
+        await holder.query(
+          'SELECT id FROM event_requests WHERE id = $1 FOR UPDATE',
+          [created.id],
+        );
+        const started = Date.now();
+        await expect(
+          repo.deny(created.id, 1, LEAD, 'Too close', { lockTimeoutMs: 200 }),
+        ).rejects.toThrow();
+        expect(Date.now() - started).toBeLessThan(3_000);
+      } finally {
+        await holder.query('ROLLBACK');
+        holder.release();
+      }
+      expect((await repo.get(created.id))?.status).toBe('pending');
+    });
+
     it('a failed request with no event can be denied; one with an event cannot', async () => {
       const { id } = await repo.create(request());
       await repo.startPublishing(id, 1, LEAD, ['pending']);

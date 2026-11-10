@@ -218,6 +218,7 @@ form.request-form details.more-options{margin:0 0 var(--s3);padding-bottom:var(-
 form.request-form details.more-options textarea{max-width:40rem}
 .desc-text{white-space:pre-line;overflow-wrap:anywhere;max-height:24rem;overflow-y:auto;padding:var(--s2) var(--s3);
   background:var(--raised);border-radius:8px;font-size:var(--t-sm)}
+ul.copy-details{margin:0 0 var(--s2);padding-left:1.2rem;overflow-wrap:anywhere}
 .wrap-anywhere{overflow-wrap:anywhere}
 .field-error{display:block;margin-top:var(--s1);color:var(--attn-ink);font-size:var(--t-sm);font-weight:600}
 td.cal.past{color:var(--muted);background:var(--bg)}
