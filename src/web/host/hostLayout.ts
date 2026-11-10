@@ -98,7 +98,10 @@ export function hostLoginPage(
     nonce,
     body: html`<div class="card">
       <h1>Host sign-in</h1>
-      <p>For members who have hosted an event with us.</p>
+      <p>
+        For members who have hosted an event with us, and for linked members to
+        see their 1.5 Gen Wrapped.
+      </p>
       ${notice ? html`<p class="note">${notice}</p>` : ''}
       <div class="actions">
         <a class="button" href="/host/auth/discord/start"

@@ -5,7 +5,9 @@ import { HostEvent } from '../../../src/lib/hosts/hostEvents.js';
 import { createHostRouter } from '../../../src/web/host/hostRouter.js';
 import { registerHostPages } from '../../../src/web/host/hostPages.js';
 import { clientFor, listen } from '../../setup/loopbackServer.js';
+import { HostResolution } from '../../../src/lib/hosts/eligibility.js';
 import {
+  DISCORD_USER,
   HOST,
   closeServers,
   makeHostDeps,
@@ -104,6 +106,14 @@ describe('host home', () => {
     expect(res.text).toContain('You have no upcoming events');
   });
 
+  it('offers a host their Wrapped', async () => {
+    const req = await pagesApp(async () => []);
+    const sid = await signInWithDiscord(req);
+    const res = await req.get('/host').set('Cookie', sid);
+    expect(res.text).toContain('href="/host/wrapped"');
+    expect(res.text).toContain('Your Wrapped');
+  });
+
   it('a Meetup outage is a 503 page, never a partial one', async () => {
     const req = await pagesApp(async () => {
       throw new Error('organizer token unavailable');
@@ -113,6 +123,45 @@ describe('host home', () => {
     expect(res.status).toBe(503);
     expect(res.text).toContain('cannot be loaded from Meetup');
     expect(res.text).not.toContain('Your upcoming events');
+  });
+});
+
+describe('member home', () => {
+  const MEMBER: HostResolution = {
+    kind: 'member',
+    meetupMemberId: '4242',
+    discordUserId: DISCORD_USER.id,
+  };
+
+  it('shows a linked member the Wrapped card and their link status, reading no events', async () => {
+    const fetchGroupEvents = vi.fn(async () => []);
+    const req = await pagesApp(fetchGroupEvents, {
+      resolve: vi.fn().mockResolvedValue(MEMBER),
+    });
+    const sid = await signInWithMeetup(req);
+    const res = await req.get('/host').set('Cookie', sid);
+    expect(res.status).toBe(200);
+    expect(res.text).toContain('Hi, <bdi>Ann</bdi>');
+    expect(res.text).toContain('href="/host/wrapped"');
+    expect(res.text).toContain('Your Wrapped');
+    expect(res.text).toContain('linked to Discord');
+    // A Meetup sign-in may refresh roles and badges, as a host may.
+    expect(res.text).toContain('Refresh roles and badges');
+    expect(res.text).not.toContain('Your upcoming events');
+    expect(res.text).not.toContain('Host an event');
+    expect(res.text).not.toContain('Picking a day');
+    expect(res.text).not.toContain('Guest Host');
+    expect(fetchGroupEvents).not.toHaveBeenCalled();
+  });
+
+  it('a Discord sign-in gets no Verify form', async () => {
+    const req = await pagesApp(async () => [], {
+      resolve: vi.fn().mockResolvedValue(MEMBER),
+    });
+    const sid = await signInWithDiscord(req);
+    const res = await req.get('/host').set('Cookie', sid);
+    expect(res.text).toContain('Your Wrapped');
+    expect(res.text).not.toContain('Refresh roles and badges');
   });
 });
 
