@@ -168,6 +168,7 @@ export interface HostRouterDeps {
     keep: (owner: MeetupTokenOwner, tokens: Tokens) => Promise<void>;
     usable: (owner: MeetupTokenOwner) => Promise<Tokens | undefined>;
     move: (from: MeetupTokenOwner, to: MeetupTokenOwner) => Promise<void>;
+    forget: (owner: MeetupTokenOwner) => Promise<void>;
   };
   now?: () => number;
   loginLimiter?: FixedWindowLimiter; // default 10 per minute per IP
@@ -449,26 +450,46 @@ export function createHostRouter(deps: HostRouterDeps): express.Router {
   }
 
   /**
-   * A usable member token set for Verify: under the Discord id first, then
-   * under the Meetup id (a sign-in from before the link), which then moves
-   * to the Discord id. undefined when there is none or the store cannot
-   * answer: the Meetup step gets a fresh one.
+   * A usable member token set for Verify, and only one for THIS host's
+   * Meetup account: under the Discord id first (the bot keeps whatever
+   * account the member last connected there), then under the Meetup id (a
+   * sign-in from before the link), which then moves to the Discord id. Each
+   * is checked with Meetup's own answer to "who is this" before use; one
+   * for another account is skipped, never used or moved. undefined when
+   * there is none, or the store or Meetup cannot answer: Meetup's sign-in
+   * then gets a fresh one.
    */
   async function storedMeetupToken(
     discordUserId: string,
     meetupId: string,
   ): Promise<string | undefined> {
-    if (!deps.meetupTokens) {
+    const store = deps.meetupTokens;
+    if (!store) {
       return undefined;
     }
+    const ownSet = async (owner: MeetupTokenOwner) => {
+      const tokens = await store.usable(owner);
+      if (!tokens) {
+        return undefined;
+      }
+      const self = await deps.meetup.fetchSelf(tokens.accessToken);
+      return self.id === meetupId ? tokens : undefined;
+    };
     try {
-      const linked = await deps.meetupTokens.usable(discordUserId);
+      const linked = await ownSet(discordUserId);
       if (linked) {
         return linked.accessToken;
       }
-      const signedIn = await deps.meetupTokens.usable({ meetup: meetupId });
+      const signedIn = await ownSet({ meetup: meetupId });
       if (signedIn) {
-        await deps.meetupTokens.move({ meetup: meetupId }, discordUserId);
+        try {
+          await store.move({ meetup: meetupId }, discordUserId);
+        } catch (error: unknown) {
+          // The token in hand is good: use it whatever the move does.
+          logger.warn(
+            `Host Meetup token move failed: ${error instanceof Error ? error.name : 'Error'}`,
+          );
+        }
         return signedIn.accessToken;
       }
     } catch (error: unknown) {
@@ -509,6 +530,10 @@ export function createHostRouter(deps: HostRouterDeps): express.Router {
       res.redirect(302, `${HOST_BASE}?link=${code}`);
     const refused = async (meetupId: string, sid: string, reason: string) => {
       await endSessions(meetupId, reason);
+      // No longer a host: the set kept at their dashboard sign-in goes too.
+      await deps.meetupTokens
+        ?.forget({ meetup: meetupId })
+        .catch(() => undefined);
       await (await sessions()).destroy(sid);
       res.append('Set-Cookie', clearCookie(HOST_SESSION_COOKIE, HOST_BASE));
       fail(res, 403);
@@ -882,20 +907,31 @@ export function createHostRouter(deps: HostRouterDeps): express.Router {
    */
   async function finishStart(res: Response) {
     const { session, sid, nonce } = hostLocals(res);
-    if (
-      !deps.runVerify ||
-      session.via !== 'meetup' ||
-      session.discordUserId === null
-    ) {
+    if (!deps.runVerify || session.via !== 'meetup') {
       res.redirect(303, HOST_BASE);
       return;
     }
-    const stored = await storedMeetupToken(
-      session.discordUserId,
-      session.userId,
-    );
+    // The session learns the link at its next re-check if an outage kept
+    // it from being patched; the link store already has it.
+    let discordUserId = session.discordUserId;
+    if (discordUserId === null && deps.members) {
+      try {
+        const row = await (await deps.members()).findByMeetupId(session.userId);
+        discordUserId =
+          row && DISCORD_ID.test(row.discordUserId) ? row.discordUserId : null;
+      } catch (error: unknown) {
+        logger.warn(
+          `Host verify finish link read failed: ${error instanceof Error ? error.name : 'Error'}`,
+        );
+      }
+    }
+    if (discordUserId === null) {
+      res.redirect(303, HOST_BASE);
+      return;
+    }
+    const stored = await storedMeetupToken(discordUserId, session.userId);
     if (stored) {
-      await runAndShow(res, session, session.discordUserId, stored, undefined);
+      await runAndShow(res, session, discordUserId, stored, undefined);
       return;
     }
     const state = newHostState();
@@ -909,7 +945,7 @@ export function createHostRouter(deps: HostRouterDeps): express.Router {
       res,
       HOST_MEETUP_OAUTH_COOKIE,
       state,
-      `verify.${sessionTag(sid)}.${session.discordUserId}.x`,
+      `verify.${sessionTag(sid)}.${discordUserId}.x`,
     );
     send(
       res,

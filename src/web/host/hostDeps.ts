@@ -11,6 +11,7 @@ import { withOrganizerMeetup } from '../../lib/reports/organizerMeetup.js';
 import { PostgresEventRequestRepository } from '../../lib/repositories/postgresEventRequestRepository.js';
 import { getRandomTip } from '../../util/tips.js';
 import {
+  forgetMeetupTokens,
   getUsableMeetupTokens,
   moveMeetupTokens,
   storeMeetupTokens,
@@ -142,6 +143,8 @@ export function hostRouterFromEnv(
         getUsableMeetupTokens(await ApplicationCache(), owner),
       move: async (from, to) =>
         moveMeetupTokens(await ApplicationCache(), from, to),
+      forget: async (owner) =>
+        forgetMeetupTokens(await ApplicationCache(), owner),
     },
     pages: (router) => {
       registerHostPages(router, {

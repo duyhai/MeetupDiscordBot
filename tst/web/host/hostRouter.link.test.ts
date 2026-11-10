@@ -634,6 +634,9 @@ describe('Verify on Discord: joining the server and running Verify', () => {
               }
             },
           ),
+          forget: vi.fn(async (owner: string | { meetup: string }) => {
+            kept.delete(keyOf(owner));
+          }),
         }
       : undefined;
     const joinServer = vi.fn(async () => {
@@ -932,6 +935,99 @@ describe('Verify on Discord: joining the server and running Verify', () => {
     const { back } = await link(app.req, app.sid, app.session().csrfToken);
     expect(back.text).toContain('You are verified');
     expect(app.runVerify).toHaveBeenCalledWith('bot-token', DISCORD_USER.id);
+  });
+
+  it('a set under the Discord id for ANOTHER Meetup account is never used', async () => {
+    const app = await verifySetup({
+      tokens: {
+        [`discord:${DISCORD_USER.id}`]: { accessToken: 'other-account' },
+      },
+    });
+    // eslint-disable-next-line @typescript-eslint/unbound-method -- a vi.fn
+    vi.mocked(app.deps.meetup.fetchSelf).mockImplementation(async (token) => {
+      if (token === 'other-account') {
+        return { id: '9999', name: 'Someone else' };
+      }
+      return MEETUP_SELF;
+    });
+    // The host's own set from sign-in passes the check and is used; the
+    // other account's set is skipped, then replaced by the host's.
+    const { back } = await link(app.req, app.sid, app.session().csrfToken);
+    expect(back.text).toContain('You are verified');
+    expect(app.runVerify).toHaveBeenCalledTimes(1);
+    expect(app.runVerify).toHaveBeenCalledWith(
+      'meetup-access',
+      DISCORD_USER.id,
+    );
+    expect(app.kept.get(`discord:${DISCORD_USER.id}`)).toMatchObject({
+      accessToken: 'meetup-access',
+    });
+    // With no own set either: the Meetup step, never the other account's.
+    app.runVerify.mockClear();
+    app.kept.clear();
+    app.kept.set(`discord:${DISCORD_USER.id}`, {
+      accessToken: 'other-account',
+    });
+    const page = await app.req
+      .post('/host/verify/finish')
+      .set('Cookie', app.sid)
+      .set('Origin', ORIGIN)
+      .type('form')
+      .send({ _csrf: app.session().csrfToken });
+    expect(page.text).toContain('Continue to Meetup');
+    expect(app.runVerify).not.toHaveBeenCalled();
+  });
+
+  it('a move that fails still uses the good token', async () => {
+    const app = await verifySetup({ tokens: {} });
+    app.meetupTokens?.move.mockRejectedValue(new Error('redis down'));
+    const { back } = await link(app.req, app.sid, app.session().csrfToken);
+    expect(back.text).toContain('You are verified');
+    expect(app.runVerify).toHaveBeenCalledWith(
+      'meetup-access',
+      DISCORD_USER.id,
+    );
+  });
+
+  it('a sign-in whose set cannot be kept still signs in', async () => {
+    const keep = vi.fn().mockRejectedValue(new Error('redis down'));
+    const app = await setup({
+      overrides: {
+        meetupTokens: {
+          keep,
+          usable: vi.fn(),
+          move: vi.fn(),
+          forget: vi.fn(),
+        },
+      },
+    });
+    expect(keep).toHaveBeenCalled();
+    expect((await app.req.get('/host').set('Cookie', app.sid)).status).toBe(
+      200,
+    );
+  });
+
+  it('Finish verification finds the link when an outage kept it out of the session', async () => {
+    const app = await verifySetup();
+    // Linked in the store, but the session never learned it.
+    app.store.rows.push(member({}));
+    const res = await app.req
+      .post('/host/verify/finish')
+      .set('Cookie', app.sid)
+      .set('Origin', ORIGIN)
+      .type('form')
+      .send({ _csrf: app.session().csrfToken });
+    expect(res.status).toBe(200);
+    expect(res.text).toContain('Continue to Meetup');
+  });
+
+  it('a host refused at the Discord step loses the set kept at sign-in', async () => {
+    const app = await verifySetup({ tokens: {} });
+    expect(app.kept.has(`meetup:${MEETUP_SELF.id}`)).toBe(true);
+    app.resolve.mockResolvedValue({ kind: 'refused', reason: 'blacklisted' });
+    const { back } = await link(app.req, app.sid, app.session().csrfToken);
+    expect(back.status).toBe(403);
+    expect(app.kept.has(`meetup:${MEETUP_SELF.id}`)).toBe(false);
   });
 
   it('no usable set (none kept, or its refresh failed): the Meetup step, which keeps the new one', async () => {

@@ -72,7 +72,9 @@ export async function storeMeetupTokens(
  * Moves a set to a new owner (a host dashboard sign-in's set, once the
  * Meetup account is linked to a Discord account), replacing whatever the
  * new owner had: it is the newest authorization. Nothing to move is a
- * no-op.
+ * no-op. Not atomic (read, write, remove): a sign-in writing the old key in
+ * between would lose its set, which only costs that member one more
+ * Meetup step.
  */
 export async function moveMeetupTokens(
   cache: KeyValueCache,
