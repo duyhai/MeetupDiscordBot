@@ -5,6 +5,7 @@ import {
   dashboardPool,
   DashboardTransactionOptions,
   inDashboardTransaction,
+  MEMBER_LOCK_CLASS,
   SCHEMA_LOCK_KEY,
 } from './dashboardPool.js';
 
@@ -301,12 +302,51 @@ export class PostgresEventRequestRepository {
   /**
    * Stores a new request. undefined when this host already sent a request
    * with the same `submitToken` (the same form sent twice): look it up with
-   * findBySubmitToken.
+   * findBySubmitToken. With `maxPending`, 'full' when the host already has
+   * that many waiting: counted under a per-host lock, so two forms sent at
+   * the same moment cannot both pass the cap.
    */
-  async create(input: NewEventRequest): Promise<EventRequest | undefined> {
-    return this.change('event request create', async (c) => {
-      const { rows } = await c.query<Row>(
-        `INSERT INTO event_requests
+  async create(input: NewEventRequest): Promise<EventRequest | undefined>;
+  async create(
+    input: NewEventRequest,
+    options: { maxPending?: number },
+  ): Promise<EventRequest | undefined | 'full'>;
+  async create(
+    input: NewEventRequest,
+    options: { maxPending?: number } = {},
+  ): Promise<EventRequest | undefined | 'full'> {
+    return inDashboardTransaction(
+      this.pool,
+      'event request create',
+      async (c) => {
+        if (options.maxPending !== undefined) {
+          await c.query('SELECT pg_advisory_xact_lock($1, hashtext($2))', [
+            MEMBER_LOCK_CLASS,
+            `event-request:${input.meetupMemberId}`,
+          ]);
+          // The same form sent again is not a new request: it goes to the
+          // one it made (undefined), even at the cap.
+          if (input.submitToken) {
+            const sent = await c.query(
+              `SELECT 1 FROM event_requests
+                WHERE meetup_member_id = $1 AND submit_token = $2`,
+              [input.meetupMemberId, input.submitToken],
+            );
+            if (sent.rows.length > 0) {
+              return undefined;
+            }
+          }
+          const pending = await c.query<{ n: string }>(
+            `SELECT count(*) AS n FROM event_requests
+            WHERE meetup_member_id = $1 AND status = 'pending'`,
+            [input.meetupMemberId],
+          );
+          if (Number(pending.rows[0].n) >= options.maxPending) {
+            return 'full' as const;
+          }
+        }
+        const { rows } = await c.query<Row>(
+          `INSERT INTO event_requests
            (meetup_member_id, discord_user_id, host_name, tier, kind,
             source_event_id, title, description, start_local, duration,
             rsvp_limit, guest_limit, featured_photo_id, venue_id, how_to_find_us,
@@ -315,31 +355,32 @@ export class PostgresEventRequestRepository {
          ON CONFLICT (meetup_member_id, submit_token) WHERE submit_token IS NOT NULL
            DO NOTHING
          RETURNING *`,
-        [
-          input.meetupMemberId,
-          input.discordUserId,
-          input.hostName,
-          input.tier,
-          input.kind,
-          input.sourceEventId,
-          input.title,
-          input.description,
-          input.startLocal,
-          input.duration,
-          input.rsvpLimit,
-          input.guestLimit,
-          input.featuredPhotoId,
-          input.venueId,
-          input.howToFindUs,
-          input.submitToken ?? null,
-        ],
-      );
-      if (rows[0] === undefined) {
-        return undefined;
-      }
-      await history(c, rows[0], 'submit', input.meetupMemberId);
-      return rows[0];
-    });
+          [
+            input.meetupMemberId,
+            input.discordUserId,
+            input.hostName,
+            input.tier,
+            input.kind,
+            input.sourceEventId,
+            input.title,
+            input.description,
+            input.startLocal,
+            input.duration,
+            input.rsvpLimit,
+            input.guestLimit,
+            input.featuredPhotoId,
+            input.venueId,
+            input.howToFindUs,
+            input.submitToken ?? null,
+          ],
+        );
+        if (rows[0] === undefined) {
+          return undefined;
+        }
+        await history(c, rows[0], 'submit', input.meetupMemberId);
+        return toRequest(rows[0]);
+      },
+    );
   }
 
   /** The host's request made by the form with this token, if any. */

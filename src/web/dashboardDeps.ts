@@ -28,6 +28,13 @@ import {
   uploadBanPhoto,
 } from '../lib/bans/service.js';
 import { PostgresSuspensionRepository } from '../lib/repositories/postgresSuspensionRepository.js';
+import { PostgresPromotedHostRepository } from '../lib/repositories/postgresPromotedHostRepository.js';
+import { hostedEvents, organizerGroupEvents } from '../lib/hosts/hostEvents.js';
+import {
+  promotionCandidates,
+  singleFlight,
+} from '../lib/hosts/promotionCandidates.js';
+import { withOrganizerMeetup } from '../lib/reports/organizerMeetup.js';
 import { PostgresEventRequestRepository } from '../lib/repositories/postgresEventRequestRepository.js';
 import {
   performWorkspaceAction,
@@ -50,7 +57,9 @@ import {
 import { html } from './html.js';
 import {
   productionPublishDeps,
+  alertVia,
   productionPublisher,
+  revokeHostSessions,
 } from './host/hostServices.js';
 import { organizerLoginDeps } from './organizerLoginDeps.js';
 import { layout } from './pages.js';
@@ -206,6 +215,45 @@ function banActions(
   };
 }
 
+/** The candidates are kept 30 minutes: a cold read is a year of events plus a count per host. */
+const CANDIDATES_TTL_MS = 30 * 60 * 1000;
+/** A hung Meetup read gives up after this, so the next load starts afresh. */
+const CANDIDATES_READ_TIMEOUT_MS = 2 * 60 * 1000;
+
+/** The promotion pages' organizer reads, shared by every request. */
+function promotionReads(getClient: () => Client | undefined) {
+  const fetchGroupEvents = organizerGroupEvents(getClient);
+  const now = () => new Date();
+  return {
+    promotionCandidates: singleFlight(
+      () =>
+        promotionCandidates(
+          {
+            fetchGroupEvents,
+            now,
+            pastHostedCount: (meetupId) =>
+              withOrganizerMeetup(getClient(), (meetup) =>
+                meetup.getGroupEventsCount({
+                  status: ['PAST'],
+                  hostId: meetupId,
+                }),
+              ),
+          },
+          new Set(),
+        ),
+      CANDIDATES_TTL_MS,
+      {
+        // A list missing some hosts is shown, not kept: the next load asks
+        // Meetup again.
+        keep: (list) => list.uncounted === 0,
+        timeoutMs: CANDIDATES_READ_TIMEOUT_MS,
+      },
+    ),
+    hostPastEvents: (meetupId: string) =>
+      hostedEvents({ fetchGroupEvents, now }, meetupId, 'past'),
+  };
+}
+
 /** Production page deps, each read wired to its repository's instance(). */
 export function dashboardPageDeps(): DashboardPageDeps {
   const isLeadership = discordRoleCheck(
@@ -266,6 +314,10 @@ export function dashboardPageDeps(): DashboardPageDeps {
     eventRequests: () => PostgresEventRequestRepository.instance(),
     publishRequest: productionPublisher(() => discordClient),
     findExistingEvent: productionPublishDeps(() => discordClient).findExisting,
+    promotedHosts: () => PostgresPromotedHostRepository.instance(),
+    ...promotionReads(() => discordClient),
+    revokeHostSessions,
+    hostAlert: alertVia(() => discordClient),
   };
 }
 
