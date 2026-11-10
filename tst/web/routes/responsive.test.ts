@@ -145,6 +145,8 @@ const TABLE_PAGES = [
   '/dashboard/suspensions?state=voided',
   '/dashboard/suspensions?state=banned',
   '/dashboard/identity',
+  '/dashboard/events',
+  '/dashboard/events/311000001',
   '/dashboard/link-progress',
   '/dashboard/trends',
 ];
@@ -155,6 +157,7 @@ const SAMPLE_PARAMS: Record<string, string> = {
   id: '1',
   side: 'old',
   rowId: '1',
+  eventId: '311000001',
 };
 
 /** Every signed-in GET page the router lists. */

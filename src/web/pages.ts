@@ -501,6 +501,11 @@ const NAV_ITEMS = [
     label: 'Identity changes',
   },
   {
+    key: 'eventChanges',
+    path: dashboardPath(DASHBOARD_PATHS.eventChanges),
+    label: 'Event changes',
+  },
+  {
     key: 'linkProgress',
     path: dashboardPath(DASHBOARD_PATHS.linkProgress),
     label: 'Link progress',

@@ -29,6 +29,11 @@ import {
 } from '../lib/bans/service.js';
 import { PostgresSuspensionRepository } from '../lib/repositories/postgresSuspensionRepository.js';
 import { PostgresPromotedHostRepository } from '../lib/repositories/postgresPromotedHostRepository.js';
+import { PostgresEventAuditRepository } from '../lib/repositories/postgresEventAuditRepository.js';
+import {
+  defaultEventAuditDeps,
+  requestEventAudit,
+} from '../lib/eventAudit/job.js';
 import { hostedEvents, organizerGroupEvents } from '../lib/hosts/hostEvents.js';
 import {
   promotionCandidates,
@@ -329,6 +334,22 @@ export function dashboardPageDeps(): DashboardPageDeps {
     ...promotionReads(() => discordClient),
     revokeHostSessions,
     hostAlert: alertVia(() => discordClient),
+    eventAudit: () => PostgresEventAuditRepository.instance(),
+    // Snapshot now: the job's deps with the timed rebuild cache for the
+    // request phase (a late lease is released by its hook), as the refresh
+    // route does. A CacheTimeoutError from here is the route's 503.
+    snapshotNow: async (requestedBy) => {
+      if (!discordClient) {
+        return { status: 'unavailable' };
+      }
+      return requestEventAudit(
+        {
+          ...(await defaultEventAuditDeps(discordClient)),
+          cache: dashboardRebuildCache,
+        },
+        requestedBy,
+      );
+    },
     mirrorRequest: (request) =>
       mirrorDecision(
         {

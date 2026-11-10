@@ -3,6 +3,7 @@ import { Client } from 'discord.js';
 
 import { getPaginatedData } from '../client/meetup/paginationHelper.js';
 import { EventStatus, GroupEventFilter } from '../client/meetup/types.js';
+import { MEETUP_EVENT_URL } from '../eventAudit/meetup.js';
 import { countsAsHosted } from '../helpers/countedEvents.js';
 import { withOrganizerMeetup } from '../reports/organizerMeetup.js';
 import { tz } from '../../util/timezone.js';
@@ -142,9 +143,6 @@ export async function monthCalendar(
   const days = Math.round(end.diff(dayjs(start), 'hour') / 24) + 1;
   return calendarDays(deps, start, days);
 }
-
-const MEETUP_EVENT_URL =
-  /^https:\/\/www\.meetup\.com\/[A-Za-z0-9_-]+\/events\/[0-9]+\/?$/;
 
 /**
  * The event's attendee page on Meetup, where hosts mark check-ins and

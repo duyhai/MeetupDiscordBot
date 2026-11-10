@@ -447,3 +447,36 @@ export interface AnnounceEventResponse {
     errors?: PayloadError[] | null;
   };
 }
+
+/**
+ * An event as the audit queries return it (src/lib/eventAudit/meetup.ts
+ * validates every field). `yes` and `waitlist` are the RSVP connection
+ * counts by status (aliases in the query).
+ */
+export interface AuditEventNode {
+  id: unknown;
+  title?: unknown;
+  status?: unknown;
+  dateTime?: unknown;
+  createdTime?: unknown;
+  duration?: unknown;
+  eventUrl?: unknown;
+  yes?: { totalCount?: unknown } | null;
+  waitlist?: { totalCount?: unknown } | null;
+  rsvpSettings?: { rsvpsClosed?: unknown } | null;
+  venue?: { id?: unknown } | null;
+  featuredEventPhoto?: { id?: unknown } | null;
+  eventHosts?:
+    ({ member?: { id?: unknown; name?: unknown } | null } | null)[] | null;
+}
+
+export interface GetGroupEventsForAuditResponse {
+  groupByUrlname: {
+    id: string;
+    events: PaginatedData<AuditEventNode>;
+  } | null;
+}
+
+export interface GetEventForAuditResponse {
+  event: AuditEventNode | null;
+}

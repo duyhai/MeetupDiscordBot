@@ -405,3 +405,73 @@ export const getEvent = gql`
     }
   }
 `;
+
+/**
+ * The event audit's node (src/lib/eventAudit): what a snapshot keeps. Every
+ * field was checked live against gql-ext with the organizer token
+ * (2026-11-10): `going` / `waiting` do not exist on Event, so the counts
+ * come from the RSVP connection with a status filter. No description, no
+ * member photos.
+ */
+const AUDIT_NODE = `
+            id
+            title
+            status
+            dateTime
+            createdTime
+            duration
+            eventUrl
+            venue {
+              id
+            }
+            featuredEventPhoto {
+              id
+            }
+            eventHosts {
+              member {
+                id
+                name
+              }
+            }
+            rsvpSettings {
+              rsvpsClosed
+            }
+            yes: rsvps(filter: { rsvpStatus: [YES] }) {
+              totalCount
+            }
+            waitlist: rsvps(filter: { rsvpStatus: [WAITLIST] }) {
+              totalCount
+            }`;
+
+export const getGroupEventsForAudit = gql`
+  query (
+    $urlname: String!
+    $first: Int!
+    $after: String
+    $filter: GroupEventFilter
+  ) {
+    groupByUrlname(urlname: $urlname) {
+      id
+      events(first: $first, after: $after, filter: $filter) {
+        pageInfo {
+          hasNextPage
+          hasPreviousPage
+          startCursor
+          endCursor
+        }
+        totalCount
+        edges {
+          node {${AUDIT_NODE}
+          }
+        }
+      }
+    }
+  }
+`;
+
+export const getEventForAudit = gql`
+  query ($eventId: ID!) {
+    event(id: $eventId) {${AUDIT_NODE}
+    }
+  }
+`;

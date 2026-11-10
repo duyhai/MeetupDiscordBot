@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   DASHBOARD_PATHS,
   dashboardPath,
+  eventHistoryPath,
   memberHistoryPath,
   MonthBeforeGroupError,
   linkableMonthPath,
@@ -128,5 +129,12 @@ describe('dashboardPaths', () => {
     expect(() => dashboardPath(DASHBOARD_PATHS.identityThumb as never)).toThrow(
       RangeError,
     );
+  });
+});
+
+describe('eventHistoryPath', () => {
+  it('only from an all-digit event id', () => {
+    expect(eventHistoryPath('311000001')).toBe('/dashboard/events/311000001');
+    expect(eventHistoryPath('abc')).toBeUndefined();
   });
 });
