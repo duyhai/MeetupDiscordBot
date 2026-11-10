@@ -1,0 +1,90 @@
+import { Client, DiscordAPIError, RESTJSONErrorCodes } from 'discord.js';
+import { describe, expect, it, vi } from 'vitest';
+
+import { GUILD_ID } from '../../../src/constants.js';
+import { ensureServerMember } from '../../../src/web/host/serverJoin.js';
+
+const USER = '123456789012345678';
+
+const unknownMember = () =>
+  new DiscordAPIError(
+    { code: RESTJSONErrorCodes.UnknownMember, message: 'Unknown Member' },
+    RESTJSONErrorCodes.UnknownMember,
+    404,
+    'GET',
+    '/guilds/x/members/y',
+    {},
+  );
+
+function fakeClient(options: {
+  member?: { pending?: boolean };
+  fetchError?: unknown;
+  added?: { pending?: boolean } | null;
+}) {
+  const fetch = vi.fn();
+  if (options.fetchError) {
+    fetch.mockRejectedValueOnce(options.fetchError);
+  }
+  if (options.member) {
+    fetch.mockResolvedValue(options.member);
+  }
+  const add = vi.fn().mockResolvedValue(options.added ?? null);
+  const guildsFetch = vi.fn().mockResolvedValue({ members: { fetch, add } });
+  const client = { guilds: { fetch: guildsFetch } } as unknown as Client;
+  return { client, fetch, add, guildsFetch };
+}
+
+describe('ensureServerMember', () => {
+  it('leaves a member as they are', async () => {
+    const member = { pending: false };
+    const { client, add, guildsFetch } = fakeClient({ member });
+    expect(await ensureServerMember(() => client, USER, 'oauth')).toEqual({
+      joined: false,
+      pending: false,
+      member,
+    });
+    expect(guildsFetch).toHaveBeenCalledWith(GUILD_ID);
+    expect(add).not.toHaveBeenCalled();
+  });
+
+  it('adds a non-member with their own OAuth token, and reports screening', async () => {
+    const added = { pending: true };
+    const { client, add } = fakeClient({
+      fetchError: unknownMember(),
+      added,
+    });
+    expect(await ensureServerMember(() => client, USER, 'oauth')).toEqual({
+      joined: true,
+      pending: true,
+      member: added,
+    });
+    expect(add).toHaveBeenCalledWith(USER, { accessToken: 'oauth' });
+  });
+
+  it('an add that finds them already in (204) is not a join', async () => {
+    const member = { pending: false };
+    const { client, fetch } = fakeClient({
+      fetchError: unknownMember(),
+      added: null,
+    });
+    fetch.mockResolvedValue(member);
+    expect(await ensureServerMember(() => client, USER, 'oauth')).toEqual({
+      joined: false,
+      pending: false,
+      member,
+    });
+  });
+
+  it('any other Discord failure, or no client, is thrown', async () => {
+    const { client, add } = fakeClient({
+      fetchError: new Error('discord down'),
+    });
+    await expect(
+      ensureServerMember(() => client, USER, 'oauth'),
+    ).rejects.toThrow('discord down');
+    expect(add).not.toHaveBeenCalled();
+    await expect(
+      ensureServerMember(() => undefined, USER, 'oauth'),
+    ).rejects.toThrow('not ready');
+  });
+});
