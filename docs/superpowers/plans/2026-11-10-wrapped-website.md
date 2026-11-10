@@ -34,10 +34,12 @@
 ### Task 1: Stats `activeYears`, cache v3 and past-year TTL, cosmetic notes
 
 **Files:**
+
 - Modify: `src/lib/wrapped/stats.ts`, `src/lib/wrapped/cache.ts`, `src/lib/wrapped/format.ts`, `src/lib/wrapped/handlers.ts`
 - Test: `tst/lib/wrapped/{stats,cache,format,handlers}.test.ts`, `tst/integration/wrappedCache.test.ts` (fixture gains `activeYears`)
 
 **Interfaces:**
+
 - Produces: `WrappedStats.activeYears: number[]` (ascending, distinct Pacific years of counted attended events, no cutoff); `WRAPPED_CACHE_VERSION = 'v3'`; `wrappedTtlSec(year, now)` returns `365 * 86400` when `year < tz(now).year()`; `PAST_YEAR_TTL_SEC` exported.
 
 - [ ] Tests: `computeWrapped` returns `activeYears: [2024, 2026, 2027]` for `[future, hotPot, hike, trivia]` with year 2026 (not cut off), and `[]` with no events; `wrappedCacheKey('d1', 2026)` is `wrapped:v3:d1:2026`; `wrappedTtlSec(2025, 2026-12-10)` is `31536000`; `wrappedTtlSec(2026, 2027-01-15)` is 365 d (2026 is past in Jan 2027) and `wrappedTtlSec(2027, 2027-01-15)` is until 2028-02-01; shared view renders `Alex N.` unchanged and `-# sub` without a leading `-#`; in `handlers.test.ts` a build failure whose `alert` rejects still ends with `replies.buildFailed` in place and no thrown error.
@@ -48,10 +50,12 @@
 ### Task 2: Eligibility `member`, session `role`, member route gate, nav
 
 **Files:**
+
 - Modify: `src/lib/hosts/eligibility.ts`, `src/web/host/hostSession.ts`, `src/web/host/hostRouter.ts`, `src/web/host/hostLayout.ts`
 - Test: `tst/lib/hosts/eligibility.test.ts`, `tst/web/host/hostRouter.member.test.ts` (new), `tst/web/host/hostRouter.session.test.ts`
 
 **Interfaces:**
+
 - Produces: `HostResolution` adds `{ kind: 'member'; meetupMemberId; discordUserId }`; `HostSession.role: 'host' | 'member'`; `MEMBER_PATHS` (exported from `hostRouter.ts`) = `['/', '/wrapped', '/wrapped/rebuild', '/logout']`; `NOT_LINKED_MEETUP_MESSAGE` in `hostLayout.ts`; `hostLayout({ user: { username, csrfToken, role? } })` filters nav: member → Home · Wrapped; host → Home · Calendar · My history · Wrapped (`HOST_NAV_ITEMS` gains `{ key: 'wrapped', path: '/host/wrapped', label: 'Wrapped' }`).
 - `admit()`: `member` → session `{ tier: 'regular', role: 'member' }`; `host` → `role: 'host'`. Gate re-check patches `role`. `liveSession` fills `role: 'host'` when absent. `isExtra` accepts `role` undefined/'host'/'member'.
 - A member-role request to a path outside `MEMBER_PATHS` → `fail(res, 403)` in `protectedRouter`, after the unsafe-method guard, before `pages`.
@@ -71,32 +75,47 @@
 ### Task 4: `wrappedPage.ts` orchestration and rendering
 
 **Files:**
+
 - Create: `src/web/host/wrappedPage.ts`
 - Test: `tst/web/host/wrappedPage.test.ts`
 
 **Interfaces:**
+
 ```ts
 export interface WrappedPageDeps {
-  cache: () => Promise<KeyValueCache>;            // ApplicationCache, not the 2 s timed one
+  cache: () => Promise<KeyValueCache>; // ApplicationCache, not the 2 s timed one
   memberToken: (discordUserId: string) => Promise<string | undefined>;
   meetupClient: (accessToken: string) => WrappedMeetup;
   organizerRsvps: BuildDeps['organizerRsvps'];
   findByMeetupId: CompanionDeps['findByMeetupId'];
   isPresent: CompanionDeps['isPresent'];
   displayName: (discordUserId: string) => Promise<string | undefined>;
-  limiter: FixedWindowLimiter;                   // wrappedBuildLimiter in production
+  limiter: FixedWindowLimiter; // wrappedBuildLimiter in production
   alert: (entry: LogEntry) => Promise<unknown>;
   groupId: string;
   now?: () => Date;
-  deadlineMs?: number;                           // 20_000
+  deadlineMs?: number; // 20_000
 }
 export const WRAPPED_PATH = '/host/wrapped';
 export const FIRST_WRAPPED_YEAR = 2015;
 export function wrappedYear(query: unknown, now: Date): number;
-export function yearList(thisYear: number, ...wrapped: (CachedWrapped | undefined)[]): number[]; // desc
-export function wrappedBody(args: { session: HostSession; wrapped: CachedWrapped; years: number[]; displayNames: Record<string, string>; notice?: SafeHtml | '' }): SafeHtml;
-export function registerWrappedPage(router: express.Router, deps: WrappedPageDeps): void; // GET /wrapped, POST /wrapped/rebuild
+export function yearList(
+  thisYear: number,
+  ...wrapped: (CachedWrapped | undefined)[]
+): number[]; // desc
+export function wrappedBody(args: {
+  session: HostSession;
+  wrapped: CachedWrapped;
+  years: number[];
+  displayNames: Record<string, string>;
+  notice?: SafeHtml | '';
+}): SafeHtml;
+export function registerWrappedPage(
+  router: express.Router,
+  deps: WrappedPageDeps,
+): void; // GET /wrapped, POST /wrapped/rebuild
 ```
+
 - Notice codes for `?notice=`: `rate-limited` (with minutes in a second param `?retry=N`), `mismatch`, `not-in-group`, `building`, `slow`, `failed`, `no-token`; each a fixed text.
 - A session with `discordUserId === null` → a page with the link nudge (200), no Meetup call.
 
@@ -106,6 +125,7 @@ export function registerWrappedPage(router: express.Router, deps: WrappedPageDep
 ### Task 5: Home page for members, wiring, preview
 
 **Files:**
+
 - Modify: `src/web/host/hostPages.ts` (member home branch; Wrapped button on the host home), `src/web/host/hostDeps.ts` (register `registerWrappedPage` with production deps), `src/web/host/hostLayout.ts` (login copy mentions members)
 - Test: `tst/web/host/hostPages.test.ts`, `tst/web/host/hostDeps.test.ts`
 - Preview: `.claude/preview.mts`, `.claude/launch.json` (copied from `.claude/worktrees/adoring-carson-6febb1/.claude/`, extended with a fake Wrapped + member sign-in), gitignored if `.claude/` is not tracked.
