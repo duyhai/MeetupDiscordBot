@@ -240,7 +240,7 @@ describe('runEventAudit', () => {
     };
     const { deps, cache, alerts } = fakeDeps({
       store: async () => store,
-      readMeetup: readMeetup as never,
+      readMeetup,
     });
     const outcome = await runEventAudit(deps, '123456789012345678');
     expect(outcome).toMatchObject({ ok: false });
