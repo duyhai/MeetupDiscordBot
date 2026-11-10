@@ -266,27 +266,21 @@ interface ChangeRow {
   alerted_at: Date | null;
 }
 
-/** Only a list of { id: digits, name: string } is trusted; anything else reads as no hosts. */
+/** Only entries of the shape { id: digits, name: string } are trusted; anything else is left out. */
 export function parseHosts(value: unknown): EventHost[] {
   if (!Array.isArray(value)) {
     return [];
   }
-  const hosts: EventHost[] = [];
-  for (const entry of value as unknown[]) {
+  return (value as unknown[]).flatMap((entry) => {
     const h = entry as { id?: unknown; name?: unknown } | null;
-    if (
-      typeof h === 'object' &&
+    return typeof h === 'object' &&
       h !== null &&
       typeof h.id === 'string' &&
       EVENT_ID.test(h.id) &&
       typeof h.name === 'string'
-    ) {
-      hosts.push({ id: h.id, name: h.name });
-    } else {
-      return [];
-    }
-  }
-  return hosts;
+      ? [{ id: h.id, name: h.name }]
+      : [];
+  });
 }
 
 const toRun = (r: RunRow): EventAuditRun => ({
