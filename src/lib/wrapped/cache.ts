@@ -15,7 +15,7 @@ import { WrappedStats } from './stats.js';
 const logger = new Logger({ name: 'wrappedCache' });
 
 /** Bump whenever CachedWrapped's shape changes. */
-export const WRAPPED_CACHE_VERSION = 'v2';
+export const WRAPPED_CACHE_VERSION = 'v3';
 export const BUILD_WINDOW_MS = 60 * 60 * 1000;
 export const SHARE_GUARD_TTL_SEC = 24 * 60 * 60;
 /**
@@ -24,6 +24,8 @@ export const SHARE_GUARD_TTL_SEC = 24 * 60 * 60;
  */
 export const BUILDING_LEASE_TTL_SEC = 15 * 60;
 const MIN_TTL_SEC = 24 * 60 * 60;
+/** A year that has ended is final: its Wrapped keeps for a year. */
+export const PAST_YEAR_TTL_SEC = 365 * 24 * 60 * 60;
 
 export interface CachedWrapped {
   /** The Meetup account this was built for; a relink makes it a miss. */
@@ -50,10 +52,14 @@ export function shareGuardKey(
 }
 
 /**
- * Until 1 February of the following year (Pacific), so a Wrapped stays
- * through the season; a past year's lookback rebuilds daily.
+ * The current year: until 1 February of the following year (Pacific), so a
+ * Wrapped stays through the season and a December copy is rebuilt once the
+ * year is over. A past year's data is final, so it keeps for a year.
  */
 export function wrappedTtlSec(year: number, now: Date): number {
+  if (year < tz(dayjs(now)).year()) {
+    return PAST_YEAR_TTL_SEC;
+  }
   const seasonEnd = tz(dayjs(now))
     .year(year + 1)
     .month(1)

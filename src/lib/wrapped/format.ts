@@ -97,7 +97,11 @@ function plainName(name: string): string {
     numberedList: true,
   });
   // Belt and braces for the link syntax: "](" can't pair up any more.
-  return neutralizeMentions(escaped.replace(/\]\(/g, ']\u200b('));
+  // escapeMarkdown knows no subtext ("-# "), so a leading one is broken
+  // up too (#138 review).
+  return neutralizeMentions(
+    escaped.replace(/\]\(/g, ']\u200b(').replace(/^-#/, '\\-#'),
+  );
 }
 
 function companionsText(wrapped: CachedWrapped, view: EmbedView): string {

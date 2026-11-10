@@ -30,6 +30,7 @@ const full: CachedWrapped = {
     hosting: { thisYear: 1, allTime: 3 },
     busiestMonth: { month: 6, count: 4 },
     longestStreakMonths: 5,
+    activeYears: [2024, 2025, 2026],
   },
   companions: {
     named: [
@@ -139,6 +140,8 @@ describe('wrappedEmbed shared view', () => {
     ['# Big', [/^# /m]],
     ['- item', [/^- /m]],
     ['1. item', [/^1\. /m]],
+    // Subtext renders at the start of a line too.
+    ['-# whisper', [/^-# /m]],
     ['@everyone', [/@everyone/]],
     ['<@&1>', [/<@/]],
     ['<#1>', [/<#/]],
@@ -156,6 +159,18 @@ describe('wrappedEmbed shared view', () => {
     });
     // Still names them, in some neutralised form.
     expect(value).toContain('(4 events)');
+  });
+
+  it('leaves an ordinary name such as "Alex N." unchanged', () => {
+    const value = field(
+      wrappedEmbed('Jane', full, {
+        kind: 'shared',
+        displayNames: { d1: 'Alex N.', d2: 'Sam' },
+      }),
+      'Went with the most',
+    );
+
+    expect(value).toContain('Alex N. (4 events)');
   });
 
   it('folds a companion whose name could not be resolved into the count', () => {

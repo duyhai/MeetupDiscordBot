@@ -4,6 +4,7 @@ import { KeyValueCache } from '../../../src/lib/cache/base.js';
 import {
   BUILD_WINDOW_MS,
   CachedWrapped,
+  PAST_YEAR_TTL_SEC,
   createBuildLimiter,
   readWrapped,
   shareGuardKey,
@@ -58,6 +59,7 @@ const wrapped: CachedWrapped = {
     hosting: null,
     busiestMonth: null,
     longestStreakMonths: 0,
+    activeYears: [],
   },
   companions: { named: [], otherCount: 0 },
   builtAt: '2026-12-10T20:00:00.000Z',
@@ -65,7 +67,7 @@ const wrapped: CachedWrapped = {
 
 describe('cache keys', () => {
   it('versions the Wrapped key and scopes the share guard to a channel', () => {
-    expect(wrappedCacheKey('d1', 2026)).toBe('wrapped:v2:d1:2026');
+    expect(wrappedCacheKey('d1', 2026)).toBe('wrapped:v3:d1:2026');
     expect(shareGuardKey('d1', 2026, 'c9')).toBe('wrapped:shared:d1:2026:c9');
   });
 });
@@ -80,8 +82,24 @@ describe('wrappedTtlSec', () => {
     );
   });
 
-  it('keeps a past year for one day', () => {
-    expect(wrappedTtlSec(2022, new Date('2026-12-10T20:00:00Z'))).toBe(86400);
+  it('keeps a past year for a year: its data is final', () => {
+    expect(wrappedTtlSec(2022, new Date('2026-12-10T20:00:00Z'))).toBe(
+      PAST_YEAR_TTL_SEC,
+    );
+    expect(PAST_YEAR_TTL_SEC).toBe(365 * 86400);
+    // In January the year just ended is a past year too.
+    expect(wrappedTtlSec(2026, new Date('2027-01-15T20:00:00Z'))).toBe(
+      PAST_YEAR_TTL_SEC,
+    );
+  });
+
+  it('keeps the new current year until its own 1 February', () => {
+    const now = new Date('2027-01-15T20:00:00Z');
+    const feb1 = new Date('2028-02-01T08:00:00Z');
+
+    expect(wrappedTtlSec(2027, now)).toBe(
+      (feb1.getTime() - now.getTime()) / 1000,
+    );
   });
 });
 
@@ -93,7 +111,7 @@ describe('readWrapped / writeWrapped', () => {
     await writeWrapped(cache, 'd1', 2026, wrapped, now);
 
     expect(await readWrapped(cache, 'd1', 2026, 'm1')).toEqual(wrapped);
-    expect(cache.ttls.get('wrapped:v2:d1:2026')).toBe(wrappedTtlSec(2026, now));
+    expect(cache.ttls.get('wrapped:v3:d1:2026')).toBe(wrappedTtlSec(2026, now));
   });
 
   it('is a miss when the member has since linked a different Meetup account', async () => {
@@ -107,7 +125,7 @@ describe('readWrapped / writeWrapped', () => {
     const cache = new FakeCache();
 
     expect(await readWrapped(cache, 'd1', 2026)).toBeUndefined();
-    cache.data.set('wrapped:v2:d1:2026', 'not json');
+    cache.data.set('wrapped:v3:d1:2026', 'not json');
     expect(await readWrapped(cache, 'd1', 2026)).toBeUndefined();
   });
 });

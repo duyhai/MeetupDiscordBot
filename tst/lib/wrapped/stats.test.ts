@@ -67,6 +67,26 @@ describe('computeWrapped', () => {
     expect(companions).toEqual([]);
   });
 
+  it('lists every year with a counted event, not cut off at the Wrapped year', () => {
+    const { stats } = computeWrapped(
+      input({
+        attended: [
+          future,
+          hotPot,
+          hike,
+          trivia,
+          ev('9', '2025-06-01T19:00:00-07:00', 'Cancelled: Picnic'),
+        ],
+      }),
+    );
+
+    expect(stats.activeYears).toEqual([2024, 2026, 2027]);
+  });
+
+  it('has no active years with no events', () => {
+    expect(computeWrapped(input()).stats.activeYears).toEqual([]);
+  });
+
   it('counts a hosted event as attended, once', () => {
     const games = ev('7', '2026-02-01T19:00:00-08:00', 'Board Game Night');
     const { stats } = computeWrapped(
