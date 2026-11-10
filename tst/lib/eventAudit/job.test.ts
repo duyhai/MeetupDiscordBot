@@ -117,7 +117,7 @@ describe('runEventAuditTick', () => {
     await heldDeps.cache.set(BUILD_LEASE_KEY, 'other', 60);
     await runEventAuditTick(heldDeps.deps);
     expect(heldDeps.cache.values.get(BUILD_LEASE_KEY)).toBe('other');
-    const recent = await storeWithRun(minutesAgo(10), 'saved');
+    const recent = await storeWithRun(new Date('2026-11-10T20:00:00Z'), 'saved');
     const notDue = fakeDeps({
       store: async () => recent,
       readMeetup: fakeReader([obs()]).readMeetup,
