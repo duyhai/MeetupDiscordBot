@@ -97,8 +97,14 @@ export interface StaffRequestStore {
   listByStatus: (
     statuses: EventRequestStatus[],
     limit?: number,
+    order?: 'oldest' | 'newest',
   ) => Promise<EventRequest[]>;
   listDecided: (limit?: number) => Promise<EventRequest[]>;
+  /**
+   * How many requests are in each status, for the queue's filter chips.
+   * Optional: a store without it shows the chips without counts.
+   */
+  countByStatus?: () => Promise<Map<EventRequestStatus, number>>;
   /**
    * The reviewer checklist recorded with each request's latest approval;
    * absent where none was. Optional: a store without it shows no checklists.

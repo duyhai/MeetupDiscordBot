@@ -31,7 +31,9 @@ import {
 } from '../../lib/reports/dashboardPaths.js';
 import {
   DENY_REASON_MAX,
+  EVENT_REQUEST_STATUSES,
   EventRequest,
+  EventRequestStatus,
   PublishFrom,
 } from '../../lib/repositories/postgresEventRequestRepository.js';
 import {
@@ -50,6 +52,8 @@ const logger = new Logger({ name: 'dashboard' });
 const REQUEST_ID = /^[1-9][0-9]{0,17}$/;
 const VERSION = /^[1-9][0-9]{0,8}$/;
 const RECENT_DECIDED = 20;
+/** How many of one status a filtered page lists. */
+const FILTERED_LIMIT = 100;
 
 /** The store the queue reads and the decision service writes (requestDecision.ts). */
 export type { StaffRequestStore } from '../../lib/hosts/requestDecision.js';
@@ -158,19 +162,57 @@ function checklistRecord(ticked: ChecklistKey[] | undefined): SafeHtml | '' {
 const whenLabel = (startLocal: string) =>
   dayjs(startLocal).format('ddd, MMM D, YYYY [at] h:mm A');
 
+/** Each status as the queue names it, on the badge and the filter chip. */
+export const STATUS_LABELS: Record<EventRequestStatus, string> = {
+  pending: 'Waiting',
+  publishing: 'Publishing',
+  published: 'Published',
+  failed: 'Failed',
+  denied: 'Denied',
+};
+
+/** Denied is attention-coloured like Waiting and Failed: it should stand out. */
 function statusBadge(r: EventRequest): SafeHtml {
   switch (r.status) {
-    case 'pending':
-      return html`<span class="badge attn">Waiting</span>`;
     case 'publishing':
-      return html`<span class="badge info">Publishing</span>`;
+      return html`<span class="badge info">${STATUS_LABELS.publishing}</span>`;
     case 'published':
-      return html`<span class="badge ok">Published</span>`;
-    case 'denied':
-      return html`<span class="badge neutral">Denied</span>`;
+      return html`<span class="badge ok">${STATUS_LABELS.published}</span>`;
     default:
-      return html`<span class="badge attn">Failed</span>`;
+      return html`<span class="badge attn">${STATUS_LABELS[r.status]}</span>`;
   }
+}
+
+/** `?status=`: one of the table's statuses, else the default view. */
+export function statusFilter(value: unknown): EventRequestStatus | undefined {
+  return typeof value === 'string' &&
+    (EVENT_REQUEST_STATUSES as readonly string[]).includes(value)
+    ? (value as EventRequestStatus)
+    : undefined;
+}
+
+function queueLink(status?: EventRequestStatus): string {
+  return status ? `${queuePath()}?status=${status}` : queuePath();
+}
+
+/** All · Waiting · … chips, each with its count when the store counts. */
+function filterChips(
+  selected: EventRequestStatus | undefined,
+  counts: Map<EventRequestStatus, number> | undefined,
+): SafeHtml {
+  const chip = (status: EventRequestStatus | undefined, label: string) => {
+    const n = status && counts ? (counts.get(status) ?? 0) : undefined;
+    const text = n === undefined ? label : `${label} (${n})`;
+    return status === selected
+      ? html`<a href="${localUrl(queueLink(status))}" aria-current="page"
+          ><strong>${text}</strong></a
+        >`
+      : html`<a href="${localUrl(queueLink(status))}">${text}</a>`;
+  };
+  return html`<nav class="status-filter" aria-label="Request status">
+    ${chip(undefined, 'All')}
+    ${EVENT_REQUEST_STATUSES.map((s) => chip(s, STATUS_LABELS[s]))}
+  </nav>`;
 }
 
 function tierBadge(r: EventRequest): SafeHtml {
@@ -388,13 +430,22 @@ function requestCard(
   </div>`;
 }
 
+/** The default view (waiting, needing attention, recently decided) or one status's list. */
+type QueueView = {
+  checklists: Map<string, ChecklistKey[]>;
+  counts: Map<EventRequestStatus, number> | undefined;
+} & (
+  | {
+      kind: 'default';
+      pending: EventRequest[];
+      attention: EventRequest[];
+      decided: EventRequest[];
+    }
+  | { kind: 'one'; status: EventRequestStatus; listed: EventRequest[] }
+);
+
 function queueBody(
-  view: {
-    pending: EventRequest[];
-    attention: EventRequest[];
-    decided: EventRequest[];
-    checklists: Map<string, ChecklistKey[]>;
-  },
+  view: QueueView,
   leadership: LeadershipAnswer,
   csrf: string,
   now: Date,
@@ -403,6 +454,34 @@ function queueBody(
   const leader = leadership === 'leader';
   const card = (r: EventRequest) =>
     requestCard(r, leader, csrf, now, view.checklists.get(r.id));
+  const lists =
+    view.kind === 'default'
+      ? html`<h2>Waiting (${view.pending.length})</h2>
+          ${
+            view.pending.length === 0
+              ? html`<p class="muted">No requests are waiting.</p>`
+              : view.pending.map(card)
+          }
+          ${
+            view.attention.length > 0
+              ? html`<h2>Needs attention (${view.attention.length})</h2>
+                  ${view.attention.map(card)}`
+              : ''
+          }
+          <h2>Recently decided</h2>
+          ${
+            view.decided.length === 0
+              ? html`<p class="muted">Nothing yet.</p>`
+              : view.decided.map(card)
+          }`
+      : html`<h2>${STATUS_LABELS[view.status]} (${view.listed.length})</h2>
+          ${
+            view.listed.length === 0
+              ? html`<p class="muted">
+                  No ${STATUS_LABELS[view.status].toLowerCase()} requests.
+                </p>`
+              : view.listed.map(card)
+          }`;
   return html`<div class="card">
       <h1>Host requests</h1>
       <p>
@@ -419,25 +498,9 @@ function queueBody(
             </p>`
       }
       ${notice}
+      ${filterChips(view.kind === 'one' ? view.status : undefined, view.counts)}
     </div>
-    <h2>Waiting (${view.pending.length})</h2>
-    ${
-      view.pending.length === 0
-        ? html`<p class="muted">No requests are waiting.</p>`
-        : view.pending.map(card)
-    }
-    ${
-      view.attention.length > 0
-        ? html`<h2>Needs attention (${view.attention.length})</h2>
-            ${view.attention.map(card)}`
-        : ''
-    }
-    <h2>Recently decided</h2>
-    ${
-      view.decided.length === 0
-        ? html`<p class="muted">Nothing yet.</p>`
-        : view.decided.map(card)
-    }`;
+    ${lists}`;
 }
 
 function stalePage(res: Response): void {
@@ -480,28 +543,61 @@ export function registerHostRequestRoutes(
 
   router.get(DASHBOARD_PATHS.hostRequests, (async (req, res) => {
     const { session } = dashboardLocals(res);
-    const loaded = await load(res, 'host requests', async () => {
-      const store = await deps.eventRequests();
-      const [pending, attention, decided] = await Promise.all([
-        store.listByStatus(['pending']),
-        store.listByStatus(['failed', 'publishing']),
-        store.listDecided(RECENT_DECIDED),
-      ]);
-      // The checklists are a note on the cards: a failure hides them only.
-      let checklists = new Map<string, ChecklistKey[]>();
-      if (store.reviewChecklists) {
-        try {
-          checklists = await store.reviewChecklists(
-            [...attention, ...decided].map((r) => r.id),
+    const status = statusFilter(req.query.status);
+    const loaded = await load(
+      res,
+      'host requests',
+      async (): Promise<QueueView> => {
+        const store = await deps.eventRequests();
+        const counting = store.countByStatus?.();
+        // The checklists are a note on the cards: a failure hides them only.
+        const checklistsOf = async (rows: EventRequest[]) => {
+          if (!store.reviewChecklists) {
+            return new Map<string, ChecklistKey[]>();
+          }
+          try {
+            return await store.reviewChecklists(rows.map((r) => r.id));
+          } catch (error: unknown) {
+            logger.warn(
+              `Review checklists read failed: ${error instanceof Error ? error.name : 'Error'}`,
+            );
+            return new Map<string, ChecklistKey[]>();
+          }
+        };
+        if (status) {
+          // Decided ones newest first; the rest oldest first, as the queue is worked.
+          const listed = await store.listByStatus(
+            [status],
+            FILTERED_LIMIT,
+            status === 'published' || status === 'denied' ? 'newest' : 'oldest',
           );
-        } catch (error: unknown) {
-          logger.warn(
-            `Review checklists read failed: ${error instanceof Error ? error.name : 'Error'}`,
+          const checklists = await checklistsOf(
+            listed.filter((r) => r.status !== 'pending'),
           );
+          return {
+            kind: 'one',
+            status,
+            listed,
+            checklists,
+            counts: await counting,
+          };
         }
-      }
-      return { pending, attention, decided, checklists };
-    });
+        const [pending, attention, decided] = await Promise.all([
+          store.listByStatus(['pending']),
+          store.listByStatus(['failed', 'publishing']),
+          store.listDecided(RECENT_DECIDED),
+        ]);
+        const checklists = await checklistsOf([...attention, ...decided]);
+        return {
+          kind: 'default',
+          pending,
+          attention,
+          decided,
+          checklists,
+          counts: await counting,
+        };
+      },
+    );
     if (!loaded.ok) {
       return;
     }

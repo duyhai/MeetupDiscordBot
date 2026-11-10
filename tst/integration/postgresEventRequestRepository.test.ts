@@ -437,6 +437,26 @@ const request = (over: Partial<NewEventRequest> = {}): NewEventRequest => ({
       expect(b.id).not.toBe(a.id);
     });
 
+    it('counts each status in one query, and lists a status newest first on request', async () => {
+      const a = await repo.create(request({ title: 'A' }));
+      const b = await repo.create(request({ title: 'B' }));
+      await repo.create(request({ title: 'C' }));
+      await repo.deny(a.id, 1, LEAD, 'No');
+      await repo.deny(b.id, 1, LEAD, 'No');
+      expect([...(await repo.countByStatus()).entries()].sort()).toEqual([
+        ['denied', 2],
+        ['pending', 1],
+      ]);
+      // b was denied last, so it leads the newest-first list; oldest first is by creation.
+      expect(
+        (await repo.listByStatus(['denied'], 10, 'newest')).map((r) => r.id),
+      ).toEqual([b.id, a.id]);
+      expect(
+        (await repo.listByStatus(['denied'], 10)).map((r) => r.id),
+      ).toEqual([a.id, b.id]);
+      expect(await repo.listByStatus(['denied'], 1, 'newest')).toHaveLength(1);
+    });
+
     it('the database refuses values outside the rules', async () => {
       await expect(repo.create(request({ title: '' }))).rejects.toThrow();
       await expect(
