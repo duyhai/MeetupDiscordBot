@@ -192,6 +192,10 @@ describe('host calendar months', () => {
       .get('/host/calendar?month=2027-11')
       .set('Cookie', sid);
     expect(last.text).toContain('<strong>November 2027</strong>');
+    // The form takes a year ahead (to Nov 3, 2027): no + or Host link after.
+    expect(last.text).toContain('aria-label="Host an event on Wed, Nov 3"');
+    expect(last.text).not.toContain('aria-label="Host an event on Thu, Nov 4"');
+    expect(last.text).not.toContain('day=2027-11-04');
     expect(last.text).toMatch(/<span class="button ghost disabled"\s*>Dec →/);
     const odd = await Promise.all(
       ['2026-10', '2027-12', '2026-13', 'x'].map((m) =>

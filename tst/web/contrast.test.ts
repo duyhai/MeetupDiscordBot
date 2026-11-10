@@ -63,9 +63,16 @@ const TEXT_PAIRS: [string, string][] = [
   ]),
   ...['bg', 'surface', 'raised'].map((bg): [string, string] => ['muted', bg]),
   // Links and ghost buttons, at rest, on hover and as the current tab.
-  ...['bg', 'surface', 'raised', 'sel', 'accent-soft'].map(
-    (bg): [string, string] => ['accent', bg],
-  ),
+  // The calendar's plain + also sits on the busy shadings.
+  ...[
+    'bg',
+    'surface',
+    'raised',
+    'sel',
+    'accent-soft',
+    'ok-soft',
+    'attn-soft',
+  ].map((bg): [string, string] => ['accent', bg]),
   ...['bg', 'surface', 'raised', 'accent-soft'].map((bg): [string, string] => [
     'accent-ink',
     bg,

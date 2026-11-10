@@ -18,6 +18,7 @@ import {
   hostedEvents,
   pacificDay,
 } from '../../lib/hosts/hostEvents.js';
+import { MAX_DAYS_AHEAD } from '../../lib/hosts/eventRequest.js';
 import { matchHolidays } from '../../lib/hosts/holidays.js';
 import { SafeHtml, html, memberText, pageLink, safeHref } from '../html.js';
 import { eventLink } from '../links.js';
@@ -217,6 +218,15 @@ function eventLine(e: HostEvent): SafeHtml {
  * hover, one-open-at-a-time, Escape, tap-outside and placement. It lists
  * every event that day, not just what the cell has room for.
  */
+/**
+ * Whether the create form takes this day: from tomorrow to MAX_DAYS_AHEAD
+ * days on (the calendar pages a little further than that).
+ */
+function canHostOn(day: string, today: string): boolean {
+  const last = dayjs(today).add(MAX_DAYS_AHEAD, 'day').format('YYYY-MM-DD');
+  return day > today && day <= last;
+}
+
 function dayPopover(day: CalendarDay, today: string): SafeHtml {
   const count = day.events.length;
   const countText =
@@ -229,10 +239,9 @@ function dayPopover(day: CalendarDay, today: string): SafeHtml {
       : html`<ul>
           ${day.events.map((e) => html`<li>${eventLine(e)}</li>`)}
         </ul>`;
-  const host =
-    day.day > today
-      ? html`<p><a href="${createDayLink(day.day)}">Host on this day</a></p>`
-      : '';
+  const host = canHostOn(day.day, today)
+    ? html`<p><a href="${createDayLink(day.day)}">Host on this day</a></p>`
+    : '';
   return html`<details class="cal-pop">
     <summary>
       <span class="sr-only">${label}: </span
@@ -264,15 +273,14 @@ function calendarCell(day: CalendarDay, today: string): SafeHtml {
     // would be wrong: it shows the date only.
     return html`<td class="cal past">${number}</td>`;
   }
-  const add =
-    day.day > today
-      ? html`<a
-          class="cal-add"
-          href="${createDayLink(day.day)}"
-          aria-label="Host an event on ${dayLabel(day.day)}"
-          >+</a
-        >`
-      : '';
+  const add = canHostOn(day.day, today)
+    ? html`<a
+        class="cal-add"
+        href="${createDayLink(day.day)}"
+        aria-label="Host an event on ${dayLabel(day.day)}"
+        >+</a
+      >`
+    : '';
   const inner = html`<div class="cal-head">${number}${add}</div>
     ${dayPopover(day, today)}`;
   switch (day.busy) {
