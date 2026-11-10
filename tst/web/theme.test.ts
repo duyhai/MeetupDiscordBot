@@ -61,6 +61,8 @@ describe('theme toggle', () => {
     const ids = (literal ?? '').split(',').map((s) => s.replace(/'/g, ''));
     expect(ids).toEqual(PALETTES.map((p) => p.id));
     expect(ids[0]).toBe('night');
+    // The ids become data-palette values and CSS selectors: plain words.
+    expect(ids.every((id) => /^[a-z]+$/.test(id))).toBe(true);
   });
 });
 
@@ -318,6 +320,34 @@ describe('THEME_SCRIPT palettes', () => {
     page.storageEvent('dashboard-theme');
     expect(page.theme()).toBe('dark');
     expect(page.palette()).toBe('potluck');
+  });
+
+  it("a palette change in another tab leaves this tab's theme pick alone", () => {
+    const storage = memoryStorage();
+    storage.setItem = () => {
+      throw new Error('quota');
+    };
+    const page = runTheme(storage);
+    page.dark.click();
+    storage.data.set('dashboard-palette', 'quiet');
+    page.storageEvent('dashboard-palette');
+    expect(page.palette()).toBe('quiet');
+    expect(page.theme()).toBe('dark');
+  });
+
+  it('a cleared storage resets both the theme and the palette', () => {
+    const storage = memoryStorage();
+    storage.setItem = () => {
+      throw new Error('quota');
+    };
+    const page = runTheme(storage);
+    page.dark.click();
+    page.choosePalette('paper');
+    storage.data.clear();
+    page.storageEvent(null);
+    expect(page.theme()).toBeUndefined();
+    expect(page.palette()).toBeUndefined();
+    expect(page.select.value).toBe('night');
   });
 
   it('a page without the picker still applies the saved palette', () => {

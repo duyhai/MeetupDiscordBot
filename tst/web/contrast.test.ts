@@ -138,8 +138,14 @@ const TEXT_PAIRS: [string, string][] = [
   ['attn-ink', 'raised'],
   // Muted text and links inside the hover, quiet-day and busy-day fills,
   // and the done colour on a plain card.
-  ...['sel', 'ok-soft', 'attn-soft'].map((bg) => ['muted', bg]),
-  ...['sel', 'ok-soft', 'attn-soft'].map((bg) => ['accent-ink', bg]),
+  ...['sel', 'ok-soft', 'attn-soft'].map((bg): [string, string] => [
+    'muted',
+    bg,
+  ]),
+  ...['sel', 'ok-soft', 'attn-soft'].map((bg): [string, string] => [
+    'accent-ink',
+    bg,
+  ]),
   ['ok-ink', 'surface'],
   ['accent', 'ok-soft'],
 ];
