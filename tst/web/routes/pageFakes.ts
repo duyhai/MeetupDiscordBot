@@ -66,6 +66,11 @@ import { SessionStore } from '../../../src/web/session.js';
 import { FakeCache } from '../fakeCache.js';
 import type { PublishOutcome } from '../../../src/lib/hosts/publishRequest.js';
 import type { EventRequest } from '../../../src/lib/repositories/postgresEventRequestRepository.js';
+import type {
+  PromotedHost,
+  PromotionChange,
+  PromotionEvent,
+} from '../../../src/lib/repositories/postgresPromotedHostRepository.js';
 import type { StaffRequestStore } from '../../../src/web/routes/hostRequests.js';
 
 export const PAGE_NOW = new Date('2026-10-05T16:15:00Z');
@@ -810,6 +815,68 @@ export function eventRequestRow(
   };
 }
 
+/**
+ * The promoted-hosts store in memory, with Postgres's compare-and-set: a
+ * change at a version the row is not at is stale.
+ */
+export function fakePromotedHosts(rows: PromotedHost[] = []) {
+  const events: PromotionEvent[] = [];
+  return {
+    rows,
+    events,
+    list: vi.fn(async () => [...rows]),
+    get: vi.fn(async (id: string) => rows.find((r) => r.meetupMemberId === id)),
+    history: vi.fn(async (id: string) =>
+      events.filter((e) => e.meetupMemberId === id).reverse(),
+    ),
+    change: vi.fn(
+      async (
+        action: 'promote' | 'demote',
+        id: string,
+        seenVersion: number,
+        actor: string,
+        reason: string,
+      ): Promise<PromotionChange> => {
+        const current = rows.find((r) => r.meetupMemberId === id);
+        if (current === undefined && action === 'demote') {
+          return { code: 'never-promoted' };
+        }
+        if ((current?.version ?? 0) !== seenVersion) {
+          return { code: 'stale' };
+        }
+        if (
+          current !== undefined &&
+          current.active === (action === 'promote')
+        ) {
+          return { code: 'unchanged' };
+        }
+        const row: PromotedHost = {
+          meetupMemberId: id,
+          active: action === 'promote',
+          reason,
+          changedBy: actor,
+          changedAt: PAGE_NOW,
+          version: seenVersion + 1,
+        };
+        if (current) {
+          rows.splice(rows.indexOf(current), 1, row);
+        } else {
+          rows.push(row);
+        }
+        events.push({
+          meetupMemberId: id,
+          action,
+          reason,
+          actorDiscordId: actor,
+          version: row.version,
+          at: PAGE_NOW,
+        });
+        return { code: 'changed', row };
+      },
+    ),
+  };
+}
+
 /** The queue's store over fixed rows; deny and resolve change a row at its version, as Postgres does. */
 export function fakeEventRequests(rows: EventRequest[] = [eventRequestRow()]) {
   return {
@@ -923,6 +990,25 @@ export function fakePageDeps(
       code: 'published',
       request: eventRequestRow({ status: 'published' }),
     })),
+    promotedHosts: async () => fakePromotedHosts(),
+    promotionCandidates: vi.fn(async () => ({
+      candidates: [],
+      seen: new Map(),
+      uncounted: 0,
+    })),
+    // The access matrix opens member 123456's page: one past event.
+    hostPastEvents: vi.fn(async (id: string) => [
+      {
+        id: '9001',
+        title: 'Board games',
+        dateTime: '2026-08-01T19:00:00-07:00',
+        eventUrl: 'https://www.meetup.com/g/events/9001/',
+        type: 'games' as const,
+        hosts: [{ id, name: 'A Host' }],
+      },
+    ]),
+    revokeHostSessions: vi.fn(async () => undefined),
+    hostAlert: vi.fn().mockResolvedValue(true),
     ...overrides,
   };
 }

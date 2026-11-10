@@ -27,7 +27,11 @@ import {
 import { PostgresEventRequestRepository } from '../../lib/repositories/postgresEventRequestRepository.js';
 import { PostgresMemberRepository } from '../../lib/repositories/postgresMemberRepository.js';
 import { PostgresPromotedHostRepository } from '../../lib/repositories/postgresPromotedHostRepository.js';
+import { ApplicationCache } from '../../util/cache.js';
 import { discordRoleCheck } from '../roleGate.js';
+import { SessionStore } from '../session.js';
+import { timedCacheFactory } from '../timedCache.js';
+import { HOST_SESSION_OPTIONS, HostSession } from './hostSession.js';
 
 /** Production lookups for resolveHost. Each throws when its source is down. */
 export function hostResolveDeps(
@@ -179,6 +183,22 @@ export function verifyRunner(
       attendedCount,
     };
   };
+}
+
+const sessionCache = timedCacheFactory(ApplicationCache);
+
+/**
+ * Ends every host-dashboard session of a Meetup member (the staff side's
+ * promote and demote), on the cache the host site's sessions live in.
+ */
+export async function revokeHostSessions(
+  meetupMemberId: string,
+): Promise<void> {
+  await new SessionStore<HostSession>(
+    await sessionCache(),
+    Date.now,
+    HOST_SESSION_OPTIONS,
+  ).revokeUser(meetupMemberId);
 }
 
 /**

@@ -33,36 +33,41 @@ function memoryStore() {
   return {
     rows,
     store: {
-      create: vi.fn(async (input: NewEventRequest) => {
-        await Promise.resolve();
-        // The unique (member, submit token) index: a repeat makes nothing.
-        if (
-          input.submitToken &&
-          rows.some(
-            (r) =>
-              r.meetupMemberId === input.meetupMemberId &&
-              r.submitToken === input.submitToken,
-          )
-        ) {
-          return undefined;
-        }
-        const row: EventRequest = {
-          ...input,
-          id: String(rows.length + 1),
-          status: 'pending',
-          denyReason: null,
-          failure: null,
-          decidedBy: null,
-          decidedAt: null,
-          meetupEventId: null,
-          eventUrl: null,
-          version: 1,
-          createdAt: NOW,
-          updatedAt: NOW,
-        };
-        rows.push(row);
-        return row;
-      }),
+      create: vi.fn(
+        async (
+          input: NewEventRequest,
+          _options?: { maxPending?: number },
+        ): Promise<EventRequest | undefined | 'full'> => {
+          await Promise.resolve();
+          // The unique (member, submit token) index: a repeat makes nothing.
+          if (
+            input.submitToken &&
+            rows.some(
+              (r) =>
+                r.meetupMemberId === input.meetupMemberId &&
+                r.submitToken === input.submitToken,
+            )
+          ) {
+            return undefined;
+          }
+          const row: EventRequest = {
+            ...input,
+            id: String(rows.length + 1),
+            status: 'pending',
+            denyReason: null,
+            failure: null,
+            decidedBy: null,
+            decidedAt: null,
+            meetupEventId: null,
+            eventUrl: null,
+            version: 1,
+            createdAt: NOW,
+            updatedAt: NOW,
+          };
+          rows.push(row);
+          return row;
+        },
+      ),
       get: vi.fn(async (id: string) => {
         await Promise.resolve();
         return rows.find((r) => r.id === id);
@@ -356,6 +361,19 @@ describe('submitting a request', () => {
     expect(mem.rows).toHaveLength(MAX_PENDING);
   });
 
+  it('a submit that loses the race to the cap (the store says full) is refused the same way', async () => {
+    const { post, mem } = await app();
+    const { create } = mem.store;
+    create.mockResolvedValueOnce('full');
+    const res = await post(good);
+    expect(res.status).toBe(429);
+    expect(res.text).toContain('waiting for approval');
+    expect(create).toHaveBeenCalledWith(expect.anything(), {
+      maxPending: MAX_PENDING,
+    });
+    expect(mem.rows).toHaveLength(0);
+  });
+
   it('the form carries a one-time token, new on every render', async () => {
     const { req, sid } = await app();
     const tokenOf = (text: string) =>
@@ -553,7 +571,7 @@ describe('request page', () => {
   it('shows only the host’s own requests', async () => {
     const { req, sid, mem } = await app();
     mem.rows.push({
-      ...(await mem.store.create({
+      ...((await mem.store.create({
         meetupMemberId: '9999',
         discordUserId: null,
         hostName: 'Other',
@@ -569,7 +587,7 @@ describe('request page', () => {
         featuredPhotoId: null,
         venueId: null,
         howToFindUs: null,
-      })),
+      })) as EventRequest),
     });
     expect((await get(req, sid, '/host/requests/1')).status).toBe(404);
     expect((await get(req, sid, '/host/requests/abc')).status).toBe(404);
