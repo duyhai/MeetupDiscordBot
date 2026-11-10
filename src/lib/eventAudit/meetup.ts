@@ -46,18 +46,21 @@ const STATUSES = new Set([
   'TEMPLATE',
 ]);
 
-const digits = (value: unknown): string | null =>
-  typeof value === 'string' && DIGITS.test(value) ? value : null;
+function digits(value: unknown): string | null {
+  return typeof value === 'string' && DIGITS.test(value) ? value : null;
+}
 
-const count = (value: unknown): number | null =>
-  typeof value === 'number' && Number.isInteger(value) && value >= 0
+function count(value: unknown): number | null {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0
     ? value
     : null;
+}
 
-const text = (value: unknown, max: number): string =>
-  typeof value === 'string'
+function text(value: unknown, max: number): string {
+  return typeof value === 'string'
     ? Array.from(value.trim()).slice(0, max).join('')
     : '';
+}
 
 function hosts(value: unknown): EventHost[] {
   if (!Array.isArray(value)) {
@@ -176,7 +179,9 @@ export function gqlAuditReader(
   meetup: AuditClient,
   state: AuditQueryState,
 ): AuditMeetupReader {
-  const variant = (): AuditQueryVariant => (state.fallback ? 'core' : 'full');
+  function variant(): AuditQueryVariant {
+    return state.fallback ? 'core' : 'full';
+  }
   /** Runs `read` with the current variant; a schema refusal of the full query switches to core and retries once. */
   async function withVariant<T>(
     read: (v: AuditQueryVariant) => Promise<T>,

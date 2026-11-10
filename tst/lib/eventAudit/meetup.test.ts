@@ -117,10 +117,7 @@ const page = (nodes: AuditEventNode[], endCursor?: string) => ({
 });
 
 const refusal = (status: number, message = 'Cannot query field "going"') =>
-  new ClientError(
-    { status, errors: [{ message }] } as never,
-    { query: 'q' } as never,
-  );
+  new ClientError({ status, errors: [{ message }] } as never, { query: 'q' });
 
 describe('isMeetupSchemaRefusal', () => {
   it('is a 400, or a 200 whose errors name an unknown field', () => {
@@ -161,17 +158,12 @@ describe('gqlAuditReader', () => {
         return page(past);
       },
     );
-    const one = vi.fn(
-      async (
-        id: string,
-        variant: 'full' | 'core',
-      ): Promise<AuditEventNode | null> => {
-        if (options.refuseFull && variant === 'full') {
-          throw refusal(400);
-        }
-        return id === '311000001' ? node() : null;
-      },
-    );
+    const one = vi.fn(async (id: string, variant: 'full' | 'core') => {
+      if (options.refuseFull && variant === 'full') {
+        throw refusal(400);
+      }
+      return id === '311000001' ? node() : null;
+    });
     return { getGroupEventsForAudit: list, getEventForAudit: one };
   }
 
