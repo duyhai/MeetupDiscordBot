@@ -96,6 +96,23 @@ const request = (over: Partial<NewEventRequest> = {}): NewEventRequest => ({
       ]);
     });
 
+    it('with maxPending, two submits at the same moment cannot both pass the cap', async () => {
+      await repo.create(request({ submitToken: 'a'.repeat(16) }));
+      const results = await Promise.all([
+        repo.create(request({ submitToken: 'b'.repeat(16) }), {
+          maxPending: 2,
+        }),
+        repo.create(request({ submitToken: 'c'.repeat(16) }), {
+          maxPending: 2,
+        }),
+      ]);
+      expect(results.filter((r) => r === 'full')).toHaveLength(1);
+      const { rows } = await pool.query<{ n: string }>(
+        `SELECT count(*) AS n FROM event_requests WHERE status = 'pending'`,
+      );
+      expect(Number(rows[0].n)).toBe(2);
+    });
+
     it('get refuses an id that cannot be a request id', async () => {
       expect(await repo.get('1; DROP TABLE x')).toBeUndefined();
       expect(await repo.get('0')).toBeUndefined();

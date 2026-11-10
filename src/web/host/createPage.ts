@@ -75,7 +75,11 @@ const DAY = /^\d{4}-\d{2}-\d{2}$/;
 /** The request store's host-side reads and writes. */
 export interface HostRequestStore {
   /** undefined when the host already sent this form (same submitToken). */
-  create: (input: NewEventRequest) => Promise<EventRequest | undefined>;
+  /** 'full': the host is at `maxPending` waiting requests (checked under a lock). */
+  create: (
+    input: NewEventRequest,
+    options?: { maxPending?: number },
+  ) => Promise<EventRequest | undefined | 'full'>;
   findBySubmitToken: (
     meetupMemberId: string,
     submitToken: string,
@@ -676,10 +680,8 @@ export function registerCreatePages(
         toExisting(sent);
         return;
       }
-      if (
-        session.tier === 'regular' &&
-        (await store.countPending(session.userId)) >= MAX_PENDING
-      ) {
+      const regular = session.tier === 'regular';
+      const full = () =>
         hostPage(res, {
           title: source ? 'Copy an event' : 'Host an event',
           status: 429,
@@ -691,25 +693,39 @@ export function registerCreatePages(
             today(),
           ),
         });
+      if (
+        regular &&
+        (await store.countPending(session.userId)) >= MAX_PENDING
+      ) {
+        full();
         return;
       }
       const settings = source
         ? copySettings(source, form.duration)
         : freshSettings(session.tier, deps.tip(), form.duration, form);
-      created = await store.create({
-        meetupMemberId: session.userId,
-        discordUserId: session.discordUserId,
-        hostName: Array.from(session.username || 'Host')
-          .slice(0, 100)
-          .join(''),
-        tier: session.tier,
-        kind: source ? 'copy' : 'fresh',
-        sourceEventId: source ? String(source.id) : null,
-        title: form.title,
-        startLocal: `${form.day}T${form.time}`,
-        submitToken,
-        ...settings,
-      });
+      const made = await store.create(
+        {
+          meetupMemberId: session.userId,
+          discordUserId: session.discordUserId,
+          hostName: Array.from(session.username || 'Host')
+            .slice(0, 100)
+            .join(''),
+          tier: session.tier,
+          kind: source ? 'copy' : 'fresh',
+          sourceEventId: source ? String(source.id) : null,
+          title: form.title,
+          startLocal: `${form.day}T${form.time}`,
+          submitToken,
+          ...settings,
+        },
+        // Counted again under a lock: the check above can race another tab.
+        regular ? { maxPending: MAX_PENDING } : {},
+      );
+      if (made === 'full') {
+        full();
+        return;
+      }
+      created = made;
       if (created === undefined) {
         // The same form landed twice at once; the other one made it.
         const raced = await store.findBySubmitToken(
