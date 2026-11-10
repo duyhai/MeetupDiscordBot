@@ -150,7 +150,44 @@ const TEXT_PAIRS: [string, string][] = [
   ['accent', 'ok-soft'],
   // Potluck's notice: body text on the accent tint.
   ['fg', 'accent-soft'],
+  // Quiet's cards are transparent, so badge and link inks sit on --bg.
+  ...['ok-ink', 'attn-ink', 'accent-ink'].map((fg): [string, string] => [
+    fg,
+    'bg',
+  ]),
 ];
+
+/**
+ * `rgb(R G B / A)` tokens (the header glows), as [r, g, b, a].
+ */
+function parseAlphaTokens(
+  block: string,
+): Record<string, [number, number, number, number]> {
+  const out: Record<string, [number, number, number, number]> = {};
+  for (const m of block.matchAll(
+    /--([a-z0-9-]+):rgb\((\d+) (\d+) (\d+) \/ (\.\d+|\d\.?\d*)\)/g,
+  )) {
+    out[m[1]] = [Number(m[2]), Number(m[3]), Number(m[4]), Number(m[5])];
+  }
+  return out;
+}
+
+/** `top` with alpha composited over the opaque `under`, as a hex colour. */
+function blend(top: [number, number, number, number], under: string): string {
+  const n = parseInt(under.slice(1), 16);
+  const u = [n >> 16, (n >> 8) & 255, n & 255];
+  const [r, g, b, a] = top;
+  return (
+    '#' +
+    [r, g, b]
+      .map((c, i) =>
+        Math.round(c * a + u[i] * (1 - a))
+          .toString(16)
+          .padStart(2, '0'),
+      )
+      .join('')
+  );
+}
 
 /** Non-text that carries meaning: 3:1 (WCAG 1.4.11). */
 const UI_PAIRS: [string, string][] = [
@@ -176,6 +213,11 @@ const UI_PAIRS: [string, string][] = [
 ];
 
 const PALETTES = paletteTokens(STYLE.value);
+/** The default palette's raw light and dark blocks, for the alpha glow tokens. */
+const glowBlocks = {
+  light: /(?:^|\})\s*:root\{([^}]*)\}/.exec(STYLE.value)?.[1] ?? '',
+  dark: /:root\[data-theme="dark"\]\{([^}]*)\}/.exec(STYLE.value)?.[1] ?? '',
+};
 const CHART_TOKENS = ['chart-1', 'chart-2', 'chart-3', 'chart-4', 'chart-5'];
 const THEMES = PALETTES.night;
 
@@ -198,6 +240,27 @@ describe('colour tokens', () => {
       for (const color of CHART_COLORS) {
         expect(contrast(color, THEMES[mode].surface)).toBeGreaterThanOrEqual(3);
       }
+    },
+  );
+
+  describe.each(['light', 'dark'] as const)(
+    "%s: the default palette's header glows keep the header text legible",
+    (mode) => {
+      // The glows sit behind the brand (--fg), the account line (--muted)
+      // and the Sign out button (--accent) at their strongest point.
+      const block = glowBlocks[mode];
+      const glows = parseAlphaTokens(block);
+      const names = ['glow-a', 'glow-b', 'glow-c'];
+      it.each(names)('--%s at full strength over --surface', (name) => {
+        expect(glows[name], `--${name}`).toBeDefined();
+        const over = blend(glows[name], THEMES[mode].surface);
+        for (const ink of ['fg', 'muted', 'accent']) {
+          expect(
+            contrast(THEMES[mode][ink], over),
+            `--${ink} over --${name}`,
+          ).toBeGreaterThanOrEqual(4.5);
+        }
+      });
     },
   );
 
@@ -256,15 +319,24 @@ describe('colour tokens', () => {
           },
         );
 
-        it('keeps series 3 well apart in lightness from series 1 and 2', () => {
-          // Red-green and blue-green deficiencies mostly leave lightness, so
-          // the first three series must not share it.
+        it('keeps adjacent series, and series 1 and 3, 10 L* apart', () => {
+          // Bars carry no dash pattern, so neighbouring series must differ
+          // in lightness, not only hue, for red-green and blue-green
+          // colour-vision deficiencies.
           const t = THEMES[mode];
-          const [one, two, three] = CHART_TOKENS.slice(0, 3).map((k) =>
-            lightness(t[k]),
-          );
-          expect(Math.abs(three - one)).toBeGreaterThanOrEqual(10);
-          expect(Math.abs(three - two)).toBeGreaterThanOrEqual(10);
+          const L = CHART_TOKENS.map((k) => lightness(t[k]));
+          for (const [a, b] of [
+            [0, 1],
+            [1, 2],
+            [2, 3],
+            [3, 4],
+            [0, 2],
+          ]) {
+            expect(
+              Math.abs(L[a] - L[b]),
+              `--${CHART_TOKENS[a]} vs --${CHART_TOKENS[b]}`,
+            ).toBeGreaterThanOrEqual(10);
+          }
         });
       });
 
