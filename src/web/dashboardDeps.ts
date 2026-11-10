@@ -45,6 +45,13 @@ import {
   organizerFetchMany,
 } from '../lib/workspace/upcoming.js';
 import { ApplicationCache } from '../util/cache.js';
+import { PostgresWrappedAnnouncementRepository } from '../lib/repositories/postgresWrappedAnnouncementRepository.js';
+import {
+  announceYear,
+  loadWrappedAnnounceConfig,
+  productionWrappedAnnounceDeps,
+  runWrappedAnnounce,
+} from '../lib/wrapped/announce.js';
 import {
   baseSecurityHeaders,
   createDashboardRouter,
@@ -337,6 +344,21 @@ export function dashboardPageDeps(): DashboardPageDeps {
         },
         request,
       ),
+    wrappedAnnounce: {
+      config: loadWrappedAnnounceConfig,
+      status: async () =>
+        (await PostgresWrappedAnnouncementRepository.instance()).get(
+          announceYear(loadWrappedAnnounceConfig()),
+        ),
+      // The job's own deps and claim: Post now can never post twice.
+      postNow: () =>
+        runWrappedAnnounce(
+          productionWrappedAnnounceDeps(() => discordClient),
+          {
+            force: true,
+          },
+        ),
+    },
   };
 }
 
@@ -371,6 +393,6 @@ export function dashboardRouterFromEnv(
         pages: pageDeps,
       }),
     homeStatus: organizerDeps.credentialStatus,
-    homeReports: () => renderHomeReports(pageDeps),
+    homeReports: (view) => renderHomeReports(pageDeps, view),
   });
 }

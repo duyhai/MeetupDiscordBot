@@ -26,6 +26,7 @@ import {
   logActivity,
   logAlert,
   logModeration,
+  postEmbed,
   recentEmbedTitles,
 } from '../../../src/lib/helpers/discordLogger.js';
 
@@ -138,6 +139,45 @@ describe('discordLogger', () => {
   it('reports success when the post lands', async () => {
     const client = makeClient(sendMock);
     await expect(logAlert(client, { title: 'x' })).resolves.toBe(true);
+  });
+
+  describe('postEmbed', () => {
+    const CHANNEL = '123456789012345678';
+
+    it('sends one embed to the given channel with pings disabled and returns the message id', async () => {
+      sendMock.mockResolvedValue({ id: '987654321098765432' });
+      const client = makeClient(sendMock);
+      await expect(
+        postEmbed(client, CHANNEL, 0x3498db, {
+          title: 'Ready',
+          description: '@everyone <@&1> hi',
+        }),
+      ).resolves.toEqual({ messageId: '987654321098765432' });
+      expect(client.channels.fetch).toHaveBeenCalledWith(CHANNEL);
+      const payload = sendMock.mock.calls[0][0];
+      expect(payload.embeds).toHaveLength(1);
+      expect(payload.allowedMentions).toEqual({ parse: [] });
+      expect(payload).not.toHaveProperty('content');
+    });
+
+    it('returns undefined, never throws, when the send or the channel fetch fails', async () => {
+      sendMock.mockRejectedValue(new Error('boom'));
+      await expect(
+        postEmbed(makeClient(sendMock), CHANNEL, 1, { title: 'x' }),
+      ).resolves.toBeUndefined();
+      await expect(
+        postEmbed(makeClient(sendMock, { fetchFails: true }), CHANNEL, 1, {
+          title: 'x',
+        }),
+      ).resolves.toBeUndefined();
+    });
+
+    it('a landed post whose reply carries no id is still a post, without an id', async () => {
+      sendMock.mockResolvedValue(undefined);
+      await expect(
+        postEmbed(makeClient(sendMock), CHANNEL, 1, { title: 'x' }),
+      ).resolves.toEqual({ messageId: undefined });
+    });
   });
   it.each([
     ['logActivity', logActivity],

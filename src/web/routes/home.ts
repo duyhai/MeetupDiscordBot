@@ -20,9 +20,12 @@ import {
   PARKED_STATUSES,
   WorkspaceStatus,
 } from '../../lib/workspace/types.js';
+import { announceDueAt, announceYear } from '../../lib/wrapped/announce.js';
+import type { HomeReportsView } from '../dashboardRouter.js';
 import { SafeHtml, html, localUrl } from '../html.js';
 import { monthCell, pacificDateTime, zeroNoShowNote } from '../pageKit.js';
 import type { DashboardPageDeps } from './dashboardPages.js';
+import { WRAPPED_ANNOUNCE_PATH, wrappedNotice } from './wrappedAnnounce.js';
 
 const logger = new Logger({ name: 'dashboard' });
 
@@ -182,14 +185,67 @@ async function workspaceCard(
 }
 
 /**
+ * The Wrapped announcement: what is configured (date and hour Pacific, the
+ * channel), whether this year's post went out (when, where), and Post now
+ * for Leadership while it has not. The form needs the session's CSRF token;
+ * a render without one (a bare card) shows the state only. Ids are digits,
+ * so they are shown as text, never as links.
+ */
+async function wrappedCard(
+  deps: Pick<DashboardPageDeps, 'wrappedAnnounce'>,
+  view: Partial<HomeReportsView>,
+): Promise<SafeHtml> {
+  const config = deps.wrappedAnnounce.config();
+  const year = announceYear(config);
+  const status = await deps.wrappedAnnounce.status();
+  const posted = status?.postedAt !== undefined;
+  const state = posted
+    ? html`<p>
+        Posted ${pacificDateTime(status.postedAt)} Pacific in channel
+        ${status.channelId ?? 'unknown'}${
+          status.messageId ? html` (message ${status.messageId})` : ''
+        }.
+      </p>`
+    : html`<p>Not posted yet for ${year}.</p>`;
+  const where =
+    config.channelId === undefined
+      ? html`<p class="muted">
+          WRAPPED_ANNOUNCE_CHANNEL_ID is not set: nothing will be posted.
+        </p>`
+      : html`<p class="muted">
+          Scheduled for ${pacificDateTime(announceDueAt(config))} Pacific in
+          channel ${config.channelId}.
+        </p>`;
+  const form =
+    !posted && config.channelId !== undefined && view.csrfToken !== undefined
+      ? html`<form method="post" action="${localUrl(WRAPPED_ANNOUNCE_PATH)}">
+          <input type="hidden" name="_csrf" value="${view.csrfToken}" />
+          <button type="submit" class="ghost">Post now</button>
+          <span class="muted">1.5 Leadership Team only.</span>
+        </form>`
+      : '';
+  return html`<div class="card">
+    <h2>Wrapped announcement</h2>
+    ${wrappedNotice(view.notice)} ${where} ${state} ${form}
+  </div>`;
+}
+
+/**
  * The Home page's report cards. Reads summaries and meta only, never a full
- * payload. Never rejects: each card degrades on its own.
+ * payload. Never rejects: each card degrades on its own. `view` carries the
+ * CSRF token for the cards' own forms and the `?wrapped=` notice code.
  */
 export async function renderHomeReports(
   deps: Pick<
     DashboardPageDeps,
-    'now' | 'snapshots' | 'identity' | 'linkProgress' | 'workspace'
+    | 'now'
+    | 'snapshots'
+    | 'identity'
+    | 'linkProgress'
+    | 'workspace'
+    | 'wrappedAnnounce'
   >,
+  view: Partial<HomeReportsView> = {},
 ): Promise<SafeHtml> {
   let timer: NodeJS.Timeout | undefined;
   try {
@@ -206,7 +262,7 @@ export async function renderHomeReports(
     const workspaceMonthsShown = [finished, open].filter((p) =>
       isWorkspaceMonth(p, now),
     );
-    const [workspace, finishedCard, openCard, identityCard, linkCard] =
+    const [workspace, finishedCard, openCard, identityCard, linkCard, wrapped] =
       await Promise.all([
         card('workspace', deadline, () =>
           workspaceCard(deps, workspaceMonthsShown),
@@ -250,9 +306,10 @@ export async function renderHomeReports(
             }
           </div>`;
         }),
+        card('wrapped', deadline, () => wrappedCard(deps, view)),
       ]);
     // The workspace card first: it is what staff act on.
-    return html`${workspace}${finishedCard}${openCard}${identityCard}${linkCard}`;
+    return html`${workspace}${finishedCard}${openCard}${identityCard}${linkCard}${wrapped}`;
   } catch (error) {
     logger.warn(
       `Dashboard home reports failed: ${error instanceof Error ? error.name : 'Error'}`,

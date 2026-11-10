@@ -183,6 +183,15 @@ describe('dashboardPageDeps', () => {
     }
   });
 
+  it('registers the Wrapped Post now action behind the gate', () => {
+    const router = dashboardRouterFromEnv({
+      DASHBOARD_SESSION_SECRET: 'k'.repeat(48),
+    });
+    expect(protectedRouteList(router)).toEqual(
+      expect.arrayContaining([{ method: 'post', path: '/wrapped/announce' }]),
+    );
+  });
+
   it('registers the Hall of Fame pages and the refresh action behind the gate', () => {
     const router = dashboardRouterFromEnv({
       DASHBOARD_SESSION_SECRET: 'k'.repeat(48),

@@ -109,8 +109,19 @@ export interface DashboardDeps {
    * returns tokens. Left out, the home page links to the page without a status.
    */
   homeStatus?: () => Promise<OrganizerCredentialStatus | undefined>;
-  /** Report cards for the home page. Must not throw; left out, the home page shows the welcome text only. */
-  homeReports?: () => Promise<SafeHtml>;
+  /**
+   * Report cards for the home page, given the session's CSRF token (for the
+   * cards' own forms) and the `?wrapped=` notice code from the query. Must
+   * not throw; left out, the home page shows the welcome text only.
+   */
+  homeReports?: (view: HomeReportsView) => Promise<SafeHtml>;
+}
+
+/** What the home page hands its report cards. */
+export interface HomeReportsView {
+  csrfToken: string;
+  /** req.query.wrapped, unparsed: the cards render fixed text for a known code only. */
+  notice: unknown;
 }
 
 interface Locals {
@@ -712,11 +723,16 @@ export function createDashboardRouter(deps: DashboardDeps): express.Router {
     next();
   });
 
-  protectedRouter.get('/', (async (_req, res) => {
+  protectedRouter.get('/', (async (req, res) => {
     const { session, nonce } = locals(res);
     let reports: SafeHtml | undefined;
     try {
-      reports = deps.homeReports ? await deps.homeReports() : undefined;
+      reports = deps.homeReports
+        ? await deps.homeReports({
+            csrfToken: session.csrfToken,
+            notice: (req.query as Record<string, unknown>).wrapped,
+          })
+        : undefined;
     } catch (error) {
       logger.warn(
         `Dashboard home reports failed: ${error instanceof Error ? error.name : 'Error'}`,

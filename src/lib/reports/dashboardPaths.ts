@@ -42,6 +42,7 @@ export const DASHBOARD_PATHS = {
   hostRequestAction: '/hosts/requests/:id/:action',
   hostPromotion: '/hosts/promotion',
   hostMember: '/hosts/promotion/:memberId',
+  wrappedAnnounce: '/wrapped/announce',
 } as const;
 
 export type DashboardPathTemplate =
