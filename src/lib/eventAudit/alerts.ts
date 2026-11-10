@@ -3,6 +3,7 @@ import dayjs from 'dayjs';
 import { PUBLIC_APP_ORIGIN } from '../../constants.js';
 import { tz } from '../../util/timezone.js';
 import { LogEntry, alertText } from '../helpers/discordLogger.js';
+import { neutralizeMentions } from '../helpers/neutralizeMentions.js';
 import { describeBuildError } from '../reports/buildJob.js';
 import {
   DASHBOARD_PATHS,
@@ -39,12 +40,20 @@ function hostList(hosts: EventHost[]): string {
     return '(no hosts listed)';
   }
   return hosts
-    .map((h) => `${alertText(h.name) || '(no name)'} (${h.id})`)
+    .map((h) => `${memberText(h.name) || '(no name)'} (${h.id})`)
     .join(', ');
 }
 
+/**
+ * Member text for an embed: markdown shown as typed (alertText) and mention
+ * syntax broken with a zero-width space (embeds never ping, but a stray
+ * `<@&…>` would still render as a role mention).
+ */
+const memberText = (text: string): string =>
+  neutralizeMentions(alertText(text));
+
 const titleText = (title: string): string =>
-  alertText(title) || '(untitled event)';
+  memberText(title) || '(untitled event)';
 
 /** 'Dec 5, 2026 7:00 PM' in the group's timezone. */
 const startText = (at: Date): string =>

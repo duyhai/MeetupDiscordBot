@@ -46,11 +46,11 @@ describe('changeAlertEntry', () => {
   it('a deletion names the event, hosts, start and last RSVPs, with the history link and no Meetup link', () => {
     const entry = changeAlertEntry(change());
     expect(entry?.title).toBe(
-      `Event deleted: ${alertText('**bold** [x](http://e) @everyone')}`,
+      `Event deleted: ${alertText('**bold** [x](http://e) @\u200beveryone')}`,
     );
-    expect(entry?.title).toContain('\*\*bold\*\* \[x]');
+    expect(entry?.title).toContain('\\*\\*bold\\*\\* \\[x]');
     expect(entry?.description).toContain(
-      'Hosts: Hana \\<@&912474048775221270\\> (4242), Ken (5151)',
+      'Hosts: Hana <\u200b@&912474048775221270> (4242), Ken (5151)',
     );
     expect(entry?.description).toContain('Start: Dec 5, 2026 7:00 PM');
     expect(entry?.description).toContain(
@@ -62,6 +62,7 @@ describe('changeAlertEntry', () => {
     expect(entry?.description).toContain(`History: ${HISTORY}`);
     expect(entry?.description).not.toContain('meetup.com/g/events');
     expect(entry?.description).not.toMatch(/<@&\d/);
+    expect(entry?.title).not.toContain('@everyone');
   });
 
   it('a cancellation links the Meetup event', () => {
