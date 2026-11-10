@@ -33,7 +33,7 @@ const EVENT = '311111111';
     });
 
     beforeEach(async () => {
-      await pool.query('TRUNCATE event_announcements');
+      await pool.query('TRUNCATE event_announcements, event_recreations');
       repo = new PostgresEventAnnouncementRepository(pool);
     });
 
@@ -125,6 +125,111 @@ const EVENT = '311111111';
       const map = await repo.forEvents([EVENT, '2', '3', "1' OR '1"]);
       expect([...map.keys()].sort()).toEqual(['2', EVENT]);
       expect(await repo.forEvents([])).toEqual(new Map());
+    });
+
+    it('hold schedules a send; a held row is neither claimed nor held again', async () => {
+      const due = new Date(Date.now() + 60 * 60 * 1000);
+      await expect(repo.hold(EVENT, HOST, due)).resolves.toEqual({
+        held: true,
+      });
+      expect(await repo.get(EVENT)).toMatchObject({
+        status: 'held',
+        dueAt: due,
+      });
+      expect(await repo.claim(EVENT, HOST)).toMatchObject({
+        claimed: false,
+        current: { status: 'held' },
+      });
+      expect(await repo.hold(EVENT, OTHER, due)).toMatchObject({
+        held: false,
+        current: { status: 'held', requestedBy: HOST },
+      });
+    });
+
+    it('a cancelled hold can be requested again; a sent one cannot be cancelled', async () => {
+      const due = new Date(Date.now() + 60 * 60 * 1000);
+      await repo.hold(EVENT, HOST, due);
+      expect(await repo.cancelHeld(EVENT)).toBe(true);
+      expect(await repo.get(EVENT)).toMatchObject({ status: 'cancelled' });
+      expect(await repo.cancelHeld(EVENT)).toBe(false);
+      await expect(repo.claim(EVENT, HOST)).resolves.toEqual({ claimed: true });
+      expect((await repo.get(EVENT))?.dueAt).toBeNull();
+      await repo.finish(EVENT, 'sent');
+      expect(await repo.cancelHeld(EVENT)).toBe(false);
+    });
+
+    it('the tick finds due holds and claims each once, never one not yet due or cancelled', async () => {
+      const now = new Date();
+      const past = new Date(now.getTime() - 60 * 1000);
+      const future = new Date(now.getTime() + 60 * 60 * 1000);
+      await repo.hold(EVENT, HOST, past);
+      await repo.hold('2', HOST, future);
+      await repo.hold('3', HOST, past);
+      await repo.cancelHeld('3');
+      expect((await repo.due(now)).map((a) => a.meetupEventId)).toEqual([
+        EVENT,
+      ]);
+      const claims = await Promise.all([
+        repo.claimHeld(EVENT, now),
+        repo.claimHeld(EVENT, now),
+      ]);
+      expect(claims.filter(Boolean)).toHaveLength(1);
+      expect(await repo.claimHeld('2', now)).toBe(false);
+      expect(await repo.claimHeld('3', now)).toBe(false);
+      expect(await repo.get(EVENT)).toMatchObject({ status: 'sending' });
+      await repo.finish(EVENT, 'sent');
+      expect(await repo.due(now)).toEqual([]);
+    });
+
+    it('otherTimes lists when others go or went out, not this one or old ones', async () => {
+      const soon = new Date(Date.now() + 10 * 60 * 1000);
+      await repo.hold(EVENT, HOST, soon);
+      await repo.hold('2', HOST, soon);
+      await repo.claim('3', HOST);
+      await repo.finish('3', 'sent');
+      await repo.claim('4', HOST);
+      await repo.finish('4', 'failed', 'no');
+      await repo.claim('5', HOST);
+      await repo.finish('5', 'sent');
+      await pool.query(
+        `UPDATE event_announcements SET completed_at = now() - interval '2 hours'
+          WHERE meetup_event_id = '5'`,
+      );
+      const since = new Date(Date.now() - 60 * 60 * 1000);
+      const times = await repo.otherTimes(EVENT, since);
+      expect(times).toHaveLength(2);
+      expect(times.map((t) => t.getTime())).toContain(soon.getTime());
+    });
+
+    it('records a recreation once and reads it back', async () => {
+      expect(await repo.recordRecreation(EVENT, '2', HOST)).toBe(true);
+      expect(await repo.recordRecreation(EVENT, '3', HOST)).toBe(false);
+      expect(await repo.recreationOf(EVENT)).toMatchObject({
+        oldEventId: EVENT,
+        newEventId: '2',
+        requestedBy: HOST,
+      });
+      expect(await repo.recreationOf('9')).toBeUndefined();
+      await expect(repo.recordRecreation('x', '2', HOST)).rejects.toThrow(
+        RangeError,
+      );
+    });
+
+    it('a table made before the hold column gains it and the new statuses', async () => {
+      await pool.query('DROP TABLE event_announcements');
+      await pool.query(`
+        CREATE TABLE event_announcements (
+          meetup_event_id TEXT PRIMARY KEY CHECK (meetup_event_id ~ '^[0-9]{1,20}$'),
+          requested_by TEXT NOT NULL CHECK (requested_by ~ '^[1-9][0-9]{0,19}$'),
+          status TEXT NOT NULL CHECK (status IN ('sending', 'sent', 'failed', 'unknown')),
+          failure TEXT,
+          requested_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+          completed_at TIMESTAMPTZ
+        )`);
+      await ensureEventAnnouncementSchema(pool);
+      await expect(
+        repo.hold(EVENT, HOST, new Date(Date.now() + 60_000)),
+      ).resolves.toEqual({ held: true });
     });
 
     it('refuses a bad event or member id', async () => {

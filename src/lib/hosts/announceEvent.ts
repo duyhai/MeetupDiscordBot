@@ -8,6 +8,14 @@ import {
   Announcement,
   AnnouncementStatus,
 } from '../repositories/postgresEventAnnouncementRepository.js';
+import {
+  SPACING_MS,
+  announceDueAt,
+  dueLabel,
+  isImmediate,
+  pastMeetupCutoff,
+  rsvpsOpen,
+} from './announceSchedule.js';
 import { HostEvent } from './hostEvents.js';
 
 const logger = new Logger({ name: 'hostAnnounce' });
@@ -15,33 +23,75 @@ const logger = new Logger({ name: 'hostAnnounce' });
 /**
  * How a host's Announce ended:
  * - sent: Meetup sent it now;
+ * - scheduled: held until its due time (the work-hours hold or the spacing
+ *   rule); the tick sends it then;
  * - already: it went out before (recorded here, or Meetup says so);
  * - in-progress: another click is sending it right now;
  * - unconfirmed: Meetup did not answer; it may or may not have gone out;
  * - failed: Meetup refused it;
- * - not-yours: not one of the host's own upcoming events.
+ * - not-yours: not one of the host's own upcoming events;
+ * - rsvps-closed: RSVPs are not open yet (open them on Meetup first);
+ * - too-late: within 7 days of the start and created more than 7 days
+ *   before it, which Meetup refuses to announce (the page offers
+ *   "Recreate and announce" when the event has no other RSVPs).
  * Unconfirmed and failed may be tried again: Meetup refuses a second
  * announcement itself, so a retry after a real send comes back "already".
  */
 export type AnnounceCode =
-  'sent' | 'already' | 'in-progress' | 'unconfirmed' | 'failed' | 'not-yours';
+  | 'sent'
+  | 'scheduled'
+  | 'already'
+  | 'in-progress'
+  | 'unconfirmed'
+  | 'failed'
+  | 'not-yours'
+  | 'rsvps-closed'
+  | 'too-late';
+
+/** What the pre-checks read about the event (the organizer credential). */
+export interface AnnounceEventDetails {
+  id: string;
+  title: string;
+  eventUrl: string;
+  /** ISO. */
+  dateTime: string;
+  /** ISO, or null when Meetup does not say. */
+  createdTime: string | null;
+  /** Meetup's rsvpState, or null when it does not say. */
+  rsvpState: string | null;
+  hosts: { id: string; name: string }[];
+}
 
 export interface AnnounceStore {
   claim: (
     meetupEventId: string,
     requestedBy: string,
   ) => Promise<{ claimed: true } | { claimed: false; current: Announcement }>;
+  hold: (
+    meetupEventId: string,
+    requestedBy: string,
+    dueAt: Date,
+  ) => Promise<{ held: true } | { held: false; current: Announcement }>;
   finish: (
     meetupEventId: string,
-    status: Exclude<AnnouncementStatus, 'sending'>,
+    status: Exclude<AnnouncementStatus, 'sending' | 'held' | 'cancelled'>,
     failure?: string | null,
   ) => Promise<void>;
+  /** When other announcements go or went out from `since` on (the spacing rule). */
+  otherTimes: (exceptEventId: string, since: Date) => Promise<Date[]>;
 }
 
 export interface AnnounceDeps {
   announcements: () => Promise<AnnounceStore>;
   /** The host's own upcoming (published) events: Meetup's hostId filter decides. */
   ownUpcoming: (meetupMemberId: string) => Promise<HostEvent[]>;
+  /**
+   * The event as the pre-checks need it; undefined when Meetup has no such
+   * event. Throws when Meetup cannot answer.
+   */
+  eventDetails: (
+    meetupEventId: string,
+  ) => Promise<AnnounceEventDetails | undefined>;
   /**
    * announceEvent with the organizer credential. Resolves only when Meetup
    * confirmed the event; a failure to get the credential is an
@@ -50,6 +100,7 @@ export interface AnnounceDeps {
   announce: (meetupEventId: string) => Promise<void>;
   /** #meetup-bot-alerts, plain. */
   alert: (entry: LogEntry) => Promise<unknown>;
+  now: () => Date;
 }
 
 /**
@@ -111,8 +162,9 @@ function meetupAnswer(error: unknown): MeetupAnswer {
   };
 }
 
-function eventFields(
-  event: HostEvent,
+/** What the alerts say about the event; the title is escaped, never a mention. */
+export function announceAlertFields(
+  event: { title: string; eventUrl: string },
   hostName: string,
 ): NonNullable<LogEntry['fields']> {
   return [
@@ -122,37 +174,26 @@ function eventFields(
   ];
 }
 
+export type DeliveryCode = 'sent' | 'already' | 'failed' | 'unconfirmed';
+
 /**
- * Sends Meetup's announcement email for one of the host's own upcoming
- * events. The event's row is claimed first (one statement), so quick
- * repeat clicks make one call; a row already `sent` sends nothing. Any
- * other ending may be tried again, since Meetup refuses a second
- * announcement itself. `onClaimed` runs once Meetup is about to be called.
+ * The send itself, for a row already claimed as `sending` (by a click or
+ * by the tick for a held one): calls Meetup, records how it went, and
+ * posts the plain alert. `how` only words the alerts.
  */
-export async function announceHostEvent(
-  deps: AnnounceDeps,
-  host: { meetupMemberId: string; name: string },
-  meetupEventId: string,
-  hooks: { onClaimed?: () => void } = {},
-): Promise<AnnounceCode> {
-  const event = (await deps.ownUpcoming(host.meetupMemberId)).find(
-    (e) => e.id === meetupEventId,
-  );
-  if (event === undefined) {
-    return 'not-yours';
-  }
-  const store = await deps.announcements();
-  const claim = await store.claim(meetupEventId, host.meetupMemberId);
-  if ('current' in claim) {
-    return claim.current.status === 'sent' ? 'already' : 'in-progress';
-  }
-  hooks.onClaimed?.();
+export async function deliverAnnouncement(
+  deps: Pick<AnnounceDeps, 'announce' | 'alert'>,
+  store: Pick<AnnounceStore, 'finish'>,
+  event: { id: string; title: string; eventUrl: string },
+  hostName: string,
+  how: 'now' | 'scheduled' = 'now',
+): Promise<DeliveryCode> {
   const finish = async (
-    status: Exclude<AnnouncementStatus, 'sending'>,
+    status: Exclude<AnnouncementStatus, 'sending' | 'held' | 'cancelled'>,
     failure: string | null = null,
   ) => {
     // A row left "sending" counts as unconfirmed after a while.
-    await store.finish(meetupEventId, status, failure).catch((e: unknown) => {
+    await store.finish(event.id, status, failure).catch((e: unknown) => {
       logger.warn(
         `Announcement finish failed: ${e instanceof Error ? e.name : 'Error'}`,
       );
@@ -161,8 +202,10 @@ export async function announceHostEvent(
   const alert = (entry: LogEntry) => {
     deps.alert(entry).catch(() => undefined);
   };
+  const whose = how === 'scheduled' ? 'scheduled announcement' : 'announcement';
+  const fields = announceAlertFields(event, hostName);
   try {
-    await deps.announce(meetupEventId);
+    await deps.announce(event.id);
   } catch (error: unknown) {
     const answer = meetupAnswer(error);
     if (answer.answered && answer.already) {
@@ -177,29 +220,133 @@ export async function announceHostEvent(
       );
       await finish('failed', answer.message);
       alert({
-        title: 'A host’s announcement was refused',
+        title: `A host’s ${whose} was refused`,
         description:
           'Meetup refused it. The host can try again. ' +
           `Meetup said: ${alertText(answer.message).slice(0, 800)}`,
-        fields: eventFields(event, host.name),
+        fields,
       });
       return 'failed';
     }
     await finish('unknown', answer.message);
     alert({
-      title: 'A host’s announcement was not confirmed',
+      title: `A host’s ${whose} was not confirmed`,
       description:
         `Meetup did not confirm it (${answer.message}); it may or may not ` +
         'have gone out. The host can try again: Meetup refuses a second ' +
         'announcement.',
-      fields: eventFields(event, host.name),
+      fields,
     });
     return 'unconfirmed';
   }
   await finish('sent');
   alert({
-    title: 'A host announced an event',
-    fields: eventFields(event, host.name),
+    title:
+      how === 'scheduled'
+        ? 'A host’s scheduled announcement went out'
+        : 'A host announced an event',
+    fields,
   });
   return 'sent';
+}
+
+/** What a row that refused a claim means to the host. */
+function codeOf(current: Announcement): AnnounceCode {
+  switch (current.status) {
+    case 'sent':
+      return 'already';
+    case 'held':
+      return 'scheduled';
+    default:
+      return 'in-progress';
+  }
+}
+
+/**
+ * Announces one of the host's own events, known to be theirs (the caller
+ * checked, or just created it): the pre-checks, then either a send now or
+ * a hold until the schedule's due time. The row is claimed first (one
+ * statement), so quick repeat clicks make one call; a row already `sent`
+ * or `held` sends nothing. `onClaimed` runs once Meetup is about to be
+ * called.
+ */
+export async function requestAnnouncement(
+  deps: AnnounceDeps,
+  host: { meetupMemberId: string; name: string },
+  event: HostEvent,
+  hooks: { onClaimed?: () => void } = {},
+): Promise<AnnounceCode> {
+  const details = await deps.eventDetails(event.id);
+  if (details === undefined) {
+    return 'not-yours';
+  }
+  if (!rsvpsOpen(details.rsvpState)) {
+    return 'rsvps-closed';
+  }
+  const now = deps.now();
+  const start = new Date(details.dateTime);
+  if (
+    details.createdTime !== null &&
+    pastMeetupCutoff(now, start, new Date(details.createdTime))
+  ) {
+    return 'too-late';
+  }
+  const store = await deps.announcements();
+  const others = await store.otherTimes(
+    event.id,
+    new Date(now.getTime() - SPACING_MS),
+  );
+  const due = announceDueAt(now, start, others);
+  if (!isImmediate(due, now)) {
+    const held = await store.hold(event.id, host.meetupMemberId, due);
+    if ('current' in held) {
+      return codeOf(held.current);
+    }
+    logger.info(`Announcement of ${event.id} held until ${dueLabel(due)}`);
+    return 'scheduled';
+  }
+  const claim = await store.claim(event.id, host.meetupMemberId);
+  if ('current' in claim) {
+    return codeOf(claim.current);
+  }
+  hooks.onClaimed?.();
+  return deliverAnnouncement(deps, store, event, host.name, 'now');
+}
+
+/**
+ * Sends Meetup's announcement email for one of the host's own upcoming
+ * events, once (requestAnnouncement, after Meetup's hostId filter says the
+ * event is theirs).
+ */
+export async function announceHostEvent(
+  deps: AnnounceDeps,
+  host: { meetupMemberId: string; name: string },
+  meetupEventId: string,
+  hooks: { onClaimed?: () => void } = {},
+): Promise<AnnounceCode> {
+  const event = (await deps.ownUpcoming(host.meetupMemberId)).find(
+    (e) => e.id === meetupEventId,
+  );
+  if (event === undefined) {
+    return 'not-yours';
+  }
+  return requestAnnouncement(deps, host, event, hooks);
+}
+
+export type CancelCode = 'cancelled' | 'not-held' | 'not-yours';
+
+/** Cancels the host's held announcement of their own event. */
+export async function cancelHeldAnnouncement(
+  deps: Pick<AnnounceDeps, 'ownUpcoming' | 'announcements'>,
+  cancel: (meetupEventId: string) => Promise<boolean>,
+  host: { meetupMemberId: string },
+  meetupEventId: string,
+): Promise<CancelCode> {
+  const mine = (await deps.ownUpcoming(host.meetupMemberId)).some(
+    (e) => e.id === meetupEventId,
+  );
+  if (!mine) {
+    return 'not-yours';
+  }
+  return (await cancel(meetupEventId)) ? 'cancelled' : 'not-held';
 }

@@ -12,12 +12,14 @@ import {
   announceEvent,
   closeEventRsvps,
   createEvent,
+  deleteEvent,
   editEvent,
   publishEventDraft,
 } from './mutations.js';
 import { throwOnPayloadErrors } from './payloadErrors.js';
 import {
   getEvent,
+  getEventForAnnounce,
   getEventForCopy,
   getEventRsvps,
   getGroupEvents,
@@ -40,9 +42,12 @@ import {
   CloseEventRsvpsResponse,
   CreateEventInput,
   CreateEventResponse,
+  DeleteEventInput,
+  DeleteEventResponse,
   EditEventInput,
   EditEventResponse,
   EventSummary,
+  GetEventForAnnounceResponse,
   GetEventForCopyResponse,
   GetEventResponse,
   GetEventRsvpsInput,
@@ -621,6 +626,41 @@ export class GqlMeetupClient {
         eventId,
       });
       logger.info(`getEvent result: ${JSON.stringify(result)}`);
+      return result;
+    } catch (error) {
+      logger.error(error);
+      throw error;
+    }
+  }
+
+  /** The announce pre-checks' view of an event; null when Meetup has no such event. Not cached: rsvpState changes. */
+  public async getEventForAnnounce(
+    eventId: string,
+  ): Promise<GetEventForAnnounceResponse['event']> {
+    logger.info(`Calling getEventForAnnounce for event ${eventId}`);
+    const result = await this.client.request<GetEventForAnnounceResponse>(
+      getEventForAnnounce,
+      { eventId },
+    );
+    return result.event;
+  }
+
+  /**
+   * Cancels an event (removeFromCalendar: false) or deletes it. Throws on
+   * a payload error or when Meetup does not say success.
+   */
+  public async deleteEvent(input: DeleteEventInput) {
+    logger.info(`Calling deleteEvent with input: ${JSON.stringify({ input })}`);
+    try {
+      const result = await this.client.request<DeleteEventResponse>(
+        deleteEvent,
+        { input },
+      );
+      logger.info(`deleteEvent result: ${JSON.stringify(result)}`);
+      throwOnPayloadErrors('deleteEvent', result.deleteEvent?.errors);
+      if (result.deleteEvent?.success !== true) {
+        throw new Error('deleteEvent did not confirm');
+      }
       return result;
     } catch (error) {
       logger.error(error);
