@@ -52,7 +52,9 @@ export type VerifyResult =
   /** Cancelled at Meetup, or Meetup did not answer. */
   | { kind: 'unfinished' }
   /** Linked, but the roles and badges step failed. */
-  | { kind: 'roles-failed' };
+  | { kind: 'roles-failed' }
+  /** A Verify run for this host is already in progress. */
+  | { kind: 'busy' };
 
 function serverNote(join: ServerJoinResult): SafeHtml | '' {
   if (join === 'failed') {
@@ -73,14 +75,17 @@ function serverNote(join: ServerJoinResult): SafeHtml | '' {
   return '';
 }
 
-/** "Verify on Discord" again, from the result page (a same-origin POST). */
-function tryAgain(session: HostSession): SafeHtml {
+/**
+ * "Finish verification": the Meetup step again for a host already linked,
+ * without redoing Discord's (a same-origin POST).
+ */
+function finish(session: HostSession): SafeHtml {
   return html`<form
     method="post"
-    action="${localUrl(`${HOST_BASE}/link/discord`)}"
+    action="${localUrl(`${HOST_BASE}/verify/finish`)}"
   >
     <input type="hidden" name="_csrf" value="${session.csrfToken}" />
-    <button type="submit">Verify on Discord again</button>
+    <button type="submit">Finish verification</button>
   </form>`;
 }
 
@@ -140,18 +145,27 @@ function resultBody(
         <p>
           Meetup answered for a different account from the one you signed in
           here with, so nothing was verified. Sign in to meetup.com with the
-          account you use here, then try again.
+          account you use here, then finish verification.
         </p>
-        ${tryAgain(session)} ${home}
+        ${finish(session)} ${home}
       </div>`;
     case 'roles-failed':
       return html`<div class="card">
         <h1>Linked, not verified yet</h1>
         <p>
           Your Meetup and Discord accounts are linked, but your roles could not
-          be updated. Press Verify in our Discord server to finish.
+          be updated. Try again, or press Verify in our Discord server.
         </p>
-        ${serverNote(join)} ${home}
+        ${serverNote(join)} ${finish(session)} ${home}
+      </div>`;
+    case 'busy':
+      return html`<div class="card">
+        <h1>Already verifying</h1>
+        <p>
+          Your verification is already running. Give it a moment, then go back
+          home: your roles will be there.
+        </p>
+        ${home}
       </div>`;
     default:
       return html`<div class="card">
@@ -161,7 +175,7 @@ function resultBody(
           confirm your account, so your roles were not updated. Try again, or
           press Verify in our Discord server.
         </p>
-        ${serverNote(join)} ${tryAgain(session)} ${home}
+        ${serverNote(join)} ${finish(session)} ${home}
       </div>`;
   }
 }

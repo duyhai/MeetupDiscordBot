@@ -213,6 +213,9 @@ export function createHostRouter(deps: HostRouterDeps): express.Router {
   // One duplicate-link alert per host and kind an hour: retries add nothing.
   // In-memory per dyno, like refusedAuditLimiter: a few extra alerts at most.
   const linkAlertLimiter = new FixedWindowLimiter(1, 60 * 60 * 1000);
+  // One Verify run at a time per host (Meetup id), so a double click on
+  // "Finish verification" never grants roles twice. In-memory per dyno.
+  const verifyInFlight = new Set<string>();
   /** The session tag a link state carries: a keyed hash, never the sid. */
   const sessionTag = (sid: string) =>
     crypto
@@ -677,10 +680,10 @@ export function createHostRouter(deps: HostRouterDeps): express.Router {
       res.redirect(302, `${HOST_BASE}?link=error`);
       return;
     }
-    const page = (result: VerifyResult) =>
+    const page = (result: VerifyResult, status = 200) =>
       send(
         res,
-        200,
+        status,
         verifyResultPage(locals(res).nonce, session, result, join),
       );
     if (req.query.error || typeof req.query.code !== 'string') {
@@ -700,9 +703,20 @@ export function createHostRouter(deps: HostRouterDeps): express.Router {
       return;
     }
     if (self.id !== session.userId) {
-      page({ kind: 'other-account' });
+      alert({
+        title: 'Verify on the host dashboard: a different Meetup account',
+        description:
+          `Meetup member ${session.userId} (with <@${discordUserId}>) came back from ` +
+          `Meetup signed in as Meetup member ${self.id}. Nothing was verified.`,
+      });
+      page({ kind: 'other-account' }, 403);
       return;
     }
+    if (verifyInFlight.has(session.userId)) {
+      page({ kind: 'busy' }, 409);
+      return;
+    }
+    verifyInFlight.add(session.userId);
     let summary: VerificationSummary;
     try {
       summary = await deps.runVerify(meetupToken, discordUserId);
@@ -727,8 +741,61 @@ export function createHostRouter(deps: HostRouterDeps): express.Router {
       });
       page({ kind: 'roles-failed' });
       return;
+    } finally {
+      verifyInFlight.delete(session.userId);
     }
     page({ kind: 'verified', summary });
+  }
+
+  /**
+   * The Meetup step of "Verify on Discord" again, for a host already linked
+   * (they backed out at Meetup, or the roles step failed): no new Discord
+   * step. Answers with a page that LINKS to Meetup, not a redirect, for the
+   * same `form-action 'self'` reason as the Discord start.
+   */
+  function finishStart(res: Response) {
+    const { session, sid, nonce } = hostLocals(res);
+    if (
+      !deps.runVerify ||
+      session.via !== 'meetup' ||
+      session.discordUserId === null
+    ) {
+      res.redirect(303, HOST_BASE);
+      return;
+    }
+    const state = newHostState();
+    const href = safeHref(deps.meetup.buildAuthUrl(state));
+    if (!href) {
+      logger.error('Host verify finish built a Meetup URL safeHref refused');
+      fail(res, 500);
+      return;
+    }
+    sealedStart(
+      res,
+      HOST_MEETUP_OAUTH_COOKIE,
+      state,
+      `verify.${sessionTag(sid)}.${session.discordUserId}.x`,
+    );
+    send(
+      res,
+      200,
+      hostLayout({
+        title: 'Finish verification',
+        nonce,
+        user: session,
+        current: 'home',
+        body: html`<div class="card">
+          <h1>Finish verification</h1>
+          <p>
+            Your Meetup and Discord accounts are already linked. Meetup will
+            confirm your account, and then you get the same roles and badges as
+            pressing Verify in our Discord server.
+          </p>
+          <p><a class="button" href="${href}">Continue to Meetup</a></p>
+          <p><a href="${localUrl(HOST_BASE)}">Back to home</a></p>
+        </div>`,
+      }),
+    );
   }
 
   const router = express.Router({ caseSensitive: true });
@@ -1056,6 +1123,10 @@ export function createHostRouter(deps: HostRouterDeps): express.Router {
         </div>`,
       }),
     );
+  });
+
+  protectedRouter.post('/verify/finish', (_req, res) => {
+    finishStart(res);
   });
 
   deps.pages?.(protectedRouter);
