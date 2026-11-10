@@ -63,6 +63,11 @@ export const announceEvent = gql`
       event {
         id
       }
+      errors {
+        code
+        field
+        message
+      }
     }
   }
 `;

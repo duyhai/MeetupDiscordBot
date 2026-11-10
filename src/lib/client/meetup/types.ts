@@ -403,5 +403,8 @@ export interface AnnounceEventInput {
 }
 
 export interface AnnounceEventResponse {
-  announceEvent: { event: { id: string } };
+  announceEvent: {
+    event: { id: string } | null;
+    errors?: PayloadError[] | null;
+  };
 }

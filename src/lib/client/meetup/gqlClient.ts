@@ -719,6 +719,8 @@ export class GqlMeetupClient {
         { input },
       );
       logger.info(`announceEvent result: ${JSON.stringify(result)}`);
+      // A rejected announcement (already announced, not allowed) is not sent.
+      throwOnPayloadErrors('announceEvent', result.announceEvent?.errors);
       return result;
     } catch (error) {
       logger.error(error);

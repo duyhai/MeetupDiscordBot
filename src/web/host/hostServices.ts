@@ -8,6 +8,10 @@ import {
   isEventFor,
 } from '../../lib/hosts/eventRequest.js';
 import { HostResolveDeps, resolveHost } from '../../lib/hosts/eligibility.js';
+import { announceHostEvent } from '../../lib/hosts/announceEvent.js';
+import { HostEventsDeps, hostedEvents } from '../../lib/hosts/hostEvents.js';
+import { PostgresEventAnnouncementRepository } from '../../lib/repositories/postgresEventAnnouncementRepository.js';
+import type { AnnounceRouteDeps } from './announcePage.js';
 import { PublishDeps, publishRequest } from '../../lib/hosts/publishRequest.js';
 import { LogEntry, logAlert } from '../../lib/helpers/discordLogger.js';
 import { getBadges } from '../../lib/helpers/getBadges.js';
@@ -174,5 +178,38 @@ export function verifyRunner(
       hostedCount,
       attendedCount,
     };
+  };
+}
+
+/**
+ * The Announce button's production deps: the announcements table, the
+ * host's own upcoming events (the site's 5-minute list), and announceEvent
+ * with the organizer credential, as the publish path makes it.
+ */
+export function productionAnnouncer(
+  getClient: () => Client | undefined,
+  events: HostEventsDeps,
+): AnnounceRouteDeps {
+  const deps = {
+    announcements: () => PostgresEventAnnouncementRepository.instance(),
+    ownUpcoming: (meetupMemberId: string) =>
+      hostedEvents(events, meetupMemberId, 'upcoming'),
+    // A client made per announce, never re-running the write on a 401.
+    announce: async (meetupEventId: string) => {
+      const token = await getOrganizerAccessToken({ client: getClient() });
+      if (!token) {
+        throw new OrganizerTokenUnavailableError();
+      }
+      await new GqlMeetupClient(token, { bypassCache: true }).announceEvent({
+        eventId: meetupEventId,
+      });
+    },
+    alert: alertVia(getClient),
+  };
+  return {
+    announce: (host, meetupEventId) =>
+      announceHostEvent(deps, host, meetupEventId),
+    announcements: async (ids) =>
+      (await PostgresEventAnnouncementRepository.instance()).forEvents(ids),
   };
 }
