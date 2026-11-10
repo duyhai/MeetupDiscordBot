@@ -394,6 +394,179 @@ describe('host request queue', () => {
   });
 });
 
+describe('queue status filter', () => {
+  const MIXED = [
+    eventRequestRow({ id: '1', title: 'Waiting one' }),
+    eventRequestRow({ id: '2', title: 'Waiting two' }),
+    eventRequestRow({
+      id: '3',
+      title: 'Denied one',
+      status: 'denied',
+      denyReason: 'Too soon',
+    }),
+    eventRequestRow({
+      id: '4',
+      title: 'Denied two',
+      status: 'denied',
+      denyReason: 'Too late',
+    }),
+    eventRequestRow({ id: '5', title: 'Published one', status: 'published' }),
+    eventRequestRow({
+      id: '6',
+      title: 'Failed one',
+      status: 'failed',
+      failure: 'Meetup said no',
+    }),
+  ];
+
+  it('a denied card wears the attention badge', async () => {
+    const { get } = await setup({ rows: MIXED });
+    const res = await get(`${QUEUE}?status=denied`);
+    expect(res.text).toContain('<span class="badge attn">Denied</span>');
+    expect(res.text).not.toContain('badge neutral">Denied');
+  });
+
+  it('the chips carry every status with its count, and mark the current one', async () => {
+    const { get } = await setup({ rows: MIXED });
+    const res = await get(QUEUE);
+    expect(res.status).toBe(200);
+    expect(res.text).toContain('<nav class="status-filter"');
+    expect(res.text).toMatch(/aria-current="page"\s*><strong>All<\/strong>/);
+    expect(res.text).toContain(`href="${QUEUE}?status=pending">Waiting (2)<`);
+    expect(res.text).toContain(`href="${QUEUE}?status=denied">Denied (2)<`);
+    expect(res.text).toContain(
+      `href="${QUEUE}?status=published">Published (1)<`,
+    );
+    expect(res.text).toContain(`href="${QUEUE}?status=failed">Failed (1)<`);
+    expect(res.text).toContain(
+      `href="${QUEUE}?status=publishing">Publishing (0)<`,
+    );
+
+    const denied = await get(`${QUEUE}?status=denied`);
+    expect(denied.text).toMatch(
+      /href="\/dashboard\/hosts\/requests\?status=denied"\s*aria-current="page"\s*><strong>Denied \(2\)<\/strong>/,
+    );
+    expect(denied.text).not.toMatch(/aria-current="page"\s*><strong>All</);
+  });
+
+  it('a filter lists only that status; decided ones newest first', async () => {
+    const { get, store } = await setup({ rows: MIXED });
+    const denied = await get(`${QUEUE}?status=denied`);
+    expect(denied.status).toBe(200);
+    expect(denied.text).toContain('Denied (2)</h2>');
+    expect(denied.text).not.toContain('Waiting (2)</h2>');
+    expect(denied.text).not.toContain('Recently decided');
+    expect(denied.text).not.toContain('Waiting one');
+    expect(denied.text).not.toContain('Published one');
+    expect(denied.text.indexOf('Denied two')).toBeLessThan(
+      denied.text.indexOf('Denied one'),
+    );
+    expect(store.listByStatus).toHaveBeenLastCalledWith(
+      ['denied'],
+      expect.any(Number),
+      'newest',
+    );
+
+    const waiting = await get(`${QUEUE}?status=pending`);
+    expect(waiting.text).toContain('Waiting (2)</h2>');
+    expect(waiting.text.indexOf('Waiting one')).toBeLessThan(
+      waiting.text.indexOf('Waiting two'),
+    );
+    expect(store.listByStatus).toHaveBeenLastCalledWith(
+      ['pending'],
+      expect.any(Number),
+      'oldest',
+    );
+    expect(waiting.text).toContain('Approve and publish');
+
+    const publishing = await get(`${QUEUE}?status=publishing`);
+    expect(publishing.text).toContain('No publishing requests.');
+  });
+
+  it('a status outside the table, or repeated, is the default view, not a 500', async () => {
+    const { get, store } = await setup({ rows: MIXED });
+    for (const bad of [
+      '?status=bogus',
+      '?status=',
+      "?status=denied'%20OR%201=1",
+      '?status=denied&status=pending',
+      '?status[]=denied',
+    ]) {
+      // eslint-disable-next-line no-await-in-loop
+      const res = await get(`${QUEUE}${bad}`);
+      expect(res.status, bad).toBe(200);
+      expect(res.text, bad).toContain('Waiting (2)</h2>');
+      expect(res.text, bad).toContain('Recently decided');
+      expect(res.text, bad).toMatch(/aria-current="page"\s*><strong>All</);
+    }
+    for (const call of store.listByStatus.mock.calls) {
+      expect(call[0].every((s) => typeof s === 'string')).toBe(true);
+      expect(call[0]).not.toContain('bogus');
+    }
+  });
+
+  it('a store without counts, or a count that fails, shows the chips bare', async () => {
+    const bare = await setup({ rows: MIXED });
+    bare.store.countByStatus = undefined;
+    const res = await bare.get(QUEUE);
+    expect(res.status).toBe(200);
+    expect(res.text).toContain(`href="${QUEUE}?status=denied">Denied<`);
+    expect(res.text).not.toContain('Denied (2)');
+
+    const down = await setup({ rows: MIXED });
+    vi.mocked(down.store.countByStatus).mockRejectedValue(new Error('pg down'));
+    const page = await down.get(QUEUE);
+    expect(page.status).toBe(200);
+    expect(page.text).toContain('Waiting (2)</h2>');
+    expect(page.text).toContain(`href="${QUEUE}?status=denied">Denied<`);
+    expect(page.text).not.toContain('Denied (2)');
+  });
+
+  it('a count that fails while the lists are still loading is handled, not fatal', async () => {
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => {
+      unhandled.push(reason);
+    };
+    process.on('unhandledRejection', onUnhandled);
+    try {
+      const { get, store } = await setup({ rows: MIXED });
+      // The count rejects at once; the list answers later, so the await of
+      // the count comes after its rejection.
+      vi.mocked(store.countByStatus).mockRejectedValue(new Error('pg down'));
+      const rows = MIXED.filter((r) => r.status === 'denied');
+      vi.mocked(store.listByStatus).mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            setTimeout(() => resolve(rows), 50);
+          }),
+      );
+      const page = await get(`${QUEUE}?status=denied`);
+      expect(page.status).toBe(200);
+      expect(page.text).toContain('Denied (2)</h2>');
+      // Bare chips: the count never arrived.
+      expect(page.text).toContain(`href="${QUEUE}?status=pending">Waiting<`);
+      expect(page.text).not.toContain('Waiting (2)');
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off('unhandledRejection', onUnhandled);
+    }
+  });
+
+  it('the filtered heading says "showing" when the page lists fewer than the count', async () => {
+    const { get, store } = await setup({ rows: MIXED });
+    vi.mocked(store.countByStatus).mockResolvedValue(
+      new Map([
+        ['denied', 250],
+        ['pending', 2],
+      ]),
+    );
+    const page = await get(`${QUEUE}?status=denied`);
+    expect(page.text).toMatch(/Denied\s*\(showing 2 of 250\)\s*<\/h2>/);
+    expect(page.text).toContain('Denied (250)<');
+  });
+});
+
 describe('queue actions', () => {
   it('approve publishes as the leader, from pending, and logs it', async () => {
     const { post, publishRequest, audit } = await setup();

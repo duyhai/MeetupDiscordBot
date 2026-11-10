@@ -502,17 +502,38 @@ export class PostgresEventRequestRepository {
     return Number(rows[0].n);
   }
 
-  /** Oldest first, so the queue is worked in the order requests came in. */
+  /**
+   * Oldest first by default, so the queue is worked in the order requests
+   * came in; 'newest' (by last change) for a list of decided ones.
+   */
   async listByStatus(
     statuses: EventRequestStatus[],
     limit = 100,
+    order: 'oldest' | 'newest' = 'oldest',
   ): Promise<EventRequest[]> {
     const { rows } = await this.pool.query<Row>(
-      `SELECT * FROM event_requests WHERE status = ANY($1::text[])
-        ORDER BY created_at, id LIMIT $2`,
+      order === 'newest'
+        ? `SELECT * FROM event_requests WHERE status = ANY($1::text[])
+            ORDER BY updated_at DESC, id DESC LIMIT $2`
+        : `SELECT * FROM event_requests WHERE status = ANY($1::text[])
+            ORDER BY created_at, id LIMIT $2`,
       [statuses, limit],
     );
     return rows.map(toRequest);
+  }
+
+  /** How many requests are in each status; a status with none is absent. */
+  async countByStatus(): Promise<Map<EventRequestStatus, number>> {
+    const { rows } = await this.pool.query<{ status: string; n: string }>(
+      `SELECT status, count(*) AS n FROM event_requests GROUP BY status`,
+    );
+    return new Map(
+      rows
+        .filter((r) =>
+          (EVENT_REQUEST_STATUSES as readonly string[]).includes(r.status),
+        )
+        .map((r) => [r.status as EventRequestStatus, Number(r.n)]),
+    );
   }
 
   /** The latest decided requests (published, denied), newest first. */

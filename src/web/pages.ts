@@ -388,8 +388,8 @@ vertical-align:middle;margin:0 var(--s1) 0 var(--s3)}
 ol.cal-list{list-style:none;padding:0;margin:0}
 ol.cal-list>li{border-top:1px solid var(--line);padding:var(--s3) 0}
 ol.cal-list>li:first-child{border-top:0;padding-top:0}
-nav.type-filter{display:flex;flex-wrap:wrap;gap:0 var(--s4);margin:0 0 var(--s3)}
-nav.type-filter a{display:inline-flex;align-items:center;min-height:var(--tap)}
+nav.type-filter,nav.status-filter{display:flex;flex-wrap:wrap;gap:0 var(--s4);margin:0 0 var(--s3)}
+nav.type-filter a,nav.status-filter a{display:inline-flex;align-items:center;min-height:var(--tap)}
 /* ---- Per-palette rules. The default (Night market) ones are scoped to :root:not([data-palette]) so no other
    palette inherits them; each other palette's sit under its data-palette. Tokens above do the colours. ---- */
 /* Night market: lantern glows behind the header, a gradient hairline under it. Static, so nothing to reduce. */
@@ -436,9 +436,11 @@ nav.type-filter a{display:inline-flex;align-items:center;min-height:var(--tap)}
 :root[data-palette="potluck"] .swatch{border-radius:50%;border:2px solid var(--fg)}
 :root[data-palette="potluck"] a.cal-add{border:2px solid var(--fg);border-radius:50%;color:var(--fg);font-size:1rem;
   min-width:26px;min-height:26px}
-:root[data-palette="potluck"] nav.type-filter a{border:2px solid var(--line);border-radius:var(--radius-pill);padding:0 12px;
+:root[data-palette="potluck"] nav.type-filter a,
+:root[data-palette="potluck"] nav.status-filter a{border:2px solid var(--line);border-radius:var(--radius-pill);padding:0 12px;
   min-height:var(--tap);text-decoration:none;color:var(--fg)}
-:root[data-palette="potluck"] nav.type-filter a[aria-current="page"]{border-color:var(--fg);background:var(--sel)}
+:root[data-palette="potluck"] nav.type-filter a[aria-current="page"],
+:root[data-palette="potluck"] nav.status-filter a[aria-current="page"]{border-color:var(--fg);background:var(--sel)}
 @media (max-width:639.98px){:root[data-palette="potluck"] .card{box-shadow:4px 4px 0 var(--line)}
 :root[data-palette="potluck"] table.stack tr{border:2px solid var(--line);border-radius:16px}}
 /* Quiet: no cards. Hairlines and space do the grouping; badges are a dot and a word. */

@@ -67,7 +67,10 @@ import { OrganizerLoginDeps } from '../../../src/web/routes/organizerLogin.js';
 import { SessionStore } from '../../../src/web/session.js';
 import { FakeCache } from '../fakeCache.js';
 import type { PublishOutcome } from '../../../src/lib/hosts/publishRequest.js';
-import type { EventRequest } from '../../../src/lib/repositories/postgresEventRequestRepository.js';
+import type {
+  EventRequest,
+  EventRequestStatus,
+} from '../../../src/lib/repositories/postgresEventRequestRepository.js';
 import type {
   PromotedHost,
   PromotionChange,
@@ -899,9 +902,19 @@ export function fakeEventRequests(rows: EventRequest[] = [eventRequestRow()]) {
     /** Tests set this to show checklists; absent by default, as a store without them. */
     reviewChecklists: undefined as
       ((ids: string[]) => Promise<Map<string, ChecklistKey[]>>) | undefined,
-    listByStatus: vi.fn(async (statuses: string[]) =>
-      rows.filter((r) => statuses.includes(r.status)),
+    listByStatus: vi.fn(
+      async (statuses: string[], _limit?: number, order?: string) => {
+        const found = rows.filter((r) => statuses.includes(r.status));
+        return order === 'newest' ? found.slice().reverse() : found;
+      },
     ),
+    countByStatus: vi.fn(async () => {
+      const counts = new Map<EventRequestStatus, number>();
+      for (const r of rows) {
+        counts.set(r.status, (counts.get(r.status) ?? 0) + 1);
+      }
+      return counts;
+    }),
     listDecided: vi.fn(async () =>
       rows.filter((r) => r.status === 'published' || r.status === 'denied'),
     ),
