@@ -12,6 +12,7 @@ import {
 } from '../../lib/hosts/publishRequest.js';
 import {
   DECISION_ACTIONS,
+  DECISION_MESSAGES,
   DecisionAction,
   REFUSAL_AUDIT_WINDOW_MS,
   StaffRequestStore,
@@ -73,33 +74,11 @@ export interface HostRequestDeps {
 
 type QueueAction = DecisionAction;
 
-/** Every code a queue POST can send back in `?result=`. Fixed text only. */
+/** Every code a queue POST can send back in `?result=`: the service's texts plus the page's own. */
 export const HOST_REQUEST_RESULT_MESSAGES = {
-  published: 'Approved and published on Meetup.',
-  failed:
-    'Approved, but publishing failed. The card says what exists on Meetup; fix it or Retry.',
-  denied: 'Denied. The host sees your reason on their dashboard.',
-  'still-publishing':
-    'Meetup is slow to answer. The request stays "publishing"; reload in a minute. If it is still stuck after 10 minutes, Retry.',
-  'deny-slow':
-    'The database is slow, so the deny may still save. Reload the queue in a minute ' +
-    'to see where the request stands; the activity log notes it if it saves.',
-  'reason-required': 'Write a reason for the host, then deny again.',
-  'reason-too-long': `Keep the reason to ${DENY_REASON_MAX} characters.`,
-  'deny-event-exists':
-    'This request’s event is on Meetup, so it was not denied. Retry to finish ' +
-    'it, or delete it on Meetup first.',
-  'deny-check-failed':
-    'Meetup could not be asked whether this request’s event exists, so it was ' +
-    'not denied. Try again in a few minutes.',
-  resolved: 'Marked resolved. The host sees the event as published.',
+  ...DECISION_MESSAGES,
   invalid:
     'That request could not be understood. Reload the page and try again.',
-  'not-leadership':
-    'Only the 1.5 Leadership Team can approve or deny host requests. Nothing was changed.',
-  'leadership-unavailable':
-    'Discord could not be reached to check your role. Nothing was changed; try again in a minute.',
-  error: 'That did not save. Please try again in a minute.',
 } as const;
 export type HostRequestResultCode = keyof typeof HOST_REQUEST_RESULT_MESSAGES;
 

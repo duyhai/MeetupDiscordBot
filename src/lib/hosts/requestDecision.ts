@@ -56,6 +56,34 @@ export type DecisionCode =
   | 'leadership-unavailable'
   | 'error';
 
+/** Every code's fixed text, as the queue page shows it. Nothing typed by anyone is in them. */
+export const DECISION_MESSAGES: Record<DecisionCode, string> = {
+  published: 'Approved and published on Meetup.',
+  failed:
+    'Approved, but publishing failed. The card says what exists on Meetup; fix it or Retry.',
+  denied: 'Denied. The host sees your reason on their dashboard.',
+  resolved: 'Marked resolved. The host sees the event as published.',
+  stale: 'Someone just acted on this request. Nothing was changed.',
+  'still-publishing':
+    'Meetup is slow to answer. The request stays "publishing"; reload in a minute. If it is still stuck after 10 minutes, Retry.',
+  'deny-slow':
+    'The database is slow, so the deny may still save. Reload the queue in a minute ' +
+    'to see where the request stands; the activity log notes it if it saves.',
+  'reason-required': 'Write a reason for the host, then deny again.',
+  'reason-too-long': `Keep the reason to ${DENY_REASON_MAX} characters.`,
+  'deny-event-exists':
+    'This request’s event is on Meetup, so it was not denied. Retry to finish ' +
+    'it, or delete it on Meetup first.',
+  'deny-check-failed':
+    'Meetup could not be asked whether this request’s event exists, so it was ' +
+    'not denied. Try again in a few minutes.',
+  'not-leadership':
+    'Only the 1.5 Leadership Team can approve or deny host requests. Nothing was changed.',
+  'leadership-unavailable':
+    'Discord could not be reached to check your role. Nothing was changed; try again in a minute.',
+  error: 'That did not save. Please try again in a minute.',
+};
+
 export interface DecisionOutcome {
   code: DecisionCode;
   /** The request as the decision left it, when it was decided. */

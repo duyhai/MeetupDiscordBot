@@ -4,7 +4,6 @@ import dayjs from 'dayjs';
 import express, { RequestHandler, Response } from 'express';
 import { Logger } from 'tslog';
 
-import { DASHBOARD_BASE } from '../../lib/reports/dashboardPaths.js';
 import {
   CopySource,
   DEFAULT_DURATION,
@@ -15,6 +14,7 @@ import {
   FormField,
   GUEST_LIMIT_RANGE,
   MAX_DAYS_AHEAD,
+  MAX_PENDING,
   RSVP_LIMIT_RANGE,
   START_TIMES,
   copyDefaults,
@@ -32,6 +32,7 @@ import {
 } from '../../templates/createEventTemplate.js';
 import { pacificDay } from '../../lib/hosts/hostEvents.js';
 import { PublishOutcome } from '../../lib/hosts/publishRequest.js';
+import { newRequestAlert } from '../../lib/hosts/requestPost.js';
 import { LogEntry, alertText } from '../../lib/helpers/discordLogger.js';
 import {
   EventRequest,
@@ -64,8 +65,7 @@ export const CREATE_PATHS = {
  */
 const PUBLISH_DEADLINE_MS = 20_000;
 
-/** A regular host may have at most this many requests waiting for leadership. */
-export const MAX_PENDING = 5;
+export { MAX_PENDING };
 
 // Meetup ids are numeric, but older recurring events have letters too.
 const EVENT_ID = /^[A-Za-z0-9]{1,40}$/;
@@ -482,19 +482,6 @@ function startDay(value: unknown, today: string): string {
   return dayjs(value).format('YYYY-MM-DD') === value && value > today
     ? value
     : '';
-}
-
-/** The new-request alert: plain text, no mentions, markdown escaped. */
-function newRequestAlert(origin: string, request: EventRequest): LogEntry {
-  return {
-    title: 'New host event request',
-    description: `Review it at ${origin}${DASHBOARD_BASE}/hosts/requests`,
-    fields: [
-      { name: 'Host', value: alertText(request.hostName), inline: true },
-      { name: 'When', value: whenLabel(request.startLocal), inline: true },
-      { name: 'Title', value: alertText(request.title) },
-    ],
-  };
 }
 
 /** A Community Host's published event: plain text, markdown escaped. */

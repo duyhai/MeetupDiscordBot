@@ -7,13 +7,31 @@ import {
   ButtonStyle,
   CommandInteraction,
   MessageActionRowComponentBuilder,
+  ModalSubmitInteraction,
 } from 'discord.js';
-import { ButtonComponent, Discord, Slash, SlashOption } from 'discordx';
+import {
+  ButtonComponent,
+  Discord,
+  ModalComponent,
+  Slash,
+  SlashOption,
+} from 'discordx';
 import { Logger } from 'tslog';
 
 import { GUEST_HOST_PREFIX } from '../../constants.js';
 import { createEventWithPhotoFallback } from '../../lib/client/meetup/createEventWithPhotoFallback.js';
-import { getPaginatedData } from '../../lib/client/meetup/paginationHelper.js';
+import {
+  handleApprovePress,
+  handleDenySubmit,
+  handleRequestCommand,
+  showDenyModal,
+} from '../../lib/hosts/discordRequests.js';
+import { TITLE_MAX } from '../../lib/hosts/eventRequest.js';
+import {
+  APPROVE_ID_PATTERN,
+  DENY_ID_PATTERN,
+} from '../../lib/hosts/requestPost.js';
+import { productionDiscordRequestDeps } from '../../web/host/hostServices.js';
 import {
   GUEST_HOST_EVENT_DESCRIPTION,
   createEventTemplate,
@@ -25,17 +43,51 @@ import {
 } from '../../util/discord.js';
 import { withLock } from '../../util/lock.js';
 import { withMeetupClient } from '../../util/meetup.js';
-import { getRandomTip } from '../../util/tips.js';
 
 const logger = new Logger({ name: 'MeetupCreateEventCommands' });
 
 const DEFAULT_START_TIME = 19;
 const DATE_FORMAT = 'YYYY-MM-DD';
-const TITLE_MAX_LENGTH = 80;
 const TEMPLATE_TITLE = 'Organizer Event Template';
 
 @Discord()
 export class MeetupCreateEventCommands {
+  /**
+   * The shared request queue (docs/superpowers/specs/2026-11-10-unified-
+   * requests-design.md): the command writes the same row the website's form
+   * does, and these buttons decide it through the website's service.
+   */
+  @ButtonComponent({ id: APPROVE_ID_PATTERN })
+  async requestApproveHandler(interaction: ButtonInteraction) {
+    await discordCommandWrapper(interaction, () =>
+      handleApprovePress(
+        productionDiscordRequestDeps(() => interaction.client),
+        interaction,
+      ),
+    );
+  }
+
+  // No wrapper: a modal must be the interaction's first response.
+  @ButtonComponent({ id: DENY_ID_PATTERN })
+  async requestDenyHandler(interaction: ButtonInteraction) {
+    await showDenyModal(interaction);
+  }
+
+  @ModalComponent({ id: DENY_ID_PATTERN })
+  async requestDenySubmitHandler(interaction: ModalSubmitInteraction) {
+    await discordCommandWrapper(interaction, () =>
+      handleDenySubmit(
+        productionDiscordRequestDeps(() => interaction.client),
+        interaction,
+      ),
+    );
+  }
+
+  /**
+   * LEGACY: the Approve/Deny buttons of request posts made before the
+   * shared queue (plain 'approve'/'deny' custom ids, nothing in the
+   * database). Kept until no such post is pending, then to be removed.
+   */
   getRequestEventButtons() {
     const approveButton = new ButtonBuilder()
       .setLabel('Approve')
@@ -320,53 +372,17 @@ export class MeetupCreateEventCommands {
       description: 'Title for the event you want to host',
       type: ApplicationCommandOptionType.String,
       required: true,
-      maxLength: TITLE_MAX_LENGTH - GUEST_HOST_PREFIX.length,
+      maxLength: TITLE_MAX,
     })
     title: string,
     interaction: CommandInteraction,
   ) {
-    await discordCommandWrapper(interaction, async () => {
-      const dateObj = dayjs(new Date(year, month - 1, day));
-      if (dateObj.isBefore(new Date())) {
-        throw new Error('Invalid date. Date cannot be in the past.');
-      }
-      if (title.includes('\n')) {
-        throw new Error(
-          'Invalid title. Please make sure it has no new line characters before trying again.',
-        );
-      }
-
-      await withMeetupClient(interaction, async (meetupClient) => {
-        logger.info(`User requested event: ${interaction.user.username}`);
-
-        const userInfo = await meetupClient.getUserInfo();
-
-        const getUserHostedEvents = await getPaginatedData(
-          async (paginationInput) => {
-            const result = await meetupClient.getGroupEvents(paginationInput, {
-              status: ['PAST'],
-              hostId: userInfo.self.id,
-            });
-            return result.groupByUrlname.events;
-          },
-        );
-
-        const replyContent = [
-          `❗${interaction.user.toString()} is requesting the creation of a new Meetup event.❗`,
-          `**Meetup User ID**: ${userInfo.self.id}`,
-          `**Number of hosted events**: ${getUserHostedEvents.length}`,
-          `**Event Date**: ${dateObj.format(DATE_FORMAT)}`,
-          `**Event Title**: ${title}`,
-          ``,
-          `💡 **Host Tip**: ${getRandomTip()} 💡`,
-          `Please reach out to us if you have any questions while setting up your event.`,
-          `Organizers, please approve or deny below:`,
-        ];
-        await interaction.followUp({
-          content: replyContent.join('\n'),
-          components: [this.getRequestEventButtons()],
-        });
-      });
-    });
+    await discordCommandWrapper(interaction, () =>
+      handleRequestCommand(
+        productionDiscordRequestDeps(() => interaction.client),
+        interaction,
+        { year, month, day, title },
+      ),
+    );
   }
 }

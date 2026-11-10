@@ -69,6 +69,25 @@ export const queueUrl = (origin: string) =>
 
 const TIP_LINE = /^💡 Host Tip: (.*) 💡\n\n/u;
 
+const whenLabel = (startLocal: string) =>
+  dayjs(startLocal).format('ddd, MMM D, YYYY [at] h:mm A');
+
+/** The new-request alert for #meetup-bot-alerts: plain text, no mentions, markdown escaped. */
+export function newRequestAlert(
+  origin: string,
+  request: EventRequest,
+): LogEntry {
+  return {
+    title: 'New host event request',
+    description: `Review it at ${queueUrl(origin)}`,
+    fields: [
+      { name: 'Host', value: alertText(request.hostName), inline: true },
+      { name: 'When', value: whenLabel(request.startLocal), inline: true },
+      { name: 'Title', value: alertText(request.title) },
+    ],
+  };
+}
+
 /** Who asked: a mention when the Discord account is known, else the stored name. */
 function requester(request: EventRequest): string {
   return request.discordUserId !== null

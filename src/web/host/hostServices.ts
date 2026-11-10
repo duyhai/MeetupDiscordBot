@@ -17,7 +17,18 @@ import { HostEventsDeps, hostedEvents } from '../../lib/hosts/hostEvents.js';
 import { PostgresEventAnnouncementRepository } from '../../lib/repositories/postgresEventAnnouncementRepository.js';
 import type { AnnounceRouteDeps } from './announcePage.js';
 import { PublishDeps, publishRequest } from '../../lib/hosts/publishRequest.js';
-import { LogEntry, logAlert } from '../../lib/helpers/discordLogger.js';
+import { DiscordRequestDeps } from '../../lib/hosts/discordRequests.js';
+import {
+  DecisionDeps,
+  REFUSAL_AUDIT_WINDOW_MS,
+  decideRequest,
+} from '../../lib/hosts/requestDecision.js';
+import { mirrorDecision } from '../../lib/hosts/requestPost.js';
+import {
+  LogEntry,
+  logActivity,
+  logAlert,
+} from '../../lib/helpers/discordLogger.js';
 import { getBadges } from '../../lib/helpers/getBadges.js';
 import { getUserRoles } from '../../lib/helpers/getUserRoles.js';
 import { selfOnboardUser } from '../../lib/helpers/onboardUser.js';
@@ -32,6 +43,9 @@ import { PostgresEventRequestRepository } from '../../lib/repositories/postgresE
 import { PostgresMemberRepository } from '../../lib/repositories/postgresMemberRepository.js';
 import { PostgresPromotedHostRepository } from '../../lib/repositories/postgresPromotedHostRepository.js';
 import { ApplicationCache } from '../../util/cache.js';
+import { getRandomTip } from '../../util/tips.js';
+import { dashboardOrigin } from '../dashboardDeps.js';
+import { FixedWindowLimiter } from '../rateLimit.js';
 import { discordRoleCheck } from '../roleGate.js';
 import { SessionStore } from '../session.js';
 import { timedCacheFactory } from '../timedCache.js';
@@ -240,5 +254,50 @@ export function productionAnnouncer(
       announceHostEvent(deps, host, meetupEventId, hooks),
     announcements: async (ids) =>
       (await PostgresEventAnnouncementRepository.instance()).forEvents(ids),
+  };
+}
+
+/**
+ * Production deps for decideRequest: the live Leadership check, the
+ * activity log, the request store, the publisher and the Discord mirror.
+ * Shared by the staff queue and the Discord buttons.
+ */
+export function productionDecisionDeps(
+  getClient: () => Client | undefined,
+): DecisionDeps {
+  const alert = alertVia(getClient);
+  return {
+    now: () => new Date(),
+    isLeadership: discordRoleCheck(getClient, SERVER_ROLES.leadership),
+    audit: async (entry) => {
+      const client = getClient();
+      return client ? logActivity(client, entry) : false;
+    },
+    store: () => PostgresEventRequestRepository.instance(),
+    publishRequest: productionPublisher(getClient),
+    findExistingEvent: productionPublishDeps(getClient).findExisting,
+    mirror: (request) => mirrorDecision({ getClient, alert }, request),
+    refusals: new FixedWindowLimiter(1, REFUSAL_AUDIT_WINDOW_MS),
+  };
+}
+
+/** Production deps for the Discord request command and buttons. */
+export function productionDiscordRequestDeps(
+  getClient: () => Client | undefined,
+): DiscordRequestDeps {
+  const resolveDeps = hostResolveDeps(getClient);
+  const decisionDeps = productionDecisionDeps(getClient);
+  const publish = productionPublisher(getClient);
+  return {
+    now: () => new Date(),
+    meetupIdForDiscord: resolveDeps.meetupIdForDiscord,
+    resolve: (who) => resolveHost(resolveDeps, who),
+    store: () => PostgresEventRequestRepository.instance(),
+    pastHostedCount: resolveDeps.pastHostedCount,
+    publish: (id, version, actor) => publish(id, version, actor, ['pending']),
+    decide: (input) => decideRequest(decisionDeps, input),
+    tip: getRandomTip,
+    alert: alertVia(getClient),
+    origin: dashboardOrigin(),
   };
 }
