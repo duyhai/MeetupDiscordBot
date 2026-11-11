@@ -12,8 +12,10 @@
  *    tick. The work set is a query, so a restart resumes where it was.
  * 3. Finish when nothing is left.
  *
- * The first run is a full pull (~2–3k calls over many ticks); later runs,
- * one a day, list again (~30 calls) and read the new and settling events.
+ * The first run is a full pull (probed 2026-11-11: ~5.2k events, ~4,850
+ * calls, ~33 ticks ≈ 2.7 h); later runs, one a day, list again (~52 calls)
+ * and read the new and settling events. Nothing sets SNAPSHOT_RUN_NOW_KEY
+ * yet: the staff button that will comes with PR 2.
  * Each tick holds the report build lease for its reads, so the organizer
  * credential is never read by two jobs at once. Nothing is written to Redis
  * but the lease, the run-now flag and the alert guard.
@@ -32,10 +34,30 @@ import {
 } from '../repositories/postgresSnapshotRepository.js';
 import {
   CallCounter,
+  EventRsvpRead,
   SnapshotMeetup,
   listAllEvents,
   readEventRsvps,
 } from './read.js';
+
+/** A 200 that is not believable: the stored rows are kept. */
+export class ShortRsvpReadError extends Error {
+  constructor() {
+    super('RSVP read shorter than Meetup counts');
+    this.name = 'ShortRsvpReadError';
+  }
+}
+
+/** Short: no edges where Meetup counts RSVPs, or under MIN_EDGE_RATIO of its total. */
+export function isShortRead(
+  read: EventRsvpRead,
+  yesCount: number | null,
+): boolean {
+  if (read.edges === 0) {
+    return read.totalCount > 0 || (yesCount ?? 0) > 0;
+  }
+  return read.edges < MIN_EDGE_RATIO * read.totalCount;
+}
 
 const logger = new Logger({ name: 'groupSnapshot' });
 
@@ -48,6 +70,12 @@ export const SNAPSHOT_RUN_INTERVAL_MS = 20 * 60 * 60_000;
 export const RSVP_SETTLE_DAYS = 14;
 /** A listing with fewer PAST events than this share of the stored ones marks nothing deleted. */
 export const MIN_LISTING_RATIO = 0.95;
+/**
+ * A read is refused as short when Meetup returned no edges for an event it
+ * counts RSVPs on, or fewer than this share of its totalCount. (A few hidden
+ * RSVPs are normal: 41 edges for a totalCount of 46 was seen live.)
+ */
+export const MIN_EDGE_RATIO = 0.5;
 /** This many RSVP reads failing in a row is Meetup, not the events: the tick ends. */
 export const CONSECUTIVE_FAILURE_LIMIT = 3;
 /** Set (to the requester's Discord id) to start a run on the next tick. */
@@ -90,26 +118,6 @@ export type SnapshotTickOutcome =
       finished: boolean;
     }
   | { kind: 'failed'; runId: number; error: string };
-
-/** Events that failed this run, skipped until the next one. In process only. */
-const skipped: { runId: number | undefined; ids: Set<string> } = {
-  runId: undefined,
-  ids: new Set(),
-};
-
-function skipSet(runId: number): Set<string> {
-  if (skipped.runId !== runId) {
-    skipped.runId = runId;
-    skipped.ids = new Set();
-  }
-  return skipped.ids;
-}
-
-/** Tests: a clean skip set, as a fresh process has. */
-export function resetSkipped(): void {
-  skipped.runId = undefined;
-  skipped.ids = new Set();
-}
 
 function errorName(error: unknown): string {
   return error instanceof Error ? error.name : 'unknown error';
@@ -160,6 +168,7 @@ function isFatal(error: unknown): boolean {
 
 interface TickWork {
   listed: boolean;
+  shortListing: boolean;
   fetched: number;
   failed: number;
   finished: boolean;
@@ -172,8 +181,9 @@ async function listPhase(
   meetup: SnapshotMeetup,
   calls: CallCounter,
   log: SchedulerLog,
-): Promise<void> {
+): Promise<boolean> {
   const listingStart = deps.now();
+  let short = false;
   const before = await store.pastEventCount();
   const { events, pastSeen, dropped } = await listAllEvents(meetup, calls);
   await store.upsertEvents(events, listingStart);
@@ -188,6 +198,7 @@ async function listPhase(
       `Group snapshot: the listing had ${pastSeen} past events of ${before} stored; nothing marked deleted`,
     );
     await store.recordError(run.id, 'ShortListing');
+    short = true;
   }
   const deleted = await store.markAuditDeletions();
   await store.markListed(run.id, deps.now(), events.length);
@@ -195,6 +206,7 @@ async function listPhase(
     `Group snapshot run ${run.id}: listed ${events.length} events (${dropped} unusable nodes dropped, ` +
       `${deleted} audit deletions applied)`,
   );
+  return short;
 }
 
 async function rsvpPhase(
@@ -207,8 +219,7 @@ async function rsvpPhase(
   work: TickWork,
   log: SchedulerLog,
 ): Promise<void> {
-  const skip = skipSet(run.id);
-  let failingInARow: string[] = [];
+  let failingInARow = 0;
   for (;;) {
     if (calls.n >= SNAPSHOT_TICK_CALL_BUDGET) {
       return;
@@ -224,29 +235,29 @@ async function rsvpPhase(
       now: deps.now(),
       settleDays: RSVP_SETTLE_DAYS,
       limit: 1,
-      skip: [...skip],
     });
     if (!next) {
       work.finished = true;
       return;
     }
-    let rsvps: Awaited<ReturnType<typeof readEventRsvps>>;
+    let read: EventRsvpRead | null;
     try {
       // eslint-disable-next-line no-await-in-loop -- one event in flight, by design
-      rsvps = await readEventRsvps(meetup, next.eventId, calls);
+      read = await readEventRsvps(meetup, next.eventId, calls);
+      if (read && isShortRead(read, next.yesCount)) {
+        throw new ShortRsvpReadError();
+      }
     } catch (error) {
       if (isFatal(error)) {
         throw error;
       }
-      failingInARow.push(next.eventId);
-      if (failingInARow.length >= CONSECUTIVE_FAILURE_LIMIT) {
-        // Meetup is down, not these events: they are tried again next tick.
-        failingInARow.forEach((id) => skip.delete(id));
-        throw error;
-      }
-      skip.add(next.eventId);
+      // Recorded on the event, so it stays out of this run (across
+      // restarts too) and is read again by the next one.
+      failingInARow += 1;
       work.failed += 1;
-      // eslint-disable-next-line no-await-in-loop -- one small write
+      // eslint-disable-next-line no-await-in-loop -- two small writes
+      await store.recordRsvpFailure(next.eventId, errorName(error), deps.now());
+      // eslint-disable-next-line no-await-in-loop -- see above
       await store.advance(run.id, {
         eventsFetched: 0,
         rsvpsStored: 0,
@@ -255,21 +266,25 @@ async function rsvpPhase(
       log.warn(
         `Group snapshot: reading RSVPs of event ${next.eventId} failed: ${errorName(error)}; retried next run`,
       );
+      if (failingInARow >= CONSECUTIVE_FAILURE_LIMIT) {
+        // Likely Meetup rather than the events: end the tick and alert.
+        throw error;
+      }
       continue;
     }
-    failingInARow = [];
-    if (rsvps === null) {
+    failingInARow = 0;
+    if (read === null) {
       // eslint-disable-next-line no-await-in-loop -- one small write
       await store.markDeleted(next.eventId, deps.now());
       log.info(`Group snapshot: event ${next.eventId} is gone from Meetup`);
       continue;
     }
     // eslint-disable-next-line no-await-in-loop -- one event in flight, by design
-    await store.replaceRsvps(next.eventId, rsvps, deps.now());
+    await store.replaceRsvps(next.eventId, read.rsvps, deps.now());
     // eslint-disable-next-line no-await-in-loop -- one small write
     await store.advance(run.id, {
       eventsFetched: 1,
-      rsvpsStored: rsvps.length,
+      rsvpsStored: read.rsvps.length,
       failed: 0,
     });
     work.fetched += 1;
@@ -331,6 +346,7 @@ export async function runSnapshotTick(
   };
   const work: TickWork = {
     listed: run.listedAt !== undefined,
+    shortListing: false,
     fetched: 0,
     failed: 0,
     finished: false,
@@ -339,7 +355,14 @@ export async function runSnapshotTick(
   try {
     await deps.withOrganizer(async (meetup) => {
       if (!work.listed) {
-        await listPhase(deps, store, run, meetup, calls, log);
+        work.shortListing = await listPhase(
+          deps,
+          store,
+          run,
+          meetup,
+          calls,
+          log,
+        );
         work.listed = true;
       }
       await rsvpPhase(deps, cache, store, run, meetup, calls, work, log);
@@ -354,11 +377,13 @@ export async function runSnapshotTick(
   }
   try {
     await settle();
+    // A good tick clears the last tick's failure, unless this one found the
+    // listing short (which it recorded itself).
+    if (run.lastError !== undefined && !work.shortListing) {
+      await store.recordError(run.id, undefined).catch(() => undefined);
+    }
     if (work.finished) {
       const done = await store.finishRun(run.id);
-      if (skipped.runId === run.id) {
-        resetSkipped();
-      }
       if (done) {
         const totals = await store.totals();
         const took =

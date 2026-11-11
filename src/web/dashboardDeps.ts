@@ -410,10 +410,11 @@ export function dashboardPageDeps(): DashboardPageDeps {
       snapshot: async () => {
         const store = await PostgresSnapshotRepository.instance();
         const now = new Date();
-        const [lastRun, openRun, totals] = await Promise.all([
+        const [lastRun, openRun, totals, failing] = await Promise.all([
           store.lastFinishedRun(),
           store.openRun(),
           store.totals(),
+          store.failingEventCount(),
         ]);
         const pending = openRun
           ? await store.pendingRsvpCount({
@@ -422,7 +423,7 @@ export function dashboardPageDeps(): DashboardPageDeps {
               settleDays: RSVP_SETTLE_DAYS,
             })
           : 0;
-        return { lastRun, openRun, ...totals, pending, now };
+        return { lastRun, openRun, ...totals, pending, failing, now };
       },
     },
     wrappedAnnounce: {

@@ -47,6 +47,8 @@ export interface SnapshotStatus {
   rsvps: number;
   /** Events the open run still has to read. */
   pending: number;
+  /** Live events whose last RSVP read failed. */
+  failing: number;
   now: Date;
 }
 
@@ -139,6 +141,11 @@ async function snapshotLine(
   }
   if (parts.length === 0) {
     parts.push('Group snapshot: not pulled yet.');
+  }
+  if (status.failing > 0) {
+    parts.push(
+      `${n(status.failing)} events failed their last RSVP read; they are retried each run.`,
+    );
   }
   return html`${parts.map((text) => html`<p class="muted">${text}</p>`)}`;
 }

@@ -402,6 +402,33 @@ seeded snapshot writes the entry `readEntry` serves, with zero Meetup calls.
   parity check (Meetup ids 38181472: 114, 483183672: 13, 156079422: 84,
   353019842: 21).
 
+## After the lead's review of PR 1 (2026-11-11)
+
+- **Per-event RSVP failures are persisted** (`rsvp_failures`,
+  `rsvp_failed_at`, `rsvp_error` on `meetup_events`; cleared by a good read).
+  An event that failed during a run stays out of that run, across restarts,
+  and is read again by the next run. Three failures in a row still end the
+  tick (and alert once a day) but no longer re-admit those events, so a
+  poison event cannot pin the run. The card shows how many events are
+  failing.
+- **Short reads are refused** (`ShortRsvpReadError`, stored rows kept): no
+  edges while Meetup's `totalCount` or the listing's `yes_count` is above 0,
+  or fewer edges than half of `totalCount`. Not "fewer than `totalCount`":
+  the probe saw 41 edges for 46 counted on a healthy event (hidden RSVPs).
+- A good tick clears the run's `last_error`.
+
+### Notes for PR 2 (reading the snapshot)
+
+- Read events with `status = 'PAST' AND deleted_at IS NULL`. ACTIVE rows
+  that vanish from a listing are never delisted (deletions of upcoming
+  events come from the event audit); they never count anyway.
+- RSVPs settle: an event is re-read once per run for 14 days after it
+  happened, then frozen. A host marking attendance later than that is not
+  seen.
+- CANCELLED events have no RSVP rows (only PAST events are read).
+- `SNAPSHOT_RUN_NOW_KEY` is read by the tick but nothing sets it yet: PR 2's
+  Refresh snapshot now button will.
+
 ## Left to the builder
 
 - File layout (suggested: `src/lib/snapshot/{ingest,job,reader}.ts`,

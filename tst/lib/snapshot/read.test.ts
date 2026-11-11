@@ -95,8 +95,10 @@ describe('readEventRsvps', () => {
     const calls = { n: 0 };
     const rsvps = await readEventRsvps(meetup, '7', calls);
     expect(calls.n).toBe(3);
-    expect(rsvps).toHaveLength(250);
-    expect(rsvps?.some((r) => r.memberId === '999')).toBe(false);
+    expect(rsvps?.rsvps).toHaveLength(250);
+    expect(rsvps?.edges).toBe(251);
+    expect(rsvps?.totalCount).toBe(100); // the first page's
+    expect(rsvps?.rsvps.some((r) => r.memberId === '999')).toBe(false);
   });
 
   it('answers null when Meetup has no such event', async () => {

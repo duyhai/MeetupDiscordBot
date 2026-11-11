@@ -1207,6 +1207,7 @@ export function fakePageDeps(
         events: 0,
         rsvps: 0,
         pending: 0,
+        failing: 0,
         now: new Date(),
       })),
     },

@@ -29,6 +29,13 @@ export interface SnapshotDelta {
   failed: number;
 }
 
+export interface RsvpWork {
+  eventId: string;
+  dateTime: Date;
+  /** Meetup's YES + ATTENDED total from the listing. */
+  yesCount: number | null;
+}
+
 export interface RsvpWorkQuery {
   runStartedAt: Date;
   now: Date;
@@ -65,15 +72,23 @@ export interface SnapshotStore {
     eventsListed: number,
   ): Promise<void>;
   /**
-   * PAST, not deleted, not in `skip`, and never read, read before it
-   * happened, or within `settleDays` and read before this run started.
-   * Oldest first.
+   * PAST, not deleted, not failed during this run, and never read, read
+   * before it happened, or within `settleDays` and read before this run
+   * started. Oldest first.
    */
   eventsNeedingRsvps(
-    query: RsvpWorkQuery & { limit: number; skip: string[] },
-  ): Promise<{ eventId: string; dateTime: Date }[]>;
+    query: RsvpWorkQuery & { limit: number },
+  ): Promise<RsvpWork[]>;
   pendingRsvpCount(query: RsvpWorkQuery): Promise<number>;
-  /** One transaction: the event's rows replaced by these, rsvps_fetched_at set. */
+  /** rsvp_failures + 1, rsvp_failed_at = at, rsvp_error = the class name. */
+  recordRsvpFailure(
+    eventId: string,
+    errorName: string,
+    at: Date,
+  ): Promise<void>;
+  /** Live events whose last RSVP read failed. */
+  failingEventCount(): Promise<number>;
+  /** One transaction: the event's rows replaced by these, rsvps_fetched_at set, failures cleared. */
   replaceRsvps(
     eventId: string,
     rsvps: SnapshotRsvp[],
@@ -81,7 +96,8 @@ export interface SnapshotStore {
   ): Promise<void>;
   advance(runId: number, delta: SnapshotDelta): Promise<void>;
   recordRequests(runId: number, calls: number): Promise<void>;
-  recordError(runId: number, errorName: string): Promise<void>;
+  /** last_error on the run; undefined clears it. */
+  recordError(runId: number, errorName: string | undefined): Promise<void>;
   finishRun(runId: number): Promise<SnapshotRun | undefined>;
   totals(): Promise<{ events: number; rsvps: number }>;
 }
@@ -123,6 +139,7 @@ function toRun(row: RunRow): SnapshotRun {
 
 /** The work-set predicate; $1 run start, $2 now, $3 settle days. */
 const NEEDS_RSVPS = `deleted_at IS NULL AND status = 'PAST' AND date_time <= $2
+  AND (rsvp_failed_at IS NULL OR rsvp_failed_at < $1)
   AND (rsvps_fetched_at IS NULL
        OR rsvps_fetched_at < date_time
        OR (date_time > $2 - make_interval(days => $3) AND rsvps_fetched_at < $1))`;
@@ -280,24 +297,44 @@ export class PostgresSnapshotRepository implements SnapshotStore {
   }
 
   async eventsNeedingRsvps(
-    query: RsvpWorkQuery & { limit: number; skip: string[] },
-  ): Promise<{ eventId: string; dateTime: Date }[]> {
-    const result = await this.pool.query<{ event_id: string; date_time: Date }>(
-      `SELECT event_id, date_time FROM meetup_events
-        WHERE ${NEEDS_RSVPS} AND NOT (event_id = ANY($4::text[]))
-        ORDER BY date_time, event_id LIMIT $5`,
-      [
-        query.runStartedAt,
-        query.now,
-        query.settleDays,
-        query.skip,
-        query.limit,
-      ],
+    query: RsvpWorkQuery & { limit: number },
+  ): Promise<RsvpWork[]> {
+    const result = await this.pool.query<{
+      event_id: string;
+      date_time: Date;
+      yes_count: number | null;
+    }>(
+      `SELECT event_id, date_time, yes_count FROM meetup_events
+        WHERE ${NEEDS_RSVPS}
+        ORDER BY date_time, event_id LIMIT $4`,
+      [query.runStartedAt, query.now, query.settleDays, query.limit],
     );
     return result.rows.map((row) => ({
       eventId: row.event_id,
       dateTime: row.date_time,
+      yesCount: row.yes_count,
     }));
+  }
+
+  async recordRsvpFailure(
+    eventId: string,
+    errorName: string,
+    at: Date,
+  ): Promise<void> {
+    await this.pool.query(
+      `UPDATE meetup_events
+          SET rsvp_failures = rsvp_failures + 1, rsvp_failed_at = $2, rsvp_error = $3
+        WHERE event_id = $1`,
+      [eventId, at, errorName.slice(0, 100)],
+    );
+  }
+
+  async failingEventCount(): Promise<number> {
+    const result = await this.pool.query<{ n: string }>(
+      `SELECT count(*)::text AS n FROM meetup_events
+        WHERE rsvp_failures > 0 AND deleted_at IS NULL`,
+    );
+    return Number(result.rows[0].n);
   }
 
   async pendingRsvpCount(query: RsvpWorkQuery): Promise<number> {
@@ -331,7 +368,9 @@ export class PostgresSnapshotRepository implements SnapshotStore {
           );
         }
         await client.query(
-          'UPDATE meetup_events SET rsvps_fetched_at = $2 WHERE event_id = $1',
+          `UPDATE meetup_events
+              SET rsvps_fetched_at = $2, rsvp_failures = 0, rsvp_failed_at = NULL, rsvp_error = NULL
+            WHERE event_id = $1`,
           [eventId, fetchedAt],
         );
       },
@@ -356,10 +395,13 @@ export class PostgresSnapshotRepository implements SnapshotStore {
     );
   }
 
-  async recordError(runId: number, errorName: string): Promise<void> {
+  async recordError(
+    runId: number,
+    errorName: string | undefined,
+  ): Promise<void> {
     await this.pool.query(
       'UPDATE meetup_snapshot_runs SET last_error = $2 WHERE id = $1',
-      [runId, errorName.slice(0, 100)],
+      [runId, errorName?.slice(0, 100) ?? null],
     );
   }
 

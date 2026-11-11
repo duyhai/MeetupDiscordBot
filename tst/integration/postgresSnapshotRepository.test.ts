@@ -177,18 +177,41 @@ const event = (
       await repo.replaceRsvps('905', [], days(25));
       await repo.markDeleted('907', NOW);
       const query = { runStartedAt, now: NOW, settleDays: 14 };
-      const work = await repo.eventsNeedingRsvps({
-        ...query,
-        limit: 10,
-        skip: ['908'],
-      });
+      // 908 failed during this run: it waits for the next one.
+      await repo.recordRsvpFailure('908', 'TypeError', days(0.2));
+      const work = await repo.eventsNeedingRsvps({ ...query, limit: 10 });
       expect(work.map((w) => w.eventId)).toEqual(['901', '905', '902']);
-      expect(await repo.pendingRsvpCount(query)).toBe(4); // + skipped
-      expect(
-        (await repo.eventsNeedingRsvps({ ...query, limit: 10, skip: [] })).map(
-          (w) => w.eventId,
-        ),
-      ).toEqual(['901', '908', '905', '902']);
+      expect(work[0].yesCount).toBe(3);
+      expect(await repo.pendingRsvpCount(query)).toBe(3);
+      expect(await repo.failingEventCount()).toBe(1);
+      const nextRun = await repo.eventsNeedingRsvps({
+        ...query,
+        runStartedAt: NOW,
+        limit: 10,
+      });
+      // 903 too: recent, and read before this later run started.
+      expect(nextRun.map((w) => w.eventId)).toEqual([
+        '901',
+        '908',
+        '905',
+        '903',
+        '902',
+      ]);
+      // A good read clears the failure.
+      await repo.replaceRsvps('908', [], NOW);
+      expect(await repo.failingEventCount()).toBe(0);
+      const cleared = await pool.query<{
+        rsvp_failures: number;
+        rsvp_error: string | null;
+        rsvp_failed_at: Date | null;
+      }>(
+        "SELECT rsvp_failures, rsvp_error, rsvp_failed_at FROM meetup_events WHERE event_id = '908'",
+      );
+      expect(cleared.rows[0]).toEqual({
+        rsvp_failures: 0,
+        rsvp_error: null,
+        rsvp_failed_at: null,
+      });
     });
 
     it('marks delisted rows but never ACTIVE ones, and counts PAST', async () => {

@@ -69,6 +69,7 @@ function control(
       events: 0,
       rsvps: 0,
       pending: 0,
+      failing: 0,
       now: new Date('2026-12-10T20:00:00Z'),
     })),
     ...overrides,
@@ -295,6 +296,7 @@ describe('Home Wrapped backfill card: the group snapshot line', () => {
         events: 2481,
         rsvps: 51204,
         pending: 0,
+        failing: 0,
         now: NOW,
       }),
     );
@@ -317,6 +319,7 @@ describe('Home Wrapped backfill card: the group snapshot line', () => {
         events: 2450,
         rsvps: 24000,
         pending: 1246,
+        failing: 4,
         now: NOW,
       }),
     );
@@ -324,6 +327,9 @@ describe('Home Wrapped backfill card: the group snapshot line', () => {
       'Group snapshot: refreshing (full): 1,204 of ~2,450 events read. Last tick failed (TypeError).',
     );
     expect(out).not.toContain('not pulled yet');
+    expect(out).toContain(
+      '4 events failed their last RSVP read; they are retried each run.',
+    );
   });
 
   it('a failing snapshot status degrades the line alone', async () => {

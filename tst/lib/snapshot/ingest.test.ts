@@ -1,5 +1,5 @@
 import { ClientError } from 'graphql-request';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
 import { FakeCache } from '../../web/fakeCache.js';
 import {
@@ -15,7 +15,6 @@ import {
   SNAPSHOT_RUN_NOW_KEY,
   SNAPSHOT_TICK_CALL_BUDGET,
   SnapshotDeps,
-  resetSkipped,
   runSnapshotTick,
 } from '../../../src/lib/snapshot/ingest.js';
 import { SnapshotMeetup } from '../../../src/lib/snapshot/read.js';
@@ -52,6 +51,9 @@ class FakeGroup implements SnapshotMeetup {
   failing = new Map<string, Error>();
 
   gone = new Set<string>();
+
+  /** Event ids whose RSVP read answers this many edges (with the real totalCount). */
+  short = new Map<string, number>();
 
   /** Every listing call throws this while set. */
   listingError: Error | undefined;
@@ -128,14 +130,20 @@ class FakeGroup implements SnapshotMeetup {
     const event = this.events.find((e) => e.id === eventId);
     const total = event?.members ?? 0;
     const from = Number(input.after ?? 0);
-    const count = Math.min(input.first, total - from);
-    return page(
+    const count = Math.min(
+      input.first,
+      this.short.get(eventId) ?? total - from,
+    );
+    const answer = page(
       Array.from({ length: Math.max(0, count) }, (_, i) => ({
         status: 'YES',
         member: { id: String(1000 + from + i) },
       })),
-      from + input.first < total ? String(from + input.first) : undefined,
+      !this.short.has(eventId) && from + input.first < total
+        ? String(from + input.first)
+        : undefined,
     );
+    return { ...answer, totalCount: total };
   }
 }
 
@@ -213,8 +221,6 @@ async function tickUntilFinished(env: ReturnType<typeof setup>) {
   }
   throw new Error('never finished');
 }
-
-beforeEach(() => resetSkipped());
 
 describe('runSnapshotTick', () => {
   it('a first run is full: lists, reads oldest first under the budget, resumes, finishes', async () => {
@@ -337,22 +343,75 @@ describe('runSnapshotTick', () => {
     expect(env.store.replaced).toContain('101');
   });
 
-  it('three failures in a row end the tick as a failure, and those events are not skipped', async () => {
+  it('three failures in a row end the tick; those events stay out of the run, even after a restart', async () => {
+    const env = setup();
+    env.group.events = past(5);
+    ['100', '101', '102'].forEach((id) =>
+      env.group.failing.set(id, new TypeError('poison')),
+    );
+    const outcome = await runSnapshotTick(env.deps);
+    expect(outcome).toEqual({ kind: 'failed', runId: 1, error: 'TypeError' });
+    expect(env.store.runs[0]).toMatchObject({
+      failed: 3,
+      lastError: 'TypeError',
+    });
+    expect(env.store.events.get('100')).toMatchObject({
+      rsvpFailures: 1,
+      rsvpError: 'TypeError',
+    });
+    // The same events keep failing, but the run moves past them and finishes.
+    env.group.rsvpReads = [];
+    const done = await tickUntilFinished(env);
+    expect(done).toMatchObject({ kind: 'ran', finished: true });
+    expect(env.group.rsvpReads).toEqual(['103', '104']);
+    expect(await env.store.failingEventCount()).toBe(3);
+    // The next run reads them again; once they work, the failures clear.
+    env.group.failing.clear();
+    env.advance(SNAPSHOT_RUN_INTERVAL_MS);
+    await tickUntilFinished(env);
+    expect(await env.store.failingEventCount()).toBe(0);
+  });
+
+  it('a good tick clears the last tick’s error', async () => {
     const env = setup();
     env.group.events = past(4);
     ['100', '101', '102'].forEach((id) =>
-      env.group.failing.set(id, new TypeError('down')),
+      env.group.failing.set(id, new TypeError('poison')),
     );
-    const outcome = await runSnapshotTick(env.deps);
-    expect(outcome).toEqual({
-      kind: 'failed',
-      runId: 1,
-      error: 'TypeError',
-    });
+    await runSnapshotTick(env.deps);
     expect(env.store.runs[0].lastError).toBe('TypeError');
-    env.group.failing.clear();
+    await runSnapshotTick(env.deps);
+    expect(env.store.runs[0].lastError).toBeUndefined();
+  });
+
+  it('refuses a short read: stored rows are kept and the event is read again next run', async () => {
+    const env = setup();
+    env.group.events = past(2, 0, 40);
     await tickUntilFinished(env);
-    expect(env.store.replaced.sort()).toEqual(['100', '101', '102', '103']);
+    expect(env.store.rsvps.get('100')).toHaveLength(40);
+
+    env.advance(SNAPSHOT_RUN_INTERVAL_MS);
+    // Force a re-read of both: make them look read before they happened.
+    env.store.events.forEach((e) => {
+      e.rsvpsFetchedAt = new Date(0);
+    });
+    env.group.short.set('100', 0); // empty 200
+    env.group.short.set('101', 15); // under half of 40
+    await tickUntilFinished(env);
+    expect(env.store.rsvps.get('100')).toHaveLength(40);
+    expect(env.store.rsvps.get('101')).toHaveLength(40);
+    expect(env.store.events.get('100')?.rsvpError).toBe('ShortRsvpReadError');
+    expect(env.store.runs[1].failed).toBe(2);
+  });
+
+  it('accepts a few hidden RSVPs (41 of 46) and an event with nobody', async () => {
+    const env = setup();
+    env.group.events = [...past(1, 0, 46), ...past(1, 1, 0)];
+    env.group.short.set('100', 41);
+    await tickUntilFinished(env);
+    expect(env.store.rsvps.get('100')).toHaveLength(41);
+    expect(env.store.rsvps.get('101')).toEqual([]);
+    expect(env.store.runs[0].failed).toBe(0);
   });
 
   it('an event Meetup no longer has is marked deleted, not failed', async () => {

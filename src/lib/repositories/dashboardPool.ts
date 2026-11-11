@@ -155,7 +155,13 @@ CREATE TABLE IF NOT EXISTS meetup_events (
   waitlist_count   INTEGER,
   listed_at        TIMESTAMPTZ NOT NULL,
   rsvps_fetched_at TIMESTAMPTZ,
-  deleted_at       TIMESTAMPTZ
+  deleted_at       TIMESTAMPTZ,
+  -- RSVP reads that failed since the last good one; rsvp_failed_at keeps the
+  -- event out of the run it failed in (across restarts), rsvp_error is the
+  -- error class name. Reset by a good read.
+  rsvp_failures    INTEGER NOT NULL DEFAULT 0,
+  rsvp_failed_at   TIMESTAMPTZ,
+  rsvp_error       TEXT
 );
 CREATE INDEX IF NOT EXISTS meetup_events_date_idx ON meetup_events (date_time);
 CREATE INDEX IF NOT EXISTS meetup_events_hosts_idx ON meetup_events USING GIN (host_ids);

@@ -58,12 +58,21 @@ export async function listAllEvents(
   };
 }
 
+export interface EventRsvpRead {
+  rsvps: SnapshotRsvp[];
+  /** Edges Meetup returned, before validation. */
+  edges: number;
+  /** Meetup's totalCount on the first page. */
+  totalCount: number;
+}
+
 /** Every page of the event's YES, WAITLIST and ATTENDED RSVPs; null when Meetup has no such event. */
 export async function readEventRsvps(
   meetup: SnapshotMeetup,
   eventId: string,
   calls: CallCounter,
-): Promise<SnapshotRsvp[] | null> {
+): Promise<EventRsvpRead | null> {
+  let totalCount: number | undefined;
   try {
     const nodes = await getPaginatedData(
       async (input): Promise<PaginatedData<SnapshotRsvpNode>> => {
@@ -72,13 +81,21 @@ export async function readEventRsvps(
         if (result === null) {
           throw new NoSuchEvent();
         }
+        totalCount ??= result.totalCount;
         return result;
       },
     );
-    return nodes.flatMap((node) => {
-      const rsvp = toSnapshotRsvp(node);
-      return rsvp ? [rsvp] : [];
-    });
+    return {
+      rsvps: nodes.flatMap((node) => {
+        const rsvp = toSnapshotRsvp(node);
+        return rsvp ? [rsvp] : [];
+      }),
+      edges: nodes.length,
+      totalCount:
+        typeof totalCount === 'number' && Number.isFinite(totalCount)
+          ? totalCount
+          : nodes.length,
+    };
   } catch (error) {
     if (error instanceof NoSuchEvent) {
       return null;

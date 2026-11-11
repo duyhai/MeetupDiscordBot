@@ -1,4 +1,5 @@
 import {
+  RsvpWork,
   RsvpWorkQuery,
   SnapshotDelta,
   SnapshotKind,
@@ -14,6 +15,9 @@ export interface StoredEvent extends SnapshotEvent {
   listedAt: Date;
   rsvpsFetchedAt: Date | undefined;
   deletedAt: Date | undefined;
+  rsvpFailures: number;
+  rsvpFailedAt: Date | undefined;
+  rsvpError: string | undefined;
 }
 
 const DAY_MS = 24 * 60 * 60_000;
@@ -97,6 +101,9 @@ export class FakeSnapshotStore implements SnapshotStore {
         listedAt,
         rsvpsFetchedAt: previous?.rsvpsFetchedAt,
         deletedAt: undefined,
+        rsvpFailures: previous?.rsvpFailures ?? 0,
+        rsvpFailedAt: previous?.rsvpFailedAt,
+        rsvpError: previous?.rsvpError,
       });
     });
   }
@@ -146,6 +153,7 @@ export class FakeSnapshotStore implements SnapshotStore {
           !e.deletedAt &&
           e.status === 'PAST' &&
           e.dateTime <= q.now &&
+          (e.rsvpFailedAt === undefined || e.rsvpFailedAt < q.runStartedAt) &&
           (e.rsvpsFetchedAt === undefined ||
             e.rsvpsFetchedAt < e.dateTime ||
             (e.dateTime.getTime() > q.now.getTime() - q.settleDays * DAY_MS &&
@@ -159,12 +167,34 @@ export class FakeSnapshotStore implements SnapshotStore {
   }
 
   async eventsNeedingRsvps(
-    q: RsvpWorkQuery & { limit: number; skip: string[] },
-  ): Promise<{ eventId: string; dateTime: Date }[]> {
+    q: RsvpWorkQuery & { limit: number },
+  ): Promise<RsvpWork[]> {
     return this.needs(q)
-      .filter((e) => !q.skip.includes(e.eventId))
       .slice(0, q.limit)
-      .map((e) => ({ eventId: e.eventId, dateTime: e.dateTime }));
+      .map((e) => ({
+        eventId: e.eventId,
+        dateTime: e.dateTime,
+        yesCount: e.yesCount,
+      }));
+  }
+
+  async recordRsvpFailure(
+    eventId: string,
+    errorName: string,
+    at: Date,
+  ): Promise<void> {
+    const e = this.events.get(eventId);
+    if (e) {
+      e.rsvpFailures += 1;
+      e.rsvpFailedAt = at;
+      e.rsvpError = errorName;
+    }
+  }
+
+  async failingEventCount(): Promise<number> {
+    return [...this.events.values()].filter(
+      (e) => e.rsvpFailures > 0 && !e.deletedAt,
+    ).length;
   }
 
   async pendingRsvpCount(q: RsvpWorkQuery): Promise<number> {
@@ -181,6 +211,9 @@ export class FakeSnapshotStore implements SnapshotStore {
     const e = this.events.get(eventId);
     if (e) {
       e.rsvpsFetchedAt = fetchedAt;
+      e.rsvpFailures = 0;
+      e.rsvpFailedAt = undefined;
+      e.rsvpError = undefined;
     }
   }
 
@@ -195,7 +228,10 @@ export class FakeSnapshotStore implements SnapshotStore {
     this.run(runId).requests += calls;
   }
 
-  async recordError(runId: number, errorName: string): Promise<void> {
+  async recordError(
+    runId: number,
+    errorName: string | undefined,
+  ): Promise<void> {
     this.run(runId).lastError = errorName;
   }
 
