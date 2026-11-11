@@ -381,6 +381,25 @@ a token from the snapshot; limiter unchanged on refresh.
 Integration: the reader's queries against real rows; a backfill tick over a
 seeded snapshot writes the entry `readEntry` serves, with zero Meetup calls.
 
+## Probe results (2026-11-11, read-only, organizer token, between backfill ticks)
+
+- Events: **4,784 PAST, 101 ACTIVE, 273 CANCELLED** (≈ 5,160; twice the
+  estimate above).
+- RSVPs on PAST events: **56,494 YES/ATTENDED** (avg 11.8, max 192, 16 events
+  over 100) and **7,942 WAITLIST** across 1,545 events ⇒ ~64k rows, **~14 MB**
+  with indexes. Still ~1.5 % of essential-0.
+- WAITLIST is returned on past events: WAITLIST is kept.
+- Edges can be fewer than `totalCount` (one event: 46 counted, 41 returned):
+  the organizer view hides a few RSVPs. The token path's attendee lists read
+  the same connection, so this is not a snapshot-only gap; `yes_count` keeps
+  Meetup's number beside the stored rows.
+- Full pull ≈ 52 listing pages + ~4,800 event reads ≈ **4,850 calls ⇒ ~33
+  ticks ≈ 2.7 h** at 150 calls a tick (one constant to raise if the lead
+  wants it faster).
+- Organizer-view history counts for four linked members recorded for PR 2's
+  parity check (Meetup ids 38181472: 114, 483183672: 13, 156079422: 84,
+  353019842: 21).
+
 ## Left to the builder
 
 - File layout (suggested: `src/lib/snapshot/{ingest,job,reader}.ts`,
