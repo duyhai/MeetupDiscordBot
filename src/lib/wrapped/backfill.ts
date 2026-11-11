@@ -28,10 +28,7 @@ import { ApplicationMemberRepository } from '../../util/memberRepository.js';
 import { tz } from '../../util/timezone.js';
 import { isServerMember } from '../../web/host/serverJoin.js';
 import { KeyValueCache } from '../cache/base.js';
-import {
-  GqlMeetupClient,
-  MeetupGroupUnreadableError,
-} from '../client/meetup/gqlClient.js';
+import { GqlMeetupClient } from '../client/meetup/gqlClient.js';
 import {
   EventSummary,
   GetEventRsvpsResponse,
@@ -222,6 +219,12 @@ export function memoSize(): number {
   return memo.lists.size;
 }
 
+/** Tests: a clean memo, as a fresh process has. */
+export function resetMemo(): void {
+  memo.runId = undefined;
+  memo.lists = new Map();
+}
+
 function memoFor(runId: number): RunMemo['lists'] {
   if (memo.runId !== runId) {
     memo.runId = runId;
@@ -230,9 +233,12 @@ function memoFor(runId: number): RunMemo['lists'] {
   return memo.lists;
 }
 
-function clearMemo(): void {
-  memo.runId = undefined;
-  memo.lists = new Map();
+/** Drops the module memo only when it belongs to `runId` (another process's open run is left alone). */
+function clearMemoFor(runId: number): void {
+  if (memo.runId === runId) {
+    memo.runId = undefined;
+    memo.lists = new Map();
+  }
 }
 
 function memoPage(
@@ -267,7 +273,7 @@ function memoPage(
  * serving attendee lists from the memo when it has them (the first page of
  * an event, which is the whole list for most events).
  */
-function instrumented<T extends WrappedMeetup>(
+export function instrumentedClient<T extends WrappedMeetup>(
   meetup: T,
   counter: Counter,
   lists: RunMemo['lists'],
@@ -308,13 +314,15 @@ function instrumented<T extends WrappedMeetup>(
     if (known && !input.after) {
       return memoPage(eventId, known.ids, known.complete);
     }
-    if (known && input.after === MEMO_CURSOR) {
+    if (input.after === MEMO_CURSOR) {
       // A full reader past a partial first page: read the whole list now
       // (Meetup never issued that cursor), remember it complete, and hand
-      // over the ids the partial page did not have.
+      // over the ids the partial page did not have. With the entry gone
+      // meanwhile (another tick cleared it), the whole list: the stats
+      // dedupe ids per event.
       const all = await readAll(eventId, input.first, filter);
       lists.set(eventId, { ids: all, complete: true });
-      const seen = new Set(known.ids);
+      const seen = new Set(known?.ids ?? []);
       return memoPage(
         eventId,
         all.filter((id) => !seen.has(id)),
@@ -380,12 +388,14 @@ interface MemberOutcome {
   fatal?: unknown;
 }
 
-/** Not the member's fault: the credential or the group, so no member is counted failed for it. */
+/**
+ * Not the member's fault: the organizer credential is unusable, so no
+ * member is counted failed for it. (MeetupGroupUnreadableError is not
+ * thrown on the backfill's read paths; a null group there is a TypeError,
+ * counted against the member and retried next run.)
+ */
 function isInfrastructureFailure(error: unknown): boolean {
-  return (
-    error instanceof OrganizerTokenUnavailableError ||
-    error instanceof MeetupGroupUnreadableError
-  );
+  return error instanceof OrganizerTokenUnavailableError;
 }
 
 interface TickContext {
@@ -498,7 +508,7 @@ async function buildWithOrganizer(
     // it on a 401). This one writes entries, idempotently: a re-run finds
     // what the first pass wrote fresh and skips it.
     return await deps.withOrganizer(async (organizer) => {
-      const meetup = instrumented(organizer, ctx.calls, ctx.lists);
+      const meetup = instrumentedClient(organizer, ctx.calls, ctx.lists);
       const events = await meetup.getMemberRsvpEvents(
         member.meetupId,
         deps.groupId,
@@ -540,7 +550,7 @@ async function buildMember(
     const token = await deps.memberToken(member.discordUserId);
     if (token !== undefined) {
       try {
-        const meetup = instrumented(
+        const meetup = instrumentedClient(
           deps.memberClient(token),
           ctx.calls,
           ctx.lists,
@@ -919,7 +929,7 @@ export async function runBackfillTick(
     try {
       finished = await store.finishRun(thisRun);
     } finally {
-      clearMemo();
+      clearMemoFor(thisRun);
       runId = undefined;
     }
     if (finished) {
@@ -941,12 +951,9 @@ export async function runBackfillTick(
     }
     return ran(true);
   } finally {
-    // Whatever the exit: the tick's calls on the run, and no memo outliving
-    // a tick that left no run open.
+    // Whatever the exit: the tick's calls on the run. A tick with no run of
+    // its own used a local map, so there is nothing of its own to clear.
     await settle();
-    if (runId === undefined) {
-      clearMemo();
-    }
   }
 }
 

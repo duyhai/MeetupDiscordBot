@@ -75,6 +75,9 @@ const tokenEvents = [
 ];
 const orgEvents = [ev('b1', `${THIS_YEAR}-07-04T10:00:00-07:00`, 'Picnic')];
 
+/** An unlinked attendee at every event: must never reach a stored entry. */
+const GHOST = { id: `ghost-${suffix}`, name: `Ghost Sentinel ${suffix}` };
+
 function fakeMeetup(events: EventSummary[], meetupId: string) {
   return {
     getSelfPastRsvpEvents: vi.fn(async () => ({ events, meetupId })),
@@ -82,7 +85,15 @@ function fakeMeetup(events: EventSummary[], meetupId: string) {
       groupByUrlname: { id: GROUP, events: page([]) },
     })),
     getEventRsvps: vi.fn(async (eventId: string) => ({
-      event: { id: eventId, rsvps: page([]) },
+      event: {
+        id: eventId,
+        rsvps: page([
+          {
+            status: 'YES' as const,
+            member: { ...GHOST, memberUrl: '', gender: 'NONE' as never },
+          },
+        ]),
+      },
     })),
   };
 }
@@ -269,6 +280,23 @@ function fakeMeetup(events: EventSummary[], meetupId: string) {
         calls: 0,
         finishedRun: true,
       });
+    });
+
+    it("never stores an unlinked attendee's Meetup name or id in wrapped_entries or the Redis hot copy", async () => {
+      const pool = (store as unknown as { pool: import('pg').Pool }).pool;
+      const rows = await pool.query<{ payload: string }>(
+        'SELECT payload::text AS payload FROM wrapped_entries',
+      );
+      expect(rows.rowCount).toBeGreaterThan(0);
+      const stored = rows.rows.map((r) => r.payload).join('\n');
+      expect(stored).not.toContain(GHOST.id);
+      expect(stored).not.toContain(GHOST.name);
+      // The ghost was an "other member": counted, never named.
+      expect(stored).toMatch(/"otherCount":\s*1/);
+      const hot = await redis.get(wrappedCacheKey(TOKEN_USER, THIS_YEAR));
+      expect(hot).toBeDefined();
+      expect(hot).not.toContain(GHOST.id);
+      expect(hot).not.toContain(GHOST.name);
     });
 
     it('a tick with nothing due is no work', async () => {
