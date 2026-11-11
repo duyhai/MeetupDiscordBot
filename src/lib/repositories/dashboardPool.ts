@@ -96,6 +96,36 @@ $$;
 CREATE INDEX IF NOT EXISTS report_snapshots_noshow_payload_idx
   ON report_snapshots USING GIN (payload jsonb_path_ops)
   WHERE report_type = 'no_show' AND superseded_by IS NULL;
+-- The Wrapped backfill (src/lib/wrapped/backfill.ts): one row per run, at
+-- most one open (finished_at IS NULL) at a time; cursor is the last Discord
+-- id processed, so a restart resumes. trigger is 'job' or the staff member
+-- who pressed Run now.
+CREATE TABLE IF NOT EXISTS wrapped_backfill_runs (
+  id            SERIAL PRIMARY KEY,
+  trigger       TEXT NOT NULL CHECK (trigger = 'job' OR trigger ~ '^[0-9]{1,20}$'),
+  started_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  finished_at   TIMESTAMPTZ,
+  members_total INTEGER NOT NULL,
+  members_done  INTEGER NOT NULL DEFAULT 0,
+  built         INTEGER NOT NULL DEFAULT 0,
+  skipped       INTEGER NOT NULL DEFAULT 0,
+  failed        INTEGER NOT NULL DEFAULT 0,
+  cursor        TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS wrapped_backfill_runs_open_idx
+  ON wrapped_backfill_runs ((true)) WHERE finished_at IS NULL;
+-- Throttled Wrapped requests waiting for the backfill tick: at most one
+-- year per member (the primary key). claimed_at is set by the tick that
+-- took the row; a stale claim (a crashed tick) is taken again. The Meetup
+-- id is the member's own.
+CREATE TABLE IF NOT EXISTS wrapped_queue (
+  discord_user_id TEXT PRIMARY KEY CHECK (discord_user_id ~ '^[0-9]{1,20}$'),
+  meetup_id       TEXT NOT NULL,
+  year            INTEGER NOT NULL CHECK (year BETWEEN 2015 AND 2100),
+  queued_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+  claimed_at      TIMESTAMPTZ,
+  attempts        INTEGER NOT NULL DEFAULT 0
+);
 `;
 
 /** pg_advisory_xact_lock(int, int) namespace for dashboard locks. */
