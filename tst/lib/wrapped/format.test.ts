@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { GET_VERIFIED_CHANNEL_ID } from '../../../src/constants.js';
 import { CachedWrapped } from '../../../src/lib/wrapped/cache.js';
 import {
+  EMBED_NAMED_COMPANIONS,
   parseShareCustomId,
   replies,
   shareButtonRow,
@@ -125,6 +126,37 @@ describe('wrappedEmbed', () => {
     expect(field(embed, 'Hosting')).toContain('3');
     expect(field(embed, 'Busiest month')).toContain('July');
     expect(field(embed, 'Longest streak')).toContain('5 months');
+  });
+});
+
+describe('wrappedEmbed with ten named companions', () => {
+  const ten: CachedWrapped = {
+    ...full,
+    companions: {
+      named: Array.from({ length: 10 }, (_, i) => ({
+        discordUserId: `d${i + 1}`,
+        sharedCount: 10 - i,
+      })),
+      otherCount: 5,
+    },
+  };
+
+  it('names three in the private view and counts the other seven with the rest', () => {
+    expect(EMBED_NAMED_COMPANIONS).toBe(3);
+    expect(field(wrappedEmbed('Jane', ten), 'Went with the most')).toBe(
+      '<@d1> (10 events), <@d2> (9 events), <@d3> (8 events) and 12 other members',
+    );
+  });
+
+  it('names three in the shared view too, an unresolved one folding into the count', () => {
+    const embed = wrappedEmbed('Jane', ten, {
+      kind: 'shared',
+      displayNames: { d1: 'Ann', d3: 'Cy' },
+    });
+
+    expect(field(embed, 'Went with the most')).toBe(
+      'Ann (10 events), Cy (8 events) and 13 other members',
+    );
   });
 });
 

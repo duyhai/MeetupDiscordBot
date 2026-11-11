@@ -21,6 +21,8 @@ import { CachedWrapped } from './cache.js';
 import { WrappedEvent } from './stats.js';
 
 export const SHARE_BUTTON_PREFIX = 'wrapped_share';
+/** The embed names this many companions; the cache may hold more (the website shows them). */
+export const EMBED_NAMED_COMPANIONS = 3;
 export const SHARE_BUTTON_ID_PATTERN = /^wrapped_share:(\d{4}):(\d+)$/;
 
 const MONTHS = [
@@ -110,19 +112,22 @@ function companionsText(wrapped: CachedWrapped, view: EmbedView): string {
     return 'Nobody yet — next year!';
   }
   const shown: string[] = [];
-  let others = otherCount;
-  named.forEach(({ discordUserId, sharedCount }) => {
-    const label =
-      view.kind === 'private'
-        ? `<@${discordUserId}>`
-        : view.displayNames[discordUserId];
-    if (label === undefined) {
-      others += 1;
-      return;
-    }
-    const text = view.kind === 'private' ? label : plainName(label);
-    shown.push(`${text} (${plural(sharedCount, 'event')})`);
-  });
+  // Companions past the embed's three join the count, like anyone unnamed.
+  let others = otherCount + Math.max(0, named.length - EMBED_NAMED_COMPANIONS);
+  named
+    .slice(0, EMBED_NAMED_COMPANIONS)
+    .forEach(({ discordUserId, sharedCount }) => {
+      const label =
+        view.kind === 'private'
+          ? `<@${discordUserId}>`
+          : view.displayNames[discordUserId];
+      if (label === undefined) {
+        others += 1;
+        return;
+      }
+      const text = view.kind === 'private' ? label : plainName(label);
+      shown.push(`${text} (${plural(sharedCount, 'event')})`);
+    });
   const othersText =
     others > 0 ? `${plural(others, 'other member')}` : undefined;
   if (shown.length === 0) {
