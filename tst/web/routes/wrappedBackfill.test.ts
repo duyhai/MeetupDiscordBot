@@ -3,10 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { LogEntry } from '../../../src/lib/helpers/discordLogger.js';
 import { BackfillRun } from '../../../src/lib/repositories/postgresWrappedBackfillRepository.js';
-import {
-  DashboardPageDeps,
-  registerAllProtectedRoutes,
-} from '../../../src/web/routes/dashboardPages.js';
+import { registerAllProtectedRoutes } from '../../../src/web/routes/dashboardPages.js';
 import { renderHomeReports } from '../../../src/web/routes/home.js';
 import {
   BACKFILL_NOTICES,
