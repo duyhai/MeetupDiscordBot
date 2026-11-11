@@ -50,6 +50,16 @@ export class FixedWindowLimiter {
     }
   }
 
+  /** Whether a take would be refused right now: a live window at its limit. */
+  isLimited(key: string): boolean {
+    const entry = this.hits.get(key);
+    return (
+      entry !== undefined &&
+      entry.resetAt > this.now() &&
+      entry.count >= this.limit
+    );
+  }
+
   retryAfterSec(key: string): number {
     const entry = this.hits.get(key);
     return entry
