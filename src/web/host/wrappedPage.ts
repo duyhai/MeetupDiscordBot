@@ -828,18 +828,34 @@ export function registerWrappedPage(
     });
   }
 
-  function message(
+  /**
+   * A notice-only page (queued, no token, mismatch…). The picker still lists
+   * the member's built years, read from this year's copy as render() does;
+   * a member who is not linked has no copy, so this year alone.
+   */
+  async function message(
     res: Response,
     session: HostSession,
     year: number,
     body: SafeHtml,
     status = 200,
   ) {
+    const thisYear = tz(dayjs(now())).year();
+    const current =
+      session.discordUserId === null
+        ? undefined
+        : await readEntry(
+            await tiersFor(),
+            session.discordUserId,
+            thisYear,
+            session.userId,
+            now(),
+          );
     hostPage(res, {
       title: `Wrapped ${year}`,
       current: 'wrapped',
       status,
-      body: messageBody(session, yearList(tz(dayjs(now())).year()), year, body),
+      body: messageBody(session, yearList(thisYear, current), year, body),
     });
   }
 
@@ -885,7 +901,7 @@ export function registerWrappedPage(
       );
       return;
     }
-    message(
+    await message(
       res,
       session,
       year,
@@ -904,7 +920,7 @@ export function registerWrappedPage(
   ) {
     const token = await deps.memberToken(discordUserId);
     if (token === undefined) {
-      message(
+      await message(
         res,
         session,
         year,
@@ -944,7 +960,7 @@ export function registerWrappedPage(
     const { session } = hostLocals(res);
     const year = wrappedYear(req.query.year, now());
     if (session.discordUserId === null) {
-      message(res, session, year, notLinked(session));
+      await message(res, session, year, notLinked(session));
       return;
     }
     const discordUserId = session.discordUserId;
@@ -985,7 +1001,7 @@ export function registerWrappedPage(
         tiers,
       );
       if (queued) {
-        message(res, session, year, queued);
+        await message(res, session, year, queued);
         return;
       }
     }
@@ -993,7 +1009,7 @@ export function registerWrappedPage(
       // Back from a rebuild that was refused: say so, build nothing. After
       // a slow, in-flight or failed one the page says to reload, so a
       // reload builds (the lease answers while one is still in flight).
-      message(res, session, year, noticeHtml);
+      await message(res, session, year, noticeHtml);
       return;
     }
     await buildAndShow(res, session, discordUserId, year, tiers);

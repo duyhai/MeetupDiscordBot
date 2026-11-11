@@ -952,6 +952,23 @@ describe('the queue for throttled requests', () => {
     expect((await h.store.position(USER))?.row.year).toBe(2023);
   });
 
+  it('a queued-notice page for a past year keeps the built years in the picker', async () => {
+    const h = await harness({ queue: true });
+    await writeWrapped(h.wrappedCache, USER, 2026, cached, NOW);
+    await h.store.enqueue({ discordUserId: USER, meetupId: ME, year: 2025 });
+    h.deps.limiter.take(USER);
+    const sid = await signInWithDiscord(h.req);
+
+    const res = await h.req.get('/host/wrapped?year=2025').set('Cookie', sid);
+
+    expect(res.status).toBe(200);
+    expect(strip(res.text)).toContain('Queued — it&#39;ll be ready by about');
+    expect(res.text).toContain('href="/host/wrapped?year=2026"');
+    expect(res.text).toContain('href="/host/wrapped?year=2024"');
+    expect(res.text).toContain('aria-current="page">2025');
+    expect(h.deps.memberToken).not.toHaveBeenCalled();
+  });
+
   it("an on-demand build keeps a different year's queued request", async () => {
     const h = await harness({ queue: true });
     await h.store.enqueue({ discordUserId: USER, meetupId: ME, year: 2023 });
