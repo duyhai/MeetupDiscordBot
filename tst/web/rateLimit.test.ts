@@ -106,3 +106,18 @@ describe('FixedWindowLimiter eviction', () => {
     expect(limiter.take('live')).toBe(false);
   });
 });
+
+describe('FixedWindowLimiter.isLimited', () => {
+  it('is true only while a live window is at its limit', () => {
+    let now = 1_000_000;
+    const limiter = new FixedWindowLimiter(1, 60_000, () => now);
+    expect(limiter.isLimited('k')).toBe(false);
+    expect(limiter.take('k')).toBe(true);
+    expect(limiter.isLimited('k')).toBe(true);
+    limiter.release('k');
+    expect(limiter.isLimited('k')).toBe(false);
+    limiter.take('k');
+    now += 60_001;
+    expect(limiter.isLimited('k')).toBe(false);
+  });
+});

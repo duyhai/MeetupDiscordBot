@@ -19,6 +19,10 @@ import { Logger } from 'tslog';
 import Configuration from '../../configuration.js';
 import { KeyValueCache } from '../cache/base.js';
 import { LogEntry, logAlert } from '../helpers/discordLogger.js';
+import {
+  PostgresWrappedBackfillRepository,
+  WrappedBackfillStore,
+} from '../repositories/postgresWrappedBackfillRepository.js';
 import { MemberRepository } from '../repositories/types.js';
 import { describeBuildError } from '../reports/buildJob.js';
 import { withOrganizerMeetup } from '../reports/organizerMeetup.js';
@@ -45,6 +49,7 @@ import {
   sharedPostContent,
   wrappedEmbed,
 } from './format.js';
+import { discordClock, queueForLater, queuedText } from './queue.js';
 
 const logger = new Logger({ name: 'wrapped' });
 
@@ -61,6 +66,12 @@ export interface WrappedHandlerDeps {
   limiter: FixedWindowLimiter;
   now(): Date;
   slowAfterMs: number;
+  /**
+   * The backfill queue: a throttled request with nothing cached is queued
+   * for the next tick. Left out, or rejecting (no DATABASE_URL), the reply
+   * is the plain limit.
+   */
+  queue?(): Promise<WrappedBackfillStore>;
 }
 
 export const defaultWrappedDeps: WrappedHandlerDeps = {
@@ -72,6 +83,7 @@ export const defaultWrappedDeps: WrappedHandlerDeps = {
   limiter: wrappedBuildLimiter,
   now: () => new Date(),
   slowAfterMs: SLOW_BUILD_MS,
+  queue: () => PostgresWrappedBackfillRepository.instance(),
 };
 
 export interface WrappedOptions {
@@ -247,8 +259,29 @@ async function buildAndReply(
       }
       if (result.kind === 'rate-limited') {
         const minutes = Math.ceil(deps.limiter.retryAfterSec(userId) / 60);
+        let content = replies.rateLimited(minutes);
+        if (!cached && deps.queue) {
+          // Nothing to show: queue it for the backfill tick instead of only
+          // "try again". A copy that appeared meanwhile is not queued.
+          try {
+            const outcome = await queueForLater(
+              await deps.queue(),
+              cache,
+              { discordUserId: userId, meetupId: linkedMeetupId },
+              year,
+              deps.now(),
+            );
+            if (outcome.kind !== 'cached') {
+              content += `\n${queuedText(outcome, discordClock)}`;
+            }
+          } catch (queueError) {
+            logger.warn(
+              `Could not queue the Wrapped: ${queueError instanceof Error ? queueError.name : 'Error'}`,
+            );
+          }
+        }
         await answerInPlace(interaction, {
-          content: replies.rateLimited(minutes),
+          content,
           embeds: cached
             ? [wrappedEmbed(displayNameOf(interaction), cached)]
             : [],
@@ -257,6 +290,14 @@ async function buildAndReply(
       }
 
       await writeWrapped(cache, userId, year, result.wrapped, deps.now());
+      if (deps.queue) {
+        // An on-demand build makes the member's queued request moot.
+        try {
+          await (await deps.queue()).complete(userId);
+        } catch {
+          // The tick drops it as fresh.
+        }
+      }
       const payload = wrappedPayload(interaction, result.wrapped);
       if (slow) {
         try {

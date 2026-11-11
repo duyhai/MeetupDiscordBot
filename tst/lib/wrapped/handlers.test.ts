@@ -18,6 +18,8 @@ import {
   writeWrapped,
 } from '../../../src/lib/wrapped/cache.js';
 import { replies, shareCustomId } from '../../../src/lib/wrapped/format.js';
+import { NEXT_TICK_KEY } from '../../../src/lib/wrapped/queue.js';
+import { FakeBackfillStore } from './backfillFakes.js';
 import {
   WrappedHandlerDeps,
   runShare,
@@ -638,6 +640,81 @@ function buttonInteraction({
     send,
   };
 }
+
+describe('runWrapped with a queue', () => {
+  let h: Harness;
+  let store: FakeBackfillStore;
+
+  beforeEach(async () => {
+    h = harness();
+    store = new FakeBackfillStore(() => h.clock.now);
+    h.deps.queue = () => Promise.resolve(store);
+    await link(h.repo);
+    await h.cache.set(NEXT_TICK_KEY, '2026-12-10T20:05:00.000Z');
+    // The slot was spent elsewhere (the website).
+    h.deps.limiter.take('u1');
+  });
+
+  it('queues a throttled request with nothing cached and says when it will be ready', async () => {
+    const interaction = commandInteraction();
+
+    await runWrapped(interaction, { year: 2026, refresh: false }, h.deps);
+
+    const last = payloads(interaction.editReply).at(-1);
+    expect(last?.content).toContain(replies.rateLimited(60));
+    expect(last?.content).toContain(
+      "Queued — it'll be ready by about <t:1796933100:t>.",
+    );
+    expect((await store.position('u1'))?.row).toMatchObject({
+      meetupId: 'me',
+      year: 2026,
+    });
+  });
+
+  it('does not queue when a copy is cached', async () => {
+    const interaction = commandInteraction();
+    await runWrapped(interaction, { year: 2026, refresh: false }, h.deps);
+    await store.complete('u1');
+    // A new hour: the slot is free again.
+    h.clock.now += 61 * 60 * 1000;
+    await runWrapped(
+      commandInteraction(),
+      { year: 2026, refresh: false },
+      h.deps,
+    );
+    const again = commandInteraction();
+
+    await runWrapped(again, { year: 2026, refresh: true }, h.deps);
+
+    const last = payloads(again.editReply).at(-1);
+    expect(last?.content).toBe(replies.rateLimited(60));
+    expect(last?.embeds).toHaveLength(1);
+    expect(await store.queueLength()).toBe(0);
+  });
+
+  it('says which year is already queued', async () => {
+    await store.enqueue({ discordUserId: 'u1', meetupId: 'me', year: 2024 });
+    const interaction = commandInteraction();
+
+    await runWrapped(interaction, { year: 2026, refresh: false }, h.deps);
+
+    expect(payloads(interaction.editReply).at(-1)?.content).toContain(
+      "You already have 2024 queued; it'll be ready by about <t:",
+    );
+    expect((await store.position('u1'))?.row.year).toBe(2024);
+  });
+
+  it('answers with the plain limit when the queue store is unavailable', async () => {
+    h.deps.queue = () => Promise.reject(new Error('no DATABASE_URL'));
+    const interaction = commandInteraction();
+
+    await runWrapped(interaction, { year: 2026, refresh: false }, h.deps);
+
+    expect(payloads(interaction.editReply).at(-1)?.content).toBe(
+      replies.rateLimited(60),
+    );
+  });
+});
 
 describe('runShare', () => {
   let h: Harness;

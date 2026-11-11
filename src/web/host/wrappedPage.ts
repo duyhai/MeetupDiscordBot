@@ -16,6 +16,7 @@ import { KeyValueCache } from '../../lib/cache/base.js';
 import { LogEntry } from '../../lib/helpers/discordLogger.js';
 import { EVENT_TYPE_LABELS } from '../../lib/hosts/eventTypes.js';
 import { describeBuildError } from '../../lib/reports/buildJob.js';
+import { WrappedBackfillStore } from '../../lib/repositories/postgresWrappedBackfillRepository.js';
 import {
   BuildDeps,
   BuildResult,
@@ -37,6 +38,13 @@ import {
   TopType,
   WrappedEvent,
 } from '../../lib/wrapped/stats.js';
+import {
+  nextTickAt,
+  pacificClock,
+  queueForLater,
+  queuedText,
+  readyBy,
+} from '../../lib/wrapped/queue.js';
 import { tz } from '../../util/timezone.js';
 import {
   SafeHtml,
@@ -98,6 +106,8 @@ export interface WrappedPageDeps {
   now?: () => Date;
   /** Tests only. */
   deadlineMs?: number;
+  /** The backfill queue; left out, a throttled request is only told to wait. */
+  queue?: () => Promise<WrappedBackfillStore>;
 }
 
 /** `?year=`: this calendar year (Pacific) unless a year 2015..this year. */
@@ -146,6 +156,10 @@ export const WRAPPED_NOTICES = {
     'Could not build your Wrapped right now; try again in a little while.',
   'no-token': () =>
     'To build your Wrapped we need your Meetup connection. Sign in with Meetup below, or run /wrapped in Discord.',
+  // The queued texts come from the queue itself (queuedNotice): these are
+  // the fallback when the row is gone by the time the page is read.
+  queued: () => 'Your Wrapped is queued; reload in a few minutes.',
+  'already-queued': () => 'Your Wrapped is queued; reload in a few minutes.',
 } as const;
 
 type NoticeCode = keyof typeof WRAPPED_NOTICES;
@@ -536,6 +550,8 @@ const FINAL_NOTICES: readonly NoticeCode[] = [
   'mismatch',
   'not-in-group',
   'no-token',
+  'queued',
+  'already-queued',
 ];
 
 export function registerWrappedPage(
@@ -589,6 +605,7 @@ export function registerWrappedPage(
         );
         if (result.kind === 'built') {
           await writeWrapped(cache, discordUserId, year, result.wrapped, now());
+          await dropQueued(discordUserId);
         } else if (result.kind === 'account-mismatch') {
           logger.warn(
             `Wrapped (web): token account ${result.tokenMeetupId} is not the linked account for Discord user ${discordUserId}`,
@@ -632,6 +649,60 @@ export function registerWrappedPage(
       return await Promise.race([run, slow]);
     } finally {
       clearTimeout(timer);
+    }
+  }
+
+  /**
+   * The queued state, from the queue itself: the hourly-limit line and when
+   * the backfill will have built it. Undefined when the member has no row
+   * (built or dropped since), or there is no queue.
+   */
+  async function queuedNotice(
+    discordUserId: string,
+    cache: KeyValueCache,
+    code: 'queued' | 'already-queued',
+  ): Promise<SafeHtml | undefined> {
+    if (!deps.queue) {
+      return undefined;
+    }
+    try {
+      const store = await deps.queue();
+      const queued = await store.position(discordUserId);
+      if (!queued) {
+        return undefined;
+      }
+      const minutes = Math.max(
+        1,
+        Math.ceil(deps.limiter.retryAfterSec(discordUserId) / 60),
+      );
+      const text = queuedText(
+        {
+          kind: code === 'queued' ? 'queued' : 'already',
+          year: queued.row.year,
+          readyBy: readyBy(await nextTickAt(cache, now()), queued.position),
+        },
+        pacificClock,
+      );
+      return html`<p class="note info">
+        ${WRAPPED_NOTICES['rate-limited'](minutes)} ${text}
+      </p>`;
+    } catch (error) {
+      logger.warn(
+        `Could not read the Wrapped queue: ${error instanceof Error ? error.name : 'Error'}`,
+      );
+      return undefined;
+    }
+  }
+
+  /** After an on-demand build the member's queue row, if any, is moot. */
+  async function dropQueued(discordUserId: string): Promise<void> {
+    if (!deps.queue) {
+      return;
+    }
+    try {
+      await (await deps.queue()).complete(discordUserId);
+    } catch {
+      // The tick drops it as fresh.
     }
   }
 
@@ -816,15 +887,18 @@ export function registerWrappedPage(
     const cache = await deps.cache();
     // Minutes from the limiter itself, never the URL: it is in-process and
     // the source of truth, and a hand-typed notice can't say "0 minutes".
-    const noticeHtml = isNoticeCode(req.query.notice)
-      ? notice(
-          req.query.notice,
-          Math.max(
-            1,
-            Math.ceil(deps.limiter.retryAfterSec(discordUserId) / 60),
-          ),
-        )
-      : '';
+    const code = isNoticeCode(req.query.notice) ? req.query.notice : undefined;
+    const minutes = Math.max(
+      1,
+      Math.ceil(deps.limiter.retryAfterSec(discordUserId) / 60),
+    );
+    const noticeHtml =
+      code === 'queued' || code === 'already-queued'
+        ? ((await queuedNotice(discordUserId, cache, code)) ??
+          notice(code, minutes))
+        : code
+          ? notice(code, minutes)
+          : '';
     const cached = await readWrapped(
       cache,
       discordUserId,
@@ -835,11 +909,16 @@ export function registerWrappedPage(
       await render(res, session, year, cached, cache, noticeHtml);
       return;
     }
-    if (
-      noticeHtml &&
-      isNoticeCode(req.query.notice) &&
-      FINAL_NOTICES.includes(req.query.notice)
-    ) {
+    if (!code && deps.limiter.isLimited(discordUserId)) {
+      // Throttled with nothing cached: a queued member sees when it will be
+      // ready instead of a build that would only be refused.
+      const queued = await queuedNotice(discordUserId, cache, 'queued');
+      if (queued) {
+        message(res, session, year, queued);
+        return;
+      }
+    }
+    if (noticeHtml && code && FINAL_NOTICES.includes(code)) {
       // Back from a rebuild that was refused: say so, build nothing. After
       // a slow, in-flight or failed one the page says to reload, so a
       // reload builds (the lease answers while one is still in flight).
@@ -875,9 +954,31 @@ export function registerWrappedPage(
       case 'built':
         back();
         return;
-      case 'rate-limited':
-        back({ notice: 'rate-limited' });
+      case 'rate-limited': {
+        let code: NoticeCode = 'rate-limited';
+        if (deps.queue) {
+          try {
+            const outcome = await queueForLater(
+              await deps.queue(),
+              cache,
+              { discordUserId, meetupId: session.userId },
+              year,
+              now(),
+            );
+            if (outcome.kind === 'queued') {
+              code = 'queued';
+            } else if (outcome.kind === 'already') {
+              code = 'already-queued';
+            }
+          } catch (error) {
+            logger.warn(
+              `Could not queue the Wrapped: ${error instanceof Error ? error.name : 'Error'}`,
+            );
+          }
+        }
+        back({ notice: code });
         return;
+      }
       case 'account-mismatch':
         back({ notice: 'mismatch' });
         return;
