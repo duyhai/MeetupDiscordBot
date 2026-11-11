@@ -359,19 +359,15 @@ function cohortSection(
   if (items.length === 0 && others === 0) {
     return html``;
   }
+  // A backfill reads one page of a big early event: the counts are "at least".
+  const atLeast = cohort.partial ? 'at least ' : '';
+  const shown = items.length > 0 ? items.length : others;
+  const summary = `Still around from your early cohort (${atLeast}${String(shown)})`;
+  const othersText = `${items.length > 0 ? 'and ' : ''}${atLeast}${plural(others, 'other member')}`;
   return html`<details>
-    <summary>
-      Still around from your early cohort
-      (${String(items.length > 0 ? items.length : others)})
-    </summary>
+    <summary>${summary}</summary>
     ${items.length > 0 ? showAll(items, COHORT_SHOWN) : ''}
-    ${
-      others > 0
-        ? html`<p class="muted">
-            ${items.length > 0 ? 'and ' : ''}${plural(others, 'other member')}
-          </p>`
-        : ''
-    }
+    ${others > 0 ? html`<p class="muted">${othersText}</p>` : ''}
   </details>`;
 }
 

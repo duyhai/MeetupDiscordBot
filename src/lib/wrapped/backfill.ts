@@ -1,14 +1,19 @@
 /**
  * The Wrapped backfill: builds every linked member's Wrapped for every year
- * back to their first event, into the same cache entries the page and the
- * command read, and drains the queue of throttled requests first. Paced: a
- * tick every BACKFILL_TICK_MS, at most MEMBERS_PER_TICK members and
+ * back to their first event, into the same two-tier store the page and the
+ * command read (store.ts: Postgres for every year, Redis for the current
+ * year), and drains the queue of throttled requests first. Paced: a tick
+ * every BACKFILL_TICK_MS, at most MEMBERS_PER_TICK builds and
  * TICK_CALL_BUDGET Meetup client calls a tick, one build in flight. Runs are
  * recorded in Postgres (one open at a time, resumable by cursor).
  *
  * Reads use the member's own stored token when there is one, else the
- * organizer credential (a caching client, under the report build lease so
- * the credential is never read by two jobs at once). A queued or swept build
+ * organizer credential (under the report build lease, so the credential is
+ * never read by two jobs at once). Both clients bypass the Redis request
+ * cache: instead a per-run, in-process memo of attendee Meetup ids (ids
+ * only, never names, never persisted, cleared when the run ends) makes an
+ * event shared by many members a single read per run, and early-cohort
+ * events read their first page of attendees only. A queued or swept build
  * takes the member's "building" lease and never spends their hourly slot.
  */
 import crypto from 'node:crypto';
@@ -24,7 +29,13 @@ import { tz } from '../../util/timezone.js';
 import { isServerMember } from '../../web/host/serverJoin.js';
 import { KeyValueCache } from '../cache/base.js';
 import { GqlMeetupClient } from '../client/meetup/gqlClient.js';
-import { EventSummary, MemberRsvpFilter } from '../client/meetup/types.js';
+import {
+  EventSummary,
+  GetEventRsvpsResponse,
+  MemberRsvpFilter,
+  PaginationInput,
+  RsvpFilter,
+} from '../client/meetup/types.js';
 import { LogEntry, logAlert } from '../helpers/discordLogger.js';
 import { getUsableMeetupTokens } from '../helpers/meetupTokens.js';
 import { isMeetupUnauthorized } from '../helpers/organizerMeetupClient.js';
@@ -33,15 +44,21 @@ import {
   identityDigestInProgress,
   releaseBuildLease,
 } from '../reports/buildLease.js';
-import { isQuietHour } from '../reports/buildSchedule.js';
+import { canStartMonthBuild } from '../reports/buildSchedule.js';
 import {
   defaultOrganizerMeetupDeps,
   withOrganizerMeetup,
 } from '../reports/organizerMeetup.js';
+import { utcDay } from '../reports/period.js';
 import {
+  BackfillRun,
   PostgresWrappedBackfillRepository,
   WrappedBackfillStore,
 } from '../repositories/postgresWrappedBackfillRepository.js';
+import {
+  PostgresWrappedEntryRepository,
+  WrappedEntryStore,
+} from '../repositories/postgresWrappedEntryRepository.js';
 import { MemberRecord, MemberRepository } from '../repositories/types.js';
 import {
   SourceDeps,
@@ -55,10 +72,9 @@ import {
   CachedWrapped,
   FIRST_WRAPPED_YEAR,
   buildingKey,
-  readWrapped,
-  writeWrapped,
 } from './cache.js';
 import { BACKFILL_TICK_MS, MEMBERS_PER_TICK, NEXT_TICK_KEY } from './queue.js';
+import { WrappedTiers, readEntry, writeEntry } from './store.js';
 
 const logger = new Logger({ name: 'wrappedBackfill' });
 
@@ -66,7 +82,7 @@ const logger = new Logger({ name: 'wrappedBackfill' });
 export const TICK_CALL_BUDGET = 150;
 /** A new sweep starts this long after the last one finished. */
 export const RUN_INTERVAL_MS = 20 * 60 * 60_000;
-/** A current-year copy younger than this is left alone; past years are final. */
+/** A current-year copy younger than this is left alone. */
 export const FRESH_CURRENT_YEAR_MS = 7 * 24 * 60 * 60_000;
 export const QUEUE_MAX_ATTEMPTS = 3;
 /** A queue claim older than this belongs to a tick that died. */
@@ -74,7 +90,14 @@ export const QUEUE_CLAIM_STALE_MS = 15 * 60_000;
 /** Set (to the requester's Discord id) by Run now; the tick that honours it removes it. */
 export const RUN_NOW_KEY = 'wrapped-backfill-run-now';
 export const RUN_NOW_TTL_SEC = 60 * 60;
+/** `<prefix><discordUserId>`: the member a process is sweeping right now. */
+export const MEMBER_LEASE_KEY_PREFIX = 'wrapped-backfill-member:';
+const MEMBER_LEASE_TTL_SEC = 15 * 60;
+/** At most this many events' attendee ids in the per-run memo. */
+export const MEMO_MAX_EVENTS = 3000;
 const NEXT_TICK_TTL_SEC = 60 * 60;
+const FAILING_ALERT_TTL_SEC = 26 * 60 * 60;
+const failingAlertKey = (day: string) => `wrapped-backfill-alerted-${day}`;
 
 const HISTORY_FILTER: MemberRsvpFilter = {
   rsvpStatus: ['YES', 'ATTENDED'],
@@ -96,16 +119,23 @@ export interface BackfillDeps {
   now(): Date;
   cache(): Promise<KeyValueCache>;
   store(): Promise<WrappedBackfillStore>;
+  /** The durable Wrapped store (Postgres). */
+  entries(): Promise<WrappedEntryStore>;
   members(): Promise<
     Pick<MemberRepository, 'listAll' | 'findByDiscordId' | 'findByMeetupId'>
   >;
   /** The member's stored Meetup access token, when usable. */
   memberToken(discordUserId: string): Promise<string | undefined>;
   memberClient(token: string): WrappedMeetup;
-  /** withOrganizerMeetup with a CACHING client; `fn` may be re-run on a 401, so it only reads. */
+  /**
+   * withOrganizerMeetup. On a 401 the helper refreshes the token and runs
+   * `fn` again from the start; everything `fn` writes is idempotent (a
+   * year already written is fresh and skipped), only the call count is
+   * paid twice.
+   */
   withOrganizer<T>(fn: (meetup: OrganizerReads) => Promise<T>): Promise<T>;
   isPresent(discordUserId: string): Promise<boolean>;
-  /** Not the quiet hour and no identity digest running. */
+  /** Whether a build may start now: inside the sweep window and no digest running. */
   canStart(now: Date, cache: KeyValueCache): Promise<boolean>;
   /** #meetup-bot-alerts, plain. */
   alert(entry: LogEntry): Promise<boolean>;
@@ -140,7 +170,11 @@ export function yearsFor(events: { dateTime: string }[], now: Date): number[] {
   return Array.from({ length: thisYear - from + 1 }, (_, i) => from + i);
 }
 
-/** A past year's copy is final; a current-year copy keeps for a week. */
+/**
+ * A past year's copy is final only once it was built after that year ended
+ * (Pacific): a December copy misses the year's last events. A current-year
+ * copy keeps for a week.
+ */
 export function isFresh(
   copy: CachedWrapped | undefined,
   meetupId: string,
@@ -150,23 +184,120 @@ export function isFresh(
   if (!copy || copy.meetupId !== meetupId) {
     return false;
   }
-  if (year < tz(dayjs(now)).year()) {
-    return true;
-  }
   const builtAt = Date.parse(copy.builtAt);
-  return (
-    Number.isFinite(builtAt) && now.getTime() - builtAt < FRESH_CURRENT_YEAR_MS
-  );
+  if (!Number.isFinite(builtAt)) {
+    return false;
+  }
+  if (year < tz(dayjs(now)).year()) {
+    const yearEnd = tz(dayjs(now)).year(year).startOf('year').add(1, 'year');
+    return builtAt >= yearEnd.valueOf();
+  }
+  return now.getTime() - builtAt < FRESH_CURRENT_YEAR_MS;
 }
 
 interface Counter {
   n: number;
 }
 
-/** The same client, counting every call against the tick's budget. */
-function counting<T extends WrappedMeetup>(meetup: T, counter: Counter): T {
+/**
+ * The per-run memo: attendee Meetup ids by event id, with whether the list
+ * is complete (a first-page read of a bigger event is not). In process
+ * only, never persisted, dropped when the run that filled it ends.
+ */
+interface RunMemo {
+  runId: number | undefined;
+  lists: Map<string, { ids: string[]; complete: boolean }>;
+}
+
+const memo: RunMemo = { runId: undefined, lists: new Map() };
+
+/** Tests: how many events the memo holds. */
+export function memoSize(): number {
+  return memo.lists.size;
+}
+
+function memoFor(runId: number): RunMemo['lists'] {
+  if (memo.runId !== runId) {
+    memo.runId = runId;
+    memo.lists = new Map();
+  }
+  return memo.lists;
+}
+
+function clearMemo(): void {
+  memo.runId = undefined;
+  memo.lists = new Map();
+}
+
+function memoPage(
+  eventId: string,
+  ids: string[],
+  complete: boolean,
+): GetEventRsvpsResponse {
+  return {
+    event: {
+      id: eventId,
+      rsvps: {
+        pageInfo: {
+          hasNextPage: !complete,
+          hasPreviousPage: false,
+          startCursor: null,
+          endCursor: complete ? null : 'memo',
+        },
+        totalCount: ids.length,
+        edges: ids.map((id) => ({
+          node: {
+            status: 'YES' as const,
+            member: { id, name: '', memberUrl: '', gender: 'NONE' as never },
+          },
+        })),
+      },
+    },
+  };
+}
+
+/**
+ * The same client, counting every call against the tick's budget and
+ * serving attendee lists from the memo when it has them (the first page of
+ * an event, which is the whole list for most events).
+ */
+function instrumented<T extends WrappedMeetup>(
+  meetup: T,
+  counter: Counter,
+  lists: RunMemo['lists'],
+): T {
   const count = () => {
     counter.n += 1;
+  };
+  const pending = new Map<string, string[]>();
+  const getEventRsvps = async (
+    eventId: string,
+    input: PaginationInput,
+    filter?: RsvpFilter,
+  ): Promise<GetEventRsvpsResponse> => {
+    const known = lists.get(eventId);
+    if (known && !input.after) {
+      return memoPage(eventId, known.ids, known.complete);
+    }
+    count();
+    const response = await meetup.getEventRsvps(eventId, input, filter);
+    const { rsvps } = response.event;
+    const ids = [
+      ...(input.after ? (pending.get(eventId) ?? []) : []),
+      ...rsvps.edges.map((edge) => edge.node.member.id),
+    ];
+    if (rsvps.pageInfo.hasNextPage) {
+      pending.set(eventId, ids);
+      if (!input.after && !known && lists.size < MEMO_MAX_EVENTS) {
+        lists.set(eventId, { ids, complete: false });
+      }
+    } else {
+      pending.delete(eventId);
+      if (lists.size < MEMO_MAX_EVENTS || lists.has(eventId)) {
+        lists.set(eventId, { ids, complete: true });
+      }
+    }
+    return response;
   };
   const counted: WrappedMeetup & Partial<OrganizerReads> = {
     getSelfPastRsvpEvents: (groupId) => {
@@ -177,10 +308,7 @@ function counting<T extends WrappedMeetup>(meetup: T, counter: Counter): T {
       count();
       return meetup.getHostedEvents(hostId, input);
     },
-    getEventRsvps: (eventId, input, filter) => {
-      count();
-      return meetup.getEventRsvps(eventId, input, filter);
-    },
+    getEventRsvps,
   };
   if ('getMemberRsvpEvents' in meetup) {
     const organizer = meetup as unknown as OrganizerReads;
@@ -202,32 +330,43 @@ interface MemberOutcome {
   failed: number;
   /** The report lease is held by another build: nothing was read; try next tick. */
   leaseHeld?: boolean;
+  /** The sweep window closed between years: the member is not done. */
+  interrupted?: boolean;
 }
 
 interface TickContext {
   deps: BackfillDeps;
-  cache: KeyValueCache;
+  tiers: WrappedTiers;
   calls: Counter;
+  lists: RunMemo['lists'];
   log: SchedulerLog;
 }
 
-/** One year: fresh or being built elsewhere → skipped; else built and written. */
+type Member = { discordUserId: string; meetupId: string };
+
+/** One year: fresh or being built elsewhere → skipped; else built and written to both tiers. */
 async function buildYear(
   ctx: TickContext,
   meetup: WrappedMeetup,
-  member: { discordUserId: string; meetupId: string },
+  member: Member,
   year: number,
   sources: WrappedSources,
 ): Promise<'built' | 'skipped'> {
-  const { deps, cache } = ctx;
+  const { deps, tiers } = ctx;
   const now = deps.now();
-  const copy = await readWrapped(cache, member.discordUserId, year);
+  const copy = await readEntry(
+    tiers,
+    member.discordUserId,
+    year,
+    member.meetupId,
+    now,
+  );
   if (isFresh(copy, member.meetupId, year, now)) {
     return 'skipped';
   }
   const lease = buildingKey(member.discordUserId, year);
   if (
-    !(await cache.exclusive_set(
+    !(await tiers.cache.exclusive_set(
       lease,
       now.toISOString(),
       BUILDING_LEASE_TTL_SEC,
@@ -248,23 +387,30 @@ async function buildYear(
       member.meetupId,
       year,
       sources,
+      { earlyFirstPageOnly: true },
     );
-    await writeWrapped(cache, member.discordUserId, year, wrapped, deps.now());
+    await writeEntry(tiers, member.discordUserId, year, wrapped, deps.now());
     return 'built';
   } finally {
-    await cache.remove(lease).catch(() => undefined);
+    await tiers.cache.remove(lease).catch(() => undefined);
   }
 }
 
+/** Each year in turn; stops (interrupted) when the sweep window closes. */
 async function buildYears(
   ctx: TickContext,
   meetup: WrappedMeetup,
-  member: { discordUserId: string; meetupId: string },
+  member: Member,
   years: number[],
   sources: WrappedSources,
 ): Promise<MemberOutcome> {
   const outcome: MemberOutcome = { built: 0, skipped: 0, failed: 0 };
   for (const year of years) {
+    // eslint-disable-next-line no-await-in-loop -- one build in flight, by design
+    if (!(await ctx.deps.canStart(ctx.deps.now(), ctx.tiers.cache))) {
+      outcome.interrupted = true;
+      return outcome;
+    }
     // eslint-disable-next-line no-await-in-loop -- one build in flight, by design
     const result = await buildYear(ctx, meetup, member, year, sources);
     outcome[result] += 1;
@@ -279,17 +425,17 @@ async function buildYears(
  */
 async function buildWithOrganizer(
   ctx: TickContext,
-  member: { discordUserId: string; meetupId: string },
+  member: Member,
   years: number[] | undefined,
 ): Promise<MemberOutcome> {
-  const { deps, cache } = ctx;
+  const { deps, tiers } = ctx;
   const lease = deps.newLeaseValue();
-  if (!(await acquireBuildLease(cache, lease))) {
+  if (!(await acquireBuildLease(tiers.cache, lease))) {
     return { built: 0, skipped: 0, failed: 0, leaseHeld: true };
   }
   try {
     return await deps.withOrganizer(async (organizer) => {
-      const meetup = counting(organizer, ctx.calls);
+      const meetup = instrumented(organizer, ctx.calls, ctx.lists);
       const events = await meetup.getMemberRsvpEvents(
         member.meetupId,
         deps.groupId,
@@ -311,7 +457,7 @@ async function buildWithOrganizer(
       );
     });
   } finally {
-    await releaseBuildLease(cache, lease);
+    await releaseBuildLease(tiers.cache, lease);
   }
 }
 
@@ -323,7 +469,7 @@ async function buildWithOrganizer(
  */
 async function buildMember(
   ctx: TickContext,
-  member: { discordUserId: string; meetupId: string },
+  member: Member,
   years: number[] | undefined,
 ): Promise<MemberOutcome> {
   const { deps } = ctx;
@@ -331,7 +477,11 @@ async function buildMember(
     const token = await deps.memberToken(member.discordUserId);
     if (token !== undefined) {
       try {
-        const meetup = counting(deps.memberClient(token), ctx.calls);
+        const meetup = instrumented(
+          deps.memberClient(token),
+          ctx.calls,
+          ctx.lists,
+        );
         const { events, meetupId } = await meetup.getSelfPastRsvpEvents(
           deps.groupId,
         );
@@ -368,25 +518,35 @@ async function buildMember(
   }
 }
 
-function linkedOf(
-  record: MemberRecord | undefined,
-): { discordUserId: string; meetupId: string } | undefined {
+function linkedOf(record: MemberRecord | undefined): Member | undefined {
   return record?.meetupId
     ? { discordUserId: record.discordUserId, meetupId: record.meetupId }
     : undefined;
 }
 
+/** Code-unit order, the same the cursor comparison uses. */
+function byId(a: Member, b: Member): number {
+  if (a.discordUserId === b.discordUserId) {
+    return 0;
+  }
+  return a.discordUserId < b.discordUserId ? -1 : 1;
+}
+
 /** Every linked member (both ids), in Discord id order: the sweep's list. */
-async function linkedMembers(deps: BackfillDeps) {
+async function linkedMembers(deps: BackfillDeps): Promise<Member[]> {
   return (await (await deps.members()).listAll())
     .map(linkedOf)
-    .filter(
-      (m): m is { discordUserId: string; meetupId: string } => m !== undefined,
-    )
-    .sort((a, b) => a.discordUserId.localeCompare(b.discordUserId));
+    .filter((m): m is Member => m !== undefined)
+    .sort(byId);
 }
 
 const seconds = (ms: number) => (ms / 1000).toFixed(1);
+
+function stopReason(outcome: MemberOutcome): string {
+  return outcome.leaseHeld
+    ? 'Wrapped backfill: the report build lease is held; the tick ends'
+    : 'Wrapped backfill: the sweep window closed; the tick ends';
+}
 
 export async function runBackfillTick(
   deps: BackfillDeps,
@@ -398,8 +558,9 @@ export async function runBackfillTick(
     return { kind: 'skipped', reason: 'guard' };
   }
   const store = await deps.store();
+  const tiers: WrappedTiers = { cache, entries: await deps.entries() };
   const repo = await deps.members();
-  const ctx: TickContext = { deps, cache, calls: { n: 0 }, log };
+  const calls: Counter = { n: 0 };
   const totals = { queued: 0, members: 0, built: 0, skipped: 0, failed: 0 };
   const add = (o: MemberOutcome) => {
     totals.built += o.built;
@@ -408,75 +569,91 @@ export async function runBackfillTick(
   };
   const capReached = () =>
     totals.queued + totals.members >= MEMBERS_PER_TICK ||
-    ctx.calls.n >= TICK_CALL_BUDGET;
+    calls.n >= TICK_CALL_BUDGET;
   const ran = (finishedRun: boolean): TickOutcome => ({
     kind: 'ran',
     ...totals,
-    calls: ctx.calls.n,
+    calls: calls.n,
     finishedRun,
   });
+  // The memo belongs to the open run (filled across its ticks); the drain
+  // shares it while one is open.
+  const openRun = await store.openRun();
+  const ctx: TickContext = {
+    deps,
+    tiers,
+    calls,
+    lists: memoFor(openRun?.id ?? -1),
+    log,
+  };
 
   // The queue first: one claim at a time, so a row is never taken and then
-  // handed back for the cap or the budget. A row released after a failure
-  // is not tried again in the same tick.
-  const seen = new Set<string>();
-  while (!capReached()) {
-    // eslint-disable-next-line no-await-in-loop -- one build in flight, by design
-    const [row] = await store.claimNext(1, QUEUE_CLAIM_STALE_MS);
-    if (!row) {
-      break;
-    }
-    if (seen.has(row.discordUserId)) {
+  // handed back for the cap or the budget. A row that fails stays claimed
+  // until the tick ends, so it cannot block the rows behind it.
+  const failedRows: string[] = [];
+  try {
+    while (!capReached()) {
       // eslint-disable-next-line no-await-in-loop -- one build in flight, by design
-      await store.unclaim(row.discordUserId);
-      break;
-    }
-    seen.add(row.discordUserId);
-    totals.queued += 1;
-
-    // eslint-disable-next-line no-await-in-loop -- one build in flight, by design
-    const record = await repo.findByDiscordId(row.discordUserId);
-    const member = linkedOf(record);
-    if (!member || member.meetupId !== row.meetupId) {
-      log.info(
-        `Wrapped backfill: queued Wrapped for Discord user ${row.discordUserId} dropped: no longer linked`,
+      const [row] = await store.claimNext(1, QUEUE_CLAIM_STALE_MS);
+      if (!row) {
+        break;
+      }
+      totals.queued += 1;
+      // eslint-disable-next-line no-await-in-loop -- one build in flight, by design
+      const record = await repo.findByDiscordId(row.discordUserId);
+      const member = linkedOf(record);
+      if (!member || member.meetupId !== row.meetupId) {
+        log.info(
+          `Wrapped backfill: queued Wrapped for Discord user ${row.discordUserId} dropped: no longer linked`,
+        );
+        // eslint-disable-next-line no-await-in-loop -- one build in flight, by design
+        await store.complete(row.discordUserId);
+        continue;
+      }
+      // eslint-disable-next-line no-await-in-loop -- one build in flight, by design
+      const copy = await readEntry(
+        tiers,
+        member.discordUserId,
+        row.year,
+        member.meetupId,
+        deps.now(),
       );
+      if (isFresh(copy, member.meetupId, row.year, deps.now())) {
+        // eslint-disable-next-line no-await-in-loop -- one build in flight, by design
+        await store.complete(row.discordUserId);
+        totals.skipped += 1;
+        continue;
+      }
       // eslint-disable-next-line no-await-in-loop -- one build in flight, by design
-      await store.complete(row.discordUserId);
-      continue;
+      const outcome = await buildMember(ctx, member, [row.year]);
+      if (outcome.leaseHeld || outcome.interrupted) {
+        totals.queued -= 1;
+        // eslint-disable-next-line no-await-in-loop -- one build in flight, by design
+        await store.unclaim(row.discordUserId);
+        log.info(stopReason(outcome));
+        return ran(false);
+      }
+      add(outcome);
+      if (outcome.failed > 0) {
+        failedRows.push(row.discordUserId);
+      } else {
+        // eslint-disable-next-line no-await-in-loop -- one build in flight, by design
+        await store.complete(row.discordUserId);
+      }
     }
-
-    // eslint-disable-next-line no-await-in-loop -- one build in flight, by design
-    const copy = await readWrapped(cache, member.discordUserId, row.year);
-    if (isFresh(copy, member.meetupId, row.year, deps.now())) {
-      // eslint-disable-next-line no-await-in-loop -- one build in flight, by design
-      await store.complete(row.discordUserId);
-      totals.skipped += 1;
-      continue;
-    }
-    // eslint-disable-next-line no-await-in-loop -- one build in flight, by design
-    const outcome = await buildMember(ctx, member, [row.year]);
-    if (outcome.leaseHeld) {
-      totals.queued -= 1;
-      // eslint-disable-next-line no-await-in-loop -- one build in flight, by design
-      await store.unclaim(row.discordUserId);
-      log.info(
-        'Wrapped backfill: the report build lease is held; the tick ends',
-      );
-      return ran(false);
-    }
-    add(outcome);
-    if (outcome.failed > 0) {
-      // eslint-disable-next-line no-await-in-loop -- one build in flight, by design
-      await store.release(row.discordUserId, QUEUE_MAX_ATTEMPTS);
-    } else {
-      // eslint-disable-next-line no-await-in-loop -- one build in flight, by design
-      await store.complete(row.discordUserId);
+  } finally {
+    for (const id of failedRows) {
+      // eslint-disable-next-line no-await-in-loop -- a few small writes
+      if ((await store.release(id, QUEUE_MAX_ATTEMPTS)) === 'dropped') {
+        log.warn(
+          `Wrapped backfill: queued Wrapped for Discord user ${id} dropped after ${QUEUE_MAX_ATTEMPTS} attempts`,
+        );
+      }
     }
   }
 
   // Then the sweep: the open run, or a new one when due or asked for.
-  let run = await store.openRun();
+  let run = openRun;
   if (!run) {
     const runNow = await cache.get(RUN_NOW_KEY);
     const last = await store.lastFinishedRun();
@@ -484,10 +661,13 @@ export async function runBackfillTick(
       runNow !== undefined ||
       last?.finishedAt === undefined ||
       deps.now().getTime() - last.finishedAt.getTime() >= RUN_INTERVAL_MS;
-    if (!due) {
+    const noWork = (): TickOutcome => {
       return totals.queued > 0
         ? ran(false)
         : { kind: 'skipped', reason: 'no-work' };
+    };
+    if (!due) {
+      return noWork();
     }
     const linked = await linkedMembers(deps);
     run = await store.startRun(runNow ?? 'job', linked.length);
@@ -495,14 +675,14 @@ export async function runBackfillTick(
       await cache.remove(RUN_NOW_KEY).catch(() => undefined);
     }
     if (!run) {
-      return totals.queued > 0
-        ? ran(false)
-        : { kind: 'skipped', reason: 'no-work' };
+      return noWork();
     }
+    ctx.lists = memoFor(run.id);
     log.info(
       `Wrapped backfill run ${run.id} started (${linked.length} linked members)`,
     );
   }
+  const runId = run.id;
   const linked = await linkedMembers(deps);
   let { cursor } = run;
   const remaining = () =>
@@ -513,20 +693,41 @@ export async function runBackfillTick(
     }
     // eslint-disable-next-line no-await-in-loop -- one build in flight, by design
     if (!(await deps.canStart(deps.now(), cache))) {
-      log.info('Wrapped backfill: the quiet hour started; the tick ends');
+      log.info('Wrapped backfill: the sweep window closed; the tick ends');
       break;
     }
+    // A short lease on the member, so two processes on the same cursor do
+    // not both read them; the holder advances the cursor past them.
+    const memberLease = `${MEMBER_LEASE_KEY_PREFIX}${member.discordUserId}`;
     // eslint-disable-next-line no-await-in-loop -- one build in flight, by design
-    const outcome = await buildMember(ctx, member, undefined);
-    if (outcome.leaseHeld) {
+    const leased = await cache.exclusive_set(
+      memberLease,
+      deps.newLeaseValue(),
+      MEMBER_LEASE_TTL_SEC,
+    );
+    if (!leased) {
       log.info(
-        'Wrapped backfill: the report build lease is held; the tick ends',
+        `Wrapped backfill: Discord user ${member.discordUserId} is being built by another process; the tick ends`,
       );
+      break;
+    }
+    const before = calls.n;
+    let outcome: MemberOutcome;
+    try {
+      // eslint-disable-next-line no-await-in-loop -- one build in flight, by design
+      outcome = await buildMember(ctx, member, undefined);
+    } finally {
+      // eslint-disable-next-line no-await-in-loop -- one build in flight, by design
+      await cache.remove(memberLease).catch(() => undefined);
+    }
+    if (outcome.leaseHeld || outcome.interrupted) {
+      add({ ...outcome, failed: 0 });
+      log.info(stopReason(outcome));
       break;
     }
     // eslint-disable-next-line no-await-in-loop -- one build in flight, by design
     const advanced = await store.advanceRun(
-      run.id,
+      runId,
       cursor,
       member.discordUserId,
       {
@@ -534,6 +735,7 @@ export async function runBackfillTick(
         built: outcome.built,
         skipped: outcome.skipped,
         failed: outcome.failed,
+        requests: calls.n - before,
       },
     );
     if (!advanced) {
@@ -549,7 +751,12 @@ export async function runBackfillTick(
   if (remaining().length > 0) {
     return ran(false);
   }
-  const finished = await store.finishRun(run.id);
+  let finished: BackfillRun | undefined;
+  try {
+    finished = await store.finishRun(runId);
+  } finally {
+    clearMemo();
+  }
   if (finished) {
     const took = finished.finishedAt
       ? finished.finishedAt.getTime() - finished.startedAt.getTime()
@@ -560,7 +767,8 @@ export async function runBackfillTick(
         description:
           `${finished.membersTotal} members: built ${finished.built}, ` +
           `skipped ${finished.skipped} fresh, failed ${finished.failed} ` +
-          `(retried next run). Took ${seconds(took)} s.`,
+          `(retried next run); ${finished.requests} Meetup requests. ` +
+          `Took ${seconds(took)} s.`,
       });
     } catch (error) {
       log.error(`Wrapped backfill summary alert failed: ${errorName(error)}`);
@@ -569,14 +777,18 @@ export async function runBackfillTick(
   return ran(true);
 }
 
-/** Never rejects: dependency or tick failures are logged by class name (and message, for operators). */
+/**
+ * Never rejects. A failing tick (pg, Redis, the schema) is logged in full to
+ * the process log and, once per UTC day, alerted by error class only.
+ */
 async function runTickSafely(
   makeDeps: () => Promise<BackfillDeps>,
   log: SchedulerLog,
   runTick: (deps: BackfillDeps) => Promise<TickOutcome>,
 ): Promise<void> {
+  let deps: BackfillDeps | undefined;
   try {
-    const deps = await makeDeps();
+    deps = await makeDeps();
     const cache = await deps.cache();
     // The queue's "ready by" counts from here.
     await cache
@@ -595,8 +807,29 @@ async function runTickSafely(
       );
     }
   } catch (error) {
-    // Process log only: what reaches here is infrastructure (pg, Redis).
     log.error(`Wrapped backfill tick failed: ${String(error)}`);
+    if (!deps) {
+      return;
+    }
+    try {
+      const cache = await deps.cache();
+      const key = failingAlertKey(utcDay(deps.now()));
+      if (await cache.exclusive_set(key, '1', FAILING_ALERT_TTL_SEC)) {
+        const posted = await deps.alert({
+          title: 'Wrapped backfill is failing',
+          description:
+            `The Wrapped backfill tick failed: ${errorName(error)}. ` +
+            'It retries every 5 minutes; details are in the process log. This alert repeats at most once a day.',
+        });
+        if (!posted) {
+          await cache.remove(key).catch(() => undefined);
+        }
+      }
+    } catch (alertError) {
+      log.error(
+        `Wrapped backfill failure alert failed: ${errorName(alertError)}`,
+      );
+    }
   }
 }
 
@@ -613,8 +846,9 @@ export interface BackfillSchedulerOptions {
 /**
  * Ticks once now and every BACKFILL_TICK_MS; runBackfillTick decides what is
  * due. A tick still running when the next fires is skipped (the Postgres
- * run row and the queue claims cover other processes). Without DATABASE_URL
- * there is nowhere to record runs, so it never starts.
+ * run row, the member lease and the queue claims cover other processes).
+ * Without DATABASE_URL there is nowhere to record runs or entries, so it
+ * never starts.
  */
 export function startWrappedBackfillScheduler(
   _client: Client,
@@ -647,26 +881,30 @@ export function startWrappedBackfillScheduler(
 export async function productionBackfillDeps(
   getClient: () => Client | undefined,
 ): Promise<BackfillDeps> {
+  // Both clients bypass the Redis request cache (spec decision 10): the
+  // backfill's reads are shared through the per-run memo instead, and the
+  // 30 MB Redis plan is left to the hot entries, sessions and tokens.
   return {
     now: () => new Date(),
     cache: ApplicationCache,
     store: () => PostgresWrappedBackfillRepository.instance(),
+    entries: () => PostgresWrappedEntryRepository.instance(),
     members: ApplicationMemberRepository,
     memberToken: async (discordUserId) =>
       (await getUsableMeetupTokens(await ApplicationCache(), discordUserId))
         ?.accessToken,
-    memberClient: (token) => new GqlMeetupClient(token),
-    // The caching client, unlike the report jobs': the backfill reads the
-    // same attendee and hosted lists the on-demand build reads, and sharing
-    // them across members is the point.
+    memberClient: (token) => new GqlMeetupClient(token, { bypassCache: true }),
     withOrganizer: (fn) =>
       withOrganizerMeetup(getClient(), fn, {
         ...defaultOrganizerMeetupDeps,
-        makeClient: (accessToken) => new GqlMeetupClient(accessToken),
+        makeClient: (accessToken) =>
+          new GqlMeetupClient(accessToken, { bypassCache: true }),
       }),
     isPresent: (discordUserId) => isServerMember(getClient, discordUserId),
+    // The report job's window rule (no start from 17:45 UTC until 19:00)
+    // and no overlap with a running identity digest.
     canStart: async (now, cache) =>
-      !isQuietHour(now) && !(await identityDigestInProgress(cache, now)),
+      canStartMonthBuild(now) && !(await identityDigestInProgress(cache, now)),
     alert: async (entry) => {
       const client = getClient();
       return client ? logAlert(client, entry) : false;

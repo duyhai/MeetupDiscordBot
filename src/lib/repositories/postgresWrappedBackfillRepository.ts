@@ -13,6 +13,8 @@ export interface BackfillRun {
   built: number;
   skipped: number;
   failed: number;
+  /** Meetup client calls made by the run so far. */
+  requests: number;
   /** The last Discord id processed; undefined before the first. */
   cursor: string | undefined;
 }
@@ -30,6 +32,7 @@ export interface RunDelta {
   built: number;
   skipped: number;
   failed: number;
+  requests: number;
 }
 
 /**
@@ -94,6 +97,7 @@ interface RunRow {
   built: number;
   skipped: number;
   failed: number;
+  requests: number;
   cursor: string | null;
 }
 
@@ -106,7 +110,7 @@ interface QueueDbRow {
 }
 
 const RUN_COLUMNS =
-  'id, trigger, started_at, finished_at, members_total, members_done, built, skipped, failed, cursor';
+  'id, trigger, started_at, finished_at, members_total, members_done, built, skipped, failed, requests, cursor';
 const QUEUE_COLUMNS = 'discord_user_id, meetup_id, year, queued_at, attempts';
 
 function toRun(row: RunRow): BackfillRun {
@@ -120,6 +124,7 @@ function toRun(row: RunRow): BackfillRun {
     built: row.built,
     skipped: row.skipped,
     failed: row.failed,
+    requests: row.requests,
     cursor: row.cursor ?? undefined,
   };
 }
@@ -204,7 +209,8 @@ export class PostgresWrappedBackfillRepository implements WrappedBackfillStore {
               members_done = members_done + $4,
               built = built + $5,
               skipped = skipped + $6,
-              failed = failed + $7
+              failed = failed + $7,
+              requests = requests + $8
         WHERE id = $1 AND finished_at IS NULL AND cursor IS NOT DISTINCT FROM $2`,
       [
         id,
@@ -214,6 +220,7 @@ export class PostgresWrappedBackfillRepository implements WrappedBackfillStore {
         delta.built,
         delta.skipped,
         delta.failed,
+        delta.requests,
       ],
     );
     return result.rowCount === 1;

@@ -14,6 +14,7 @@ import {
   dashboardPath,
 } from '../../lib/reports/dashboardPaths.js';
 import { BackfillRun } from '../../lib/repositories/postgresWrappedBackfillRepository.js';
+import { RUN_INTERVAL_MS } from '../../lib/wrapped/backfill.js';
 import { tz } from '../../util/timezone.js';
 import { dashboardLocals } from '../dashboardRouter.js';
 import { SafeHtml, html, localUrl } from '../html.js';
@@ -30,7 +31,10 @@ export interface BackfillStatus {
   lastRun: BackfillRun | undefined;
   openRun: BackfillRun | undefined;
   queueLength: number;
+  /** The scheduler's recorded next tick; undefined when it is not running. */
   nextTickAt: Date | undefined;
+  /** Rows in wrapped_entries. */
+  entries: number;
 }
 
 export type RunNowOutcome =
@@ -86,24 +90,32 @@ export async function wrappedBackfillCard(
   const last = lastRun?.finishedAt
     ? html`<p>
         Last run finished ${pacificDateTime(lastRun.finishedAt)} Pacific:
-        ${String(lastRun.membersTotal)} members: ${counts(lastRun)}.
+        ${String(lastRun.membersTotal)} members: ${counts(lastRun)};
+        ${String(lastRun.requests)} Meetup requests.
       </p>`
     : html`<p>No run yet.</p>`;
   const running = openRun
     ? html`<p>
         Running: ${String(openRun.membersDone)} of
         ${String(openRun.membersTotal)} members (${counts(openRun)}), started
-        ${pacificDateTime(openRun.startedAt)} Pacific.
+        ${pacificDateTime(openRun.startedAt)} Pacific;
+        ${String(openRun.requests)} Meetup requests so far.
       </p>`
     : '';
+  let nextSweep = 'as soon as the job runs';
+  if (openRun) {
+    nextSweep = 'running now';
+  } else if (lastRun?.finishedAt) {
+    nextSweep = `${pacificDateTime(new Date(lastRun.finishedAt.getTime() + RUN_INTERVAL_MS))} Pacific`;
+  }
+  const nextTick = status.nextTickAt
+    ? `${pacificTime(status.nextTickAt)} Pacific`
+    : 'the job is not running';
   const queue = html`<p class="muted">
-    Queue:
-    ${String(status.queueLength)}${
-      status.nextTickAt
-        ? html` · Next tick: ${pacificTime(status.nextTickAt)} Pacific`
-        : ''
-    }
-  </p>`;
+      Queue: ${String(status.queueLength)} · Stored Wrapped entries:
+      ${String(status.entries)}
+    </p>
+    <p class="muted">Next tick: ${nextTick} · Next sweep: ${nextSweep}</p>`;
   const form =
     !openRun && view.csrfToken !== undefined
       ? html`<form method="post" action="${localUrl(WRAPPED_BACKFILL_PATH)}">

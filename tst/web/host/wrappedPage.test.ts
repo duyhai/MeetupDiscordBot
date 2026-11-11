@@ -716,6 +716,24 @@ describe('GET /host/wrapped deeper sections', () => {
     expect(text).not.toContain('discord.com/users/d-linked');
   });
 
+  it('labels a partial early cohort "at least"', async () => {
+    const { text } = await deepPage({
+      ...deep,
+      stats: {
+        ...deep.stats,
+        topTypes: deep.stats.topTypes.map((top, i) => {
+          return i === 0
+            ? { ...top, cohort: { ...top.cohort, partial: true } }
+            : top;
+        }),
+      },
+    });
+    expect(text).toContain(
+      '<summary>Still around from your early cohort (at least 7)</summary>',
+    );
+    expect(text).toContain('at least 3 other members');
+  });
+
   it('folds an unresolvable top companion', async () => {
     const copy: CachedWrapped = {
       ...deep,

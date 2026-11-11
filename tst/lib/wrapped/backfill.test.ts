@@ -8,7 +8,9 @@ import { InMemoryMemberRepository } from '../../../src/lib/repositories/inMemory
 import {
   BackfillDeps,
   FRESH_CURRENT_YEAR_MS,
+  MEMBER_LEASE_KEY_PREFIX,
   TickOutcome,
+  memoSize,
   OrganizerReads,
   QUEUE_MAX_ATTEMPTS,
   RUN_INTERVAL_MS,
@@ -25,7 +27,6 @@ import {
   buildingKey,
   readWrapped,
   wrappedCacheKey,
-  writeWrapped,
 } from '../../../src/lib/wrapped/cache.js';
 import {
   BACKFILL_TICK_MS,
@@ -33,7 +34,7 @@ import {
   NEXT_TICK_KEY,
 } from '../../../src/lib/wrapped/queue.js';
 import { FakeCache } from '../../web/fakeCache.js';
-import { FakeBackfillStore } from './backfillFakes.js';
+import { FakeBackfillStore, FakeEntryStore } from './backfillFakes.js';
 
 /** 2026-12-10, 12:00 Pacific (20:00 UTC: outside the quiet hour). */
 const NOW = new Date('2026-12-10T20:00:00Z');
@@ -88,6 +89,12 @@ const members: FakeMember[] = [
   },
 ];
 
+/** Attendee ids per event id, for the memo and first-page tests; `big` events report a second page. */
+const attendeesOf: Record<string, string[]> = {};
+const bigEvents = new Set<string>();
+/** Every attendee read any client made this test: event id and page cursor. */
+let rsvpReads: { eventId: string; after: string | undefined }[] = [];
+
 function meetupFor(
   member: FakeMember | undefined,
   calls: { n: number },
@@ -105,9 +112,35 @@ function meetupFor(
       calls.n += 1;
       return { groupByUrlname: { id: GROUP, events: page([]) } };
     }),
-    getEventRsvps: vi.fn(async (eventId: string) => {
+    getEventRsvps: vi.fn(async (eventId: string, input: { after?: string }) => {
       calls.n += 1;
-      return { event: { id: eventId, rsvps: page([]) } };
+      rsvpReads.push({ eventId, after: input.after });
+      const ids = attendeesOf[eventId] ?? [];
+      const nodes = ids.map((id) => ({
+        status: 'YES' as const,
+        member: {
+          id,
+          name: `Member ${id}`,
+          memberUrl: '',
+          gender: 'NONE' as never,
+        },
+      }));
+      const more = bigEvents.has(eventId) && !input.after;
+      return {
+        event: {
+          id: eventId,
+          rsvps: {
+            ...page(input.after ? [] : nodes),
+            pageInfo: {
+              hasNextPage: more,
+              hasPreviousPage: false,
+              startCursor: null,
+              endCursor: more ? 'cursor-2' : null,
+            },
+            totalCount: more ? 150 : ids.length,
+          },
+        },
+      };
     }),
   };
 }
@@ -115,6 +148,7 @@ function meetupFor(
 interface Harness {
   deps: BackfillDeps;
   store: FakeBackfillStore;
+  entries: FakeEntryStore;
   cache: FakeCache;
   repo: InMemoryMemberRepository;
   alert: ReturnType<typeof vi.fn>;
@@ -142,8 +176,10 @@ async function harness({
   memberFailure?: { discordUserId: string; error: Error };
   organizerFailure?: { meetupId: string; error: Error };
 } = {}): Promise<Harness> {
+  rsvpReads = [];
   const clock = { now: NOW.getTime() };
   const store = new FakeBackfillStore(() => clock.now);
+  const entries = new FakeEntryStore();
   const cache = new FakeCache();
   const repo = new InMemoryMemberRepository();
   for (const m of linked) {
@@ -167,6 +203,7 @@ async function harness({
     now: () => new Date(clock.now),
     cache: async () => cache,
     store: async () => store,
+    entries: async () => entries,
     members: async () => repo,
     memberToken: async (discordUserId) =>
       linked.find((m) => m.discordUserId === discordUserId)?.token,
@@ -203,6 +240,7 @@ async function harness({
   return {
     deps,
     store,
+    entries,
     cache,
     repo,
     alert,
@@ -227,20 +265,19 @@ const meetupError = (status: number) =>
     { query: 'q' },
   );
 
+/** Years with an entry in Postgres (the durable tier) for the member's current link. */
 async function cachedYears(h: Harness, member: FakeMember): Promise<number[]> {
   const years = await Promise.all(
-    [2024, 2025, 2026].map(async (year) => {
-      const copy = await readWrapped(
-        h.cache,
-        member.discordUserId,
-        year,
-        member.meetupId,
-      );
-      return copy ? year : undefined;
+    [2015, 2024, 2025, 2026].map(async (year) => {
+      const copy = await h.entries.get(member.discordUserId, year);
+      return copy?.meetupId === member.meetupId ? year : undefined;
     }),
   );
   return years.filter((year): year is number => year !== undefined);
 }
+
+const pagesReadFor = (eventId: string) =>
+  rsvpReads.filter((r) => r.eventId === eventId).map((r) => r.after);
 
 describe('yearsFor', () => {
   it('runs from the first event’s Pacific year to this year, never before 2015', () => {
@@ -270,10 +307,18 @@ describe('isFresh', () => {
     builtAt: builtAt.toISOString(),
   });
 
-  it('a past year is fresh whenever it is cached for the current Meetup id', () => {
+  it('a past year is fresh only when it was built after that year ended (Pacific)', () => {
     expect(
-      isFresh(copy(2025, new Date('2025-01-01T00:00:00Z')), 'm1', 2025, NOW),
+      isFresh(copy(2025, new Date('2026-01-01T08:00:00Z')), 'm1', 2025, NOW),
     ).toBe(true);
+    // Built on 15 December 2025: the late-December events are missing.
+    expect(
+      isFresh(copy(2025, new Date('2025-12-15T20:00:00Z')), 'm1', 2025, NOW),
+    ).toBe(false);
+    // 31 December 2025, 23:30 Pacific is still 2025.
+    expect(
+      isFresh(copy(2025, new Date('2026-01-01T07:30:00Z')), 'm1', 2025, NOW),
+    ).toBe(false);
     expect(isFresh(copy(2025, NOW), 'other', 2025, NOW)).toBe(false);
     expect(isFresh(undefined, 'm1', 2025, NOW)).toBe(false);
   });
@@ -331,10 +376,15 @@ describe('runBackfillTick', () => {
       members: 0,
     });
     expect(await h.store.queueLength()).toBe(0);
-    const b = await readWrapped(h.cache, members[1].discordUserId, 2025, 'm2');
+    // A past year lives in Postgres only; the current year has a hot copy too.
+    const b = await h.entries.get(members[1].discordUserId, 2025);
     expect(b?.stats).toMatchObject({ year: 2025, attendedThisYear: 1 });
+    expect(
+      h.cache.values.has(wrappedCacheKey(members[1].discordUserId, 2025)),
+    ).toBe(false);
     const a = await readWrapped(h.cache, members[0].discordUserId, 2026, 'm1');
     expect(a?.stats.attendedThisYear).toBe(1);
+    expect(await h.entries.get(members[0].discordUserId, 2026)).toEqual(a);
     // The one with a token used it; the other went through the organizer.
     expect(h.organizerUsedFor).toEqual(['m2']);
     expect(
@@ -361,7 +411,7 @@ describe('runBackfillTick', () => {
       await runBackfillTick(g.deps);
       return readWrapped(g.cache, m.discordUserId, 2026, 'm1');
     })();
-    await writeWrapped(h.cache, m.discordUserId, 2026, copy, NOW);
+    await h.entries.put(m.discordUserId, 2026, copy, NOW);
 
     const outcome = await runBackfillTick(h.deps);
 
@@ -406,17 +456,28 @@ describe('runBackfillTick', () => {
       year: 2026,
     });
     expect(QUEUE_MAX_ATTEMPTS).toBe(3);
+    await h.store.enqueue({
+      discordUserId: members[1].discordUserId,
+      meetupId: 'm2',
+      year: 2026,
+    });
 
+    // The failing head row does not block the row behind it.
     expect(await runBackfillTick(h.deps)).toMatchObject({
-      queued: 1,
+      queued: 2,
       failed: 1,
+      built: 1,
     });
     expect((await h.store.position(m.discordUserId))?.row.attempts).toBe(1);
+    expect(await h.store.position(members[1].discordUserId)).toBeUndefined();
     await runBackfillTick(h.deps);
     await runBackfillTick(h.deps);
     expect(await h.store.queueLength()).toBe(0);
-    expect(JSON.stringify(h.log.warn.mock.calls)).toContain('Error');
-    expect(JSON.stringify(h.log.warn.mock.calls)).not.toContain('rsvps down');
+    const warned = JSON.stringify(h.log.warn.mock.calls);
+    expect(warned).toContain('Error');
+    expect(warned).not.toContain('rsvps down');
+    // The drop is logged, by Discord id.
+    expect(warned).toContain(`dropped after ${QUEUE_MAX_ATTEMPTS} attempts`);
   });
 
   it('starts a run when none finished in 20 hours, sweeps members in Discord-id order, at most four a tick', async () => {
@@ -469,9 +530,7 @@ describe('runBackfillTick', () => {
 
     expect(await cachedYears(h, members[0])).toEqual([2024, 2025, 2026]);
     const ancient = members[2];
-    expect(
-      await readWrapped(h.cache, ancient.discordUserId, 2015, 'm3'),
-    ).toBeDefined();
+    expect(await h.entries.get(ancient.discordUserId, 2015)).toBeDefined();
     expect(
       h.cache.values.has(wrappedCacheKey(ancient.discordUserId, 2014)),
     ).toBe(false);
@@ -558,8 +617,11 @@ describe('runBackfillTick', () => {
 
   it('stops at the quiet hour and leaves the cursor behind', async () => {
     const h = await harness();
-    // Allowed at the tick's start and for the first member; then the hour starts.
+    // The tick's start, member A, A's three years; then the hour starts.
     h.canStart
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(true)
       .mockResolvedValueOnce(true)
       .mockResolvedValueOnce(true)
       .mockResolvedValue(false);
@@ -578,6 +640,122 @@ describe('runBackfillTick', () => {
         h.cache.values.has(buildingKey(members[1].discordUserId, year)),
       ).toBe(false);
     }
+  });
+
+  it('stops before the next year of a half-built member, with the cursor not advanced', async () => {
+    const h = await harness({ linked: [members[0]] });
+    // Tick start, member A, year 2024; then the sweep window closes.
+    h.canStart
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(true)
+      .mockResolvedValue(false);
+
+    const outcome = await runBackfillTick(h.deps);
+
+    expect(outcome).toMatchObject({ kind: 'ran', members: 0, built: 1 });
+    expect(await cachedYears(h, members[0])).toEqual([2024]);
+    expect((await h.store.openRun())?.cursor).toBeUndefined();
+    expect(
+      h.cache.values.has(buildingKey(members[0].discordUserId, 2025)),
+    ).toBe(false);
+  });
+
+  it('skips a member another process is building (a short per-member lease)', async () => {
+    const h = await harness({ linked: [members[0], members[1]] });
+    await h.cache.exclusive_set(
+      `${MEMBER_LEASE_KEY_PREFIX}${members[0].discordUserId}`,
+      'other-process',
+      600,
+    );
+
+    const outcome = await runBackfillTick(h.deps);
+
+    // The other process will advance the cursor past A; this tick stops.
+    expect(outcome).toMatchObject({ kind: 'ran', members: 0 });
+    expect(h.calls.n).toBe(0);
+    expect((await h.store.openRun())?.cursor).toBeUndefined();
+  });
+
+  it('reads a shared event’s attendees once per run (an in-process memo of ids), cleared when the run ends', async () => {
+    attendeesOf.shared = ['m1', 'm2', 'x'];
+    const shared = ev('shared', '2026-03-03T19:00:00-08:00', 'Big Mixer');
+    const pair = [
+      { ...members[0], events: [shared] },
+      { ...members[1], events: [shared] },
+    ];
+    const h = await harness({ linked: pair });
+
+    const outcome = await runBackfillTick(h.deps);
+
+    expect(outcome).toMatchObject({ finishedRun: true, built: 2 });
+    // One attendee read for the shared event across both members.
+    expect(pagesReadFor('shared')).toEqual([undefined]);
+    // Both saw each other as a companion from the memoized list.
+    expect(
+      (await h.entries.get(members[1].discordUserId, 2026))?.companions.named,
+    ).toMatchObject([
+      { discordUserId: members[0].discordUserId, sharedCount: 1 },
+    ]);
+    expect(memoSize()).toBe(0);
+    delete attendeesOf.shared;
+  });
+
+  it('reads only the first page of an early event and marks the cohort partial when there was more', async () => {
+    attendeesOf.g0 = ['m1', 'old'];
+    bigEvents.add('g0');
+    const early = Array.from({ length: 3 }, (_, i) =>
+      ev(`g${i}`, `${2023 + i}-02-05T19:00:00-08:00`, 'Trivia'),
+    );
+    const one: FakeMember = {
+      ...members[0],
+      events: [...early, ev('t26', '2026-02-05T19:00:00-08:00', 'Trivia')],
+    };
+    attendeesOf.t26 = ['m1', 'old'];
+    const h = await harness({ linked: [one] });
+    await h.repo.upsert({
+      discordUserId: '100000000000000077',
+      meetupId: 'old',
+      meetupName: null,
+      meetupMemberUrl: null,
+      onboardMethod: 'self_onboard',
+      onboardedBy: null,
+    });
+    // 2026 alone (a queued year): g0 is read only as an early event. In a
+    // sweep it would be 2023's own event, paginated in full, and then the
+    // memo's complete list would serve 2026 (not partial).
+    await recentRun(h);
+    await h.store.enqueue({
+      discordUserId: one.discordUserId,
+      meetupId: 'm1',
+      year: 2026,
+    });
+
+    await runBackfillTick(h.deps);
+
+    const copy = await h.entries.get(one.discordUserId, 2026);
+    const games = copy?.stats.topTypes.find((t) => t.type === 'games');
+    expect(games?.cohort.partial).toBe(true);
+    // 'old' was at g0 (first page) and at t26, both among the first events.
+    expect(games?.cohort.named).toEqual([
+      { discordUserId: '100000000000000077', earlyCount: 2, sharedCount: 1 },
+    ]);
+    // g0 was read once, first page only (no `after`), even though it had more.
+    expect(pagesReadFor('g0')).toEqual([undefined]);
+    bigEvents.delete('g0');
+    delete attendeesOf.g0;
+    delete attendeesOf.t26;
+  });
+
+  it('records the run’s Meetup request count', async () => {
+    const h = await harness({ linked: [members[0]] });
+
+    const outcome = await runBackfillTick(h.deps);
+
+    expect(outcome.kind === 'ran' ? outcome.calls : -1).toBeGreaterThan(0);
+    expect((await h.store.lastFinishedRun())?.requests).toBe(
+      outcome.kind === 'ran' ? outcome.calls : -1,
+    );
   });
 
   it('uses the member token when stored and the organizer reads otherwise, under the report lease', async () => {
@@ -748,6 +926,42 @@ describe('startWrappedBackfillScheduler', () => {
       setTimeout(r, 0);
     });
     expect(tick).toHaveBeenCalledTimes(2);
+  });
+
+  it('alerts once a UTC day when ticks keep failing, by error class only', async () => {
+    const cache = new FakeCache();
+    const alert = vi.fn(async (_entry: LogEntry) => true);
+    const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const intervals: Array<{ fn: () => void }> = [];
+    startWrappedBackfillScheduler(
+      {} as never,
+      async () =>
+        ({ cache: async () => cache, now: () => NOW, alert }) as never,
+      {
+        env: { DATABASE_URL: 'postgres://x' },
+        setIntervalFn: ((fn: () => void) => {
+          intervals.push({ fn });
+          return 0 as never;
+        }) as never,
+        log,
+        now: () => NOW.getTime(),
+        runTick: async () => {
+          throw new Error('connection refused to secret-host');
+        },
+      },
+    );
+    await new Promise((r) => {
+      setTimeout(r, 0);
+    });
+    intervals[0].fn();
+    await new Promise((r) => {
+      setTimeout(r, 0);
+    });
+    expect(alert).toHaveBeenCalledTimes(1);
+    const entry = alert.mock.calls[0][0];
+    expect(entry.title).toBe('Wrapped backfill is failing');
+    expect(entry.description).toContain('Error');
+    expect(entry.description).not.toContain('secret-host');
   });
 
   it('is off without DATABASE_URL', () => {

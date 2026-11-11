@@ -53,6 +53,7 @@ export class FakeBackfillStore implements WrappedBackfillStore {
       built: 0,
       skipped: 0,
       failed: 0,
+      requests: 0,
       cursor: undefined,
     };
     this.runs.push(run);
@@ -74,6 +75,7 @@ export class FakeBackfillStore implements WrappedBackfillStore {
     run.built += delta.built;
     run.skipped += delta.skipped;
     run.failed += delta.failed;
+    run.requests += delta.requests;
     return true;
   }
 

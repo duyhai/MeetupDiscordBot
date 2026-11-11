@@ -1198,6 +1198,7 @@ export function fakePageDeps(
         openRun: undefined,
         queueLength: 0,
         nextTickAt: undefined,
+        entries: 0,
       })),
       runNow: vi.fn(async () => 'requested' as const),
     },
