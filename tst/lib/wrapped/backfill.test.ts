@@ -1,5 +1,5 @@
 import { ClientError } from 'graphql-request';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { LogEntry } from '../../../src/lib/helpers/discordLogger.js';
 import { EventSummary } from '../../../src/lib/client/meetup/types.js';
@@ -11,7 +11,9 @@ import {
   FRESH_CURRENT_YEAR_MS,
   MEMBER_LEASE_KEY_PREFIX,
   TickOutcome,
+  instrumentedClient,
   memoSize,
+  resetMemo,
   OrganizerReads,
   QUEUE_MAX_ATTEMPTS,
   RUN_INTERVAL_MS,
@@ -47,6 +49,10 @@ const ev = (id: string, iso: string, title = `Event ${id}`): EventSummary => ({
   dateTime: iso,
   eventUrl: `https://www.meetup.com/e/${id}/`,
 });
+
+/** The j-th event of a year, spread over the first nine months. */
+const dayOf = (year: number, j: number) =>
+  `${year}-0${1 + (j % 9)}-${String(1 + (j % 28)).padStart(2, '0')}T19:00:00-08:00`;
 
 const page = <T>(nodes: T[]) => ({
   pageInfo: {
@@ -337,6 +343,9 @@ describe('isFresh', () => {
 });
 
 describe('runBackfillTick', () => {
+  // The memo is module state (it belongs to the open run): each test starts clean.
+  beforeEach(resetMemo);
+
   it('does nothing in the quiet hour or while the digest runs', async () => {
     const h = await harness({ quiet: true });
     await h.store.enqueue({
@@ -972,6 +981,76 @@ describe('runBackfillTick', () => {
     );
     expect(built).toBe(1);
     expect(await h.store.queueLength()).toBe(0);
+  });
+
+  it('a reader that sends the memo cursor after the entry is gone gets a full read, never the sentinel', async () => {
+    attendeesOf.race = ['m1', 'm2'];
+    bigEvents.add('race');
+    const calls = { n: 0 };
+    const lists = new Map<string, { ids: string[]; complete: boolean }>();
+    const client = instrumentedClient(
+      meetupFor(members[0], calls),
+      calls,
+      lists,
+    );
+
+    const second = await client.getEventRsvps('race', {
+      first: 100,
+      after: 'memo',
+    });
+
+    expect(rsvpReads.map((r) => r.after)).not.toContain('memo');
+    expect(second.event.rsvps.edges.map((e) => e.node.member.id)).toEqual([
+      'm1',
+      'm2',
+    ]);
+    expect(second.event.rsvps.pageInfo.hasNextPage).toBe(false);
+    expect(lists.get('race')).toEqual({ ids: ['m1', 'm2'], complete: true });
+    bigEvents.delete('race');
+    delete attendeesOf.race;
+  });
+
+  it('a tick with no run of its own never wipes another process’s open-run memo', async () => {
+    const busy: FakeMember = {
+      ...members[0],
+      events: [2024, 2025, 2026].flatMap((year) =>
+        Array.from({ length: 80 }, (_, j) =>
+          ev(`k${year}-${j}`, dayOf(year, j)),
+        ),
+      ),
+    };
+    const one = await harness({ linked: [busy] });
+    // Over budget at the year boundary: the run stays open with its memo filled.
+    expect(await runBackfillTick(one.deps)).toMatchObject({
+      finishedRun: false,
+    });
+    expect(await one.store.openRun()).toBeDefined();
+    const sizeBefore = memoSize();
+    expect(sizeBefore).toBeGreaterThan(0);
+    // Another process (its own store, no open run there) drains a queue row.
+    attendeesOf.other = ['m2', 'x'];
+    const other = await harness({
+      linked: [
+        {
+          ...members[1],
+          events: [ev('other', '2026-02-05T19:00:00-08:00', 'Trivia')],
+        },
+      ],
+    });
+    await recentRun(other);
+    await other.store.enqueue({
+      discordUserId: members[1].discordUserId,
+      meetupId: 'm2',
+      year: 2026,
+    });
+
+    expect(await runBackfillTick(other.deps)).toMatchObject({ built: 1 });
+
+    expect(memoSize()).toBe(sizeBefore);
+    // Finishing the open run clears it.
+    await runBackfillTick(one.deps);
+    expect(memoSize()).toBe(0);
+    delete attendeesOf.other;
   });
 
   it('records the run’s Meetup request count', async () => {
