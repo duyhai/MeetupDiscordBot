@@ -74,6 +74,8 @@ export interface WrappedBackfillStore {
    */
   claimNext(limit: number, staleMs: number): Promise<QueueRow[]>;
   complete(discordUserId: string): Promise<void>;
+  /** Gives a claimed row back untouched (nothing was tried: the tick could not start it). */
+  unclaim(discordUserId: string): Promise<void>;
   /** attempts + 1, then released for the next tick, or dropped at `maxAttempts`. */
   release(
     discordUserId: string,
@@ -291,6 +293,13 @@ export class PostgresWrappedBackfillRepository implements WrappedBackfillStore {
   async complete(discordUserId: string): Promise<void> {
     await this.pool.query(
       'DELETE FROM wrapped_queue WHERE discord_user_id = $1',
+      [discordUserId],
+    );
+  }
+
+  async unclaim(discordUserId: string): Promise<void> {
+    await this.pool.query(
+      'UPDATE wrapped_queue SET claimed_at = NULL WHERE discord_user_id = $1',
       [discordUserId],
     );
   }

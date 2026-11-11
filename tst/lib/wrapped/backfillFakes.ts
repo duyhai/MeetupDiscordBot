@@ -145,6 +145,13 @@ export class FakeBackfillStore implements WrappedBackfillStore {
     this.queue.delete(discordUserId);
   }
 
+  async unclaim(discordUserId: string): Promise<void> {
+    const row = this.queue.get(discordUserId);
+    if (row) {
+      row.claimedAt = undefined;
+    }
+  }
+
   async release(
     discordUserId: string,
     maxAttempts: number,

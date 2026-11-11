@@ -25,6 +25,7 @@ import {
 import {
   BUILDING_LEASE_TTL_SEC,
   CachedWrapped,
+  FIRST_WRAPPED_YEAR,
   buildingKey,
   readWrapped,
   writeWrapped,
@@ -56,8 +57,7 @@ export const WRAPPED_PATH = `${HOST_BASE}/wrapped`;
 const REBUILD_PATH = `${WRAPPED_PATH}/rebuild`;
 const LINK_DISCORD_PATH = `${HOST_BASE}/link/discord`;
 const MEETUP_SIGN_IN = `${HOST_BASE}/auth/meetup/start`;
-/** The group's first year on Meetup; nothing to wrap before it (as the command). */
-export const FIRST_WRAPPED_YEAR = 2015;
+export { FIRST_WRAPPED_YEAR };
 /** How long the page waits for Meetup; the build goes on after that. */
 const BUILD_DEADLINE_MS = 20_000;
 /** Companions and cohort members shown before the "Show all" expander. */
