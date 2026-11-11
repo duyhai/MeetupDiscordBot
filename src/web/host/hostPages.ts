@@ -79,6 +79,7 @@ export const HOST_PATHS = {
 } as const;
 
 const CREATE_PAGE = `${HOST_BASE}/create`;
+const WRAPPED_PAGE = `${HOST_BASE}/wrapped`;
 /** How many of the host's requests the home page lists. */
 const HOME_REQUESTS_SHOWN = 10;
 
@@ -278,6 +279,9 @@ function homeBody(
       ${notice} ${linkNudge}
       <div class="actions">
         <a class="button" href="${pageLink(CREATE_PAGE)}">Host an event</a>
+        <a class="button ghost" href="${pageLink(WRAPPED_PAGE)}"
+          >Your Wrapped</a
+        >
       </div>
     </div>
     ${requestsCard(requests)}
@@ -338,6 +342,43 @@ function homeBody(
         >
       </div>
     </div>`;
+}
+
+/**
+ * A member who has never hosted (Wrapped addendum): one card, their Wrapped
+ * and their link status. No host features, no Meetup read. A member is
+ * linked by definition, so the only Verify offer is the refresh, and only
+ * for a Meetup sign-in (the same rule as a host's).
+ */
+function memberBody(
+  session: HostSession,
+  linkResult: HostLinkResult | undefined,
+): SafeHtml {
+  const refresh =
+    session.via === 'meetup'
+      ? html`<div class="note info">
+          <p>
+            Your Meetup account is linked to Discord. Re-run Verify to update
+            your roles and badges from your Meetup activity.
+          </p>
+          <form method="post" action="${localUrl(LINK_DISCORD_PATH)}">
+            <input type="hidden" name="_csrf" value="${session.csrfToken}" />
+            <button type="submit">Refresh roles and badges</button>
+          </form>
+        </div>`
+      : html`<p class="muted">Your Meetup account is linked to Discord.</p>`;
+  return html`<div class="card">
+    <h1>Hi, ${memberText(session.username)}</h1>
+    ${linkResult ? linkNotice(linkResult) : ''}
+    <p>
+      Your 1.5 Gen Wrapped is your year with the group: your first event, events
+      this year, top activities, busiest month and who you went with.
+    </p>
+    <div class="actions">
+      <a class="button" href="${pageLink(WRAPPED_PAGE)}">Your Wrapped</a>
+    </div>
+    ${refresh}
+  </div>`;
 }
 
 /** One event as a line: time, title link, holiday badges, hosts. */
@@ -867,6 +908,14 @@ export function registerHostPages(
 
   router.get('/', (async (req, res) => {
     const { session } = hostLocals(res);
+    if (session.role === 'member') {
+      hostPage(res, {
+        title: 'Home',
+        current: 'home',
+        body: memberBody(session, linkResultOf(req.query.link)),
+      });
+      return;
+    }
     let upcoming: HostEvent[];
     let calendar: CalendarDay[];
     try {

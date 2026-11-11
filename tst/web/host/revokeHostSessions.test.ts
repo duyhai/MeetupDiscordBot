@@ -25,6 +25,7 @@ describe('revokeHostSessions', () => {
       username: 'Ann',
       discordUserId: null,
       tier: 'regular' as const,
+      role: 'host' as const,
       via: 'meetup' as const,
     });
     const { session: promoted } = await store.create(user('4242'));

@@ -280,13 +280,26 @@ async function buildAndReply(
       // body, issue #112) and the member a fixed line, in place: a transient
       // failure is not "reach out to a moderator".
       logger.error(error);
-      await deps.alert(interaction.client, {
-        title: '/wrapped failed',
-        description:
-          `User: ${interaction.user.toString()} (${interaction.user.username})\n` +
-          `Error: ${describeBuildError(error)}`,
-      });
-      await answerInPlace(interaction, { content: replies.buildFailed });
+      // The alert and the answer are each best-effort (#138 review): a
+      // failing alert channel must still leave the member an answer in
+      // place, and neither may surface as a second failure to the wrapper.
+      try {
+        await deps.alert(interaction.client, {
+          title: '/wrapped failed',
+          description:
+            `User: ${interaction.user.toString()} (${interaction.user.username})\n` +
+            `Error: ${describeBuildError(error)}`,
+        });
+      } catch (alertError) {
+        logger.warn(`Could not post the /wrapped alert: ${String(alertError)}`);
+      }
+      try {
+        await answerInPlace(interaction, { content: replies.buildFailed });
+      } catch (replyError) {
+        logger.warn(
+          `Could not answer the /wrapped failure: ${String(replyError)}`,
+        );
+      }
     } finally {
       clearTimeout(slowTimer);
     }

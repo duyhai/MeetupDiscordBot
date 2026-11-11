@@ -51,6 +51,12 @@ export interface WrappedStats {
   /** 0 = January. */
   busiestMonth: { month: number; count: number } | null;
   longestStreakMonths: number;
+  /**
+   * Every Pacific year with at least one counted attended event, ascending,
+   * NOT cut off at the Wrapped year: the website's year picker reads it
+   * from whichever year's Wrapped is shown.
+   */
+  activeYears: number[];
 }
 
 const TOP_TYPES = 3;
@@ -163,12 +169,11 @@ export function computeWrapped(input: WrappedInput): {
     dayjs(event.dateTime).valueOf() < end.valueOf();
 
   // A hosted event counts as attended, even without an RSVP.
-  const attended = cleanEvents(
+  const attendedEver = cleanEvents(
     [...input.attended, ...input.hosted],
     countsAsAttended,
-  )
-    .filter(cutoff)
-    .sort(byDate);
+  );
+  const attended = attendedEver.filter(cutoff).sort(byDate);
   const hosted = cleanEvents(input.hosted, countsAsHosted).filter(cutoff);
   const thisYear = attended.filter((event) => isInYear(event.dateTime, year));
   const hostedThisYear = hosted.filter((event) =>
@@ -189,6 +194,11 @@ export function computeWrapped(input: WrappedInput): {
           : null,
       busiestMonth: busiestMonth(months),
       longestStreakMonths: longestStreak(months),
+      activeYears: [
+        ...new Set(
+          attendedEver.map((event) => tz(dayjs(event.dateTime)).year()),
+        ),
+      ].sort((a, b) => a - b),
     },
     companions: rankCompanions(thisYear, attendeesByEvent, selfMeetupId),
   };

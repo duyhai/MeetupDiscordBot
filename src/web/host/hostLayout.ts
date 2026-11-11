@@ -1,20 +1,27 @@
 import { SafeHtml, html, localUrl, memberText } from '../html.js';
 import { STYLE } from '../pages.js';
 import { THEME_SCRIPT, themeToggle as themeToggleMarkup } from '../theme.js';
-import { HOST_BASE } from './hostSession.js';
+import { HOST_BASE, HostRole } from './hostSession.js';
 
 /** The host site's pages, in order. Links and labels are fixed. */
 const HOST_NAV_ITEMS = [
-  { key: 'home', path: HOST_BASE, label: 'Home' },
+  { key: 'home', path: HOST_BASE, label: 'Home', member: true },
   { key: 'calendar', path: `${HOST_BASE}/calendar`, label: 'Calendar' },
   { key: 'history', path: `${HOST_BASE}/history`, label: 'My history' },
+  {
+    key: 'wrapped',
+    path: `${HOST_BASE}/wrapped`,
+    label: 'Wrapped',
+    member: true,
+  },
 ] as const;
 
 export type HostNavKey = (typeof HOST_NAV_ITEMS)[number]['key'];
 
-function hostNav(current: HostNavKey | undefined): SafeHtml {
+/** A member (never hosted) sees only the pages they may reach. */
+function hostNav(current: HostNavKey | undefined, role: HostRole): SafeHtml {
   // prettier-ignore
-  const links = HOST_NAV_ITEMS.map((item) => {
+  const links = HOST_NAV_ITEMS.filter((item) => role === 'host' || ('member' in item && item.member)).map((item) => {
     const href = localUrl(item.path);
     return item.key === current
       ? html`<a href="${href}" aria-current="page">${item.label}</a>`
@@ -41,7 +48,8 @@ export function hostLayout({
 }: {
   title: string;
   nonce: string;
-  user?: { username: string; csrfToken: string };
+  /** No role (an error page's user, or a test) reads as a host. */
+  user?: { username: string; csrfToken: string; role?: HostRole };
   current?: HostNavKey;
   body: SafeHtml;
   /** One staticRaw constant: the page's progressive enhancement. */
@@ -56,7 +64,7 @@ export function hostLayout({
         </form>
       </div>`
     : '';
-  const nav = user ? hostNav(current) : '';
+  const nav = user ? hostNav(current, user.role ?? 'host') : '';
   const themeToggle = themeToggleMarkup();
   // prettier-ignore
   const scriptTag = script ? html`<script nonce="${nonce}">${script}</script>` : '';
@@ -90,7 +98,10 @@ export function hostLoginPage(
     nonce,
     body: html`<div class="card">
       <h1>Host sign-in</h1>
-      <p>For members who have hosted an event with us.</p>
+      <p>
+        For members who have hosted an event with us, and for linked members to
+        see their 1.5 Gen Wrapped.
+      </p>
       ${notice ? html`<p class="note">${notice}</p>` : ''}
       <div class="actions">
         <a class="button" href="/host/auth/discord/start"
@@ -133,6 +144,11 @@ export const HOST_ERROR_MESSAGES = {
 } as const;
 
 export type HostErrorStatus = keyof typeof HOST_ERROR_MESSAGES;
+
+/** Shown instead of the 403 text when a Meetup sign-in has no Discord link. */
+export const NOT_LINKED_MEETUP_MESSAGE =
+  'Your Meetup account is not linked to Discord yet. Press Verify (Link Meetup ' +
+  'Account) in our Discord server to link it, then sign in again.';
 
 /** Shown instead of the 403 text when a Discord sign-in has no Meetup link. */
 export const NOT_LINKED_MESSAGE =

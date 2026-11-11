@@ -137,6 +137,7 @@ const cached: CachedWrapped = {
     hosting: null,
     busiestMonth: null,
     longestStreakMonths: 1,
+    activeYears: [2026],
   },
   companions: { named: [], otherCount: 0 },
   builtAt: '2026-12-01T20:00:00.000Z',
@@ -414,6 +415,21 @@ describe('runWrapped', () => {
     // A transient failure must not lock the member out for an hour.
     expect(release).toHaveBeenCalledTimes(1);
     expect(h.deps.limiter.take('u1')).toBe(true);
+  });
+
+  it('still answers in place when the failure alert itself fails', async () => {
+    h = harness(fakeMeetup({ rsvpsError: new Error('boom') }));
+    await link(h.repo);
+    h.alert.mockRejectedValueOnce(new Error('alerts channel gone'));
+    const interaction = commandInteraction();
+
+    await expect(
+      runWrapped(interaction, { year: 2026, refresh: false }, h.deps),
+    ).resolves.toBeUndefined();
+
+    expect(contents(interaction.editReply).at(-1)).toBe(replies.buildFailed);
+    // The lease is released however the failure went.
+    expect(h.cache.data.has('wrapped:building:u1:2026')).toBe(false);
   });
 
   it('keeps the slot when the build succeeds', async () => {

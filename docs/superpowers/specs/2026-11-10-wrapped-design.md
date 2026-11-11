@@ -280,3 +280,223 @@ computed TTL.
   `src/commands/index.ts`).
 - Exact copy and emoji.
 - Progress message wording and cadence.
+
+---
+
+# Addendum (2026-11-10): Wrapped on the website
+
+Status: drafted from the build brief after #138 shipped `/wrapped`. The brief
+was detailed enough that no interview was held; every choice it left open is
+marked _my call_. This addendum extends the design above; it does not replace
+it. The non-goal "A web page version" above is withdrawn by this addendum.
+
+## Why
+
+Members who are not on Discord much, or who prefer a page they can bookmark,
+should see the same Wrapped. The host dashboard already has Meetup and
+Discord sign-in, sessions, CSP/CSRF, and a page kit, so the Wrapped page is a
+second front door onto the same cached stats rather than a new site.
+
+## Goals
+
+1. Any **linked** member (a `members` row with both ids) can sign in to the
+   host dashboard, with Meetup or Discord, and reach **`/host/wrapped`**, even
+   if they have never hosted.
+2. The page shows the same Wrapped as `/wrapped` in Discord, for this year and
+   any past year with at least one counted event, back to their first.
+3. Web and Discord share **one** cache entry, **one** hourly build slot and
+   **one** in-flight lease per member and year, so together they cost Meetup
+   at most one build an hour.
+4. The same privacy rules as Discord: linked members appear by server display
+   name, everyone else is a count; no Meetup name or id of another person
+   reaches the HTML.
+
+## Non-goals
+
+- A "Share to Discord" button on the web (v1). Sharing stays in Discord.
+- Admitting anyone who is not linked and not a host. An unlinked sign-in gets
+  a nudge to link (below), never a session.
+- Host features for non-hosts. A linked non-host sees the Wrapped card and
+  their link status on the home page, nothing else.
+- A Meetup OAuth hop inside the Wrapped page. A member with no usable stored
+  Meetup token is pointed at "Sign in with Meetup" (which keeps a token set),
+  or at `/wrapped` in Discord.
+
+## Anti-goals
+
+- A host-only route reachable by a non-host, however they signed in.
+- A 500, or a raw Meetup response body, on the page or in an alert.
+- A web build that bypasses the hourly limit the Discord command enforces, or
+  the other way round.
+- An unlinked person's name or Meetup id in the HTML, the cache or a log.
+
+## Access: hosts and members
+
+`resolveHost` gains a third outcome:
+
+```ts
+| { kind: 'member'; meetupMemberId: string; discordUserId: string }
+```
+
+returned for a person who is **linked** (both ids), on neither blacklist, and
+not a host (no Guest Host role, no counted hosted event). The blacklist check
+stays first. A Meetup sign-in that is not linked and not a host is now refused
+as **`not-linked`** rather than `not-a-host` (_my call_: the right next step
+for them is to link, not to host). `publishTier` treats `member` as `regular`,
+as it already treats a not-yet-host.
+
+The 403 for `not-linked` keeps its Discord text; a Meetup sign-in gets a
+Meetup-appropriate one (_my call_): "Your Meetup account is not linked to
+Discord yet. Press **Verify** in our Discord server (Link Meetup Account) to
+link it, then sign in again." Both are "the existing Verify nudge".
+
+`HostSession` gains `role: 'host' | 'member'`. Sessions written before this
+change have no `role`; they are read as `host` (they were only ever created
+for hosts). The 10-minute re-check patches `role` along with `tier`, so a
+member who hosts their first event becomes a host on the next re-check, and a
+host who is no longer one but is linked drops to `member` instead of being
+signed out.
+
+### What a member may reach
+
+Inside the gated router, before the pages, a member-role request is allowed
+only to `GET /` (home), `GET /host/wrapped`, `POST /host/wrapped/rebuild`,
+the Verify refresh the home page offers (`POST /link/discord` and its retry
+`POST /verify/finish`; a member is linked, so these only re-run Verify) and
+`POST /logout`. Anything else answers the existing 403 ("The host dashboard
+is for members who have hosted an event with us."). Hosts are untouched: every
+route they have today, plus `/host/wrapped`.
+
+The nav for a member is Home · Wrapped. For a host it is Home · Calendar ·
+My history · Wrapped (_my call_: hosts get the tab too; it is their Wrapped).
+
+The member home page is one card: "Hi, <name>", a **Your Wrapped** button, and
+their link status (linked ✓, with "Refresh roles and badges" when they signed
+in with Meetup, as a host sees). No upcoming events, no quiet days, no
+requests, no calendar links. No Meetup read.
+
+## The page: `/host/wrapped?year=YYYY`
+
+`year` defaults to this calendar year (Pacific); out of range (before 2015 or
+after this year, or not a number) falls back to this year. The session must
+carry a Discord id (a member always does; a Meetup-signed-in host who is not
+linked sees the link nudge instead of a Wrapped: Wrapped is for linked
+members, as in Discord).
+
+Flow, mirroring `runWrapped`:
+
+1. `readWrapped(cache, discordUserId, year, session.userId)`: a hit renders.
+   (The key is `wrapped:<version>:<discordUserId>:<year>`, as the Discord
+   command writes it; the brief's "(meetupId, year)" is this key, since a
+   linked member has exactly one of each. The Meetup id guards against a
+   relink.)
+2. Miss: the member's **stored Meetup token** (`getUsableMeetupTokens` under
+   the Discord id, the same store the bot and the dashboard sign-in write).
+   None → a page: "To build your Wrapped we need your Meetup connection", with
+   **Sign in with Meetup** (`/host/auth/meetup/start`; the sign-in keeps the
+   token set under their Discord id) and a line about `/wrapped` in Discord.
+3. Lease `wrapped:building:<discordUserId>:<year>` with `exclusive_set`, the
+   same key and TTL as Discord. Taken → "Your Wrapped is already being built
+   (perhaps in Discord). Reload in a minute."
+4. `buildWrapped` with the member's client, `claimBuild` taking the **same
+   module-level `wrappedBuildLimiter`** the command uses, the organizer RSVP
+   fallback via `withOrganizerMeetup`, `isPresent` through the bot, and no
+   progress callback. The page waits **20 s** (`announcePage` pattern); the
+   build goes on after that and writes the cache; the page says "Still
+   building — you've been busy! Reload in a minute." (On reload the lease
+   answers "already being built" until the build lands.)
+5. Outcomes: `built` → write and render. `rate-limited` → "You built your
+   Wrapped less than an hour ago (here or in Discord); try again in N
+   minutes", with the cached copy if there is one. `account-mismatch` → "The
+   Meetup account you connected isn't the one linked to your Discord. Sign in
+   with Meetup again." `not-in-group` → the Discord text. Any error → the slot
+   is released if claimed, a plain alert with `describeBuildError` text goes
+   to `#meetup-bot-alerts`, and the page is a **503** "Couldn't build your
+   Wrapped right now; try again in a little while." Never a 500, never a
+   Meetup body.
+
+`POST /host/wrapped/rebuild` (`year` in the body, CSRF-guarded) runs steps
+2–5 with the cache read skipped, then 303s to `/host/wrapped?year=`, carrying
+a `?notice=` code for the non-render outcomes (_my call_: the web
+counterpart of `/wrapped refresh:true`; it spends the same hourly slot).
+
+### Year picker
+
+The brief wants "this year plus each past year with ≥ 1 counted event, back
+to the member's first event". That needs per-year presence, which the
+cached stats do not carry, so **`WrappedStats` gains one additive field**,
+`activeYears: number[]`: the distinct Pacific years of every counted
+attended event in the member's history, **not** cut off at the Wrapped year
+(so any year's build lists them all). `WRAPPED_CACHE_VERSION` bumps to `v3`
+(copies built today under `v2` are rebuilt once). The embed ignores the
+field. This is the one deviation from "build/stats unchanged"; everything
+else in `src/lib/wrapped` is reused as is.
+
+The picker lists, newest first: this year, then each year in `activeYears`
+that is before this year. The years come from the Wrapped being shown, plus
+this year's cached copy when there is one (a past year's build is still
+complete, but this keeps the list current after a relink). With nothing
+cached yet (first visit, no token), only this year is offered.
+
+### Cache TTL for past years
+
+`wrappedTtlSec(year, now)`: unchanged for the current year (until 1 February
+of year+1, at least a day). A year **before the current calendar year** now
+keeps for **365 days** (_my call_ for "~1 year"): its data is final. A current
+-year copy written in December still expires on 1 February as before, so a
+member who looks back in January gets a fresh, final build once.
+
+### Rendering
+
+`hostLayout` page, the same CSP (nonce, `default-src 'none'`), no inline
+script. One card per section, `dl.stats` tiles for the numbers (this year,
+all-time, busiest month, streak), the first event as a `safeHref` link with
+its Pacific date, top activities as a list, hosting only for hosts, and
+"Went with the most" as display names resolved **at render time** through the
+bot's guild member cache (`displayName`), falling back to a count for anyone
+it cannot resolve; `memberText` (bdi + escaping) for every name. The RSVP
+caveat as a muted footnote. A zero-event year reads "A quiet year" with the
+all-time count and first event, as the embed does.
+
+## Cosmetic notes carried from the #138 review
+
+- `format.ts` `plainName`: a leading `-#` (Discord subtext) is escaped too.
+- `handlers.ts`: the alert and the in-place reply inside the build `catch`
+  are themselves guarded, so a failing alert still leaves the member an
+  answer in place.
+- `format.test.ts`: `Alex N.` renders unchanged in the shared view.
+
+## Testing
+
+Unit (vitest, network blocked):
+
+- `resolveHost`: linked non-host → `member`; unlinked Meetup non-host →
+  `not-linked`; blacklist still first; `publishTier(member)` is `regular`.
+- Router matrix: a member reaches `/host` (Wrapped card, no host features)
+  and `/host/wrapped`, and every host route answers 403 (calendar, history,
+  create, announce, link, verify finish, requests); a host reaches all of
+  them and `/host/wrapped`; the session stores `role`; a pre-change session
+  without `role` reads as a host; a re-check moves host ↔ member.
+- `wrappedPage`: the year list; the shared slot (a web build makes
+  `limiter.take(userId)` false, and a slot already taken, as by Discord,
+  gives the hourly message); rendering fixtures incl. a zero-event year; no
+  unlinked attendee's name or id in the HTML; the 20 s deadline page; the
+  lease page; a Meetup error → 503, alert with safe text, slot released; no
+  token → the connect page; a non-linked session → the link nudge.
+- `cache.test`: past-year TTL; `v3` key.
+- `stats.test`: `activeYears`.
+- `format.test`, `handlers.test`: the three cosmetic notes.
+
+Integration (`tst/integration`, Redis on :56379): a build through the web
+page's orchestrator lands in Redis under the key `runWrapped` reads, and the
+Discord handler then serves it without touching Meetup; and the reverse.
+
+Render check: the dev preview (`.claude/preview.mts` + `launch.json`, copied
+from a sibling worktree and extended with a fake Wrapped) at 360 and 1280 px,
+light and dark, noted in the PR.
+
+## Left to the builder
+
+- Exact copy of the connect, waiting and error pages.
+- File layout (suggested: `src/web/host/wrappedPage.ts` for the routes and
+  rendering; `displayName` beside `isServerMember` in `serverJoin.ts`).

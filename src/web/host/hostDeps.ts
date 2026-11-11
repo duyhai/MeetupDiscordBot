@@ -10,6 +10,9 @@ import { LogEntry, logActivity } from '../../lib/helpers/discordLogger.js';
 import { withOrganizerMeetup } from '../../lib/reports/organizerMeetup.js';
 import { PostgresEventRequestRepository } from '../../lib/repositories/postgresEventRequestRepository.js';
 import { getRandomTip } from '../../util/tips.js';
+import Configuration from '../../configuration.js';
+import { GqlMeetupClient } from '../../lib/client/meetup/gqlClient.js';
+import { wrappedBuildLimiter } from '../../lib/wrapped/cache.js';
 import {
   forgetMeetupTokens,
   getUsableMeetupTokens,
@@ -32,8 +35,10 @@ import { hostLayout } from './hostLayout.js';
 import { registerHostPages } from './hostPages.js';
 import { createHostRouter } from './hostRouter.js';
 import { registerCreatePages } from './createPage.js';
+import { registerWrappedPage } from './wrappedPage.js';
 import {
   discordUsername,
+  displayName,
   ensureServerMember,
   isServerMember,
 } from './serverJoin.js';
@@ -190,6 +195,32 @@ export function hostRouterFromEnv(
         },
         dashboardOrigin(),
       );
+      // The Discord command's cache, slot and lease; the member's own token
+      // from the bot's store; the organizer credential as the RSVP fallback.
+      registerWrappedPage(router, {
+        cache: ApplicationCache,
+        memberToken: async (discordUserId) =>
+          (await getUsableMeetupTokens(await ApplicationCache(), discordUserId))
+            ?.accessToken,
+        meetupClient: (accessToken) => new GqlMeetupClient(accessToken),
+        organizerRsvps: (meetupId) =>
+          withOrganizerMeetup(discordClient, (organizer) =>
+            organizer.getMemberRsvpEvents(
+              meetupId,
+              Configuration.meetup.groupId,
+              { rsvpStatus: ['YES', 'ATTENDED'], eventStatus: ['PAST'] },
+            ),
+          ),
+        findByMeetupId: async (meetupId) =>
+          (await ApplicationMemberRepository()).findByMeetupId(meetupId),
+        isPresent: (discordUserId) =>
+          isServerMember(() => discordClient, discordUserId),
+        displayName: (discordUserId) =>
+          displayName(() => discordClient, discordUserId),
+        limiter: wrappedBuildLimiter,
+        alert: alertVia(() => discordClient),
+        groupId: Configuration.meetup.groupId,
+      });
     },
   });
 }

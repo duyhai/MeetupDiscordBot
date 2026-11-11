@@ -35,6 +35,7 @@ const wrapped: CachedWrapped = {
     hosting: { thisYear: 1, allTime: 3 },
     busiestMonth: { month: 6, count: 4 },
     longestStreakMonths: 5,
+    activeYears: [2024, 2026],
   },
   companions: {
     named: [{ discordUserId: 'd2', sharedCount: 4 }],

@@ -48,6 +48,7 @@ import {
 import { CacheTimeoutError } from '../timedCache.js';
 import {
   HostErrorStatus,
+  NOT_LINKED_MEETUP_MESSAGE,
   NOT_LINKED_MESSAGE,
   hostErrorPage,
   hostLayout,
@@ -104,6 +105,22 @@ export const HOST_LINK_RESULTS = [
   'error',
 ] as const;
 export type HostLinkResult = (typeof HOST_LINK_RESULTS)[number];
+
+/**
+ * Inside the gate, what a member (linked, never hosted) may reach: home,
+ * Wrapped, the Verify refresh the home page offers (a Meetup sign-in's
+ * "Refresh roles and badges": /link/discord re-resolves them, and
+ * /verify/finish is its retry), and sign-out. Every other path is a
+ * host's and answers 403.
+ */
+export const MEMBER_PATHS: readonly string[] = [
+  '/',
+  '/wrapped',
+  '/wrapped/rebuild',
+  '/link/discord',
+  '/verify/finish',
+  '/logout',
+];
 
 export interface HostMeetupOAuth {
   buildAuthUrl(state: string): string;
@@ -223,6 +240,15 @@ function fail(res: Response, status: HostErrorStatus, message?: string) {
   send(res, status, hostErrorPage(status, locals(res).nonce, message));
 }
 
+/** The session fields an admitted resolution decides: a member is a regular-tier non-host. */
+function roleOf(
+  resolution: Exclude<HostResolution, { kind: 'refused' }>,
+): Pick<HostSession, 'tier' | 'role'> {
+  return resolution.kind === 'host'
+    ? { tier: resolution.tier, role: 'host' }
+    : { tier: 'regular', role: 'member' };
+}
+
 /** Who a refused sign-in was, for the audit line: ids only, never a name. */
 function who(identity: HostIdentity): string {
   return 'discordUserId' in identity
@@ -290,7 +316,8 @@ export function createHostRouter(deps: HostRouterDeps): express.Router {
       await store.destroy(sid);
       return undefined;
     }
-    return session;
+    // Written before roles existed: only hosts were admitted then.
+    return { ...session, role: session.role ?? 'host' };
   }
 
   /** As the staff dashboard's readSession, on host_sid and the host MAC domain. */
@@ -414,7 +441,11 @@ export function createHostRouter(deps: HostRouterDeps): express.Router {
       fail(
         res,
         403,
-        resolution.reason === 'not-linked' ? NOT_LINKED_MESSAGE : undefined,
+        resolution.reason === 'not-linked'
+          ? 'meetupMemberId' in identity
+            ? NOT_LINKED_MEETUP_MESSAGE
+            : NOT_LINKED_MESSAGE
+          : undefined,
       );
       return;
     }
@@ -427,7 +458,7 @@ export function createHostRouter(deps: HostRouterDeps): express.Router {
       discordUserId: DISCORD_ID.test(resolution.discordUserId ?? '')
         ? resolution.discordUserId
         : null,
-      tier: resolution.tier,
+      ...roleOf(resolution),
       via,
     });
     res.append(
@@ -833,7 +864,7 @@ export function createHostRouter(deps: HostRouterDeps): express.Router {
       await sessions()
     ).markRoleChecked(sid, session, {
       discordUserId: identity.id,
-      tier: after.tier,
+      ...roleOf(after),
     });
     if (!kept) {
       // Past its lifetime: the link is saved, the session is over.
@@ -1290,7 +1321,7 @@ export function createHostRouter(deps: HostRouterDeps): express.Router {
         return;
       }
       const patch = {
-        tier: outcome.tier,
+        ...roleOf(outcome),
         discordUserId: DISCORD_ID.test(outcome.discordUserId ?? '')
           ? outcome.discordUserId
           : null,
@@ -1335,6 +1366,16 @@ export function createHostRouter(deps: HostRouterDeps): express.Router {
       typeof token !== 'string' ||
       !safeEqual(token, session.csrfToken)
     ) {
+      fail(res, 403);
+      return;
+    }
+    next();
+  });
+
+  /** A member's area is small: anything else is a host page, refused as today. */
+  protectedRouter.use(function hostMemberGate(req, res, next) {
+    const { session } = hostLocals(res);
+    if (session.role === 'member' && !MEMBER_PATHS.includes(req.path)) {
       fail(res, 403);
       return;
     }

@@ -98,19 +98,33 @@ describe('resolveHost', () => {
     }
   });
 
-  it('no role and no past events: not a host', async () => {
-    await expect(
-      resolveHost(deps(), { discordUserId: DISCORD }),
-    ).resolves.toEqual({ kind: 'refused', reason: 'not-a-host' });
+  it('linked, no role and no past events: a member (Wrapped only), count read', async () => {
+    const d = deps();
+    await expect(resolveHost(d, { discordUserId: DISCORD })).resolves.toEqual({
+      kind: 'member',
+      meetupMemberId: MEETUP,
+      discordUserId: DISCORD,
+    });
+    expect(d.pastHostedCount).toHaveBeenCalledWith(MEETUP);
+    expect(d.isPromoted).not.toHaveBeenCalled();
   });
 
-  it('a Meetup sign-in with no Discord link and no counted hosted event is refused', async () => {
+  it('meetup path, linked, no role and no past events: a member too', async () => {
+    const d = deps({ discordIdForMeetup: vi.fn().mockResolvedValue(DISCORD) });
+    await expect(resolveHost(d, { meetupMemberId: MEETUP })).resolves.toEqual({
+      kind: 'member',
+      meetupMemberId: MEETUP,
+      discordUserId: DISCORD,
+    });
+  });
+
+  it('a Meetup sign-in with no Discord link and no counted hosted event is not linked', async () => {
     const d = deps({
       discordIdForMeetup: vi.fn().mockResolvedValue(undefined),
     });
     await expect(resolveHost(d, { meetupMemberId: '4242' })).resolves.toEqual({
       kind: 'refused',
-      reason: 'not-a-host',
+      reason: 'not-linked',
     });
     expect(d.pastHostedCount).toHaveBeenCalledWith('4242');
   });
@@ -137,10 +151,14 @@ describe('resolveHost', () => {
   });
 
   it('a promoted row alone does not make a host: promoted is a tier of hosts', async () => {
-    const d = deps({ isPromoted: vi.fn().mockResolvedValue(true) });
+    const d = deps({
+      isPromoted: vi.fn().mockResolvedValue(true),
+      discordIdForMeetup: vi.fn().mockResolvedValue(DISCORD),
+    });
     await expect(resolveHost(d, { meetupMemberId: MEETUP })).resolves.toEqual({
-      kind: 'refused',
-      reason: 'not-a-host',
+      kind: 'member',
+      meetupMemberId: MEETUP,
+      discordUserId: DISCORD,
     });
   });
 
@@ -171,6 +189,16 @@ describe('publishTier', () => {
     expect(publishTier({ kind: 'refused', reason: 'not-linked' })).toBe(
       'regular',
     );
+  });
+
+  it('a linked member who is not a host publishes as a regular host', () => {
+    expect(
+      publishTier({
+        kind: 'member',
+        meetupMemberId: MEETUP,
+        discordUserId: DISCORD,
+      }),
+    ).toBe('regular');
   });
 
   it('a blacklisted member is refused', () => {
