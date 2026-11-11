@@ -11,7 +11,7 @@ import { KeyValueCache } from '../cache/base.js';
 import { IDENTITY_DIGEST_UTC_HOUR } from '../helpers/identity/digest.js';
 import { WrappedBackfillStore } from '../repositories/postgresWrappedBackfillRepository.js';
 import { tz } from '../../util/timezone.js';
-import { readWrapped } from './cache.js';
+import { WrappedTiers, readEntry } from './store.js';
 
 export const BACKFILL_TICK_MS = 5 * 60_000;
 export const MEMBERS_PER_TICK = 4;
@@ -54,18 +54,22 @@ export type QueueOutcome =
 
 /**
  * Queues the member's year unless a copy for their current Meetup id is
- * already cached (then there is nothing to wait for: 'cached'). The ready-by
- * time counts from the recorded next tick, or one tick from now when the job
- * has not recorded one yet.
+ * already stored (then there is nothing to wait for: 'cached'). The same
+ * year queued again reads as 'queued'; another year already queued is
+ * 'already' with that year. The ready-by time counts from the recorded next
+ * tick, or one tick from now when the job has not recorded one yet.
  */
 export async function queueForLater(
   store: WrappedBackfillStore,
-  cache: KeyValueCache,
+  tiers: WrappedTiers,
   member: { discordUserId: string; meetupId: string },
   year: number,
   now: Date,
 ): Promise<QueueOutcome> {
-  if (await readWrapped(cache, member.discordUserId, year, member.meetupId)) {
+  const { cache } = tiers;
+  if (
+    await readEntry(tiers, member.discordUserId, year, member.meetupId, now)
+  ) {
     return { kind: 'cached' };
   }
   const result = await store.enqueue({
@@ -76,7 +80,7 @@ export async function queueForLater(
   const nextTick = await nextTickAt(cache, now);
   const position = (await store.position(member.discordUserId))?.position ?? 1;
   const at = readyBy(nextTick, position);
-  return result === 'queued'
+  return result === 'queued' || result.already === year
     ? { kind: 'queued', year, readyBy: at }
     : { kind: 'already', year: result.already, readyBy: at };
 }
