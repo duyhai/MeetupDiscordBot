@@ -23,6 +23,7 @@ import {
   MEETUP_SELF,
   ORIGIN,
   closeServers,
+  locationOf,
   makeHostDeps,
   signInWithDiscord,
 } from './hostHarness.js';
@@ -685,11 +686,68 @@ describe('the pre-flight confirmation', () => {
     expect(recreate).not.toHaveBeenCalled();
   });
 
-  it('the confirm page is for hosts only', async () => {
-    const { req, sid } = await setup();
-    // Signed out: the gate sends to login.
+  it('signed out, the confirm page redirects to the host login', async () => {
+    const { req } = await setup();
     const res = await req.get(`/host/events/${MINE}/announce`);
-    expect(res.status).not.toBe(200);
-    expect(sid).toBeTruthy();
+    expect(locationOf(res).pathname).toBe('/host/login');
+  });
+
+  it('a repeated field (an array) is not a tick: 422, nothing claimed', async () => {
+    const { req, sid, store, deps, home } = await setup();
+    const csrf = /name="_csrf" value="([^"]+)"/.exec(await home())?.[1] ?? '';
+    const res = await req
+      .post(`/host/events/${MINE}/announce`)
+      .set('Cookie', sid)
+      .set('Origin', ORIGIN)
+      .type('form')
+      .send(`_csrf=${csrf}&photo=on&photo=x&location=on&rsvps=on`);
+    expect(res.status).toBe(422);
+    expect(res.text).toContain('Tick all three');
+    expect(store.claim).not.toHaveBeenCalled();
+    expect(deps.announce).not.toHaveBeenCalled();
+  });
+
+  it('the refused page keeps the ticks that were sent, and the CSRF token', async () => {
+    const { announce } = await setup();
+    const res = await announce(MINE, undefined, { photo: 'on', rsvps: 'on' });
+    expect(res.status).toBe(422);
+    expect(res.text).toMatch(/name="_csrf" value="[^"]+"/);
+    expect(res.text).toMatch(/name="photo"[^>]*checked/);
+    expect(res.text).toMatch(/name="rsvps"[^>]*checked/);
+    expect(res.text).not.toMatch(/name="location"[^>]*checked/);
+    // A fresh page has nothing ticked.
+    const fresh = await announce(MINE, undefined, {});
+    expect(fresh.text).not.toMatch(/type="checkbox"[^>]*checked/);
+  });
+
+  it('the confirm page for an event already announced, held or being sent goes back home', async () => {
+    const { get, rows, now } = await setup();
+    for (const status of ['sent', 'held', 'sending'] as const) {
+      rows.set(MINE, row(MINE, status, { requestedAt: now, dueAt: now }));
+      // eslint-disable-next-line no-await-in-loop
+      const res = await get(`/host/events/${MINE}/announce`);
+      expect(res.status).toBe(303);
+      expect(res.headers.location).toBe('/host');
+      // eslint-disable-next-line no-await-in-loop
+      expect((await get(`/host/events/${MINE}/recreate`)).status).toBe(303);
+    }
+    // A send cut off by a restart may be tried again, so the page shows.
+    rows.set(
+      MINE,
+      row(MINE, 'sending', {
+        requestedAt: new Date(now.getTime() - 3 * 60 * 1000),
+      }),
+    );
+    expect((await get(`/host/events/${MINE}/announce`)).status).toBe(200);
+    for (const status of ['failed', 'unknown', 'cancelled'] as const) {
+      rows.set(MINE, row(MINE, status));
+      // eslint-disable-next-line no-await-in-loop
+      expect((await get(`/host/events/${MINE}/announce`)).status).toBe(200);
+    }
+    // The row read failing still shows the page: the server refuses a second send anyway.
+    const broken = await setup({ readFails: true });
+    expect((await broken.get(`/host/events/${MINE}/announce`)).status).toBe(
+      200,
+    );
   });
 });

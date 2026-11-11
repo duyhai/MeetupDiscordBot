@@ -368,6 +368,7 @@ ul.copy-details{margin:0 0 var(--s2);padding-left:1.2rem;overflow-wrap:anywhere}
 fieldset.review-checklist{border:1px solid var(--line);border-radius:var(--radius-ctl);padding:var(--s2) var(--s3);margin:0 0 var(--s3)}
 fieldset.review-checklist legend{font-size:var(--t-sm);color:var(--muted);padding:0 var(--s1)}
 fieldset.review-checklist label.check{display:flex;gap:var(--s2);align-items:center;min-height:44px}
+fieldset.review-checklist label.check input{flex:none}
 details.announce-guidelines{margin:0 0 var(--s3);font-size:var(--t-sm)}
 details.announce-guidelines ul{margin:var(--s1) 0 0;padding-left:1.2rem}
 .announce-early{margin:0 0 var(--s2);font-size:var(--t-sm)}

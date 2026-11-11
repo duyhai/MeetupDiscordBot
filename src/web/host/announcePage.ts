@@ -282,11 +282,26 @@ export const recreatePath = (eventId: string) =>
  * latter says what it does. `refused` shows the message after a POST with
  * a box unticked.
  */
+/**
+ * Which boxes a refused POST had ticked, so the page comes back as sent.
+ * (The markup below is literal twice per box: the template takes no
+ * interpolated attribute names, `checked` included.)
+ */
+export type Ticked = Partial<Record<keyof typeof ANNOUNCE_CHECKS, boolean>>;
+
+export function tickedIn(body: unknown): Ticked {
+  const fields = (body ?? {}) as Record<string, unknown>;
+  return Object.fromEntries(
+    CHECK_NAMES.map((name) => [name, fields[name] === 'on']),
+  );
+}
+
 export function confirmBody(
   event: HostEvent,
   kind: 'announce' | 'recreate',
   csrf: string,
   refused = false,
+  ticked: Ticked = {},
 ): SafeHtml {
   const meetup = safeHref(event.eventUrl);
   const action = kind === 'announce' ? announcePath : recreatePath;
@@ -313,15 +328,27 @@ export function confirmBody(
       <fieldset class="review-checklist">
         <legend>Before it goes out, confirm on Meetup that:</legend>
         <label class="check">
-          <input type="checkbox" name="photo" required />
+          ${
+            ticked.photo
+              ? html`<input type="checkbox" name="photo" required checked />`
+              : html`<input type="checkbox" name="photo" required />`
+          }
           ${ANNOUNCE_CHECKS.photo}
         </label>
         <label class="check">
-          <input type="checkbox" name="location" required />
+          ${
+            ticked.location
+              ? html`<input type="checkbox" name="location" required checked />`
+              : html`<input type="checkbox" name="location" required />`
+          }
           ${ANNOUNCE_CHECKS.location}
         </label>
         <label class="check">
-          <input type="checkbox" name="rsvps" required />
+          ${
+            ticked.rsvps
+              ? html`<input type="checkbox" name="rsvps" required checked />`
+              : html`<input type="checkbox" name="rsvps" required />`
+          }
           ${ANNOUNCE_CHECKS.rsvps}
         </label>
       </fieldset>
@@ -613,17 +640,43 @@ export function registerAnnounceRoute(
         kind,
         hostLocals(res).session.csrfToken,
         refused,
+        refused ? tickedIn(req.body) : {},
       ),
     });
   };
+  /**
+   * True when the event's announcement is done or under way (sent, held,
+   * or a fresh send), so the confirm page has nothing to offer: a stale
+   * bookmark goes back home instead. A row read that fails lets the page
+   * show; the server refuses a second send anyway.
+   */
+  const settled = async (eventId: string): Promise<boolean> => {
+    try {
+      const state = stateOf(
+        (await deps.announcements([eventId])).get(eventId),
+        events.now(),
+      );
+      return state === 'sent' || state === 'held' || state === 'sending';
+    } catch (error: unknown) {
+      warn('Confirm page announcement read failed', error);
+      return false;
+    }
+  };
+  const confirmGet =
+    (kind: 'announce' | 'recreate'): RequestHandler =>
+    async (req, res) => {
+      const { eventId } = req.params;
+      if (typeof eventId === 'string' && EVENT_ID.test(eventId)) {
+        if (await settled(eventId)) {
+          res.redirect(303, HOST_BASE);
+          return;
+        }
+      }
+      await confirmPage(req, res, kind, false);
+    };
 
-  router.get('/events/:eventId/announce', (async (req, res) => {
-    await confirmPage(req, res, 'announce', false);
-  }) as RequestHandler);
-
-  router.get('/events/:eventId/recreate', (async (req, res) => {
-    await confirmPage(req, res, 'recreate', false);
-  }) as RequestHandler);
+  router.get('/events/:eventId/announce', confirmGet('announce'));
+  router.get('/events/:eventId/recreate', confirmGet('recreate'));
 
   router.post('/events/:eventId/announce', (async (req, res) => {
     const { eventId } = req.params;
