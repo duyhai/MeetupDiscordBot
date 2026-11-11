@@ -1,10 +1,15 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { MemberRecord } from '../../../src/lib/repositories/types.js';
+import { CohortCandidate } from '../../../src/lib/wrapped/cohort.js';
 import {
+  COHORT_LOOKUP_CAP,
   COMPANION_LOOKUP_CAP,
+  NAMED_COHORT,
   NAMED_COMPANIONS,
+  nameCohort,
   nameCompanions,
+  nameRanked,
 } from '../../../src/lib/wrapped/companions.js';
 import { Companion } from '../../../src/lib/wrapped/stats.js';
 
@@ -25,6 +30,15 @@ function ranked(ids: string[]): Companion[] {
   return ids.map((meetupId, index) => ({
     meetupId,
     sharedCount: ids.length - index,
+    sharedEventIds: [`e${index}`],
+  }));
+}
+
+function cohort(ids: string[]): CohortCandidate[] {
+  return ids.map((meetupId, index) => ({
+    meetupId,
+    earlyCount: ids.length - index,
+    sharedCount: 1,
   }));
 }
 
@@ -39,20 +53,26 @@ function deps(linked: string[], absent: string[] = []) {
 }
 
 describe('nameCompanions', () => {
-  it('names only linked members, in rank order, up to three', async () => {
-    const d = deps(['1', '3', '5']);
+  it('names only linked members, in rank order, up to ten', async () => {
+    const ids = Array.from({ length: 12 }, (_, i) => String(i + 1));
+    const d = deps(ids.filter((id) => id !== '2'));
 
-    const result = await nameCompanions(ranked(['1', '2', '3', '4', '5']), d);
+    const result = await nameCompanions(ranked(ids), d);
 
-    expect(result).toEqual({
-      named: [
-        { discordUserId: 'd1', sharedCount: 5 },
-        { discordUserId: 'd3', sharedCount: 3 },
-        { discordUserId: 'd5', sharedCount: 1 },
-      ],
-      otherCount: 2,
-    });
-    expect(NAMED_COMPANIONS).toBe(3);
+    expect(NAMED_COMPANIONS).toBe(10);
+    expect(result.named).toHaveLength(10);
+    expect(result.named[0]).toEqual({ discordUserId: 'd1', sharedCount: 12 });
+    expect(result.named[1]).toEqual({ discordUserId: 'd3', sharedCount: 10 });
+    expect(result.otherCount).toBe(2);
+  });
+
+  it('carries no Meetup id or event ids into the named list', async () => {
+    const result = await nameCompanions(ranked(['1']), deps(['1']));
+
+    expect(Object.keys(result.named[0]).sort()).toEqual([
+      'discordUserId',
+      'sharedCount',
+    ]);
   });
 
   it('skips linked members who left the server', async () => {
@@ -67,30 +87,80 @@ describe('nameCompanions', () => {
   });
 
   it('stops after the lookup cap', async () => {
-    const ids = Array.from({ length: 40 }, (_, i) => String(i + 1));
+    const ids = Array.from({ length: 60 }, (_, i) => String(i + 1));
     const d = deps([]);
 
     const result = await nameCompanions(ranked(ids), d);
 
     expect(d.findByMeetupId).toHaveBeenCalledTimes(COMPANION_LOOKUP_CAP);
-    expect(COMPANION_LOOKUP_CAP).toBe(25);
-    expect(result).toEqual({ named: [], otherCount: 40 });
+    expect(COMPANION_LOOKUP_CAP).toBe(50);
+    expect(result).toEqual({ named: [], otherCount: 60 });
   });
 
-  it('stops looking once three are named', async () => {
-    const ids = Array.from({ length: 10 }, (_, i) => String(i + 1));
+  it('stops looking once ten are named', async () => {
+    const ids = Array.from({ length: 15 }, (_, i) => String(i + 1));
     const d = deps(ids);
 
     const result = await nameCompanions(ranked(ids), d);
 
-    expect(d.findByMeetupId).toHaveBeenCalledTimes(3);
-    expect(result.named).toHaveLength(3);
-    expect(result.otherCount).toBe(7);
+    expect(d.findByMeetupId).toHaveBeenCalledTimes(10);
+    expect(result.named).toHaveLength(10);
+    expect(result.otherCount).toBe(5);
   });
 
   it('handles nobody', async () => {
     expect(await nameCompanions([], deps([]))).toEqual({
       named: [],
+      otherCount: 0,
+    });
+  });
+});
+
+describe('nameCohort', () => {
+  it('names at most ten after at most 25 lookups, keeping both counts', async () => {
+    const ids = Array.from({ length: 30 }, (_, i) => String(i + 1));
+    const d = deps(ids.filter((_, i) => i % 2 === 0));
+
+    const result = await nameCohort(cohort(ids), d);
+
+    expect(NAMED_COHORT).toBe(10);
+    expect(COHORT_LOOKUP_CAP).toBe(25);
+    expect(result.named).toHaveLength(10);
+    expect(result.named[0]).toEqual({
+      discordUserId: 'd1',
+      earlyCount: 30,
+      sharedCount: 1,
+    });
+    expect(Object.keys(result.named[0]).sort()).toEqual([
+      'discordUserId',
+      'earlyCount',
+      'sharedCount',
+    ]);
+    expect(result.otherCount).toBe(20);
+  });
+
+  it('stops after its own lookup cap', async () => {
+    const ids = Array.from({ length: 30 }, (_, i) => String(i + 1));
+    const d = deps([]);
+
+    const result = await nameCohort(cohort(ids), d);
+
+    expect(d.findByMeetupId).toHaveBeenCalledTimes(25);
+    expect(result).toEqual({ named: [], otherCount: 30 });
+  });
+});
+
+describe('nameRanked', () => {
+  it('keeps the ranked item and adds the Discord id', async () => {
+    const result = await nameRanked(
+      [{ meetupId: '1', extra: 'x' }],
+      deps(['1']),
+      5,
+      5,
+    );
+
+    expect(result).toEqual({
+      named: [{ meetupId: '1', extra: 'x', discordUserId: 'd1' }],
       otherCount: 0,
     });
   });
