@@ -11,6 +11,7 @@ import {
 import { HostEvent } from '../../../src/lib/hosts/hostEvents.js';
 import { OrganizerTokenUnavailableError } from '../../../src/lib/reports/organizerMeetup.js';
 import {
+  AnnounceConfirmation,
   Announcement,
   AnnouncementStatus,
 } from '../../../src/lib/repositories/postgresEventAnnouncementRepository.js';
@@ -55,6 +56,7 @@ function memoryStore(start?: AnnouncementStatus, dueAt: Date | null = null) {
     requestedAt: new Date(),
     completedAt: null,
     dueAt: due,
+    confirmation: null,
   });
   if (start) {
     rows.set(EVENT.id, row(EVENT.id, HOST.meetupMemberId, start, dueAt));
@@ -64,22 +66,35 @@ function memoryStore(start?: AnnouncementStatus, dueAt: Date | null = null) {
     ['failed', 'unknown', 'cancelled'].includes(current.status);
   return {
     rows,
-    claim: vi.fn(async (id: string, by: string) => {
-      const current = rows.get(id);
-      if (reclaimable(current)) {
-        rows.set(id, row(id, by, 'sending'));
-        return { claimed: true as const };
-      }
-      return { claimed: false as const, current: current };
-    }),
-    hold: vi.fn(async (id: string, by: string, due: Date) => {
-      const current = rows.get(id);
-      if (reclaimable(current)) {
-        rows.set(id, row(id, by, 'held', due));
-        return { held: true as const };
-      }
-      return { held: false as const, current: current };
-    }),
+    claim: vi.fn(
+      async (
+        id: string,
+        by: string,
+        confirmation: AnnounceConfirmation | null = null,
+      ) => {
+        const current = rows.get(id);
+        if (reclaimable(current)) {
+          rows.set(id, { ...row(id, by, 'sending'), confirmation });
+          return { claimed: true as const };
+        }
+        return { claimed: false as const, current: current };
+      },
+    ),
+    hold: vi.fn(
+      async (
+        id: string,
+        by: string,
+        due: Date,
+        confirmation: AnnounceConfirmation | null = null,
+      ) => {
+        const current = rows.get(id);
+        if (reclaimable(current)) {
+          rows.set(id, { ...row(id, by, 'held', due), confirmation });
+          return { held: true as const };
+        }
+        return { held: false as const, current: current };
+      },
+    ),
     finish: vi.fn(
       async (
         id: string,
@@ -132,6 +147,30 @@ const graphqlError = (message: string, status = 200) =>
   );
 
 describe('announceHostEvent', () => {
+  it('records the host’s pre-flight confirmation with the claim, and with a hold', async () => {
+    const confirmation: AnnounceConfirmation = {
+      photoSet: true,
+      locationNotInTitle: true,
+      rsvpsOpen: true,
+      confirmedAt: NOW.toISOString(),
+    };
+    const sent = setup();
+    await expect(
+      announceHostEvent(sent.deps, HOST, EVENT.id, { confirmation }),
+    ).resolves.toBe('sent');
+    expect(sent.store.claim).toHaveBeenCalledWith(
+      EVENT.id,
+      HOST.meetupMemberId,
+      confirmation,
+    );
+    expect(sent.store.rows.get(EVENT.id)?.confirmation).toEqual(confirmation);
+    const held = setup({ now: WORK_HOURS });
+    await expect(
+      announceHostEvent(held.deps, HOST, EVENT.id, { confirmation }),
+    ).resolves.toBe('scheduled');
+    expect(held.store.rows.get(EVENT.id)?.confirmation).toEqual(confirmation);
+  });
+
   it('sends once, records it, and alerts with the text escaped and no mentions', async () => {
     const { store, deps, run } = setup();
     await expect(run()).resolves.toBe('sent');
@@ -226,6 +265,7 @@ describe('announceHostEvent', () => {
         EVENT.id,
         HOST.meetupMemberId,
         new Date('2026-11-11T00:00:00Z'),
+        null,
       );
       expect(store.rows.get(EVENT.id)?.status).toBe('held');
       expect(deps.alert).not.toHaveBeenCalled();

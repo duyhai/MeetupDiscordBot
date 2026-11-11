@@ -12,7 +12,10 @@ import {
   RecreateOutcome,
   Recreatable,
 } from '../../../src/lib/hosts/recreateEvent.js';
-import { Announcement } from '../../../src/lib/repositories/postgresEventAnnouncementRepository.js';
+import {
+  AnnounceConfirmation,
+  Announcement,
+} from '../../../src/lib/repositories/postgresEventAnnouncementRepository.js';
 import { createHostRouter } from '../../../src/web/host/hostRouter.js';
 import { registerHostPages } from '../../../src/web/host/hostPages.js';
 import { clientFor, listen } from '../../setup/loopbackServer.js';
@@ -33,6 +36,14 @@ const EVENING = new Date('2026-11-04T03:00:00Z');
 const MINE = '311111111';
 const THEIRS = '322222222';
 const SOON = '333333333';
+/** The pre-flight checkboxes, all ticked, as the form sends them. */
+const TICKED = { photo: 'on', location: 'on', rsvps: 'on' };
+const CONFIRMED = (at: Date): AnnounceConfirmation => ({
+  photoSet: true,
+  locationNotInTitle: true,
+  rsvpsOpen: true,
+  confirmedAt: at.toISOString(),
+});
 
 const ev = (
   id: string,
@@ -60,6 +71,7 @@ const row = (
   requestedAt: NOW,
   completedAt: null,
   dueAt: null,
+  confirmation: null,
   ...extra,
 });
 
@@ -81,22 +93,38 @@ function announceApp(
     current === undefined ||
     ['failed', 'unknown', 'cancelled'].includes(current.status);
   const store = {
-    claim: vi.fn(async (id: string, by: string) => {
-      const current = rows.get(id);
-      if (reclaimable(current)) {
-        rows.set(id, row(id, 'sending', { requestedBy: by }));
-        return { claimed: true as const };
-      }
-      return { claimed: false as const, current: current };
-    }),
-    hold: vi.fn(async (id: string, by: string, dueAt: Date) => {
-      const current = rows.get(id);
-      if (reclaimable(current)) {
-        rows.set(id, row(id, 'held', { requestedBy: by, dueAt }));
-        return { held: true as const };
-      }
-      return { held: false as const, current: current };
-    }),
+    claim: vi.fn(
+      async (
+        id: string,
+        by: string,
+        confirmation: AnnounceConfirmation | null = null,
+      ) => {
+        const current = rows.get(id);
+        if (reclaimable(current)) {
+          rows.set(id, row(id, 'sending', { requestedBy: by, confirmation }));
+          return { claimed: true as const };
+        }
+        return { claimed: false as const, current: current };
+      },
+    ),
+    hold: vi.fn(
+      async (
+        id: string,
+        by: string,
+        dueAt: Date,
+        confirmation: AnnounceConfirmation | null = null,
+      ) => {
+        const current = rows.get(id);
+        if (reclaimable(current)) {
+          rows.set(
+            id,
+            row(id, 'held', { requestedBy: by, dueAt, confirmation }),
+          );
+          return { held: true as const };
+        }
+        return { held: false as const, current: current };
+      },
+    ),
     finish: vi.fn(
       async (
         id: string,
@@ -201,8 +229,8 @@ async function setup(options: Parameters<typeof announceApp>[0] = {}) {
           now: () => a.now,
         },
         announce: {
-          announce: (host, id, hooks) =>
-            announceHostEvent(a.deps, host, id, hooks),
+          announce: (host, id, options) =>
+            announceHostEvent(a.deps, host, id, options),
           announcements: async (ids) => {
             if (a.readFails) {
               throw new Error('pg down');
@@ -229,28 +257,35 @@ async function setup(options: Parameters<typeof announceApp>[0] = {}) {
   const home = async (query = '') =>
     (await req.get(`/host${query}`).set('Cookie', sid)).text;
   const csrf = /name="_csrf" value="([^"]+)"/.exec(await home())?.[1] ?? '';
-  const postTo = (path: string, token = csrf) =>
+  const postTo = (
+    path: string,
+    token = csrf,
+    body: Record<string, string> = TICKED,
+  ) =>
     req
       .post(path)
       .set('Cookie', sid)
       .set('Origin', ORIGIN)
       .type('form')
-      .send({ _csrf: token });
-  const announce = (id: string, token = csrf) =>
-    postTo(`/host/events/${id}/announce`, token);
-  const cancel = (id: string) => postTo(`/host/events/${id}/announce/cancel`);
-  const recreatePost = (id: string) => postTo(`/host/events/${id}/recreate`);
-  return { ...a, req, sid, home, announce, cancel, recreatePost };
+      .send({ _csrf: token, ...body });
+  const announce = (id: string, token = csrf, body?: Record<string, string>) =>
+    postTo(`/host/events/${id}/announce`, token, body);
+  const cancel = (id: string) =>
+    postTo(`/host/events/${id}/announce/cancel`, csrf, {});
+  const recreatePost = (id: string, body?: Record<string, string>) =>
+    postTo(`/host/events/${id}/recreate`, csrf, body);
+  const get = async (path: string) => req.get(path).set('Cookie', sid);
+  return { ...a, req, sid, home, get, announce, cancel, recreatePost };
 }
 
 const noticeOf = (location: string | undefined) =>
   new URL(location ?? '', ORIGIN).searchParams.get('announce');
 
 describe('Announce on the host home', () => {
-  it('each own upcoming event has an Announce button, posting to its own path, with the guidelines', async () => {
+  it('each own upcoming event has an Announce button, leading to its own confirm page, with the guidelines', async () => {
     const { home } = await setup();
     const text = await home();
-    expect(text).toContain(`action="/host/events/${MINE}/announce"`);
+    expect(text).toContain(`href="/host/events/${MINE}/announce"`);
     expect(text).not.toContain(`/host/events/${THEIRS}/announce`);
     expect(text).toContain('It goes out once per event.');
     expect(text).toContain('Announcing: the guidelines');
@@ -271,7 +306,7 @@ describe('Announce on the host home', () => {
     expect(text).toMatch(
       /<button type="button" class="secondary" disabled>\s*Announced/,
     );
-    expect(text).not.toContain(`action="/host/events/${MINE}/announce"`);
+    expect(text).not.toContain(`href="/host/events/${MINE}/announce"`);
     // Sent again by hand (a stale tab): nothing goes out.
     expect(noticeOf((await announce(MINE)).headers.location)).toBe('already');
     expect(deps.announce).toHaveBeenCalledTimes(1);
@@ -374,7 +409,7 @@ describe('Announce on the host home', () => {
     );
     const text = await home();
     expect(text).toContain('Announcement not confirmed');
-    expect(text).toContain(`action="/host/events/${MINE}/announce"`);
+    expect(text).toContain(`href="/host/events/${MINE}/announce"`);
     // A fresh one is still "Announcing…", disabled.
     rows.set(MINE, row(MINE, 'sending', { requestedAt: now }));
     expect(await home()).toMatch(/disabled>\s*Announcing…/);
@@ -385,7 +420,7 @@ describe('Announce on the host home', () => {
     const { home } = await setup({ readFails: true });
     const text = await home();
     expect(text).toContain('Your upcoming events');
-    expect(text).toContain(`action="/host/events/${MINE}/announce"`);
+    expect(text).toContain(`href="/host/events/${MINE}/announce"`);
   });
 
   it('an unknown ?announce= code shows nothing', async () => {
@@ -406,12 +441,12 @@ describe('the hold', () => {
     expect(text).toMatch(/Announcement scheduled for\s+Tue, Nov 3 at 4:00 PM/);
     expect(text).toContain(`action="/host/events/${MINE}/announce/cancel"`);
     expect(text).toContain('Cancel the announcement');
-    expect(text).not.toContain(`action="/host/events/${MINE}/announce"`);
+    expect(text).not.toContain(`href="/host/events/${MINE}/announce"`);
     expect(noticeOf((await cancel(MINE)).headers.location)).toBe('cancelled');
     expect(rows.get(MINE)?.status).toBe('cancelled');
     text = await home('?announce=cancelled');
     expect(text).toContain('The scheduled announcement was cancelled');
-    expect(text).toContain(`action="/host/events/${MINE}/announce"`);
+    expect(text).toContain(`href="/host/events/${MINE}/announce"`);
     // Cancelling again, or someone else's: says so, changes nothing.
     expect(noticeOf((await cancel(MINE)).headers.location)).toBe('not-held');
     expect(noticeOf((await cancel(THEIRS)).headers.location)).toBe('not-yours');
@@ -440,7 +475,7 @@ describe('the hold', () => {
     });
     const text = await home();
     expect(text).toContain('More than 3 weeks away');
-    expect(text).toContain(`action="/host/events/${MINE}/announce"`);
+    expect(text).toContain(`href="/host/events/${MINE}/announce"`);
     expect(noticeOf((await announce(MINE)).headers.location)).toBe('sent');
   });
 });
@@ -466,7 +501,11 @@ describe('pre-checks on the page', () => {
     expect(res.headers.location).toBe(`/host?announce=too-late&event=${MINE}`);
     const text = await home(`?announce=too-late&event=${MINE}`);
     expect(text).toContain('Meetup will not announce an event within 7 days');
-    expect(text).toContain(`action="/host/events/${MINE}/recreate"`);
+    expect(text).toContain(
+      'It&#39;s too late for Meetup to announce this event!',
+    );
+    expect(text).toContain('nobody except the hosts has RSVPed');
+    expect(text).toContain(`href="/host/events/${MINE}/recreate"`);
     expect(text).toContain('Recreate and announce');
     expect(recreatable).toHaveBeenCalledWith(
       expect.objectContaining({ meetupMemberId: MEETUP_SELF.id }),
@@ -474,13 +513,18 @@ describe('pre-checks on the page', () => {
     );
   });
 
-  it('too late with other RSVPs: says why it is not offered, with no button', async () => {
+  it('too late with other RSVPs: Kristen’s wording, with no button', async () => {
     const { home } = await setup({
       recreatable: { ok: false, reason: 'has-rsvps' },
     });
     const text = await home(`?announce=too-late&event=${MINE}`);
-    expect(text).toContain('someone other than the hosts has already RSVPed');
-    expect(text).not.toContain(`action="/host/events/${MINE}/recreate"`);
+    expect(text).toContain(
+      'It&#39;s too late for Meetup to announce this event! The only workaround is ' +
+        'to recreate the event — but that&#39;s not possible because someone is ' +
+        'already signed up.',
+    );
+    expect(text).not.toContain('Recreate and announce');
+    expect(text).not.toContain(`href="/host/events/${MINE}/recreate"`);
   });
 
   it('a recreation under way or stuck is said, with no button', async () => {
@@ -489,7 +533,7 @@ describe('pre-checks on the page', () => {
     });
     const text = await home(`?announce=too-late&event=${MINE}`);
     expect(text).toContain('under way or needs checking');
-    expect(text).not.toContain(`action="/host/events/${MINE}/recreate"`);
+    expect(text).not.toContain(`href="/host/events/${MINE}/recreate"`);
   });
 
   it('the recreatable check failing shows a reload note, and a stranger’s event id shows nothing', async () => {
@@ -497,18 +541,26 @@ describe('pre-checks on the page', () => {
     expect(await home(`?announce=too-late&event=${MINE}`)).toContain(
       'could not be checked just now',
     );
+    expect(await home(`?announce=too-late&event=${MINE}`)).toContain(
+      'It&#39;s too late for Meetup to announce this event!',
+    );
     expect(await home(`?announce=too-late&event=${THEIRS}`)).not.toContain(
-      'Meetup will not announce this event any more',
+      'It&#39;s too late for Meetup to announce this event!',
     );
   });
 });
 
 describe('Recreate and announce', () => {
-  it('runs the recreate and reports its outcome', async () => {
-    const { recreatePost, home } = await setup();
+  it('runs the recreate, with the confirmation, and reports its outcome', async () => {
+    const { recreatePost, home, recreate, now } = await setup();
     const res = await recreatePost(MINE);
     expect(res.status).toBe(303);
     expect(noticeOf(res.headers.location)).toBe('recreated');
+    expect(recreate).toHaveBeenCalledWith(
+      expect.objectContaining({ meetupMemberId: MEETUP_SELF.id }),
+      MINE,
+      CONFIRMED(now),
+    );
     expect(await home('?announce=recreated')).toContain(
       'your event was recreated',
     );
@@ -555,5 +607,89 @@ describe('Recreate and announce', () => {
     expect(noticeOf((await broken.recreatePost('abc')).headers.location)).toBe(
       'not-yours',
     );
+  });
+});
+
+describe('the pre-flight confirmation', () => {
+  it('Announce leads to a confirm page with the three checks, posting to the announce path', async () => {
+    const { get } = await setup();
+    const res = await get(`/host/events/${MINE}/announce`);
+    expect(res.status).toBe(200);
+    expect(res.text).toContain(`Event ${MINE}`);
+    expect(res.text).toContain(`action="/host/events/${MINE}/announce"`);
+    expect(res.text).toContain('The event photo is set (not the default)');
+    expect(res.text).toContain(
+      'The exact location is NOT in the title (it&#39;s in the event details)',
+    );
+    expect(res.text).toContain('RSVPs are open');
+    expect(res.text).toMatch(/type="checkbox" name="photo"[^>]*required/);
+    expect(res.text).toMatch(/type="checkbox" name="location"[^>]*required/);
+    expect(res.text).toMatch(/type="checkbox" name="rsvps"[^>]*required/);
+    expect(res.text).toContain('Confirm and announce');
+    expect(res.text).not.toContain('Tick all three');
+  });
+
+  it('a stranger’s event or a bad id has no confirm page', async () => {
+    const { get } = await setup();
+    expect((await get(`/host/events/${THEIRS}/announce`)).status).toBe(404);
+    expect((await get('/host/events/abc/announce')).status).toBe(404);
+    expect((await get(`/host/events/${THEIRS}/recreate`)).status).toBe(404);
+  });
+
+  it('without all three ticked: the page again with the message, nothing claimed or sent', async () => {
+    const { announce, deps, store } = await setup();
+    for (const body of [
+      {},
+      { photo: 'on', location: 'on' },
+      { photo: 'on', rsvps: 'on' },
+      { location: 'on', rsvps: 'on' },
+      { photo: 'yes', location: 'on', rsvps: 'on' },
+    ]) {
+      // eslint-disable-next-line no-await-in-loop
+      const res = await announce(MINE, undefined, body);
+      expect(res.status).toBe(422);
+      expect(res.text).toContain('Tick all three');
+      expect(res.text).toContain(`action="/host/events/${MINE}/announce"`);
+    }
+    expect(store.claim).not.toHaveBeenCalled();
+    expect(store.hold).not.toHaveBeenCalled();
+    expect(deps.announce).not.toHaveBeenCalled();
+  });
+
+  it('with all three: announced, and the row records what was confirmed and when', async () => {
+    const { announce, deps, rows, now } = await setup();
+    expect(noticeOf((await announce(MINE)).headers.location)).toBe('sent');
+    expect(deps.announce).toHaveBeenCalledWith(MINE);
+    expect(rows.get(MINE)?.confirmation).toEqual(CONFIRMED(now));
+  });
+
+  it('a held announcement records the confirmation too', async () => {
+    const { announce, rows, now } = await setup({ now: NOW });
+    expect(noticeOf((await announce(MINE)).headers.location)).toBe('scheduled');
+    expect(rows.get(MINE)).toMatchObject({
+      status: 'held',
+      confirmation: CONFIRMED(now),
+    });
+  });
+
+  it('Recreate and announce goes through the same confirm page, and is refused without the ticks', async () => {
+    const { get, recreatePost, recreate } = await setup();
+    const page = await get(`/host/events/${MINE}/recreate`);
+    expect(page.status).toBe(200);
+    expect(page.text).toContain(`action="/host/events/${MINE}/recreate"`);
+    expect(page.text).toContain('The event photo is set (not the default)');
+    expect(page.text).toContain('Confirm and announce');
+    const res = await recreatePost(MINE, { photo: 'on' });
+    expect(res.status).toBe(422);
+    expect(res.text).toContain('Tick all three');
+    expect(recreate).not.toHaveBeenCalled();
+  });
+
+  it('the confirm page is for hosts only', async () => {
+    const { req, sid } = await setup();
+    // Signed out: the gate sends to login.
+    const res = await req.get(`/host/events/${MINE}/announce`);
+    expect(res.status).not.toBe(200);
+    expect(sid).toBeTruthy();
   });
 });

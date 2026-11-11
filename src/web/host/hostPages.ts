@@ -267,7 +267,7 @@ function homeBody(
           extra.tooLate?.eventId === event.id
             ? html`<tr class="offer-row">
                 <td colspan="5">
-                  ${recreateOffer(event, extra.tooLate.offer, session.csrfToken)}
+                  ${recreateOffer(event, extra.tooLate.offer)}
                 </td>
               </tr>`
             : ''
@@ -903,7 +903,11 @@ export function registerHostPages(
 ): void {
   const today = () => pacificDay(deps.events.now());
   if (deps.announce) {
-    registerAnnounceRoute(router, deps.announce);
+    registerAnnounceRoute(router, deps.announce, {
+      ownUpcoming: (memberId) =>
+        hostedEvents(deps.events, memberId, 'upcoming'),
+      now: () => deps.events.now(),
+    });
   }
 
   router.get('/', (async (req, res) => {

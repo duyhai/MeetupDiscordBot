@@ -5,6 +5,7 @@ import { MeetupPayloadError } from '../client/meetup/payloadErrors.js';
 import { LogEntry, alertText } from '../helpers/discordLogger.js';
 import { OrganizerTokenUnavailableError } from '../reports/organizerMeetup.js';
 import {
+  AnnounceConfirmation,
   Announcement,
   AnnouncementStatus,
 } from '../repositories/postgresEventAnnouncementRepository.js';
@@ -70,11 +71,13 @@ export interface AnnounceStore {
   claim: (
     meetupEventId: string,
     requestedBy: string,
+    confirmation: AnnounceConfirmation | null,
   ) => Promise<{ claimed: true } | { claimed: false; current: Announcement }>;
   hold: (
     meetupEventId: string,
     requestedBy: string,
     dueAt: Date,
+    confirmation: AnnounceConfirmation | null,
   ) => Promise<{ held: true } | { held: false; current: Announcement }>;
   finish: (
     meetupEventId: string,
@@ -286,19 +289,26 @@ function codeOf(current: Announcement): AnnounceCode {
   }
 }
 
+export interface AnnounceOptions {
+  /** Runs once Meetup is about to be called. */
+  onClaimed?: () => void;
+  /** The host's pre-flight confirmation, recorded on the row with the request. */
+  confirmation?: AnnounceConfirmation;
+}
+
 /**
  * Announces one of the host's own events, known to be theirs (the caller
  * checked, or just created it): the pre-checks, then either a send now or
  * a hold until the schedule's due time. The row is claimed first (one
  * statement), so quick repeat clicks make one call; a row already `sent`
  * or `held` sends nothing. `onClaimed` runs once Meetup is about to be
- * called.
+ * called; the confirmation is kept on the row for leadership to see.
  */
 export async function requestAnnouncement(
   deps: AnnounceDeps,
   host: { meetupMemberId: string; name: string },
   event: HostEvent,
-  hooks: { onClaimed?: () => void } = {},
+  options: AnnounceOptions = {},
 ): Promise<AnnounceCode> {
   const details = await deps.eventDetails(event.id);
   if (details === undefined) {
@@ -322,19 +332,25 @@ export async function requestAnnouncement(
     new Date(now.getTime() - SPACING_MS),
   );
   const due = announceDueAt(now, start, others);
+  const confirmation = options.confirmation ?? null;
   if (!isImmediate(due, now)) {
-    const held = await store.hold(event.id, host.meetupMemberId, due);
+    const held = await store.hold(
+      event.id,
+      host.meetupMemberId,
+      due,
+      confirmation,
+    );
     if ('current' in held) {
       return codeOf(held.current);
     }
     logger.info(`Announcement of ${event.id} held until ${dueLabel(due)}`);
     return 'scheduled';
   }
-  const claim = await store.claim(event.id, host.meetupMemberId);
+  const claim = await store.claim(event.id, host.meetupMemberId, confirmation);
   if ('current' in claim) {
     return codeOf(claim.current);
   }
-  hooks.onClaimed?.();
+  options.onClaimed?.();
   const code = await deliverAnnouncement(deps, store, event, host.name);
   // 'deferred' needs onNoToken, which a click never passes.
   return code === 'deferred' ? 'failed' : code;
@@ -349,7 +365,7 @@ export async function announceHostEvent(
   deps: AnnounceDeps,
   host: { meetupMemberId: string; name: string },
   meetupEventId: string,
-  hooks: { onClaimed?: () => void } = {},
+  options: AnnounceOptions = {},
 ): Promise<AnnounceCode> {
   const event = (await deps.ownUpcoming(host.meetupMemberId)).find(
     (e) => e.id === meetupEventId,
@@ -357,7 +373,7 @@ export async function announceHostEvent(
   if (event === undefined) {
     return 'not-yours';
   }
-  return requestAnnouncement(deps, host, event, hooks);
+  return requestAnnouncement(deps, host, event, options);
 }
 
 export type CancelCode = 'cancelled' | 'not-held' | 'not-yours';

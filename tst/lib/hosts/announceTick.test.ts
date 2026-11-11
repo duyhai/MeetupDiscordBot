@@ -53,6 +53,7 @@ function setup(
         completedAt: null,
         // Later ids are due later, so the order is fixed.
         dueAt: new Date(NOW.getTime() - (options.dueAgoMs ?? 1000) + i),
+        confirmation: null,
       },
     ]),
   );
