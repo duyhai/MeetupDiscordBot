@@ -2,7 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Pull the group's full event list and every past event's RSVPs into Postgres with the organizer token, keep it current daily, and show its state on the staff dashboard with a leadership "Refresh snapshot now" button.
+**Goal:** Pull the group's full event list and every past event's RSVPs into Postgres with the organizer token, keep it current daily, and show its state on the staff dashboard.
+
+**Scope cut (lead, 2026-11-11):** PR 1 is minimal so the first pull can start soon (Hai will stop the per-member backfill to free the token when it deploys). The **Refresh snapshot now** button moves to PR 2; Task 6 is the card line only. Executed natively for speed.
 
 **Architecture:** A 5-minute tick (`src/lib/snapshot/ingest.ts`) runs one phase-structured run at a time, recorded in `meetup_snapshot_runs`: list every event (one tick), mark deletions, then read RSVPs for the events that need them under a 150-call tick budget, resumable because the work set is a SQL query. Postgres access goes through a `SnapshotStore` interface (`postgresSnapshotRepository.ts`), faked in memory for unit tests. Nothing about Wrapped changes in this PR.
 
@@ -206,7 +208,7 @@ Order inside a tick: guard → open run, else due check (`SNAPSHOT_RUN_NOW_KEY` 
 - [ ] **Step 2–4:** run (FAIL), implement (pattern: `startWrappedBackfillScheduler`), run (PASS).
 - [ ] **Step 5: Commit** `Group snapshot: scheduler`.
 
-### Task 6: Staff card line and Refresh snapshot now
+### Task 6: Staff card line (Refresh button deferred to PR 2)
 
 **Files:**
 - Modify: `src/web/routes/wrappedBackfill.ts`, `src/lib/reports/dashboardPaths.ts` (`snapshotRefresh: '/wrapped/snapshot/run'`), `src/web/dashboardDeps.ts`, `src/web/routes/dashboardPages.ts` (register), `tst/web/routes/pageFakes.ts` (fake control)

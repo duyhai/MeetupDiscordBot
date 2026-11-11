@@ -510,3 +510,34 @@ export interface GetGroupEventsForAuditResponse {
 export interface GetEventForAuditResponse {
   event: AuditEventNode | null;
 }
+
+/** A snapshot listing node, unvalidated (src/lib/snapshot/meetup.ts checks it). */
+export interface SnapshotEventNode {
+  id: unknown;
+  title?: unknown;
+  status?: unknown;
+  dateTime?: unknown;
+  eventUrl?: unknown;
+  eventHosts?: ({ member?: { id?: unknown } | null } | null)[] | null;
+  attendance?: { totalCount?: unknown } | null;
+  waitlist?: { totalCount?: unknown } | null;
+}
+
+export interface SnapshotRsvpNode {
+  status?: unknown;
+  member?: { id?: unknown } | null;
+}
+
+export interface GetGroupEventsForSnapshotResponse {
+  groupByUrlname: {
+    id: string;
+    events: PaginatedData<SnapshotEventNode>;
+  } | null;
+}
+
+export interface GetEventRsvpsForSnapshotResponse {
+  event: {
+    id: string;
+    rsvps: PaginatedData<SnapshotRsvpNode>;
+  } | null;
+}
