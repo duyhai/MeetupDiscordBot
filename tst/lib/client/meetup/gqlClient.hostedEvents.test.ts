@@ -41,7 +41,7 @@ const node = {
   eventUrl: 'https://www.meetup.com/e/1/',
   eventHosts: [],
   maxTickets: 0,
-  status: 'PAST',
+  status: 'PAST' as const,
   attendance: { totalCount: 14 },
 };
 

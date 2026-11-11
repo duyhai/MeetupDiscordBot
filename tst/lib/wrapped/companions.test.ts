@@ -66,6 +66,31 @@ describe('nameCompanions', () => {
     expect(result.otherCount).toBe(2);
   });
 
+  it('attaches the top named companion’s shared events when given the events', async () => {
+    const e0 = { id: 'e0', title: 'A', dateTime: 'd', eventUrl: 'u' };
+    const e1 = { id: 'e1', title: 'B', dateTime: 'd', eventUrl: 'u' };
+    // '1' (unlinked) ranks first with the same count as '2': the events must be '2's.
+    const list = ranked(['1', '2', '3']);
+    list[1].sharedCount = 3;
+    list[1].sharedEventIds = ['e1'];
+
+    const result = await nameCompanions(
+      list,
+      deps(['2', '3']),
+      new Map([
+        ['e0', e0],
+        ['e1', e1],
+      ]),
+    );
+
+    expect(result.named[0]).toEqual({
+      discordUserId: 'd2',
+      sharedCount: 3,
+      sharedEvents: [e1],
+    });
+    expect(result.named[1]).toEqual({ discordUserId: 'd3', sharedCount: 1 });
+  });
+
   it('carries no Meetup id or event ids into the named list', async () => {
     const result = await nameCompanions(ranked(['1']), deps(['1']));
 

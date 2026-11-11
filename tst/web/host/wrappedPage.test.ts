@@ -87,7 +87,7 @@ function fakeMeetup({
       await wait();
       return { events, meetupId };
     }),
-    getGroupEvents: vi.fn(() =>
+    getHostedEvents: vi.fn(() =>
       Promise.resolve({ groupByUrlname: { id: GROUP, events: page([]) } }),
     ),
     getEventRsvps: vi.fn((eventId: string) => {
@@ -135,11 +135,21 @@ const cached: CachedWrapped = {
     attendedThisYear: 12,
     attendedAllTime: 40,
     topTypes: [
-      { type: 'food', count: 5 },
-      { type: 'games', count: 4 },
+      {
+        type: 'food',
+        count: 5,
+        firstEvents: [],
+        cohort: { named: [], otherCount: 0 },
+      },
+      {
+        type: 'games',
+        count: 4,
+        firstEvents: [],
+        cohort: { named: [], otherCount: 0 },
+      },
     ],
-    hosting: { thisYear: 1, allTime: 3 },
-    busiestMonth: { month: 6, count: 4 },
+    hosting: { thisYear: 1, allTime: 3, topThisYear: [], allTimeBest: null },
+    busiestMonth: { month: 6, count: 4, events: [] },
     longestStreakMonths: 5,
     activeYears: [2024, 2025, 2026],
   },

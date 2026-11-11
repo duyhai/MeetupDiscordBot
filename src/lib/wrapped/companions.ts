@@ -64,10 +64,16 @@ export async function nameRanked<T extends { meetupId: string }>(
   return { named, otherCount: ranked.length - named.length };
 }
 
-/** The Meetup id and event ids stay here: the cache gets Discord ids and counts. */
+/**
+ * The Meetup id and event ids stay here: the cache gets Discord ids and
+ * counts. With `eventsById`, the top named companion also gets the events
+ * the two of you shared (the member's own events, so nothing about anyone
+ * else).
+ */
 export async function nameCompanions(
   ranked: Companion[],
   deps: CompanionDeps,
+  eventsById?: ReadonlyMap<string, WrappedEvent>,
 ): Promise<NamedCompanions> {
   const { named, otherCount } = await nameRanked(
     ranked,
@@ -76,10 +82,15 @@ export async function nameCompanions(
     COMPANION_LOOKUP_CAP,
   );
   return {
-    named: named.map(({ discordUserId, sharedCount }) => ({
-      discordUserId,
-      sharedCount,
-    })),
+    named: named.map(({ discordUserId, sharedCount, sharedEventIds }, i) => {
+      const companion: NamedCompanion = { discordUserId, sharedCount };
+      if (i === 0 && eventsById) {
+        companion.sharedEvents = sharedEventIds
+          .map((id) => eventsById.get(id))
+          .filter((event): event is WrappedEvent => event !== undefined);
+      }
+      return companion;
+    }),
     otherCount,
   };
 }
