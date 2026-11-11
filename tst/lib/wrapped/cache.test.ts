@@ -67,7 +67,7 @@ const wrapped: CachedWrapped = {
 
 describe('cache keys', () => {
   it('versions the Wrapped key and scopes the share guard to a channel', () => {
-    expect(wrappedCacheKey('d1', 2026)).toBe('wrapped:v3:d1:2026');
+    expect(wrappedCacheKey('d1', 2026)).toBe('wrapped:v4:d1:2026');
     expect(shareGuardKey('d1', 2026, 'c9')).toBe('wrapped:shared:d1:2026:c9');
   });
 });
@@ -111,7 +111,7 @@ describe('readWrapped / writeWrapped', () => {
     await writeWrapped(cache, 'd1', 2026, wrapped, now);
 
     expect(await readWrapped(cache, 'd1', 2026, 'm1')).toEqual(wrapped);
-    expect(cache.ttls.get('wrapped:v3:d1:2026')).toBe(wrappedTtlSec(2026, now));
+    expect(cache.ttls.get('wrapped:v4:d1:2026')).toBe(wrappedTtlSec(2026, now));
   });
 
   it('is a miss when the member has since linked a different Meetup account', async () => {
@@ -125,7 +125,7 @@ describe('readWrapped / writeWrapped', () => {
     const cache = new FakeCache();
 
     expect(await readWrapped(cache, 'd1', 2026)).toBeUndefined();
-    cache.data.set('wrapped:v3:d1:2026', 'not json');
+    cache.data.set('wrapped:v4:d1:2026', 'not json');
     expect(await readWrapped(cache, 'd1', 2026)).toBeUndefined();
   });
 });

@@ -87,7 +87,7 @@ function fakeMeetup({
       await wait();
       return { events, meetupId };
     }),
-    getGroupEvents: vi.fn(() =>
+    getHostedEvents: vi.fn(() =>
       Promise.resolve({ groupByUrlname: { id: GROUP, events: page([]) } }),
     ),
     getEventRsvps: vi.fn((eventId: string) => {
@@ -135,11 +135,21 @@ const cached: CachedWrapped = {
     attendedThisYear: 12,
     attendedAllTime: 40,
     topTypes: [
-      { type: 'food', count: 5 },
-      { type: 'games', count: 4 },
+      {
+        type: 'food',
+        count: 5,
+        firstEvents: [],
+        cohort: { named: [], otherCount: 0 },
+      },
+      {
+        type: 'games',
+        count: 4,
+        firstEvents: [],
+        cohort: { named: [], otherCount: 0 },
+      },
     ],
-    hosting: { thisYear: 1, allTime: 3 },
-    busiestMonth: { month: 6, count: 4 },
+    hosting: { thisYear: 1, allTime: 3, topThisYear: [], allTimeBest: null },
+    busiestMonth: { month: 6, count: 4, events: [] },
     longestStreakMonths: 5,
     activeYears: [2024, 2025, 2026],
   },
@@ -151,6 +161,92 @@ const cached: CachedWrapped = {
     otherCount: 5,
   },
   builtAt: '2026-12-01T20:00:00.000Z',
+};
+
+const E = (id: string, iso: string, title = `Event ${id}`) => ({
+  id,
+  title,
+  dateTime: iso,
+  eventUrl: `https://www.meetup.com/e/${id}/`,
+});
+const june = [
+  E('j1', '2026-06-03T19:00:00-07:00', 'Pho Night'),
+  {
+    ...E('j2', '2026-06-12T19:00:00-07:00', 'Sneaky'),
+    eventUrl: 'javascript:alert(1)',
+  },
+  E('j3', '2026-06-20T19:00:00-07:00', 'Karaoke'),
+];
+const firstFood = Array.from({ length: 10 }, (_, i) =>
+  E(
+    `f${i}`,
+    `${2022 + Math.floor(i / 4)}-0${1 + (i % 4)}-05T19:00:00-08:00`,
+    `Dinner ${i}`,
+  ),
+);
+/** Ten companions, a seven-strong cohort, six hosted rankings. */
+const deep: CachedWrapped = {
+  ...cached,
+  stats: {
+    ...cached.stats,
+    topTypes: [
+      {
+        type: 'food',
+        count: 5,
+        firstEvents: firstFood,
+        cohort: {
+          named: Array.from({ length: 7 }, (_, i) => ({
+            discordUserId: `30000000000000000${i + 1}`,
+            earlyCount: 7 - i,
+            sharedCount: 2,
+          })),
+          otherCount: 3,
+        },
+      },
+      {
+        type: 'games',
+        count: 4,
+        firstEvents: [E('g0', '2025-02-01T19:00:00-08:00', 'Trivia')],
+        cohort: { named: [], otherCount: 0 },
+      },
+    ],
+    hosting: {
+      thisYear: 6,
+      allTime: 9,
+      topThisYear: [
+        {
+          event: E('h1', '2026-04-01T19:00:00-07:00', 'Big Hike'),
+          attendance: 31,
+        },
+        {
+          event: E('h2', '2026-05-01T19:00:00-07:00', 'Picnic'),
+          attendance: 20,
+        },
+        { event: E('h3', '2026-06-01T19:00:00-07:00', 'Boba'), attendance: 12 },
+        {
+          event: E('h4', '2026-07-01T19:00:00-07:00', 'Museum'),
+          attendance: 9,
+        },
+        {
+          event: E('h5', '2026-08-01T19:00:00-07:00', 'Bowling'),
+          attendance: 4,
+        },
+      ],
+      allTimeBest: {
+        event: E('h0', '2023-09-01T19:00:00-07:00', 'Legendary Potluck'),
+        attendance: 58,
+      },
+    },
+    busiestMonth: { month: 5, count: 3, events: june },
+  },
+  companions: {
+    named: Array.from({ length: 10 }, (_, i) => ({
+      discordUserId: `2000000000000000${String(i + 1).padStart(2, '0')}`,
+      sharedCount: 10 - i,
+      ...(i === 0 ? { sharedEvents: [june[0], june[2]] } : {}),
+    })),
+    otherCount: 5,
+  },
 };
 
 const quiet: CachedWrapped = {
@@ -206,7 +302,17 @@ async function harness({
     },
     isPresent: async () => true,
     displayName: async (discordUserId) => {
-      return discordUserId === 'd-linked' ? 'Linked <Pal>' : undefined;
+      if (discordUserId === 'd-linked') {
+        return 'Linked <Pal>';
+      }
+      // Companions 1–9 and every cohort member resolve; companion 10 does not.
+      if (
+        /^20000000000000000[1-9]$/.test(discordUserId) ||
+        /^30000000000000000\d$/.test(discordUserId)
+      ) {
+        return `Pal ${discordUserId.slice(-2)}`;
+      }
+      return undefined;
     },
     limiter: createBuildLimiter(() => clock.now),
     alert,
@@ -315,7 +421,10 @@ describe('GET /host/wrapped', () => {
     // d-gone could not be named: folded into the count (5 + 1).
     expect(text).toContain('6 other members');
     expect(text).not.toContain('d-gone');
-    expect(text).not.toContain('d-linked');
+    // The Discord id appears only as the profile link they consented to by linking.
+    expect(
+      text.replace(/href="https:\/\/discord\.com\/users\/d-linked"/g, ''),
+    ).not.toContain('d-linked');
   });
 
   it('reads a year with no events as a quiet one', async () => {
@@ -463,6 +572,157 @@ describe('GET /host/wrapped', () => {
     expect(res.text).toContain('linked members');
     expect(res.text).toContain('action="/host/link/discord"');
     expect(h.deps.memberToken).not.toHaveBeenCalled();
+  });
+});
+
+describe('GET /host/wrapped deeper sections', () => {
+  async function deepPage(copy: CachedWrapped = deep) {
+    const h = await harness();
+    await writeWrapped(h.wrappedCache, USER, 2026, copy, NOW);
+    const sid = await signInWithDiscord(h.req);
+    const res = await h.req.get('/host/wrapped?year=2026').set('Cookie', sid);
+    expect(res.status).toBe(200);
+    // Whitespace between tags and inside tag ends is formatting, not content.
+    const text = strip(res.text)
+      .replace(/>\s+</g, '><')
+      .replace(/\s+>/g, '>')
+      .replace(/<summary>\s+/g, '<summary>')
+      .replace(/\s+<\/summary>/g, '</summary>');
+    return { h, text, raw: res.text };
+  }
+
+  it('shows three companions with profile links and a "Show all" expander for the rest', async () => {
+    const { text } = await deepPage();
+    const section = text.slice(text.indexOf('Went with the most'));
+    const before = section.slice(0, section.indexOf('<details'));
+    expect(
+      before.match(
+        /href="https:\/\/discord\.com\/users\/2000000000000000\d\d"/g,
+      ),
+    ).toHaveLength(3);
+    expect(before).toContain(
+      'href="https://discord.com/users/200000000000000001"',
+    );
+    expect(before).toContain('<bdi>Pal 01</bdi>');
+    expect(before).toContain('10 events');
+    expect(section).toContain('<summary>Show all 9</summary>');
+    expect(section).toContain(
+      'href="https://discord.com/users/200000000000000009"',
+    );
+    // Five never named plus d-10, who could not be resolved.
+    expect(section).toContain('6 other members');
+    expect(section).not.toContain('200000000000000010');
+  });
+
+  it('lists the events shared with the top companion in an expander', async () => {
+    const { text } = await deepPage();
+    expect(text).toContain(
+      '<summary>Together with <bdi>Pal 01</bdi> (2 events)</summary>',
+    );
+    expect(text).toContain('Pho Night');
+    expect(text).toContain('href="https://www.meetup.com/e/j3/"');
+  });
+
+  it("lists the busiest month's events with dates and links", async () => {
+    const { text } = await deepPage();
+    expect(text).toContain('June (3 events)');
+    expect(text).toContain('<summary>Events that month (3)</summary>');
+    expect(text).toContain('<time>Jun 3, 2026</time>');
+    expect(text).toContain('href="https://www.meetup.com/e/j1/"');
+  });
+
+  it('renders unsafe event URLs as text', async () => {
+    const { raw } = await deepPage();
+    expect(raw).not.toContain('javascript:');
+    expect(raw).toContain('Sneaky');
+  });
+
+  it('ranks hosted events with attendance and the all-time best', async () => {
+    const { text } = await deepPage();
+    expect(text).toContain('hosted 6 events');
+    expect(text).toContain('Most attended this year');
+    expect(text).toMatch(/Big Hike<\/bdi><\/a>\s*\(31 RSVPs\)/);
+    expect(text).not.toContain('going');
+    expect(text).not.toContain('attended)');
+    expect(text.indexOf('Big Hike')).toBeLessThan(text.indexOf('Picnic'));
+    expect(text).toContain('Legendary Potluck');
+    expect(text).toContain('(58 RSVPs)');
+  });
+
+  it('expands each top type to its first events and the early cohort', async () => {
+    const { text } = await deepPage();
+    expect(text).toContain(
+      '<summary>Your first 10 food &amp; drink events</summary>',
+    );
+    expect(text).toContain('Dinner 0');
+    expect(text).toContain('href="https://www.meetup.com/e/f9/"');
+    expect(text).toContain(
+      '<summary>Still around from your early cohort (7)</summary>',
+    );
+    const cohort = text.slice(
+      text.indexOf('Still around from your early cohort'),
+    );
+    const firstFive = cohort.slice(
+      0,
+      cohort.indexOf('<summary>Show all 7</summary>'),
+    );
+    expect(
+      firstFive.match(
+        /href="https:\/\/discord\.com\/users\/30000000000000000\d"/g,
+      ),
+    ).toHaveLength(5);
+    expect(firstFive).toContain('7 early events, 2 this year');
+    expect(cohort).toContain(
+      'href="https://discord.com/users/300000000000000007"',
+    );
+    expect(cohort).toContain('and 3 other members');
+    expect(text).toContain('<summary>Your first 1 games event</summary>');
+  });
+
+  it('a Discord id that is not a snowflake gets no profile link, only the name', async () => {
+    const { text } = await deepPage({
+      ...deep,
+      companions: {
+        named: [{ discordUserId: 'd-linked', sharedCount: 3 }],
+        otherCount: 0,
+      },
+    });
+    expect(text).toContain('<bdi>Linked &lt;Pal&gt;</bdi>');
+    expect(text).not.toContain('discord.com/users/d-linked');
+  });
+
+  it('folds an unresolvable top companion', async () => {
+    const copy: CachedWrapped = {
+      ...deep,
+      companions: {
+        ...deep.companions,
+        named: deep.companions.named.map((c, i) => {
+          return i === 0 ? { ...c, discordUserId: '200000000000000010' } : c;
+        }),
+      },
+    };
+    const { text } = await deepPage(copy);
+    expect(text).not.toContain('Together with');
+    // Five never named, plus the two d-10 entries that could not be resolved.
+    expect(text).toContain('7 other members');
+  });
+
+  it('a quiet year has no expanders', async () => {
+    const { text } = await deepPage({
+      ...quiet,
+      stats: { ...quiet.stats, year: 2026 },
+    });
+    expect(text).not.toContain('<details');
+    expect(text).not.toContain('Hosting');
+  });
+
+  it("never lets an unlinked attendee's Meetup name or id reach the deeper sections or the cache", async () => {
+    const { raw, h } = await deepPage();
+    const everything =
+      raw + JSON.stringify([...h.wrappedCache.values.values()]);
+    expect(everything).not.toContain(GHOST.name);
+    expect(everything).not.toContain(GHOST.id);
+    expect(everything).not.toContain(LINKED.name);
   });
 });
 

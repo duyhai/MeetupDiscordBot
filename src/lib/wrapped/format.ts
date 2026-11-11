@@ -21,6 +21,8 @@ import { CachedWrapped } from './cache.js';
 import { WrappedEvent } from './stats.js';
 
 export const SHARE_BUTTON_PREFIX = 'wrapped_share';
+/** The embed names this many companions; the cache may hold more (the website shows them). */
+export const EMBED_NAMED_COMPANIONS = 3;
 export const SHARE_BUTTON_ID_PATTERN = /^wrapped_share:(\d{4}):(\d+)$/;
 
 const MONTHS = [
@@ -110,13 +112,15 @@ function companionsText(wrapped: CachedWrapped, view: EmbedView): string {
     return 'Nobody yet — next year!';
   }
   const shown: string[] = [];
+  // The first three that can be shown; everyone else named (past three, or
+  // unresolvable in the shared view) joins the count, like anyone unnamed.
   let others = otherCount;
   named.forEach(({ discordUserId, sharedCount }) => {
     const label =
       view.kind === 'private'
         ? `<@${discordUserId}>`
         : view.displayNames[discordUserId];
-    if (label === undefined) {
+    if (label === undefined || shown.length >= EMBED_NAMED_COMPANIONS) {
       others += 1;
       return;
     }

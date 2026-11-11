@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  FIRST_EVENTS_PER_TYPE,
+  HostedEvent,
+  TOP_HOSTED,
   WrappedEvent,
   WrappedInput,
   computeWrapped,
@@ -15,6 +18,18 @@ function ev(id: string, iso: string, title = `Event ${id}`): WrappedEvent {
     eventUrl: `https://www.meetup.com/e/${id}/`,
   };
 }
+
+const hosted = (event: WrappedEvent, attendance = 0): HostedEvent => ({
+  ...event,
+  attendance,
+});
+
+/** A top type as computeWrapped returns it: no cohort yet (build.ts fills it). */
+const topType = (
+  type: string,
+  count: number,
+  firstEvents: WrappedEvent[] = [],
+) => ({ type, count, firstEvents, cohort: { named: [], otherCount: 0 } });
 
 const hike = ev('1', '2024-03-02T10:00:00-08:00', 'Hike');
 const trivia = ev('2', '2026-05-10T19:00:00-07:00', 'Trivia');
@@ -90,24 +105,31 @@ describe('computeWrapped', () => {
   it('counts a hosted event as attended, once', () => {
     const games = ev('7', '2026-02-01T19:00:00-08:00', 'Board Game Night');
     const { stats } = computeWrapped(
-      input({ attended: [games], hosted: [games] }),
+      input({ attended: [games], hosted: [hosted(games, 8)] }),
     );
 
     expect(stats.attendedThisYear).toBe(1);
     expect(stats.attendedAllTime).toBe(1);
-    expect(stats.hosting).toEqual({ thisYear: 1, allTime: 1 });
-    expect(stats.topTypes).toEqual([{ type: 'games', count: 1 }]);
+    expect(stats.hosting).toEqual({
+      thisYear: 1,
+      allTime: 1,
+      topThisYear: [{ event: games, attendance: 8 }],
+      allTimeBest: { event: games, attendance: 8 },
+    });
+    expect(stats.topTypes).toEqual([topType('games', 1, [games])]);
   });
 
   it('builds the year from hosted events alone', () => {
     const games = ev('7', '2026-02-01T19:00:00-08:00', 'Board Game Night');
     const old = ev('8', '2025-02-01T19:00:00-08:00', 'Old Dinner');
-    const { stats } = computeWrapped(input({ hosted: [games, old] }));
+    const { stats } = computeWrapped(
+      input({ hosted: [hosted(games), hosted(old)] }),
+    );
 
     expect(stats.attendedThisYear).toBe(1);
     expect(stats.attendedAllTime).toBe(2);
     expect(stats.firstEvent).toEqual(old);
-    expect(stats.hosting).toEqual({ thisYear: 1, allTime: 2 });
+    expect(stats.hosting).toMatchObject({ thisYear: 1, allTime: 2 });
   });
 
   it('breaks top-type ties by EVENT_TYPES order and keeps at most three', () => {
@@ -123,7 +145,7 @@ describe('computeWrapped', () => {
       }),
     );
 
-    expect(stats.topTypes).toEqual([
+    expect(stats.topTypes.map(({ type, count }) => ({ type, count }))).toEqual([
       { type: 'nightlife', count: 2 },
       { type: 'games', count: 1 },
       { type: 'food', count: 1 },
@@ -143,7 +165,129 @@ describe('computeWrapped', () => {
       }),
     );
 
-    expect(stats.busiestMonth).toEqual({ month: 2, count: 2 });
+    expect(stats.busiestMonth).toMatchObject({ month: 2, count: 2 });
+  });
+
+  it("lists the busiest month's events in date order, cancelled dropped", () => {
+    const a = ev('a', '2026-06-20T19:00:00-07:00');
+    const b = ev('b', '2026-06-02T19:00:00-07:00');
+    const m = ev('m', '2026-06-11T19:00:00-07:00');
+    const { stats } = computeWrapped(
+      input({
+        attended: [
+          a,
+          b,
+          m,
+          ev('x', '2026-06-10T19:00:00-07:00', 'Cancelled: Picnic'),
+          ev('c', '2026-03-01T19:00:00-08:00'),
+          ev('d', '2026-03-02T19:00:00-08:00'),
+        ],
+      }),
+    );
+
+    expect(stats.busiestMonth).toEqual({
+      month: 5,
+      count: 3,
+      events: [b, m, a],
+    });
+  });
+
+  it('ranks hosted events this year by attendance, then earliest date, at most five', () => {
+    const at = (id: string, day: number, attendance: number) =>
+      hosted(
+        ev(id, `2026-03-${String(day).padStart(2, '0')}T19:00:00-08:00`),
+        attendance,
+      );
+    const list = [
+      at('h1', 1, 9),
+      at('h2', 2, 9),
+      at('h3', 3, 7),
+      at('h4', 4, 12),
+      at('h5', 5, 3),
+      at('h6', 6, 5),
+    ];
+    const { stats } = computeWrapped(input({ hosted: list }));
+
+    expect(TOP_HOSTED).toBe(5);
+    expect(stats.hosting?.topThisYear.map((h) => h.event.id)).toEqual([
+      'h4',
+      'h1',
+      'h2',
+      'h3',
+      'h6',
+    ]);
+    expect(stats.hosting?.topThisYear[0].attendance).toBe(12);
+  });
+
+  it('finds the all-time best hosted event as of 31 Dec of the year', () => {
+    const old = ev('o', '2024-05-01T19:00:00-07:00');
+    const now = ev('n', '2026-05-01T19:00:00-07:00');
+    const later = ev('l', '2027-05-01T19:00:00-07:00');
+    const { stats } = computeWrapped(
+      input({ hosted: [hosted(later, 50), hosted(now, 20), hosted(old, 30)] }),
+    );
+
+    expect(stats.hosting?.allTimeBest).toEqual({ event: old, attendance: 30 });
+    expect(stats.hosting?.topThisYear).toEqual([
+      { event: now, attendance: 20 },
+    ]);
+  });
+
+  it('has no hosting rankings for a member who never hosted', () => {
+    expect(
+      computeWrapped(input({ attended: [trivia] })).stats.hosting,
+    ).toBeNull();
+  });
+
+  it('lists the first ten events ever of each top type, earliest first, all-time', () => {
+    const games = Array.from({ length: 12 }, (_, i) =>
+      ev(
+        `g${i}`,
+        `${2023 + Math.floor(i / 3)}-0${1 + (i % 3)}-05T19:00:00-08:00`,
+        'Trivia',
+      ),
+    );
+    const { stats } = computeWrapped(
+      input({ attended: [...games].reverse().concat(hotPot) }),
+    );
+
+    expect(FIRST_EVENTS_PER_TYPE).toBe(10);
+    expect(stats.topTypes[0]).toMatchObject({ type: 'games' });
+    expect(stats.topTypes[0].firstEvents).toEqual(games.slice(0, 10));
+    expect(stats.topTypes[0].cohort).toEqual({ named: [], otherCount: 0 });
+    expect(stats.topTypes[1]).toEqual(topType('food', 1, [hotPot]));
+  });
+
+  it('has fewer than ten first events when the member has fewer', () => {
+    const { stats } = computeWrapped(input({ attended: [hike, trivia] }));
+
+    expect(stats.topTypes.find((t) => t.type === 'games')?.firstEvents).toEqual(
+      [trivia],
+    );
+  });
+
+  it('no first events when nothing counts', () => {
+    const { stats } = computeWrapped(
+      input({
+        attended: [ev('x', '2026-06-10T19:00:00-07:00', 'Cancelled: Trivia')],
+      }),
+    );
+
+    expect(stats.topTypes).toEqual([]);
+  });
+
+  it("carries each companion's shared event ids in date order", () => {
+    const { companions } = computeWrapped(
+      input({
+        attended: [hotPot, trivia],
+        attendeesByEvent: { '3': ['self', '7'], '2': ['self', '7', '8'] },
+      }),
+    );
+
+    expect(companions).toEqual([
+      { meetupId: '7', sharedCount: 2, sharedEventIds: ['2', '3'] },
+      { meetupId: '8', sharedCount: 1, sharedEventIds: ['2'] },
+    ]);
   });
 
   it('measures the longest run of consecutive months', () => {
@@ -184,12 +328,12 @@ describe('computeWrapped', () => {
     const { stats } = computeWrapped(
       input({
         attended: [],
-        hosted: [openHouse, trivia],
+        hosted: [hosted(openHouse), hosted(trivia)],
         attendeesByEvent: {},
       }),
     );
     expect(stats.attendedThisYear).toBe(2);
-    expect(stats.hosting).toEqual({ thisYear: 1, allTime: 1 });
+    expect(stats.hosting).toMatchObject({ thisYear: 1, allTime: 1 });
   });
 
   it('ranks companions by shared count, then by Meetup id, excluding self', () => {
@@ -208,9 +352,9 @@ describe('computeWrapped', () => {
     );
 
     expect(companions).toEqual([
-      { meetupId: '9', sharedCount: 2 },
-      { meetupId: '10', sharedCount: 2 },
-      { meetupId: '2', sharedCount: 1 },
+      { meetupId: '9', sharedCount: 2, sharedEventIds: ['e1', 'e3'] },
+      { meetupId: '10', sharedCount: 2, sharedEventIds: ['e1', 'e2'] },
+      { meetupId: '2', sharedCount: 1, sharedEventIds: ['e2'] },
     ]);
   });
 
@@ -230,6 +374,8 @@ describe('computeWrapped', () => {
       }),
     );
 
-    expect(companions).toEqual([{ meetupId: 'new', sharedCount: 1 }]);
+    expect(companions).toEqual([
+      { meetupId: 'new', sharedCount: 1, sharedEventIds: ['2'] },
+    ]);
   });
 });

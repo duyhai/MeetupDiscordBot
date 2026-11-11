@@ -104,7 +104,7 @@ function fakeMeetup({
       await wait();
       return { events, meetupId };
     }),
-    getGroupEvents: vi.fn(() =>
+    getHostedEvents: vi.fn(() =>
       Promise.resolve({ groupByUrlname: { id: GROUP, events: page([]) } }),
     ),
     getEventRsvps: vi.fn((eventId: string) => {
@@ -331,7 +331,7 @@ describe('runWrapped', () => {
     // The cheap history read runs (it decides whether the slot is spent at
     // all); the costly hosted/attendee scan does not.
     expect(h.meetup.getSelfPastRsvpEvents).toHaveBeenCalledTimes(2);
-    expect(h.meetup.getGroupEvents).toHaveBeenCalledTimes(1);
+    expect(h.meetup.getHostedEvents).toHaveBeenCalledTimes(1);
     const last = payloads(interaction.editReply).at(-1);
     expect(last?.content).toBe(replies.rateLimited(50));
     expect(last?.embeds).toHaveLength(1);

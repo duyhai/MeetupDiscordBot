@@ -28,6 +28,7 @@ import {
   getGroupEventsForAudit,
   getGroupMembersByIds,
   getGroupMembershipsByIds,
+  getHostedEvents,
   getGroupMemberships,
   getMemberRsvps,
   getSelfPastRsvpCount,
@@ -62,6 +63,8 @@ import {
   GetGroupEventsForAuditResponse,
   GetGroupEventsInput,
   GetGroupEventsResponse,
+  GetHostedEventsInput,
+  GetHostedEventsResponse,
   GetGroupMembersByIdsInput,
   GetGroupMembershipsByIdsResponse,
   GetGroupMembershipsInput,
@@ -384,6 +387,45 @@ export class GqlMeetupClient {
           const events = result.groupByUrlname?.events;
           logger.info(
             `getGroupEvents page: ${events?.edges?.length ?? 0} events, hasNextPage=${events?.pageInfo?.hasNextPage}`,
+          );
+          return result;
+        } catch (error) {
+          logger.error(error);
+          throw error;
+        }
+      },
+    );
+  }
+
+  /**
+   * The member's past hosted events with each one's yes+attended count
+   * (Wrapped). One page; callers page with getPaginatedData. Cached under its
+   * own name: the pages carry no user-specific data.
+   */
+  public async getHostedEvents(
+    hostId: string,
+    input: PaginationInput,
+  ): Promise<GetHostedEventsResponse> {
+    logger.info(
+      `Calling getHostedEvents with input: ${JSON.stringify({ hostId, input })}`,
+    );
+    return this.cached(
+      'getHostedEvents',
+      {
+        urlname: Configuration.meetup.groupUrlName,
+        ...input,
+        filter: { status: ['PAST'], hostId },
+      },
+      async (callbackInput: GetHostedEventsInput) => {
+        try {
+          const result = await this.client.request<
+            GetHostedEventsResponse,
+            GetHostedEventsInput
+          >(getHostedEvents, callbackInput);
+          // Counts only, like every page log.
+          const events = result.groupByUrlname?.events;
+          logger.info(
+            `getHostedEvents page: ${events?.edges?.length ?? 0} events, hasNextPage=${events?.pageInfo?.hasNextPage}`,
           );
           return result;
         } catch (error) {

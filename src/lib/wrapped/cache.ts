@@ -15,7 +15,7 @@ import { WrappedStats } from './stats.js';
 const logger = new Logger({ name: 'wrappedCache' });
 
 /** Bump whenever CachedWrapped's shape changes. */
-export const WRAPPED_CACHE_VERSION = 'v3';
+export const WRAPPED_CACHE_VERSION = 'v4';
 export const BUILD_WINDOW_MS = 60 * 60 * 1000;
 export const SHARE_GUARD_TTL_SEC = 24 * 60 * 60;
 /**

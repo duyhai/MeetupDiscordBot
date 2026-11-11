@@ -29,7 +29,13 @@ import {
   readWrapped,
   writeWrapped,
 } from '../../lib/wrapped/cache.js';
-import { CompanionDeps } from '../../lib/wrapped/companions.js';
+import { CompanionDeps, NamedCompanion } from '../../lib/wrapped/companions.js';
+import {
+  HostedRanked,
+  NamedCohort,
+  TopType,
+  WrappedEvent,
+} from '../../lib/wrapped/stats.js';
 import { tz } from '../../util/timezone.js';
 import {
   SafeHtml,
@@ -54,6 +60,9 @@ const MEETUP_SIGN_IN = `${HOST_BASE}/auth/meetup/start`;
 export const FIRST_WRAPPED_YEAR = 2015;
 /** How long the page waits for Meetup; the build goes on after that. */
 const BUILD_DEADLINE_MS = 20_000;
+/** Companions and cohort members shown before the "Show all" expander. */
+export const COMPANIONS_SHOWN = 3;
+export const COHORT_SHOWN = 5;
 
 const MONTHS = [
   'January',
@@ -166,34 +175,207 @@ function yearNav(years: number[], current: number): SafeHtml {
   </nav>`;
 }
 
-function companionsText(
+/** A Discord user id, as discordOAuth.ts checks it: nothing else goes into a profile URL. */
+const SNOWFLAKE = /^\d{17,20}$/;
+
+/** A linked member: their server display name linking to their Discord profile (the identity they consented to by linking). */
+function profileLink(discordUserId: string, name: string): SafeHtml {
+  const href = SNOWFLAKE.test(discordUserId)
+    ? safeHref(`https://discord.com/users/${discordUserId}`)
+    : undefined;
+  const text = memberText(name);
+  return href
+    ? html`<a href="${href}" rel="noopener noreferrer" target="_blank"
+        >${text}</a
+      >`
+    : text;
+}
+
+/** One of the member's own events: Pacific date and a Meetup link (text when the URL is not one). */
+function eventItem(event: WrappedEvent): SafeHtml {
+  const href = safeHref(event.eventUrl);
+  const title = memberText(event.title);
+  const link = href
+    ? html`<a href="${href}" rel="noopener noreferrer" target="_blank"
+        >${title}</a
+      >`
+    : title;
+  return html`<li>
+    <time>${tz(dayjs(event.dateTime)).format('ll')}</time> · ${link}
+  </li>`;
+}
+
+function eventList(events: WrappedEvent[]): SafeHtml {
+  return html`<ul class="event-list">
+    ${events.map(eventItem)}
+  </ul>`;
+}
+
+/** The first `shown` items, then the rest behind "Show all N". */
+function showAll(items: SafeHtml[], shown: number): SafeHtml {
+  const first = items.slice(0, shown);
+  const rest = items.slice(shown);
+  return html`<ul class="people">
+      ${first.map((item) => html`<li>${item}</li>`)}
+    </ul>
+    ${
+      rest.length > 0
+        ? html`<details>
+            <summary>Show all ${String(items.length)}</summary>
+            <ul class="people">
+              ${rest.map((item) => html`<li>${item}</li>`)}
+            </ul>
+          </details>`
+        : ''
+    }`;
+}
+
+/**
+ * Linked companions by display name, three first and the rest behind an
+ * expander; anyone not in the map (or never named) is counted. Under the
+ * top companion, the events the two of you shared.
+ */
+function companionsSection(
   wrapped: CachedWrapped,
   displayNames: Record<string, string>,
 ): SafeHtml {
   const { named, otherCount } = wrapped.companions;
   if (named.length === 0 && otherCount === 0) {
-    return html`Nobody yet — next year!`;
+    return html`<p>Nobody yet — next year!</p>`;
   }
+  const resolved: (NamedCompanion & { name: string })[] = [];
   let others = otherCount;
-  const shown: SafeHtml[] = [];
-  named.forEach(({ discordUserId, sharedCount }) => {
+  named.forEach((companion) => {
+    const name = displayNames[companion.discordUserId];
+    if (name === undefined) {
+      others += 1;
+    } else {
+      resolved.push({ ...companion, name });
+    }
+  });
+  const items = resolved.map(
+    ({ discordUserId, name, sharedCount }) =>
+      html`<strong>${profileLink(discordUserId, name)}</strong>
+        (${plural(sharedCount, 'event')})`,
+  );
+  const top = resolved[0];
+  const together =
+    top?.sharedEvents && top.sharedEvents.length > 0
+      ? html`<details>
+          <summary>
+            Together with ${memberText(top.name)}
+            (${plural(top.sharedEvents.length, 'event')})
+          </summary>
+          ${eventList(top.sharedEvents)}
+        </details>`
+      : '';
+  const othersText =
+    others > 0
+      ? html`<p class="muted">
+          ${items.length > 0 ? 'and ' : ''}${plural(others, 'other member')}
+          ${items.length > 0 ? '' : 'you shared events with'}
+        </p>`
+      : '';
+  return html`${items.length > 0 ? showAll(items, COMPANIONS_SHOWN) : ''}
+  ${othersText} ${together}`;
+}
+
+function hostedItem({ event, attendance }: HostedRanked): SafeHtml {
+  const href = safeHref(event.eventUrl);
+  const title = memberText(event.title);
+  const link = href
+    ? html`<a href="${href}" rel="noopener noreferrer" target="_blank"
+        >${title}</a
+      >`
+    : title;
+  return html`<li>
+    ${link} (${String(attendance)} RSVPs) ·
+    <time>${tz(dayjs(event.dateTime)).format('ll')}</time>
+  </li>`;
+}
+
+function hostingSection(
+  hosting: NonNullable<CachedWrapped['stats']['hosting']>,
+): SafeHtml {
+  return html`<p>
+      You hosted ${plural(hosting.thisYear, 'event')} this year
+      (${String(hosting.allTime)} all-time). Thank you!
+    </p>
+    ${
+      hosting.topThisYear.length > 0
+        ? html`<h3>Most attended this year</h3>
+            <ol>
+              ${hosting.topThisYear.map(hostedItem)}
+            </ol>`
+        : ''
+    }
+    ${
+      hosting.allTimeBest
+        ? html`<h3>All-time most attended</h3>
+            <ul class="event-list">
+              ${hostedItem(hosting.allTimeBest)}
+            </ul>`
+        : ''
+    }`;
+}
+
+function cohortSection(
+  cohort: NamedCohort,
+  displayNames: Record<string, string>,
+): SafeHtml {
+  let others = cohort.otherCount;
+  const items: SafeHtml[] = [];
+  cohort.named.forEach(({ discordUserId, earlyCount, sharedCount }) => {
     const name = displayNames[discordUserId];
     if (name === undefined) {
       others += 1;
       return;
     }
-    shown.push(
-      html`<strong>${memberText(name)}</strong>
-        (${plural(sharedCount, 'event')})`,
+    items.push(
+      html`${profileLink(discordUserId, name)}
+      (${plural(earlyCount, 'early event')}, ${String(sharedCount)} this year)`,
     );
   });
-  const othersText =
-    others > 0 ? html`${plural(others, 'other member')}` : undefined;
-  if (shown.length === 0) {
-    return html`${othersText} you shared events with`;
+  if (items.length === 0 && others === 0) {
+    return html``;
   }
-  const list = shown.map((item, i) => html`${i ? ', ' : ''}${item}`);
-  return othersText ? html`${list} and ${othersText}` : html`${list}`;
+  return html`<details>
+    <summary>
+      Still around from your early cohort
+      (${String(items.length > 0 ? items.length : others)})
+    </summary>
+    ${items.length > 0 ? showAll(items, COHORT_SHOWN) : ''}
+    ${
+      others > 0
+        ? html`<p class="muted">
+            ${items.length > 0 ? 'and ' : ''}${plural(others, 'other member')}
+          </p>`
+        : ''
+    }
+  </details>`;
+}
+
+function topTypeItem(
+  top: TopType,
+  displayNames: Record<string, string>,
+): SafeHtml {
+  const label = EVENT_TYPE_LABELS[top.type];
+  return html`<li>
+    ${label} (${plural(top.count, 'event')})
+    ${
+      top.firstEvents.length > 0
+        ? html`<details>
+            <summary>
+              Your first ${String(top.firstEvents.length)}
+              ${label.toLowerCase()}
+              ${top.firstEvents.length === 1 ? 'event' : 'events'}
+            </summary>
+            ${eventList(top.firstEvents)}
+            ${cohortSection(top.cohort, displayNames)}
+          </details>`
+        : ''
+    }
+  </li>`;
 }
 
 function firstEventText(wrapped: CachedWrapped): SafeHtml {
@@ -275,13 +457,8 @@ export function wrappedBody({
       <h2>Top activities</h2>
       ${
         stats.topTypes.length > 0
-          ? html`<ul>
-              ${stats.topTypes.map(
-                ({ type, count }) =>
-                  html`<li>
-                    ${EVENT_TYPE_LABELS[type]} (${plural(count, 'event')})
-                  </li>`,
-              )}
+          ? html`<ul class="top-types">
+              ${stats.topTypes.map((top) => topTypeItem(top, displayNames))}
             </ul>`
           : html`<p class="muted">None this year</p>`
       }
@@ -290,10 +467,7 @@ export function wrappedBody({
       stats.hosting
         ? html`<div class="card">
             <h2>Hosting</h2>
-            <p>
-              You hosted ${plural(stats.hosting.thisYear, 'event')} this year
-              (${String(stats.hosting.allTime)} all-time). Thank you!
-            </p>
+            ${hostingSection(stats.hosting)}
           </div>`
         : ''
     }
@@ -307,10 +481,20 @@ export function wrappedBody({
             : html`None this year`
         }
       </p>
+      ${
+        stats.busiestMonth && stats.busiestMonth.events.length > 0
+          ? html`<details>
+              <summary>
+                Events that month (${String(stats.busiestMonth.events.length)})
+              </summary>
+              ${eventList(stats.busiestMonth.events)}
+            </details>`
+          : ''
+      }
     </div>
     <div class="card">
       <h2>Went with the most</h2>
-      <p>${companionsText(wrapped, displayNames)}</p>
+      ${companionsSection(wrapped, displayNames)}
       <p class="muted">
         Counted from Meetup RSVPs, so an event you signed up for but missed
         still counts. Only members who have linked their Meetup account are
@@ -451,13 +635,19 @@ export function registerWrappedPage(
     }
   }
 
-  /** The named companions' display names, through the bot, in parallel. */
+  /** Every named person's display name (companions and cohorts), through the bot, in parallel. */
   async function namesFor(
     wrapped: CachedWrapped,
   ): Promise<Record<string, string>> {
     const names: Record<string, string> = {};
+    const ids = new Set<string>([
+      ...wrapped.companions.named.map((c) => c.discordUserId),
+      ...wrapped.stats.topTypes.flatMap((top) =>
+        top.cohort.named.map((c) => c.discordUserId),
+      ),
+    ]);
     await Promise.all(
-      wrapped.companions.named.map(async ({ discordUserId }) => {
+      [...ids].map(async (discordUserId) => {
         try {
           const name = await deps.displayName(discordUserId);
           if (name !== undefined) {

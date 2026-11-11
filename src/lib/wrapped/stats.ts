@@ -26,11 +26,16 @@ export interface WrappedEvent {
   eventUrl: string;
 }
 
+/** A hosted event with its yes+attended RSVP count as Meetup reported it at build time. */
+export interface HostedEvent extends WrappedEvent {
+  attendance: number;
+}
+
 export interface WrappedInput {
   year: number;
   selfMeetupId: string;
   attended: WrappedEvent[];
-  hosted: WrappedEvent[];
+  hosted: HostedEvent[];
   /** Attendee Meetup ids per event id, for the Wrapped year's events only. */
   attendeesByEvent: Record<string, string[]>;
 }
@@ -38,6 +43,37 @@ export interface WrappedInput {
 export interface Companion {
   meetupId: string;
   sharedCount: number;
+  /** This year's events you were both at, date ascending. */
+  sharedEventIds: string[];
+}
+
+/** A linked, present member from a type's early events: Discord id only. */
+export interface CohortMember {
+  discordUserId: string;
+  /** Of the type's first events, how many they were at too. */
+  earlyCount: number;
+  /** This year's events shared. */
+  sharedCount: number;
+}
+
+export interface NamedCohort {
+  named: CohortMember[];
+  /** Early-cohort people not named: an aggregate, never a name. */
+  otherCount: number;
+}
+
+export interface TopType {
+  type: EventType;
+  count: number;
+  /** The member's first events ever of this type, earliest first, as of the year's end. */
+  firstEvents: WrappedEvent[];
+  /** Empty from computeWrapped; build.ts fills it after naming. */
+  cohort: NamedCohort;
+}
+
+export interface HostedRanked {
+  event: WrappedEvent;
+  attendance: number;
 }
 
 export interface WrappedStats {
@@ -46,10 +82,17 @@ export interface WrappedStats {
   attendedThisYear: number;
   /** As of 31 December of the Wrapped year. */
   attendedAllTime: number;
-  topTypes: { type: EventType; count: number }[];
-  hosting: { thisYear: number; allTime: number } | null;
-  /** 0 = January. */
-  busiestMonth: { month: number; count: number } | null;
+  topTypes: TopType[];
+  hosting: {
+    thisYear: number;
+    allTime: number;
+    /** This year's hosted events by attendance desc, earliest first on a tie. */
+    topThisYear: HostedRanked[];
+    /** The best-attended hosted event ever, as of the year's end. */
+    allTimeBest: HostedRanked | null;
+  } | null;
+  /** 0 = January. `events`: that month's counted attended events, date asc. */
+  busiestMonth: { month: number; count: number; events: WrappedEvent[] } | null;
   longestStreakMonths: number;
   /**
    * Every Pacific year with at least one counted attended event, ascending,
@@ -60,6 +103,8 @@ export interface WrappedStats {
 }
 
 const TOP_TYPES = 3;
+export const FIRST_EVENTS_PER_TYPE = 10;
+export const TOP_HOSTED = 5;
 
 /** [1 Jan 00:00, 1 Jan next year 00:00) in the group's timezone. */
 export function yearBounds(year: number): { start: Dayjs; end: Dayjs } {
@@ -77,11 +122,11 @@ export function isInYear(dateTime: string, year: number): boolean {
  * Deduped by id (first occurrence wins), keeping what `counts` says counts
  * (the shared rule; these lists carry no status, so it goes by title).
  */
-function cleanEvents(
-  events: WrappedEvent[],
+function cleanEvents<T extends WrappedEvent>(
+  events: T[],
   counts: (event: CountedEventLike) => boolean,
-): WrappedEvent[] {
-  const byId = new Map<string, WrappedEvent>();
+): T[] {
+  const byId = new Map<string, T>();
   events.forEach((event) => {
     if (!byId.has(event.id) && counts(event)) {
       byId.set(event.id, event);
@@ -93,9 +138,11 @@ function cleanEvents(
 const byDate = (a: WrappedEvent, b: WrappedEvent) =>
   dayjs(a.dateTime).valueOf() - dayjs(b.dateTime).valueOf();
 
+/** `attendedEver` is date-sorted, so each type's first events come out earliest first. */
 function topTypes(
   events: WrappedEvent[],
-): { type: EventType; count: number }[] {
+  attendedEver: WrappedEvent[],
+): TopType[] {
   const counts = new Map<EventType, number>();
   events.forEach((event) => {
     const type = classifyEventType(event.title);
@@ -104,7 +151,15 @@ function topTypes(
   return EVENT_TYPES.filter((type) => counts.has(type))
     .map((type) => ({ type, count: counts.get(type) ?? 0 }))
     .sort((a, b) => b.count - a.count)
-    .slice(0, TOP_TYPES);
+    .slice(0, TOP_TYPES)
+    .map(({ type, count }) => ({
+      type,
+      count,
+      firstEvents: attendedEver
+        .filter((event) => classifyEventType(event.title) === type)
+        .slice(0, FIRST_EVENTS_PER_TYPE),
+      cohort: { named: [], otherCount: 0 },
+    }));
 }
 
 function monthCounts(events: WrappedEvent[]): number[] {
@@ -115,16 +170,35 @@ function monthCounts(events: WrappedEvent[]): number[] {
   return counts;
 }
 
+/** `thisYear` is date-sorted, so the month's events come out in date order. */
 function busiestMonth(
   counts: number[],
-): { month: number; count: number } | null {
+  thisYear: WrappedEvent[],
+): WrappedStats['busiestMonth'] {
   let best: { month: number; count: number } | null = null;
   counts.forEach((count, month) => {
     if (count > 0 && (best === null || count > best.count)) {
       best = { month, count };
     }
   });
-  return best;
+  if (best === null) {
+    return null;
+  }
+  const { month, count } = best;
+  return {
+    month,
+    count,
+    events: thisYear.filter(
+      (event) => tz(dayjs(event.dateTime)).month() === month,
+    ),
+  };
+}
+
+/** Attendance desc, then earliest first; `hosted` is date-sorted. */
+function rankHosted(hosted: HostedEvent[]): HostedRanked[] {
+  return [...hosted]
+    .sort((a, b) => b.attendance - a.attendance || byDate(a, b))
+    .map(({ attendance, ...event }) => ({ event, attendance }));
 }
 
 function longestStreak(counts: number[]): number {
@@ -142,16 +216,20 @@ function rankCompanions(
   attendeesByEvent: Record<string, string[]>,
   selfMeetupId: string,
 ): Companion[] {
-  const counts = new Map<string, number>();
+  const shared = new Map<string, string[]>();
   yearEvents.forEach((event) => {
     new Set(attendeesByEvent[event.id] ?? []).forEach((meetupId) => {
       if (meetupId !== selfMeetupId) {
-        counts.set(meetupId, (counts.get(meetupId) ?? 0) + 1);
+        shared.set(meetupId, [...(shared.get(meetupId) ?? []), event.id]);
       }
     });
   });
-  return [...counts.entries()]
-    .map(([meetupId, sharedCount]) => ({ meetupId, sharedCount }))
+  return [...shared.entries()]
+    .map(([meetupId, sharedEventIds]) => ({
+      meetupId,
+      sharedCount: sharedEventIds.length,
+      sharedEventIds,
+    }))
     .sort(
       (a, b) =>
         b.sharedCount - a.sharedCount ||
@@ -168,13 +246,19 @@ export function computeWrapped(input: WrappedInput): {
   const cutoff = (event: WrappedEvent) =>
     dayjs(event.dateTime).valueOf() < end.valueOf();
 
-  // A hosted event counts as attended, even without an RSVP.
+  // A hosted event counts as attended, even without an RSVP (its attendance
+  // count stays with the hosting stats).
   const attendedEver = cleanEvents(
-    [...input.attended, ...input.hosted],
+    [
+      ...input.attended,
+      ...input.hosted.map(({ attendance: _attendance, ...event }) => event),
+    ],
     countsAsAttended,
   );
   const attended = attendedEver.filter(cutoff).sort(byDate);
-  const hosted = cleanEvents(input.hosted, countsAsHosted).filter(cutoff);
+  const hosted = cleanEvents(input.hosted, countsAsHosted)
+    .filter(cutoff)
+    .sort(byDate);
   const thisYear = attended.filter((event) => isInYear(event.dateTime, year));
   const hostedThisYear = hosted.filter((event) =>
     isInYear(event.dateTime, year),
@@ -187,12 +271,17 @@ export function computeWrapped(input: WrappedInput): {
       firstEvent: attended[0] ?? null,
       attendedThisYear: thisYear.length,
       attendedAllTime: attended.length,
-      topTypes: topTypes(thisYear),
+      topTypes: topTypes(thisYear, attended),
       hosting:
         hosted.length > 0
-          ? { thisYear: hostedThisYear.length, allTime: hosted.length }
+          ? {
+              thisYear: hostedThisYear.length,
+              allTime: hosted.length,
+              topThisYear: rankHosted(hostedThisYear).slice(0, TOP_HOSTED),
+              allTimeBest: rankHosted(hosted)[0] ?? null,
+            }
           : null,
-      busiestMonth: busiestMonth(months),
+      busiestMonth: busiestMonth(months, thisYear),
       longestStreakMonths: longestStreak(months),
       activeYears: [
         ...new Set(

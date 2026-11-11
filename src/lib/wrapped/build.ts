@@ -13,14 +13,20 @@ import {
 import {
   EventSummary,
   GetEventRsvpsResponse,
-  GetGroupEventsResponse,
-  GroupEventFilter,
+  GetHostedEventsResponse,
   PaginationInput,
   RsvpFilter,
+  hostedAttendance,
 } from '../client/meetup/types.js';
 import { CachedWrapped } from './cache.js';
-import { CompanionDeps, nameCompanions } from './companions.js';
-import { WrappedEvent, computeWrapped, isInYear } from './stats.js';
+import { earlyEventIdsToFetch, rankCohort } from './cohort.js';
+import { CompanionDeps, nameCohort, nameCompanions } from './companions.js';
+import {
+  HostedEvent,
+  WrappedEvent,
+  computeWrapped,
+  isInYear,
+} from './stats.js';
 
 const logger = new Logger({ name: 'wrappedBuild' });
 
@@ -35,10 +41,10 @@ export interface WrappedMeetup {
   getSelfPastRsvpEvents(
     groupId: string,
   ): Promise<{ events: EventSummary[]; meetupId: string }>;
-  getGroupEvents(
+  getHostedEvents(
+    hostId: string,
     input: PaginationInput,
-    filter?: GroupEventFilter,
-  ): Promise<GetGroupEventsResponse>;
+  ): Promise<GetHostedEventsResponse>;
   getEventRsvps(
     eventId: string,
     input: PaginationInput,
@@ -61,6 +67,8 @@ export interface BuildDeps extends CompanionDeps {
   claimBuild?(): boolean;
   onProgress?(message: string): Promise<void>;
   now?: () => Date;
+  /** Where the duration line goes (ids only); the module logger by default. */
+  log?: (message: string) => void;
 }
 
 export type BuildResult =
@@ -107,14 +115,18 @@ async function readHistory(
 async function readHosted(
   meetup: WrappedMeetup,
   hostId: string,
-): Promise<WrappedEvent[]> {
-  return getPaginatedData(async (paginationInput) => {
-    const result = await meetup.getGroupEvents(paginationInput, {
-      status: ['PAST'],
-      hostId,
-    });
+): Promise<HostedEvent[]> {
+  const nodes = await getPaginatedData(async (paginationInput) => {
+    const result = await meetup.getHostedEvents(hostId, paginationInput);
     return result.groupByUrlname.events;
   });
+  return nodes.map(({ id, title, dateTime, eventUrl, ...node }) => ({
+    id,
+    title,
+    dateTime,
+    eventUrl,
+    attendance: hostedAttendance({ id, title, dateTime, eventUrl, ...node }),
+  }));
 }
 
 async function readAttendees(
@@ -151,6 +163,9 @@ export async function buildWrapped(
     }
   };
 
+  const now = deps.now ?? (() => new Date());
+  const startedMs = now().getTime();
+
   await progress('Reading your RSVPs…');
   const history = await readHistory(deps, linkedMeetupId, groupId);
   if (history.kind !== 'events') {
@@ -164,11 +179,15 @@ export async function buildWrapped(
   await progress('Finding who you went with…');
   // Deduped: a hosted event is usually in the RSVP list too, and each
   // event's attendee list should be fetched once.
-  const thisYear = [
-    ...new Map(
-      [...history.events, ...hosted].map((event) => [event.id, event]),
-    ).values(),
-  ].filter((event) => isInYear(event.dateTime, year));
+  const everyEvent = new Map<string, WrappedEvent>(
+    [...history.events, ...hosted].map(({ id, title, dateTime, eventUrl }) => [
+      id,
+      { id, title, dateTime, eventUrl },
+    ]),
+  );
+  const thisYear = [...everyEvent.values()].filter((event) =>
+    isInYear(event.dateTime, year),
+  );
   const attendeesByEvent = await readAttendees(deps.meetup, thisYear);
 
   const { stats, companions } = computeWrapped({
@@ -178,14 +197,40 @@ export async function buildWrapped(
     hosted,
     attendeesByEvent,
   });
-  const named = await nameCompanions(companions, deps);
+
+  await progress('Looking back at your early events…');
+  // Each top type's first events, fetched once (never again for one already
+  // read this year), bounded by TOP_TYPES × FIRST_EVENTS_PER_TYPE.
+  const earlyEvents = earlyEventIdsToFetch(
+    stats.topTypes,
+    Object.keys(attendeesByEvent),
+  )
+    .map((id) => everyEvent.get(id))
+    .filter((event): event is WrappedEvent => event !== undefined);
+  Object.assign(
+    attendeesByEvent,
+    await readAttendees(deps.meetup, earlyEvents),
+  );
+  const topTypes = await mapWithConcurrency(stats.topTypes, 1, async (top) => ({
+    ...top,
+    cohort: await nameCohort(
+      rankCohort(top.firstEvents, attendeesByEvent, companions, linkedMeetupId),
+      deps,
+    ),
+  }));
+
+  const named = await nameCompanions(companions, deps, everyEvent);
+
+  (deps.log ?? ((message: string) => logger.info(message)))(
+    `Wrapped build for Meetup member ${linkedMeetupId} (${year}) took ${now().getTime() - startedMs} ms`,
+  );
   return {
     kind: 'built',
     wrapped: {
       meetupId: linkedMeetupId,
-      stats,
+      stats: { ...stats, topTypes },
       companions: named,
-      builtAt: (deps.now ?? (() => new Date()))().toISOString(),
+      builtAt: now().toISOString(),
     },
   };
 }

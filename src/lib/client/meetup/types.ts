@@ -191,6 +191,36 @@ export type GetGroupEventsInput = {
   urlname: string;
 };
 
+/** A hosted event with its yes+attended RSVP count (getHostedEvents). No hosts. */
+export type HostedEventNode = Pick<
+  Event,
+  'dateTime' | 'eventUrl' | 'id' | 'status' | 'title'
+> & {
+  attendance?: { totalCount?: number | null } | null;
+};
+
+/** The count, or 0 when Meetup sent none or something that is not a number. */
+export function hostedAttendance(node: HostedEventNode): number {
+  const count = node.attendance?.totalCount;
+  return typeof count === 'number' && Number.isFinite(count) && count >= 0
+    ? count
+    : 0;
+}
+
+export interface GetHostedEventsResponse {
+  groupByUrlname: {
+    events: PaginatedData<HostedEventNode>;
+    id: string;
+  };
+}
+
+export type GetHostedEventsInput = {
+  after?: string;
+  filter: GroupEventFilter;
+  first: number;
+  urlname: string;
+};
+
 export interface GetGroupEventsCountResponse {
   groupByUrlname: {
     events: { totalCount: number };

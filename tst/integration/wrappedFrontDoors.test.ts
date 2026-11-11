@@ -74,7 +74,7 @@ const events: EventSummary[] = [
 function fakeMeetup() {
   return {
     getSelfPastRsvpEvents: vi.fn(async () => ({ events, meetupId: ME })),
-    getGroupEvents: vi.fn(async () => ({
+    getHostedEvents: vi.fn(async () => ({
       groupByUrlname: { id: GROUP, events: page([]) },
     })),
     getEventRsvps: vi.fn(async (eventId: string) => ({
