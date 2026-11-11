@@ -200,6 +200,52 @@ export const getGroupEvents = gql`
   ${UserFragment}
 `;
 
+/**
+ * A member's past hosted events (Wrapped): getGroupEvents' fields plus how
+ * many RSVPs are yes or marked attended. Its own query, so the request cache
+ * never serves a getGroupEvents page (which lacks the count) as "0".
+ */
+export const getHostedEvents = gql`
+  query (
+    $urlname: String!
+    $first: Int!
+    $after: String
+    $filter: GroupEventFilter
+  ) {
+    groupByUrlname(urlname: $urlname) {
+      id
+      events(first: $first, after: $after, filter: $filter) {
+        pageInfo {
+          hasNextPage
+          hasPreviousPage
+          startCursor
+          endCursor
+        }
+        totalCount
+        edges {
+          node {
+            id
+            title
+            dateTime
+            eventUrl
+            eventHosts {
+              member {
+                ...UserDetails
+              }
+            }
+            maxTickets
+            status
+            attendance: rsvps(filter: { rsvpStatus: [YES, ATTENDED] }) {
+              totalCount
+            }
+          }
+        }
+      }
+    }
+  }
+  ${UserFragment}
+`;
+
 // Sends the filter exactly as given, with no +1-month expansion, so
 // totalCount reflects the caller's actual window. Used where only a count is
 // needed (e.g. new-host detection), unlike getGroupEvents which pads
