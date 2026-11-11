@@ -16,6 +16,10 @@ import {
   productionWrappedAnnounceDeps,
   startWrappedAnnounceScheduler,
 } from './lib/wrapped/announce.js';
+import {
+  productionBackfillDeps,
+  startWrappedBackfillScheduler,
+} from './lib/wrapped/backfill.js';
 import { productionAnnounceTickDeps } from './web/host/hostServices.js';
 import { setDashboardClient } from './web/dashboardDeps.js';
 import { setHostClient } from './web/host/hostDeps.js';
@@ -69,6 +73,9 @@ client.once('clientReady', async () => {
   );
   startWrappedAnnounceScheduler(client, () =>
     productionWrappedAnnounceDeps(() => client),
+  );
+  startWrappedBackfillScheduler(client, () =>
+    productionBackfillDeps(() => client),
   );
   // The express OAuth routes run outside discordCommandWrapper, so without a
   // client their failures reach nobody. Hand it over now that we can post.

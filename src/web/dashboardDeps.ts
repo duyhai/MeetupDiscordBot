@@ -51,6 +51,9 @@ import {
 } from '../lib/workspace/upcoming.js';
 import { ApplicationCache } from '../util/cache.js';
 import { PostgresWrappedAnnouncementRepository } from '../lib/repositories/postgresWrappedAnnouncementRepository.js';
+import { PostgresWrappedBackfillRepository } from '../lib/repositories/postgresWrappedBackfillRepository.js';
+import { RUN_NOW_KEY, RUN_NOW_TTL_SEC } from '../lib/wrapped/backfill.js';
+import { nextTickAt } from '../lib/wrapped/queue.js';
 import {
   announceYear,
   loadWrappedAnnounceConfig,
@@ -365,6 +368,40 @@ export function dashboardPageDeps(): DashboardPageDeps {
         },
         request,
       ),
+    wrappedBackfill: {
+      status: async () => {
+        const store = await PostgresWrappedBackfillRepository.instance();
+        const cache = await ApplicationCache();
+        const now = new Date();
+        const [lastRun, openRun, queueLength] = await Promise.all([
+          store.lastFinishedRun(),
+          store.openRun(),
+          store.queueLength(),
+        ]);
+        return {
+          lastRun,
+          openRun,
+          queueLength,
+          nextTickAt: await nextTickAt(cache, now),
+        };
+      },
+      // The flag the next tick honours (backfill.ts); a run already open
+      // needs no flag, and a second press is told the first one stands.
+      runNow: async (requestedBy) => {
+        const store = await PostgresWrappedBackfillRepository.instance();
+        if (await store.openRun()) {
+          return 'already-running';
+        }
+        const cache = await ApplicationCache();
+        return (await cache.exclusive_set(
+          RUN_NOW_KEY,
+          requestedBy,
+          RUN_NOW_TTL_SEC,
+        ))
+          ? 'requested'
+          : 'already-requested';
+      },
+    },
     wrappedAnnounce: {
       config: () => loadWrappedAnnounceConfig(),
       status: async () => {

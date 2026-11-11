@@ -31,6 +31,7 @@ import { SafeHtml, html, localUrl } from '../html.js';
 import { monthCell, pacificDateTime, zeroNoShowNote } from '../pageKit.js';
 import type { DashboardPageDeps } from './dashboardPages.js';
 import { WRAPPED_ANNOUNCE_PATH, wrappedNotice } from './wrappedAnnounce.js';
+import { wrappedBackfillCard } from './wrappedBackfill.js';
 
 const logger = new Logger({ name: 'dashboard' });
 
@@ -262,6 +263,7 @@ export async function renderHomeReports(
     | 'linkProgress'
     | 'workspace'
     | 'wrappedAnnounce'
+    | 'wrappedBackfill'
   >,
   view: Partial<HomeReportsView> = {},
 ): Promise<SafeHtml> {
@@ -280,54 +282,62 @@ export async function renderHomeReports(
     const workspaceMonthsShown = [finished, open].filter((p) =>
       isWorkspaceMonth(p, now),
     );
-    const [workspace, finishedCard, openCard, identityCard, linkCard, wrapped] =
-      await Promise.all([
-        card('workspace', deadline, () =>
-          workspaceCard(deps, workspaceMonthsShown),
-        ),
-        card('finished month', deadline, () =>
-          monthCard(snapshotsOnce, finished, now, false),
-        ),
-        card('open month', deadline, () =>
-          monthCard(snapshotsOnce, open, now, true),
-        ),
-        card('identity', deadline, async () => {
-          const identity = await deps.identity();
-          const changes = await identity.countChangesSince(
-            new Date(now.getTime() - 7 * DAY_MS),
-          );
-          return html`<div class="card">
-            <h2>Identity changes</h2>
-            <p>
-              <a href="${localUrl(dashboardPath(DASHBOARD_PATHS.identity))}"
-                >${num({ changes }, 'changes')} identity changes in the last 7
-                days</a
-              >
-            </p>
-          </div>`;
-        }),
-        card('link progress', deadline, async () => {
-          const [day] = await (await deps.linkProgress()).listDays(1);
-          return html`<div class="card">
-            <h2>
-              <a href="${localUrl(dashboardPath(DASHBOARD_PATHS.linkProgress))}"
-                >Link progress</a
-              >
-            </h2>
-            ${
-              day
-                ? html`<p>
-                    Linked ${day.linked}, unlinked ${day.unlinked}, onboarding
-                    ${day.onboarding} on ${day.day}
-                  </p>`
-                : html`<p class="muted">No link progress recorded yet.</p>`
-            }
-          </div>`;
-        }),
-        card('wrapped', deadline, () => wrappedCard(deps, view)),
-      ]);
+    const [
+      workspace,
+      finishedCard,
+      openCard,
+      identityCard,
+      linkCard,
+      wrapped,
+      backfill,
+    ] = await Promise.all([
+      card('workspace', deadline, () =>
+        workspaceCard(deps, workspaceMonthsShown),
+      ),
+      card('finished month', deadline, () =>
+        monthCard(snapshotsOnce, finished, now, false),
+      ),
+      card('open month', deadline, () =>
+        monthCard(snapshotsOnce, open, now, true),
+      ),
+      card('identity', deadline, async () => {
+        const identity = await deps.identity();
+        const changes = await identity.countChangesSince(
+          new Date(now.getTime() - 7 * DAY_MS),
+        );
+        return html`<div class="card">
+          <h2>Identity changes</h2>
+          <p>
+            <a href="${localUrl(dashboardPath(DASHBOARD_PATHS.identity))}"
+              >${num({ changes }, 'changes')} identity changes in the last 7
+              days</a
+            >
+          </p>
+        </div>`;
+      }),
+      card('link progress', deadline, async () => {
+        const [day] = await (await deps.linkProgress()).listDays(1);
+        return html`<div class="card">
+          <h2>
+            <a href="${localUrl(dashboardPath(DASHBOARD_PATHS.linkProgress))}"
+              >Link progress</a
+            >
+          </h2>
+          ${
+            day
+              ? html`<p>
+                  Linked ${day.linked}, unlinked ${day.unlinked}, onboarding
+                  ${day.onboarding} on ${day.day}
+                </p>`
+              : html`<p class="muted">No link progress recorded yet.</p>`
+          }
+        </div>`;
+      }),
+      card('wrapped', deadline, () => wrappedCard(deps, view)),
+      card('wrapped backfill', deadline, () => wrappedBackfillCard(deps, view)),
+    ]);
     // The workspace card first: it is what staff act on.
-    return html`${workspace}${finishedCard}${openCard}${identityCard}${linkCard}${wrapped}`;
+    return html`${workspace}${finishedCard}${openCard}${identityCard}${linkCard}${wrapped}${backfill}`;
   } catch (error) {
     logger.warn(
       `Dashboard home reports failed: ${error instanceof Error ? error.name : 'Error'}`,
