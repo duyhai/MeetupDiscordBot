@@ -969,6 +969,59 @@ describe('the queue for throttled requests', () => {
     expect(h.deps.memberToken).not.toHaveBeenCalled();
   });
 
+  it('a mismatch page for a past year keeps the built years in the picker', async () => {
+    const h = await harness({ meetup: fakeMeetup({ meetupId: 'someone' }) });
+    await writeWrapped(h.wrappedCache, USER, 2026, cached, NOW);
+    const sid = await signInWithDiscord(h.req);
+
+    const res = await h.req.get('/host/wrapped?year=2025').set('Cookie', sid);
+
+    expect(res.status).toBe(200);
+    expect(res.text).toContain('is not the one linked');
+    expect(res.text).toContain('href="/host/wrapped?year=2026"');
+    expect(res.text).toContain('href="/host/wrapped?year=2024"');
+    expect(res.text).toContain('aria-current="page">2025');
+  });
+
+  it('a not-linked member sees this year alone in the picker, with no cache read', async () => {
+    const h = await harness({
+      resolve: { ...HOST, discordUserId: undefined },
+    });
+    const get = vi.spyOn(h.wrappedCache, 'get');
+    const sid = await signInWithMeetup(h.req);
+
+    const res = await h.req.get('/host/wrapped?year=2024').set('Cookie', sid);
+
+    expect(res.status).toBe(200);
+    expect(res.text).toContain('linked members');
+    expect(res.text).toContain('href="/host/wrapped?year=2026"');
+    expect(res.text).not.toContain('href="/host/wrapped?year=2025"');
+    expect(res.text).not.toContain('href="/host/wrapped?year=2024"');
+    expect(get).not.toHaveBeenCalled();
+  });
+
+  it('a notice page still renders when the current-year read fails', async () => {
+    const h = await harness({ queue: true });
+    await h.store.enqueue({ discordUserId: USER, meetupId: ME, year: 2025 });
+    h.deps.limiter.take(USER);
+    const sid = await signInWithDiscord(h.req);
+    const values = h.wrappedCache.values;
+    vi.spyOn(h.wrappedCache, 'get').mockImplementation(async (key: string) => {
+      if (key === wrappedCacheKey(USER, 2026)) {
+        throw new Error('redis down');
+      }
+      return values.get(key);
+    });
+
+    const res = await h.req.get('/host/wrapped?year=2025').set('Cookie', sid);
+
+    expect(res.status).toBe(200);
+    expect(strip(res.text)).toContain('Queued — it&#39;ll be ready by about');
+    // The picker falls back to this year alone; the notice is what matters.
+    expect(res.text).toContain('href="/host/wrapped?year=2026"');
+    expect(res.text).not.toContain('redis down');
+  });
+
   it("an on-demand build keeps a different year's queued request", async () => {
     const h = await harness({ queue: true });
     await h.store.enqueue({ discordUserId: USER, meetupId: ME, year: 2023 });
