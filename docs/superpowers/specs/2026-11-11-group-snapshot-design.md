@@ -78,7 +78,7 @@ calls, and the dataset feeds the long-term analytics and cohort goals
   idempotent `CREATE TABLE IF NOT EXISTS`, column additions guarded by a
   catalog read, `inDashboardTransaction` with lock and idle timeouts.
 - `build.ts`: `WrappedSources { events, hosted }`, `buildWrappedYear(deps,
-  meetupId, year, sources, options)`, which reads attendee lists through
+meetupId, year, sources, options)`, which reads attendee lists through
   `deps.meetup.getEventRsvps`; `computeWrapped` is pure.
 - `countedEvents.ts`: the one counted-event rule (cancelled status or title,
   Open House tag for hosting). The snapshot stores raw rows; the rule is
@@ -164,7 +164,7 @@ Writes use the existing pool (size 3); no new connections.
   Paged 100 at a time over `status: [PAST]` and then `status: [ACTIVE]`.
   Host ids only, no host names (unlike the audit node).
 - **RSVPs**: a new query `getEventRsvpsForSnapshot(eventId, first, after,
-  filter)`: `pageInfo`, `totalCount`, `edges { node { status member { id } } }`
+filter)`: `pageInfo`, `totalCount`, `edges { node { status member { id } } }`
   with `rsvpStatus: [YES, WAITLIST, ATTENDED]`, 100 per page, every page.
   No names, no profile fields.
 - Nodes are validated like `toObservation`: an id that is not digits or a
@@ -205,14 +205,14 @@ else `incremental`.
      after), and `rsvps_fetched_at` before this run's `started_at`, or
    - PAST, `rsvps_fetched_at` earlier than `date_time` (read before it
      happened, e.g. a status flip).
-   This set is computed in SQL each tick, so the phase is resumable with no
-   cursor: a fetched event drops out. Each event's pages are read in full,
-   then in **one transaction** its rows are replaced (delete + insert) and
-   `rsvps_fetched_at` set. A failed event is counted (`failed`), logged by
-   error class, skipped for this run (an in-run skip set) and retried next
-   run.
-   The **watermark** is the newest `date_time` whose RSVPs are stored and
-   settled; it is not stored separately because the three rules above are it.
+     This set is computed in SQL each tick, so the phase is resumable with no
+     cursor: a fetched event drops out. Each event's pages are read in full,
+     then in **one transaction** its rows are replaced (delete + insert) and
+     `rsvps_fetched_at` set. A failed event is counted (`failed`), logged by
+     error class, skipped for this run (an in-run skip set) and retried next
+     run.
+     The **watermark** is the newest `date_time` whose RSVPs are stored and
+     settled; it is not stored separately because the three rules above are it.
 4. **Finish** when the set is empty: `finished_at`, summary log line, and an
    alert for a `full` run only (_my call_: one daily "incremental finished"
    post would be noise; failures still alert).
@@ -267,6 +267,7 @@ notices `snapshot-requested`, `snapshot-already-running`,
 ### Testing (PR 1)
 
 Unit (vitest, network blocked, in-memory store):
+
 - listing upsert: node validation (bad id/date dropped, bad URL → NULL,
   bounded title), PAST then ACTIVE, the counts; a failed listing leaves the
   run open and the next tick lists again;
@@ -308,7 +309,7 @@ A `SnapshotReader` (Postgres) with, for a Meetup member id:
     `yes_count` is used).
 - `attendees(eventIds)`: `{ byEvent, partial }` from one
   `SELECT event_id, member_id … WHERE event_id = ANY($1) AND status IN
-  ('YES','ATTENDED')`; `partial` is always empty (lists are complete).
+('YES','ATTENDED')`; `partial` is always empty (lists are complete).
 
 `build.ts` gains an `AttendeeSource` seam: `buildWrappedYear` reads attendee
 lists through `deps.attendees(events, { firstPageOnly })`, whose Meetup
@@ -336,6 +337,7 @@ Meetup token, so it has no account-mismatch or not-in-group outcome.
 Unchanged order: linked gate, stored entry (Redis hot copy, then Postgres),
 hourly limiter, building lease. Only the build step changes: snapshot path
 first, token path as fallback. Consequences:
+
 - A snapshot build needs no stored Meetup token, so the web page's "connect
   your Meetup" page is shown only when the fallback is needed and there is no
   token.

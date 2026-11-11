@@ -37,11 +37,13 @@
 ### Task 1: Meetup snapshot queries and node validation
 
 **Files:**
+
 - Modify: `src/lib/client/meetup/queries.ts` (add two queries), `src/lib/client/meetup/types.ts` (node types), `src/lib/client/meetup/gqlClient.ts` (two methods)
 - Create: `src/lib/snapshot/meetup.ts`
 - Test: `tst/lib/snapshot/meetup.test.ts`, extend `tst/lib/client/` gql client test if one covers request shapes (else a new `tst/lib/client/snapshotQueries.test.ts` asserting the query text)
 
 **Interfaces:**
+
 - Produces:
   - `SnapshotEventNode { id; title; dateTime; eventUrl; status; eventHosts: { member: { id } }[] | null; attendance: { totalCount } | null; waitlist: { totalCount } | null }` (all `unknown`-tolerant at validation).
   - `SnapshotRsvpNode { status: string; member: { id: string } | null }`.
@@ -65,26 +67,46 @@
 ### Task 2: Schema and Postgres repository
 
 **Files:**
+
 - Modify: `src/lib/repositories/dashboardPool.ts` (append the three tables verbatim from the spec, with the spec's comments, plus `status IN ('YES','WAITLIST','ATTENDED')` CHECK)
 - Create: `src/lib/repositories/postgresSnapshotRepository.ts`
 - Create: `tst/lib/snapshot/fakes.ts` (`FakeSnapshotStore implements SnapshotStore`, same contract in memory)
 - Test: `tst/integration/postgresSnapshotRepository.test.ts` (isolated schema via `tst/integration/isolatedSchema.ts`)
 
 **Interfaces:**
+
 - Consumes: `SnapshotEvent`, `SnapshotRsvp` (Task 1).
 - Produces (`SnapshotStore`):
+
   ```ts
-  interface SnapshotRun { id: number; trigger: string; kind: 'full' | 'incremental';
-    startedAt: Date; finishedAt?: Date; listedAt?: Date; eventsListed: number;
-    eventsFetched: number; rsvpsStored: number; failed: number; requests: number;
-    lastError?: string }
-  interface SnapshotDelta { eventsFetched: number; rsvpsStored: number; failed: number }
+  interface SnapshotRun {
+    id: number;
+    trigger: string;
+    kind: 'full' | 'incremental';
+    startedAt: Date;
+    finishedAt?: Date;
+    listedAt?: Date;
+    eventsListed: number;
+    eventsFetched: number;
+    rsvpsStored: number;
+    failed: number;
+    requests: number;
+    lastError?: string;
+  }
+  interface SnapshotDelta {
+    eventsFetched: number;
+    rsvpsStored: number;
+    failed: number;
+  }
   interface SnapshotStore {
     openRun(): Promise<SnapshotRun | undefined>;
     lastFinishedRun(): Promise<SnapshotRun | undefined>;
     hasFinishedFull(): Promise<boolean>;
     /** undefined when one is open (the unique index). */
-    startRun(trigger: string, kind: 'full' | 'incremental'): Promise<SnapshotRun | undefined>;
+    startRun(
+      trigger: string,
+      kind: 'full' | 'incremental',
+    ): Promise<SnapshotRun | undefined>;
     /** Non-deleted events with status PAST. */
     pastEventCount(): Promise<number>;
     upsertEvents(events: SnapshotEvent[], listedAt: Date): Promise<void>;
@@ -94,12 +116,30 @@
     markAuditDeletions(): Promise<number>;
     /** deleted_at = at for one event (a by-id read answered null). */
     markDeleted(eventId: string, at: Date): Promise<void>;
-    markListed(runId: number, listedAt: Date, eventsListed: number): Promise<void>;
+    markListed(
+      runId: number,
+      listedAt: Date,
+      eventsListed: number,
+    ): Promise<void>;
     /** The spec's three rules, oldest date_time first, excluding `skip`. */
-    eventsNeedingRsvps(q: { runStartedAt: Date; now: Date; settleDays: number; limit: number; skip: string[] }): Promise<{ eventId: string; dateTime: Date }[]>;
-    pendingRsvpCount(q: { runStartedAt: Date; now: Date; settleDays: number }): Promise<number>;
+    eventsNeedingRsvps(q: {
+      runStartedAt: Date;
+      now: Date;
+      settleDays: number;
+      limit: number;
+      skip: string[];
+    }): Promise<{ eventId: string; dateTime: Date }[]>;
+    pendingRsvpCount(q: {
+      runStartedAt: Date;
+      now: Date;
+      settleDays: number;
+    }): Promise<number>;
     /** One transaction: delete the event's rows, insert these, set rsvps_fetched_at. */
-    replaceRsvps(eventId: string, rsvps: SnapshotRsvp[], fetchedAt: Date): Promise<void>;
+    replaceRsvps(
+      eventId: string,
+      rsvps: SnapshotRsvp[],
+      fetchedAt: Date,
+    ): Promise<void>;
     advance(runId: number, delta: SnapshotDelta): Promise<void>;
     recordRequests(runId: number, calls: number): Promise<void>;
     /** Sets last_error (a class name) on the run. */
@@ -108,6 +148,7 @@
     totals(): Promise<{ events: number; rsvps: number }>;
   }
   ```
+
   `PostgresSnapshotRepository.instance()` singleton like `PostgresWrappedEntryRepository`.
 
 - [ ] **Step 1: Write failing integration tests:**
@@ -119,7 +160,7 @@
   - `markAuditDeletions` copies `event_audit_state.deleted_at` (seed a state row via `PostgresEventAuditRepository.saveRun` or a direct insert in the isolated schema);
   - `markDelisted(before)` marks only PAST/CANCELLED rows with older `listed_at`, never ACTIVE;
   - `totals()` excludes nothing (raw counts) — events and rows.
-  Also write the matching unit contract for `FakeSnapshotStore` in the same task (the fake is used from Task 4).
+    Also write the matching unit contract for `FakeSnapshotStore` in the same task (the fake is used from Task 4).
 - [ ] **Step 2: Run** with the integration env line — FAIL.
 - [ ] **Step 3: Implement** schema + repository. `replaceRsvps` uses `inDashboardTransaction`; inserts via `unnest($2::text[], $3::text[])`.
 - [ ] **Step 4: Run** integration file — PASS; unit tests unaffected.
@@ -128,10 +169,12 @@
 ### Task 3: Reading one listing and one event (organizer reads, counted)
 
 **Files:**
+
 - Create: `src/lib/snapshot/read.ts`
 - Test: `tst/lib/snapshot/read.test.ts`
 
 **Interfaces:**
+
 - Consumes: Task 1 client methods and validators.
 - Produces:
   - `type SnapshotMeetup = Pick<GqlMeetupClient, 'getGroupEventsForSnapshot' | 'getEventRsvpsForSnapshot'>`
@@ -146,10 +189,12 @@
 ### Task 4: The tick
 
 **Files:**
+
 - Create: `src/lib/snapshot/ingest.ts`
 - Test: `tst/lib/snapshot/ingest.test.ts` (uses `FakeSnapshotStore`, a fake `SnapshotMeetup`, the in-memory cache)
 
 **Interfaces:**
+
 - Consumes: Tasks 2–3.
 - Produces:
   ```ts
@@ -165,7 +210,15 @@
   }
   type SnapshotTickOutcome =
     | { kind: 'skipped'; reason: 'guard' | 'lease' | 'not-due' }
-    | { kind: 'ran'; runId: number; listed: boolean; fetched: number; failed: number; calls: number; finished: boolean }
+    | {
+        kind: 'ran';
+        runId: number;
+        listed: boolean;
+        fetched: number;
+        failed: number;
+        calls: number;
+        finished: boolean;
+      }
     | { kind: 'failed'; runId: number | undefined; error: string };
   function runSnapshotTick(deps: SnapshotDeps): Promise<SnapshotTickOutcome>;
   function resetSkipped(): void; // tests
@@ -197,11 +250,13 @@ Order inside a tick: guard → open run, else due check (`SNAPSHOT_RUN_NOW_KEY` 
 ### Task 5: Scheduler and production wiring
 
 **Files:**
+
 - Create: `src/lib/snapshot/job.ts`
 - Modify: `src/index.ts` (start beside `startWrappedBackfillScheduler`)
 - Test: `tst/lib/snapshot/job.test.ts`
 
 **Interfaces:**
+
 - Produces: `startGroupSnapshotScheduler(client: Client, makeDeps: () => Promise<SnapshotDeps>, options?: { env?; setIntervalFn?; log?; runTick? }): void`; `productionSnapshotDeps(getClient: () => Client | undefined): Promise<SnapshotDeps>` (organizer via `withOrganizerMeetup` with the bypass-cache `makeClient`; `canStart` = `canStartMonthBuild(now) && !(await identityDigestInProgress(cache, now))`; `alert` via `logAlert`; `store` = `PostgresSnapshotRepository.instance()`).
 
 - [ ] **Step 1: Failing tests:** no `DATABASE_URL` → warns and never ticks; ticks once at start and every `SNAPSHOT_TICK_MS`; an overlapping tick is skipped; a `makeDeps` rejection is logged, never thrown.
@@ -211,10 +266,12 @@ Order inside a tick: guard → open run, else due check (`SNAPSHOT_RUN_NOW_KEY` 
 ### Task 6: Staff card line (Refresh button deferred to PR 2)
 
 **Files:**
+
 - Modify: `src/web/routes/wrappedBackfill.ts`, `src/lib/reports/dashboardPaths.ts` (`snapshotRefresh: '/wrapped/snapshot/run'`), `src/web/dashboardDeps.ts`, `src/web/routes/dashboardPages.ts` (register), `tst/web/routes/pageFakes.ts` (fake control)
 - Test: `tst/web/routes/wrappedBackfill.test.ts` (extend)
 
 **Interfaces:**
+
 - Consumes: `SnapshotStore` (`lastFinishedRun`, `openRun`, `totals`, `pendingRsvpCount`), `SNAPSHOT_RUN_NOW_KEY`, `SNAPSHOT_RUN_NOW_TTL_SEC`, `RSVP_SETTLE_DAYS`.
 - Produces: `WrappedBackfillControl` gains
   `snapshot(): Promise<SnapshotStatus>` and `refreshSnapshot(requestedBy: string): Promise<RunNowOutcome>`, with
@@ -222,6 +279,7 @@ Order inside a tick: guard → open run, else due check (`SNAPSHOT_RUN_NOW_KEY` 
   notice codes `snapshot-requested`, `snapshot-already-running`, `snapshot-already-requested` added to `BACKFILL_NOTICES` (fixed text), sharing `not-leadership`/`unavailable`/`error`.
 
 Card copy (exact pattern; numbers via `toLocaleString('en-US')`, dates via `pacificDateTime`):
+
 - finished: `Group snapshot: updated <age> ago (<pacific date time> Pacific) · <events> events · <rsvps> RSVPs · last run: <kind>, <requests> calls, <failed> failed.`
 - open run: `Group snapshot: refreshing (<kind>): <eventsFetched> of ~<eventsFetched + pending> events read.` (followed by the finished line if one exists)
 - none: `Group snapshot: not pulled yet.`
