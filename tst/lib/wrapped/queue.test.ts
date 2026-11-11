@@ -46,16 +46,20 @@ describe('readyBy', () => {
     expect(readyBy(next, 9)).toEqual(new Date('2026-12-10T20:13:00Z'));
   });
 
-  it('skips the quiet hour', () => {
+  it('skips the sweep-window closure (17:45–19:00 UTC)', () => {
     const next = new Date('2026-12-10T18:02:00Z');
     expect(readyBy(next, 2)).toEqual(new Date('2026-12-10T19:00:00Z'));
-    // A tick just before the hour still runs.
+    // From 17:45 no build starts (the report job's lead on the identity sweep).
     expect(readyBy(new Date('2026-12-10T17:58:00Z'), 2)).toEqual(
-      new Date('2026-12-10T17:58:00Z'),
+      new Date('2026-12-10T19:00:00Z'),
+    );
+    expect(readyBy(new Date('2026-12-10T17:40:00Z'), 2)).toEqual(
+      new Date('2026-12-10T17:40:00Z'),
     );
     // Past the quiet hour the remaining ticks still count.
+    // 17:55 is inside the closure: that tick and the two behind it land after 19:00.
     expect(readyBy(new Date('2026-12-10T17:55:00Z'), 9)).toEqual(
-      new Date('2026-12-10T19:05:00Z'),
+      new Date('2026-12-10T19:10:00Z'),
     );
   });
 });

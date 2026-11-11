@@ -69,7 +69,6 @@ export const WRAPPED_PATH = `${HOST_BASE}/wrapped`;
 const REBUILD_PATH = `${WRAPPED_PATH}/rebuild`;
 const LINK_DISCORD_PATH = `${HOST_BASE}/link/discord`;
 const MEETUP_SIGN_IN = `${HOST_BASE}/auth/meetup/start`;
-export { FIRST_WRAPPED_YEAR };
 /** How long the page waits for Meetup; the build goes on after that. */
 const BUILD_DEADLINE_MS = 20_000;
 /** Companions and cohort members shown before the "Show all" expander. */

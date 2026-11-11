@@ -75,8 +75,14 @@ export class FakeBackfillStore implements WrappedBackfillStore {
     run.built += delta.built;
     run.skipped += delta.skipped;
     run.failed += delta.failed;
-    run.requests += delta.requests;
     return true;
+  }
+
+  async recordRequests(id: number, calls: number): Promise<void> {
+    const run = this.runs.find((r) => r.id === id);
+    if (run) {
+      run.requests += calls;
+    }
   }
 
   async finishRun(id: number): Promise<BackfillRun | undefined> {

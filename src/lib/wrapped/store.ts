@@ -10,6 +10,7 @@
  * account other than the member's current link is a miss.
  */
 import dayjs from 'dayjs';
+import { Logger } from 'tslog';
 
 import { KeyValueCache } from '../cache/base.js';
 import { WrappedEntryStore } from '../repositories/postgresWrappedEntryRepository.js';
@@ -21,8 +22,14 @@ import {
   writeWrapped,
 } from './cache.js';
 
+const logger = new Logger({ name: 'wrappedStore' });
+
 /** The Redis hot copy of the current year. */
 export const HOT_TTL_SEC = 24 * 60 * 60;
+
+function errorName(error: unknown): string {
+  return error instanceof Error ? error.name : 'Error';
+}
 
 export interface WrappedTiers {
   cache: KeyValueCache;
@@ -44,7 +51,14 @@ export async function readEntry(
   if (hot || !tiers.entries) {
     return hot;
   }
-  const stored = await tiers.entries.get(discordUserId, year);
+  let stored: CachedWrapped | undefined;
+  try {
+    stored = await tiers.entries.get(discordUserId, year);
+  } catch (error) {
+    // Postgres down: the Redis tier already answered (a miss).
+    logger.warn(`Wrapped entries read failed: ${errorName(error)}`);
+    return undefined;
+  }
   if (!stored || stored.meetupId !== meetupId) {
     return undefined;
   }
@@ -71,7 +85,15 @@ export async function writeEntry(
     await writeWrapped(tiers.cache, discordUserId, year, wrapped, now);
     return;
   }
-  await tiers.entries.put(discordUserId, year, wrapped, now);
+  try {
+    await tiers.entries.put(discordUserId, year, wrapped, now);
+  } catch (error) {
+    // Postgres down: keep the build in Redis as before (the season TTL)
+    // rather than lose it; the next build writes both tiers.
+    logger.warn(`Wrapped entries write failed: ${errorName(error)}`);
+    await writeWrapped(tiers.cache, discordUserId, year, wrapped, now);
+    return;
+  }
   const key = wrappedCacheKey(discordUserId, year);
   if (isCurrentYear(year, now)) {
     await tiers.cache.set(key, JSON.stringify(wrapped), HOT_TTL_SEC);

@@ -115,10 +115,6 @@ CREATE TABLE IF NOT EXISTS wrapped_backfill_runs (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS wrapped_backfill_runs_open_idx
   ON wrapped_backfill_runs ((true)) WHERE finished_at IS NULL;
--- Throttled Wrapped requests waiting for the backfill tick: at most one
--- year per member (the primary key). claimed_at is set by the tick that
--- took the row; a stale claim (a crashed tick) is taken again. The Meetup
--- id is the member's own.
 -- Every built Wrapped, durably (src/lib/wrapped/store.ts): the same JSON the
 -- Redis hot copy holds, one row per member and year. meetup_id is the
 -- member's own link at build time; a relink's old rows are deleted on the
@@ -132,6 +128,10 @@ CREATE TABLE IF NOT EXISTS wrapped_entries (
   PRIMARY KEY (discord_user_id, year)
 );
 CREATE INDEX IF NOT EXISTS wrapped_entries_meetup_idx ON wrapped_entries (meetup_id);
+-- Throttled Wrapped requests waiting for the backfill tick: at most one
+-- year per member (the primary key). claimed_at is set by the tick that
+-- took the row; a stale claim (a crashed tick) is taken again. The Meetup
+-- id is the member's own.
 CREATE TABLE IF NOT EXISTS wrapped_queue (
   discord_user_id TEXT PRIMARY KEY CHECK (discord_user_id ~ '^[0-9]{1,20}$'),
   meetup_id       TEXT NOT NULL,

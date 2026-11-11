@@ -806,10 +806,13 @@ year, meetup_id, payload JSONB, built_at)`, primary key (discord_user_id,
    the current link deletes that member's rows written for another Meetup
    id.
 10. **The backfill never writes the request cache.** Its Meetup clients
-    bypass it (`bypassCache: true`); instead a **per-run, in-process memo of
-    attendee Meetup ids** (ids only, never names; at most 3000 events;
-    cleared in a `finally` when the run ends) makes an event shared by many
-    members a single read per run. It is transient and never persisted,
+    bypass it (`bypassCache: true`); instead an **in-process memo of attendee Meetup
+    ids** (ids only, never names; at most 3000 events) makes an event shared
+    by many members a single read: it lives for the open run, or for one
+    tick when no run is open, and is cleared in a `finally` when the run or
+    that tick ends. A first-page read of a big event is remembered as
+    partial and is completed (read in full, once) the first time a build
+    needs the whole list. It is transient and never persisted,
     which is why it may hold other people's Meetup ids. On-demand builds
     keep today's request cache.
 11. **Early-cohort events read the first page of attendees only** (100

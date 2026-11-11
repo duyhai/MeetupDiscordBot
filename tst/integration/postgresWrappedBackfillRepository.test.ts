@@ -84,9 +84,9 @@ const pause = (ms: number) =>
           built: 2,
           skipped: 1,
           failed: 0,
-          requests: 40,
         }),
       ).toBe(true);
+      await repo.recordRequests(run.id, 40);
       // Another process that still thinks the cursor is unset loses.
       expect(
         await another().advanceRun(run.id, undefined, B, {
@@ -94,7 +94,6 @@ const pause = (ms: number) =>
           built: 0,
           skipped: 0,
           failed: 1,
-          requests: 1,
         }),
       ).toBe(false);
       expect(
@@ -103,9 +102,9 @@ const pause = (ms: number) =>
           built: 0,
           skipped: 0,
           failed: 1,
-          requests: 2,
         }),
       ).toBe(true);
+      await repo.recordRequests(run.id, 2);
       expect(await repo.openRun()).toMatchObject({
         cursor: B,
         membersDone: 2,
