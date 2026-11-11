@@ -134,12 +134,20 @@ const pause = (ms: number) =>
 
     it('exactly one of many concurrent reclaims of a stale (crashed) claim wins', async () => {
       expect(await repo.claim(2026)).toBe('fresh');
-      await pause(20);
+      // Backdated by SQL rather than waited for: each statement's now() is
+      // its own transaction start, so with a tiny window a statement that
+      // starts late enough would find the first winner's fresh claimed_at
+      // stale again. With an hour-old row and a minute's window only the
+      // crashed claim is reclaimable, never the one just made.
+      await pool.query(
+        `UPDATE wrapped_announcements SET claimed_at = now() - interval '1 hour'
+          WHERE year = 2026`,
+      );
       const a = another();
       const b = another();
       const results = await Promise.all(
         Array.from({ length: 12 }, (_, i) =>
-          (i % 2 ? a : b).claim(2026, { reclaimAfterMs: 10 }),
+          (i % 2 ? a : b).claim(2026, { reclaimAfterMs: 60_000 }),
         ),
       );
       expect(results.filter((r) => r === 'retry')).toHaveLength(1);
