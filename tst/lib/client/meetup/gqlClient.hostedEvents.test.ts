@@ -74,6 +74,8 @@ describe('getHostedEvents', () => {
     expect(sent.query()).toMatch(
       /attendance:\s*rsvps\(filter:\s*\{\s*rsvpStatus:\s*\[YES,\s*ATTENDED\]\s*\}\)\s*\{\s*totalCount\s*\}/,
     );
+    // Nothing about other people: no co-host names, ids or profile URLs.
+    expect(sent.query()).not.toMatch(/eventHosts|UserDetails|memberUrl/);
   });
 
   it('serves a second read from the request cache under its own name', async () => {

@@ -148,14 +148,14 @@ describe('wrappedEmbed with ten named companions', () => {
     );
   });
 
-  it('names three in the shared view too, an unresolved one folding into the count', () => {
+  it('names the first three that resolve in the shared view, counting the rest', () => {
     const embed = wrappedEmbed('Jane', ten, {
       kind: 'shared',
-      displayNames: { d1: 'Ann', d3: 'Cy' },
+      displayNames: { d1: 'Ann', d3: 'Cy', d4: 'Dee', d5: 'Eve' },
     });
 
     expect(field(embed, 'Went with the most')).toBe(
-      'Ann (10 events), Cy (8 events) and 13 other members',
+      'Ann (10 events), Cy (8 events), Dee (7 events) and 12 other members',
     );
   });
 });

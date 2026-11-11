@@ -422,7 +422,7 @@ export class GqlMeetupClient {
             GetHostedEventsResponse,
             GetHostedEventsInput
           >(getHostedEvents, callbackInput);
-          // Counts only: the result carries host names and profile URLs.
+          // Counts only, like every page log.
           const events = result.groupByUrlname?.events;
           logger.info(
             `getHostedEvents page: ${events?.edges?.length ?? 0} events, hasNextPage=${events?.pageInfo?.hasNextPage}`,

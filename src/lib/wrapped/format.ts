@@ -112,22 +112,21 @@ function companionsText(wrapped: CachedWrapped, view: EmbedView): string {
     return 'Nobody yet — next year!';
   }
   const shown: string[] = [];
-  // Companions past the embed's three join the count, like anyone unnamed.
-  let others = otherCount + Math.max(0, named.length - EMBED_NAMED_COMPANIONS);
-  named
-    .slice(0, EMBED_NAMED_COMPANIONS)
-    .forEach(({ discordUserId, sharedCount }) => {
-      const label =
-        view.kind === 'private'
-          ? `<@${discordUserId}>`
-          : view.displayNames[discordUserId];
-      if (label === undefined) {
-        others += 1;
-        return;
-      }
-      const text = view.kind === 'private' ? label : plainName(label);
-      shown.push(`${text} (${plural(sharedCount, 'event')})`);
-    });
+  // The first three that can be shown; everyone else named (past three, or
+  // unresolvable in the shared view) joins the count, like anyone unnamed.
+  let others = otherCount;
+  named.forEach(({ discordUserId, sharedCount }) => {
+    const label =
+      view.kind === 'private'
+        ? `<@${discordUserId}>`
+        : view.displayNames[discordUserId];
+    if (label === undefined || shown.length >= EMBED_NAMED_COMPANIONS) {
+      others += 1;
+      return;
+    }
+    const text = view.kind === 'private' ? label : plainName(label);
+    shown.push(`${text} (${plural(sharedCount, 'event')})`);
+  });
   const othersText =
     others > 0 ? `${plural(others, 'other member')}` : undefined;
   if (shown.length === 0) {

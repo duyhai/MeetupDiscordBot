@@ -201,9 +201,10 @@ export const getGroupEvents = gql`
 `;
 
 /**
- * A member's past hosted events (Wrapped): getGroupEvents' fields plus how
- * many RSVPs are yes or marked attended. Its own query, so the request cache
- * never serves a getGroupEvents page (which lacks the count) as "0".
+ * A member's past hosted events (Wrapped): the event itself plus how many
+ * RSVPs are yes or marked attended. Its own query, so the request cache never
+ * serves a getGroupEvents page (which lacks the count) as "0". No hosts: a
+ * co-host's name has no business in the request cache or an error log.
  */
 export const getHostedEvents = gql`
   query (
@@ -228,12 +229,6 @@ export const getHostedEvents = gql`
             title
             dateTime
             eventUrl
-            eventHosts {
-              member {
-                ...UserDetails
-              }
-            }
-            maxTickets
             status
             attendance: rsvps(filter: { rsvpStatus: [YES, ATTENDED] }) {
               totalCount
@@ -243,7 +238,6 @@ export const getHostedEvents = gql`
       }
     }
   }
-  ${UserFragment}
 `;
 
 // Sends the filter exactly as given, with no +1-month expansion, so

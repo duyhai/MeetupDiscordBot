@@ -631,10 +631,11 @@ describe('GET /host/wrapped deeper sections', () => {
     const { text } = await deepPage();
     expect(text).toContain('hosted 6 events');
     expect(text).toContain('Most attended this year');
-    expect(text).toMatch(/Big Hike<\/bdi><\/a>\s*\(31 going\)/);
+    expect(text).toMatch(/Big Hike<\/bdi><\/a>\s*\(31 attended\)/);
+    expect(text).not.toContain('going');
     expect(text.indexOf('Big Hike')).toBeLessThan(text.indexOf('Picnic'));
     expect(text).toContain('Legendary Potluck');
-    expect(text).toContain('(58 going)');
+    expect(text).toContain('(58 attended)');
   });
 
   it('expands each top type to its first events and the early cohort', async () => {

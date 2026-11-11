@@ -191,8 +191,11 @@ export type GetGroupEventsInput = {
   urlname: string;
 };
 
-/** A hosted event with its yes+attended RSVP count (getHostedEvents). */
-export type HostedEventNode = Event & {
+/** A hosted event with its yes+attended RSVP count (getHostedEvents). No hosts. */
+export type HostedEventNode = Pick<
+  Event,
+  'dateTime' | 'eventUrl' | 'id' | 'status' | 'title'
+> & {
   attendance?: { totalCount?: number | null } | null;
 };
 

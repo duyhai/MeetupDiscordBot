@@ -284,7 +284,7 @@ function hostedItem({ event, attendance }: HostedRanked): SafeHtml {
       >`
     : title;
   return html`<li>
-    ${link} (${String(attendance)} going) ·
+    ${link} (${String(attendance)} attended) ·
     <time>${tz(dayjs(event.dateTime)).format('ll')}</time>
   </li>`;
 }
