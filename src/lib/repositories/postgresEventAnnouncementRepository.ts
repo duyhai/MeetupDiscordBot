@@ -46,6 +46,22 @@ export function isStaleSending(a: Announcement, now: Date): boolean {
 export type AnnouncementStatus =
   'held' | 'sending' | 'sent' | 'failed' | 'unknown' | 'cancelled';
 
+/**
+ * What the host confirmed on the pre-flight page before the announcement
+ * was accepted (leadership, 2026-11-11), and when: all three must be true
+ * for a request to be accepted, so this is a record, not a check.
+ */
+export interface AnnounceConfirmation {
+  /** "The event photo is set (not the default)". */
+  photoSet: boolean;
+  /** "The exact location is NOT in the title (it's in the event details)". */
+  locationNotInTitle: boolean;
+  /** "RSVPs are open". */
+  rsvpsOpen: boolean;
+  /** ISO, the server's clock when the form was accepted. */
+  confirmedAt: string;
+}
+
 export interface Announcement {
   meetupEventId: string;
   requestedBy: string;
@@ -55,6 +71,8 @@ export interface Announcement {
   completedAt: Date | null;
   /** When a held one goes out; null otherwise. */
   dueAt: Date | null;
+  /** The host's pre-flight confirmation for this request; null for rows made before it existed. */
+  confirmation: AnnounceConfirmation | null;
 }
 
 /** A recreated event: the old one, cancelled, and the new one announced instead. */
@@ -96,6 +114,7 @@ CREATE TABLE IF NOT EXISTS event_announcements (
   due_at          TIMESTAMPTZ
 );
 ALTER TABLE event_announcements ADD COLUMN IF NOT EXISTS due_at TIMESTAMPTZ;
+ALTER TABLE event_announcements ADD COLUMN IF NOT EXISTS confirmation JSONB;
 ALTER TABLE event_announcements DROP CONSTRAINT IF EXISTS event_announcements_status_check;
 ALTER TABLE event_announcements ADD CONSTRAINT event_announcements_status_check
   CHECK (status IN ('held', 'sending', 'sent', 'failed', 'unknown', 'cancelled'));
@@ -136,6 +155,7 @@ interface Row {
   requested_at: Date;
   completed_at: Date | null;
   due_at: Date | null;
+  confirmation: AnnounceConfirmation | null;
 }
 
 const toAnnouncement = (r: Row): Announcement => ({
@@ -146,7 +166,13 @@ const toAnnouncement = (r: Row): Announcement => ({
   requestedAt: r.requested_at,
   completedAt: r.completed_at,
   dueAt: r.due_at,
+  confirmation: r.confirmation ?? null,
 });
+
+/** The confirmation as the JSONB parameter, or SQL NULL. */
+function confirmationParam(c: AnnounceConfirmation | null): string | null {
+  return c === null ? null : JSON.stringify(c);
+}
 
 /** Rows a new request may take over: a refusal, no answer, a cancelled hold, or a send cut off. */
 const RECLAIMABLE_SQL = `(event_announcements.status IN ('failed', 'unknown', 'cancelled')
@@ -187,20 +213,26 @@ export class PostgresEventAnnouncementRepository {
   async claim(
     meetupEventId: string,
     requestedBy: string,
+    confirmation: AnnounceConfirmation | null = null,
   ): Promise<{ claimed: true } | { claimed: false; current: Announcement }> {
     if (!EVENT_ID.test(meetupEventId)) {
       throw new RangeError('not a Meetup event id');
     }
     const { rows } = await this.pool.query<Row>(
-      `INSERT INTO event_announcements (meetup_event_id, requested_by, status)
-       VALUES ($1, $2, 'sending')
+      `INSERT INTO event_announcements (meetup_event_id, requested_by, status, confirmation)
+       VALUES ($1, $2, 'sending', $4)
        ON CONFLICT (meetup_event_id) DO UPDATE
          SET status = 'sending', requested_by = EXCLUDED.requested_by,
              requested_at = now(), failure = NULL, completed_at = NULL,
-             due_at = NULL
+             due_at = NULL, confirmation = EXCLUDED.confirmation
          WHERE ${RECLAIMABLE_SQL}
        RETURNING *`,
-      [meetupEventId, requestedBy, SENDING_STALE_MS / 1000],
+      [
+        meetupEventId,
+        requestedBy,
+        SENDING_STALE_MS / 1000,
+        confirmationParam(confirmation),
+      ],
     );
     if (rows[0] !== undefined) {
       return { claimed: true };
@@ -217,20 +249,27 @@ export class PostgresEventAnnouncementRepository {
     meetupEventId: string,
     requestedBy: string,
     dueAt: Date,
+    confirmation: AnnounceConfirmation | null = null,
   ): Promise<{ held: true } | { held: false; current: Announcement }> {
     if (!EVENT_ID.test(meetupEventId)) {
       throw new RangeError('not a Meetup event id');
     }
     const { rows } = await this.pool.query<Row>(
-      `INSERT INTO event_announcements (meetup_event_id, requested_by, status, due_at)
-       VALUES ($1, $2, 'held', $4)
+      `INSERT INTO event_announcements (meetup_event_id, requested_by, status, due_at, confirmation)
+       VALUES ($1, $2, 'held', $4, $5)
        ON CONFLICT (meetup_event_id) DO UPDATE
          SET status = 'held', requested_by = EXCLUDED.requested_by,
              requested_at = now(), failure = NULL, completed_at = NULL,
-             due_at = EXCLUDED.due_at
+             due_at = EXCLUDED.due_at, confirmation = EXCLUDED.confirmation
          WHERE ${RECLAIMABLE_SQL}
        RETURNING *`,
-      [meetupEventId, requestedBy, SENDING_STALE_MS / 1000, dueAt],
+      [
+        meetupEventId,
+        requestedBy,
+        SENDING_STALE_MS / 1000,
+        dueAt,
+        confirmationParam(confirmation),
+      ],
     );
     if (rows[0] !== undefined) {
       return { held: true };

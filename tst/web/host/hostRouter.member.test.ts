@@ -267,6 +267,8 @@ describe('the member gate against the real route table', () => {
         'GET /',
         'GET /calendar',
         'GET /create',
+        'GET /events/:eventId/announce',
+        'GET /events/:eventId/recreate',
         'GET /history',
         'GET /requests/:id',
         'GET /wrapped',
@@ -296,7 +298,7 @@ describe('the member gate against the real route table', () => {
         }),
     );
     expect(statuses).toEqual(statuses.map((s) => s.replace(/\d+$/, '403')));
-    expect(statuses).toHaveLength(8);
+    expect(statuses).toHaveLength(10);
   });
 });
 

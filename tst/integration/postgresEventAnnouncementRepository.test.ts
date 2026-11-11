@@ -282,7 +282,33 @@ const EVENT = '311111111';
       expect(times[0].getTime()).toBeGreaterThan(since.getTime());
     });
 
-    it('a table made before the hold column gains it and the new statuses', async () => {
+    it('claim and hold record the host’s pre-flight confirmation, read back as given', async () => {
+      const confirmation = {
+        photoSet: true,
+        locationNotInTitle: true,
+        rsvpsOpen: true,
+        confirmedAt: '2026-11-10T20:00:00.000Z',
+      };
+      await repo.claim(EVENT, HOST, confirmation);
+      expect((await repo.get(EVENT))?.confirmation).toEqual(confirmation);
+      await repo.hold('2', HOST, new Date(Date.now() + 60_000), confirmation);
+      expect((await repo.forEvents(['2'])).get('2')?.confirmation).toEqual(
+        confirmation,
+      );
+      // Without one (older callers, the tick): null.
+      await repo.claim('3', HOST);
+      expect((await repo.get('3'))?.confirmation).toBeNull();
+      // A retry replaces it with the new click's confirmation.
+      await repo.finish(EVENT, 'failed', 'no');
+      const again = {
+        ...confirmation,
+        confirmedAt: '2026-11-10T21:00:00.000Z',
+      };
+      await repo.claim(EVENT, OTHER, again);
+      expect((await repo.get(EVENT))?.confirmation).toEqual(again);
+    });
+
+    it('a table made before the hold and confirmation columns gains them and the new statuses', async () => {
       await pool.query('DROP TABLE event_announcements');
       await pool.query(`
         CREATE TABLE event_announcements (
@@ -295,8 +321,16 @@ const EVENT = '311111111';
         )`);
       await ensureEventAnnouncementSchema(pool);
       await expect(
-        repo.hold(EVENT, HOST, new Date(Date.now() + 60_000)),
+        repo.hold(EVENT, HOST, new Date(Date.now() + 60_000), {
+          photoSet: true,
+          locationNotInTitle: true,
+          rsvpsOpen: true,
+          confirmedAt: '2026-11-10T20:00:00.000Z',
+        }),
       ).resolves.toEqual({ held: true });
+      expect((await repo.get(EVENT))?.confirmation).toMatchObject({
+        rsvpsOpen: true,
+      });
     });
 
     it('refuses a bad event or member id', async () => {

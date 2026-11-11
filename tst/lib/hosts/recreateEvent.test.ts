@@ -95,6 +95,13 @@ function memoryRecreations(existing?: {
   };
 }
 
+const CONFIRMATION = {
+  photoSet: true,
+  locationNotInTitle: true,
+  rsvpsOpen: true,
+  confirmedAt: '2026-11-10T20:00:00.000Z',
+};
+
 function setup(
   options: {
     others?: boolean;
@@ -162,7 +169,7 @@ function setup(
     recreations,
     createEvent,
     alerts: () => JSON.stringify(vi.mocked(deps.alert).mock.calls),
-    run: () => recreateAndAnnounce(deps, HOST, OLD.id),
+    run: () => recreateAndAnnounce(deps, HOST, OLD.id, CONFIRMATION),
   };
 }
 
@@ -256,9 +263,11 @@ describe('recreateAndAnnounce', () => {
       eventHosts: [4242, 5151],
       venueId: '27000001',
     });
+    // The host's pre-flight confirmation goes on the copy's announcement row.
     expect(deps.announce).toHaveBeenCalledWith(
       HOST,
       expect.objectContaining({ id: '322222222' }),
+      CONFIRMATION,
     );
     expect(deps.cancelEvent).toHaveBeenCalledWith(OLD.id);
     expect(alerts()).toContain('recreated an event');

@@ -1,7 +1,11 @@
 import express, { RequestHandler } from 'express';
 import { Logger } from 'tslog';
 
-import { AnnounceCode, CancelCode } from '../../lib/hosts/announceEvent.js';
+import {
+  AnnounceCode,
+  AnnounceOptions,
+  CancelCode,
+} from '../../lib/hosts/announceEvent.js';
 import {
   ANNOUNCE_GUIDELINES,
   dueLabel,
@@ -14,10 +18,19 @@ import {
   Recreatable,
 } from '../../lib/hosts/recreateEvent.js';
 import {
+  AnnounceConfirmation,
   Announcement,
   isStaleSending,
 } from '../../lib/repositories/postgresEventAnnouncementRepository.js';
-import { SafeHtml, html, localUrl, safeHref } from '../html.js';
+import {
+  SafeHtml,
+  html,
+  localUrl,
+  memberText,
+  pageLink,
+  safeHref,
+} from '../html.js';
+import { dateLabel, hostPage, timeLabel, unavailable } from './hostPageKit.js';
 import { hostLocals } from './hostRouter.js';
 import { HOST_BASE } from './hostSession.js';
 
@@ -36,11 +49,11 @@ const RECREATE_DEADLINE_MS = 25_000;
 type Host = { meetupMemberId: string; name: string };
 
 export interface AnnounceRouteDeps {
-  /** announceHostEvent on the production deps. */
+  /** announceHostEvent on the production deps; the confirmation goes on the row. */
   announce: (
     host: Host,
     meetupEventId: string,
-    hooks: { onClaimed?: () => void },
+    options: AnnounceOptions & { confirmation: AnnounceConfirmation },
   ) => Promise<AnnounceCode>;
   /** Each event's announcement, if any. */
   announcements: (
@@ -50,10 +63,59 @@ export interface AnnounceRouteDeps {
   cancel: (host: Host, meetupEventId: string) => Promise<CancelCode>;
   /** Whether "Recreate and announce" may be offered for the event, and why not. */
   recreatable: (host: Host, meetupEventId: string) => Promise<Recreatable>;
-  /** recreateAndAnnounce on the production deps. */
-  recreate: (host: Host, meetupEventId: string) => Promise<RecreateOutcome>;
+  /** recreateAndAnnounce on the production deps; the confirmation goes on the copy's row. */
+  recreate: (
+    host: Host,
+    meetupEventId: string,
+    confirmation: AnnounceConfirmation,
+  ) => Promise<RecreateOutcome>;
   /** Tests only. */
   deadlineMs?: number;
+}
+
+/** What the confirm pages read: the host's own upcoming events, and the clock. */
+export interface AnnounceEventsDeps {
+  ownUpcoming: (meetupMemberId: string) => Promise<HostEvent[]>;
+  now: () => Date;
+}
+
+/**
+ * The pre-flight checks (leadership, 2026-11-11): every announcement, and
+ * every recreate-and-announce, is accepted only once the host has ticked
+ * all three. Short on purpose: hosts skim.
+ */
+export const ANNOUNCE_CHECKS = {
+  photo: 'The event photo is set (not the default)',
+  location:
+    "The exact location is NOT in the title (it's in the event details)",
+  rsvps: 'RSVPs are open',
+} as const;
+const CHECK_NAMES = Object.keys(
+  ANNOUNCE_CHECKS,
+) as (keyof typeof ANNOUNCE_CHECKS)[];
+
+export const CONFIRM_ALL_MESSAGE =
+  'Tick all three to confirm before announcing. Nothing was sent.';
+
+/**
+ * The confirmation from the form body: every box ticked ("on", as a
+ * checkbox sends it), stamped now. Undefined when any is missing, so the
+ * caller shows the page again and announces nothing.
+ */
+export function parseConfirmation(
+  body: unknown,
+  now: Date,
+): AnnounceConfirmation | undefined {
+  const fields = (body ?? {}) as Record<string, unknown>;
+  if (!CHECK_NAMES.every((name) => fields[name] === 'on')) {
+    return undefined;
+  }
+  return {
+    photoSet: true,
+    locationNotInTitle: true,
+    rsvpsOpen: true,
+    confirmedAt: now.toISOString(),
+  };
 }
 
 /** Every `?announce=` code: the outcomes, a slow Meetup, or a failure here. */
@@ -214,6 +276,101 @@ export const cancelAnnouncePath = (eventId: string) =>
 export const recreatePath = (eventId: string) =>
   `${HOST_BASE}/events/${eventId}/recreate`;
 
+/**
+ * The confirm page: the event, the three required checks, Confirm and
+ * announce. The same page for Announce and for Recreate and announce; the
+ * latter says what it does. `refused` shows the message after a POST with
+ * a box unticked.
+ */
+/**
+ * Which boxes a refused POST had ticked, so the page comes back as sent.
+ * (The markup below is literal twice per box: the template takes no
+ * interpolated attribute names, `checked` included.)
+ */
+export type Ticked = Partial<Record<keyof typeof ANNOUNCE_CHECKS, boolean>>;
+
+export function tickedIn(body: unknown): Ticked {
+  const fields = (body ?? {}) as Record<string, unknown>;
+  return Object.fromEntries(
+    CHECK_NAMES.map((name) => [name, fields[name] === 'on']),
+  );
+}
+
+export function confirmBody(
+  event: HostEvent,
+  kind: 'announce' | 'recreate',
+  csrf: string,
+  refused = false,
+  ticked: Ticked = {},
+): SafeHtml {
+  const meetup = safeHref(event.eventUrl);
+  const action = kind === 'announce' ? announcePath : recreatePath;
+  return html`<div class="card announce-confirm">
+    <h1>
+      ${kind === 'announce' ? 'Announce this event' : 'Recreate and announce'}
+    </h1>
+    <p>
+      <strong>${memberText(event.title)}</strong><br />
+      ${dateLabel(event.dateTime)}, ${timeLabel(event.dateTime)}
+    </p>
+    ${
+      kind === 'recreate'
+        ? html`<p class="muted">
+            A copy (same title, description, photo, venue and hosts) is created
+            and announced, and this event is cancelled. The copy may be
+            scheduled under the usual rules.
+          </p>`
+        : ''
+    }
+    ${refused ? html`<p class="note attn">${CONFIRM_ALL_MESSAGE}</p>` : ''}
+    <form method="post" action="${localUrl(action(event.id))}">
+      <input type="hidden" name="_csrf" value="${csrf}" />
+      <fieldset class="review-checklist">
+        <legend>Before it goes out, confirm on Meetup that:</legend>
+        <label class="check">
+          ${
+            ticked.photo
+              ? html`<input type="checkbox" name="photo" required checked />`
+              : html`<input type="checkbox" name="photo" required />`
+          }
+          ${ANNOUNCE_CHECKS.photo}
+        </label>
+        <label class="check">
+          ${
+            ticked.location
+              ? html`<input type="checkbox" name="location" required checked />`
+              : html`<input type="checkbox" name="location" required />`
+          }
+          ${ANNOUNCE_CHECKS.location}
+        </label>
+        <label class="check">
+          ${
+            ticked.rsvps
+              ? html`<input type="checkbox" name="rsvps" required checked />`
+              : html`<input type="checkbox" name="rsvps" required />`
+          }
+          ${ANNOUNCE_CHECKS.rsvps}
+        </label>
+      </fieldset>
+      <div class="actions">
+        <button type="submit">Confirm and announce</button>
+        <a class="button ghost" href="${pageLink(HOST_BASE)}">Back</a>
+        ${
+          meetup
+            ? html`<a
+                class="button ghost"
+                href="${meetup}"
+                rel="noopener noreferrer"
+                target="_blank"
+                >Check it on Meetup</a
+              >`
+            : ''
+        }
+      </div>
+    </form>
+  </div>`;
+}
+
 /** The guidelines, by the Announce buttons. */
 export function announceGuidelines(): SafeHtml {
   return html`<details class="announce-guidelines">
@@ -271,9 +428,10 @@ export function announceBadge(
 
 /**
  * The event's Announce button: a disabled one once it is announced or on
- * its way, Cancel for a held one, else a form ("Try announcing again"
- * after a refused or unconfirmed send). More than 3 weeks out: a warning
- * line, and the button still works. The server decides either way.
+ * its way, Cancel for a held one, else a link to the confirm page ("Try
+ * announcing again" after a refused or unconfirmed send). More than 3
+ * weeks out: a warning line, and the button still works. The server
+ * decides either way.
  */
 export function announceButton(
   event: HostEvent,
@@ -310,17 +468,16 @@ export function announceButton(
         still announce it now.
       </p>`
     : '';
-  return html`<form method="post" action="${localUrl(announcePath(event.id))}">
-    <input type="hidden" name="_csrf" value="${csrf}" />
+  return html`<div>
     ${early}
-    <button type="submit">
+    <a class="button" href="${pageLink(announcePath(event.id))}">
       ${
         state === undefined || state === 'cancelled'
           ? 'Announce'
           : 'Try announcing again'
       }
-    </button>
-  </form>`;
+    </a>
+  </div>`;
 }
 
 function reasonOf(
@@ -332,29 +489,33 @@ function reasonOf(
   return offer.reason;
 }
 
+/** Every too-late message leads with this (Kristen's wording, 2026-11-11). */
+export const TOO_LATE_LEAD = "It's too late for Meetup to announce this event!";
+
 /**
- * After a "too late" refusal: the Recreate and announce button when the
- * event has no RSVPs but the hosts', else why it is not offered. `offer`
- * undefined means the check itself failed.
+ * After a "too late" refusal: the Recreate and announce button (to its
+ * confirm page) when the event has no RSVPs but the hosts', else why it is
+ * not offered. `offer` undefined means the check itself failed.
  */
 export function recreateOffer(
   event: HostEvent,
   offer: Recreatable | undefined,
-  csrf: string,
 ): SafeHtml {
   const meetup = safeHref(event.eventUrl);
   if (offer?.ok) {
     return html`<div class="note attn recreate-offer">
       <p>
-        Meetup will not announce this event any more, but nobody except the
-        hosts has RSVPed, so it can be recreated: the copy (same title,
-        description, photo, venue and hosts) is created and announced, and this
-        one is cancelled. The copy may be scheduled under the usual rules.
+        ${TOO_LATE_LEAD} The only workaround is to recreate the event, and
+        nobody except the hosts has RSVPed, so that is possible: the copy (same
+        title, description, photo, venue and hosts) is created and announced,
+        and this one is cancelled. The copy may be scheduled under the usual
+        rules.
       </p>
-      <form method="post" action="${localUrl(recreatePath(event.id))}">
-        <input type="hidden" name="_csrf" value="${csrf}" />
-        <button type="submit">Recreate and announce</button>
-      </form>
+      <p>
+        <a class="button" href="${pageLink(recreatePath(event.id))}"
+          >Recreate and announce</a
+        >
+      </p>
     </div>`;
   }
   const reason = reasonOf(offer);
@@ -364,9 +525,8 @@ export function recreateOffer(
       'Whether it can be recreated could not be checked just now; reload in a minute.';
   } else if (reason === 'has-rsvps') {
     why =
-      'It cannot be recreated here because someone other than the hosts has ' +
-      'already RSVPed: cancelling it would drop their RSVP. Ask an organizer ' +
-      'if you still want it announced.';
+      "The only workaround is to recreate the event — but that's not possible " +
+      'because someone is already signed up.';
   } else if (reason === 'in-progress') {
     why =
       'A recreation of it is under way or needs checking; ask an organizer ' +
@@ -377,7 +537,7 @@ export function recreateOffer(
     why = 'It is not one of your upcoming events.';
   }
   return html`<div class="note attn recreate-offer">
-    <p>Meetup will not announce this event any more. ${why}</p>
+    <p>${TOO_LATE_LEAD} ${why}</p>
     ${
       meetup
         ? html`<p>
@@ -402,15 +562,30 @@ export function tooLateEvent(query: {
     : undefined;
 }
 
+function notFound(res: express.Response) {
+  hostPage(res, {
+    title: 'Not found',
+    status: 404,
+    body: html`<div class="card">
+      <h1>Not found</h1>
+      <p>That page does not exist, or it is not yours.</p>
+    </div>`,
+  });
+}
+
 /**
+ * GET /host/events/:eventId/announce and .../recreate (the confirm page),
  * POST /host/events/:eventId/announce (Meetup's announcement email for one
  * of the host's own upcoming events, once, or a hold), .../announce/cancel
- * (a held one) and /host/events/:eventId/recreate. The router's
- * unsafe-method guard (session, CSRF, Origin, rate limit) runs first.
+ * (a held one) and POST /host/events/:eventId/recreate. The two announcing
+ * POSTs need the three confirmations ticked, else the page comes back with
+ * the message and nothing happens. The router's unsafe-method guard
+ * (session, CSRF, Origin, rate limit) runs first.
  */
 export function registerAnnounceRoute(
   router: express.Router,
   deps: AnnounceRouteDeps,
+  events: AnnounceEventsDeps,
 ): void {
   const hostOf = (res: express.Response): Host => {
     const { session } = hostLocals(res);
@@ -419,11 +594,99 @@ export function registerAnnounceRoute(
   const warn = (what: string, error: unknown) => {
     logger.warn(`${what}: ${error instanceof Error ? error.name : 'Error'}`);
   };
+  /**
+   * The host's own event for the confirm page, as the home page lists it.
+   * 'answered' when the response is already sent (not theirs, or Meetup
+   * down).
+   */
+  const ownEvent = async (
+    res: express.Response,
+    eventId: unknown,
+  ): Promise<HostEvent | 'answered'> => {
+    if (typeof eventId !== 'string' || !EVENT_ID.test(eventId)) {
+      notFound(res);
+      return 'answered';
+    }
+    let own: HostEvent[];
+    try {
+      own = await events.ownUpcoming(hostOf(res).meetupMemberId);
+    } catch (error: unknown) {
+      unavailable(res, error);
+      return 'answered';
+    }
+    const event = own.find((e) => e.id === eventId);
+    if (event === undefined) {
+      notFound(res);
+      return 'answered';
+    }
+    return event;
+  };
+  const confirmPage = async (
+    req: express.Request,
+    res: express.Response,
+    kind: 'announce' | 'recreate',
+    refused: boolean,
+  ) => {
+    const event = await ownEvent(res, req.params.eventId);
+    if (event === 'answered') {
+      return;
+    }
+    hostPage(res, {
+      title: kind === 'announce' ? 'Announce' : 'Recreate and announce',
+      current: 'home',
+      status: refused ? 422 : 200,
+      body: confirmBody(
+        event,
+        kind,
+        hostLocals(res).session.csrfToken,
+        refused,
+        refused ? tickedIn(req.body) : {},
+      ),
+    });
+  };
+  /**
+   * True when the event's announcement is done or under way (sent, held,
+   * or a fresh send), so the confirm page has nothing to offer: a stale
+   * bookmark goes back home instead. A row read that fails lets the page
+   * show; the server refuses a second send anyway.
+   */
+  const settled = async (eventId: string): Promise<boolean> => {
+    try {
+      const state = stateOf(
+        (await deps.announcements([eventId])).get(eventId),
+        events.now(),
+      );
+      return state === 'sent' || state === 'held' || state === 'sending';
+    } catch (error: unknown) {
+      warn('Confirm page announcement read failed', error);
+      return false;
+    }
+  };
+  const confirmGet =
+    (kind: 'announce' | 'recreate'): RequestHandler =>
+    async (req, res) => {
+      const { eventId } = req.params;
+      if (typeof eventId === 'string' && EVENT_ID.test(eventId)) {
+        if (await settled(eventId)) {
+          res.redirect(303, HOST_BASE);
+          return;
+        }
+      }
+      await confirmPage(req, res, kind, false);
+    };
+
+  router.get('/events/:eventId/announce', confirmGet('announce'));
+  router.get('/events/:eventId/recreate', confirmGet('recreate'));
 
   router.post('/events/:eventId/announce', (async (req, res) => {
     const { eventId } = req.params;
     if (typeof eventId !== 'string' || !EVENT_ID.test(eventId)) {
       res.redirect(303, `${HOST_BASE}?announce=not-yours`);
+      return;
+    }
+    const confirmation = parseConfirmation(req.body, events.now());
+    if (confirmation === undefined) {
+      await confirmPage(req, res, 'announce', true);
       return;
     }
     const back = (code: AnnounceNoticeCode) =>
@@ -447,6 +710,7 @@ export function registerAnnounceRoute(
     });
     const run = deps.announce(hostOf(res), eventId, {
       onClaimed: () => startDeadline(),
+      confirmation,
     });
     // Still handled, and logged, if it fails after the page stopped waiting.
     run.catch((error: unknown) => {
@@ -488,6 +752,11 @@ export function registerAnnounceRoute(
       res.redirect(303, `${HOST_BASE}?announce=not-yours`);
       return;
     }
+    const confirmation = parseConfirmation(req.body, events.now());
+    if (confirmation === undefined) {
+      await confirmPage(req, res, 'recreate', true);
+      return;
+    }
     let timer: NodeJS.Timeout | undefined;
     let answered = false;
     const slow = new Promise<'slow'>((resolve) => {
@@ -495,7 +764,7 @@ export function registerAnnounceRoute(
         resolve('slow');
       }, deps.deadlineMs ?? RECREATE_DEADLINE_MS);
     });
-    const run = deps.recreate(hostOf(res), eventId);
+    const run = deps.recreate(hostOf(res), eventId, confirmation);
     run.catch((error: unknown) => {
       if (answered) {
         warn('Host recreate failed after the page answered', error);

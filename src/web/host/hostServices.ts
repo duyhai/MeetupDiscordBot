@@ -450,7 +450,8 @@ export function productionAnnouncer(
         get: (oldId) => store.recreationOf(oldId),
       };
     },
-    announce: (host, event) => requestAnnouncement(deps, host, event),
+    announce: (host, event, confirmation) =>
+      requestAnnouncement(deps, host, event, { confirmation }),
     alert: alertVia(getClient),
     audit: async (entry) => {
       const client = getClient();
@@ -460,8 +461,8 @@ export function productionAnnouncer(
       (await ApplicationCache()).exclusive_set(key, '1', ttlSec),
   };
   return {
-    announce: (host, meetupEventId, hooks) =>
-      announceHostEvent(deps, host, meetupEventId, hooks),
+    announce: (host, meetupEventId, options) =>
+      announceHostEvent(deps, host, meetupEventId, options),
     announcements: async (ids) => (await repo()).forEvents(ids),
     cancel: async (host, meetupEventId) =>
       cancelHeldAnnouncement(
@@ -472,8 +473,8 @@ export function productionAnnouncer(
       ),
     recreatable: (host, meetupEventId) =>
       recreatable(recreateDeps, host, meetupEventId),
-    recreate: (host, meetupEventId) =>
-      recreateAndAnnounce(recreateDeps, host, meetupEventId),
+    recreate: (host, meetupEventId, confirmation) =>
+      recreateAndAnnounce(recreateDeps, host, meetupEventId, confirmation),
   };
 }
 

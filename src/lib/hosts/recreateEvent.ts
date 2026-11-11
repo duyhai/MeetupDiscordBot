@@ -20,7 +20,10 @@ import {
 import { MeetupPayloadError } from '../client/meetup/payloadErrors.js';
 import { CreateEventInput } from '../client/meetup/types.js';
 import { OrganizerTokenUnavailableError } from '../reports/organizerMeetup.js';
-import { RecreationClaim } from '../repositories/postgresEventAnnouncementRepository.js';
+import {
+  AnnounceConfirmation,
+  RecreationClaim,
+} from '../repositories/postgresEventAnnouncementRepository.js';
 import { LogEntry, alertText } from '../helpers/discordLogger.js';
 import { tz } from '../../util/timezone.js';
 import { AnnounceCode } from './announceEvent.js';
@@ -95,10 +98,11 @@ export interface RecreateDeps {
    */
   cancelEvent: ((meetupEventId: string) => Promise<void>) | undefined;
   recreations: () => Promise<RecreationStore>;
-  /** requestAnnouncement for the new event (the hold rules apply). */
+  /** requestAnnouncement for the new event (the hold rules apply), with the host's pre-flight confirmation. */
   announce: (
     host: { meetupMemberId: string; name: string },
     event: HostEvent,
+    confirmation: AnnounceConfirmation | undefined,
   ) => Promise<AnnounceCode>;
   /** #meetup-bot-alerts, plain; fire and forget. */
   alert: (entry: LogEntry) => Promise<unknown>;
@@ -205,6 +209,7 @@ export async function recreateAndAnnounce(
   deps: RecreateDeps,
   host: { meetupMemberId: string; name: string },
   meetupEventId: string,
+  confirmation?: AnnounceConfirmation,
 ): Promise<RecreateOutcome> {
   const old = (await deps.ownUpcoming(host.meetupMemberId)).find(
     (e) => e.id === meetupEventId,
@@ -374,7 +379,7 @@ export async function recreateAndAnnounce(
 
   let announce: AnnounceCode;
   try {
-    announce = await deps.announce(host, newEvent);
+    announce = await deps.announce(host, newEvent, confirmation);
   } catch (error: unknown) {
     // The copy exists; its announcement request failed (a Meetup read,
     // the credential, Postgres). Same as a refusal: the old one stays.
