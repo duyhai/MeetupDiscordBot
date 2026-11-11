@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { LogEntry } from '../../../src/lib/helpers/discordLogger.js';
 import { EventSummary } from '../../../src/lib/client/meetup/types.js';
 import { BUILD_LEASE_KEY } from '../../../src/lib/reports/buildLease.js';
+import { OrganizerTokenUnavailableError } from '../../../src/lib/reports/organizerMeetup.js';
 import { InMemoryMemberRepository } from '../../../src/lib/repositories/inMemoryMemberRepository.js';
 import {
   BackfillDeps,
@@ -115,6 +116,9 @@ function meetupFor(
     getEventRsvps: vi.fn(async (eventId: string, input: { after?: string }) => {
       calls.n += 1;
       rsvpReads.push({ eventId, after: input.after });
+      if (input.after !== undefined && input.after !== 'cursor-2') {
+        throw new Error(`unknown cursor ${input.after}`);
+      }
       const ids = attendeesOf[eventId] ?? [];
       const nodes = ids.map((id) => ({
         status: 'YES' as const,
@@ -517,9 +521,12 @@ describe('runBackfillTick', () => {
       reason: 'no-work',
     });
     h.clock.now += RUN_INTERVAL_MS + 1;
+    // Due again: every member is fresh, so the run finishes with no call.
     expect(await runBackfillTick(h.deps)).toMatchObject({
       kind: 'ran',
-      members: 4,
+      members: 0,
+      calls: 0,
+      finishedRun: true,
     });
   });
 
@@ -539,10 +546,11 @@ describe('runBackfillTick', () => {
       skipped: 0,
     });
 
-    // A second run: every year is fresh (past years always, this year for a week).
+    // A second run: every year is fresh (the past years were built after they
+    // ended, this year within the week), so the members are not even read.
     h.clock.now += RUN_INTERVAL_MS + 1;
     const again = await runBackfillTick(h.deps);
-    expect(again).toMatchObject({ built: 0, skipped: 15 });
+    expect(again).toMatchObject({ built: 0, calls: 0, finishedRun: true });
   });
 
   it('rebuilds a current-year copy older than seven days and leaves a younger one', async () => {
@@ -745,6 +753,225 @@ describe('runBackfillTick', () => {
     bigEvents.delete('g0');
     delete attendeesOf.g0;
     delete attendeesOf.t26;
+  });
+
+  it('a partial memo entry never feeds a full reader a bogus cursor', async () => {
+    // A's first game night X is big (more than one page). A reads X as an
+    // early event (first page only). B attended X this year and reads it
+    // in full: the memo must not hand B hasNextPage with a made-up cursor.
+    attendeesOf.x = ['m1', 'm2', 'p1'];
+    bigEvents.add('x');
+    const x = ev('x', '2026-02-05T19:00:00-08:00', 'Trivia');
+    const a: FakeMember = {
+      ...members[0],
+      events: [
+        ev('ga', '2024-02-05T19:00:00-08:00', 'Trivia'),
+        ev('gb', '2025-02-05T19:00:00-08:00', 'Trivia'),
+        x,
+      ],
+    };
+    const b: FakeMember = { ...members[1], events: [x] };
+    const h = await harness({ linked: [a, b] });
+    await recentRun(h);
+    // A for 2026 only: X is this year's event for A too, so make X early
+    // for A by queueing A's 2024 (X is a first-ten games event, read first
+    // page only), then B's 2026 (X in full).
+    await h.store.enqueue({
+      discordUserId: a.discordUserId,
+      meetupId: 'm1',
+      year: 2024,
+    });
+    h.clock.now += 1000;
+    await h.store.enqueue({
+      discordUserId: b.discordUserId,
+      meetupId: 'm2',
+      year: 2026,
+    });
+
+    const outcome = await runBackfillTick(h.deps);
+
+    expect(outcome).toMatchObject({ queued: 2, built: 2, failed: 0 });
+    // Never a cursor Meetup has not issued.
+    expect(rsvpReads.map((r) => r.after)).not.toContain('memo');
+    expect(pagesReadFor('x')).toEqual([undefined, 'cursor-2']);
+    const copy = await h.entries.get(b.discordUserId, 2026);
+    expect(copy?.companions.named).toMatchObject([
+      { discordUserId: a.discordUserId, sharedCount: 1 },
+    ]);
+    bigEvents.delete('x');
+    delete attendeesOf.x;
+  });
+
+  it('an organizer-credential outage ends the tick: no cursor move, no attempt burnt, one alert a day', async () => {
+    const h = await harness({ linked: [members[1], members[0]] });
+    h.deps.withOrganizer = async () => {
+      throw new OrganizerTokenUnavailableError();
+    };
+    await h.store.enqueue({
+      discordUserId: members[1].discordUserId,
+      meetupId: 'm2',
+      year: 2026,
+    });
+
+    const first = await runBackfillTick(h.deps);
+
+    expect(first).toMatchObject({
+      kind: 'ran',
+      queued: 0,
+      members: 0,
+      failed: 0,
+    });
+    expect(
+      (await h.store.position(members[1].discordUserId))?.row.attempts,
+    ).toBe(0);
+    expect(await h.store.openRun()).toBeUndefined();
+    expect(h.alert).toHaveBeenCalledTimes(1);
+    expect((h.alert.mock.calls[0][0] as LogEntry).title).toBe(
+      'Wrapped backfill is failing',
+    );
+    // The sweep: the token-path member builds; the organizer-path member
+    // ends the tick with the cursor before them, and no second alert today.
+    await h.store.complete(members[1].discordUserId);
+    const second = await runBackfillTick(h.deps);
+    expect(second).toMatchObject({ kind: 'ran', members: 1, failed: 0 });
+    expect((await h.store.openRun())?.cursor).toBe(members[0].discordUserId);
+    expect(h.alert).toHaveBeenCalledTimes(1);
+  });
+
+  it('a queue-only tick leaves nothing in the memo', async () => {
+    attendeesOf.q = ['m1', 'zed'];
+    const h = await harness({
+      linked: [
+        {
+          ...members[0],
+          events: [ev('q', '2026-02-05T19:00:00-08:00', 'Trivia')],
+        },
+      ],
+    });
+    await recentRun(h);
+    await h.store.enqueue({
+      discordUserId: members[0].discordUserId,
+      meetupId: 'm1',
+      year: 2026,
+    });
+
+    await runBackfillTick(h.deps);
+
+    expect(memoSize()).toBe(0);
+    delete attendeesOf.q;
+  });
+
+  it("never lets an unlinked attendee's Meetup name or id into Postgres or the Redis hot copy", async () => {
+    attendeesOf.pv = ['m1', 'ghost-77', 'm2'];
+    const h = await harness({
+      linked: [
+        {
+          ...members[0],
+          events: [ev('pv', '2026-02-05T19:00:00-08:00', 'Trivia')],
+        },
+        {
+          ...members[1],
+          events: [ev('pv', '2026-02-05T19:00:00-08:00', 'Trivia')],
+        },
+      ],
+    });
+
+    await runBackfillTick(h.deps);
+
+    const stored = JSON.stringify([...h.entries.rows.values()]);
+    const hot = JSON.stringify([...h.cache.values.entries()]);
+    for (const text of [stored, hot]) {
+      expect(text).not.toContain('ghost-77');
+      expect(text).not.toContain('Member ghost-77');
+      expect(text).not.toContain('Member m2');
+    }
+    expect(stored).toContain(members[1].discordUserId);
+    delete attendeesOf.pv;
+  });
+
+  it('records every call of the tick on the run and stops at a year boundary over budget', async () => {
+    const busy: FakeMember = {
+      ...members[0],
+      // 80 events a year for three years: two years cross the budget.
+      events: [2024, 2025, 2026].flatMap((year) =>
+        Array.from({ length: 80 }, (_, j) =>
+          ev(
+            `b${year}-${j}`,
+            `${year}-0${1 + (j % 9)}-${String(1 + (j % 28)).padStart(2, '0')}T19:00:00-08:00`,
+          ),
+        ),
+      ),
+    };
+    const h = await harness({ linked: [busy, members[1]] });
+    await h.store.enqueue({
+      discordUserId: members[1].discordUserId,
+      meetupId: 'm2',
+      year: 2026,
+    });
+
+    const first = await runBackfillTick(h.deps);
+
+    expect(first).toMatchObject({
+      kind: 'ran',
+      queued: 1,
+      members: 0,
+      built: 3,
+    });
+    expect(JSON.stringify(h.log.info.mock.calls)).toContain('call budget');
+    const run = await h.store.openRun();
+    expect(run?.cursor).toBeUndefined();
+    // Every call this tick is on the run: the drain's and the interrupted member's.
+    expect(run?.requests).toBe(first.kind === 'ran' ? first.calls : -1);
+    expect(await cachedYears(h, busy)).toEqual([2024, 2025]);
+
+    const second = await runBackfillTick(h.deps);
+    expect(second).toMatchObject({ kind: 'ran', finishedRun: true });
+    expect(await cachedYears(h, busy)).toEqual([2024, 2025, 2026]);
+    expect((await h.store.lastFinishedRun())?.requests).toBe(
+      (first.kind === 'ran' ? first.calls : 0) +
+        (second.kind === 'ran' ? second.calls : 0),
+    );
+  });
+
+  it('skips a fully fresh member with no Meetup call and no slot', async () => {
+    const h = await harness({ linked: [members[0], members[1]] });
+    await runBackfillTick(h.deps);
+    const after = h.calls.n + h.organizerCalls.n;
+    // The previous year is final (built after it ended) and the current year is fresh.
+    h.clock.now += RUN_INTERVAL_MS + 1;
+
+    const again = await runBackfillTick(h.deps);
+
+    expect(again).toMatchObject({
+      kind: 'ran',
+      finishedRun: true,
+      calls: 0,
+      members: 0,
+    });
+    expect(h.calls.n + h.organizerCalls.n).toBe(after);
+    expect((await h.store.lastFinishedRun())?.membersDone).toBe(2);
+  });
+
+  it('two ticks at once never build one queued row twice', async () => {
+    const h = await harness({ linked: [members[0]] });
+    await recentRun(h);
+    await h.store.enqueue({
+      discordUserId: members[0].discordUserId,
+      meetupId: 'm1',
+      year: 2026,
+    });
+
+    const [a, b] = await Promise.all([
+      runBackfillTick(h.deps),
+      runBackfillTick(h.deps),
+    ]);
+
+    const built = [a, b].reduce(
+      (n, o) => n + (o.kind === 'ran' ? o.built : 0),
+      0,
+    );
+    expect(built).toBe(1);
+    expect(await h.store.queueLength()).toBe(0);
   });
 
   it('records the run’s Meetup request count', async () => {

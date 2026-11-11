@@ -32,7 +32,6 @@ export interface RunDelta {
   built: number;
   skipped: number;
   failed: number;
-  requests: number;
 }
 
 /**
@@ -60,6 +59,8 @@ export interface WrappedBackfillStore {
     delta: RunDelta,
   ): Promise<boolean>;
   finishRun(id: number): Promise<BackfillRun | undefined>;
+  /** Adds a tick's Meetup client calls to the run (open or just finished). */
+  recordRequests(id: number, calls: number): Promise<void>;
   /** 'queued' on insert; the year already queued when the member has a row. */
   enqueue(row: {
     discordUserId: string;
@@ -209,8 +210,7 @@ export class PostgresWrappedBackfillRepository implements WrappedBackfillStore {
               members_done = members_done + $4,
               built = built + $5,
               skipped = skipped + $6,
-              failed = failed + $7,
-              requests = requests + $8
+              failed = failed + $7
         WHERE id = $1 AND finished_at IS NULL AND cursor IS NOT DISTINCT FROM $2`,
       [
         id,
@@ -220,10 +220,16 @@ export class PostgresWrappedBackfillRepository implements WrappedBackfillStore {
         delta.built,
         delta.skipped,
         delta.failed,
-        delta.requests,
       ],
     );
     return result.rowCount === 1;
+  }
+
+  async recordRequests(id: number, calls: number): Promise<void> {
+    await this.pool.query(
+      'UPDATE wrapped_backfill_runs SET requests = requests + $2 WHERE id = $1',
+      [id, calls],
+    );
   }
 
   async finishRun(id: number): Promise<BackfillRun | undefined> {

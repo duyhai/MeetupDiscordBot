@@ -235,9 +235,12 @@ function fakeMeetup(events: EventSummary[], meetupId: string) {
 
       const first = await runBackfillTick(deps);
 
+      // The organizer-path member's one year was built by the drain and is
+      // fresh with no earlier year: skipped without a call. The token-path
+      // member is swept.
       expect(first).toMatchObject({
         kind: 'ran',
-        members: 2,
+        members: 1,
         finishedRun: true,
       });
       // A past year lives in Postgres only; the current year has a hot copy.
@@ -258,8 +261,14 @@ function fakeMeetup(events: EventSummary[], meetupId: string) {
         "UPDATE wrapped_backfill_runs SET finished_at = finished_at - interval '1 day'",
       );
       const again = await runBackfillTick(deps);
-      // Every year is fresh: last year is past, this year was built just now.
-      expect(again).toMatchObject({ kind: 'ran', built: 0, skipped: 3 });
+      // Every year is fresh (last year final, this year built just now): both
+      // members are skipped from the stored entries without a Meetup call.
+      expect(again).toMatchObject({
+        kind: 'ran',
+        built: 0,
+        calls: 0,
+        finishedRun: true,
+      });
     });
 
     it('a tick with nothing due is no work', async () => {

@@ -9,6 +9,7 @@ import dayjs from 'dayjs';
 
 import { KeyValueCache } from '../cache/base.js';
 import { IDENTITY_DIGEST_UTC_HOUR } from '../helpers/identity/digest.js';
+import { SWEEP_LEAD_MINUTES } from '../reports/buildSchedule.js';
 import { WrappedBackfillStore } from '../repositories/postgresWrappedBackfillRepository.js';
 import { tz } from '../../util/timezone.js';
 import { WrappedTiers, readEntry } from './store.js';
@@ -18,9 +19,17 @@ export const MEMBERS_PER_TICK = 4;
 /** The scheduler writes the next tick's start here (ISO) on every tick. */
 export const NEXT_TICK_KEY = 'wrapped-backfill-next-tick';
 
-/** The identity sweep's hour (18:00–19:00 UTC): no tick does any work in it. */
+/**
+ * The sweep window's closure (the report job's rule, buildSchedule.ts): no
+ * build starts from 17:45 UTC until the identity sweep's hour ends at 19:00.
+ */
 function quietHourEnd(at: Date): Date | undefined {
-  if (at.getUTCHours() !== IDENTITY_DIGEST_UTC_HOUR) {
+  const hour = at.getUTCHours();
+  const closed =
+    hour === IDENTITY_DIGEST_UTC_HOUR ||
+    (hour === IDENTITY_DIGEST_UTC_HOUR - 1 &&
+      at.getUTCMinutes() >= 60 - SWEEP_LEAD_MINUTES);
+  if (!closed) {
     return undefined;
   }
   const end = new Date(at);

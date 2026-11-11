@@ -106,7 +106,7 @@ describe('Home Wrapped backfill card', () => {
     );
     expect(out).toContain('Last run finished Dec 9, 2026 1:30 PM Pacific');
     expect(out).toContain('240 members: built 600, skipped 300, failed 2');
-    expect(out).toContain('1830 Meetup requests');
+    expect(out).toContain('1830 Meetup client calls');
     expect(out).toContain('Queue: 3');
     expect(out).toContain('Stored Wrapped entries: 1234');
     expect(out).toContain('Next tick: 12:05 PM Pacific');
@@ -129,7 +129,7 @@ describe('Home Wrapped backfill card', () => {
     );
     expect(out).toContain('Running: 96 of 240 members');
     expect(out).toContain('built 150, skipped 130, failed 1');
-    expect(out).toContain('410 Meetup requests so far');
+    expect(out).toContain('410 Meetup client calls so far');
     expect(out).toContain('Next sweep: running now');
     expect(out).toContain('started Dec 10, 2026 11:00 AM Pacific');
     expect(out).not.toContain('Run now');

@@ -91,7 +91,7 @@ export async function wrappedBackfillCard(
     ? html`<p>
         Last run finished ${pacificDateTime(lastRun.finishedAt)} Pacific:
         ${String(lastRun.membersTotal)} members: ${counts(lastRun)};
-        ${String(lastRun.requests)} Meetup requests.
+        ${String(lastRun.requests)} Meetup client calls.
       </p>`
     : html`<p>No run yet.</p>`;
   const running = openRun
@@ -99,7 +99,7 @@ export async function wrappedBackfillCard(
         Running: ${String(openRun.membersDone)} of
         ${String(openRun.membersTotal)} members (${counts(openRun)}), started
         ${pacificDateTime(openRun.startedAt)} Pacific;
-        ${String(openRun.requests)} Meetup requests so far.
+        ${String(openRun.requests)} Meetup client calls so far.
       </p>`
     : '';
   let nextSweep = 'as soon as the job runs';

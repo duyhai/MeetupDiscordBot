@@ -121,4 +121,29 @@ describe('readEntry', () => {
     );
     expect(await readEntry({ cache }, USER, 2025, 'm1', NOW)).toBeUndefined();
   });
+
+  it('falls back to Redis when the Postgres tier fails, so a build is not lost', async () => {
+    const cache = new FakeCache();
+    const broken = {
+      get: async () => {
+        throw new Error('pg down');
+      },
+      put: async () => {
+        throw new Error('pg down');
+      },
+      count: async () => 0,
+    };
+
+    await writeEntry({ cache, entries: broken }, USER, 2025, copy(2025), NOW);
+    expect(cache.ttls.get(wrappedCacheKey(USER, 2025))).toBe(
+      wrappedTtlSec(2025, NOW),
+    );
+    expect(
+      await readEntry({ cache, entries: broken }, USER, 2025, 'm1', NOW),
+    ).toEqual(copy(2025));
+    await cache.remove(wrappedCacheKey(USER, 2025));
+    expect(
+      await readEntry({ cache, entries: broken }, USER, 2025, 'm1', NOW),
+    ).toBeUndefined();
+  });
 });
