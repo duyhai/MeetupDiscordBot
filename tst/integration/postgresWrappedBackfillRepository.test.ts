@@ -84,6 +84,7 @@ const pause = (ms: number) =>
           built: 2,
           skipped: 1,
           failed: 0,
+          requests: 40,
         }),
       ).toBe(true);
       // Another process that still thinks the cursor is unset loses.
@@ -93,6 +94,7 @@ const pause = (ms: number) =>
           built: 0,
           skipped: 0,
           failed: 1,
+          requests: 1,
         }),
       ).toBe(false);
       expect(
@@ -101,6 +103,7 @@ const pause = (ms: number) =>
           built: 0,
           skipped: 0,
           failed: 1,
+          requests: 2,
         }),
       ).toBe(true);
       expect(await repo.openRun()).toMatchObject({
@@ -109,6 +112,7 @@ const pause = (ms: number) =>
         built: 2,
         skipped: 1,
         failed: 1,
+        requests: 42,
       });
     });
 

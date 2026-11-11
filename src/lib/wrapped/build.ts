@@ -35,6 +35,8 @@ export const ATTENDEE_FETCH_CONCURRENCY = 5;
 
 /** The same filter Where have we met? uses, so cached lists are shared. */
 const ATTENDEE_FILTER: RsvpFilter = { rsvpStatus: ['ATTENDED', 'YES'] };
+/** One page of attendees: the whole list for nearly every group event. */
+export const ATTENDEE_PAGE = 100;
 
 /** The slice of GqlMeetupClient a build reads. */
 export interface WrappedMeetup {
@@ -130,14 +132,33 @@ export async function readHostedEvents(
   }));
 }
 
+/**
+ * Attendee Meetup ids per event. With `firstPageOnly`, one page of
+ * ATTENDEE_PAGE each (the whole list for nearly every group event); the
+ * events that had more are returned in `partial`.
+ */
 async function readAttendees(
   meetup: WrappedMeetup,
   events: WrappedEvent[],
-): Promise<Record<string, string[]>> {
+  firstPageOnly = false,
+): Promise<{ byEvent: Record<string, string[]>; partial: Set<string> }> {
+  const partial = new Set<string>();
   const lists = await mapWithConcurrency(
     events,
     ATTENDEE_FETCH_CONCURRENCY,
     async (event) => {
+      if (firstPageOnly) {
+        const result = await meetup.getEventRsvps(
+          event.id,
+          { first: ATTENDEE_PAGE },
+          ATTENDEE_FILTER,
+        );
+        const { rsvps } = result.event;
+        if (rsvps.pageInfo.hasNextPage) {
+          partial.add(event.id);
+        }
+        return rsvps.edges.map((edge) => edge.node.member.id);
+      }
       const rsvps = await getPaginatedData(async (paginationInput) => {
         const result = await meetup.getEventRsvps(
           event.id,
@@ -149,7 +170,10 @@ async function readAttendees(
       return rsvps.map((rsvp) => rsvp.member.id);
     },
   );
-  return Object.fromEntries(events.map((event, i) => [event.id, lists[i]]));
+  return {
+    byEvent: Object.fromEntries(events.map((event, i) => [event.id, lists[i]])),
+    partial,
+  };
 }
 
 /** What one member's Wrapped years are built from: read once, reused per year. */
@@ -175,11 +199,17 @@ async function report(deps: SourceDeps, message: string): Promise<void> {
  * stats, the early cohort and the naming. The on-demand build and the
  * backfill both end here, so their cache entries are identical.
  */
+export interface YearBuildOptions {
+  /** The backfill: early-cohort events read one page of attendees (the cohort is then `partial` when an event had more). */
+  earlyFirstPageOnly?: boolean;
+}
+
 export async function buildWrappedYear(
   deps: SourceDeps,
   linkedMeetupId: string,
   year: number,
   sources: WrappedSources,
+  options: YearBuildOptions = {},
 ): Promise<CachedWrapped> {
   const now = deps.now ?? (() => new Date());
   const startedMs = now().getTime();
@@ -198,7 +228,10 @@ export async function buildWrappedYear(
   const thisYear = [...everyEvent.values()].filter((event) =>
     isInYear(event.dateTime, year),
   );
-  const attendeesByEvent = await readAttendees(deps.meetup, thisYear);
+  const { byEvent: attendeesByEvent } = await readAttendees(
+    deps.meetup,
+    thisYear,
+  );
 
   const { stats, companions } = computeWrapped({
     year,
@@ -217,17 +250,22 @@ export async function buildWrappedYear(
   )
     .map((id) => everyEvent.get(id))
     .filter((event): event is WrappedEvent => event !== undefined);
-  Object.assign(
-    attendeesByEvent,
-    await readAttendees(deps.meetup, earlyEvents),
+  const early = await readAttendees(
+    deps.meetup,
+    earlyEvents,
+    options.earlyFirstPageOnly === true,
   );
-  const topTypes = await mapWithConcurrency(stats.topTypes, 1, async (top) => ({
-    ...top,
-    cohort: await nameCohort(
+  Object.assign(attendeesByEvent, early.byEvent);
+  const topTypes = await mapWithConcurrency(stats.topTypes, 1, async (top) => {
+    const cohort = await nameCohort(
       rankCohort(top.firstEvents, attendeesByEvent, companions, linkedMeetupId),
       deps,
-    ),
-  }));
+    );
+    const partial = top.firstEvents.some((event) =>
+      early.partial.has(event.id),
+    );
+    return { ...top, cohort: partial ? { ...cohort, partial } : cohort };
+  });
 
   const named = await nameCompanions(companions, deps, everyEvent);
 

@@ -32,6 +32,7 @@ const finished: BackfillRun = {
   built: 600,
   skipped: 300,
   failed: 2,
+  requests: 1830,
   cursor: '9',
 };
 
@@ -45,6 +46,7 @@ const open: BackfillRun = {
   built: 150,
   skipped: 130,
   failed: 1,
+  requests: 410,
   cursor: '5',
 };
 
@@ -57,6 +59,7 @@ function control(
       openRun: undefined,
       queueLength: 0,
       nextTickAt: undefined,
+      entries: 0,
     })),
     runNow: vi.fn(async () => 'requested' as const),
     ...overrides,
@@ -80,6 +83,9 @@ describe('Home Wrapped backfill card', () => {
     expect(out).toContain('<h2>Wrapped backfill</h2>');
     expect(out).toContain('No run yet.');
     expect(out).toContain('Queue: 0');
+    expect(out).toContain('Stored Wrapped entries: 0');
+    expect(out).toContain('Next tick: the job is not running');
+    expect(out).toContain('Next sweep: as soon as the job runs');
     expect(out).toContain(`action="${WRAPPED_BACKFILL_PATH}"`);
     expect(out).toContain('name="_csrf" value="tok"');
     expect(out).toContain('>Run now</button>');
@@ -94,13 +100,18 @@ describe('Home Wrapped backfill card', () => {
           openRun: undefined,
           queueLength: 3,
           nextTickAt: new Date('2026-12-10T20:05:00Z'),
+          entries: 1234,
         }),
       }),
     );
     expect(out).toContain('Last run finished Dec 9, 2026 1:30 PM Pacific');
     expect(out).toContain('240 members: built 600, skipped 300, failed 2');
+    expect(out).toContain('1830 Meetup requests');
     expect(out).toContain('Queue: 3');
+    expect(out).toContain('Stored Wrapped entries: 1234');
     expect(out).toContain('Next tick: 12:05 PM Pacific');
+    // 20 hours after the last finish: Dec 10, 2026 9:30 AM Pacific.
+    expect(out).toContain('Next sweep: Dec 10, 2026 9:30 AM Pacific');
     expect(out).toContain('Run now');
   });
 
@@ -112,11 +123,14 @@ describe('Home Wrapped backfill card', () => {
           openRun: open,
           queueLength: 0,
           nextTickAt: new Date('2026-12-10T20:05:00Z'),
+          entries: 900,
         }),
       }),
     );
     expect(out).toContain('Running: 96 of 240 members');
     expect(out).toContain('built 150, skipped 130, failed 1');
+    expect(out).toContain('410 Meetup requests so far');
+    expect(out).toContain('Next sweep: running now');
     expect(out).toContain('started Dec 10, 2026 11:00 AM Pacific');
     expect(out).not.toContain('Run now');
   });

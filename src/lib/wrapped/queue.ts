@@ -35,8 +35,8 @@ function quietHourEnd(at: Date): Date | undefined {
  */
 export function readyBy(nextTickAt: Date, position: number): Date {
   let at = new Date(nextTickAt);
-  const ticksAhead = Math.floor(Math.max(1, position) - 1) / MEMBERS_PER_TICK;
-  for (let tick = 0; tick <= Math.floor(ticksAhead); tick += 1) {
+  const ticksAhead = Math.floor((Math.max(1, position) - 1) / MEMBERS_PER_TICK);
+  for (let tick = 0; tick <= ticksAhead; tick += 1) {
     if (tick > 0) {
       at = new Date(at.getTime() + BACKFILL_TICK_MS);
     }
@@ -85,15 +85,27 @@ export async function queueForLater(
     : { kind: 'already', year: result.already, readyBy: at };
 }
 
-export async function nextTickAt(
+/** The next tick the scheduler recorded, if it is running and the time is still ahead. */
+export async function recordedNextTick(
   cache: KeyValueCache,
   now: Date,
-): Promise<Date> {
+): Promise<Date | undefined> {
   const raw = await cache.get(NEXT_TICK_KEY);
   const parsed = raw ? new Date(raw) : undefined;
   return parsed && Number.isFinite(parsed.getTime()) && parsed > now
     ? parsed
-    : new Date(now.getTime() + BACKFILL_TICK_MS);
+    : undefined;
+}
+
+/** The recorded next tick, else one tick from now (the promise still needs a time). */
+export async function nextTickAt(
+  cache: KeyValueCache,
+  now: Date,
+): Promise<Date> {
+  return (
+    (await recordedNextTick(cache, now)) ??
+    new Date(now.getTime() + BACKFILL_TICK_MS)
+  );
 }
 
 export function queuedText(

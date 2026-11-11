@@ -8,6 +8,7 @@ import { EventSummary } from '../../src/lib/client/meetup/types.js';
 import { ensureDashboardSchema } from '../../src/lib/repositories/dashboardPool.js';
 import { InMemoryMemberRepository } from '../../src/lib/repositories/inMemoryMemberRepository.js';
 import { PostgresWrappedBackfillRepository } from '../../src/lib/repositories/postgresWrappedBackfillRepository.js';
+import { PostgresWrappedEntryRepository } from '../../src/lib/repositories/postgresWrappedEntryRepository.js';
 import {
   BackfillDeps,
   OrganizerReads,
@@ -92,6 +93,7 @@ function fakeMeetup(events: EventSummary[], meetupId: string) {
     let schema: { drop(): Promise<void> };
     let redis: RedisCache;
     let store: PostgresWrappedBackfillRepository;
+    let entries: PostgresWrappedEntryRepository;
     let repo: InMemoryMemberRepository;
     let deps: BackfillDeps;
     const memberMeetup = fakeMeetup(tokenEvents, TOKEN_MEETUP);
@@ -102,6 +104,7 @@ function fakeMeetup(events: EventSummary[], meetupId: string) {
     beforeAll(async () => {
       schema = await useIsolatedSchema('wrapped_backfill_tick');
       store = await PostgresWrappedBackfillRepository.instance();
+      entries = await PostgresWrappedEntryRepository.instance();
       await ensureDashboardSchema(
         (store as unknown as { pool: import('pg').Pool }).pool,
       );
@@ -125,6 +128,7 @@ function fakeMeetup(events: EventSummary[], meetupId: string) {
         now: () => new Date(),
         cache: async () => redis,
         store: async () => store,
+        entries: async () => entries,
         members: async () => repo,
         memberToken: async (id) => {
           return id === TOKEN_USER ? 'member-token' : undefined;
@@ -236,9 +240,11 @@ function fakeMeetup(events: EventSummary[], meetupId: string) {
         members: 2,
         finishedRun: true,
       });
+      // A past year lives in Postgres only; the current year has a hot copy.
+      expect(await entries.get(TOKEN_USER, THIS_YEAR - 1)).toBeDefined();
       expect(
         await readWrapped(redis, TOKEN_USER, THIS_YEAR - 1, TOKEN_MEETUP),
-      ).toBeDefined();
+      ).toBeUndefined();
       expect(
         await readWrapped(redis, TOKEN_USER, THIS_YEAR, TOKEN_MEETUP),
       ).toBeDefined();
