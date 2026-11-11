@@ -112,7 +112,8 @@ async function readHistory(
   }
 }
 
-async function readHosted(
+/** The member's past hosted events with their attendance. */
+export async function readHostedEvents(
   meetup: WrappedMeetup,
   hostId: string,
 ): Promise<HostedEvent[]> {
@@ -151,39 +152,48 @@ async function readAttendees(
   return Object.fromEntries(events.map((event, i) => [event.id, lists[i]]));
 }
 
-export async function buildWrapped(
-  deps: BuildDeps,
+/** What one member's Wrapped years are built from: read once, reused per year. */
+export interface WrappedSources {
+  events: EventSummary[];
+  hosted: HostedEvent[];
+}
+
+/** What building a year from sources needs: no history read, no slot. */
+export type SourceDeps = Pick<
+  BuildDeps,
+  'meetup' | 'findByMeetupId' | 'isPresent' | 'now' | 'log' | 'onProgress'
+>;
+
+async function report(deps: SourceDeps, message: string): Promise<void> {
+  if (deps.onProgress) {
+    await deps.onProgress(message);
+  }
+}
+
+/**
+ * Everything after the history and the slot: the year's attendee lists, the
+ * stats, the early cohort and the naming. The on-demand build and the
+ * backfill both end here, so their cache entries are identical.
+ */
+export async function buildWrappedYear(
+  deps: SourceDeps,
   linkedMeetupId: string,
   year: number,
-  groupId: string,
-): Promise<BuildResult> {
-  const progress = async (message: string) => {
-    if (deps.onProgress) {
-      await deps.onProgress(message);
-    }
-  };
-
+  sources: WrappedSources,
+): Promise<CachedWrapped> {
   const now = deps.now ?? (() => new Date());
   const startedMs = now().getTime();
 
-  await progress('Reading your RSVPs…');
-  const history = await readHistory(deps, linkedMeetupId, groupId);
-  if (history.kind !== 'events') {
-    return history;
-  }
-  if (deps.claimBuild && !deps.claimBuild()) {
-    return { kind: 'rate-limited' };
-  }
-  const hosted = await readHosted(deps.meetup, linkedMeetupId);
-
-  await progress('Finding who you went with…');
+  await report(deps, 'Finding who you went with…');
   // Deduped: a hosted event is usually in the RSVP list too, and each
   // event's attendee list should be fetched once.
   const everyEvent = new Map<string, WrappedEvent>(
-    [...history.events, ...hosted].map(({ id, title, dateTime, eventUrl }) => [
-      id,
-      { id, title, dateTime, eventUrl },
-    ]),
+    [...sources.events, ...sources.hosted].map(
+      ({ id, title, dateTime, eventUrl }) => [
+        id,
+        { id, title, dateTime, eventUrl },
+      ],
+    ),
   );
   const thisYear = [...everyEvent.values()].filter((event) =>
     isInYear(event.dateTime, year),
@@ -193,12 +203,12 @@ export async function buildWrapped(
   const { stats, companions } = computeWrapped({
     year,
     selfMeetupId: linkedMeetupId,
-    attended: history.events,
-    hosted,
+    attended: sources.events,
+    hosted: sources.hosted,
     attendeesByEvent,
   });
 
-  await progress('Looking back at your early events…');
+  await report(deps, 'Looking back at your early events…');
   // Each top type's first events, fetched once (never again for one already
   // read this year), bounded by TOP_TYPES × FIRST_EVENTS_PER_TYPE.
   const earlyEvents = earlyEventIdsToFetch(
@@ -225,12 +235,33 @@ export async function buildWrapped(
     `Wrapped build for Meetup member ${linkedMeetupId} (${year}) took ${now().getTime() - startedMs} ms`,
   );
   return {
+    meetupId: linkedMeetupId,
+    stats: { ...stats, topTypes },
+    companions: named,
+    builtAt: now().toISOString(),
+  };
+}
+
+export async function buildWrapped(
+  deps: BuildDeps,
+  linkedMeetupId: string,
+  year: number,
+  groupId: string,
+): Promise<BuildResult> {
+  await report(deps, 'Reading your RSVPs…');
+  const history = await readHistory(deps, linkedMeetupId, groupId);
+  if (history.kind !== 'events') {
+    return history;
+  }
+  if (deps.claimBuild && !deps.claimBuild()) {
+    return { kind: 'rate-limited' };
+  }
+  const hosted = await readHostedEvents(deps.meetup, linkedMeetupId);
+  return {
     kind: 'built',
-    wrapped: {
-      meetupId: linkedMeetupId,
-      stats: { ...stats, topTypes },
-      companions: named,
-      builtAt: now().toISOString(),
-    },
+    wrapped: await buildWrappedYear(deps, linkedMeetupId, year, {
+      events: history.events,
+      hosted,
+    }),
   };
 }
