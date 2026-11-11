@@ -122,6 +122,8 @@ export interface HomeReportsView {
   csrfToken: string;
   /** req.query.wrapped, unparsed: the cards render fixed text for a known code only. */
   notice: unknown;
+  /** req.query.backfill, likewise. */
+  backfillNotice: unknown;
 }
 
 interface Locals {
@@ -731,6 +733,7 @@ export function createDashboardRouter(deps: DashboardDeps): express.Router {
         ? await deps.homeReports({
             csrfToken: session.csrfToken,
             notice: (req.query as Record<string, unknown>).wrapped,
+            backfillNotice: (req.query as Record<string, unknown>).backfill,
           })
         : undefined;
     } catch (error) {
