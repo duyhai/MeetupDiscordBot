@@ -784,6 +784,47 @@ answers, all _my calls_ unless marked for Hai:
    policy; if it is small, the backfill caps the years it writes (newest
    first) by a constant.
 
+## Decisions after the lead's sizing note (2026-11-11, PR B)
+
+Redis is the 30 MB plan, shared with sessions, token sets, the request cache
+and limiters; 471 members are linked. A Redis-only backfill of every year
+(~6 KB an entry, up to ten years) would fill it, and the 12-hour request
+cache (full RSVP pages, names included) would fill it faster. Agreed with
+the lead:
+
+8. **Postgres is the durable store.** `wrapped_entries (discord_user_id,
+year, meetup_id, payload JSONB, built_at)`, primary key (discord_user_id,
+   year), index on meetup_id, created under the schema lock like the other
+   dashboard tables. Every build (on-demand and backfill) writes it with the
+   same `CachedWrapped` JSON; nothing about the entry's shape changes.
+   **Redis keeps only the current year** as a hot copy, TTL **1 day**; past
+   years are read from Postgres and never written to Redis. Reads are
+   two-tier (Redis, then Postgres) through one store module; without
+   `DATABASE_URL` the Redis tier alone behaves as before.
+9. **The relink guard (#138) holds in both tiers**: an entry whose
+   `meetup_id` is not the member's current link is a miss, and a build for
+   the current link deletes that member's rows written for another Meetup
+   id.
+10. **The backfill never writes the request cache.** Its Meetup clients
+    bypass it (`bypassCache: true`); instead an **in-process memo of attendee Meetup
+    ids** (ids only, never names; at most 3000 events) makes an event shared
+    by many members a single read: it lives for the open run, or for one
+    tick when no run is open, and is cleared in a `finally` when the run or
+    that tick ends. A first-page read of a big event is remembered as
+    partial and is completed (read in full, once) the first time a build
+    needs the whole list. It is transient and never persisted,
+    which is why it may hold other people's Meetup ids. On-demand builds
+    keep today's request cache.
+11. **Early-cohort events read the first page of attendees only** (100
+    RSVPs) in the backfill. When an event had more (`totalCount` > 100) the
+    type's cohort is marked `partial` and the page labels it "at least N".
+    On-demand builds read every page, as before.
+12. The run records its **Meetup request count** (`requests`) and the staff
+    card shows it beside the **Postgres entry count**, so the budget can be
+    seen to hold.
+13. Queue and throttled members: as the brief (no hourly slot spent, "ready
+    by about HH:MM" on the page and in Discord).
+
 ## Left to the builder
 
 - Exact copy of summaries, notices and the staff card.

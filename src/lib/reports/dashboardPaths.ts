@@ -43,6 +43,7 @@ export const DASHBOARD_PATHS = {
   hostPromotion: '/hosts/promotion',
   hostMember: '/hosts/promotion/:memberId',
   wrappedAnnounce: '/wrapped/announce',
+  wrappedBackfill: '/wrapped/backfill/run',
   eventChanges: '/events',
   eventHistory: '/events/:eventId',
   eventSnapshot: '/events/snapshot',

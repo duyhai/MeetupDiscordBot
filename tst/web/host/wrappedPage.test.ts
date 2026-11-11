@@ -30,6 +30,11 @@ import {
   signInWithMeetup,
 } from './hostHarness.js';
 import { FakeCache } from '../fakeCache.js';
+import { NEXT_TICK_KEY } from '../../../src/lib/wrapped/queue.js';
+import {
+  FakeBackfillStore,
+  FakeEntryStore,
+} from '../../lib/wrapped/backfillFakes.js';
 
 afterEach(closeServers);
 
@@ -271,6 +276,8 @@ interface Harness {
   deps: WrappedPageDeps;
   alert: ReturnType<typeof vi.fn>;
   csrf: () => string;
+  store: FakeBackfillStore;
+  entries: FakeEntryStore;
 }
 
 async function harness({
@@ -278,15 +285,21 @@ async function harness({
   hasToken = true,
   deadlineMs = 2000,
   resolve,
+  queue = false,
+  postgres = false,
 }: {
   meetup?: ReturnType<typeof fakeMeetup>;
   hasToken?: boolean;
   deadlineMs?: number;
   resolve?: unknown;
+  queue?: boolean;
+  postgres?: boolean;
 } = {}): Promise<Harness> {
-  const wrappedCache = new FakeCache();
-  const alert = vi.fn().mockResolvedValue(true);
   const clock = { now: NOW.getTime() };
+  const wrappedCache = new FakeCache();
+  const store = new FakeBackfillStore(() => clock.now);
+  const entries = new FakeEntryStore();
+  const alert = vi.fn().mockResolvedValue(true);
   const deps: WrappedPageDeps = {
     cache: async () => wrappedCache,
     memberToken: vi.fn(async () => {
@@ -319,6 +332,8 @@ async function harness({
     groupId: GROUP,
     now: () => new Date(clock.now),
     deadlineMs,
+    ...(queue ? { queue: async () => store } : {}),
+    ...(postgres ? { entries: async () => entries } : {}),
   };
   const { deps: hostDeps, cache } = makeHostDeps({
     ...(resolve ? { resolve: vi.fn().mockResolvedValue(resolve) } : {}),
@@ -336,7 +351,17 @@ async function harness({
     }
     throw new Error('no session');
   };
-  return { req, cache, wrappedCache, meetup, deps, alert, csrf };
+  return {
+    req,
+    cache,
+    wrappedCache,
+    meetup,
+    deps,
+    alert,
+    csrf,
+    store,
+    entries,
+  };
 }
 
 const strip = (text: string) => text.replace(/\s+/g, ' ');
@@ -691,6 +716,24 @@ describe('GET /host/wrapped deeper sections', () => {
     expect(text).not.toContain('discord.com/users/d-linked');
   });
 
+  it('labels a partial early cohort "at least"', async () => {
+    const { text } = await deepPage({
+      ...deep,
+      stats: {
+        ...deep.stats,
+        topTypes: deep.stats.topTypes.map((top, i) => {
+          return i === 0
+            ? { ...top, cohort: { ...top.cohort, partial: true } }
+            : top;
+        }),
+      },
+    });
+    expect(text).toContain(
+      '<summary>Still around from your early cohort (at least 7)</summary>',
+    );
+    expect(text).toContain('at least 3 other members');
+  });
+
   it('folds an unresolvable top companion', async () => {
     const copy: CachedWrapped = {
       ...deep,
@@ -784,6 +827,249 @@ describe('after a rebuild that did not build', () => {
     const res = await h.req.get('/host/wrapped?year=2024').set('Cookie', sid);
     expect(res.text).toContain('aria-current="page">2024');
     expect(res.text).not.toContain('?year=2019');
+  });
+});
+
+describe('the queue for throttled requests', () => {
+  const rebuild = (h: Harness, sid: string, year = '2026') =>
+    h.req
+      .post('/host/wrapped/rebuild')
+      .set('Cookie', sid)
+      .set('Origin', ORIGIN)
+      .type('form')
+      .send({ _csrf: h.csrf(), year });
+
+  it('a throttled rebuild with nothing cached is queued and the page says when', async () => {
+    const h = await harness({ queue: true });
+    await h.wrappedCache.set(NEXT_TICK_KEY, '2026-12-10T20:05:00.000Z');
+    h.deps.limiter.take(USER);
+    const sid = await signInWithDiscord(h.req);
+
+    const res = await rebuild(h, sid);
+
+    expect(res.status).toBe(303);
+    expect(res.headers.location).toBe('/host/wrapped?year=2026&notice=queued');
+    expect((await h.store.position(USER))?.row).toMatchObject({
+      meetupId: ME,
+      year: 2026,
+    });
+    const shown = strip(
+      (await h.req.get(res.headers.location).set('Cookie', sid)).text,
+    );
+    expect(shown).toContain('Queued — it&#39;ll be ready by about 12:05 pm.');
+    expect(shown).toContain('less than an hour ago');
+    expect(h.meetup.getSelfPastRsvpEvents).toHaveBeenCalledTimes(1);
+  });
+
+  it('says which year is already queued', async () => {
+    const h = await harness({ queue: true });
+    await h.store.enqueue({ discordUserId: USER, meetupId: ME, year: 2024 });
+    h.deps.limiter.take(USER);
+    const sid = await signInWithDiscord(h.req);
+
+    const res = await rebuild(h, sid);
+
+    expect(res.headers.location).toBe(
+      '/host/wrapped?year=2026&notice=already-queued',
+    );
+    const shown = strip(
+      (await h.req.get(res.headers.location).set('Cookie', sid)).text,
+    );
+    expect(shown).toContain(
+      'You already have 2024 queued; it&#39;ll be ready by about',
+    );
+  });
+
+  it('a throttled rebuild with a cached copy is not queued', async () => {
+    const h = await harness({ queue: true });
+    await writeWrapped(h.wrappedCache, USER, 2026, cached, NOW);
+    h.deps.limiter.take(USER);
+    const sid = await signInWithDiscord(h.req);
+
+    const res = await rebuild(h, sid);
+
+    expect(res.headers.location).toBe(
+      '/host/wrapped?year=2026&notice=rate-limited',
+    );
+    expect(await h.store.queueLength()).toBe(0);
+  });
+
+  it('a reload while queued and limited shows the notice without building', async () => {
+    const h = await harness({ queue: true });
+    await h.store.enqueue({ discordUserId: USER, meetupId: ME, year: 2026 });
+    h.deps.limiter.take(USER);
+    const sid = await signInWithDiscord(h.req);
+
+    const res = await h.req.get('/host/wrapped?year=2026').set('Cookie', sid);
+
+    expect(res.status).toBe(200);
+    expect(strip(res.text)).toContain('Queued — it&#39;ll be ready by about');
+    expect(h.deps.memberToken).not.toHaveBeenCalled();
+  });
+
+  it('a reload with a free slot builds and drops the row', async () => {
+    const h = await harness({ queue: true });
+    await h.store.enqueue({ discordUserId: USER, meetupId: ME, year: 2026 });
+    const sid = await signInWithDiscord(h.req);
+
+    const res = await h.req.get('/host/wrapped?year=2026').set('Cookie', sid);
+
+    expect(res.status).toBe(200);
+    expect(strip(res.text)).toContain('Events in 2026</dt> <dd>2</dd>');
+    expect(await h.store.queueLength()).toBe(0);
+  });
+
+  it('a throttled page load of a year with nothing cached is queued, without a Meetup read', async () => {
+    const h = await harness({ queue: true });
+    await h.wrappedCache.set(NEXT_TICK_KEY, '2026-12-10T20:05:00.000Z');
+    await writeWrapped(h.wrappedCache, USER, 2026, cached, NOW);
+    h.deps.limiter.take(USER);
+    const sid = await signInWithDiscord(h.req);
+
+    const res = await h.req.get('/host/wrapped?year=2025').set('Cookie', sid);
+
+    expect(res.status).toBe(200);
+    expect(strip(res.text)).toContain(
+      'Queued — it&#39;ll be ready by about 12:05 pm.',
+    );
+    expect((await h.store.position(USER))?.row.year).toBe(2025);
+    expect(h.deps.memberToken).not.toHaveBeenCalled();
+    expect(h.meetup.getSelfPastRsvpEvents).not.toHaveBeenCalled();
+  });
+
+  it('a reload while another year is queued says which year', async () => {
+    const h = await harness({ queue: true });
+    await h.store.enqueue({ discordUserId: USER, meetupId: ME, year: 2023 });
+    h.deps.limiter.take(USER);
+    const sid = await signInWithDiscord(h.req);
+
+    const res = await h.req.get('/host/wrapped?year=2024').set('Cookie', sid);
+
+    expect(strip(res.text)).toContain(
+      'You already have 2023 queued; it&#39;ll be ready by about',
+    );
+    expect(strip(res.text)).not.toContain('Queued — it');
+    expect((await h.store.position(USER))?.row.year).toBe(2023);
+  });
+
+  it('a queued-notice page for a past year keeps the built years in the picker', async () => {
+    const h = await harness({ queue: true });
+    await writeWrapped(h.wrappedCache, USER, 2026, cached, NOW);
+    await h.store.enqueue({ discordUserId: USER, meetupId: ME, year: 2025 });
+    h.deps.limiter.take(USER);
+    const sid = await signInWithDiscord(h.req);
+
+    const res = await h.req.get('/host/wrapped?year=2025').set('Cookie', sid);
+
+    expect(res.status).toBe(200);
+    expect(strip(res.text)).toContain('Queued — it&#39;ll be ready by about');
+    expect(res.text).toContain('href="/host/wrapped?year=2026"');
+    expect(res.text).toContain('href="/host/wrapped?year=2024"');
+    expect(res.text).toContain('aria-current="page">2025');
+    expect(h.deps.memberToken).not.toHaveBeenCalled();
+  });
+
+  it('a mismatch page for a past year keeps the built years in the picker', async () => {
+    const h = await harness({ meetup: fakeMeetup({ meetupId: 'someone' }) });
+    await writeWrapped(h.wrappedCache, USER, 2026, cached, NOW);
+    const sid = await signInWithDiscord(h.req);
+
+    const res = await h.req.get('/host/wrapped?year=2025').set('Cookie', sid);
+
+    expect(res.status).toBe(200);
+    expect(res.text).toContain('is not the one linked');
+    expect(res.text).toContain('href="/host/wrapped?year=2026"');
+    expect(res.text).toContain('href="/host/wrapped?year=2024"');
+    expect(res.text).toContain('aria-current="page">2025');
+  });
+
+  it('a not-linked member sees this year alone in the picker, with no cache read', async () => {
+    const h = await harness({
+      resolve: { ...HOST, discordUserId: undefined },
+    });
+    const get = vi.spyOn(h.wrappedCache, 'get');
+    const sid = await signInWithMeetup(h.req);
+
+    const res = await h.req.get('/host/wrapped?year=2024').set('Cookie', sid);
+
+    expect(res.status).toBe(200);
+    expect(res.text).toContain('linked members');
+    expect(res.text).toContain('href="/host/wrapped?year=2026"');
+    expect(res.text).not.toContain('href="/host/wrapped?year=2025"');
+    expect(res.text).not.toContain('href="/host/wrapped?year=2024"');
+    expect(get).not.toHaveBeenCalled();
+  });
+
+  it('a notice page still renders when the current-year read fails', async () => {
+    const h = await harness({ queue: true });
+    await h.store.enqueue({ discordUserId: USER, meetupId: ME, year: 2025 });
+    h.deps.limiter.take(USER);
+    const sid = await signInWithDiscord(h.req);
+    const values = h.wrappedCache.values;
+    vi.spyOn(h.wrappedCache, 'get').mockImplementation(async (key: string) => {
+      if (key === wrappedCacheKey(USER, 2026)) {
+        throw new Error('redis down');
+      }
+      return values.get(key);
+    });
+
+    const res = await h.req.get('/host/wrapped?year=2025').set('Cookie', sid);
+
+    expect(res.status).toBe(200);
+    expect(strip(res.text)).toContain('Queued — it&#39;ll be ready by about');
+    // The picker falls back to this year alone; the notice is what matters.
+    expect(res.text).toContain('href="/host/wrapped?year=2026"');
+    expect(res.text).not.toContain('redis down');
+  });
+
+  it("an on-demand build keeps a different year's queued request", async () => {
+    const h = await harness({ queue: true });
+    await h.store.enqueue({ discordUserId: USER, meetupId: ME, year: 2023 });
+    const sid = await signInWithDiscord(h.req);
+
+    const res = await h.req.get('/host/wrapped?year=2026').set('Cookie', sid);
+
+    expect(res.status).toBe(200);
+    expect(strip(res.text)).toContain('Events in 2026</dt> <dd>2</dd>');
+    expect((await h.store.position(USER))?.row.year).toBe(2023);
+  });
+
+  it('serves a past year from Postgres when Redis has no copy, and writes both tiers on a build', async () => {
+    const h = await harness({ postgres: true });
+    await h.entries.put(
+      USER,
+      2025,
+      { ...quiet, stats: { ...quiet.stats, year: 2025 } },
+      NOW,
+    );
+    const sid = await signInWithDiscord(h.req);
+
+    const shown = await h.req.get('/host/wrapped?year=2025').set('Cookie', sid);
+    expect(shown.status).toBe(200);
+    expect(strip(shown.text)).toMatch(/quiet year/i);
+    expect(h.deps.memberToken).not.toHaveBeenCalled();
+    expect(h.wrappedCache.values.has(wrappedCacheKey(USER, 2025))).toBe(false);
+
+    const built = await h.req.get('/host/wrapped?year=2026').set('Cookie', sid);
+    expect(built.status).toBe(200);
+    // The seeded 2025 row, then the build's 2026 row.
+    expect(h.entries.puts.at(-1)).toEqual({ discordUserId: USER, year: 2026 });
+    expect(h.entries.puts).toHaveLength(2);
+    expect(h.wrappedCache.ttls.get(wrappedCacheKey(USER, 2026))).toBe(
+      24 * 60 * 60,
+    );
+  });
+
+  it('without a queue the hourly limit reads as before', async () => {
+    const h = await harness();
+    h.deps.limiter.take(USER);
+    const sid = await signInWithDiscord(h.req);
+
+    const res = await rebuild(h, sid);
+
+    expect(res.headers.location).toBe(
+      '/host/wrapped?year=2026&notice=rate-limited',
+    );
   });
 });
 

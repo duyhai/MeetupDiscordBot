@@ -1191,6 +1191,17 @@ export function fakePageDeps(
       status: vi.fn(async () => undefined),
       postNow: vi.fn(async () => 'posted' as const),
     },
+    // The same fake Leadership check says no, so runNow is never reached there.
+    wrappedBackfill: {
+      status: vi.fn(async () => ({
+        lastRun: undefined,
+        openRun: undefined,
+        queueLength: 0,
+        nextTickAt: undefined,
+        entries: 0,
+      })),
+      runNow: vi.fn(async () => 'requested' as const),
+    },
     // The access matrix opens event 311000001's history.
     eventAudit: async () =>
       fakeEventAudit([eventChangeRow()], {

@@ -60,6 +60,11 @@ export interface NamedCohort {
   named: CohortMember[];
   /** Early-cohort people not named: an aggregate, never a name. */
   otherCount: number;
+  /**
+   * Set when an early event's attendee list was read in part (the backfill
+   * reads the first page of 100 only): the counts are "at least".
+   */
+  partial?: boolean;
 }
 
 export interface TopType {

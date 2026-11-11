@@ -13,6 +13,8 @@ import {
   ATTENDEE_FETCH_CONCURRENCY,
   BuildDeps,
   buildWrapped,
+  buildWrappedYear,
+  readHostedEvents,
 } from '../../../src/lib/wrapped/build.js';
 
 const GROUP = '7595882';
@@ -374,5 +376,52 @@ describe('buildWrapped', () => {
         /^Wrapped build for Meetup member me \(2026\) took \d+ ms$/,
       ),
     );
+  });
+
+  describe('from sources', () => {
+    it('buildWrappedYear builds one year from sources without reading history or hosted again', async () => {
+      const f = fakeDeps({
+        hosted: [{ ...hotPot, attendance: 12 }],
+        attendees: { '2': ['me', '7', '8'], '3': ['me', '7'] },
+        linked: ['7'],
+      });
+      const whole = await buildWrapped(f.deps, 'me', 2026, GROUP);
+      const g = fakeDeps({
+        hosted: [{ ...hotPot, attendance: 12 }],
+        attendees: { '2': ['me', '7', '8'], '3': ['me', '7'] },
+        linked: ['7'],
+      });
+
+      const hosted = await readHostedEvents(g.deps.meetup, 'me');
+      g.getHostedEvents.mockClear();
+      const wrapped = await buildWrappedYear(g.deps, 'me', 2026, {
+        events: [hike, trivia, hotPot],
+        hosted,
+      });
+
+      expect(whole.kind).toBe('built');
+      expect(wrapped).toEqual(
+        whole.kind === 'built' ? whole.wrapped : undefined,
+      );
+      expect(g.getSelfPastRsvpEvents).not.toHaveBeenCalled();
+      expect(g.getHostedEvents).not.toHaveBeenCalled();
+      expect(g.claimBuild).not.toHaveBeenCalled();
+    });
+
+    it('buildWrappedYear for two years shares the sources and fetches each year’s attendees once', async () => {
+      const f = fakeDeps({ attendees: { '1': ['me', '9'], '2': ['me', '7'] } });
+      const sources = { events: [hike, trivia, hotPot], hosted: [] };
+
+      const y2024 = await buildWrappedYear(f.deps, 'me', 2024, sources);
+      const y2026 = await buildWrappedYear(f.deps, 'me', 2026, sources);
+
+      expect(y2024.stats.attendedThisYear).toBe(1);
+      expect(y2026.stats.attendedThisYear).toBe(2);
+      expect(f.getEventRsvps.mock.calls.map((c) => c[0]).sort()).toEqual([
+        '1',
+        '2',
+        '3',
+      ]);
+    });
   });
 });

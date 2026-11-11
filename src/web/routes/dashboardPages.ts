@@ -52,6 +52,10 @@ import { registerTrendsRoutes } from './trends.js';
 import { registerWorkspaceRoutes } from './workspace.js';
 import { registerWorkspaceActionRoutes } from './workspaceActions.js';
 import { registerWrappedAnnounceRoute } from './wrappedAnnounce.js';
+import {
+  WrappedBackfillControl,
+  registerWrappedBackfillRoute,
+} from './wrappedBackfill.js';
 
 /** The snapshot reads the month pages use: never save. */
 export type SnapshotPageReader = Pick<
@@ -202,6 +206,8 @@ export interface DashboardPageDeps
   upcoming: (memberIds: string[]) => Promise<Map<string, UpcomingEntry>>;
   /** The Wrapped announcement card and its Post now action. */
   wrappedAnnounce: WrappedAnnounceControl;
+  /** The Wrapped backfill card and its Run now action. */
+  wrappedBackfill: WrappedBackfillControl;
 }
 
 /**
@@ -227,6 +233,7 @@ export function registerDashboardPages(
   registerHostRequestRoutes(router, deps);
   registerHostPromotionRoutes(router, deps);
   registerWrappedAnnounceRoute(router, deps);
+  registerWrappedBackfillRoute(router, deps);
   registerEventChangeRoutes(router, deps);
 }
 

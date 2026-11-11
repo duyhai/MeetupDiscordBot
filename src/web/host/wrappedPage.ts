@@ -16,6 +16,8 @@ import { KeyValueCache } from '../../lib/cache/base.js';
 import { LogEntry } from '../../lib/helpers/discordLogger.js';
 import { EVENT_TYPE_LABELS } from '../../lib/hosts/eventTypes.js';
 import { describeBuildError } from '../../lib/reports/buildJob.js';
+import { WrappedBackfillStore } from '../../lib/repositories/postgresWrappedBackfillRepository.js';
+import { WrappedEntryStore } from '../../lib/repositories/postgresWrappedEntryRepository.js';
 import {
   BuildDeps,
   BuildResult,
@@ -25,9 +27,8 @@ import {
 import {
   BUILDING_LEASE_TTL_SEC,
   CachedWrapped,
+  FIRST_WRAPPED_YEAR,
   buildingKey,
-  readWrapped,
-  writeWrapped,
 } from '../../lib/wrapped/cache.js';
 import { CompanionDeps, NamedCompanion } from '../../lib/wrapped/companions.js';
 import {
@@ -36,6 +37,18 @@ import {
   TopType,
   WrappedEvent,
 } from '../../lib/wrapped/stats.js';
+import {
+  nextTickAt,
+  pacificClock,
+  queueForLater,
+  queuedText,
+  readyBy,
+} from '../../lib/wrapped/queue.js';
+import {
+  WrappedTiers,
+  readEntry,
+  writeEntry,
+} from '../../lib/wrapped/store.js';
 import { tz } from '../../util/timezone.js';
 import {
   SafeHtml,
@@ -56,8 +69,6 @@ export const WRAPPED_PATH = `${HOST_BASE}/wrapped`;
 const REBUILD_PATH = `${WRAPPED_PATH}/rebuild`;
 const LINK_DISCORD_PATH = `${HOST_BASE}/link/discord`;
 const MEETUP_SIGN_IN = `${HOST_BASE}/auth/meetup/start`;
-/** The group's first year on Meetup; nothing to wrap before it (as the command). */
-export const FIRST_WRAPPED_YEAR = 2015;
 /** How long the page waits for Meetup; the build goes on after that. */
 const BUILD_DEADLINE_MS = 20_000;
 /** Companions and cohort members shown before the "Show all" expander. */
@@ -98,6 +109,10 @@ export interface WrappedPageDeps {
   now?: () => Date;
   /** Tests only. */
   deadlineMs?: number;
+  /** The backfill queue; left out, a throttled request is only told to wait. */
+  queue?: () => Promise<WrappedBackfillStore>;
+  /** The durable Wrapped store; left out or rejecting, Redis alone. */
+  entries?: () => Promise<WrappedEntryStore>;
 }
 
 /** `?year=`: this calendar year (Pacific) unless a year 2015..this year. */
@@ -146,6 +161,10 @@ export const WRAPPED_NOTICES = {
     'Could not build your Wrapped right now; try again in a little while.',
   'no-token': () =>
     'To build your Wrapped we need your Meetup connection. Sign in with Meetup below, or run /wrapped in Discord.',
+  // The queued texts come from the queue itself (queuedNotice): these are
+  // the fallback when the row is gone by the time the page is read.
+  queued: () => 'Your Wrapped is queued; reload in a few minutes.',
+  'already-queued': () => 'Your Wrapped is queued; reload in a few minutes.',
 } as const;
 
 type NoticeCode = keyof typeof WRAPPED_NOTICES;
@@ -339,19 +358,15 @@ function cohortSection(
   if (items.length === 0 && others === 0) {
     return html``;
   }
+  // A backfill reads one page of a big early event: the counts are "at least".
+  const atLeast = cohort.partial ? 'at least ' : '';
+  const shown = items.length > 0 ? items.length : others;
+  const summary = `Still around from your early cohort (${atLeast}${String(shown)})`;
+  const othersText = `${items.length > 0 ? 'and ' : ''}${atLeast}${plural(others, 'other member')}`;
   return html`<details>
-    <summary>
-      Still around from your early cohort
-      (${String(items.length > 0 ? items.length : others)})
-    </summary>
+    <summary>${summary}</summary>
     ${items.length > 0 ? showAll(items, COHORT_SHOWN) : ''}
-    ${
-      others > 0
-        ? html`<p class="muted">
-            ${items.length > 0 ? 'and ' : ''}${plural(others, 'other member')}
-          </p>`
-        : ''
-    }
+    ${others > 0 ? html`<p class="muted">${othersText}</p>` : ''}
   </details>`;
 }
 
@@ -536,6 +551,8 @@ const FINAL_NOTICES: readonly NoticeCode[] = [
   'mismatch',
   'not-in-group',
   'no-token',
+  'queued',
+  'already-queued',
 ];
 
 export function registerWrappedPage(
@@ -556,8 +573,9 @@ export function registerWrappedPage(
     discordUserId: string,
     year: number,
     accessToken: string,
-    cache: KeyValueCache,
+    tiers: WrappedTiers,
   ): Promise<Outcome> {
+    const { cache } = tiers;
     const lease = buildingKey(discordUserId, year);
     if (
       !(await cache.exclusive_set(
@@ -588,7 +606,8 @@ export function registerWrappedPage(
           deps.groupId,
         );
         if (result.kind === 'built') {
-          await writeWrapped(cache, discordUserId, year, result.wrapped, now());
+          await writeEntry(tiers, discordUserId, year, result.wrapped, now());
+          await dropQueued(discordUserId, year);
         } else if (result.kind === 'account-mismatch') {
           logger.warn(
             `Wrapped (web): token account ${result.tokenMeetupId} is not the linked account for Discord user ${discordUserId}`,
@@ -635,6 +654,120 @@ export function registerWrappedPage(
     }
   }
 
+  /** Both tiers; a Postgres that cannot be reached leaves the Redis tier alone. */
+  async function tiersFor(): Promise<WrappedTiers> {
+    const cache = await deps.cache();
+    if (!deps.entries) {
+      return { cache };
+    }
+    try {
+      return { cache, entries: await deps.entries() };
+    } catch (error) {
+      logger.warn(
+        `Wrapped entries unavailable, Redis only: ${error instanceof Error ? error.name : 'Error'}`,
+      );
+      return { cache };
+    }
+  }
+
+  /**
+   * Throttled with nothing stored for `year`: queue it (or say which year is
+   * already queued) instead of a build that would only be refused. Undefined
+   * when there is no queue, it failed, or a copy exists after all.
+   */
+  async function queueOnThrottle(
+    discordUserId: string,
+    meetupId: string,
+    year: number,
+    tiers: WrappedTiers,
+  ): Promise<SafeHtml | undefined> {
+    if (!deps.queue) {
+      return undefined;
+    }
+    try {
+      const outcome = await queueForLater(
+        await deps.queue(),
+        tiers,
+        { discordUserId, meetupId },
+        year,
+        now(),
+      );
+      if (outcome.kind === 'cached') {
+        return undefined;
+      }
+      const minutes = Math.max(
+        1,
+        Math.ceil(deps.limiter.retryAfterSec(discordUserId) / 60),
+      );
+      return html`<p class="note info">
+        ${WRAPPED_NOTICES['rate-limited'](minutes)}
+        ${queuedText(outcome, pacificClock)}
+      </p>`;
+    } catch (error) {
+      logger.warn(
+        `Could not queue the Wrapped: ${error instanceof Error ? error.name : 'Error'}`,
+      );
+      return undefined;
+    }
+  }
+
+  /**
+   * The queued state, from the queue itself: the hourly-limit line and when
+   * the backfill will have built it. Undefined when the member has no row
+   * (built or dropped since), or there is no queue.
+   */
+  async function queuedNotice(
+    discordUserId: string,
+    cache: KeyValueCache,
+    year: number,
+  ): Promise<SafeHtml | undefined> {
+    if (!deps.queue) {
+      return undefined;
+    }
+    try {
+      const store = await deps.queue();
+      const queued = await store.position(discordUserId);
+      if (!queued) {
+        return undefined;
+      }
+      const minutes = Math.max(
+        1,
+        Math.ceil(deps.limiter.retryAfterSec(discordUserId) / 60),
+      );
+      const text = queuedText(
+        {
+          kind: queued.row.year === year ? 'queued' : 'already',
+          year: queued.row.year,
+          readyBy: readyBy(await nextTickAt(cache, now()), queued.position),
+        },
+        pacificClock,
+      );
+      return html`<p class="note info">
+        ${WRAPPED_NOTICES['rate-limited'](minutes)} ${text}
+      </p>`;
+    } catch (error) {
+      logger.warn(
+        `Could not read the Wrapped queue: ${error instanceof Error ? error.name : 'Error'}`,
+      );
+      return undefined;
+    }
+  }
+
+  /** After an on-demand build, a queued request for that year is moot. */
+  async function dropQueued(
+    discordUserId: string,
+    year: number,
+  ): Promise<void> {
+    if (!deps.queue) {
+      return;
+    }
+    try {
+      await (await deps.queue()).complete(discordUserId, year);
+    } catch {
+      // The tick drops it as fresh.
+    }
+  }
+
   /** Every named person's display name (companions and cohorts), through the bot, in parallel. */
   async function namesFor(
     wrapped: CachedWrapped,
@@ -666,7 +799,7 @@ export function registerWrappedPage(
     session: HostSession,
     year: number,
     wrapped: CachedWrapped,
-    cache: KeyValueCache,
+    tiers: WrappedTiers,
     noticeHtml: SafeHtml | '' = '',
     status = 200,
   ) {
@@ -674,11 +807,12 @@ export function registerWrappedPage(
     const current =
       year === thisYear
         ? undefined
-        : await readWrapped(
-            cache,
+        : await readEntry(
+            tiers,
             session.discordUserId ?? '',
             thisYear,
             session.userId,
+            now(),
           );
     hostPage(res, {
       title: `Wrapped ${year}`,
@@ -694,18 +828,41 @@ export function registerWrappedPage(
     });
   }
 
-  function message(
+  /**
+   * A notice-only page (queued, no token, mismatch…). The picker still lists
+   * the member's built years, read from this year's copy as render() does
+   * (the caller's tiers, no second lookup); a member who is not linked has
+   * no copy, so this year alone. A failed read costs the picker its past
+   * years, never the notice.
+   */
+  async function message(
     res: Response,
     session: HostSession,
     year: number,
     body: SafeHtml,
+    tiers?: WrappedTiers,
     status = 200,
   ) {
+    const thisYear = tz(dayjs(now())).year();
+    let current: CachedWrapped | undefined;
+    if (tiers !== undefined && session.discordUserId !== null) {
+      try {
+        current = await readEntry(
+          tiers,
+          session.discordUserId,
+          thisYear,
+          session.userId,
+          now(),
+        );
+      } catch {
+        current = undefined;
+      }
+    }
     hostPage(res, {
       title: `Wrapped ${year}`,
       current: 'wrapped',
       status,
-      body: messageBody(session, yearList(tz(dayjs(now())).year()), year, body),
+      body: messageBody(session, yearList(thisYear, current), year, body),
     });
   }
 
@@ -720,7 +877,7 @@ export function registerWrappedPage(
     discordUserId: string,
     year: number,
     outcome: Exclude<Outcome, { kind: 'built' }>,
-    cache: KeyValueCache,
+    tiers: WrappedTiers,
   ) {
     const minutes = Math.ceil(deps.limiter.retryAfterSec(discordUserId) / 60);
     const code: NoticeCode =
@@ -732,11 +889,12 @@ export function registerWrappedPage(
             ? 'not-in-group'
             : outcome.kind;
     const status = code === 'failed' ? 503 : 200;
-    const cached = await readWrapped(
-      cache,
+    const cached = await readEntry(
+      tiers,
       discordUserId,
       year,
       session.userId,
+      now(),
     );
     if (cached) {
       await render(
@@ -744,17 +902,18 @@ export function registerWrappedPage(
         session,
         year,
         cached,
-        cache,
+        tiers,
         notice(code, minutes),
         status,
       );
       return;
     }
-    message(
+    await message(
       res,
       session,
       year,
       html`${notice(code, minutes)} ${code === 'mismatch' ? meetupSignIn : ''}`,
+      tiers,
       status,
     );
   }
@@ -765,11 +924,11 @@ export function registerWrappedPage(
     session: HostSession,
     discordUserId: string,
     year: number,
-    cache: KeyValueCache,
+    tiers: WrappedTiers,
   ) {
     const token = await deps.memberToken(discordUserId);
     if (token === undefined) {
-      message(
+      await message(
         res,
         session,
         year,
@@ -778,15 +937,16 @@ export function registerWrappedPage(
             Signing in with Meetup keeps your Meetup connection for Wrapped; it
             does not change your link.
           </p>`,
+        tiers,
       );
       return;
     }
-    const outcome = await build(session, discordUserId, year, token, cache);
+    const outcome = await build(session, discordUserId, year, token, tiers);
     if (outcome.kind === 'built') {
-      await render(res, session, year, outcome.wrapped, cache);
+      await render(res, session, year, outcome.wrapped, tiers);
       return;
     }
-    await show(res, session, discordUserId, year, outcome, cache);
+    await show(res, session, discordUserId, year, outcome, tiers);
   }
 
   const notLinked = (session: HostSession) =>
@@ -809,44 +969,59 @@ export function registerWrappedPage(
     const { session } = hostLocals(res);
     const year = wrappedYear(req.query.year, now());
     if (session.discordUserId === null) {
-      message(res, session, year, notLinked(session));
+      await message(res, session, year, notLinked(session));
       return;
     }
     const discordUserId = session.discordUserId;
-    const cache = await deps.cache();
+    const tiers = await tiersFor();
+    const { cache } = tiers;
     // Minutes from the limiter itself, never the URL: it is in-process and
     // the source of truth, and a hand-typed notice can't say "0 minutes".
-    const noticeHtml = isNoticeCode(req.query.notice)
-      ? notice(
-          req.query.notice,
-          Math.max(
-            1,
-            Math.ceil(deps.limiter.retryAfterSec(discordUserId) / 60),
-          ),
-        )
-      : '';
-    const cached = await readWrapped(
-      cache,
+    const code = isNoticeCode(req.query.notice) ? req.query.notice : undefined;
+    const minutes = Math.max(
+      1,
+      Math.ceil(deps.limiter.retryAfterSec(discordUserId) / 60),
+    );
+    const noticeHtml =
+      code === 'queued' || code === 'already-queued'
+        ? ((await queuedNotice(discordUserId, cache, year)) ??
+          notice(code, minutes))
+        : code
+          ? notice(code, minutes)
+          : '';
+    const cached = await readEntry(
+      tiers,
       discordUserId,
       year,
       session.userId,
+      now(),
     );
     if (cached) {
-      await render(res, session, year, cached, cache, noticeHtml);
+      await render(res, session, year, cached, tiers, noticeHtml);
       return;
     }
-    if (
-      noticeHtml &&
-      isNoticeCode(req.query.notice) &&
-      FINAL_NOTICES.includes(req.query.notice)
-    ) {
+    if (!code && deps.limiter.isLimited(discordUserId)) {
+      // Throttled with nothing stored: queued (now, or already) beats a build
+      // that would only be refused.
+      const queued = await queueOnThrottle(
+        discordUserId,
+        session.userId,
+        year,
+        tiers,
+      );
+      if (queued) {
+        await message(res, session, year, queued, tiers);
+        return;
+      }
+    }
+    if (noticeHtml && code && FINAL_NOTICES.includes(code)) {
       // Back from a rebuild that was refused: say so, build nothing. After
       // a slow, in-flight or failed one the page says to reload, so a
       // reload builds (the lease answers while one is still in flight).
-      message(res, session, year, noticeHtml);
+      await message(res, session, year, noticeHtml, tiers);
       return;
     }
-    await buildAndShow(res, session, discordUserId, year, cache);
+    await buildAndShow(res, session, discordUserId, year, tiers);
   }) as RequestHandler);
 
   // The web counterpart of `/wrapped refresh:true`: the same hourly slot.
@@ -864,20 +1039,42 @@ export function registerWrappedPage(
       return;
     }
     const discordUserId = session.discordUserId;
-    const cache = await deps.cache();
+    const tiers = await tiersFor();
     const token = await deps.memberToken(discordUserId);
     if (token === undefined) {
       back({ notice: 'no-token' });
       return;
     }
-    const outcome = await build(session, discordUserId, year, token, cache);
+    const outcome = await build(session, discordUserId, year, token, tiers);
     switch (outcome.kind) {
       case 'built':
         back();
         return;
-      case 'rate-limited':
-        back({ notice: 'rate-limited' });
+      case 'rate-limited': {
+        let code: NoticeCode = 'rate-limited';
+        if (deps.queue) {
+          try {
+            const outcome = await queueForLater(
+              await deps.queue(),
+              tiers,
+              { discordUserId, meetupId: session.userId },
+              year,
+              now(),
+            );
+            if (outcome.kind === 'queued') {
+              code = 'queued';
+            } else if (outcome.kind === 'already') {
+              code = 'already-queued';
+            }
+          } catch (error) {
+            logger.warn(
+              `Could not queue the Wrapped: ${error instanceof Error ? error.name : 'Error'}`,
+            );
+          }
+        }
+        back({ notice: code });
         return;
+      }
       case 'account-mismatch':
         back({ notice: 'mismatch' });
         return;
