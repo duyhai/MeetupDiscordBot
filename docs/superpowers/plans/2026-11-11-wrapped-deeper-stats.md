@@ -36,10 +36,12 @@
 ### Task 1: Pure stats: month events, first events per type, hosting rankings, shared event ids
 
 **Files:**
+
 - Modify: `src/lib/wrapped/stats.ts`
 - Test: `tst/lib/wrapped/stats.test.ts`
 
 **Interfaces:**
+
 - Consumes: `countsAsAttended`, `countsAsHosted`, `classifyEventType`, `EVENT_TYPES`, `tz` (as today).
 - Produces:
 
@@ -102,19 +104,33 @@ git commit -m "Wrapped stats: month events, first events per type, hosted rankin
 ### Task 2: Pure cohort ranking
 
 **Files:**
+
 - Create: `src/lib/wrapped/cohort.ts`
 - Test: `tst/lib/wrapped/cohort.test.ts`
 
 **Interfaces:**
+
 - Consumes: `Companion`, `WrappedEvent` from `stats.ts`.
 - Produces:
 
 ```ts
-export interface CohortCandidate { meetupId: string; earlyCount: number; sharedCount: number }
+export interface CohortCandidate {
+  meetupId: string;
+  earlyCount: number;
+  sharedCount: number;
+}
 /** Ids seen at `firstEvents` (self excluded, deduped per event) that also appear in `yearCompanions`; earlyCount desc, sharedCount desc, numeric id asc. */
-export function rankCohort(firstEvents: WrappedEvent[], attendeesByEvent: Record<string, string[]>, yearCompanions: Companion[], selfMeetupId: string): CohortCandidate[]
+export function rankCohort(
+  firstEvents: WrappedEvent[],
+  attendeesByEvent: Record<string, string[]>,
+  yearCompanions: Companion[],
+  selfMeetupId: string,
+): CohortCandidate[];
 /** Event ids of every type's first events, deduped, minus `alreadyFetched`. */
-export function earlyEventIdsToFetch(topTypes: { firstEvents: WrappedEvent[] }[], alreadyFetched: Iterable<string>): string[]
+export function earlyEventIdsToFetch(
+  topTypes: { firstEvents: WrappedEvent[] }[],
+  alreadyFetched: Iterable<string>,
+): string[];
 ```
 
 - [ ] **Step 1: Write the failing tests**
@@ -135,21 +151,43 @@ it('lists early event ids to fetch once, skipping ones fetched this year', …)
 ### Task 3: Naming any ranking, to any limit
 
 **Files:**
+
 - Modify: `src/lib/wrapped/companions.ts`
 - Test: `tst/lib/wrapped/companions.test.ts`
 
 **Interfaces:**
+
 - Produces:
 
 ```ts
-export const NAMED_COMPANIONS = 10; export const COMPANION_LOOKUP_CAP = 50;
-export const NAMED_COHORT = 10; export const COHORT_LOOKUP_CAP = 25;
-export interface NamedCompanion { discordUserId: string; sharedCount: number; sharedEvents?: WrappedEvent[] }
-export interface NamedCompanions { named: NamedCompanion[]; otherCount: number }
+export const NAMED_COMPANIONS = 10;
+export const COMPANION_LOOKUP_CAP = 50;
+export const NAMED_COHORT = 10;
+export const COHORT_LOOKUP_CAP = 25;
+export interface NamedCompanion {
+  discordUserId: string;
+  sharedCount: number;
+  sharedEvents?: WrappedEvent[];
+}
+export interface NamedCompanions {
+  named: NamedCompanion[];
+  otherCount: number;
+}
 /** Generic walk: linked (findByMeetupId) and present, in rank order, up to `limit`, at most `lookupCap` lookups; `otherCount` = ranked.length − named.length. */
-export async function nameRanked<T extends { meetupId: string }>(ranked: T[], deps: CompanionDeps, limit: number, lookupCap: number): Promise<{ named: (T & { discordUserId: string })[]; otherCount: number }>
-export async function nameCompanions(ranked: Companion[], deps: CompanionDeps): Promise<NamedCompanions>  // nameRanked(…, 10, 50) mapped to { discordUserId, sharedCount }
-export async function nameCohort(ranked: CohortCandidate[], deps: CompanionDeps): Promise<NamedCohort>   // nameRanked(…, 10, 25) mapped to { discordUserId, earlyCount, sharedCount }
+export async function nameRanked<T extends { meetupId: string }>(
+  ranked: T[],
+  deps: CompanionDeps,
+  limit: number,
+  lookupCap: number,
+): Promise<{ named: (T & { discordUserId: string })[]; otherCount: number }>;
+export async function nameCompanions(
+  ranked: Companion[],
+  deps: CompanionDeps,
+): Promise<NamedCompanions>; // nameRanked(…, 10, 50) mapped to { discordUserId, sharedCount }
+export async function nameCohort(
+  ranked: CohortCandidate[],
+  deps: CompanionDeps,
+): Promise<NamedCohort>; // nameRanked(…, 10, 25) mapped to { discordUserId, earlyCount, sharedCount }
 ```
 
 - [ ] **Step 1: Write the failing tests**: update "up to three" → "up to ten" (12 linked ranked → 10 named, otherCount 2); "stops after the lookup cap" with 50; `nameCohort` names at most 10 after at most 25 lookups and keeps `earlyCount`/`sharedCount`; `nameCompanions` output has no `meetupId` key (`expect(Object.keys(named[0])).toEqual(['discordUserId','sharedCount'])`).
@@ -161,10 +199,12 @@ export async function nameCohort(ranked: CohortCandidate[], deps: CompanionDeps)
 ### Task 4: Meetup client: hosted events with attendance
 
 **Files:**
+
 - Modify: `src/lib/client/meetup/queries.ts`, `src/lib/client/meetup/types.ts`, `src/lib/client/meetup/gqlClient.ts`
 - Test: `tst/lib/client/meetup/hostedEvents.test.ts`
 
 **Interfaces:**
+
 - Produces:
 
 ```ts
@@ -194,11 +234,13 @@ it('attendance defaults to 0 when the node has none', …)   // a helper `hosted
 ### Task 5: Build: hosted attendance, early cohort, shared events, duration
 
 **Files:**
+
 - Modify: `src/lib/wrapped/build.ts`
 - Modify (fakes): `tst/lib/wrapped/handlers.test.ts:107`, `tst/web/host/wrappedPage.test.ts:90`, `tst/integration/wrappedFrontDoors.test.ts:77`
 - Test: `tst/lib/wrapped/build.test.ts`
 
 **Interfaces:**
+
 - Consumes: Tasks 1–4.
 - Produces: `WrappedMeetup.getHostedEvents(hostId, input): Promise<GetHostedEventsResponse>` replaces `getGroupEvents`; `buildWrapped` signature unchanged; progress messages `'Reading your RSVPs…'`, `'Finding who you went with…'`, `'Looking back at your early events…'`.
 
@@ -222,6 +264,7 @@ it('logs the build duration', …)   // spy on the module logger or assert via o
 ### Task 6: Cache version v4
 
 **Files:**
+
 - Modify: `src/lib/wrapped/cache.ts`
 - Test: `tst/lib/wrapped/cache.test.ts` (lines 70, 114, 128: `v3` → `v4`)
 
@@ -232,6 +275,7 @@ it('logs the build duration', …)   // spy on the module logger or assert via o
 ### Task 7: Embed: three named, the rest counted
 
 **Files:**
+
 - Modify: `src/lib/wrapped/format.ts`
 - Test: `tst/lib/wrapped/format.test.ts`
 
@@ -246,10 +290,12 @@ it('logs the build duration', …)   // spy on the module logger or assert via o
 ### Task 8: The page: expandable sections
 
 **Files:**
+
 - Modify: `src/web/host/wrappedPage.ts` (`wrappedBody`, `companionsText`, new section helpers)
 - Test: `tst/web/host/wrappedPage.test.ts`
 
 **Interfaces:**
+
 - Consumes: `CachedWrapped` v4; `displayNames: Record<string, string>` now resolved for companions **and every cohort member** (`namesFor` collects all Discord ids on the entry).
 - Produces (markup; summaries are exact copy):
   - Went with the most: first 3 named as `<a href="https://discord.com/users/<id>" rel="noopener noreferrer" target="_blank"><bdi>name</bdi></a> (N events)`; if more named resolve, `<details class="more"><summary>Show all <n></summary><ul>…</ul></details>` with the rest; unresolved fold into the count.
@@ -281,6 +327,7 @@ it('never lets an unlinked attendee’s Meetup name or id reach the page or the 
 ### Task 9: Render check, integration, PR
 
 **Files:**
+
 - Create (untracked, not committed): `.claude/preview.mts`, `.claude/launch.json` (copied from the sibling worktree `adoring-carson-6febb1`, extended with `registerWrappedPage` on a fake v4 entry and `resolve` returning a `member`).
 
 - [ ] **Step 1: Integration**: start the throwaway stack (`tst/integration` README / memory: postgres:16 on :55432, redis:7 on :56379), run `yarn test:integration` with the env line; `wrappedFrontDoors` passes with the v4 shape.

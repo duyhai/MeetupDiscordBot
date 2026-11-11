@@ -564,11 +564,11 @@ built under `v3`).
 
 - **Hosted events with attendance.** A new query `getHostedEvents`
   (`getGroupEvents`' fields plus `attendance: rsvps(filter: { rsvpStatus:
-  [YES, ATTENDED] }) { totalCount }`), paged like `getGroupEvents` with `hostId` and
+[YES, ATTENDED] }) { totalCount }`), paged like `getGroupEvents` with `hostId` and
   `status: [PAST]`, cached under its own name in the 12-hour request cache
   (_my call_: a separate query, so the existing `getGroupEvents` entries,
   which lack the field, are never read as "0 yes"). `WrappedMeetup.
-  getGroupEvents` is replaced by `getHostedEvents(hostId, input)`.
+getGroupEvents` is replaced by `getHostedEvents(hostId, input)`.
 - **Early-cohort attendees.** For each top type, the first 10 counted
   attended events of that type; the union across types (at most 30 events)
   minus the ones already fetched for this year goes through the same
@@ -687,8 +687,8 @@ restart-safe, single-flight.
   overlaps an on-demand build, and never calls `claimBuild`, so it spends no
   hourly slot.
 - **Runs.** `wrapped_backfill_runs (id, trigger 'job' | Discord id,
-  started_at, finished_at, members_total, members_done, built, skipped,
-  failed, cursor)`. A run opens when none is open and the last finished more
+started_at, finished_at, members_total, members_done, built, skipped,
+failed, cursor)`. A run opens when none is open and the last finished more
   than **20 hours** ago (daily), or when staff pressed Run now; it advances
   its cursor (the last Discord id processed) after each member, so a restart
   resumes. Per-member failures are logged by error class, counted, and
@@ -702,7 +702,7 @@ restart-safe, single-flight.
 ### The queue
 
 - `wrapped_queue (discord_user_id PRIMARY KEY, meetup_id, year, queued_at,
-  claimed_at NULL, attempts)`: at most one queued year per member.
+claimed_at NULL, attempts)`: at most one queued year per member.
 - When a member is **rate-limited** (web or Discord), the entry is
   **auto-added** (_my call_: no extra click; the brief says "offer/auto-add").
   Same year already queued → the same message; a different year queued →
