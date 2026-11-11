@@ -143,8 +143,11 @@ export class FakeBackfillStore implements WrappedBackfillStore {
     });
   }
 
-  async complete(discordUserId: string): Promise<void> {
-    this.queue.delete(discordUserId);
+  async complete(discordUserId: string, year?: number): Promise<void> {
+    const row = this.queue.get(discordUserId);
+    if (row && (year === undefined || row.year === year)) {
+      this.queue.delete(discordUserId);
+    }
   }
 
   async unclaim(discordUserId: string): Promise<void> {

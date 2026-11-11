@@ -73,7 +73,8 @@ export interface WrappedBackfillStore {
    * tick that died). Sets claimed_at; two ticks never get the same row.
    */
   claimNext(limit: number, staleMs: number): Promise<QueueRow[]>;
-  complete(discordUserId: string): Promise<void>;
+  /** Removes the member's row; with `year`, only if it is that year's. */
+  complete(discordUserId: string, year?: number): Promise<void>;
   /** Gives a claimed row back untouched (nothing was tried: the tick could not start it). */
   unclaim(discordUserId: string): Promise<void>;
   /** attempts + 1, then released for the next tick, or dropped at `maxAttempts`. */
@@ -290,10 +291,10 @@ export class PostgresWrappedBackfillRepository implements WrappedBackfillStore {
       );
   }
 
-  async complete(discordUserId: string): Promise<void> {
+  async complete(discordUserId: string, year?: number): Promise<void> {
     await this.pool.query(
-      'DELETE FROM wrapped_queue WHERE discord_user_id = $1',
-      [discordUserId],
+      'DELETE FROM wrapped_queue WHERE discord_user_id = $1 AND ($2::integer IS NULL OR year = $2)',
+      [discordUserId, year ?? null],
     );
   }
 

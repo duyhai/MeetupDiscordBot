@@ -69,7 +69,7 @@ describe('queueForLater', () => {
 
     const outcome = await queueForLater(
       store,
-      cache,
+      { cache },
       { discordUserId: USER, meetupId: 'm1' },
       2025,
       NOW,
@@ -90,7 +90,7 @@ describe('queueForLater', () => {
     const store = new FakeBackfillStore(() => NOW.getTime());
     const outcome = await queueForLater(
       store,
-      new FakeCache(),
+      { cache: new FakeCache() },
       { discordUserId: USER, meetupId: 'm1' },
       2026,
       NOW,
@@ -107,13 +107,28 @@ describe('queueForLater', () => {
 
     const outcome = await queueForLater(
       store,
-      new FakeCache(),
+      { cache: new FakeCache() },
       { discordUserId: USER, meetupId: 'm1' },
       2026,
       NOW,
     );
 
     expect(outcome).toMatchObject({ kind: 'already', year: 2024 });
+  });
+
+  it('the same year queued again reads as queued, not "already"', async () => {
+    const store = new FakeBackfillStore(() => NOW.getTime());
+    await store.enqueue({ discordUserId: USER, meetupId: 'm1', year: 2026 });
+
+    const outcome = await queueForLater(
+      store,
+      { cache: new FakeCache() },
+      { discordUserId: USER, meetupId: 'm1' },
+      2026,
+      NOW,
+    );
+
+    expect(outcome).toMatchObject({ kind: 'queued', year: 2026 });
   });
 
   it('is "cached" when a copy for the current Meetup id exists', async () => {
@@ -124,7 +139,7 @@ describe('queueForLater', () => {
     expect(
       await queueForLater(
         store,
-        cache,
+        { cache },
         { discordUserId: USER, meetupId: 'm1' },
         2026,
         NOW,
@@ -135,7 +150,7 @@ describe('queueForLater', () => {
     expect(
       await queueForLater(
         store,
-        cache,
+        { cache },
         { discordUserId: USER, meetupId: 'm2' },
         2026,
         NOW,

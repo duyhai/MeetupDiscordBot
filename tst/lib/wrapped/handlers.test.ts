@@ -19,7 +19,7 @@ import {
 } from '../../../src/lib/wrapped/cache.js';
 import { replies, shareCustomId } from '../../../src/lib/wrapped/format.js';
 import { NEXT_TICK_KEY } from '../../../src/lib/wrapped/queue.js';
-import { FakeBackfillStore } from './backfillFakes.js';
+import { FakeBackfillStore, FakeEntryStore } from './backfillFakes.js';
 import {
   WrappedHandlerDeps,
   runShare,
@@ -702,6 +702,38 @@ describe('runWrapped with a queue', () => {
       "You already have 2024 queued; it'll be ready by about <t:",
     );
     expect((await store.position('u1'))?.row.year).toBe(2024);
+  });
+
+  it("an on-demand build keeps a different year's queued request", async () => {
+    await store.enqueue({ discordUserId: 'u1', meetupId: 'me', year: 2023 });
+    h.clock.now += 61 * 60 * 1000;
+
+    await runWrapped(
+      commandInteraction(),
+      { year: 2026, refresh: false },
+      h.deps,
+    );
+
+    expect(await readWrapped(h.cache, 'u1', 2026, 'me')).toBeDefined();
+    expect((await store.position('u1'))?.row.year).toBe(2023);
+  });
+
+  it('serves a Postgres entry without building, and writes both tiers on a build', async () => {
+    const entries = new FakeEntryStore();
+    h.deps.entries = () => Promise.resolve(entries);
+    h.clock.now += 61 * 60 * 1000;
+    const interaction = commandInteraction();
+
+    await runWrapped(interaction, { year: 2026, refresh: false }, h.deps);
+
+    expect(entries.puts).toEqual([{ discordUserId: 'u1', year: 2026 }]);
+    expect(await readWrapped(h.cache, 'u1', 2026, 'me')).toBeDefined();
+    // Redis emptied (a flush): the next view comes from Postgres, no build.
+    h.cache.data.clear();
+    const again = commandInteraction();
+    await runWrapped(again, { year: 2026, refresh: false }, h.deps);
+    expect(h.withMeetupClient).toHaveBeenCalledTimes(1);
+    expect(again.followUp).toHaveBeenCalledTimes(1);
   });
 
   it('answers with the plain limit when the queue store is unavailable', async () => {

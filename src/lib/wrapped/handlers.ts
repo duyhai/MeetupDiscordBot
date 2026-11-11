@@ -23,6 +23,10 @@ import {
   PostgresWrappedBackfillRepository,
   WrappedBackfillStore,
 } from '../repositories/postgresWrappedBackfillRepository.js';
+import {
+  PostgresWrappedEntryRepository,
+  WrappedEntryStore,
+} from '../repositories/postgresWrappedEntryRepository.js';
 import { MemberRepository } from '../repositories/types.js';
 import { describeBuildError } from '../reports/buildJob.js';
 import { withOrganizerMeetup } from '../reports/organizerMeetup.js';
@@ -37,11 +41,10 @@ import {
   CachedWrapped,
   SHARE_GUARD_TTL_SEC,
   buildingKey,
-  readWrapped,
   shareGuardKey,
   wrappedBuildLimiter,
-  writeWrapped,
 } from './cache.js';
+import { WrappedTiers, readEntry, writeEntry } from './store.js';
 import {
   parseShareCustomId,
   replies,
@@ -72,6 +75,24 @@ export interface WrappedHandlerDeps {
    * is the plain limit.
    */
   queue?(): Promise<WrappedBackfillStore>;
+  /** The durable Wrapped store; left out or rejecting, Redis alone. */
+  entries?(): Promise<WrappedEntryStore>;
+}
+
+/** Both tiers; a Postgres that cannot be reached leaves the Redis tier alone. */
+async function tiersFor(deps: WrappedHandlerDeps): Promise<WrappedTiers> {
+  const cache = await deps.cache();
+  if (!deps.entries) {
+    return { cache };
+  }
+  try {
+    return { cache, entries: await deps.entries() };
+  } catch (error) {
+    logger.warn(
+      `Wrapped entries unavailable, Redis only: ${error instanceof Error ? error.name : 'Error'}`,
+    );
+    return { cache };
+  }
 }
 
 export const defaultWrappedDeps: WrappedHandlerDeps = {
@@ -84,6 +105,7 @@ export const defaultWrappedDeps: WrappedHandlerDeps = {
   now: () => new Date(),
   slowAfterMs: SLOW_BUILD_MS,
   queue: () => PostgresWrappedBackfillRepository.instance(),
+  entries: () => PostgresWrappedEntryRepository.instance(),
 };
 
 export interface WrappedOptions {
@@ -136,9 +158,16 @@ export async function runWrapped(
     return;
   }
 
-  const cache = await deps.cache();
+  const tiers = await tiersFor(deps);
+  const { cache } = tiers;
   // A copy built for a since-replaced Meetup account is a miss.
-  const cached = await readWrapped(cache, userId, year, linkedMeetupId);
+  const cached = await readEntry(
+    tiers,
+    userId,
+    year,
+    linkedMeetupId,
+    deps.now(),
+  );
   if (cached && !refresh) {
     await interaction.followUp({
       ...wrappedPayload(interaction, cached),
@@ -165,7 +194,7 @@ export async function runWrapped(
       buildAndReply(interaction, deps, {
         meetup,
         members,
-        cache,
+        tiers,
         cached,
         linkedMeetupId,
         year,
@@ -179,7 +208,7 @@ export async function runWrapped(
 interface BuildContext {
   meetup: Parameters<Parameters<typeof withMeetupClient>[1]>[0];
   members: MemberRepository;
-  cache: KeyValueCache;
+  tiers: WrappedTiers;
   cached: CachedWrapped | undefined;
   linkedMeetupId: string;
   year: number;
@@ -188,7 +217,7 @@ interface BuildContext {
 async function buildAndReply(
   interaction: CommandInteraction,
   deps: WrappedHandlerDeps,
-  { meetup, members, cache, cached, linkedMeetupId, year }: BuildContext,
+  { meetup, members, tiers, cached, linkedMeetupId, year }: BuildContext,
 ): Promise<void> {
   const userId = interaction.user.id;
   {
@@ -266,7 +295,7 @@ async function buildAndReply(
           try {
             const outcome = await queueForLater(
               await deps.queue(),
-              cache,
+              tiers,
               { discordUserId: userId, meetupId: linkedMeetupId },
               year,
               deps.now(),
@@ -289,11 +318,11 @@ async function buildAndReply(
         return;
       }
 
-      await writeWrapped(cache, userId, year, result.wrapped, deps.now());
+      await writeEntry(tiers, userId, year, result.wrapped, deps.now());
       if (deps.queue) {
-        // An on-demand build makes the member's queued request moot.
+        // An on-demand build makes a queued request for this year moot.
         try {
-          await (await deps.queue()).complete(userId);
+          await (await deps.queue()).complete(userId, year);
         } catch {
           // The tick drops it as fresh.
         }
@@ -412,14 +441,15 @@ export async function runShare(
   }
   const { year, channelId } = parsed;
   const userId = interaction.user.id;
-  const cache = await deps.cache();
+  const tiers = await tiersFor(deps);
+  const { cache } = tiers;
 
   // Always the clicker's own Wrapped, whichever message the button sits on,
   // and only one built for the Meetup account they are linked to now.
   const linkedMeetupId = (await (await deps.members()).findByDiscordId(userId))
     ?.meetupId;
   const wrapped = linkedMeetupId
-    ? await readWrapped(cache, userId, year, linkedMeetupId)
+    ? await readEntry(tiers, userId, year, linkedMeetupId, deps.now())
     : undefined;
   if (!wrapped) {
     await answerInPlace(interaction, { content: replies.shareExpired });
