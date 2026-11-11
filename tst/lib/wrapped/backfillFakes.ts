@@ -4,6 +4,8 @@ import {
   RunDelta,
   WrappedBackfillStore,
 } from '../../../src/lib/repositories/postgresWrappedBackfillRepository.js';
+import { WrappedEntryStore } from '../../../src/lib/repositories/postgresWrappedEntryRepository.js';
+import { CachedWrapped } from '../../../src/lib/wrapped/cache.js';
 
 /**
  * The repository's contract in memory: one open run at a time, a cursor
@@ -167,5 +169,52 @@ export class FakeBackfillStore implements WrappedBackfillStore {
       return 'dropped';
     }
     return 'released';
+  }
+}
+
+/** The entry table in memory: one row per member and year, the member's meetup id beside it. */
+export class FakeEntryStore implements WrappedEntryStore {
+  readonly rows = new Map<
+    string,
+    { meetupId: string; wrapped: CachedWrapped; builtAt: Date }
+  >();
+
+  readonly puts: { discordUserId: string; year: number }[] = [];
+
+  private key(discordUserId: string, year: number): string {
+    return `${discordUserId}:${year}`;
+  }
+
+  async get(
+    discordUserId: string,
+    year: number,
+  ): Promise<CachedWrapped | undefined> {
+    return this.rows.get(this.key(discordUserId, year))?.wrapped;
+  }
+
+  async put(
+    discordUserId: string,
+    year: number,
+    wrapped: CachedWrapped,
+    builtAt: Date,
+  ): Promise<void> {
+    for (const [key, row] of this.rows) {
+      if (
+        key.startsWith(`${discordUserId}:`) &&
+        row.meetupId !== wrapped.meetupId
+      ) {
+        this.rows.delete(key);
+      }
+    }
+    this.rows.set(this.key(discordUserId, year), {
+      meetupId: wrapped.meetupId,
+      wrapped,
+      builtAt,
+    });
+    this.puts.push({ discordUserId, year });
+  }
+
+  async count(): Promise<number> {
+    return this.rows.size;
   }
 }

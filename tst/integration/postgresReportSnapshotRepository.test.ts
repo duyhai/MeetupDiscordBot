@@ -406,6 +406,7 @@ function within<T>(promise: Promise<T>, ms: number): Promise<T> {
             'report_snapshots',
             'wrapped_announcements',
             'wrapped_backfill_runs',
+            'wrapped_entries',
             'wrapped_queue',
           ]);
         } finally {
