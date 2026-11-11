@@ -1,0 +1,425 @@
+# Group snapshot for Wrapped — design
+
+Status: drafted 2026-11-11 from IDEAS.md §10 and the lead's build brief; builder-checked and approved by the lead. The
+brief was detailed enough that no interview was held; every choice it left
+open is marked _my call_. Two PRs: **1 (ingest + staff visibility)** and
+**2 (compute Wrapped from the snapshot)**. PR 2 is based on PR 1's branch.
+
+## Why
+
+The Wrapped backfill (#154) reuses the per-member on-demand build: about 18
+Meetup calls per member, throttled to 4 members per 5-minute tick, so a full
+sweep of ~470 linked members takes ~10 hours, and every `/wrapped` refresh
+pages Meetup again. Hai: "we should have just pulled all the historic data of
+our group and then done all the calculations locally."
+
+The group's whole history is one dataset: every event and who RSVP'd. Pulled
+once (~2–3k organizer calls) and kept current incrementally (tens of calls a
+day), Wrapped for every member and every year becomes a local computation:
+the backfill takes minutes, the December post and `/wrapped` cost zero Meetup
+calls, and the dataset feeds the long-term analytics and cohort goals
+(IDEAS.md §1).
+
+## Goals
+
+1. **Ingest** (PR 1). A job pulls the group's full event list (PAST and
+   ACTIVE) and each past event's RSVPs into Postgres with the organizer
+   token: a resumable full pull under a per-tick call budget, then daily
+   incremental runs. Failures alert `#meetup-bot-alerts`, plain.
+2. **Compute** (PR 2). `WrappedSources` and the attendee lists can come from
+   the snapshot for a given Meetup member id, with no Meetup call. The
+   backfill builds every linked member from the snapshot (minutes); `/wrapped`
+   and `/host/wrapped` serve stored entries and rebuild from the snapshot on
+   `refresh`, under the unchanged hourly limiter. The current token-based
+   path stays as the fallback.
+3. **Staff visibility** (PR 1). The dashboard home's Wrapped backfill card
+   gains a snapshot line (age, events and RSVPs stored, last ingest result)
+   and a leadership-only **Refresh snapshot now** button, mirroring Run now.
+
+## Non-goals
+
+- Any new member-facing stat or page. The Wrapped shape is unchanged.
+- Upcoming events' RSVPs. Wrapped counts past events only; ACTIVE events are
+  stored as event rows (so the list is complete and the watermark is real),
+  their RSVPs are read once they are past (_my call_: upcoming RSVPs change
+  hourly and nothing reads them yet).
+- Analytics or cohort pages over the dataset. Later, on top of these tables.
+- Replacing the event audit. The audit keeps its own snapshots and alerts;
+  the ingest only reads its confirmed deletions.
+
+## Anti-goals
+
+- **A Meetup name or id of another person reaching a Wrapped entry, Redis, a
+  page or a log line.** The snapshot holds other members' Meetup ids in
+  Postgres (it has to); everything built from it keeps today's invariant:
+  others appear only as linked Discord ids plus counts. The privacy tests in
+  `tst/` must pass unchanged, plus new ones for the snapshot path.
+- **RSVP data in Redis.** Nothing from the snapshot is written to Redis or the
+  request cache; the ingest client bypasses the request cache.
+- **Two jobs on the organizer credential at once.** The ingest takes the
+  shared report build lease for each tick's reads, like every other
+  organizer job.
+- **A Wrapped built from a half-pulled snapshot.** Until the first full pull
+  has finished, every build takes the token path.
+- Pinging anyone. Alerts are plain; no role mentions.
+
+## What exists today (build on it)
+
+- `src/lib/wrapped/backfill.ts`: the tick scheduler, Postgres-recorded runs
+  with a cursor, `RUN_NOW_KEY`, the per-tick call budget
+  (`TICK_CALL_BUDGET = 150`), `canStart` (the report window rule plus no
+  identity digest), the report build lease for organizer reads, once-a-day
+  failure alert, one summary alert per run.
+- `src/lib/eventAudit/*`: an hourly organizer snapshot of upcoming and
+  recently-past events, `toObservation` validation (ids are digits, URLs
+  match `MEETUP_EVENT_URL`, text bounded), and `event_audit_state.deleted_at`
+  for deletions confirmed by a null read by id.
+- `dashboardPool.ts`: `DASHBOARD_SCHEMA_SQL` under the schema advisory lock,
+  idempotent `CREATE TABLE IF NOT EXISTS`, column additions guarded by a
+  catalog read, `inDashboardTransaction` with lock and idle timeouts.
+- `build.ts`: `WrappedSources { events, hosted }`, `buildWrappedYear(deps,
+  meetupId, year, sources, options)`, which reads attendee lists through
+  `deps.meetup.getEventRsvps`; `computeWrapped` is pure.
+- `countedEvents.ts`: the one counted-event rule (cancelled status or title,
+  Open House tag for hosting). The snapshot stores raw rows; the rule is
+  applied at compute time exactly as today.
+- `src/web/routes/wrappedBackfill.ts`: the card and the leadership Run now
+  POST (CSRF, Origin, rate limit, live role check, audit, fixed notices).
+
+## PR 1: ingest
+
+### Tables (in `DASHBOARD_SCHEMA_SQL`, under the schema lock)
+
+```sql
+-- The group's events as Meetup last listed them (src/lib/snapshot/ingest.ts).
+-- host_ids are Meetup member ids. deleted_at is set from the event audit's
+-- confirmed deletions; deleted rows are kept but never read by Wrapped.
+CREATE TABLE IF NOT EXISTS meetup_events (
+  event_id         TEXT PRIMARY KEY CHECK (event_id ~ '^[0-9]{1,20}$'),
+  title            TEXT NOT NULL,
+  date_time        TIMESTAMPTZ NOT NULL,
+  event_url        TEXT,
+  status           TEXT NOT NULL,
+  host_ids         TEXT[] NOT NULL DEFAULT '{}',
+  yes_count        INTEGER,        -- Meetup's totalCount for [YES, ATTENDED]
+  waitlist_count   INTEGER,
+  listed_at        TIMESTAMPTZ NOT NULL,   -- last seen in a listing
+  rsvps_fetched_at TIMESTAMPTZ,            -- NULL: RSVPs never read
+  deleted_at       TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS meetup_events_date_idx ON meetup_events (date_time);
+CREATE INDEX IF NOT EXISTS meetup_events_hosts_idx ON meetup_events USING GIN (host_ids);
+-- One row per event and member: the RSVP as of rsvps_fetched_at.
+CREATE TABLE IF NOT EXISTS meetup_event_rsvps (
+  event_id   TEXT NOT NULL REFERENCES meetup_events(event_id) ON DELETE CASCADE,
+  member_id  TEXT NOT NULL CHECK (member_id ~ '^[0-9]{1,20}$'),
+  status     TEXT NOT NULL CHECK (status IN ('YES', 'WAITLIST', 'ATTENDED')),
+  fetched_at TIMESTAMPTZ NOT NULL,
+  PRIMARY KEY (event_id, member_id)
+);
+CREATE INDEX IF NOT EXISTS meetup_event_rsvps_member_idx ON meetup_event_rsvps (member_id);
+-- Ingest runs, as wrapped_backfill_runs: at most one open; kind 'full' until
+-- the first full pull finishes, then 'incremental'.
+CREATE TABLE IF NOT EXISTS meetup_snapshot_runs (
+  id             SERIAL PRIMARY KEY,
+  trigger        TEXT NOT NULL CHECK (trigger = 'job' OR trigger ~ '^[0-9]{1,20}$'),
+  kind           TEXT NOT NULL CHECK (kind IN ('full', 'incremental')),
+  started_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  finished_at    TIMESTAMPTZ,
+  listed_at      TIMESTAMPTZ,      -- when this run's listing phase finished
+  events_listed  INTEGER NOT NULL DEFAULT 0,
+  events_fetched INTEGER NOT NULL DEFAULT 0,
+  rsvps_stored   INTEGER NOT NULL DEFAULT 0,
+  failed         INTEGER NOT NULL DEFAULT 0,
+  requests       INTEGER NOT NULL DEFAULT 0,
+  last_error     TEXT              -- an error class name, never a message
+);
+CREATE UNIQUE INDEX IF NOT EXISTS meetup_snapshot_runs_open_idx
+  ON meetup_snapshot_runs ((true)) WHERE finished_at IS NULL;
+```
+
+**No member names** (_my call, flagged for the lead_: the brief says "member
+id + name"). Nothing in Wrapped reads a Meetup name, linked members' names
+come from Discord, and every unlinked person's name stored is privacy
+surface with no reader. The column can be added later, guarded by a catalog
+read, when an analytics page needs it. **NO** RSVPs are not stored (the
+filter asks for YES, WAITLIST and ATTENDED only).
+
+### Sizing (Postgres essential-0: 1 GB, 20 connections)
+
+Estimated, to be replaced by the first full run's real numbers in PR 1's
+description: ~2,500 events (PAST + ACTIVE) and ~20 stored RSVPs per event ⇒
+~50,000 RSVP rows. An RSVP row is ~80 bytes on disk with tuple overhead plus
+~2 × 50 bytes in the two indexes ⇒ **~9 MB**; events with their indexes
+**< 2 MB**. Even 5× the estimate is under 60 MB, a few percent of the plan.
+Writes use the existing pool (size 3); no new connections.
+
+### Meetup reads (organizer credential, request cache bypassed)
+
+- **Listing**: a new query `getGroupEventsForSnapshot` (one page, the filter
+  exactly as given, no month padding, never cached, logs counts only):
+  `id title dateTime eventUrl status eventHosts { member { id } }`,
+  `attendance: rsvps(filter: { rsvpStatus: [YES, ATTENDED] }) { totalCount }`,
+  `waitlist: rsvps(filter: { rsvpStatus: [WAITLIST] }) { totalCount }`.
+  Paged 100 at a time over `status: [PAST]` and then `status: [ACTIVE]`.
+  Host ids only, no host names (unlike the audit node).
+- **RSVPs**: a new query `getEventRsvpsForSnapshot(eventId, first, after,
+  filter)`: `pageInfo`, `totalCount`, `edges { node { status member { id } } }`
+  with `rsvpStatus: [YES, WAITLIST, ATTENDED]`, 100 per page, every page.
+  No names, no profile fields.
+- Nodes are validated like `toObservation`: an id that is not digits or a
+  start that does not parse drops the node (logged by count); a URL that does
+  not match `MEETUP_EVENT_URL` is stored as NULL; titles bounded to
+  `TITLE_MAX`; an RSVP status outside the three is dropped.
+
+A live read-only probe is needed before PR 1 is merged, to confirm the
+`WAITLIST` filter returns waitlisted members for a past event and to record
+the real event count: asked of the lead session first (Heroku one-off tsx
+pattern or Hai's Meetup tab), never run without its go-ahead.
+
+### A run, in phases
+
+A run is **due** when none is open and the last finished more than **20 h**
+ago (daily), or when staff pressed Refresh snapshot now (`RUN_NOW` key, as
+the backfill's). Its kind is `full` while no `full` run has ever finished,
+else `incremental`.
+
+1. **List** (one tick, ~25–30 calls): every PAST and ACTIVE page, upserting
+   `meetup_events` (title, date, URL, status, hosts, counts, `listed_at`).
+   Not resumed mid-listing: a listing that fails leaves the run open and the
+   next tick lists again (Meetup cursors are not kept across ticks). When it
+   finishes, `listed_at` is set on the run.
+   _My call_: the listing is re-read in full on every run, not only "events
+   after the watermark". It is ~30 calls a day and it is the only way a past
+   event renamed "cancelled", re-hosted or moved is ever seen.
+2. **Deletions**: event ids with `event_audit_state.deleted_at` set get
+   `meetup_events.deleted_at` (one `UPDATE … FROM`), so a deleted event never
+   counts. (The audit confirms deletions of upcoming events only; a past
+   event cannot be deleted from Meetup's group listing in practice.)
+3. **RSVPs** (many ticks on a full run): the events that need a read,
+   oldest first, are
+   - PAST, not deleted, `rsvps_fetched_at IS NULL` (never read: the whole
+     history on a full run, newly past events after), or
+   - PAST, not deleted, `date_time` within the last **14 days**
+     (`RSVP_SETTLE_DAYS`, _my call_: hosts mark attendance in the days
+     after), and `rsvps_fetched_at` before this run's `started_at`, or
+   - PAST, `rsvps_fetched_at` earlier than `date_time` (read before it
+     happened, e.g. a status flip).
+   This set is computed in SQL each tick, so the phase is resumable with no
+   cursor: a fetched event drops out. Each event's pages are read in full,
+   then in **one transaction** its rows are replaced (delete + insert) and
+   `rsvps_fetched_at` set. A failed event is counted (`failed`), logged by
+   error class, skipped for this run (an in-run skip set) and retried next
+   run.
+   The **watermark** is the newest `date_time` whose RSVPs are stored and
+   settled; it is not stored separately because the three rules above are it.
+4. **Finish** when the set is empty: `finished_at`, summary log line, and an
+   alert for a `full` run only (_my call_: one daily "incremental finished"
+   post would be noise; failures still alert).
+
+### Pacing and budget (_my calls_, one constants block in `ingest.ts`)
+
+- Tick every **5 minutes** (`SNAPSHOT_TICK_MS`), the backfill's cadence, in
+  its own scheduler (started beside the backfill's in `src/index.ts`).
+- **150 Meetup calls per tick** (`SNAPSHOT_TICK_CALL_BUDGET`), counted by a
+  wrapper around the client, checked before each event (an event in flight
+  finishes its pages). One event in flight.
+- The **report build lease** is held for one tick's reads (acquired at the
+  start, released in `finally`); a held lease skips the tick. The backfill
+  takes the same lease per organizer build, so the two never overlap on the
+  credential.
+- Guards: `canStartMonthBuild` (no start from 17:45 UTC until 19:00) and
+  `identityDigestInProgress`, re-checked between events.
+- Full pull: ~2,500 RSVP reads + ~30 listing ⇒ ~17 ticks ⇒ **~1.5 h** of
+  ticks, spread over whatever the quiet hour and the lease allow. Incremental:
+  ~30 listing + ~20–40 RSVP reads a day.
+
+### Failures and alerts
+
+- A tick that throws (credential unavailable, Postgres, a listing error)
+  leaves the run open, records `last_error` (class name only), and posts a
+  plain **"Group snapshot is failing"** alert at most once per UTC day (the
+  backfill's `alertFailingOnce` pattern). An `OrganizerTokenUnavailableError`
+  ends the tick without counting any event failed.
+- An open run that has not advanced for **24 h** is reported in that same
+  alert's text on the next failure; no separate watchdog (_my call_).
+- A full run's finish posts one plain summary: events, RSVP rows, calls,
+  failed events, duration.
+
+### Staff visibility (Part 3, in PR 1)
+
+On the dashboard home's **Wrapped backfill** card, one more line:
+
+> Group snapshot: updated 3 h ago (Nov 11, 9:12 AM Pacific) · 2,481 events ·
+> 51,204 RSVPs · last run: incremental, 62 calls, 0 failed.
+
+With an open run: "refreshing: 1,204 of ~2,450 events read". Before any run:
+"Group snapshot: not pulled yet." A run that last failed shows "last tick
+failed (TypeError)" (the class name).
+
+**Refresh snapshot now** (leadership only) beside Run now: same guards as
+Run now (router CSRF/Origin/rate limit, live leadership check, audit post
+"Group snapshot refresh requested"), sets the snapshot run-now flag; fixed
+notices `snapshot-requested`, `snapshot-already-running`,
+`snapshot-already-requested` (and the shared `not-leadership`,
+`unavailable`, `error`). Nothing echoed.
+
+### Testing (PR 1)
+
+Unit (vitest, network blocked, in-memory store):
+- listing upsert: node validation (bad id/date dropped, bad URL → NULL,
+  bounded title), PAST then ACTIVE, the counts; a failed listing leaves the
+  run open and the next tick lists again;
+- the RSVP work set: never-read, within settle days and stale, read before
+  the event; deleted excluded; ACTIVE excluded;
+- per-tick budget stop between events; an event's pages all read; one
+  failed event counted, skipped for the run, retried next run;
+- full → incremental kind; daily due gate; run-now flag;
+- quiet hour, identity digest and held lease defer; lease released on throw;
+- alerts: failing once a day with the class name, summary on a full run
+  only, no mentions;
+- staff card line in each state; the Refresh POST matrix (leader, not
+  leader, Discord unavailable, already running/requested).
+
+Integration (`tst/integration`, Postgres :55432, Redis :56379): the schema
+creates idempotently twice; an event's RSVP replace is one transaction
+(rows replaced, `rsvps_fetched_at` set); the work-set query against real
+rows; the deletion join from `event_audit_state`; no key written to Redis by
+a tick other than the lease, the run-now flag and the alert guard.
+
+## PR 2: compute Wrapped from the snapshot
+
+### Sources from the snapshot
+
+A `SnapshotReader` (Postgres) with, for a Meetup member id:
+
+- `isReady()`: a `full` run has finished. False ⇒ every caller uses the
+  token path.
+- `hasMember(meetupId)`: any stored RSVP row or hosted event for the id.
+- `sources(meetupId): WrappedSources`:
+  - `events`: PAST, not deleted events where the member's RSVP is YES or
+    ATTENDED (the same statuses `getSelfPastRsvpEvents` and the organizer
+    history read use), as `EventSummary`-shaped rows (status included, so
+    the counted-event rule sees the platform status, not only the title);
+  - `hosted`: PAST, not deleted events with the id in `host_ids`, with
+    `attendance` = the stored YES + ATTENDED row count (_my call_: the local
+    count rather than `yes_count`, so attendance and companions agree; they
+    differ only when an event's RSVPs failed to read, and then
+    `yes_count` is used).
+- `attendees(eventIds)`: `{ byEvent, partial }` from one
+  `SELECT event_id, member_id … WHERE event_id = ANY($1) AND status IN
+  ('YES','ATTENDED')`; `partial` is always empty (lists are complete).
+
+`build.ts` gains an `AttendeeSource` seam: `buildWrappedYear` reads attendee
+lists through `deps.attendees(events, { firstPageOnly })`, whose Meetup
+implementation is today's `readAttendees` and whose snapshot implementation
+is the query above. `computeWrapped`, `WrappedInput` and the cached shape do
+not change, so **no cache version bump** (_my call_: the stored JSON is
+identical in shape; values may differ by a late attendance mark, which is
+what a rebuild is for).
+
+A new `buildWrappedFromSnapshot(deps, linkedMeetupId, year)` composes
+`sources` + `buildWrappedYear` with the snapshot attendee source. It needs no
+Meetup token, so it has no account-mismatch or not-in-group outcome.
+
+### Who uses which path
+
+- **Snapshot path** when `isReady()` and `hasMember(linkedMeetupId)`.
+- **Token path** (today's code, unchanged) otherwise: no full pull yet, or a
+  member the organizer view never saw (joined after the last run, or whose
+  RSVPs the organizer view can't see — the IDEAS.md caveat). A member with
+  no RSVP and no hosted event in the snapshot and none on Meetup gets the
+  same quiet-year Wrapped from either path.
+
+### On-demand: `/wrapped` and `/host/wrapped`
+
+Unchanged order: linked gate, stored entry (Redis hot copy, then Postgres),
+hourly limiter, building lease. Only the build step changes: snapshot path
+first, token path as fallback. Consequences:
+- A snapshot build needs no stored Meetup token, so the web page's "connect
+  your Meetup" page is shown only when the fallback is needed and there is no
+  token.
+- `refresh` rebuilds from the snapshot, so it reflects Meetup as of the last
+  ingest (at most a day old, or the last Refresh snapshot now). The hourly
+  limiter is unchanged (it still limits builds).
+- Builds from the snapshot are fast; the 10 s DM handover and the 20 s page
+  wait stay for the fallback.
+
+### The backfill over the snapshot
+
+- With `isReady()`, the sweep builds each linked member present in the
+  snapshot from it: no Meetup call, no organizer lease, no call budget, the
+  member's building lease as today. Up to **100** such members per tick
+  (`SNAPSHOT_MEMBERS_PER_TICK`, _my call_) ⇒ ~470 members in ~5 ticks
+  (~25 min); members missing from the snapshot keep the token path, inside
+  the existing `MEMBERS_PER_TICK` and `TICK_CALL_BUDGET`.
+- Freshness: a current-year copy is fresh when built after the latest
+  finished snapshot run (instead of "under 7 days"), so each daily ingest
+  makes the next sweep rebuild the current year once; the past-year rule
+  ("built after the year ended") is unchanged.
+- The per-run attendee memo remains for the token path only.
+- The queue drains through the same build choice.
+
+### Privacy (unchanged invariants, new tests)
+
+The snapshot reader returns other people's Meetup ids only into
+`computeWrapped`'s companion ranking and `rankCohort`, exactly where the
+token path's attendee lists go; naming goes through `nameRanked`
+(linked-and-present only). New tests: a snapshot-built entry's JSON contains
+no Meetup id other than the member's own and no stored name; the privacy
+tests in `tst/` run against a snapshot-backed build too.
+
+### Testing (PR 2)
+
+Unit: `sources` mapping (deleted and ACTIVE excluded; status carried; hosted
+attendance local count, fallback to `yes_count`); path choice (not ready,
+member missing → token path; ready and present → snapshot, zero Meetup
+calls); the snapshot build and the token build produce equal entries on the
+same fixture data; freshness against the latest snapshot run; backfill
+snapshot cap and no budget use; the on-demand page and command build without
+a token from the snapshot; limiter unchanged on refresh.
+Integration: the reader's queries against real rows; a backfill tick over a
+seeded snapshot writes the entry `readEntry` serves, with zero Meetup calls.
+
+## Left to the builder
+
+- File layout (suggested: `src/lib/snapshot/{ingest,job,reader}.ts`,
+  `src/lib/repositories/postgresSnapshotRepository.ts`, the two queries in
+  `queries.ts` and methods on `GqlMeetupClient`).
+- Exact copy of the card line, notices and alerts.
+
+## Decisions after the builder check (2026-11-11)
+
+A fresh reader planned from the draft above and asked five questions. Three
+are _my calls_; two went to the lead (below).
+
+1. **Partial organizer visibility** (_my call_). `hasMember` alone could hide
+   an undercount if Meetup shows organizers only some of a member's RSVPs.
+   On-demand builds (`/wrapped`, `/host/wrapped`) that have the member's
+   usable token make one cheap cross-check, `getSelfPastRsvpCount`, against
+   the snapshot's count of that member's YES/ATTENDED past rows; Meetup
+   higher than local by more than `SNAPSHOT_COUNT_SLACK = 2` (events newer
+   than the last ingest) ⇒ token path, logged by Discord id. The backfill
+   does not cross-check (it would cost a call per member); a member it
+   undercounts is corrected on their next on-demand build. The live probe
+   also compares the two counts for a handful of linked members.
+2. **Events that leave the listing** (_my call_). After a listing phase that
+   completed, PAST events not seen in it (`listed_at` before the phase's
+   start) get `deleted_at`, but only when the listing returned at least
+   **95 %** of the previously stored non-deleted PAST events; otherwise
+   nothing is marked and the run's `last_error` says `ShortListing`. The
+   listing reads `status: [PAST, CANCELLED]` so a cancelled-after-the-fact
+   event is stored with its status (the counted-event rule then drops it,
+   as the token path does by title and status).
+3. **WAITLIST** (_my call_). Stored if the probe shows the filter returns
+   waitlisted members on past events; if it does not, WAITLIST is dropped
+   from the filter, the CHECK and `waitlist_count`. Either way the probe
+   does not block anything Wrapped needs.
+
+### Answered by the lead (2026-11-11)
+
+4. **Names**: ids only, as proposed. No name column; added later behind a
+   catalog-guarded `ALTER` if an analytics page needs one.
+5. **Retention**: RSVP history is kept indefinitely; unlinking or a deletion
+   request does not purge snapshot rows (they are the organizer's view of the
+   group, like the report snapshots). Revisit with the analytics work.
