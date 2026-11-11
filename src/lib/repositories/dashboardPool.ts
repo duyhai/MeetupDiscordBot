@@ -140,6 +140,54 @@ CREATE TABLE IF NOT EXISTS wrapped_queue (
   claimed_at      TIMESTAMPTZ,
   attempts        INTEGER NOT NULL DEFAULT 0
 );
+-- The group snapshot (src/lib/snapshot/ingest.ts): every event as Meetup
+-- last listed it. host_ids are Meetup member ids. deleted_at comes from the
+-- event audit's confirmed deletions, a null read by id, or a complete
+-- listing the event was missing from; deleted rows are kept but not read.
+CREATE TABLE IF NOT EXISTS meetup_events (
+  event_id         TEXT PRIMARY KEY CHECK (event_id ~ '^[0-9]{1,20}$'),
+  title            TEXT NOT NULL,
+  date_time        TIMESTAMPTZ NOT NULL,
+  event_url        TEXT,
+  status           TEXT NOT NULL,
+  host_ids         TEXT[] NOT NULL DEFAULT '{}',
+  yes_count        INTEGER,
+  waitlist_count   INTEGER,
+  listed_at        TIMESTAMPTZ NOT NULL,
+  rsvps_fetched_at TIMESTAMPTZ,
+  deleted_at       TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS meetup_events_date_idx ON meetup_events (date_time);
+CREATE INDEX IF NOT EXISTS meetup_events_hosts_idx ON meetup_events USING GIN (host_ids);
+-- One row per event and member: the RSVP as of the event's rsvps_fetched_at.
+-- Meetup member ids only, never names.
+CREATE TABLE IF NOT EXISTS meetup_event_rsvps (
+  event_id   TEXT NOT NULL REFERENCES meetup_events(event_id) ON DELETE CASCADE,
+  member_id  TEXT NOT NULL CHECK (member_id ~ '^[0-9]{1,20}$'),
+  status     TEXT NOT NULL CHECK (status IN ('YES', 'WAITLIST', 'ATTENDED')),
+  fetched_at TIMESTAMPTZ NOT NULL,
+  PRIMARY KEY (event_id, member_id)
+);
+CREATE INDEX IF NOT EXISTS meetup_event_rsvps_member_idx ON meetup_event_rsvps (member_id);
+-- Snapshot runs, as wrapped_backfill_runs: at most one open. kind is 'full'
+-- until a full pull has finished, then 'incremental'. listed_at is when the
+-- run's listing phase finished; last_error is an error class name only.
+CREATE TABLE IF NOT EXISTS meetup_snapshot_runs (
+  id             SERIAL PRIMARY KEY,
+  trigger        TEXT NOT NULL CHECK (trigger = 'job' OR trigger ~ '^[0-9]{1,20}$'),
+  kind           TEXT NOT NULL CHECK (kind IN ('full', 'incremental')),
+  started_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  finished_at    TIMESTAMPTZ,
+  listed_at      TIMESTAMPTZ,
+  events_listed  INTEGER NOT NULL DEFAULT 0,
+  events_fetched INTEGER NOT NULL DEFAULT 0,
+  rsvps_stored   INTEGER NOT NULL DEFAULT 0,
+  failed         INTEGER NOT NULL DEFAULT 0,
+  requests       INTEGER NOT NULL DEFAULT 0,
+  last_error     TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS meetup_snapshot_runs_open_idx
+  ON meetup_snapshot_runs ((true)) WHERE finished_at IS NULL;
 `;
 
 /** pg_advisory_xact_lock(int, int) namespace for dashboard locks. */
