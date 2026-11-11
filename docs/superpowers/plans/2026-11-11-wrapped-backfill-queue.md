@@ -10,6 +10,8 @@
 
 **Spec:** `docs/superpowers/specs/2026-11-10-wrapped-design.md`, "Addendum (2026-11-11)", section "PR B" and "Decisions after the builder check" (2–7).
 
+> **Amended after the lead's sizing note (spec decisions 8–13):** the durable store is Postgres `wrapped_entries` with Redis as a one-day hot copy of the current year (`src/lib/wrapped/store.ts`, `postgresWrappedEntryRepository.ts`); the backfill's clients bypass the request cache and share attendee ids through a per-run in-process memo; early-cohort events read their first page only (`cohort.partial`); runs record their Meetup request count and the staff card shows it with the entry count. Where a task below says `readWrapped`/`writeWrapped` or "the cache", read the two-tier `readEntry`/`writeEntry`.
+
 ## Global Constraints
 
 - Privacy unchanged: the backfill writes exactly what `buildWrapped` writes; no Meetup name or id of another person in a log line (ids of the member being built are fine), in an alert, or in Postgres (the queue holds the member's own Meetup id).
