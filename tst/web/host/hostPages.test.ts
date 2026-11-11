@@ -92,6 +92,8 @@ describe('host home', () => {
     expect(res.text).toContain('<table class="stack upcoming">');
     expect(res.text).toContain('<td class="type" data-label="Type">');
     expect(res.text).toContain('<td class="event" data-label="Event">');
+    expect(res.text).toContain('<td class="status" data-label="Status">');
+    expect(res.text).toContain('<td class="buttons" data-label="Actions">');
     expect(res.text).toMatch(
       /<span class="when">Tue, Nov 10, 2026,<\/span>\s*<span class="when">7:00 PM<\/span>/,
     );

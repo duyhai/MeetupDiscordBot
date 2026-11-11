@@ -355,6 +355,10 @@ describe('Announce on the host home', () => {
     );
     const text = await home();
     expect(text).toContain('Announcement not confirmed');
+    // In the Status cell, whose badges wrap on desktop rather than widen it.
+    expect(text).toMatch(
+      /<td class="status" data-label="Status">(?:(?!<\/td>)[\s\S])*Announcement not confirmed/,
+    );
     expect(text).toMatch(/Try announcing again/);
     vi.mocked(deps.announce).mockResolvedValueOnce(undefined);
     expect(noticeOf((await announce(MINE)).headers.location)).toBe('sent');
