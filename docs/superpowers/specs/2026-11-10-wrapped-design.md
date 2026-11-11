@@ -500,3 +500,293 @@ light and dark, noted in the PR.
 - Exact copy of the connect, waiting and error pages.
 - File layout (suggested: `src/web/host/wrappedPage.ts` for the routes and
   rendering; `displayName` beside `isServerMember` in `serverJoin.ts`).
+
+---
+
+# Addendum (2026-11-11): deeper stats, backfill and a queue
+
+Status: drafted from Hai's brief after #148 shipped `/host/wrapped`. The
+brief was detailed enough that no interview was held; every choice it left
+open is marked _my call_. Two PRs: **A** (the page's deeper stats) and **B**
+(a backfill for everyone and a queue for throttled requests). B is based on
+A's branch because A changes the cache shape B writes; if A merges first, B
+is rebased onto `main`.
+
+The privacy rules above carry over unchanged: another person appears only if
+they are a linked member (a `members` row) and on the server; as a display
+name, never a Meetup name or id of an unlinked person; the unlinked are
+counts. The Discord command and the web page keep sharing one cache entry,
+one hourly slot and one in-flight lease. Hosted stats follow the
+counted-events rule (#140). Alerts carry `describeBuildError` text, never a
+Meetup body.
+
+## PR A: deeper stats and expandable sections
+
+### What the page shows (the embed stays as it is, except where noted)
+
+1. **Went with the most.** The build names the top **10** linked companions
+   (was 3). The page shows the first 3 and a **"Show all 10"** expander with
+   the rest. Every named companion links to their **Discord profile**
+   (`https://discord.com/users/<discordUserId>`, through `safeHref`, which
+   already allows that path): the identity they consented to show by
+   linking. No Meetup profile of anyone else is linked or shown. The Discord
+   embed keeps naming 3; everyone else, named-but-not-shown included, folds
+   into the existing "and N other members" count (_my call_: that is the
+   brief's "and N more", in the words the embed already uses).
+2. **Busiest month** lists every counted event the member attended that
+   month: Pacific date, title, Meetup link via `safeHref`.
+3. **Hosting** (hosts only): the top **5** hosted events of the year by
+   yes-RSVP count, with links, and the all-time highest-attendance event
+   they hosted, with its link. Attendance is
+   `rsvps(filter: { rsvpStatus: [YES] }) { totalCount }` as Meetup reports it
+   at build time (the audit query already reads it under the alias `yes`).
+   _My call_: "all-time" is as of 31 December of the Wrapped year, like every
+   other all-time number here, so a past year's copy is final.
+4. **Together with your top companion**: under the top named companion, the
+   events the two of you attended together this year, expandable. Hai wrote
+   "do the same for the one with the most section"; this reads it as "list
+   the events behind the top companion's count". The PR asks him to confirm.
+5. **Top activity types**: each of the (at most 3) top types expands to the
+   member's **first 10 events ever** of that type (all-time up to the year's
+   end, earliest first, linked), and under those **"Still around from your
+   early cohort"**: the people at those first 10 events who also shared an
+   event with the member this year. Top 5, expandable to 10, linked and
+   present members only; the rest a count.
+
+Zero-event years render every section cleanly ("None this year", no
+expanders); a member who never hosted has no hosting card.
+
+### Where the data comes from
+
+All of it is computed in `build.ts` and cached; the page renders from the
+cache only. `WRAPPED_CACHE_VERSION` bumps to **`v4`** (one rebuild of copies
+built under `v3`).
+
+- **Hosted events with attendance.** A new query `getHostedEvents`
+  (`getGroupEvents`' fields plus `attendance: rsvps(filter: { rsvpStatus:
+  [YES, ATTENDED] }) { totalCount }`), paged like `getGroupEvents` with `hostId` and
+  `status: [PAST]`, cached under its own name in the 12-hour request cache
+  (_my call_: a separate query, so the existing `getGroupEvents` entries,
+  which lack the field, are never read as "0 yes"). `WrappedMeetup.
+  getGroupEvents` is replaced by `getHostedEvents(hostId, input)`.
+- **Early-cohort attendees.** For each top type, the first 10 counted
+  attended events of that type; the union across types (at most 30 events)
+  minus the ones already fetched for this year goes through the same
+  `readAttendees` (filter `['ATTENDED', 'YES']`, `mapWithConcurrency` at 5,
+  cached per event by the client). One pure step then ranks, per type, the
+  Meetup ids seen at those early events that also appear in this year's
+  companion ranking (self excluded): by early events shared desc, then
+  this-year events shared desc, then Meetup id asc.
+- **Naming.** `nameCompanions` becomes `nameRanked(ranked, deps, limit)`:
+  the same linked-and-present walk, `COMPANION_LOOKUP_CAP` raised from 25 to
+  **50** so ten can be found; companions use limit 10, each type's cohort
+  limit 10 with its own cap of 25 lookups. The unlinked remainder is
+  `otherCount`, as today.
+
+### The cached shape (`CachedWrapped`, `v4`)
+
+Additive fields, all on the member's own events or on linked Discord ids:
+
+```ts
+stats.busiestMonth: { month; count; events: WrappedEvent[] } | null
+stats.topTypes[i]: { type; count; firstEvents: WrappedEvent[];   // ≤ 10
+                     cohort: { named: { discordUserId; earlyCount; sharedCount }[]; // ≤ 10
+                               otherCount: number } }
+stats.hosting: { thisYear; allTime;
+                 topThisYear: { event: WrappedEvent; yesCount: number }[]; // ≤ 5
+                 allTimeBest: { event: WrappedEvent; yesCount: number } | null } | null
+companions.named[0].sharedEvents?: WrappedEvent[]   // the top companion only
+```
+
+_My call_: only the top companion carries its event list; the other nine are
+name and count, which keeps the entry small. The embed ignores the new
+fields except that `named` may now hold 10.
+
+### Keeping the page fast
+
+The build does more Meetup reads (hosted attendance comes with the hosted
+list; the cohort adds at most 30 cached attendee fetches), so it may take
+longer. The 20 s wait and the "still building" page stay; `buildWrapped`
+logs its duration (info, ids only). Progress gains one step, "Looking back at
+your early events…".
+
+### Rendering
+
+`<details>`/`<summary>` for every expander (the stylesheet already styles
+them; no script, so the CSP is untouched). Summaries say what they open:
+"Show all 10", "Events that month (4)", "Your first 10 game nights",
+"Still around from your early cohort (6)". Companion names via `memberText`
+inside `<a href="https://discord.com/users/…" rel="noopener noreferrer"
+target="_blank">`. Event links via `safeHref`, title via `memberText`, date
+in Pacific `ll`. Rendered at 360 and 1280 px, light and dark, with
+screenshots in the PR.
+
+### Testing (PR A)
+
+Unit (vitest, network blocked):
+
+- `stats.test`: busiest-month event list (sorted, cancelled dropped, tie to
+  the earliest month); hosting top 5 by yes count with a date tiebreak and
+  fewer than 5; all-time best across years and null without hosting; first
+  10 per type with fewer than 10 and all-time reach; the cohort ranking
+  (early count, then shared count, then id; self excluded; nobody shared this
+  year → empty); top companion's shared events.
+- `companions.test`: `nameRanked` to 10, the raised cap, the cohort's own cap.
+- `build.test`: hosted attendance read through `getHostedEvents`; early
+  events fetched once each and never twice for an event already fetched this
+  year; the duration log; a zero-event year makes no cohort fetch.
+- `format.test`: the embed names 3 and folds 7 more into "and N other
+  members".
+- `cache.test`: `v4` key.
+- `wrappedPage.test`: expand/collapse markup for each section, companion
+  profile links, every event link through `safeHref` (a `javascript:` URL
+  renders as text), no unlinked attendee's Meetup name or id anywhere in the
+  HTML or the cache JSON, zero-event and no-hosting renders.
+
+Render check at 360/1280, light/dark, via the dev preview.
+
+## PR B: backfill for everyone, and a queue for throttled requests
+
+### Why
+
+A member who opens Wrapped on 1 December should find every past year already
+there, and a member who hits the hourly limit should get a promise with a
+time on it rather than a "try again".
+
+### The backfill job
+
+Modelled on the report build job (`buildJob.ts`): Postgres-recorded runs,
+the shared organizer lease, the quiet-hour and identity-sweep guards,
+restart-safe, single-flight.
+
+- **Who and what.** Every **linked** member (`members.listAll()` rows with
+  both ids), ordered by Discord id, for every year from the Pacific year of
+  their first counted event through the current year. Years come from the
+  member's history, read once per member.
+- **Reads.** The member's own stored token (`getUsableMeetupTokens` under
+  the Discord id) when present, else the organizer credential: history via
+  `getMemberRsvpEvents` (`['YES', 'ATTENDED']`, `['PAST']`; `undefined` = not
+  in the group → skipped and counted), hosted via `getHostedEvents`,
+  attendees via `getEventRsvps`. The spec above called the organizer path
+  unverified for ordinary members; it is in fact what the daily no-show
+  report runs (`noShowReport.ts` reads `getMemberRsvpEvents` for every
+  no-show member with the organizer token), so it is verified in production.
+  The PR records that; no separate probe.
+- **One read, every year.** `build.ts` splits into `readWrappedSources`
+  (history, hosted, this-year attendees for a set of years) and
+  `buildWrappedFromSources(sources, year)`; `buildWrapped` composes them, so
+  the on-demand build and the backfill produce byte-identical cache entries.
+- **Skip fresh.** A cached copy for the member's current Meetup id is fresh
+  when the year is past, or when it is the current year and `builtAt` is
+  under **7 days** old (_my call_). Fresh copies are skipped and counted.
+- **Pacing** (_my calls_, constants in one place): a tick every **5
+  minutes**; at most **4** members per tick and one build in flight; a
+  per-tick budget of **150** Meetup client calls (a counting wrapper around
+  the client; a build that is in flight finishes, no new one starts past the
+  budget). Each build takes the member's `wrapped:building` lease so it never
+  overlaps an on-demand build, and never calls `claimBuild`, so it spends no
+  hourly slot.
+- **Runs.** `wrapped_backfill_runs (id, trigger 'job' | Discord id,
+  started_at, finished_at, members_total, members_done, built, skipped,
+  failed, cursor)`. A run opens when none is open and the last finished more
+  than **20 hours** ago (daily), or when staff pressed Run now; it advances
+  its cursor (the last Discord id processed) after each member, so a restart
+  resumes. Per-member failures are logged by error class, counted, and
+  retried on the next run (not in this one). The run's end posts **one**
+  plain alert: members, built, skipped, failed, duration. Nothing pings.
+- **Guards.** No tick starts work in the quiet hour, while the identity
+  digest runs, or while the report build lease is held (the backfill takes
+  the same `acquireBuildLease`, so the organizer credential is never read by
+  two jobs at once); the lease is held for one tick, not a run.
+
+### The queue
+
+- `wrapped_queue (discord_user_id PRIMARY KEY, meetup_id, year, queued_at,
+  claimed_at NULL, attempts)`: at most one queued year per member.
+- When a member is **rate-limited** (web or Discord), the entry is
+  **auto-added** (_my call_: no extra click; the brief says "offer/auto-add").
+  Same year already queued → the same message; a different year queued →
+  "You already have YYYY queued; it'll be ready by about HH:MM" (the first
+  stays). On the web the queued state also shows on a plain reload while the
+  cache is still a miss and the entry exists; a member with a free slot who
+  reloads still builds on demand (the queue entry is then dropped).
+- **Ready by** = the next tick's start, plus one tick per
+  `MEMBERS_PER_TICK` entries ahead in the queue, shown in Pacific time
+  (`h:mm a`) on the web and as a Discord `<t:…:t>` timestamp.
+- Each tick drains the queue **first**, oldest `queued_at` first, claiming
+  rows (`claimed_at` set; a claim older than the lease TTL is stale and taken
+  again), then the sweep. A built entry is deleted; a failed one is released
+  with `attempts + 1` and dropped after **3** (logged). Queued builds take the
+  member's building lease and write the shared cache; they spend no hourly
+  slot.
+- No notification in v1: the next page view or `/wrapped` finds the copy.
+
+### Staff dashboard
+
+A **Wrapped backfill** card beside the Wrapped announcement card: last run
+(when, built/skipped/failed), members done/total of the open run, queue
+length, next run. **Run now** (leadership only, same guards as the other
+staff POSTs: CSRF, Origin, rate limit, live role check, audit) sets a
+run-now flag the next tick honours and kicks a tick in-process. Fixed notice
+texts, nothing echoed.
+
+### Testing (PR B)
+
+Unit: queue dedupe (same year, different year) and drain order; stale claim
+re-taken; attempts and the drop after 3; the backfill skips fresh copies and
+rebuilds a stale current year; per-tick member cap, in-flight cap and budget
+stop; a failed member is counted and retried next run; resume from the
+cursor; the daily gate and Run now; quiet hour and held lease defer; the
+page's and the command's queued state with the ready-by time; the summary
+alert once per run. Integration (`tst/integration`, Postgres :55432, Redis
+:56379): the queue table round-trips; a backfill tick writes the exact cache
+entry `readWrapped` serves, and the on-demand path then makes no Meetup call.
+
+## Decisions after the builder check (2026-11-11)
+
+A fresh reader planned from the draft above and asked seven questions. The
+answers, all _my calls_ unless marked for Hai:
+
+1. **Hosted attendance counts `[YES, ATTENDED]`** (PR A), not `[YES]` alone.
+   Hosts mark attendance after an event and the rest of the codebase reads
+   attendees with both statuses for that reason; the superset is right
+   whether or not Meetup moves a marked member off `YES`. The PR asks Hai to
+   confirm, since his brief said `[YES]`.
+2. **The backfill's organizer client keeps the 12-hour request cache.**
+   `withOrganizerMeetup` is given a `makeClient` that builds a plain
+   `GqlMeetupClient` (the identity and no-show jobs bypass the cache because
+   they diff live data; the backfill reads the same attendee and hosted
+   lists the on-demand build reads, and sharing them across members is the
+   point). This also keeps backfill and on-demand entries identical.
+3. **Member-token path = the on-demand build's path.** History via
+   `getSelfPastRsvpEvents` with the account-mismatch check. A mismatch, or a
+   401 from any read with the member's token, redoes that member with the
+   organizer credential (the linked Meetup id is the identity; a stale token
+   never writes under the wrong account). Any other error fails the member,
+   who is retried next run.
+4. **The queue is for members with nothing cached.** Rate-limited with a
+   copy for the current Meetup id already cached: no queue entry; the notice
+   stays "try again in N minutes" with the copy shown. Rate-limited with no
+   copy: queued. At drain time an entry whose copy appeared meanwhile is
+   dropped unbuilt. So Rebuild every five minutes cannot buy a build a tick.
+5. **The report lease is taken per organizer-credential build only**, held
+   for that one build, never for a tick or a run; member-token builds take
+   none (they do not touch the organizer credential). The report job ticks
+   every 15 minutes and simply finds the lease free on its next tick: a
+   delay of at most one report tick is accepted.
+6. **Ready-by skips the quiet hour** (18:00–19:00 UTC) and is worded "by
+   about": the estimate counts ticks, with none falling in that hour.
+   Budget stops and lease waits are accepted as noise in the estimate.
+7. **Redis memory**: the `v4` entry is bounded (10 companions, ≤ 30 first
+   events, one month's events, top companion's events, ≤ 6 hosted) and past
+   years are written once per 365 days. The PR records the entry size for a
+   busy member and asks Hai to check the Redis plan's limit and eviction
+   policy; if it is small, the backfill caps the years it writes (newest
+   first) by a constant.
+
+## Left to the builder
+
+- Exact copy of summaries, notices and the staff card.
+- File layout (suggested: `src/lib/wrapped/{cohort,backfill,queue}.ts`,
+  `src/lib/repositories/postgresWrappedBackfillRepository.ts`,
+  `src/web/routes/wrappedBackfill.ts`).
