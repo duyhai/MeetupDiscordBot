@@ -175,9 +175,14 @@ function yearNav(years: number[], current: number): SafeHtml {
   </nav>`;
 }
 
+/** A Discord user id, as discordOAuth.ts checks it: nothing else goes into a profile URL. */
+const SNOWFLAKE = /^\d{17,20}$/;
+
 /** A linked member: their server display name linking to their Discord profile (the identity they consented to by linking). */
 function profileLink(discordUserId: string, name: string): SafeHtml {
-  const href = safeHref(`https://discord.com/users/${discordUserId}`);
+  const href = SNOWFLAKE.test(discordUserId)
+    ? safeHref(`https://discord.com/users/${discordUserId}`)
+    : undefined;
   const text = memberText(name);
   return href
     ? html`<a href="${href}" rel="noopener noreferrer" target="_blank"
@@ -284,7 +289,7 @@ function hostedItem({ event, attendance }: HostedRanked): SafeHtml {
       >`
     : title;
   return html`<li>
-    ${link} (${String(attendance)} attended) ·
+    ${link} (${String(attendance)} RSVPs) ·
     <time>${tz(dayjs(event.dateTime)).format('ll')}</time>
   </li>`;
 }
@@ -332,7 +337,7 @@ function cohortSection(
     );
   });
   if (items.length === 0 && others === 0) {
-    return '' as unknown as SafeHtml;
+    return html``;
   }
   return html`<details>
     <summary>

@@ -196,7 +196,7 @@ const deep: CachedWrapped = {
         firstEvents: firstFood,
         cohort: {
           named: Array.from({ length: 7 }, (_, i) => ({
-            discordUserId: `c-${i + 1}`,
+            discordUserId: `30000000000000000${i + 1}`,
             earlyCount: 7 - i,
             sharedCount: 2,
           })),
@@ -241,7 +241,7 @@ const deep: CachedWrapped = {
   },
   companions: {
     named: Array.from({ length: 10 }, (_, i) => ({
-      discordUserId: `d-${i + 1}`,
+      discordUserId: `2000000000000000${String(i + 1).padStart(2, '0')}`,
       sharedCount: 10 - i,
       ...(i === 0 ? { sharedEvents: [june[0], june[2]] } : {}),
     })),
@@ -305,8 +305,12 @@ async function harness({
       if (discordUserId === 'd-linked') {
         return 'Linked <Pal>';
       }
-      if (/^d-[1-9]$/.test(discordUserId) || /^c-\d$/.test(discordUserId)) {
-        return `Pal ${discordUserId}`;
+      // Companions 1–9 and every cohort member resolve; companion 10 does not.
+      if (
+        /^20000000000000000[1-9]$/.test(discordUserId) ||
+        /^30000000000000000\d$/.test(discordUserId)
+      ) {
+        return `Pal ${discordUserId.slice(-2)}`;
       }
       return undefined;
     },
@@ -592,22 +596,28 @@ describe('GET /host/wrapped deeper sections', () => {
     const section = text.slice(text.indexOf('Went with the most'));
     const before = section.slice(0, section.indexOf('<details'));
     expect(
-      before.match(/href="https:\/\/discord\.com\/users\/d-\d"/g),
+      before.match(
+        /href="https:\/\/discord\.com\/users\/2000000000000000\d\d"/g,
+      ),
     ).toHaveLength(3);
-    expect(before).toContain('href="https://discord.com/users/d-1"');
-    expect(before).toContain('<bdi>Pal d-1</bdi>');
+    expect(before).toContain(
+      'href="https://discord.com/users/200000000000000001"',
+    );
+    expect(before).toContain('<bdi>Pal 01</bdi>');
     expect(before).toContain('10 events');
     expect(section).toContain('<summary>Show all 9</summary>');
-    expect(section).toContain('href="https://discord.com/users/d-9"');
+    expect(section).toContain(
+      'href="https://discord.com/users/200000000000000009"',
+    );
     // Five never named plus d-10, who could not be resolved.
     expect(section).toContain('6 other members');
-    expect(section).not.toContain('d-10');
+    expect(section).not.toContain('200000000000000010');
   });
 
   it('lists the events shared with the top companion in an expander', async () => {
     const { text } = await deepPage();
     expect(text).toContain(
-      '<summary>Together with <bdi>Pal d-1</bdi> (2 events)</summary>',
+      '<summary>Together with <bdi>Pal 01</bdi> (2 events)</summary>',
     );
     expect(text).toContain('Pho Night');
     expect(text).toContain('href="https://www.meetup.com/e/j3/"');
@@ -631,11 +641,12 @@ describe('GET /host/wrapped deeper sections', () => {
     const { text } = await deepPage();
     expect(text).toContain('hosted 6 events');
     expect(text).toContain('Most attended this year');
-    expect(text).toMatch(/Big Hike<\/bdi><\/a>\s*\(31 attended\)/);
+    expect(text).toMatch(/Big Hike<\/bdi><\/a>\s*\(31 RSVPs\)/);
     expect(text).not.toContain('going');
+    expect(text).not.toContain('attended)');
     expect(text.indexOf('Big Hike')).toBeLessThan(text.indexOf('Picnic'));
     expect(text).toContain('Legendary Potluck');
-    expect(text).toContain('(58 attended)');
+    expect(text).toContain('(58 RSVPs)');
   });
 
   it('expands each top type to its first events and the early cohort', async () => {
@@ -656,12 +667,28 @@ describe('GET /host/wrapped deeper sections', () => {
       cohort.indexOf('<summary>Show all 7</summary>'),
     );
     expect(
-      firstFive.match(/href="https:\/\/discord\.com\/users\/c-\d"/g),
+      firstFive.match(
+        /href="https:\/\/discord\.com\/users\/30000000000000000\d"/g,
+      ),
     ).toHaveLength(5);
     expect(firstFive).toContain('7 early events, 2 this year');
-    expect(cohort).toContain('href="https://discord.com/users/c-7"');
+    expect(cohort).toContain(
+      'href="https://discord.com/users/300000000000000007"',
+    );
     expect(cohort).toContain('and 3 other members');
     expect(text).toContain('<summary>Your first 1 games event</summary>');
+  });
+
+  it('a Discord id that is not a snowflake gets no profile link, only the name', async () => {
+    const { text } = await deepPage({
+      ...deep,
+      companions: {
+        named: [{ discordUserId: 'd-linked', sharedCount: 3 }],
+        otherCount: 0,
+      },
+    });
+    expect(text).toContain('<bdi>Linked &lt;Pal&gt;</bdi>');
+    expect(text).not.toContain('discord.com/users/d-linked');
   });
 
   it('folds an unresolvable top companion', async () => {
@@ -670,7 +697,7 @@ describe('GET /host/wrapped deeper sections', () => {
       companions: {
         ...deep.companions,
         named: deep.companions.named.map((c, i) => {
-          return i === 0 ? { ...c, discordUserId: 'd-10' } : c;
+          return i === 0 ? { ...c, discordUserId: '200000000000000010' } : c;
         }),
       },
     };

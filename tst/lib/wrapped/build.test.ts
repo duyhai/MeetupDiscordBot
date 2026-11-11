@@ -327,10 +327,14 @@ describe('buildWrapped', () => {
       named: [{ discordUserId: 'dnew', earlyCount: 1, sharedCount: 2 }],
       otherCount: 0,
     });
+    // Neither the Meetup ids nor the names the attendee lists carried.
     const json = JSON.stringify(result.wrapped);
     expect(json).not.toContain('ghost');
     expect(json).not.toContain('stranger');
     expect(json).not.toContain('"old"');
+    expect(json).not.toContain('Member ghost');
+    expect(json).not.toContain('Member old');
+    expect(json).not.toContain('Member new');
   });
 
   it('attaches the shared events to the top companion only', async () => {
