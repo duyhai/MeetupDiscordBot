@@ -14,6 +14,8 @@ import { WrappedStats } from './stats.js';
 
 const logger = new Logger({ name: 'wrappedCache' });
 
+/** The group's first year on Meetup; nothing to wrap before it. */
+export const FIRST_WRAPPED_YEAR = 2015;
 /** Bump whenever CachedWrapped's shape changes. */
 export const WRAPPED_CACHE_VERSION = 'v4';
 export const BUILD_WINDOW_MS = 60 * 60 * 1000;

@@ -186,6 +186,15 @@ const pause = (ms: number) =>
       expect(await repo.queueLength()).toBe(0);
     });
 
+    it('unclaim hands a claimed row back without an attempt', async () => {
+      await repo.enqueue({ discordUserId: A, meetupId: 'm1', year: 2026 });
+      await repo.claimNext(1, 60_000);
+      expect(await repo.claimNext(1, 60_000)).toEqual([]);
+      await repo.unclaim(A);
+      const [row] = await repo.claimNext(1, 60_000);
+      expect(row).toMatchObject({ discordUserId: A, attempts: 0 });
+    });
+
     it('complete removes the row', async () => {
       await repo.enqueue({ discordUserId: A, meetupId: 'm1', year: 2026 });
       await repo.complete(A);
