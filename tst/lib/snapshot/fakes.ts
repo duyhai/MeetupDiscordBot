@@ -21,6 +21,7 @@ export interface StoredEvent extends SnapshotEvent {
   rsvpFailures: number;
   rsvpFailedAt: Date | undefined;
   rsvpError: string | undefined;
+  rsvpsHidden: boolean;
 }
 
 const DAY_MS = 24 * 60 * 60_000;
@@ -107,6 +108,7 @@ export class FakeSnapshotStore implements SnapshotStore {
         rsvpFailures: previous?.rsvpFailures ?? 0,
         rsvpFailedAt: previous?.rsvpFailedAt,
         rsvpError: previous?.rsvpError,
+        rsvpsHidden: previous?.rsvpsHidden ?? false,
       });
     });
   }
@@ -178,6 +180,8 @@ export class FakeSnapshotStore implements SnapshotStore {
         eventId: e.eventId,
         dateTime: e.dateTime,
         yesCount: e.yesCount,
+        lastError: e.rsvpError,
+        hidden: e.rsvpsHidden,
       }));
   }
 
@@ -204,10 +208,17 @@ export class FakeSnapshotStore implements SnapshotStore {
     return this.needs(q).length;
   }
 
+  async hiddenEventCount(): Promise<number> {
+    return [...this.events.values()].filter(
+      (e) => e.rsvpsHidden && !e.deletedAt,
+    ).length;
+  }
+
   async replaceRsvps(
     eventId: string,
     rsvps: SnapshotRsvp[],
     fetchedAt: Date,
+    options: { hidden?: boolean } = {},
   ): Promise<void> {
     this.replaced.push(eventId);
     this.rsvps.set(eventId, [...rsvps]);
@@ -217,6 +228,7 @@ export class FakeSnapshotStore implements SnapshotStore {
       e.rsvpFailures = 0;
       e.rsvpFailedAt = undefined;
       e.rsvpError = undefined;
+      e.rsvpsHidden = options.hidden === true;
     }
   }
 
@@ -316,6 +328,10 @@ export class FakeSnapshotReader implements SnapshotReader {
     selfCount: number,
   ): Promise<void> {
     this.flagged.set(meetupId, { snapshot: snapshotCount, self: selfCount });
+  }
+
+  async clearFlag(meetupId: string): Promise<void> {
+    this.flagged.delete(meetupId);
   }
 
   async attendeesOf(eventIds: string[]): Promise<Record<string, string[]>> {

@@ -78,6 +78,50 @@ export class FakeBackfillStore implements WrappedBackfillStore {
     return true;
   }
 
+  /** Deferred Discord ids per run. */
+  readonly deferred = new Map<number, Set<string>>();
+
+  async deferMember(
+    id: number,
+    from: string | undefined,
+    to: string,
+  ): Promise<boolean> {
+    const run = this.runs.find((r) => r.id === id);
+    if (!run || run.finishedAt !== undefined || run.cursor !== from) {
+      return false;
+    }
+    run.cursor = to;
+    const set = this.deferred.get(id) ?? new Set<string>();
+    set.add(to);
+    this.deferred.set(id, set);
+    return true;
+  }
+
+  async nextDeferred(id: number, limit: number): Promise<string[]> {
+    return [...(this.deferred.get(id) ?? [])].sort().slice(0, limit);
+  }
+
+  async completeDeferred(
+    id: number,
+    discordUserId: string,
+    delta: RunDelta,
+  ): Promise<boolean> {
+    const run = this.runs.find((r) => r.id === id);
+    const set = this.deferred.get(id);
+    if (!run || run.finishedAt !== undefined || !set?.delete(discordUserId)) {
+      return false;
+    }
+    run.membersDone += delta.done;
+    run.built += delta.built;
+    run.skipped += delta.skipped;
+    run.failed += delta.failed;
+    return true;
+  }
+
+  async deferredCount(id: number): Promise<number> {
+    return this.deferred.get(id)?.size ?? 0;
+  }
+
   async recordRequests(id: number, calls: number): Promise<void> {
     const run = this.runs.find((r) => r.id === id);
     if (run) {

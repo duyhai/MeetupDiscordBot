@@ -17,6 +17,7 @@ import {
   OrganizerReads,
   QUEUE_MAX_ATTEMPTS,
   RUN_INTERVAL_MS,
+  LAST_ERROR_KEY,
   RUN_NOW_KEY,
   SNAPSHOT_MEMBERS_PER_TICK,
   TICK_CALL_BUDGET,
@@ -1460,5 +1461,91 @@ describe('the backfill over the snapshot: per-member path (#156 review)', () => 
     expect(h.organizerUsedFor).toContain('m2');
     const rebuilt = await h.entries.get(flagged.discordUserId, 2025);
     expect(rebuilt?.builtFrom).toBeUndefined();
+  });
+});
+
+describe('snapshot-first sweep (#156 follow-up)', () => {
+  // Interleaved ids: a token-path member (not in the snapshot) first, then
+  // snapshot members, then more token-path members.
+  const snap = (i: number) => ({
+    discordUserId: `40000000000000${String(1000 + i * 2)}`,
+    meetupId: `sn${i}`,
+    events: [] as EventSummary[],
+  });
+  const token = (i: number) => ({
+    discordUserId: `40000000000000${String(999 + i * 2)}`,
+    meetupId: `tk${i}`,
+    token: `tok${i}`,
+    events: [ev(`t${i}`, '2026-02-01T19:00:00-08:00', 'Trivia')],
+  });
+  const snapshotMembers = Array.from({ length: 10 }, (_, i) => snap(i));
+  const tokenMembers = Array.from({ length: 6 }, (_, i) => token(i));
+  const readerFor = () =>
+    new FakeSnapshotReader(
+      [ev('s26', '2026-04-01T19:00:00-07:00', 'Board game night')],
+      { s26: snapshotMembers.map((m) => m.meetupId) },
+    );
+
+  it('builds every snapshot member in tick 1 despite token members before them, then drains token members', async () => {
+    const h = await harness({ linked: [...tokenMembers, ...snapshotMembers] });
+    h.deps.snapshot = async () => snapshotWrapped(readerFor());
+
+    const first = await runBackfillTick(h.deps);
+    expect(first).toMatchObject({
+      kind: 'ran',
+      members: 10 + MEMBERS_PER_TICK,
+      deferred: 6,
+      finishedRun: false,
+    });
+    for (const m of snapshotMembers) {
+      // eslint-disable-next-line no-await-in-loop -- a few reads
+      expect((await h.entries.get(m.discordUserId, 2026))?.builtFrom).toBe(
+        'snapshot',
+      );
+    }
+    const builtTokens = await Promise.all(
+      tokenMembers.map((m) => h.entries.get(m.discordUserId, 2026)),
+    );
+    expect(builtTokens.filter(Boolean)).toHaveLength(MEMBERS_PER_TICK);
+
+    const second = await runBackfillTick(h.deps);
+    expect(second).toMatchObject({ members: 2, finishedRun: true });
+    expect((await h.store.lastFinishedRun())?.membersDone).toBe(16);
+  });
+
+  it('a snapshot read error ends the tick: no token-path build, cursor unmoved', async () => {
+    const h = await harness({ linked: [...tokenMembers, ...snapshotMembers] });
+    const reader = readerFor();
+    h.deps.snapshot = async () => snapshotWrapped(reader);
+    // Ready and dated, then unreadable for the members.
+    const failing = snapshotWrapped(reader);
+    h.deps.snapshot = async () => ({
+      ...failing,
+      sources: async () => {
+        throw new TypeError('pg down');
+      },
+    });
+    const outcome = await runBackfillTick(h.deps);
+    expect(outcome).toMatchObject({
+      kind: 'ran',
+      members: 0,
+      finishedRun: false,
+    });
+    expect(h.calls.n + h.organizerCalls.n).toBe(0);
+    expect((await h.store.openRun())?.cursor).toBeUndefined();
+    // Not silent: the once-a-day alert and the card's last error.
+    expect(h.alert).toHaveBeenCalledWith(
+      expect.objectContaining({ title: 'Wrapped backfill is failing' }),
+    );
+    expect(
+      JSON.parse((await h.cache.get(LAST_ERROR_KEY)) ?? '{}'),
+    ).toMatchObject({ error: 'TypeError' });
+    await runBackfillTick(h.deps);
+    expect(h.alert).toHaveBeenCalledTimes(1);
+
+    // Readable again: the next tick clears the card's last error.
+    h.deps.snapshot = async () => snapshotWrapped(reader);
+    await runBackfillTick(h.deps);
+    expect(await h.cache.get(LAST_ERROR_KEY)).toBeUndefined();
   });
 });

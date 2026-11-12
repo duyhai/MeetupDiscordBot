@@ -41,7 +41,9 @@ const pause = (ms: number) =>
     });
 
     beforeEach(async () => {
-      await pool.query('DROP TABLE IF EXISTS wrapped_backfill_runs');
+      await pool.query(
+        'DROP TABLE IF EXISTS wrapped_backfill_deferred, wrapped_backfill_runs',
+      );
       await pool.query('DROP TABLE IF EXISTS wrapped_queue');
       await ensureDashboardSchema(pool);
       repo = another();
@@ -112,6 +114,50 @@ const pause = (ms: number) =>
         skipped: 1,
         failed: 1,
         requests: 42,
+      });
+    });
+
+    it('defers members past the cursor (compare-and-set) and completes them with their deltas', async () => {
+      const run = await repo.startRun('job', 3);
+      const id = run.id;
+      expect(await repo.deferMember(id, undefined, '11')).toBe(true);
+      // Stale cursor: refused, nothing deferred.
+      expect(await repo.deferMember(id, undefined, '12')).toBe(false);
+      expect(
+        await repo.advanceRun(id, '11', '12', {
+          done: 1,
+          built: 2,
+          skipped: 0,
+          failed: 0,
+        }),
+      ).toBe(true);
+      expect(await repo.deferMember(id, '12', '13')).toBe(true);
+      expect(await repo.deferredCount(id)).toBe(2);
+      expect(await repo.nextDeferred(id, 5)).toEqual(['11', '13']);
+      expect(
+        await repo.completeDeferred(id, '11', {
+          done: 1,
+          built: 3,
+          skipped: 0,
+          failed: 1,
+        }),
+      ).toBe(true);
+      // Already completed (another process): false, nothing added twice.
+      expect(
+        await repo.completeDeferred(id, '11', {
+          done: 1,
+          built: 3,
+          skipped: 0,
+          failed: 1,
+        }),
+      ).toBe(false);
+      expect(await repo.nextDeferred(id, 5)).toEqual(['13']);
+      const open = await repo.openRun();
+      expect(open).toMatchObject({
+        cursor: '13',
+        membersDone: 2,
+        built: 5,
+        failed: 1,
       });
     });
 

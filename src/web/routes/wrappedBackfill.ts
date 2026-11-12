@@ -16,7 +16,10 @@ import {
 import { SnapshotRun } from '../../lib/repositories/postgresSnapshotRepository.js';
 import { LastSnapshotTick, SnapshotTuning } from '../../lib/snapshot/ingest.js';
 import { BackfillRun } from '../../lib/repositories/postgresWrappedBackfillRepository.js';
-import { RUN_INTERVAL_MS } from '../../lib/wrapped/backfill.js';
+import {
+  BackfillLastError,
+  RUN_INTERVAL_MS,
+} from '../../lib/wrapped/backfill.js';
 import { tz } from '../../util/timezone.js';
 import { dashboardLocals } from '../dashboardRouter.js';
 import { SafeHtml, html, localUrl } from '../html.js';
@@ -40,6 +43,8 @@ export interface BackfillStatus {
   nextTickAt: Date | undefined;
   /** Rows in wrapped_entries. */
   entries: number;
+  /** The last tick that ended on a fatal error, within a day; cleared by a good tick. */
+  lastError?: BackfillLastError;
 }
 
 /** The group snapshot's state, for one line on the card. */
@@ -53,6 +58,8 @@ export interface SnapshotStatus {
   pending: number;
   /** Live events whose last RSVP read failed. */
   failing: number;
+  /** Live events whose short read was accepted (attendees left Meetup). */
+  hidden: number;
   /** The configured pace (SNAPSHOT_CALLS_PER_TICK, SNAPSHOT_CONCURRENCY). */
   pace: SnapshotTuning;
   /** The last tick that ran; undefined when none in the last day. */
@@ -170,11 +177,17 @@ async function snapshotLine(
   const tickAt = lastTick ? Date.parse(lastTick.at) : Number.NaN;
   const lastTickText = Number.isFinite(tickAt)
     ? ` · last tick ${age(new Date(tickAt), status.now)} ago: ${n(lastTick?.calls ?? 0)} calls, ` +
-      `${n(lastTick?.fetched ?? 0)} events read`
+      `${n(lastTick?.fetched ?? 0)} events read` +
+      (lastTick?.error ? ` (failed: ${lastTick.error})` : '')
     : '';
   parts.push(
     `Pace: ${n(pace.callsPerTick)} Meetup calls a tick, ${n(pace.concurrency)} at a time${lastTickText}.`,
   );
+  if (status.hidden > 0) {
+    parts.push(
+      `${n(status.hidden)} events have RSVPs Meetup no longer shows (their attendees left Meetup).`,
+    );
+  }
   if (status.failing > 0) {
     parts.push(
       `${n(status.failing)} events failed their last RSVP read; they are retried each run.`,
@@ -240,8 +253,17 @@ export async function wrappedBackfillCard(
       : '';
   return html`<div class="card">
     <h2>Wrapped backfill</h2>
-    ${backfillNotice(view.backfillNotice)} ${last} ${running} ${queue} ${form}
-    ${await snapshotLine(deps, view.csrfToken)}
+    ${backfillNotice(view.backfillNotice)} ${last} ${running}
+    ${
+      status.lastError
+        ? html`<p class="note attn">
+            Last tick failed (${status.lastError.error}) at
+            ${pacificDateTime(new Date(status.lastError.at))} Pacific; the
+            backfill retries every 5 minutes.
+          </p>`
+        : ''
+    }
+    ${queue} ${form} ${await snapshotLine(deps, view.csrfToken)}
   </div>`;
 }
 

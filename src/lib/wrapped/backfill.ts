@@ -169,6 +169,8 @@ export type TickOutcome =
       built: number;
       skipped: number;
       failed: number;
+      /** Token-path members the sweep passed, to build with the token room. */
+      deferred: number;
       calls: number;
       finishedRun: boolean;
     };
@@ -578,12 +580,16 @@ async function buildWithOrganizer(
  * refused token. Any other failure counts the member failed; the next run
  * retries them. `years` pins the queue's one year; undefined sweeps all.
  */
-/** The member's sources from the snapshot, or undefined: the token path. Never throws. */
+/** The member's sources from the snapshot, or undefined: the token path. Throws when the snapshot is unreadable. */
 async function memberSources(
   ctx: TickContext,
   member: Member,
 ): Promise<WrappedSources | undefined> {
-  return ctx.snapshot ? ctx.snapshot.sources(member.meetupId) : undefined;
+  // Strict: a reader error throws, so the caller can end the tick rather
+  // than send a snapshot member down the token path.
+  return ctx.snapshot
+    ? ctx.snapshot.sources(member.meetupId, undefined, { strict: true })
+    : undefined;
 }
 
 /** `sources`: memberSources' answer, decided once per member by the caller. */
@@ -680,6 +686,29 @@ async function linkedMembers(deps: BackfillDeps): Promise<Member[]> {
 
 const seconds = (ms: number) => (ms / 1000).toFixed(1);
 
+/** The last failed tick, for the staff card: the error class and when; a day's TTL. */
+export const LAST_ERROR_KEY = 'wrapped-backfill-last-error';
+const LAST_ERROR_TTL_SEC = 24 * 60 * 60;
+
+export interface BackfillLastError {
+  at: string;
+  error: string;
+}
+
+async function recordLastError(
+  deps: Pick<BackfillDeps, 'now'>,
+  cache: KeyValueCache,
+  error: unknown,
+): Promise<void> {
+  const last: BackfillLastError = {
+    at: deps.now().toISOString(),
+    error: errorName(error),
+  };
+  await cache
+    .set(LAST_ERROR_KEY, JSON.stringify(last), LAST_ERROR_TTL_SEC)
+    .catch(() => undefined);
+}
+
 /** "Wrapped backfill is failing", once per UTC day, by error class only. */
 async function alertFailingOnce(
   deps: Pick<BackfillDeps, 'now' | 'alert'>,
@@ -733,7 +762,14 @@ export async function runBackfillTick(
   const tiers: WrappedTiers = { cache, entries: await deps.entries() };
   const repo = await deps.members();
   const calls: Counter = { n: 0 };
-  const totals = { queued: 0, members: 0, built: 0, skipped: 0, failed: 0 };
+  const totals = {
+    queued: 0,
+    members: 0,
+    built: 0,
+    skipped: 0,
+    failed: 0,
+    deferred: 0,
+  };
   const add = (o: MemberOutcome) => {
     totals.built += o.built;
     totals.skipped += o.skipped;
@@ -796,8 +832,11 @@ export async function runBackfillTick(
       recorded = calls.n;
     }
   };
+  let failedThisTick = false;
   const fatal = async (error: unknown): Promise<TickOutcome> => {
+    failedThisTick = true;
     log.error(`Wrapped backfill: ${errorName(error)}; the tick ends`);
+    await recordLastError(deps, cache, error);
     await alertFailingOnce(deps, cache, error, log);
     return ran(false);
   };
@@ -834,8 +873,20 @@ export async function runBackfillTick(
           member.meetupId,
           deps.now(),
         );
-        // eslint-disable-next-line no-await-in-loop -- one member at a time
-        const sources = await memberSources(ctx, member);
+        let sources: WrappedSources | undefined;
+        try {
+          // eslint-disable-next-line no-await-in-loop -- one member at a time
+          sources = await memberSources(ctx, member);
+        } catch (error) {
+          totals.queued -= 1;
+          // eslint-disable-next-line no-await-in-loop -- the tick ends here
+          await store.unclaim(row.discordUserId);
+          log.warn(
+            `Wrapped backfill: the group snapshot is unreadable (${errorName(error)}); the tick ends`,
+          );
+          // eslint-disable-next-line no-await-in-loop -- the tick ends here
+          return await fatal(error);
+        }
         if (
           isFresh(
             copy,
@@ -931,19 +982,95 @@ export async function runBackfillTick(
     let { cursor } = run;
     const remaining = () =>
       linked.filter((m) => cursor === undefined || m.discordUserId > cursor);
+    /**
+     * One member under a short lease, so two processes on the same run do
+     * not both read them. `stop` ends the tick (with the outcome to return
+     * when it is final).
+     */
+    const buildLeased = async (
+      member: Member,
+      sources: WrappedSources | undefined,
+    ): Promise<
+      | { kind: 'built'; outcome: MemberOutcome }
+      | { kind: 'stop'; tick?: TickOutcome }
+    > => {
+      if (!(await deps.canStart(deps.now(), cache))) {
+        log.info('Wrapped backfill: the sweep window closed; the tick ends');
+        return { kind: 'stop' };
+      }
+      const memberLease = `${MEMBER_LEASE_KEY_PREFIX}${member.discordUserId}`;
+      const leased = await cache.exclusive_set(
+        memberLease,
+        deps.newLeaseValue(),
+        MEMBER_LEASE_TTL_SEC,
+      );
+      if (!leased) {
+        log.info(
+          `Wrapped backfill: Discord user ${member.discordUserId} is being built by another process; the tick ends`,
+        );
+        return { kind: 'stop' };
+      }
+      let outcome: MemberOutcome;
+      try {
+        outcome = await buildMember(ctx, member, undefined, true, sources);
+      } finally {
+        await cache.remove(memberLease).catch(() => undefined);
+      }
+      if (outcome.fatal) {
+        add({ ...outcome, failed: 0 });
+        return { kind: 'stop', tick: await fatal(outcome.fatal) };
+      }
+      if (outcome.leaseHeld || outcome.interrupted) {
+        add({ ...outcome, failed: 0 });
+        log.info(stopReason(outcome));
+        return { kind: 'stop' };
+      }
+      return { kind: 'built', outcome };
+    };
+    const delta = (outcome: MemberOutcome) => ({
+      done: 1,
+      built: outcome.built,
+      skipped: outcome.skipped,
+      failed: outcome.failed,
+    });
+    const cursorMoved = (): TickOutcome => {
+      log.warn(
+        'Wrapped backfill: another process moved the run cursor; the tick ends',
+      );
+      return ran(false);
+    };
+
+    // Pass 1, in Discord-id order: snapshot members are built (up to
+    // SNAPSHOT_MEMBERS_PER_TICK, no Meetup call); with a snapshot, a
+    // token-path member who needs a build is deferred (the cursor moves past
+    // them) so they never hold up the snapshot members behind them. Without
+    // one, everyone is built in order under the token caps, as before.
+    let stopped = false;
     for (const member of remaining()) {
+      let sources: WrappedSources | undefined;
+      try {
+        // eslint-disable-next-line no-await-in-loop -- one member at a time
+        sources = await memberSources(ctx, member);
+      } catch (error) {
+        // The snapshot is unreadable: neither path is safe for this member
+        // now (the token path would overwrite their snapshot entries).
+        log.warn(
+          `Wrapped backfill: the group snapshot is unreadable (${errorName(error)}); the tick ends`,
+        );
+        // A persistent reader failure would otherwise stall every tick in
+        // silence: the once-a-day "failing" alert and the card's last error.
+        // eslint-disable-next-line no-await-in-loop -- the tick ends here
+        return await fatal(error);
+      }
       // A member whose current year is fresh and whose previous year is
       // final (or who has no earlier year: the current entry lists every
       // active year) has nothing to build: skipped with no Meetup call and
-      // no slot.
+      // no slot. The member's path decides which freshness rule applies.
       // eslint-disable-next-line no-await-in-loop -- two small reads, one member at a time
       const [current, previous] = await Promise.all([
         tiers.entries?.get(member.discordUserId, thisYear),
         tiers.entries?.get(member.discordUserId, thisYear - 1),
       ]);
-      // The member's path decides which freshness rule applies.
-      // eslint-disable-next-line no-await-in-loop -- one member at a time
-      const sources = await memberSources(ctx, member);
       const at = sources ? snapshotAt : undefined;
       const now = deps.now();
       const noEarlierYear =
@@ -954,79 +1081,50 @@ export async function runBackfillTick(
         (noEarlierYear ||
           isFresh(previous, member.meetupId, thisYear - 1, now, at))
       ) {
-        // eslint-disable-next-line no-await-in-loop -- one build in flight, by design
+        // eslint-disable-next-line no-await-in-loop -- one member at a time
         const moved = await store.advanceRun(
           thisRun,
           cursor,
           member.discordUserId,
-          {
-            done: 1,
-            built: 0,
-            skipped: 1,
-            failed: 0,
-          },
+          { done: 1, built: 0, skipped: 1, failed: 0 },
         );
         if (!moved) {
-          log.warn(
-            'Wrapped backfill: another process moved the run cursor; the tick ends',
-          );
-          return ran(false);
+          return cursorMoved();
         }
         cursor = member.discordUserId;
         totals.skipped += 1;
         continue;
       }
-      if (capReached()) {
+      if (!sources && snapshotAt === undefined) {
+        // No snapshot to serve anyone: one pass in id order under the
+        // token caps, as before the snapshot.
+        if (!tokenRoom()) {
+          break;
+        }
+      } else if (!sources) {
+        // eslint-disable-next-line no-await-in-loop -- one member at a time
+        const moved = await store.deferMember(
+          thisRun,
+          cursor,
+          member.discordUserId,
+        );
+        if (!moved) {
+          return cursorMoved();
+        }
+        cursor = member.discordUserId;
+        totals.deferred += 1;
+        continue;
+      }
+      if (sources && built.snapshot >= SNAPSHOT_MEMBERS_PER_TICK) {
         break;
       }
       // eslint-disable-next-line no-await-in-loop -- one build in flight, by design
-      if (!(await deps.canStart(deps.now(), cache))) {
-        log.info('Wrapped backfill: the sweep window closed; the tick ends');
-        break;
-      }
-      // A short lease on the member, so two processes on the same cursor do
-      // not both read them; the holder advances the cursor past them.
-      const memberLease = `${MEMBER_LEASE_KEY_PREFIX}${member.discordUserId}`;
-      // eslint-disable-next-line no-await-in-loop -- one build in flight, by design
-      const leased = await cache.exclusive_set(
-        memberLease,
-        deps.newLeaseValue(),
-        MEMBER_LEASE_TTL_SEC,
-      );
-      if (!leased) {
-        log.info(
-          `Wrapped backfill: Discord user ${member.discordUserId} is being built by another process; the tick ends`,
-        );
-        break;
-      }
-      let outcome: MemberOutcome;
-      try {
-        // eslint-disable-next-line no-await-in-loop -- one build in flight, by design
-        outcome = await buildMember(
-          ctx,
-          member,
-          undefined,
-          tokenRoom(),
-          sources,
-        );
-      } finally {
-        // eslint-disable-next-line no-await-in-loop -- one build in flight, by design
-        await cache.remove(memberLease).catch(() => undefined);
-      }
-      if (outcome.fatal) {
-        add({ ...outcome, failed: 0 });
-        // eslint-disable-next-line no-await-in-loop -- the tick ends here
-        return await fatal(outcome.fatal);
-      }
-      if (outcome.deferred) {
-        log.info(
-          'Wrapped backfill: the next member needs the token path and the tick has no room; the tick ends',
-        );
-        break;
-      }
-      if (outcome.leaseHeld || outcome.interrupted) {
-        add({ ...outcome, failed: 0 });
-        log.info(stopReason(outcome));
+      const result = await buildLeased(member, sources);
+      if (result.kind === 'stop') {
+        if (result.tick) {
+          return result.tick;
+        }
+        stopped = true;
         break;
       }
       // eslint-disable-next-line no-await-in-loop -- one build in flight, by design
@@ -1034,25 +1132,56 @@ export async function runBackfillTick(
         thisRun,
         cursor,
         member.discordUserId,
-        {
-          done: 1,
-          built: outcome.built,
-          skipped: outcome.skipped,
-          failed: outcome.failed,
-        },
+        delta(result.outcome),
       );
       if (!advanced) {
-        log.warn(
-          'Wrapped backfill: another process moved the run cursor; the tick ends',
-        );
-        return ran(false);
+        return cursorMoved();
       }
       cursor = member.discordUserId;
       totals.members += 1;
-      add(outcome);
-      count(outcome);
+      add(result.outcome);
+      count(result.outcome);
     }
-    if (remaining().length > 0) {
+
+    // Pass 2: deferred token-path members, with whatever token room the
+    // tick has left (MEMBERS_PER_TICK, TICK_CALL_BUDGET).
+    const byId = new Map(linked.map((m) => [m.discordUserId, m]));
+    while (!stopped && tokenRoom()) {
+      // eslint-disable-next-line no-await-in-loop -- one build in flight, by design
+      const [id] = await store.nextDeferred(thisRun, 1);
+      if (id === undefined) {
+        break;
+      }
+      const member = byId.get(id);
+      if (!member) {
+        // No longer linked: nothing to build.
+        // eslint-disable-next-line no-await-in-loop -- one small write
+        await store.completeDeferred(thisRun, id, {
+          done: 1,
+          built: 0,
+          skipped: 1,
+          failed: 0,
+        });
+        totals.skipped += 1;
+        continue;
+      }
+      // eslint-disable-next-line no-await-in-loop -- one build in flight, by design
+      const result = await buildLeased(member, undefined);
+      if (result.kind === 'stop') {
+        if (result.tick) {
+          return result.tick;
+        }
+        break;
+      }
+      // eslint-disable-next-line no-await-in-loop -- one small write
+      if (!(await store.completeDeferred(thisRun, id, delta(result.outcome)))) {
+        return cursorMoved();
+      }
+      totals.members += 1;
+      add(result.outcome);
+      count(result.outcome);
+    }
+    if (remaining().length > 0 || (await store.deferredCount(thisRun)) > 0) {
       return ran(false);
     }
     await settle();
@@ -1085,6 +1214,10 @@ export async function runBackfillTick(
     // Whatever the exit: the tick's calls on the run. A tick with no run of
     // its own used a local map, so there is nothing of its own to clear.
     await settle();
+    if (!failedThisTick) {
+      // A tick that ended without a fatal error clears the card's last error.
+      await cache.remove(LAST_ERROR_KEY).catch(() => undefined);
+    }
   }
 }
 

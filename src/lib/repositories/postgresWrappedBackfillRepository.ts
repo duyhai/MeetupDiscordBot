@@ -59,6 +59,25 @@ export interface WrappedBackfillStore {
     delta: RunDelta,
   ): Promise<boolean>;
   finishRun(id: number): Promise<BackfillRun | undefined>;
+  /**
+   * Moves the cursor from `from` to `to` (compare-and-set, as advanceRun)
+   * and records `to` as deferred to the token path, in one statement; false
+   * when another process moved the cursor first.
+   */
+  deferMember(
+    id: number,
+    from: string | undefined,
+    to: string,
+  ): Promise<boolean>;
+  /** The run's deferred members, lowest Discord id first. */
+  nextDeferred(id: number, limit: number): Promise<string[]>;
+  /** Removes the member's deferred row and adds the deltas; false when it was already gone. */
+  completeDeferred(
+    id: number,
+    discordUserId: string,
+    delta: RunDelta,
+  ): Promise<boolean>;
+  deferredCount(id: number): Promise<number>;
   /** Adds a tick's Meetup client calls to the run (open or just finished). */
   recordRequests(id: number, calls: number): Promise<void>;
   /** 'queued' on insert; the year already queued when the member has a row. */
@@ -223,6 +242,66 @@ export class PostgresWrappedBackfillRepository implements WrappedBackfillStore {
       ],
     );
     return result.rowCount === 1;
+  }
+
+  async deferMember(
+    id: number,
+    from: string | undefined,
+    to: string,
+  ): Promise<boolean> {
+    const result = await this.pool.query(
+      `WITH moved AS (
+         UPDATE wrapped_backfill_runs SET cursor = $3
+          WHERE id = $1 AND finished_at IS NULL AND cursor IS NOT DISTINCT FROM $2
+          RETURNING id
+       )
+       INSERT INTO wrapped_backfill_deferred (run_id, discord_user_id)
+       SELECT id, $3 FROM moved
+       -- Unreachable in practice: the cursor only moves forward, so a member
+       -- is deferred once per run. Were it hit, the cursor still moved and
+       -- the caller would end the tick as if another process had moved it.
+       ON CONFLICT DO NOTHING
+       RETURNING run_id`,
+      [id, from ?? null, to],
+    );
+    return result.rowCount === 1;
+  }
+
+  async nextDeferred(id: number, limit: number): Promise<string[]> {
+    const result = await this.pool.query<{ discord_user_id: string }>(
+      `SELECT discord_user_id FROM wrapped_backfill_deferred
+        WHERE run_id = $1 ORDER BY discord_user_id LIMIT $2`,
+      [id, limit],
+    );
+    return result.rows.map((row) => row.discord_user_id);
+  }
+
+  async completeDeferred(
+    id: number,
+    discordUserId: string,
+    delta: RunDelta,
+  ): Promise<boolean> {
+    const result = await this.pool.query(
+      `WITH gone AS (
+         DELETE FROM wrapped_backfill_deferred
+          WHERE run_id = $1 AND discord_user_id = $2
+          RETURNING run_id
+       )
+       UPDATE wrapped_backfill_runs r
+          SET members_done = members_done + $3, built = built + $4,
+              skipped = skipped + $5, failed = failed + $6
+         FROM gone WHERE r.id = gone.run_id AND r.finished_at IS NULL`,
+      [id, discordUserId, delta.done, delta.built, delta.skipped, delta.failed],
+    );
+    return result.rowCount === 1;
+  }
+
+  async deferredCount(id: number): Promise<number> {
+    const result = await this.pool.query<{ n: string }>(
+      'SELECT count(*)::text AS n FROM wrapped_backfill_deferred WHERE run_id = $1',
+      [id],
+    );
+    return Number(result.rows[0].n);
   }
 
   async recordRequests(id: number, calls: number): Promise<void> {

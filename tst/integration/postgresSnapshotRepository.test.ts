@@ -51,7 +51,7 @@ const event = (
 
     beforeEach(async () => {
       await pool.query(
-        'DROP TABLE IF EXISTS meetup_event_rsvps, meetup_events, meetup_snapshot_runs, event_audit_state CASCADE',
+        'DROP TABLE IF EXISTS meetup_event_rsvps, meetup_events, meetup_snapshot_runs, event_audit_state, wrapped_snapshot_flags CASCADE',
       );
       await ensureDashboardSchema(pool);
       repo = new PostgresSnapshotRepository(pool);
@@ -345,6 +345,46 @@ const event = (
         'rsvp_failed_at',
         'rsvp_failures',
       ]);
+    });
+
+    it('marks an accepted short read hidden, counts it, and clears it on a normal read', async () => {
+      await repo.upsertEvents([event('601', days(3), { yesCount: 6 })], NOW);
+      await repo.replaceRsvps('601', [], NOW, { hidden: true });
+      expect(await repo.hiddenEventCount()).toBe(1);
+      await repo.replaceRsvps('601', [{ memberId: '10', status: 'YES' }], NOW);
+      expect(await repo.hiddenEventCount()).toBe(0);
+      await repo.recordRsvpFailure('601', 'ShortRsvpReadError', days(1));
+      // The next run (started after both): recent, so read again, with the
+      // earlier run's error on hand.
+      const [work] = await repo.eventsNeedingRsvps({
+        runStartedAt: new Date(NOW.getTime() + 60_000),
+        now: NOW,
+        settleDays: 14,
+        limit: 1,
+      });
+      expect(work).toMatchObject({
+        eventId: '601',
+        lastError: 'ShortRsvpReadError',
+      });
+    });
+
+    it('flags, reads and clears an undercounted member', async () => {
+      expect(await repo.isFlagged('m9')).toBe(false);
+      await repo.flagUndercounted('m9', 3, 9);
+      expect(await repo.isFlagged('m9')).toBe(true);
+      await repo.clearFlag('m9');
+      expect(await repo.isFlagged('m9')).toBe(false);
+    });
+
+    it('adds rsvps_hidden to a table that predates it', async () => {
+      await pool.query('ALTER TABLE meetup_events DROP COLUMN rsvps_hidden');
+      await ensureDashboardSchema(pool);
+      const { rows } = await pool.query<{ column_name: string }>(
+        `SELECT column_name FROM information_schema.columns
+          WHERE table_schema = current_schema() AND table_name = 'meetup_events'
+            AND column_name = 'rsvps_hidden'`,
+      );
+      expect(rows).toHaveLength(1);
     });
   },
 );

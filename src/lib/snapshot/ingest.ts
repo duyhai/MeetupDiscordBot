@@ -41,11 +41,16 @@ import {
   readEventRsvps,
 } from './read.js';
 
-/** A 200 that is not believable: the stored rows are kept. */
+const SHORT_READ = 'ShortRsvpReadError';
+
+/**
+ * A 200 that is not believable: the stored rows are kept, and the event is
+ * read again next run. Short again then, it is accepted (rsvps_hidden).
+ */
 export class ShortRsvpReadError extends Error {
   constructor() {
     super('RSVP read shorter than Meetup counts');
-    this.name = 'ShortRsvpReadError';
+    this.name = SHORT_READ;
   }
 }
 
@@ -82,6 +87,29 @@ export interface LastSnapshotTick {
   at: string;
   calls: number;
   fetched: number;
+  /** The error class (or 'RateLimited') when the tick failed. */
+  error?: string;
+}
+
+const RATE_LIMITED = 'RateLimited';
+
+/** The last tick's numbers for the staff card, failed ticks included. Never throws. */
+async function recordLastTick(
+  deps: Pick<SnapshotDeps, 'now'>,
+  cache: KeyValueCache,
+  calls: number,
+  fetched: number,
+  error?: string,
+): Promise<void> {
+  const last: LastSnapshotTick = {
+    at: deps.now().toISOString(),
+    calls,
+    fetched,
+    ...(error === undefined ? {} : { error }),
+  };
+  await cache
+    .set(SNAPSHOT_LAST_TICK_KEY, JSON.stringify(last), LAST_TICK_TTL_SEC)
+    .catch(() => undefined);
 }
 const MAX_CONCURRENCY = 8;
 
@@ -338,9 +366,15 @@ async function rsvpPhase(
       batch.map(async (next) => {
         const read = await readEventRsvps(meetup, next.eventId, calls);
         if (read && isShortRead(read, next.yesCount)) {
+          if (next.lastError === SHORT_READ || next.hidden) {
+            // Short in an earlier run too (or already accepted, re-read in
+            // the settle window): not a glitch but an event whose attendees
+            // have left Meetup since. What Meetup shows is final.
+            return { ...read, hidden: true };
+          }
           throw new ShortRsvpReadError();
         }
-        return read;
+        return read && { ...read, hidden: false };
       }),
     );
     let stop: unknown;
@@ -385,8 +419,15 @@ async function rsvpPhase(
         log.info(`Group snapshot: event ${next.eventId} is gone from Meetup`);
         continue;
       }
+      if (read.hidden) {
+        log.info(
+          `Group snapshot: event ${next.eventId} read short again; accepted (its attendees left Meetup)`,
+        );
+      }
       // eslint-disable-next-line no-await-in-loop -- one event's write
-      await store.replaceRsvps(next.eventId, read.rsvps, deps.now());
+      await store.replaceRsvps(next.eventId, read.rsvps, deps.now(), {
+        hidden: read.hidden,
+      });
       // eslint-disable-next-line no-await-in-loop -- one small write
       await store.advance(run.id, {
         eventsFetched: 1,
@@ -480,12 +521,19 @@ export async function runSnapshotTick(
       await rsvpPhase(deps, cache, store, run, meetup, calls, work, log);
     });
   } catch (error) {
+    const name = isRateLimited(error) ? RATE_LIMITED : errorName(error);
     log.error(`Group snapshot tick failed: ${String(error)}`);
-    await store.recordError(run.id, errorName(error)).catch(() => undefined);
+    await store.recordError(run.id, name).catch(() => undefined);
     await settle();
     await releaseBuildLease(cache, lease);
-    await alertFailingOnce(deps, cache, error, run, log);
-    return { kind: 'failed', runId: run.id, error: errorName(error) };
+    await recordLastTick(deps, cache, calls.n, work.fetched, name);
+    // One rate-limited tick is Meetup asking us to slow down, and the next
+    // tick resumes; only a second in a row (the run's last error is still
+    // the rate limit) is worth the "failing" alert.
+    if (name !== RATE_LIMITED || run.lastError === RATE_LIMITED) {
+      await alertFailingOnce(deps, cache, error, run, log);
+    }
+    return { kind: 'failed', runId: run.id, error: name };
   }
   try {
     await settle();
@@ -524,14 +572,7 @@ export async function runSnapshotTick(
   } finally {
     await releaseBuildLease(cache, lease);
   }
-  const last: LastSnapshotTick = {
-    at: deps.now().toISOString(),
-    calls: calls.n,
-    fetched: work.fetched,
-  };
-  await cache
-    .set(SNAPSHOT_LAST_TICK_KEY, JSON.stringify(last), LAST_TICK_TTL_SEC)
-    .catch(() => undefined);
+  await recordLastTick(deps, cache, calls.n, work.fetched);
   return {
     kind: 'ran',
     runId: run.id,

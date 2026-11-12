@@ -115,6 +115,15 @@ CREATE TABLE IF NOT EXISTS wrapped_backfill_runs (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS wrapped_backfill_runs_open_idx
   ON wrapped_backfill_runs ((true)) WHERE finished_at IS NULL;
+-- Members the run's cursor passed without building because they need the
+-- token path (src/lib/wrapped/backfill.ts): the sweep builds snapshot
+-- members first and drains these with the tick's token room. A member's
+-- row is removed when they are built (members_done counts them then).
+CREATE TABLE IF NOT EXISTS wrapped_backfill_deferred (
+  run_id          INTEGER NOT NULL REFERENCES wrapped_backfill_runs(id) ON DELETE CASCADE,
+  discord_user_id TEXT NOT NULL CHECK (discord_user_id ~ '^[0-9]{1,20}$'),
+  PRIMARY KEY (run_id, discord_user_id)
+);
 -- Every built Wrapped, durably (src/lib/wrapped/store.ts): the same JSON the
 -- Redis hot copy holds, one row per member and year. meetup_id is the
 -- member's own link at build time; a relink's old rows are deleted on the
@@ -161,7 +170,10 @@ CREATE TABLE IF NOT EXISTS meetup_events (
   -- error class name. Reset by a good read.
   rsvp_failures    INTEGER NOT NULL DEFAULT 0,
   rsvp_failed_at   TIMESTAMPTZ,
-  rsvp_error       TEXT
+  rsvp_error       TEXT,
+  -- A short read accepted as final (its attendees left Meetup since): the
+  -- stored rows are what Meetup still shows.
+  rsvps_hidden     BOOLEAN NOT NULL DEFAULT false
 );
 -- The rsvp_* columns came after the table's first shape (PR #155 review).
 -- Guarded by a catalog read like dashboard_notices above, so a boot on a
@@ -181,6 +193,18 @@ BEGIN
   END IF;
 END
 $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+     WHERE table_schema = current_schema()
+       AND table_name = 'meetup_events'
+       AND column_name = 'rsvps_hidden'
+  ) THEN
+    ALTER TABLE meetup_events ADD COLUMN rsvps_hidden BOOLEAN NOT NULL DEFAULT false;
+  END IF;
+END
+$$;
 CREATE INDEX IF NOT EXISTS meetup_events_date_idx ON meetup_events (date_time);
 CREATE INDEX IF NOT EXISTS meetup_events_hosts_idx ON meetup_events USING GIN (host_ids);
 -- One row per event and member: the RSVP as of the event's rsvps_fetched_at.
@@ -193,18 +217,19 @@ CREATE TABLE IF NOT EXISTS meetup_event_rsvps (
   PRIMARY KEY (event_id, member_id)
 );
 CREATE INDEX IF NOT EXISTS meetup_event_rsvps_member_idx ON meetup_event_rsvps (member_id);
--- Snapshot runs, as wrapped_backfill_runs: at most one open. kind is 'full'
--- until a full pull has finished, then 'incremental'. listed_at is when the
--- run's listing phase finished; last_error is an error class name only.
 -- Members whose own token counted clearly more past RSVPs than the snapshot
 -- holds (src/lib/snapshot/wrapped.ts): their Wrapped is built on the token
--- path from then on, every year. Meetup ids and counts only.
+-- path until a later cross-check agrees (the flag is then cleared). Meetup
+-- ids and counts only.
 CREATE TABLE IF NOT EXISTS wrapped_snapshot_flags (
   meetup_id      TEXT PRIMARY KEY,
   flagged_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
   snapshot_count INTEGER NOT NULL,
   self_count     INTEGER NOT NULL
 );
+-- Snapshot runs, as wrapped_backfill_runs: at most one open. kind is 'full'
+-- until a full pull has finished, then 'incremental'. listed_at is when the
+-- run's listing phase finished; last_error is an error class name only.
 CREATE TABLE IF NOT EXISTS meetup_snapshot_runs (
   id             SERIAL PRIMARY KEY,
   trigger        TEXT NOT NULL CHECK (trigger = 'job' OR trigger ~ '^[0-9]{1,20}$'),

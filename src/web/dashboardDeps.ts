@@ -61,7 +61,12 @@ import {
   snapshotTuning,
 } from '../lib/snapshot/ingest.js';
 import { PostgresWrappedBackfillRepository } from '../lib/repositories/postgresWrappedBackfillRepository.js';
-import { RUN_NOW_KEY, RUN_NOW_TTL_SEC } from '../lib/wrapped/backfill.js';
+import {
+  BackfillLastError,
+  LAST_ERROR_KEY,
+  RUN_NOW_KEY,
+  RUN_NOW_TTL_SEC,
+} from '../lib/wrapped/backfill.js';
 import { recordedNextTick } from '../lib/wrapped/queue.js';
 import { PostgresWrappedEntryRepository } from '../lib/repositories/postgresWrappedEntryRepository.js';
 import {
@@ -390,12 +395,20 @@ export function dashboardPageDeps(): DashboardPageDeps {
           store.queueLength(),
           entries.count(),
         ]);
+        let lastError: BackfillLastError | undefined;
+        try {
+          const raw = await cache.get(LAST_ERROR_KEY);
+          lastError = raw ? (JSON.parse(raw) as BackfillLastError) : undefined;
+        } catch {
+          lastError = undefined;
+        }
         return {
           lastRun,
           openRun,
           queueLength,
           nextTickAt: await recordedNextTick(cache, now),
           entries: count,
+          ...(lastError ? { lastError } : {}),
         };
       },
       // The flag the next tick honours (backfill.ts); a run already open
@@ -417,11 +430,12 @@ export function dashboardPageDeps(): DashboardPageDeps {
       snapshot: async () => {
         const store = await PostgresSnapshotRepository.instance();
         const now = new Date();
-        const [lastRun, openRun, totals, failing] = await Promise.all([
+        const [lastRun, openRun, totals, failing, hidden] = await Promise.all([
           store.lastFinishedRun(),
           store.openRun(),
           store.totals(),
           store.failingEventCount(),
+          store.hiddenEventCount(),
         ]);
         const pending = openRun
           ? await store.pendingRsvpCount({
@@ -445,6 +459,7 @@ export function dashboardPageDeps(): DashboardPageDeps {
           ...totals,
           pending,
           failing,
+          hidden,
           pace: snapshotTuning(),
           lastTick,
           now,

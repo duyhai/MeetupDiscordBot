@@ -114,6 +114,27 @@ describe('snapshotWrapped.sources', () => {
     // The backfill passes no cross-check: still the token path.
     expect(await snap.sources('me')).toBeUndefined();
   });
+
+  it('clears the flag when a later cross-check agrees', async () => {
+    const reader = new FakeSnapshotReader(EVENTS, ATTENDEES);
+    await reader.flagUndercounted('me', 1, 9);
+    const snap = snapshotWrapped(reader);
+    // Still disagreeing, or no count: stays on the token path.
+    expect(await snap.sources('me', async () => 9)).toBeUndefined();
+    expect(await snap.sources('me', async () => undefined)).toBeUndefined();
+    expect(reader.flagged.has('me')).toBe(true);
+    // The snapshot has caught up.
+    expect(await snap.sources('me', async () => 4)).toBeDefined();
+    expect(reader.flagged.has('me')).toBe(false);
+  });
+
+  it('strict mode rethrows a reader error instead of answering the token path', async () => {
+    const reader = new FakeSnapshotReader(EVENTS, ATTENDEES);
+    reader.failing = new TypeError('pg down');
+    await expect(
+      snapshotWrapped(reader).sources('me', undefined, { strict: true }),
+    ).rejects.toThrow(TypeError);
+  });
 });
 
 describe('buildWrappedFromSnapshot', () => {

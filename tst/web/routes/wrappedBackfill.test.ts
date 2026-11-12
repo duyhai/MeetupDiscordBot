@@ -72,6 +72,7 @@ function control(
       rsvps: 0,
       pending: 0,
       failing: 0,
+      hidden: 0,
       pace: { callsPerTick: 150, concurrency: 1 },
       lastTick: undefined,
       now: new Date('2026-12-10T20:00:00Z'),
@@ -301,6 +302,7 @@ describe('Home Wrapped backfill card: the group snapshot line', () => {
         rsvps: 51204,
         pending: 0,
         failing: 0,
+        hidden: 0,
         pace: { callsPerTick: 150, concurrency: 1 },
         lastTick: undefined,
         now: NOW,
@@ -326,6 +328,7 @@ describe('Home Wrapped backfill card: the group snapshot line', () => {
         rsvps: 24000,
         pending: 1246,
         failing: 4,
+        hidden: 0,
         pace: { callsPerTick: 150, concurrency: 1 },
         lastTick: undefined,
         now: NOW,
@@ -377,6 +380,7 @@ describe('POST /dashboard/wrapped/snapshot/run (Refresh snapshot now)', () => {
           rsvps: 1,
           pending: 1,
           failing: 0,
+          hidden: 0,
           pace: { callsPerTick: 150, concurrency: 1 },
           lastTick: undefined,
           now: new Date('2026-12-10T20:00:00Z'),
@@ -451,6 +455,7 @@ describe('Home Wrapped backfill card: the snapshot pace', () => {
           rsvps: 0,
           pending: 0,
           failing: 0,
+          hidden: 0,
           pace: { callsPerTick: 5000, concurrency: 1 },
           lastTick: { at: '2026-12-10T19:56:00Z', calls: 150, fetched: 148 },
           now: new Date('2026-12-10T20:00:00Z'),
@@ -465,5 +470,55 @@ describe('Home Wrapped backfill card: the snapshot pace', () => {
   it('with no recent tick, the pace alone', async () => {
     const out = await render(control());
     expect(out).toContain('Pace: 150 Meetup calls a tick, 1 at a time.');
+  });
+});
+
+describe('Home Wrapped backfill card: hidden RSVPs and a failed last tick', () => {
+  it('counts events whose attendees left Meetup, and shows a failed last tick', async () => {
+    const out = await render(
+      control({
+        snapshot: async () => ({
+          lastRun: undefined,
+          openRun: undefined,
+          events: 0,
+          rsvps: 0,
+          pending: 0,
+          failing: 0,
+          hidden: 7,
+          pace: { callsPerTick: 150, concurrency: 1 },
+          lastTick: {
+            at: '2026-12-10T19:58:00Z',
+            calls: 3,
+            fetched: 2,
+            error: 'RateLimited',
+          },
+          now: new Date('2026-12-10T20:00:00Z'),
+        }),
+      }),
+    );
+    expect(out).toContain(
+      '7 events have RSVPs Meetup no longer shows (their attendees left Meetup).',
+    );
+    expect(out).toContain('2 events read (failed: RateLimited).');
+  });
+});
+
+describe('Home Wrapped backfill card: the last failed tick', () => {
+  it('says the last tick failed, with the error class and time only', async () => {
+    const out = await render(
+      control({
+        status: async () => ({
+          lastRun: undefined,
+          openRun: undefined,
+          queueLength: 0,
+          nextTickAt: undefined,
+          entries: 0,
+          lastError: { at: '2026-12-10T19:55:00Z', error: 'TypeError' },
+        }),
+      }),
+    );
+    expect(out).toContain(
+      'Last tick failed (TypeError) at Dec 10, 2026 11:55 AM Pacific; the backfill retries every 5 minutes.',
+    );
   });
 });
