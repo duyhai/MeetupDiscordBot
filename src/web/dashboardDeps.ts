@@ -53,9 +53,12 @@ import { ApplicationCache } from '../util/cache.js';
 import { PostgresWrappedAnnouncementRepository } from '../lib/repositories/postgresWrappedAnnouncementRepository.js';
 import { PostgresSnapshotRepository } from '../lib/repositories/postgresSnapshotRepository.js';
 import {
+  LastSnapshotTick,
   RSVP_SETTLE_DAYS,
+  SNAPSHOT_LAST_TICK_KEY,
   SNAPSHOT_RUN_NOW_KEY,
   SNAPSHOT_RUN_NOW_TTL_SEC,
+  snapshotTuning,
 } from '../lib/snapshot/ingest.js';
 import { PostgresWrappedBackfillRepository } from '../lib/repositories/postgresWrappedBackfillRepository.js';
 import { RUN_NOW_KEY, RUN_NOW_TTL_SEC } from '../lib/wrapped/backfill.js';
@@ -427,7 +430,25 @@ export function dashboardPageDeps(): DashboardPageDeps {
               settleDays: RSVP_SETTLE_DAYS,
             })
           : 0;
-        return { lastRun, openRun, ...totals, pending, failing, now };
+        let lastTick: LastSnapshotTick | undefined;
+        try {
+          const raw = await (
+            await ApplicationCache()
+          ).get(SNAPSHOT_LAST_TICK_KEY);
+          lastTick = raw ? (JSON.parse(raw) as LastSnapshotTick) : undefined;
+        } catch {
+          lastTick = undefined;
+        }
+        return {
+          lastRun,
+          openRun,
+          ...totals,
+          pending,
+          failing,
+          pace: snapshotTuning(),
+          lastTick,
+          now,
+        };
       },
       // The flag the next snapshot tick honours (snapshot/ingest.ts).
       refreshSnapshot: async (requestedBy) => {

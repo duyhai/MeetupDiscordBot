@@ -67,17 +67,33 @@ export const SNAPSHOT_TICK_MS = 5 * 60_000;
 export const SNAPSHOT_TICK_CALL_BUDGET = 150;
 /** Events whose RSVPs are read at once by default (listing pages are always one at a time). */
 export const SNAPSHOT_CONCURRENCY = 1;
-const MAX_CALLS_PER_TICK = 2000;
+const MAX_CALLS_PER_TICK = 10_000;
+/**
+ * A tick stops starting events this long after it began, so a slow Meetup
+ * day cannot overrun the 5-minute interval or the 30-minute report lease.
+ * Checked at event (batch) boundaries; an event in flight finishes.
+ */
+export const SNAPSHOT_TICK_MAX_MS = 4 * 60_000;
+/** The last tick's numbers, for the staff card: counts only, a day's TTL. */
+export const SNAPSHOT_LAST_TICK_KEY = 'group-snapshot-last-tick';
+const LAST_TICK_TTL_SEC = 24 * 60 * 60;
+
+export interface LastSnapshotTick {
+  at: string;
+  calls: number;
+  fetched: number;
+}
 const MAX_CONCURRENCY = 8;
 
 /**
  * The ingest's pace, from the environment (Heroku config vars), so the
  * full pull can be sped up without a deploy:
- * - SNAPSHOT_CALLS_PER_TICK: 1..2000, default 150.
+ * - SNAPSHOT_CALLS_PER_TICK: 1..10000, default 150.
  * - SNAPSHOT_CONCURRENCY: 1..8, default 1.
- * Recommended fast setting for the first full pull: 600 and 4 (~9 ticks,
- * ~45 min, ~8 requests/s at peak; see the spec's "Pace"). Anything else
- * falls back to the default. The quiet-hour and digest guards are untouched.
+ * Live (2026-11-12): sequential RSVP reads run ~75–90 ms apart, so the
+ * budget is the bottleneck; 5000 at concurrency 1 finishes the full pull in
+ * about two ticks. Anything out of range falls back to the default. The
+ * SNAPSHOT_TICK_MAX_MS cap and the quiet-hour and digest guards still apply.
  */
 export interface SnapshotTuning {
   callsPerTick: number;
@@ -224,6 +240,8 @@ function isFatal(error: unknown): boolean {
 }
 
 interface TickWork {
+  /** When the tick began, for SNAPSHOT_TICK_MAX_MS. */
+  startedMs: number;
   listed: boolean;
   shortListing: boolean;
   fetched: number;
@@ -293,6 +311,10 @@ async function rsvpPhase(
   for (;;) {
     const room = callsPerTick - calls.n;
     if (room <= 0) {
+      return;
+    }
+    if (deps.now().getTime() - work.startedMs >= SNAPSHOT_TICK_MAX_MS) {
+      log.info('Group snapshot: the tick reached its time cap; the tick ends');
       return;
     }
     // eslint-disable-next-line no-await-in-loop -- one batch in flight, by design
@@ -410,6 +432,7 @@ export async function runSnapshotTick(
   deps: SnapshotDeps,
 ): Promise<SnapshotTickOutcome> {
   const log = deps.log ?? logger;
+  const tickStartedMs = deps.now().getTime();
   const cache = await deps.cache();
   if (!(await deps.canStart(deps.now(), cache))) {
     return { kind: 'skipped', reason: 'guard' };
@@ -433,6 +456,7 @@ export async function runSnapshotTick(
     }
   };
   const work: TickWork = {
+    startedMs: tickStartedMs,
     listed: run.listedAt !== undefined,
     shortListing: false,
     fetched: 0,
@@ -500,6 +524,14 @@ export async function runSnapshotTick(
   } finally {
     await releaseBuildLease(cache, lease);
   }
+  const last: LastSnapshotTick = {
+    at: deps.now().toISOString(),
+    calls: calls.n,
+    fetched: work.fetched,
+  };
+  await cache
+    .set(SNAPSHOT_LAST_TICK_KEY, JSON.stringify(last), LAST_TICK_TTL_SEC)
+    .catch(() => undefined);
   return {
     kind: 'ran',
     runId: run.id,

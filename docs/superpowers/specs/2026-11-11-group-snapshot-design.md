@@ -458,34 +458,33 @@ seeded snapshot writes the entry `readEntry` serves, with zero Meetup calls.
 Two config vars, read at boot (`snapshotTuning`), so the pace changes with a
 config change and a restart, no deploy:
 
-| Var                       | Range  | Default | Fast (first full pull) |
-| ------------------------- | ------ | ------- | ---------------------- |
-| `SNAPSHOT_CALLS_PER_TICK` | 1–2000 | 150     | 600                    |
-| `SNAPSHOT_CONCURRENCY`    | 1–8    | 1       | 4                      |
+| Var                       | Range   | Default | Fast (first full pull) |
+| ------------------------- | ------- | ------- | ---------------------- |
+| `SNAPSHOT_CALLS_PER_TICK` | 1–10000 | 150     | 5000                   |
+| `SNAPSHOT_CONCURRENCY`    | 1–8     | 1       | 1                      |
 
-- Concurrency applies to RSVP reads of different events only; listing
-  pages stay one at a time. A batch never starts more events than the calls
-  left (the budget is still checked at event boundaries; an event in flight
-  reads all its pages).
-- "Three failures in a row" counts in event order across batches, and any
-  good read resets it, so it means the same at any concurrency. A batch's
-  good reads are written before the tick ends.
+- **Live evidence (v335, the first ingest ticks, from the lead):** sequential
+  `getEventRsvpsForSnapshot` calls run ~75–90 ms apart, so 150 calls take
+  ~12 s and the tick idles ~288 s. The budget is the whole bottleneck; at
+  5000 calls a tick the remaining full pull finishes in about two ticks
+  (~7 min of calls). Concurrency is not needed and stays at 1.
+- **Time cap:** a tick stops starting events `SNAPSHOT_TICK_MAX_MS` (4 min)
+  after it began, checked at event boundaries (an event in flight finishes),
+  so a slow Meetup day cannot overrun the 5-minute interval or the 30-minute
+  report lease. The budget is still checked at event boundaries too.
+- Concurrency (optional) applies to RSVP reads of different events only;
+  listing pages stay one at a time. "Three failures in a row" counts in
+  event order across batches, and any good read resets it.
 - **429 (rate limited)** ends the tick like a refused token: the event is
-  not marked failed, the daily "failing" alert applies, the next tick (5 min
-  later) carries on. This is the safety valve for the faster pace.
-- Headroom observed in the probes (read-only, 2026-11-11): a listing page of
-  100 events with two aliased counts took ~2.1 s; an ACTIVE page 0.16 s; ~110
-  sequential calls in ~45 s across both probes with no 429 or cost error.
-  Meetup publishes no per-token limit for `gql-ext`; 4 concurrent RSVP reads
-  is roughly 6–8 requests/s at peak, untested live, so watch the first fast
-  ticks' log lines ("Group snapshot tick: … N Meetup calls").
-- **Fast setting estimate:** ~4,850 calls / 600 a tick ⇒ ~9 ticks ⇒ **~45
-  min** of wall time (each tick ~1–2 min of work at concurrency 4, inside
-  the 5-minute interval and the 30-minute report lease). Set both vars back
-  to the defaults (or unset them) after the first full pull: daily runs need
-  ~60–100 calls.
-- The quiet-hour and identity-digest guards and the report lease are
-  unchanged.
+  not marked failed, the daily "failing" alert applies, and the next tick
+  carries on.
+- Probe headroom (read-only, 2026-11-11): ~2.1 s per listing page of 100
+  events with two aliased counts, 0.16 s for an ACTIVE page, no 429 or
+  query-cost error. Meetup publishes no per-token limit for `gql-ext`.
+- The staff card shows the configured pace and the last tick's calls and
+  events read (`group-snapshot-last-tick` in Redis: counts only, a day's TTL).
+- Unset both vars after the full pull: daily runs need ~60–100 calls. The
+  quiet-hour and identity-digest guards and the report lease are unchanged.
 
 ## Left to the builder
 

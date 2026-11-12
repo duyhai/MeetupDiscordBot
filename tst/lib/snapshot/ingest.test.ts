@@ -13,7 +13,9 @@ import { BUILD_LEASE_KEY } from '../../../src/lib/reports/buildLease.js';
 import {
   SNAPSHOT_RUN_INTERVAL_MS,
   SNAPSHOT_RUN_NOW_KEY,
+  SNAPSHOT_LAST_TICK_KEY,
   SNAPSHOT_TICK_CALL_BUDGET,
+  SNAPSHOT_TICK_MAX_MS,
   SnapshotDeps,
   snapshotTuning,
   runSnapshotTick,
@@ -60,6 +62,9 @@ class FakeGroup implements SnapshotMeetup {
   listingError: Error | undefined;
 
   rsvpReads: string[] = [];
+
+  /** Called at the start of every RSVP read (a slow Meetup, in tests). */
+  onRsvpRead: (() => void) | undefined;
 
   /** RSVP reads in flight right now, and the most at once. */
   inFlight = 0;
@@ -125,6 +130,7 @@ class FakeGroup implements SnapshotMeetup {
     input: PaginationInput,
   ): Promise<PaginatedData<SnapshotRsvpNode> | null> {
     this.tick();
+    this.onRsvpRead?.();
     this.rsvpReads.push(eventId);
     this.inFlight += 1;
     this.maxInFlight = Math.max(this.maxInFlight, this.inFlight);
@@ -519,7 +525,10 @@ describe('snapshotTuning', () => {
         SNAPSHOT_CONCURRENCY: '4',
       }),
     ).toEqual({ callsPerTick: 600, concurrency: 4 });
-    for (const bad of ['0', '-3', '2.5', 'fast', '9999', '']) {
+    expect(
+      snapshotTuning({ SNAPSHOT_CALLS_PER_TICK: '5000' }).callsPerTick,
+    ).toBe(5000);
+    for (const bad of ['0', '-3', '2.5', 'fast', '10001', '']) {
       expect(
         snapshotTuning({
           SNAPSHOT_CALLS_PER_TICK: bad,
@@ -600,5 +609,32 @@ describe('runSnapshotTick with concurrent reads', () => {
     env.group.failing.set('100', rateLimited());
     expect(await runSnapshotTick(env.deps)).toMatchObject({ kind: 'failed' });
     expect(env.store.events.get('100')?.rsvpFailures).toBe(0);
+  });
+});
+
+describe('runSnapshotTick time cap', () => {
+  it(`stops starting events ${SNAPSHOT_TICK_MAX_MS / 60_000} min into a tick, even with budget left`, async () => {
+    const env = setup();
+    env.deps.tuning = { callsPerTick: 5000, concurrency: 1 };
+    env.group.events = past(10);
+    // A slow Meetup: every RSVP read takes 61 s.
+    env.group.onRsvpRead = () => env.advance(61_000);
+    const first = await runSnapshotTick(env.deps);
+    expect(first).toMatchObject({ kind: 'ran', finished: false, fetched: 4 });
+    expect(await tickUntilFinished(env)).toMatchObject({ finished: true });
+    expect(new Set(env.store.replaced).size).toBe(10);
+  });
+
+  it('records the last tick’s calls for the staff card (counts only)', async () => {
+    const env = setup();
+    env.group.events = past(3);
+    await runSnapshotTick(env.deps);
+    const raw = await env.cache.get(SNAPSHOT_LAST_TICK_KEY);
+    expect(JSON.parse(raw ?? '{}')).toEqual({
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- a matcher
+      at: expect.any(String),
+      calls: 5,
+      fetched: 3,
+    });
   });
 });

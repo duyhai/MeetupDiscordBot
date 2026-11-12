@@ -14,6 +14,7 @@ import {
   dashboardPath,
 } from '../../lib/reports/dashboardPaths.js';
 import { SnapshotRun } from '../../lib/repositories/postgresSnapshotRepository.js';
+import { LastSnapshotTick, SnapshotTuning } from '../../lib/snapshot/ingest.js';
 import { BackfillRun } from '../../lib/repositories/postgresWrappedBackfillRepository.js';
 import { RUN_INTERVAL_MS } from '../../lib/wrapped/backfill.js';
 import { tz } from '../../util/timezone.js';
@@ -52,6 +53,10 @@ export interface SnapshotStatus {
   pending: number;
   /** Live events whose last RSVP read failed. */
   failing: number;
+  /** The configured pace (SNAPSHOT_CALLS_PER_TICK, SNAPSHOT_CONCURRENCY). */
+  pace: SnapshotTuning;
+  /** The last tick that ran; undefined when none in the last day. */
+  lastTick: LastSnapshotTick | undefined;
   now: Date;
 }
 
@@ -157,6 +162,15 @@ async function snapshotLine(
   if (parts.length === 0) {
     parts.push('Group snapshot: not pulled yet.');
   }
+  const { pace, lastTick } = status;
+  const tickAt = lastTick ? Date.parse(lastTick.at) : Number.NaN;
+  const lastTickText = Number.isFinite(tickAt)
+    ? ` · last tick ${age(new Date(tickAt), status.now)} ago: ${n(lastTick?.calls ?? 0)} calls, ` +
+      `${n(lastTick?.fetched ?? 0)} events read`
+    : '';
+  parts.push(
+    `Pace: ${n(pace.callsPerTick)} Meetup calls a tick, ${n(pace.concurrency)} at a time${lastTickText}.`,
+  );
   if (status.failing > 0) {
     parts.push(
       `${n(status.failing)} events failed their last RSVP read; they are retried each run.`,

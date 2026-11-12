@@ -72,6 +72,8 @@ function control(
       rsvps: 0,
       pending: 0,
       failing: 0,
+      pace: { callsPerTick: 150, concurrency: 1 },
+      lastTick: undefined,
       now: new Date('2026-12-10T20:00:00Z'),
     })),
     ...overrides,
@@ -299,6 +301,8 @@ describe('Home Wrapped backfill card: the group snapshot line', () => {
         rsvps: 51204,
         pending: 0,
         failing: 0,
+        pace: { callsPerTick: 150, concurrency: 1 },
+        lastTick: undefined,
         now: NOW,
       }),
     );
@@ -322,6 +326,8 @@ describe('Home Wrapped backfill card: the group snapshot line', () => {
         rsvps: 24000,
         pending: 1246,
         failing: 4,
+        pace: { callsPerTick: 150, concurrency: 1 },
+        lastTick: undefined,
         now: NOW,
       }),
     );
@@ -371,6 +377,8 @@ describe('POST /dashboard/wrapped/snapshot/run (Refresh snapshot now)', () => {
           rsvps: 1,
           pending: 1,
           failing: 0,
+          pace: { callsPerTick: 150, concurrency: 1 },
+          lastTick: undefined,
           now: new Date('2026-12-10T20:00:00Z'),
         }),
       }),
@@ -424,5 +432,33 @@ describe('POST /dashboard/wrapped/snapshot/run (Refresh snapshot now)', () => {
     expect((await pressRefresh(req, cookie)).headers.location).toBe(
       '/dashboard?backfill=snapshot-already-running',
     );
+  });
+});
+
+describe('Home Wrapped backfill card: the snapshot pace', () => {
+  it('shows the configured pace and the last tick', async () => {
+    const out = await render(
+      control({
+        snapshot: async () => ({
+          lastRun: undefined,
+          openRun: undefined,
+          events: 0,
+          rsvps: 0,
+          pending: 0,
+          failing: 0,
+          pace: { callsPerTick: 5000, concurrency: 1 },
+          lastTick: { at: '2026-12-10T19:56:00Z', calls: 150, fetched: 148 },
+          now: new Date('2026-12-10T20:00:00Z'),
+        }),
+      }),
+    );
+    expect(out).toContain(
+      'Pace: 5,000 Meetup calls a tick, 1 at a time · last tick 4 min ago: 150 calls, 148 events read.',
+    );
+  });
+
+  it('with no recent tick, the pace alone', async () => {
+    const out = await render(control());
+    expect(out).toContain('Pace: 150 Meetup calls a tick, 1 at a time.');
   });
 });
