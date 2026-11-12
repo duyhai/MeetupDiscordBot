@@ -13,6 +13,7 @@ import {
   DASHBOARD_PATHS,
   dashboardPath,
 } from '../../lib/reports/dashboardPaths.js';
+import { SnapshotRun } from '../../lib/repositories/postgresSnapshotRepository.js';
 import { BackfillRun } from '../../lib/repositories/postgresWrappedBackfillRepository.js';
 import { RUN_INTERVAL_MS } from '../../lib/wrapped/backfill.js';
 import { tz } from '../../util/timezone.js';
@@ -37,6 +38,20 @@ export interface BackfillStatus {
   entries: number;
 }
 
+/** The group snapshot's state, for one line on the card. */
+export interface SnapshotStatus {
+  lastRun: SnapshotRun | undefined;
+  openRun: SnapshotRun | undefined;
+  /** Rows in meetup_events / meetup_event_rsvps. */
+  events: number;
+  rsvps: number;
+  /** Events the open run still has to read. */
+  pending: number;
+  /** Live events whose last RSVP read failed. */
+  failing: number;
+  now: Date;
+}
+
 export type RunNowOutcome =
   'requested' | 'already-running' | 'already-requested';
 
@@ -44,6 +59,7 @@ export type RunNowOutcome =
 export interface WrappedBackfillControl {
   status(): Promise<BackfillStatus>;
   runNow(requestedBy: string): Promise<RunNowOutcome>;
+  snapshot(): Promise<SnapshotStatus>;
 }
 
 export type BackfillNoticeCode =
@@ -76,6 +92,63 @@ export function backfillNotice(code: unknown): SafeHtml | '' {
 }
 
 const pacificTime = (at: Date) => tz(dayjs(at)).format('h:mm A');
+
+const n = (value: number) => value.toLocaleString('en-US');
+
+function age(from: Date, now: Date): string {
+  const minutes = Math.max(
+    0,
+    Math.floor((now.getTime() - from.getTime()) / 60_000),
+  );
+  if (minutes < 60) {
+    return `${minutes} min`;
+  }
+  const hours = Math.floor(minutes / 60);
+  return hours < 48 ? `${hours} h` : `${Math.floor(hours / 24)} days`;
+}
+
+/** The snapshot line: fixed text and numbers only; a failing read degrades to a fixed line. */
+async function snapshotLine(
+  deps: Pick<DashboardPageDeps, 'wrappedBackfill'>,
+): Promise<SafeHtml> {
+  let status: SnapshotStatus;
+  try {
+    status = await deps.wrappedBackfill.snapshot();
+  } catch (error: unknown) {
+    logger.warn(
+      `Group snapshot status failed: ${error instanceof Error ? error.name : 'Error'}`,
+    );
+    return html`<p class="muted">Group snapshot: status unavailable.</p>`;
+  }
+  const { lastRun, openRun } = status;
+  const failed = (run: SnapshotRun | undefined): string => {
+    return run?.lastError ? ` Last tick failed (${run.lastError}).` : '';
+  };
+  const parts: string[] = [];
+  if (openRun) {
+    const total = openRun.eventsFetched + status.pending;
+    parts.push(
+      `Group snapshot: refreshing (${openRun.kind}): ${n(openRun.eventsFetched)} of ~${n(total)} events read.` +
+        failed(openRun),
+    );
+  }
+  if (lastRun?.finishedAt) {
+    parts.push(
+      `Group snapshot: updated ${age(lastRun.finishedAt, status.now)} ago (${pacificDateTime(lastRun.finishedAt)} Pacific) · ` +
+        `${n(status.events)} events · ${n(status.rsvps)} RSVPs · last run: ${lastRun.kind}, ` +
+        `${n(lastRun.requests)} calls, ${n(lastRun.failed)} failed.${openRun ? '' : failed(lastRun)}`,
+    );
+  }
+  if (parts.length === 0) {
+    parts.push('Group snapshot: not pulled yet.');
+  }
+  if (status.failing > 0) {
+    parts.push(
+      `${n(status.failing)} events failed their last RSVP read; they are retried each run.`,
+    );
+  }
+  return html`${parts.map((text) => html`<p class="muted">${text}</p>`)}`;
+}
 
 const counts = (run: BackfillRun) =>
   `built ${run.built}, skipped ${run.skipped}, failed ${run.failed}`;
@@ -126,7 +199,8 @@ export async function wrappedBackfillCard(
       : '';
   return html`<div class="card">
     <h2>Wrapped backfill</h2>
-    ${backfillNotice(view.backfillNotice)} ${last} ${running} ${queue} ${form}
+    ${backfillNotice(view.backfillNotice)} ${last} ${running} ${queue}
+    ${await snapshotLine(deps)} ${form}
   </div>`;
 }
 

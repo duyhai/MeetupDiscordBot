@@ -51,6 +51,8 @@ import {
 } from '../lib/workspace/upcoming.js';
 import { ApplicationCache } from '../util/cache.js';
 import { PostgresWrappedAnnouncementRepository } from '../lib/repositories/postgresWrappedAnnouncementRepository.js';
+import { PostgresSnapshotRepository } from '../lib/repositories/postgresSnapshotRepository.js';
+import { RSVP_SETTLE_DAYS } from '../lib/snapshot/ingest.js';
 import { PostgresWrappedBackfillRepository } from '../lib/repositories/postgresWrappedBackfillRepository.js';
 import { RUN_NOW_KEY, RUN_NOW_TTL_SEC } from '../lib/wrapped/backfill.js';
 import { recordedNextTick } from '../lib/wrapped/queue.js';
@@ -404,6 +406,24 @@ export function dashboardPageDeps(): DashboardPageDeps {
         ))
           ? 'requested'
           : 'already-requested';
+      },
+      snapshot: async () => {
+        const store = await PostgresSnapshotRepository.instance();
+        const now = new Date();
+        const [lastRun, openRun, totals, failing] = await Promise.all([
+          store.lastFinishedRun(),
+          store.openRun(),
+          store.totals(),
+          store.failingEventCount(),
+        ]);
+        const pending = openRun
+          ? await store.pendingRsvpCount({
+              runStartedAt: openRun.startedAt,
+              now,
+              settleDays: RSVP_SETTLE_DAYS,
+            })
+          : 0;
+        return { lastRun, openRun, ...totals, pending, failing, now };
       },
     },
     wrappedAnnounce: {

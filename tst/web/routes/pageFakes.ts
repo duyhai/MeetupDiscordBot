@@ -1201,6 +1201,15 @@ export function fakePageDeps(
         entries: 0,
       })),
       runNow: vi.fn(async () => 'requested' as const),
+      snapshot: vi.fn(async () => ({
+        lastRun: undefined,
+        openRun: undefined,
+        events: 0,
+        rsvps: 0,
+        pending: 0,
+        failing: 0,
+        now: new Date(),
+      })),
     },
     // The access matrix opens event 311000001's history.
     eventAudit: async () =>

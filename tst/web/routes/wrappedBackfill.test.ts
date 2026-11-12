@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { LogEntry } from '../../../src/lib/helpers/discordLogger.js';
+import { SnapshotRun } from '../../../src/lib/repositories/postgresSnapshotRepository.js';
 import { BackfillRun } from '../../../src/lib/repositories/postgresWrappedBackfillRepository.js';
 import { registerAllProtectedRoutes } from '../../../src/web/routes/dashboardPages.js';
 import { renderHomeReports } from '../../../src/web/routes/home.js';
@@ -62,6 +63,15 @@ function control(
       entries: 0,
     })),
     runNow: vi.fn(async () => 'requested' as const),
+    snapshot: vi.fn(async () => ({
+      lastRun: undefined,
+      openRun: undefined,
+      events: 0,
+      rsvps: 0,
+      pending: 0,
+      failing: 0,
+      now: new Date('2026-12-10T20:00:00Z'),
+    })),
     ...overrides,
   };
 }
@@ -248,5 +258,90 @@ describe('POST /dashboard/wrapped/backfill/run', () => {
     const res = await pressRunNow(req, await signIn(req));
     expect(res.headers.location).toBe('/dashboard?backfill=unavailable');
     expect(runNow).not.toHaveBeenCalled();
+  });
+});
+
+const snapshotRun = (over: Partial<SnapshotRun> = {}): SnapshotRun => ({
+  id: 3,
+  trigger: 'job',
+  kind: 'incremental',
+  startedAt: new Date('2026-12-10T16:50:00Z'),
+  finishedAt: new Date('2026-12-10T17:00:00Z'),
+  listedAt: new Date('2026-12-10T16:51:00Z'),
+  eventsListed: 2481,
+  eventsFetched: 31,
+  rsvpsStored: 600,
+  failed: 0,
+  requests: 62,
+  lastError: undefined,
+  ...over,
+});
+
+describe('Home Wrapped backfill card: the group snapshot line', () => {
+  const NOW = new Date('2026-12-10T20:00:00Z');
+  const withSnapshot = (
+    status: Awaited<ReturnType<WrappedBackfillControl['snapshot']>>,
+  ) => control({ snapshot: async () => status });
+
+  it('before any pull', async () => {
+    const out = await render(control());
+    expect(out).toContain('Group snapshot: not pulled yet.');
+  });
+
+  it('after a run: age, totals and the last run', async () => {
+    const out = await render(
+      withSnapshot({
+        lastRun: snapshotRun(),
+        openRun: undefined,
+        events: 2481,
+        rsvps: 51204,
+        pending: 0,
+        failing: 0,
+        now: NOW,
+      }),
+    );
+    expect(out).toContain(
+      'Group snapshot: updated 3 h ago (Dec 10, 2026 9:00 AM Pacific) · 2,481 events · ' +
+        '51,204 RSVPs · last run: incremental, 62 calls, 0 failed.',
+    );
+  });
+
+  it('during a run: progress, and the last tick’s error class', async () => {
+    const out = await render(
+      withSnapshot({
+        lastRun: undefined,
+        openRun: snapshotRun({
+          kind: 'full',
+          finishedAt: undefined,
+          eventsFetched: 1204,
+          lastError: 'TypeError',
+        }),
+        events: 2450,
+        rsvps: 24000,
+        pending: 1246,
+        failing: 4,
+        now: NOW,
+      }),
+    );
+    expect(out).toContain(
+      'Group snapshot: refreshing (full): 1,204 of ~2,450 events read. Last tick failed (TypeError).',
+    );
+    expect(out).not.toContain('not pulled yet');
+    expect(out).toContain(
+      '4 events failed their last RSVP read; they are retried each run.',
+    );
+  });
+
+  it('a failing snapshot status degrades the line alone', async () => {
+    const out = await render(
+      control({
+        snapshot: async () => {
+          throw new Error('pg <b>down</b>');
+        },
+      }),
+    );
+    expect(out).toContain('<h2>Wrapped backfill</h2>');
+    expect(out).toContain('Group snapshot: status unavailable.');
+    expect(out).not.toContain('down');
   });
 });

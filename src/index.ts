@@ -10,6 +10,10 @@ import Configuration from './configuration.js';
 import { startIdentityDigestScheduler } from './lib/helpers/identity/digest.js';
 import { registerMemberLeaveListener } from './lib/helpers/memberLeave.js';
 import { startEventAuditScheduler } from './lib/eventAudit/job.js';
+import {
+  productionSnapshotDeps,
+  startGroupSnapshotScheduler,
+} from './lib/snapshot/job.js';
 import { startAnnounceScheduler } from './lib/hosts/announceTick.js';
 import { startReportBuildScheduler } from './lib/reports/buildJob.js';
 import {
@@ -76,6 +80,9 @@ client.once('clientReady', async () => {
   );
   startWrappedBackfillScheduler(client, () =>
     productionBackfillDeps(() => client),
+  );
+  startGroupSnapshotScheduler(client, () =>
+    productionSnapshotDeps(() => client),
   );
   // The express OAuth routes run outside discordCommandWrapper, so without a
   // client their failures reach nobody. Hand it over now that we can post.

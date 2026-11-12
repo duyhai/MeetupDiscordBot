@@ -23,9 +23,11 @@ import {
   getEventForAudit,
   getEventForCopy,
   getEventRsvps,
+  getEventRsvpsForSnapshot,
   getGroupEvents,
   getGroupEventsCount,
   getGroupEventsForAudit,
+  getGroupEventsForSnapshot,
   getGroupMembersByIds,
   getGroupMembershipsByIds,
   getHostedEvents,
@@ -52,15 +54,19 @@ import {
   EditEventInput,
   EditEventResponse,
   EventSummary,
+  SnapshotEventNode,
+  SnapshotRsvpNode,
   GetEventForAnnounceResponse,
   GetEventForAuditResponse,
   GetEventForCopyResponse,
   GetEventResponse,
   GetEventRsvpsInput,
+  GetEventRsvpsForSnapshotResponse,
   GetEventRsvpsResponse,
   GetGroupEventsCountInput,
   GetGroupEventsCountResponse,
   GetGroupEventsForAuditResponse,
+  GetGroupEventsForSnapshotResponse,
   GetGroupEventsInput,
   GetGroupEventsResponse,
   GetHostedEventsInput,
@@ -766,6 +772,53 @@ export class GqlMeetupClient {
       logger.error(error);
       throw error;
     }
+  }
+
+  /**
+   * The group snapshot's listing: the filter exactly as given, never cached,
+   * one page. Logs counts only. A null group is MeetupGroupUnreadableError.
+   */
+  public async getGroupEventsForSnapshot(
+    input: PaginationInput,
+    filter: GroupEventFilter,
+  ): Promise<PaginatedData<SnapshotEventNode>> {
+    logger.info(
+      `Calling getGroupEventsForSnapshot with input: ${JSON.stringify({ input, filter })}`,
+    );
+    const result = await this.client.request<
+      GetGroupEventsForSnapshotResponse,
+      GetGroupEventsInput
+    >(getGroupEventsForSnapshot, {
+      urlname: Configuration.meetup.groupUrlName,
+      ...input,
+      filter,
+    });
+    if (!result.groupByUrlname) {
+      throw new MeetupGroupUnreadableError(Configuration.meetup.groupUrlName);
+    }
+    const { edges, pageInfo } = result.groupByUrlname.events;
+    logger.info(
+      `getGroupEventsForSnapshot page: ${edges.length} events, hasNextPage=${pageInfo.hasNextPage}`,
+    );
+    return result.groupByUrlname.events;
+  }
+
+  /**
+   * One page of an event's yes, waitlisted and attended RSVPs (ids and
+   * statuses only), never cached; null when Meetup has no such event.
+   */
+  public async getEventRsvpsForSnapshot(
+    eventId: string,
+    input: PaginationInput,
+  ): Promise<PaginatedData<SnapshotRsvpNode> | null> {
+    logger.info(
+      `Calling getEventRsvpsForSnapshot for ${eventId} with input: ${JSON.stringify(input)}`,
+    );
+    const result = await this.client.request<GetEventRsvpsForSnapshotResponse>(
+      getEventRsvpsForSnapshot,
+      { eventId, ...input },
+    );
+    return result.event?.rsvps ?? null;
   }
 
   /**

@@ -515,3 +515,80 @@ export const getEventForAudit = gql`
     }
   }
 `;
+
+/**
+ * The group snapshot's listing (src/lib/snapshot): the filter exactly as
+ * given, never cached. Host ids only and no names anywhere: the snapshot
+ * stores Meetup ids, never names.
+ */
+export const getGroupEventsForSnapshot = gql`
+  query (
+    $urlname: String!
+    $first: Int!
+    $after: String
+    $filter: GroupEventFilter
+  ) {
+    groupByUrlname(urlname: $urlname) {
+      id
+      events(first: $first, after: $after, filter: $filter) {
+        pageInfo {
+          hasNextPage
+          hasPreviousPage
+          startCursor
+          endCursor
+        }
+        totalCount
+        edges {
+          node {
+            id
+            title
+            status
+            dateTime
+            eventUrl
+            eventHosts {
+              member {
+                id
+              }
+            }
+            attendance: rsvps(filter: { rsvpStatus: [YES, ATTENDED] }) {
+              totalCount
+            }
+            waitlist: rsvps(filter: { rsvpStatus: [WAITLIST] }) {
+              totalCount
+            }
+          }
+        }
+      }
+    }
+  }
+`;
+
+/** One page of an event's yes, waitlisted and attended RSVPs: status and member id only. */
+export const getEventRsvpsForSnapshot = gql`
+  query ($eventId: ID!, $first: Int!, $after: String) {
+    event(id: $eventId) {
+      id
+      rsvps(
+        first: $first
+        after: $after
+        filter: { rsvpStatus: [YES, WAITLIST, ATTENDED] }
+      ) {
+        pageInfo {
+          hasNextPage
+          hasPreviousPage
+          startCursor
+          endCursor
+        }
+        totalCount
+        edges {
+          node {
+            status
+            member {
+              id
+            }
+          }
+        }
+      }
+    }
+  }
+`;
