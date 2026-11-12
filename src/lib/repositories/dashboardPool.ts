@@ -163,6 +163,24 @@ CREATE TABLE IF NOT EXISTS meetup_events (
   rsvp_failed_at   TIMESTAMPTZ,
   rsvp_error       TEXT
 );
+-- The rsvp_* columns came after the table's first shape (PR #155 review).
+-- Guarded by a catalog read like dashboard_notices above, so a boot on a
+-- table that has them only reads.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+     WHERE table_schema = current_schema()
+       AND table_name = 'meetup_events'
+       AND column_name = 'rsvp_failures'
+  ) THEN
+    ALTER TABLE meetup_events
+      ADD COLUMN rsvp_failures INTEGER NOT NULL DEFAULT 0,
+      ADD COLUMN rsvp_failed_at TIMESTAMPTZ,
+      ADD COLUMN rsvp_error TEXT;
+  END IF;
+END
+$$;
 CREATE INDEX IF NOT EXISTS meetup_events_date_idx ON meetup_events (date_time);
 CREATE INDEX IF NOT EXISTS meetup_events_hosts_idx ON meetup_events USING GIN (host_ids);
 -- One row per event and member: the RSVP as of the event's rsvps_fetched_at.
