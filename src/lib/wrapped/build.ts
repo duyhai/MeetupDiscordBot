@@ -182,11 +182,37 @@ export interface WrappedSources {
   hosted: HostedEvent[];
 }
 
-/** What building a year from sources needs: no history read, no slot. */
+/**
+ * Attendee Meetup ids per event, and the events whose list was read in part.
+ * From Meetup (readAttendees) or from the group snapshot.
+ */
+export type AttendeeReader = (
+  events: WrappedEvent[],
+  firstPageOnly: boolean,
+) => Promise<{ byEvent: Record<string, string[]>; partial: Set<string> }>;
+
+/**
+ * What building a year from sources needs: no history read, no slot.
+ * Attendees come from `attendees` when given, else from `meetup`.
+ */
 export type SourceDeps = Pick<
   BuildDeps,
-  'meetup' | 'findByMeetupId' | 'isPresent' | 'now' | 'log' | 'onProgress'
->;
+  'findByMeetupId' | 'isPresent' | 'now' | 'log' | 'onProgress'
+> & { meetup?: WrappedMeetup; attendees?: AttendeeReader };
+
+function attendeeReader(deps: SourceDeps): AttendeeReader {
+  if (deps.attendees) {
+    return deps.attendees;
+  }
+  const { meetup } = deps;
+  if (!meetup) {
+    throw new Error(
+      'buildWrappedYear needs a Meetup client or an attendee reader',
+    );
+  }
+  return (events, firstPageOnly) =>
+    readAttendees(meetup, events, firstPageOnly);
+}
 
 async function report(deps: SourceDeps, message: string): Promise<void> {
   if (deps.onProgress) {
@@ -228,10 +254,8 @@ export async function buildWrappedYear(
   const thisYear = [...everyEvent.values()].filter((event) =>
     isInYear(event.dateTime, year),
   );
-  const { byEvent: attendeesByEvent } = await readAttendees(
-    deps.meetup,
-    thisYear,
-  );
+  const attendees = attendeeReader(deps);
+  const { byEvent: attendeesByEvent } = await attendees(thisYear, false);
 
   const { stats, companions } = computeWrapped({
     year,
@@ -250,8 +274,7 @@ export async function buildWrappedYear(
   )
     .map((id) => everyEvent.get(id))
     .filter((event): event is WrappedEvent => event !== undefined);
-  const early = await readAttendees(
-    deps.meetup,
+  const early = await attendees(
     earlyEvents,
     options.earlyFirstPageOnly === true,
   );
