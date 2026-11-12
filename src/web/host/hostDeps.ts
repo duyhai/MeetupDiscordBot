@@ -2,6 +2,11 @@ import crypto from 'crypto';
 import { Client } from 'discord.js';
 import express from 'express';
 import { Logger } from 'tslog';
+import {
+  snapshotWrapped,
+  storedTokenSelfCount,
+} from '../../lib/snapshot/wrapped.js';
+import { PostgresSnapshotRepository } from '../../lib/repositories/postgresSnapshotRepository.js';
 
 import { exchangeMeetupCode } from '../../lib/client/oauth/providers.js';
 import { resolveHost } from '../../lib/hosts/eligibility.js';
@@ -220,6 +225,9 @@ export function hostRouterFromEnv(
         limiter: wrappedBuildLimiter,
         alert: alertVia(() => discordClient),
         groupId: Configuration.meetup.groupId,
+        snapshot: async () =>
+          snapshotWrapped(await PostgresSnapshotRepository.instance()),
+        selfPastCount: storedTokenSelfCount,
       });
     },
   });

@@ -1201,6 +1201,7 @@ export function fakePageDeps(
         entries: 0,
       })),
       runNow: vi.fn(async () => 'requested' as const),
+      refreshSnapshot: vi.fn(async () => 'requested' as const),
       snapshot: vi.fn(async () => ({
         lastRun: undefined,
         openRun: undefined,
@@ -1208,6 +1209,8 @@ export function fakePageDeps(
         rsvps: 0,
         pending: 0,
         failing: 0,
+        pace: { callsPerTick: 150, concurrency: 1 },
+        lastTick: undefined,
         now: new Date(),
       })),
     },

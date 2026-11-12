@@ -35,6 +35,12 @@ export interface CachedWrapped {
   stats: WrappedStats;
   companions: NamedCompanions;
   builtAt: string;
+  /**
+   * 'snapshot' when built from the group snapshot; absent for the token
+   * path (and every copy built before the snapshot). Additive: readers that
+   * do not know it ignore it, so no cache version bump.
+   */
+  builtFrom?: 'snapshot';
 }
 
 export function wrappedCacheKey(discordUserId: string, year: number): string {

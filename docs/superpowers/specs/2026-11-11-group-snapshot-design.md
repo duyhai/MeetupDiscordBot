@@ -399,8 +399,7 @@ seeded snapshot writes the entry `readEntry` serves, with zero Meetup calls.
   ticks ≈ 2.7 h** at 150 calls a tick (one constant to raise if the lead
   wants it faster).
 - Organizer-view history counts for four linked members recorded for PR 2's
-  parity check (Meetup ids 38181472: 114, 483183672: 13, 156079422: 84,
-  353019842: 21).
+  parity check (four members, by label only: 114, 13, 84 and 21 past RSVPs; the ids stay out of the public repo).
 
 ## After the lead's review of PR 1 (2026-11-11)
 
@@ -429,6 +428,120 @@ seeded snapshot writes the entry `readEntry` serves, with zero Meetup calls.
 - `SNAPSHOT_RUN_NOW_KEY` is read by the tick but nothing sets it yet: PR 2's
   Refresh snapshot now button will.
 
+### Known limits noted by the lead (re-review of PR 1, 2026-11-11)
+
+- A Meetup outage tick records three failures and parks three healthy events
+  until the next daily run: bounded, and visible on the card.
+- The card's "ShortListing" hint is cleared by the next good tick.
+- `failingEventCount` can include an event that aged out of the settle
+  window and is never re-read (rare).
+
+## PR 2 as built (2026-11-12)
+
+- `SnapshotReader` on the repository; `src/lib/snapshot/wrapped.ts` turns it
+  into `WrappedSources` and an attendee reader. `build.ts` has an attendee
+  seam (`SourceDeps.attendees`); snapshot and token builds produce equal
+  entries on the same data (tested).
+- `/wrapped` and `/host/wrapped` try the snapshot first: no token, no OAuth
+  hop, the same hourly slot. The cross-check uses the member's stored token
+  when there is one (`storedTokenSelfCount`, one Meetup call).
+- The backfill builds snapshot members with no Meetup call, up to
+  `SNAPSHOT_MEMBERS_PER_TICK = 100` a tick, and treats a current-year copy as
+  fresh only when built after the latest snapshot run. No cross-check there.
+- Leadership **Refresh snapshot now** sets `SNAPSHOT_RUN_NOW_KEY`.
+- The `rsvp_*` columns also have a catalog-guarded `ALTER`.
+- No `WRAPPED_CACHE_VERSION` bump: the stored shape is unchanged.
+
+## Pace (Hai, 2026-11-12: 2.7 h is too slow)
+
+Two config vars, read at boot (`snapshotTuning`), so the pace changes with a
+config change and a restart, no deploy:
+
+| Var                       | Range   | Default | Fast (first full pull) |
+| ------------------------- | ------- | ------- | ---------------------- |
+| `SNAPSHOT_CALLS_PER_TICK` | 1–10000 | 150     | 5000                   |
+| `SNAPSHOT_CONCURRENCY`    | 1–8     | 1       | 1                      |
+
+- **Live evidence (v335, the first ingest ticks, from the lead):** sequential
+  `getEventRsvpsForSnapshot` calls run ~75–90 ms apart, so 150 calls take
+  ~12 s and the tick idles ~288 s. The budget is the whole bottleneck; at
+  5000 calls a tick the remaining full pull finishes in about two ticks
+  (~7 min of calls). Concurrency is not needed and stays at 1.
+- **Time cap:** a tick stops starting events `SNAPSHOT_TICK_MAX_MS` (4 min)
+  after it began, checked at event boundaries (an event in flight finishes),
+  so a slow Meetup day cannot overrun the 5-minute interval or the 30-minute
+  report lease. The budget is still checked at event boundaries too.
+- Concurrency (optional) applies to RSVP reads of different events only;
+  listing pages stay one at a time. "Three failures in a row" counts in
+  event order across batches, and any good read resets it.
+- **429 (rate limited)** ends the tick like a refused token: the event is
+  not marked failed, the daily "failing" alert applies, and the next tick
+  carries on.
+- Probe headroom (read-only, 2026-11-11): ~2.1 s per listing page of 100
+  events with two aliased counts, 0.16 s for an ACTIVE page, no 429 or
+  query-cost error. Meetup publishes no per-token limit for `gql-ext`.
+- The staff card shows the configured pace and the last tick's calls and
+  events read (`group-snapshot-last-tick` in Redis: counts only, a day's TTL).
+- Unset both vars after the full pull: daily runs need ~60–100 calls. The
+  quiet-hour and identity-digest guards and the report lease are unchanged.
+
+## After the lead's review of PR 2 (2026-11-12)
+
+### Parity (read-only probe, 2026-11-12 00:31 UTC, 8 calls, Meetup ids only)
+
+Over the 544 PAST events the first ingest ticks had read (the oldest ones):
+the 8 linked members with the most stored rows, organizer view of their own
+history (`getMemberRsvpEvents`, YES/ATTENDED, PAST) restricted to those
+events, against the snapshot's rows.
+
+| Member   | org history (all) | org, in read events | snapshot | missing in snapshot | extra in snapshot |
+| -------- | ----------------- | ------------------- | -------- | ------------------- | ----------------- |
+| member A | 96                | 30                  | 30       | 0                   | 0                 |
+| member B | 260               | 27                  | 28       | 0                   | 1                 |
+| member C | 144               | 28                  | 28       | 0                   | 0                 |
+| member D | 189               | 20                  | 20       | 0                   | 0                 |
+| member E | 34                | 16                  | 16       | 0                   | 0                 |
+| member F | 28                | 15                  | 15       | 0                   | 0                 |
+| member G | 47                | 13                  | 13       | 0                   | 0                 |
+| member H | 15                | 11                  | 12       | 0                   | 1                 |
+
+- **0 of 160 linked-member RSVPs missing** from the snapshot; it even has 2
+  the member-history read lacks. Across those events Meetup counts 5,505
+  YES/ATTENDED and the snapshot stores 4,813 (12.6 % hidden): the hidden
+  RSVPs are not these current members', so they look like departed or
+  deleted accounts. Expect the cross-check fallback rate near zero.
+- Caveat: these are 2014–2015 events (the pull reads oldest first); the
+  check is cheap to re-run on recent events after the full pull.
+- The listing dropped 21 unusable nodes (no usable id or start) of 5,137.
+
+### Changes
+
+- **Per-member path, per-path freshness.** The backfill asks the snapshot
+  once per member. Snapshot members: a current-year copy is fresh until the
+  snapshot is newer. Token members (not in the snapshot, or flagged): the
+  7-day rule as before, so they are not rebuilt daily. A copy built from
+  the snapshot is never fresh for a token-path member.
+- **`builtFrom: 'snapshot'`** on entries built from the snapshot (additive
+  JSON field, in Postgres and Redis; absent = token path; no version bump).
+- **Undercount flag** (`wrapped_snapshot_flags`, Meetup id + counts): an
+  on-demand cross-check that finds the token counting more than
+  `SNAPSHOT_COUNT_SLACK` above the snapshot flags the member durably. From
+  then on every path, the backfill included, builds them from Meetup, and
+  their snapshot-built years (past ones too) are rebuilt on the token path.
+- **Cross-check throttled**: only when the member's hourly slot is free
+  (`limiter.isLimited`), so it costs at most one Meetup call per allowed
+  build.
+- **Hosted attendance** is Meetup's YES + ATTENDED total from the listing
+  (`yes_count`), the number the token path reads; the stored rows only when
+  the listing had no count. Companions always use the stored rows, so a
+  hosted event can show more attendees than named companions plus "others"
+  (the hidden RSVPs), exactly as on the token path.
+- The snapshot button's refusals have their own text.
+- **On-demand paths serve a stored entry without checking for a newer
+  snapshot**: `/wrapped` and `/host/wrapped` rebuild only on `refresh` /
+  Rebuild (under the hourly limit), and the daily backfill rebuilds the
+  current year once per ingest.
+
 ## Left to the builder
 
 - File layout (suggested: `src/lib/snapshot/{ingest,job,reader}.ts`,
@@ -447,7 +560,7 @@ are _my calls_; two went to the lead (below).
    usable token make one cheap cross-check, `getSelfPastRsvpCount`, against
    the snapshot's count of that member's YES/ATTENDED past rows; Meetup
    higher than local by more than `SNAPSHOT_COUNT_SLACK = 2` (events newer
-   than the last ingest) ⇒ token path, logged by Discord id. The backfill
+   than the last ingest) ⇒ token path, logged by Meetup id. The backfill
    does not cross-check (it would cost a call per member); a member it
    undercounts is corrected on their next on-demand build. The live probe
    also compares the two counts for a handful of linked members.

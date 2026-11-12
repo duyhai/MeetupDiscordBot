@@ -1,6 +1,9 @@
 import pg from 'pg';
 
+import Configuration from '../../configuration.js';
+import { EventSummary } from '../client/meetup/types.js';
 import { SnapshotEvent, SnapshotRsvp } from '../snapshot/meetup.js';
+import { HostedEvent } from '../wrapped/stats.js';
 import { dashboardPool, inDashboardTransaction } from './dashboardPool.js';
 
 export type SnapshotKind = 'full' | 'incremental';
@@ -102,6 +105,30 @@ export interface SnapshotStore {
   totals(): Promise<{ events: number; rsvps: number }>;
 }
 
+/**
+ * What Wrapped reads from the snapshot: PAST, live events only, and RSVPs
+ * that are YES or ATTENDED (never WAITLIST). Meetup ids only.
+ */
+export interface SnapshotReader {
+  /** A full pull has finished. */
+  isReady(): Promise<boolean>;
+  /** When the latest run finished; undefined before any. */
+  updatedAt(): Promise<Date | undefined>;
+  /** The member's YES/ATTENDED past events. */
+  memberEvents(meetupId: string): Promise<EventSummary[]>;
+  /** Past events the member hosted, with YES + ATTENDED attendance. */
+  hostedEvents(meetupId: string): Promise<HostedEvent[]>;
+  /** YES/ATTENDED member ids per event. */
+  attendeesOf(eventIds: string[]): Promise<Record<string, string[]>>;
+  /** Flagged as undercounted by the snapshot: the token path from then on. */
+  isFlagged(meetupId: string): Promise<boolean>;
+  flagUndercounted(
+    meetupId: string,
+    snapshotCount: number,
+    selfCount: number,
+  ): Promise<void>;
+}
+
 interface RunRow {
   id: number;
   trigger: string;
@@ -144,7 +171,30 @@ const NEEDS_RSVPS = `deleted_at IS NULL AND status = 'PAST' AND date_time <= $2
        OR rsvps_fetched_at < date_time
        OR (date_time > $2 - make_interval(days => $3) AND rsvps_fetched_at < $1))`;
 
-export class PostgresSnapshotRepository implements SnapshotStore {
+interface EventRow {
+  event_id: string;
+  title: string;
+  date_time: Date;
+  event_url: string | null;
+  status: string;
+}
+
+const LIVE_PAST = `e.status = 'PAST' AND e.deleted_at IS NULL`;
+
+function summary(row: EventRow): EventSummary {
+  return {
+    id: row.event_id,
+    title: row.title,
+    dateTime: row.date_time.toISOString(),
+    eventUrl:
+      row.event_url ??
+      `https://www.meetup.com/${Configuration.meetup.groupUrlName}/events/${row.event_id}/`,
+  };
+}
+
+export class PostgresSnapshotRepository
+  implements SnapshotStore, SnapshotReader
+{
   private static singleton: Promise<PostgresSnapshotRepository> | undefined;
 
   constructor(private readonly pool: pg.Pool) {}
@@ -412,6 +462,97 @@ export class PostgresSnapshotRepository implements SnapshotStore {
       [runId],
     );
     return result.rows[0] ? toRun(result.rows[0]) : undefined;
+  }
+
+  isReady(): Promise<boolean> {
+    return this.hasFinishedFull();
+  }
+
+  async updatedAt(): Promise<Date | undefined> {
+    return (await this.lastFinishedRun())?.finishedAt;
+  }
+
+  async memberEvents(meetupId: string): Promise<EventSummary[]> {
+    const result = await this.pool.query<EventRow>(
+      `SELECT e.event_id, e.title, e.date_time, e.event_url, e.status
+         FROM meetup_event_rsvps r JOIN meetup_events e USING (event_id)
+        WHERE r.member_id = $1 AND r.status IN ('YES', 'ATTENDED') AND ${LIVE_PAST}
+        ORDER BY e.date_time, e.event_id`,
+      [meetupId],
+    );
+    return result.rows.map(summary);
+  }
+
+  async hostedEvents(meetupId: string): Promise<HostedEvent[]> {
+    // Attendance is Meetup's YES + ATTENDED total from the listing, the same
+    // number the token path reads (its totalCount counts the RSVPs the
+    // organizer view hides); the stored rows only when the listing had none.
+    const result = await this.pool.query<
+      EventRow & { stored: number; yes_count: number | null; read: boolean }
+    >(
+      `SELECT e.event_id, e.title, e.date_time, e.event_url, e.status, e.yes_count,
+              e.rsvps_fetched_at IS NOT NULL AS read,
+              (SELECT count(*)::int FROM meetup_event_rsvps r
+                WHERE r.event_id = e.event_id AND r.status IN ('YES', 'ATTENDED')) AS stored
+         FROM meetup_events e
+        WHERE $1 = ANY(e.host_ids) AND ${LIVE_PAST}
+        ORDER BY e.date_time, e.event_id`,
+      [meetupId],
+    );
+    return result.rows.map((row) => {
+      const { id, title, dateTime, eventUrl } = summary(row);
+      return {
+        id,
+        title,
+        dateTime,
+        eventUrl,
+        attendance: row.yes_count ?? row.stored,
+      };
+    });
+  }
+
+  async attendeesOf(eventIds: string[]): Promise<Record<string, string[]>> {
+    const byEvent: Record<string, string[]> = Object.fromEntries(
+      eventIds.map((id) => [id, []]),
+    );
+    if (eventIds.length === 0) {
+      return byEvent;
+    }
+    const result = await this.pool.query<{
+      event_id: string;
+      member_id: string;
+    }>(
+      `SELECT event_id, member_id FROM meetup_event_rsvps
+        WHERE event_id = ANY($1::text[]) AND status IN ('YES', 'ATTENDED')
+        ORDER BY event_id, member_id`,
+      [eventIds],
+    );
+    result.rows.forEach((row) => {
+      byEvent[row.event_id]?.push(row.member_id);
+    });
+    return byEvent;
+  }
+
+  async isFlagged(meetupId: string): Promise<boolean> {
+    const result = await this.pool.query(
+      'SELECT 1 FROM wrapped_snapshot_flags WHERE meetup_id = $1',
+      [meetupId],
+    );
+    return (result.rowCount ?? 0) > 0;
+  }
+
+  async flagUndercounted(
+    meetupId: string,
+    snapshotCount: number,
+    selfCount: number,
+  ): Promise<void> {
+    await this.pool.query(
+      `INSERT INTO wrapped_snapshot_flags (meetup_id, snapshot_count, self_count)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (meetup_id) DO UPDATE
+         SET snapshot_count = EXCLUDED.snapshot_count, self_count = EXCLUDED.self_count`,
+      [meetupId, snapshotCount, selfCount],
+    );
   }
 
   async totals(): Promise<{ events: number; rsvps: number }> {

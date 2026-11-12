@@ -13,8 +13,11 @@ import { BUILD_LEASE_KEY } from '../../../src/lib/reports/buildLease.js';
 import {
   SNAPSHOT_RUN_INTERVAL_MS,
   SNAPSHOT_RUN_NOW_KEY,
+  SNAPSHOT_LAST_TICK_KEY,
   SNAPSHOT_TICK_CALL_BUDGET,
+  SNAPSHOT_TICK_MAX_MS,
   SnapshotDeps,
+  snapshotTuning,
   runSnapshotTick,
 } from '../../../src/lib/snapshot/ingest.js';
 import { SnapshotMeetup } from '../../../src/lib/snapshot/read.js';
@@ -59,6 +62,14 @@ class FakeGroup implements SnapshotMeetup {
   listingError: Error | undefined;
 
   rsvpReads: string[] = [];
+
+  /** Called at the start of every RSVP read (a slow Meetup, in tests). */
+  onRsvpRead: (() => void) | undefined;
+
+  /** RSVP reads in flight right now, and the most at once. */
+  inFlight = 0;
+
+  maxInFlight = 0;
 
   /** Fail every call after this many with a 401, once. */
   unauthorizedAfter: number | undefined;
@@ -119,7 +130,14 @@ class FakeGroup implements SnapshotMeetup {
     input: PaginationInput,
   ): Promise<PaginatedData<SnapshotRsvpNode> | null> {
     this.tick();
+    this.onRsvpRead?.();
     this.rsvpReads.push(eventId);
+    this.inFlight += 1;
+    this.maxInFlight = Math.max(this.maxInFlight, this.inFlight);
+    await new Promise((resolve) => {
+      setTimeout(resolve, 1);
+    });
+    this.inFlight -= 1;
     const failure = this.failing.get(eventId);
     if (failure) {
       throw failure;
@@ -489,6 +507,134 @@ describe('runSnapshotTick', () => {
     await tickUntilFinished(env);
     env.alerts.forEach((a) => {
       expect(`${a.title} ${a.description}`).not.toMatch(/<@|@everyone|@here/);
+    });
+  });
+});
+
+const rateLimited = () =>
+  new ClientError({ status: 429, headers: new Headers() } as never, {
+    query: '',
+  });
+
+describe('snapshotTuning', () => {
+  it('reads the pace from the environment, bounded, with safe defaults', () => {
+    expect(snapshotTuning({})).toEqual({ callsPerTick: 150, concurrency: 1 });
+    expect(
+      snapshotTuning({
+        SNAPSHOT_CALLS_PER_TICK: '600',
+        SNAPSHOT_CONCURRENCY: '4',
+      }),
+    ).toEqual({ callsPerTick: 600, concurrency: 4 });
+    expect(
+      snapshotTuning({ SNAPSHOT_CALLS_PER_TICK: '5000' }).callsPerTick,
+    ).toBe(5000);
+    for (const bad of ['0', '-3', '2.5', 'fast', '10001', '']) {
+      expect(
+        snapshotTuning({
+          SNAPSHOT_CALLS_PER_TICK: bad,
+          SNAPSHOT_CONCURRENCY: bad,
+        }),
+      ).toEqual({ callsPerTick: 150, concurrency: 1 });
+    }
+    expect(snapshotTuning({ SNAPSHOT_CONCURRENCY: '9' }).concurrency).toBe(1);
+  });
+});
+
+describe('runSnapshotTick with concurrent reads', () => {
+  it('reads several events at once, oldest first, and stores each exactly once', async () => {
+    const env = setup();
+    env.deps.tuning = { callsPerTick: 600, concurrency: 4 };
+    env.group.events = past(30);
+    const outcome = await runSnapshotTick(env.deps);
+    expect(outcome).toMatchObject({ kind: 'ran', finished: true, fetched: 30 });
+    expect(env.group.maxInFlight).toBe(4);
+    expect(env.store.replaced).toEqual(past(30).map((e) => e.id));
+    expect(env.store.runs[0].eventsFetched).toBe(30);
+  });
+
+  it('checks the budget at event boundaries: a batch never starts more events than calls left', async () => {
+    const env = setup();
+    env.deps.tuning = { callsPerTick: 10, concurrency: 4 };
+    env.group.events = past(20);
+    const first = await runSnapshotTick(env.deps);
+    // 2 listing calls (one PAST page, one ACTIVE page), then two batches of 4: exactly 10.
+    expect(first).toMatchObject({ kind: 'ran', calls: 10, fetched: 8 });
+    const second = await runSnapshotTick(env.deps);
+    expect(second).toMatchObject({ calls: 10, fetched: 10 });
+  });
+
+  it('three failures in a row still end the tick; the batch’s good reads are kept', async () => {
+    const env = setup();
+    env.deps.tuning = { callsPerTick: 600, concurrency: 4 };
+    env.group.events = past(6);
+    ['100', '101', '102'].forEach((id) =>
+      env.group.failing.set(id, new TypeError('down')),
+    );
+    const outcome = await runSnapshotTick(env.deps);
+    expect(outcome).toEqual({ kind: 'failed', runId: 1, error: 'TypeError' });
+    expect(env.store.replaced).toEqual(['103']);
+    expect(await env.store.failingEventCount()).toBe(3);
+  });
+
+  it('failures broken up by a good read do not end the tick', async () => {
+    const env = setup();
+    env.deps.tuning = { callsPerTick: 600, concurrency: 4 };
+    env.group.events = past(8);
+    ['100', '101', '103', '104'].forEach((id) =>
+      env.group.failing.set(id, new TypeError('poison')),
+    );
+    const outcome = await runSnapshotTick(env.deps);
+    expect(outcome).toMatchObject({ kind: 'ran', finished: true, failed: 4 });
+    expect(env.store.replaced).toEqual(['102', '105', '106', '107']);
+  });
+
+  it('a rate limit ends the tick without marking the event failed; the next tick reads it', async () => {
+    const env = setup();
+    env.deps.tuning = { callsPerTick: 600, concurrency: 4 };
+    env.group.events = past(6);
+    env.group.failing.set('101', rateLimited());
+    const outcome = await runSnapshotTick(env.deps);
+    expect(outcome).toMatchObject({ kind: 'failed' });
+    expect(env.store.replaced).toEqual(['100', '102', '103']);
+    expect(await env.store.failingEventCount()).toBe(0);
+    expect(env.store.runs[0].failed).toBe(0);
+    env.group.failing.clear();
+    expect(await tickUntilFinished(env)).toMatchObject({ finished: true });
+    expect(env.store.replaced).toContain('101');
+  });
+
+  it('a rate limit at concurrency 1 backs off the same way', async () => {
+    const env = setup();
+    env.group.events = past(2);
+    env.group.failing.set('100', rateLimited());
+    expect(await runSnapshotTick(env.deps)).toMatchObject({ kind: 'failed' });
+    expect(env.store.events.get('100')?.rsvpFailures).toBe(0);
+  });
+});
+
+describe('runSnapshotTick time cap', () => {
+  it(`stops starting events ${SNAPSHOT_TICK_MAX_MS / 60_000} min into a tick, even with budget left`, async () => {
+    const env = setup();
+    env.deps.tuning = { callsPerTick: 5000, concurrency: 1 };
+    env.group.events = past(10);
+    // A slow Meetup: every RSVP read takes 61 s.
+    env.group.onRsvpRead = () => env.advance(61_000);
+    const first = await runSnapshotTick(env.deps);
+    expect(first).toMatchObject({ kind: 'ran', finished: false, fetched: 4 });
+    expect(await tickUntilFinished(env)).toMatchObject({ finished: true });
+    expect(new Set(env.store.replaced).size).toBe(10);
+  });
+
+  it('records the last tick’s calls for the staff card (counts only)', async () => {
+    const env = setup();
+    env.group.events = past(3);
+    await runSnapshotTick(env.deps);
+    const raw = await env.cache.get(SNAPSHOT_LAST_TICK_KEY);
+    expect(JSON.parse(raw ?? '{}')).toEqual({
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- a matcher
+      at: expect.any(String),
+      calls: 5,
+      fetched: 3,
     });
   });
 });

@@ -111,6 +111,8 @@ const EXPECTED_UNSAFE_ALLOWED: Record<string, number> = {
   'POST /wrapped/announce': 303,
   // A fake Leadership check says no: refused, back to the home page.
   'POST /wrapped/backfill/run': 303,
+  // A fake Leadership check says no: refused, back to the home page.
+  'POST /wrapped/snapshot/run': 303,
   // Snapshot now: a fake job says started, back to the list.
   'POST /events/snapshot': 303,
 };

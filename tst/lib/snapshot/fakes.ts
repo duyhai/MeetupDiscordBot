@@ -1,11 +1,14 @@
+import { EventSummary } from '../../../src/lib/client/meetup/types.js';
 import {
   RsvpWork,
   RsvpWorkQuery,
   SnapshotDelta,
   SnapshotKind,
+  SnapshotReader,
   SnapshotRun,
   SnapshotStore,
 } from '../../../src/lib/repositories/postgresSnapshotRepository.js';
+import { HostedEvent } from '../../../src/lib/wrapped/stats.js';
 import {
   SnapshotEvent,
   SnapshotRsvp,
@@ -249,5 +252,77 @@ export class FakeSnapshotStore implements SnapshotStore {
       events: this.events.size,
       rsvps: [...this.rsvps.values()].reduce((n, r) => n + r.length, 0),
     };
+  }
+}
+
+/** A SnapshotReader over plain data: events with their YES/ATTENDED attendee ids. */
+export class FakeSnapshotReader implements SnapshotReader {
+  ready = true;
+
+  failing: Error | undefined;
+
+  finishedAt: Date | undefined = new Date('2026-11-12T06:00:00Z');
+
+  attendeeReads = 0;
+
+  constructor(
+    readonly events: (EventSummary & { hosts?: string[] })[],
+    readonly attendees: Record<string, string[]>,
+  ) {}
+
+  private check(): void {
+    if (this.failing) {
+      throw this.failing;
+    }
+  }
+
+  async isReady(): Promise<boolean> {
+    this.check();
+    return this.ready;
+  }
+
+  async updatedAt(): Promise<Date | undefined> {
+    this.check();
+    return this.finishedAt;
+  }
+
+  async memberEvents(meetupId: string): Promise<EventSummary[]> {
+    this.check();
+    return this.events
+      .filter((e) => (this.attendees[e.id] ?? []).includes(meetupId))
+      .map(({ hosts: _hosts, ...e }) => e);
+  }
+
+  async hostedEvents(meetupId: string): Promise<HostedEvent[]> {
+    this.check();
+    return this.events
+      .filter((e) => (e.hosts ?? []).includes(meetupId))
+      .map(({ hosts: _hosts, ...e }) => ({
+        ...e,
+        attendance: (this.attendees[e.id] ?? []).length,
+      }));
+  }
+
+  readonly flagged = new Map<string, { snapshot: number; self: number }>();
+
+  async isFlagged(meetupId: string): Promise<boolean> {
+    this.check();
+    return this.flagged.has(meetupId);
+  }
+
+  async flagUndercounted(
+    meetupId: string,
+    snapshotCount: number,
+    selfCount: number,
+  ): Promise<void> {
+    this.flagged.set(meetupId, { snapshot: snapshotCount, self: selfCount });
+  }
+
+  async attendeesOf(eventIds: string[]): Promise<Record<string, string[]>> {
+    this.check();
+    this.attendeeReads += 1;
+    return Object.fromEntries(
+      eventIds.map((id) => [id, [...(this.attendees[id] ?? [])]]),
+    );
   }
 }

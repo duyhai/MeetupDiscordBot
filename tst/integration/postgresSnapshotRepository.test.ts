@@ -260,5 +260,91 @@ const event = (
       ]);
       expect(results.filter(Boolean)).toHaveLength(1);
     });
+
+    it('reads a member’s events, hosted events and attendees for Wrapped', async () => {
+      await repo.upsertEvents(
+        [
+          event('701', days(30), { hostIds: ['55'] }),
+          event('702', days(20), { eventUrl: null, hostIds: ['55', '66'] }),
+          event('703', days(10), { status: 'CANCELLED', hostIds: ['55'] }),
+          event('704', days(-2), { status: 'ACTIVE', hostIds: ['55'] }),
+          event('705', days(5), { hostIds: ['55'], yesCount: 9 }),
+          event('706', days(4)),
+        ],
+        NOW,
+      );
+      await repo.markDeleted('706', NOW);
+      await repo.replaceRsvps(
+        '701',
+        [
+          { memberId: '55', status: 'YES' },
+          { memberId: '77', status: 'ATTENDED' },
+          { memberId: '88', status: 'WAITLIST' },
+        ],
+        NOW,
+      );
+      await repo.replaceRsvps(
+        '702',
+        [
+          { memberId: '55', status: 'WAITLIST' },
+          { memberId: '77', status: 'YES' },
+        ],
+        NOW,
+      );
+      await repo.replaceRsvps('706', [{ memberId: '55', status: 'YES' }], NOW);
+
+      expect(await repo.memberEvents('55')).toEqual([
+        {
+          id: '701',
+          title: 'Event 701',
+          dateTime: days(30).toISOString(),
+          eventUrl: 'https://www.meetup.com/g/events/701/',
+        },
+      ]);
+      const hosted = await repo.hostedEvents('55');
+      // Meetup's YES + ATTENDED total from the listing, as the token path
+      // reads it (it counts RSVPs the organizer view hides).
+      expect(hosted.map((h) => [h.id, h.attendance])).toEqual([
+        ['701', 3],
+        ['702', 3],
+        ['705', 9],
+      ]);
+      // With no listed count, the stored YES/ATTENDED rows.
+      await repo.upsertEvents(
+        [event('701', days(30), { hostIds: ['55'], yesCount: null })],
+        NOW,
+      );
+      expect((await repo.hostedEvents('55'))[0].attendance).toBe(2);
+      expect(hosted[1].eventUrl).toMatch(/\/events\/702\/$/);
+      expect(await repo.attendeesOf(['701', '702', '799'])).toEqual({
+        '701': ['55', '77'],
+        '702': ['77'],
+        '799': [],
+      });
+      expect(await repo.isReady()).toBe(false);
+      const run = await repo.startRun('job', 'full');
+      await repo.finishRun(run.id);
+      expect(await repo.isReady()).toBe(true);
+      expect(await repo.updatedAt()).toBeInstanceOf(Date);
+    });
+
+    it('adds the rsvp_* columns to a table that predates them', async () => {
+      await pool.query(
+        'ALTER TABLE meetup_events DROP COLUMN rsvp_failures, DROP COLUMN rsvp_failed_at, DROP COLUMN rsvp_error',
+      );
+      await ensureDashboardSchema(pool);
+      await ensureDashboardSchema(pool);
+      const { rows } = await pool.query<{ column_name: string }>(
+        `SELECT column_name FROM information_schema.columns
+          WHERE table_schema = current_schema() AND table_name = 'meetup_events'
+            AND column_name IN ('rsvp_error', 'rsvp_failed_at', 'rsvp_failures')
+          ORDER BY column_name`,
+      );
+      expect(rows.map((r) => r.column_name)).toEqual([
+        'rsvp_error',
+        'rsvp_failed_at',
+        'rsvp_failures',
+      ]);
+    });
   },
 );
