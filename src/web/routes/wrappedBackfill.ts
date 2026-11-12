@@ -27,6 +27,9 @@ const logger = new Logger({ name: 'dashboard' });
 export const WRAPPED_BACKFILL_PATH = dashboardPath(
   DASHBOARD_PATHS.wrappedBackfill,
 );
+export const SNAPSHOT_REFRESH_PATH = dashboardPath(
+  DASHBOARD_PATHS.snapshotRefresh,
+);
 
 export interface BackfillStatus {
   lastRun: BackfillRun | undefined;
@@ -60,10 +63,16 @@ export interface WrappedBackfillControl {
   status(): Promise<BackfillStatus>;
   runNow(requestedBy: string): Promise<RunNowOutcome>;
   snapshot(): Promise<SnapshotStatus>;
+  /** Asks the next snapshot tick to start a run (the snapshot's Run now). */
+  refreshSnapshot(requestedBy: string): Promise<RunNowOutcome>;
 }
 
 export type BackfillNoticeCode =
-  RunNowOutcome | 'not-leadership' | 'unavailable' | 'error';
+  | RunNowOutcome
+  | `snapshot-${RunNowOutcome}`
+  | 'not-leadership'
+  | 'unavailable'
+  | 'error';
 
 /** Fixed text per code. Nothing from the request, the store or Discord is ever shown. */
 export const BACKFILL_NOTICES = {
@@ -71,6 +80,11 @@ export const BACKFILL_NOTICES = {
     'The Wrapped backfill will start on its next tick (within 5 minutes).',
   'already-running': 'A Wrapped backfill run is already in progress.',
   'already-requested': 'Run now was already pressed; the next tick starts it.',
+  'snapshot-requested':
+    'The group snapshot will refresh on its next tick (within 5 minutes).',
+  'snapshot-already-running': 'A group snapshot run is already in progress.',
+  'snapshot-already-requested':
+    'Refresh snapshot now was already pressed; the next tick starts it.',
   'not-leadership':
     'Only the 1.5 Leadership Team can run the Wrapped backfill.',
   unavailable:
@@ -86,7 +100,7 @@ export function backfillNotice(code: unknown): SafeHtml | '' {
   if (!isNoticeCode(code)) {
     return '';
   }
-  return code === 'requested'
+  return code === 'requested' || code === 'snapshot-requested'
     ? html`<p class="note info">${BACKFILL_NOTICES[code]}</p>`
     : html`<p class="note attn">${BACKFILL_NOTICES[code]}</p>`;
 }
@@ -110,6 +124,7 @@ function age(from: Date, now: Date): string {
 /** The snapshot line: fixed text and numbers only; a failing read degrades to a fixed line. */
 async function snapshotLine(
   deps: Pick<DashboardPageDeps, 'wrappedBackfill'>,
+  csrfToken: string | undefined,
 ): Promise<SafeHtml> {
   let status: SnapshotStatus;
   try {
@@ -147,7 +162,15 @@ async function snapshotLine(
       `${n(status.failing)} events failed their last RSVP read; they are retried each run.`,
     );
   }
-  return html`${parts.map((text) => html`<p class="muted">${text}</p>`)}`;
+  const form =
+    !openRun && csrfToken !== undefined
+      ? html`<form method="post" action="${localUrl(SNAPSHOT_REFRESH_PATH)}">
+          <input type="hidden" name="_csrf" value="${csrfToken}" />
+          <button type="submit" class="ghost">Refresh snapshot now</button>
+          <span class="muted">1.5 Leadership Team only.</span>
+        </form>`
+      : '';
+  return html`${parts.map((text) => html`<p class="muted">${text}</p>`)} ${form}`;
 }
 
 const counts = (run: BackfillRun) =>
@@ -199,15 +222,16 @@ export async function wrappedBackfillCard(
       : '';
   return html`<div class="card">
     <h2>Wrapped backfill</h2>
-    ${backfillNotice(view.backfillNotice)} ${last} ${running} ${queue}
-    ${await snapshotLine(deps)} ${form}
+    ${backfillNotice(view.backfillNotice)} ${last} ${running} ${queue} ${form}
+    ${await snapshotLine(deps, view.csrfToken)}
   </div>`;
 }
 
 const back = (code: BackfillNoticeCode) => `/dashboard?backfill=${code}`;
 
 /**
- * POST /dashboard/wrapped/backfill/run: asks the next tick to start a run.
+ * POST /dashboard/wrapped/backfill/run: asks the next tick to start a run;
+ * POST /dashboard/wrapped/snapshot/run: the same for the group snapshot.
  * 1.5 Leadership Team only, asked of Discord live. CSRF, Origin,
  * Sec-Fetch-Site and the per-user action rate limit are the router's
  * unsafe-method guard, which runs before this handler.
@@ -226,38 +250,64 @@ export function registerWrappedBackfillRoute(
       );
   };
 
-  router.post(DASHBOARD_PATHS.wrappedBackfill, (async (_req, res) => {
-    const { session } = dashboardLocals(res);
-    let leader: boolean;
-    try {
-      leader = await deps.isLeadership(session.userId);
-    } catch (error: unknown) {
-      logger.warn(
-        `Dashboard Leadership check failed: ${error instanceof Error ? error.name : 'Error'}`,
-      );
-      res.redirect(303, back('unavailable'));
-      return;
-    }
-    if (leader !== true) {
-      res.redirect(303, back('not-leadership'));
-      return;
-    }
-    let outcome: RunNowOutcome;
-    try {
-      outcome = await deps.wrappedBackfill.runNow(session.userId);
-    } catch (error: unknown) {
-      logger.warn(
-        `Wrapped backfill Run now failed: ${error instanceof Error ? error.name : 'Error'}`,
-      );
-      res.redirect(303, back('error'));
-      return;
-    }
-    if (outcome === 'requested') {
-      audit({
-        title: 'Wrapped backfill requested',
-        description: `<@${session.userId}> asked for a Wrapped backfill run from the staff dashboard.`,
-      });
-    }
-    res.redirect(303, back(outcome));
-  }) as RequestHandler);
+  const leadershipPost = (
+    path: string,
+    act: (requestedBy: string) => Promise<RunNowOutcome>,
+    code: (outcome: RunNowOutcome) => BackfillNoticeCode,
+    auditEntry: (userId: string) => LogEntry,
+    label: string,
+  ) => {
+    router.post(path, (async (_req, res) => {
+      const { session } = dashboardLocals(res);
+      let leader: boolean;
+      try {
+        leader = await deps.isLeadership(session.userId);
+      } catch (error: unknown) {
+        logger.warn(
+          `Dashboard Leadership check failed: ${error instanceof Error ? error.name : 'Error'}`,
+        );
+        res.redirect(303, back('unavailable'));
+        return;
+      }
+      if (leader !== true) {
+        res.redirect(303, back('not-leadership'));
+        return;
+      }
+      let outcome: RunNowOutcome;
+      try {
+        outcome = await act(session.userId);
+      } catch (error: unknown) {
+        logger.warn(
+          `${label} failed: ${error instanceof Error ? error.name : 'Error'}`,
+        );
+        res.redirect(303, back('error'));
+        return;
+      }
+      if (outcome === 'requested') {
+        audit(auditEntry(session.userId));
+      }
+      res.redirect(303, back(code(outcome)));
+    }) as RequestHandler);
+  };
+
+  leadershipPost(
+    DASHBOARD_PATHS.wrappedBackfill,
+    (by) => deps.wrappedBackfill.runNow(by),
+    (outcome) => outcome,
+    (userId) => ({
+      title: 'Wrapped backfill requested',
+      description: `<@${userId}> asked for a Wrapped backfill run from the staff dashboard.`,
+    }),
+    'Wrapped backfill Run now',
+  );
+  leadershipPost(
+    DASHBOARD_PATHS.snapshotRefresh,
+    (by) => deps.wrappedBackfill.refreshSnapshot(by),
+    (outcome) => `snapshot-${outcome}`,
+    (userId) => ({
+      title: 'Group snapshot refresh requested',
+      description: `<@${userId}> asked for a group snapshot refresh from the staff dashboard.`,
+    }),
+    'Group snapshot refresh',
+  );
 }

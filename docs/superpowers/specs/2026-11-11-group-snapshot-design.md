@@ -429,6 +429,30 @@ seeded snapshot writes the entry `readEntry` serves, with zero Meetup calls.
 - `SNAPSHOT_RUN_NOW_KEY` is read by the tick but nothing sets it yet: PR 2's
   Refresh snapshot now button will.
 
+### Known limits noted by the lead (re-review of PR 1, 2026-11-11)
+
+- A Meetup outage tick records three failures and parks three healthy events
+  until the next daily run: bounded, and visible on the card.
+- The card's "ShortListing" hint is cleared by the next good tick.
+- `failingEventCount` can include an event that aged out of the settle
+  window and is never re-read (rare).
+
+## PR 2 as built (2026-11-12)
+
+- `SnapshotReader` on the repository; `src/lib/snapshot/wrapped.ts` turns it
+  into `WrappedSources` and an attendee reader. `build.ts` has an attendee
+  seam (`SourceDeps.attendees`); snapshot and token builds produce equal
+  entries on the same data (tested).
+- `/wrapped` and `/host/wrapped` try the snapshot first: no token, no OAuth
+  hop, the same hourly slot. The cross-check uses the member's stored token
+  when there is one (`storedTokenSelfCount`, one Meetup call).
+- The backfill builds snapshot members with no Meetup call, up to
+  `SNAPSHOT_MEMBERS_PER_TICK = 100` a tick, and treats a current-year copy as
+  fresh only when built after the latest snapshot run. No cross-check there.
+- Leadership **Refresh snapshot now** sets `SNAPSHOT_RUN_NOW_KEY`.
+- The `rsvp_*` columns also have a catalog-guarded `ALTER`.
+- No `WRAPPED_CACHE_VERSION` bump: the stored shape is unchanged.
+
 ## Left to the builder
 
 - File layout (suggested: `src/lib/snapshot/{ingest,job,reader}.ts`,

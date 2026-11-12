@@ -8,6 +8,7 @@ import { registerAllProtectedRoutes } from '../../../src/web/routes/dashboardPag
 import { renderHomeReports } from '../../../src/web/routes/home.js';
 import {
   BACKFILL_NOTICES,
+  SNAPSHOT_REFRESH_PATH,
   WRAPPED_BACKFILL_PATH,
   WrappedBackfillControl,
 } from '../../../src/web/routes/wrappedBackfill.js';
@@ -63,6 +64,7 @@ function control(
       entries: 0,
     })),
     runNow: vi.fn(async () => 'requested' as const),
+    refreshSnapshot: vi.fn(async () => 'requested' as const),
     snapshot: vi.fn(async () => ({
       lastRun: undefined,
       openRun: undefined,
@@ -343,5 +345,84 @@ describe('Home Wrapped backfill card: the group snapshot line', () => {
     expect(out).toContain('<h2>Wrapped backfill</h2>');
     expect(out).toContain('Group snapshot: status unavailable.');
     expect(out).not.toContain('down');
+  });
+});
+
+async function pressRefresh(req: Client, cookie: string) {
+  return req
+    .post(SNAPSHOT_REFRESH_PATH)
+    .set('Cookie', cookie)
+    .set('Origin', ORIGIN)
+    .type('form')
+    .send({ _csrf: await tokenOf(req, cookie) });
+}
+
+describe('POST /dashboard/wrapped/snapshot/run (Refresh snapshot now)', () => {
+  it('offers the button with a CSRF token and hides it during a snapshot run', async () => {
+    const out = await render(control());
+    expect(out).toContain(`action="${SNAPSHOT_REFRESH_PATH}"`);
+    expect(out).toContain('>Refresh snapshot now</button>');
+    const busy = await render(
+      control({
+        snapshot: async () => ({
+          lastRun: undefined,
+          openRun: snapshotRun({ finishedAt: undefined }),
+          events: 1,
+          rsvps: 1,
+          pending: 1,
+          failing: 0,
+          now: new Date('2026-12-10T20:00:00Z'),
+        }),
+      }),
+    );
+    expect(busy).not.toContain(`action="${SNAPSHOT_REFRESH_PATH}"`);
+    expect(await render(control(), {})).not.toContain(
+      `action="${SNAPSHOT_REFRESH_PATH}"`,
+    );
+  });
+
+  it('needs Leadership, checked live; Discord down is "unavailable"', async () => {
+    const refreshSnapshot = vi.fn(async (_by: string) => 'requested' as const);
+    const { req, isLeadership } = await setup({ refreshSnapshot });
+    isLeadership.mockResolvedValue(false);
+    const cookie = await signIn(req);
+    expect((await pressRefresh(req, cookie)).headers.location).toBe(
+      '/dashboard?backfill=not-leadership',
+    );
+    isLeadership.mockRejectedValue(new Error('gateway down'));
+    expect((await pressRefresh(req, cookie)).headers.location).toBe(
+      '/dashboard?backfill=unavailable',
+    );
+    expect(refreshSnapshot).not.toHaveBeenCalled();
+  });
+
+  it('Leadership asks for a refresh: notice and audit; repeats and open runs say so', async () => {
+    const refreshSnapshot = vi.fn<
+      (
+        by: string,
+      ) => Promise<'requested' | 'already-running' | 'already-requested'>
+    >(async () => 'requested');
+    const { req, isLeadership, audit } = await setup({ refreshSnapshot });
+    isLeadership.mockResolvedValue(true);
+    const cookie = await signIn(req);
+    const res = await pressRefresh(req, cookie);
+    expect(res.headers.location).toBe('/dashboard?backfill=snapshot-requested');
+    expect(refreshSnapshot).toHaveBeenCalledWith(USER.id);
+    const home = await req
+      .get('/dashboard?backfill=snapshot-requested')
+      .set('Cookie', cookie);
+    expect(home.text).toContain(BACKFILL_NOTICES['snapshot-requested']);
+    expect(audit).toHaveBeenCalledWith(
+      expect.objectContaining({ title: 'Group snapshot refresh requested' }),
+    );
+
+    refreshSnapshot.mockResolvedValue('already-requested');
+    expect((await pressRefresh(req, cookie)).headers.location).toBe(
+      '/dashboard?backfill=snapshot-already-requested',
+    );
+    refreshSnapshot.mockResolvedValue('already-running');
+    expect((await pressRefresh(req, cookie)).headers.location).toBe(
+      '/dashboard?backfill=snapshot-already-running',
+    );
   });
 });

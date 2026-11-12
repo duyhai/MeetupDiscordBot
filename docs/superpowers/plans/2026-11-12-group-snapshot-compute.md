@@ -36,6 +36,7 @@
 **Files:** Modify `src/lib/repositories/postgresSnapshotRepository.ts`, `src/lib/repositories/dashboardPool.ts`; Test `tst/integration/postgresSnapshotRepository.test.ts`.
 
 **Produces** (`SnapshotReader`, implemented by the repository):
+
 - `isReady(): Promise<boolean>` (= `hasFinishedFull`)
 - `updatedAt(): Promise<Date | undefined>` (latest finished run's `finished_at`)
 - `memberEvents(meetupId): Promise<EventSummary[]>` — PAST, live, the member's row YES/ATTENDED; `eventUrl` falls back to `https://www.meetup.com/<urlname>/events/<id>/`.
@@ -50,6 +51,7 @@
 **Files:** Modify `src/lib/wrapped/build.ts`; Create `src/lib/snapshot/wrapped.ts`; Tests `tst/lib/snapshot/wrapped.test.ts`, existing `tst/lib/wrapped/build.test.ts` unchanged and passing.
 
 **Produces:**
+
 - `type AttendeeReader = (events: WrappedEvent[], firstPageOnly: boolean) => Promise<{ byEvent: Record<string, string[]>; partial: Set<string> }>`; `SourceDeps` gains `attendees?: AttendeeReader` and `meetup` becomes optional (one of the two required at runtime).
 - `interface SnapshotWrapped { sources(linkedMeetupId: string, selfPastCount?: () => Promise<number | undefined>): Promise<WrappedSources | undefined>; attendees: AttendeeReader; updatedAt(): Promise<Date | undefined> }`
 - `snapshotWrapped(reader: SnapshotReader): SnapshotWrapped`

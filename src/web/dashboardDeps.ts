@@ -52,7 +52,11 @@ import {
 import { ApplicationCache } from '../util/cache.js';
 import { PostgresWrappedAnnouncementRepository } from '../lib/repositories/postgresWrappedAnnouncementRepository.js';
 import { PostgresSnapshotRepository } from '../lib/repositories/postgresSnapshotRepository.js';
-import { RSVP_SETTLE_DAYS } from '../lib/snapshot/ingest.js';
+import {
+  RSVP_SETTLE_DAYS,
+  SNAPSHOT_RUN_NOW_KEY,
+  SNAPSHOT_RUN_NOW_TTL_SEC,
+} from '../lib/snapshot/ingest.js';
 import { PostgresWrappedBackfillRepository } from '../lib/repositories/postgresWrappedBackfillRepository.js';
 import { RUN_NOW_KEY, RUN_NOW_TTL_SEC } from '../lib/wrapped/backfill.js';
 import { recordedNextTick } from '../lib/wrapped/queue.js';
@@ -424,6 +428,21 @@ export function dashboardPageDeps(): DashboardPageDeps {
             })
           : 0;
         return { lastRun, openRun, ...totals, pending, failing, now };
+      },
+      // The flag the next snapshot tick honours (snapshot/ingest.ts).
+      refreshSnapshot: async (requestedBy) => {
+        const store = await PostgresSnapshotRepository.instance();
+        if (await store.openRun()) {
+          return 'already-running';
+        }
+        const cache = await ApplicationCache();
+        return (await cache.exclusive_set(
+          SNAPSHOT_RUN_NOW_KEY,
+          requestedBy,
+          SNAPSHOT_RUN_NOW_TTL_SEC,
+        ))
+          ? 'requested'
+          : 'already-requested';
       },
     },
     wrappedAnnounce: {
