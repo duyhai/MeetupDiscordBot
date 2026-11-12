@@ -22,6 +22,7 @@ import {
   SnapshotDeps,
   SnapshotTickOutcome,
   runSnapshotTick,
+  snapshotTuning,
 } from './ingest.js';
 
 const logger = new Logger({ name: 'groupSnapshotJob' });
@@ -53,6 +54,10 @@ export function startGroupSnapshotScheduler(
     return;
   }
   const runTick = options.runTick ?? runSnapshotTick;
+  const pace = snapshotTuning(env);
+  log.info(
+    `Group snapshot pace: ${pace.callsPerTick} Meetup calls a tick, ${pace.concurrency} event(s) at a time`,
+  );
   let running = false;
   const tick = () => {
     if (running) {
@@ -102,5 +107,6 @@ export async function productionSnapshotDeps(
       return client ? logAlert(client, entry) : false;
     },
     newLeaseValue: () => crypto.randomUUID(),
+    tuning: snapshotTuning(),
   };
 }

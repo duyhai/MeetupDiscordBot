@@ -8,7 +8,7 @@
  *    audit's confirmed deletions.
  * 2. Read RSVPs for the events that need them (never read, read before they
  *    happened, or within RSVP_SETTLE_DAYS and read before this run), oldest
- *    first, one event at a time, under SNAPSHOT_TICK_CALL_BUDGET calls a
+ *    first, up to `concurrency` events at a time, under `callsPerTick` calls a
  *    tick. The work set is a query, so a restart resumes where it was.
  * 3. Finish when nothing is left.
  *
@@ -20,6 +20,7 @@
  * credential is never read by two jobs at once. Nothing is written to Redis
  * but the lease, the run-now flag and the alert guard.
  */
+import { ClientError } from 'graphql-request';
 import { Logger } from 'tslog';
 
 import { KeyValueCache } from '../cache/base.js';
@@ -64,6 +65,55 @@ const logger = new Logger({ name: 'groupSnapshot' });
 export const SNAPSHOT_TICK_MS = 5 * 60_000;
 /** Meetup calls a tick may start events under; an event in flight reads all its pages. */
 export const SNAPSHOT_TICK_CALL_BUDGET = 150;
+/** Events whose RSVPs are read at once by default (listing pages are always one at a time). */
+export const SNAPSHOT_CONCURRENCY = 1;
+const MAX_CALLS_PER_TICK = 2000;
+const MAX_CONCURRENCY = 8;
+
+/**
+ * The ingest's pace, from the environment (Heroku config vars), so the
+ * full pull can be sped up without a deploy:
+ * - SNAPSHOT_CALLS_PER_TICK: 1..2000, default 150.
+ * - SNAPSHOT_CONCURRENCY: 1..8, default 1.
+ * Recommended fast setting for the first full pull: 600 and 4 (~9 ticks,
+ * ~45 min, ~8 requests/s at peak; see the spec's "Pace"). Anything else
+ * falls back to the default. The quiet-hour and digest guards are untouched.
+ */
+export interface SnapshotTuning {
+  callsPerTick: number;
+  concurrency: number;
+}
+
+function boundedInt(
+  raw: string | undefined,
+  max: number,
+  fallback: number,
+): number {
+  const value = Number(raw);
+  return raw !== undefined &&
+    Number.isInteger(value) &&
+    value >= 1 &&
+    value <= max
+    ? value
+    : fallback;
+}
+
+export function snapshotTuning(
+  env: Record<string, string | undefined> = process.env,
+): SnapshotTuning {
+  return {
+    callsPerTick: boundedInt(
+      env.SNAPSHOT_CALLS_PER_TICK,
+      MAX_CALLS_PER_TICK,
+      SNAPSHOT_TICK_CALL_BUDGET,
+    ),
+    concurrency: boundedInt(
+      env.SNAPSHOT_CONCURRENCY,
+      MAX_CONCURRENCY,
+      SNAPSHOT_CONCURRENCY,
+    ),
+  };
+}
 /** A new run starts this long after the last one finished. */
 export const SNAPSHOT_RUN_INTERVAL_MS = 20 * 60 * 60_000;
 /** Past events this recent are read again once per run: hosts mark attendance after. */
@@ -103,6 +153,8 @@ export interface SnapshotDeps {
   /** #meetup-bot-alerts, plain. */
   alert(entry: LogEntry): Promise<boolean>;
   newLeaseValue(): string;
+  /** Pace; the defaults (150 calls, one event at a time) when left out. */
+  tuning?: SnapshotTuning;
   log?: SchedulerLog;
 }
 
@@ -158,6 +210,11 @@ async function alertFailingOnce(
   }
 }
 
+/** Meetup's rate limit: not the event's fault; the tick backs off. */
+export function isRateLimited(error: unknown): boolean {
+  return error instanceof ClientError && error.response?.status === 429;
+}
+
 /** An infrastructure failure that must end the tick (and, for a 401, re-run the callback). */
 function isFatal(error: unknown): boolean {
   return (
@@ -209,6 +266,15 @@ async function listPhase(
   return short;
 }
 
+/**
+ * Up to `concurrency` events read at once, then written in event order. The
+ * budget is checked at event boundaries: a batch never starts more events
+ * than the calls left, and an event in flight reads all its pages. Failures
+ * count in event order across batches and any good read resets the count,
+ * so "three in a row" means the same with one reader or several. A rate
+ * limit, a refused token or an unusable credential ends the tick without
+ * marking the event failed (the good reads of the batch are kept).
+ */
 async function rsvpPhase(
   deps: SnapshotDeps,
   cache: KeyValueCache,
@@ -219,75 +285,97 @@ async function rsvpPhase(
   work: TickWork,
   log: SchedulerLog,
 ): Promise<void> {
+  const { callsPerTick, concurrency } = deps.tuning ?? {
+    callsPerTick: SNAPSHOT_TICK_CALL_BUDGET,
+    concurrency: SNAPSHOT_CONCURRENCY,
+  };
   let failingInARow = 0;
   for (;;) {
-    if (calls.n >= SNAPSHOT_TICK_CALL_BUDGET) {
+    const room = callsPerTick - calls.n;
+    if (room <= 0) {
       return;
     }
-    // eslint-disable-next-line no-await-in-loop -- one event in flight, by design
+    // eslint-disable-next-line no-await-in-loop -- one batch in flight, by design
     if (!(await deps.canStart(deps.now(), cache))) {
       log.info('Group snapshot: the window closed; the tick ends');
       return;
     }
-    // eslint-disable-next-line no-await-in-loop -- one event in flight, by design
-    const [next] = await store.eventsNeedingRsvps({
+    // eslint-disable-next-line no-await-in-loop -- one batch in flight, by design
+    const batch = await store.eventsNeedingRsvps({
       runStartedAt: run.startedAt,
       now: deps.now(),
       settleDays: RSVP_SETTLE_DAYS,
-      limit: 1,
+      limit: Math.min(concurrency, room),
     });
-    if (!next) {
+    if (batch.length === 0) {
       work.finished = true;
       return;
     }
-    let read: EventRsvpRead | null;
-    try {
-      // eslint-disable-next-line no-await-in-loop -- one event in flight, by design
-      read = await readEventRsvps(meetup, next.eventId, calls);
-      if (read && isShortRead(read, next.yesCount)) {
-        throw new ShortRsvpReadError();
+    // eslint-disable-next-line no-await-in-loop -- one batch in flight, by design
+    const reads = await Promise.allSettled(
+      batch.map(async (next) => {
+        const read = await readEventRsvps(meetup, next.eventId, calls);
+        if (read && isShortRead(read, next.yesCount)) {
+          throw new ShortRsvpReadError();
+        }
+        return read;
+      }),
+    );
+    let stop: unknown;
+    for (const [i, settled] of reads.entries()) {
+      const next = batch[i];
+      if (settled.status === 'rejected') {
+        const error: unknown = settled.reason;
+        if (isFatal(error) || isRateLimited(error)) {
+          stop ??= error;
+          continue;
+        }
+        // Recorded on the event, so it stays out of this run (across
+        // restarts too) and is read again by the next one.
+        failingInARow += 1;
+        work.failed += 1;
+        // eslint-disable-next-line no-await-in-loop -- two small writes
+        await store.recordRsvpFailure(
+          next.eventId,
+          errorName(error),
+          deps.now(),
+        );
+        // eslint-disable-next-line no-await-in-loop -- see above
+        await store.advance(run.id, {
+          eventsFetched: 0,
+          rsvpsStored: 0,
+          failed: 1,
+        });
+        log.warn(
+          `Group snapshot: reading RSVPs of event ${next.eventId} failed: ${errorName(error)}; retried next run`,
+        );
+        if (failingInARow >= CONSECUTIVE_FAILURE_LIMIT) {
+          // Likely Meetup rather than the events: end the tick and alert.
+          stop ??= error;
+        }
+        continue;
       }
-    } catch (error) {
-      if (isFatal(error)) {
-        throw error;
+      failingInARow = 0;
+      const read = settled.value;
+      if (read === null) {
+        // eslint-disable-next-line no-await-in-loop -- one small write
+        await store.markDeleted(next.eventId, deps.now());
+        log.info(`Group snapshot: event ${next.eventId} is gone from Meetup`);
+        continue;
       }
-      // Recorded on the event, so it stays out of this run (across
-      // restarts too) and is read again by the next one.
-      failingInARow += 1;
-      work.failed += 1;
-      // eslint-disable-next-line no-await-in-loop -- two small writes
-      await store.recordRsvpFailure(next.eventId, errorName(error), deps.now());
-      // eslint-disable-next-line no-await-in-loop -- see above
-      await store.advance(run.id, {
-        eventsFetched: 0,
-        rsvpsStored: 0,
-        failed: 1,
-      });
-      log.warn(
-        `Group snapshot: reading RSVPs of event ${next.eventId} failed: ${errorName(error)}; retried next run`,
-      );
-      if (failingInARow >= CONSECUTIVE_FAILURE_LIMIT) {
-        // Likely Meetup rather than the events: end the tick and alert.
-        throw error;
-      }
-      continue;
-    }
-    failingInARow = 0;
-    if (read === null) {
+      // eslint-disable-next-line no-await-in-loop -- one event's write
+      await store.replaceRsvps(next.eventId, read.rsvps, deps.now());
       // eslint-disable-next-line no-await-in-loop -- one small write
-      await store.markDeleted(next.eventId, deps.now());
-      log.info(`Group snapshot: event ${next.eventId} is gone from Meetup`);
-      continue;
+      await store.advance(run.id, {
+        eventsFetched: 1,
+        rsvpsStored: read.rsvps.length,
+        failed: 0,
+      });
+      work.fetched += 1;
     }
-    // eslint-disable-next-line no-await-in-loop -- one event in flight, by design
-    await store.replaceRsvps(next.eventId, read.rsvps, deps.now());
-    // eslint-disable-next-line no-await-in-loop -- one small write
-    await store.advance(run.id, {
-      eventsFetched: 1,
-      rsvpsStored: read.rsvps.length,
-      failed: 0,
-    });
-    work.fetched += 1;
+    if (stop !== undefined) {
+      throw stop;
+    }
   }
 }
 
