@@ -19,6 +19,8 @@ import {
 } from '../../../src/lib/wrapped/cache.js';
 import { replies, shareCustomId } from '../../../src/lib/wrapped/format.js';
 import { NEXT_TICK_KEY } from '../../../src/lib/wrapped/queue.js';
+import { snapshotWrapped } from '../../../src/lib/snapshot/wrapped.js';
+import { FakeSnapshotReader } from '../snapshot/fakes.js';
 import { FakeBackfillStore, FakeEntryStore } from './backfillFakes.js';
 import {
   WrappedHandlerDeps,
@@ -882,5 +884,85 @@ describe('runShare', () => {
     const { interaction } = buttonInteraction({ customId: 'wrapped_share:x' });
 
     await expect(runShare(interaction, h.deps)).rejects.toThrow();
+  });
+});
+
+describe('runWrapped from the group snapshot', () => {
+  const snapshotEvents = [
+    {
+      id: 's1',
+      title: 'Board game night',
+      dateTime: '2026-03-10T03:00:00Z',
+      eventUrl: 'https://www.meetup.com/g/events/1/',
+    },
+    {
+      id: 's2',
+      title: 'Hot pot dinner',
+      dateTime: '2026-04-10T03:00:00Z',
+      eventUrl: 'https://www.meetup.com/g/events/2/',
+    },
+  ];
+  const reader = () =>
+    new FakeSnapshotReader(snapshotEvents, { s1: ['me', 'x'], s2: ['me'] });
+
+  it('builds with no Meetup token (no OAuth hop) and spends the hourly slot', async () => {
+    const h = harness();
+    await link(h.repo);
+    const r = reader();
+    h.deps.snapshot = async () => snapshotWrapped(r);
+    const interaction = commandInteraction();
+
+    await runWrapped(interaction, { year: 2026, refresh: false }, h.deps);
+
+    expect(h.withMeetupClient).not.toHaveBeenCalled();
+    expect(h.meetup.getEventRsvps).not.toHaveBeenCalled();
+    expect(
+      (await readWrapped(h.cache, 'u1', 2026, 'me'))?.stats.attendedThisYear,
+    ).toBe(2);
+    expect(h.deps.limiter.take('u1')).toBe(false);
+
+    // refresh: rebuilt from the snapshot, but the slot is spent.
+    const again = commandInteraction();
+    await runWrapped(again, { year: 2026, refresh: true }, h.deps);
+    expect(h.withMeetupClient).not.toHaveBeenCalled();
+    expect(contents(again.editReply).join(' ')).toMatch(/less than an hour/);
+  });
+
+  it('a member the snapshot does not hold, or a failing snapshot, takes the token path', async () => {
+    const h = harness();
+    await link(h.repo, 'me');
+    h.deps.snapshot = async () =>
+      snapshotWrapped(new FakeSnapshotReader(snapshotEvents, {}));
+    await runWrapped(
+      commandInteraction(),
+      { year: 2026, refresh: false },
+      h.deps,
+    );
+    expect(h.withMeetupClient).toHaveBeenCalledOnce();
+
+    const h2 = harness();
+    await link(h2.repo);
+    h2.deps.snapshot = async () => {
+      throw new Error('pg down');
+    };
+    await runWrapped(
+      commandInteraction(),
+      { year: 2026, refresh: false },
+      h2.deps,
+    );
+    expect(h2.withMeetupClient).toHaveBeenCalledOnce();
+  });
+
+  it('a stored-token count well above the snapshot’s takes the token path', async () => {
+    const h = harness();
+    await link(h.repo);
+    h.deps.snapshot = async () => snapshotWrapped(reader());
+    h.deps.selfPastCount = async () => 20;
+    await runWrapped(
+      commandInteraction(),
+      { year: 2026, refresh: false },
+      h.deps,
+    );
+    expect(h.withMeetupClient).toHaveBeenCalledOnce();
   });
 });

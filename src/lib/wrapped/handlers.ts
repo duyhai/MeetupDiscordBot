@@ -35,7 +35,14 @@ import { keepReplyVisible } from '../../util/discord.js';
 import { withMeetupClient } from '../../util/meetup.js';
 import { ApplicationMemberRepository } from '../../util/memberRepository.js';
 import { FixedWindowLimiter } from '../../web/rateLimit.js';
-import { BuildResult, buildWrapped } from './build.js';
+import { PostgresSnapshotRepository } from '../repositories/postgresSnapshotRepository.js';
+import {
+  SnapshotWrapped,
+  buildWrappedFromSnapshot,
+  snapshotWrapped,
+  storedTokenSelfCount,
+} from '../snapshot/wrapped.js';
+import { BuildDeps, BuildResult, buildWrapped } from './build.js';
 import {
   BUILDING_LEASE_TTL_SEC,
   CachedWrapped,
@@ -77,6 +84,40 @@ export interface WrappedHandlerDeps {
   queue?(): Promise<WrappedBackfillStore>;
   /** The durable Wrapped store; left out or rejecting, Redis alone. */
   entries?(): Promise<WrappedEntryStore>;
+  /**
+   * The group snapshot: a member it can serve is built from it with no
+   * Meetup token (no OAuth hop). Left out or rejecting, the token path.
+   */
+  snapshot?(): Promise<SnapshotWrapped>;
+  /** The member's stored token's past-RSVP count, the snapshot's cross-check. */
+  selfPastCount?(discordUserId: string): Promise<number | undefined>;
+}
+
+/** The snapshot's sources for the member, or undefined for the token path. Never throws. */
+async function snapshotSources(
+  deps: WrappedHandlerDeps,
+  discordUserId: string,
+  linkedMeetupId: string,
+) {
+  if (!deps.snapshot) {
+    return undefined;
+  }
+  try {
+    const snapshot = await deps.snapshot();
+    const sources = await snapshot.sources(
+      linkedMeetupId,
+      deps.selfPastCount
+        ? () =>
+            deps.selfPastCount?.(discordUserId) ?? Promise.resolve(undefined)
+        : undefined,
+    );
+    return sources ? { snapshot, sources } : undefined;
+  } catch (error) {
+    logger.warn(
+      `Wrapped snapshot unavailable, using the token path: ${error instanceof Error ? error.name : 'Error'}`,
+    );
+    return undefined;
+  }
 }
 
 /** Both tiers; a Postgres that cannot be reached leaves the Redis tier alone. */
@@ -106,6 +147,9 @@ export const defaultWrappedDeps: WrappedHandlerDeps = {
   slowAfterMs: SLOW_BUILD_MS,
   queue: () => PostgresWrappedBackfillRepository.instance(),
   entries: () => PostgresWrappedEntryRepository.instance(),
+  snapshot: async () =>
+    snapshotWrapped(await PostgresSnapshotRepository.instance()),
+  selfPastCount: storedTokenSelfCount,
 };
 
 export interface WrappedOptions {
@@ -190,23 +234,60 @@ export async function runWrapped(
     return;
   }
   try {
-    await deps.withMeetupClient(interaction, (meetup) =>
-      buildAndReply(interaction, deps, {
-        meetup,
-        members,
-        tiers,
-        cached,
-        linkedMeetupId,
-        year,
-      }),
-    );
+    const context = { members, tiers, cached, linkedMeetupId, year };
+    const fromSnapshot = await snapshotSources(deps, userId, linkedMeetupId);
+    if (fromSnapshot) {
+      await buildAndReply(interaction, deps, {
+        ...context,
+        build: (shared) =>
+          buildWrappedFromSnapshot(
+            { ...shared, attendees: fromSnapshot.snapshot.attendees },
+            linkedMeetupId,
+            year,
+            fromSnapshot.sources,
+          ),
+      });
+    } else {
+      await deps.withMeetupClient(interaction, (meetup) =>
+        buildAndReply(interaction, deps, {
+          ...context,
+          build: (shared) =>
+            buildWrapped(
+              {
+                ...shared,
+                meetup,
+                organizerRsvps: (meetupId) =>
+                  deps.withOrganizerMeetup(interaction.client, (organizer) =>
+                    organizer.getMemberRsvpEvents(
+                      meetupId,
+                      Configuration.meetup.groupId,
+                      {
+                        rsvpStatus: ['YES', 'ATTENDED'],
+                        eventStatus: ['PAST'],
+                      },
+                    ),
+                  ),
+              },
+              linkedMeetupId,
+              year,
+              Configuration.meetup.groupId,
+            ),
+        }),
+      );
+    }
   } finally {
     await cache.remove(lease);
   }
 }
 
+/** What both build paths share: the slot, naming, progress, the clock. */
+type SharedBuildDeps = Pick<
+  BuildDeps,
+  'claimBuild' | 'findByMeetupId' | 'isPresent' | 'onProgress' | 'now'
+>;
+
 interface BuildContext {
-  meetup: Parameters<Parameters<typeof withMeetupClient>[1]>[0];
+  build: (shared: SharedBuildDeps) => Promise<BuildResult>;
   members: MemberRepository;
   tiers: WrappedTiers;
   cached: CachedWrapped | undefined;
@@ -217,7 +298,7 @@ interface BuildContext {
 async function buildAndReply(
   interaction: CommandInteraction,
   deps: WrappedHandlerDeps,
-  { meetup, members, tiers, cached, linkedMeetupId, year }: BuildContext,
+  { build, members, tiers, cached, linkedMeetupId, year }: BuildContext,
 ): Promise<void> {
   const userId = interaction.user.id;
   {
@@ -233,47 +314,33 @@ async function buildAndReply(
 
     let claimed = false;
     try {
-      const result: BuildResult = await buildWrapped(
-        {
-          meetup,
-          // Taken only with the token in hand and the history readable: a
-          // member sent on the OAuth hop, or told to reconnect, keeps their
-          // slot for the next attempt.
-          claimBuild: () => {
-            claimed = deps.limiter.take(userId);
-            return claimed;
-          },
-          organizerRsvps: (meetupId) =>
-            deps.withOrganizerMeetup(interaction.client, (organizer) =>
-              organizer.getMemberRsvpEvents(
-                meetupId,
-                Configuration.meetup.groupId,
-                { rsvpStatus: ['YES', 'ATTENDED'], eventStatus: ['PAST'] },
-              ),
-            ),
-          findByMeetupId: (meetupId) => members.findByMeetupId(meetupId),
-          isPresent: async (discordUserId) => {
-            if (!interaction.guild) {
-              return true;
-            }
-            try {
-              await interaction.guild.members.fetch(discordUserId);
-              return true;
-            } catch {
-              return false;
-            }
-          },
-          onProgress: async (message) => {
-            if (!slow) {
-              await interaction.editReply({ content: message, components: [] });
-            }
-          },
-          now: () => deps.now(),
+      const result: BuildResult = await build({
+        // Taken only with the token in hand and the history readable (or,
+        // from the snapshot, right away): a member sent on the OAuth hop, or
+        // told to reconnect, keeps their slot for the next attempt.
+        claimBuild: () => {
+          claimed = deps.limiter.take(userId);
+          return claimed;
         },
-        linkedMeetupId,
-        year,
-        Configuration.meetup.groupId,
-      );
+        findByMeetupId: (meetupId) => members.findByMeetupId(meetupId),
+        isPresent: async (discordUserId) => {
+          if (!interaction.guild) {
+            return true;
+          }
+          try {
+            await interaction.guild.members.fetch(discordUserId);
+            return true;
+          } catch {
+            return false;
+          }
+        },
+        onProgress: async (message) => {
+          if (!slow) {
+            await interaction.editReply({ content: message, components: [] });
+          }
+        },
+        now: () => deps.now(),
+      });
 
       if (result.kind === 'account-mismatch') {
         logger.warn(
