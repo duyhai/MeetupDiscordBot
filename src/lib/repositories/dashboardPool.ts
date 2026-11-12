@@ -196,6 +196,15 @@ CREATE INDEX IF NOT EXISTS meetup_event_rsvps_member_idx ON meetup_event_rsvps (
 -- Snapshot runs, as wrapped_backfill_runs: at most one open. kind is 'full'
 -- until a full pull has finished, then 'incremental'. listed_at is when the
 -- run's listing phase finished; last_error is an error class name only.
+-- Members whose own token counted clearly more past RSVPs than the snapshot
+-- holds (src/lib/snapshot/wrapped.ts): their Wrapped is built on the token
+-- path from then on, every year. Meetup ids and counts only.
+CREATE TABLE IF NOT EXISTS wrapped_snapshot_flags (
+  meetup_id      TEXT PRIMARY KEY,
+  flagged_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  snapshot_count INTEGER NOT NULL,
+  self_count     INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS meetup_snapshot_runs (
   id             SERIAL PRIMARY KEY,
   trigger        TEXT NOT NULL CHECK (trigger = 'job' OR trigger ~ '^[0-9]{1,20}$'),

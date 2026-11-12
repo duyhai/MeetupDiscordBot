@@ -696,7 +696,11 @@ export function registerWrappedPage(
     }
     try {
       const snapshot = await deps.snapshot();
-      const count = deps.selfPastCount;
+      // The cross-check costs a Meetup call: only when a build could follow
+      // (the shared hourly slot is free), so it is throttled like the build.
+      const count = deps.limiter.isLimited(discordUserId)
+        ? undefined
+        : deps.selfPastCount;
       const sources = await snapshot.sources(
         meetupId,
         count ? () => count(discordUserId) : undefined,

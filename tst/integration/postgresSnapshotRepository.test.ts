@@ -302,11 +302,19 @@ const event = (
         },
       ]);
       const hosted = await repo.hostedEvents('55');
+      // Meetup's YES + ATTENDED total from the listing, as the token path
+      // reads it (it counts RSVPs the organizer view hides).
       expect(hosted.map((h) => [h.id, h.attendance])).toEqual([
-        ['701', 2],
-        ['702', 1],
-        ['705', 9], // never read: Meetup's count
+        ['701', 3],
+        ['702', 3],
+        ['705', 9],
       ]);
+      // With no listed count, the stored YES/ATTENDED rows.
+      await repo.upsertEvents(
+        [event('701', days(30), { hostIds: ['55'], yesCount: null })],
+        NOW,
+      );
+      expect((await repo.hostedEvents('55'))[0].attendance).toBe(2);
       expect(hosted[1].eventUrl).toMatch(/\/events\/702\/$/);
       expect(await repo.attendeesOf(['701', '702', '799'])).toEqual({
         '701': ['55', '77'],

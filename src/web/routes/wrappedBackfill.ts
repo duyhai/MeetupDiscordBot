@@ -72,12 +72,10 @@ export interface WrappedBackfillControl {
   refreshSnapshot(requestedBy: string): Promise<RunNowOutcome>;
 }
 
+type Refusal = 'not-leadership' | 'unavailable' | 'error';
+
 export type BackfillNoticeCode =
-  | RunNowOutcome
-  | `snapshot-${RunNowOutcome}`
-  | 'not-leadership'
-  | 'unavailable'
-  | 'error';
+  RunNowOutcome | Refusal | `snapshot-${RunNowOutcome | Refusal}`;
 
 /** Fixed text per code. Nothing from the request, the store or Discord is ever shown. */
 export const BACKFILL_NOTICES = {
@@ -90,6 +88,12 @@ export const BACKFILL_NOTICES = {
   'snapshot-already-running': 'A group snapshot run is already in progress.',
   'snapshot-already-requested':
     'Refresh snapshot now was already pressed; the next tick starts it.',
+  'snapshot-not-leadership':
+    'Only the 1.5 Leadership Team can refresh the group snapshot.',
+  'snapshot-unavailable':
+    'Discord could not be reached to check your role. Nothing was requested; try again in a minute.',
+  'snapshot-error':
+    'The snapshot refresh could not be requested. Please try again later.',
   'not-leadership':
     'Only the 1.5 Leadership Team can run the Wrapped backfill.',
   unavailable:
@@ -267,7 +271,7 @@ export function registerWrappedBackfillRoute(
   const leadershipPost = (
     path: string,
     act: (requestedBy: string) => Promise<RunNowOutcome>,
-    code: (outcome: RunNowOutcome) => BackfillNoticeCode,
+    code: (outcome: RunNowOutcome | Refusal) => BackfillNoticeCode,
     auditEntry: (userId: string) => LogEntry,
     label: string,
   ) => {
@@ -280,11 +284,11 @@ export function registerWrappedBackfillRoute(
         logger.warn(
           `Dashboard Leadership check failed: ${error instanceof Error ? error.name : 'Error'}`,
         );
-        res.redirect(303, back('unavailable'));
+        res.redirect(303, back(code('unavailable')));
         return;
       }
       if (leader !== true) {
-        res.redirect(303, back('not-leadership'));
+        res.redirect(303, back(code('not-leadership')));
         return;
       }
       let outcome: RunNowOutcome;
@@ -294,7 +298,7 @@ export function registerWrappedBackfillRoute(
         logger.warn(
           `${label} failed: ${error instanceof Error ? error.name : 'Error'}`,
         );
-        res.redirect(303, back('error'));
+        res.redirect(303, back(code('error')));
         return;
       }
       if (outcome === 'requested') {

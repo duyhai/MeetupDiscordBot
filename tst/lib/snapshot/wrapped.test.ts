@@ -88,19 +88,31 @@ describe('snapshotWrapped.sources', () => {
   });
 
   it('cross-checks against the member’s own count, with a little slack', async () => {
-    const snap = snapshotWrapped(new FakeSnapshotReader(EVENTS, ATTENDEES));
+    const fresh = () =>
+      snapshotWrapped(new FakeSnapshotReader(EVENTS, ATTENDEES));
     expect(
-      await snap.sources('me', async () => 4 + SNAPSHOT_COUNT_SLACK),
+      await fresh().sources('me', async () => 4 + SNAPSHOT_COUNT_SLACK),
     ).toBeDefined();
+    expect(await fresh().sources('me', async () => undefined)).toBeDefined();
     expect(
-      await snap.sources('me', async () => 4 + SNAPSHOT_COUNT_SLACK + 1),
-    ).toBeUndefined();
-    expect(await snap.sources('me', async () => undefined)).toBeDefined();
-    expect(
-      await snap.sources('me', async () => {
+      await fresh().sources('me', async () => {
         throw new Error('token refused');
       }),
     ).toBeDefined();
+  });
+
+  it('flags a member it undercounts, durably: the token path from then on, cross-check or not', async () => {
+    const reader = new FakeSnapshotReader(EVENTS, ATTENDEES);
+    const snap = snapshotWrapped(reader);
+    expect(
+      await snap.sources('me', async () => 4 + SNAPSHOT_COUNT_SLACK + 1),
+    ).toBeUndefined();
+    expect(reader.flagged.get('me')).toEqual({
+      snapshot: 4,
+      self: 4 + SNAPSHOT_COUNT_SLACK + 1,
+    });
+    // The backfill passes no cross-check: still the token path.
+    expect(await snap.sources('me')).toBeUndefined();
   });
 });
 
@@ -193,7 +205,10 @@ describe('buildWrappedFromSnapshot', () => {
     if (fromSnapshot.kind !== 'built' || fromToken.kind !== 'built') {
       return;
     }
-    expect(fromSnapshot.wrapped).toEqual(fromToken.wrapped);
+    const { builtFrom, ...sameShape } = fromSnapshot.wrapped;
+    expect(builtFrom).toBe('snapshot');
+    expect(fromToken.wrapped.builtFrom).toBeUndefined();
+    expect(sameShape).toEqual(fromToken.wrapped);
     expect(fromSnapshot.wrapped.stats.attendedThisYear).toBe(3);
     expect(fromSnapshot.wrapped.stats.hosting?.thisYear).toBe(1);
     const json = JSON.stringify(fromSnapshot.wrapped);

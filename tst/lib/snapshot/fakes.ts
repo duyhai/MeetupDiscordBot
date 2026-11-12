@@ -303,6 +303,21 @@ export class FakeSnapshotReader implements SnapshotReader {
       }));
   }
 
+  readonly flagged = new Map<string, { snapshot: number; self: number }>();
+
+  async isFlagged(meetupId: string): Promise<boolean> {
+    this.check();
+    return this.flagged.has(meetupId);
+  }
+
+  async flagUndercounted(
+    meetupId: string,
+    snapshotCount: number,
+    selfCount: number,
+  ): Promise<void> {
+    this.flagged.set(meetupId, { snapshot: snapshotCount, self: selfCount });
+  }
+
   async attendeesOf(eventIds: string[]): Promise<Record<string, string[]>> {
     this.check();
     this.attendeeReads += 1;

@@ -104,13 +104,14 @@ async function snapshotSources(
   }
   try {
     const snapshot = await deps.snapshot();
-    const sources = await snapshot.sources(
-      linkedMeetupId,
-      deps.selfPastCount
+    // The cross-check costs a Meetup call: only when a build could follow
+    // (the hourly slot is free), so it is throttled like the build itself.
+    const crossCheck =
+      deps.selfPastCount && !deps.limiter.isLimited(discordUserId)
         ? () =>
             deps.selfPastCount?.(discordUserId) ?? Promise.resolve(undefined)
-        : undefined,
-    );
+        : undefined;
+    const sources = await snapshot.sources(linkedMeetupId, crossCheck);
     return sources ? { snapshot, sources } : undefined;
   } catch (error) {
     logger.warn(

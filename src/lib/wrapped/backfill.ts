@@ -186,9 +186,14 @@ export function yearsFor(events: { dateTime: string }[], now: Date): number[] {
 
 /**
  * A past year's copy is final only once it was built after that year ended
- * (Pacific): a December copy misses the year's last events. A current-year
- * copy keeps for a week, or, with a group snapshot, until the snapshot is
- * newer than it (`snapshotAt`): each daily ingest makes one rebuild.
+ * (Pacific): a December copy misses the year's last events. Per the path the
+ * member's next build takes:
+ * - from the snapshot (`snapshotAt` given): a current-year copy is fresh
+ *   until the snapshot is newer than it, so each daily ingest makes one
+ *   rebuild;
+ * - on the token path (no `snapshotAt`): a current-year copy keeps for a
+ *   week, and a copy built from the snapshot is never fresh (the member was
+ *   flagged as undercounted since, so every year is rebuilt from Meetup).
  */
 export function isFresh(
   copy: CachedWrapped | undefined,
@@ -202,6 +207,9 @@ export function isFresh(
   }
   const builtAt = Date.parse(copy.builtAt);
   if (!Number.isFinite(builtAt)) {
+    return false;
+  }
+  if (snapshotAt === undefined && copy.builtFrom === 'snapshot') {
     return false;
   }
   if (year < tz(dayjs(now)).year()) {
@@ -453,7 +461,8 @@ async function buildYear(
     member.meetupId,
     now,
   );
-  if (isFresh(copy, member.meetupId, year, now, ctx.snapshotAt)) {
+  const snapshotAt = 'attendees' in reads ? ctx.snapshotAt : undefined;
+  if (isFresh(copy, member.meetupId, year, now, snapshotAt)) {
     return 'skipped';
   }
   const lease = buildingKey(member.discordUserId, year);
@@ -569,18 +578,25 @@ async function buildWithOrganizer(
  * refused token. Any other failure counts the member failed; the next run
  * retries them. `years` pins the queue's one year; undefined sweeps all.
  */
+/** The member's sources from the snapshot, or undefined: the token path. Never throws. */
+async function memberSources(
+  ctx: TickContext,
+  member: Member,
+): Promise<WrappedSources | undefined> {
+  return ctx.snapshot ? ctx.snapshot.sources(member.meetupId) : undefined;
+}
+
+/** `sources`: memberSources' answer, decided once per member by the caller. */
 async function buildMember(
   ctx: TickContext,
   member: Member,
   years: number[] | undefined,
   tokenRoom: boolean,
+  sources: WrappedSources | undefined,
 ): Promise<MemberOutcome> {
   const { deps } = ctx;
   try {
-    const sources = ctx.snapshot
-      ? await ctx.snapshot.sources(member.meetupId)
-      : undefined;
-    if (sources) {
+    if (sources && ctx.snapshot) {
       const outcome = await buildYears(
         ctx,
         { attendees: ctx.snapshot.attendees },
@@ -818,14 +834,30 @@ export async function runBackfillTick(
           member.meetupId,
           deps.now(),
         );
-        if (isFresh(copy, member.meetupId, row.year, deps.now(), snapshotAt)) {
+        // eslint-disable-next-line no-await-in-loop -- one member at a time
+        const sources = await memberSources(ctx, member);
+        if (
+          isFresh(
+            copy,
+            member.meetupId,
+            row.year,
+            deps.now(),
+            sources ? snapshotAt : undefined,
+          )
+        ) {
           // eslint-disable-next-line no-await-in-loop -- one build in flight, by design
           await store.complete(row.discordUserId);
           totals.skipped += 1;
           continue;
         }
         // eslint-disable-next-line no-await-in-loop -- one build in flight, by design
-        const outcome = await buildMember(ctx, member, [row.year], tokenRoom());
+        const outcome = await buildMember(
+          ctx,
+          member,
+          [row.year],
+          tokenRoom(),
+          sources,
+        );
         if (
           outcome.leaseHeld ||
           outcome.interrupted ||
@@ -909,14 +941,18 @@ export async function runBackfillTick(
         tiers.entries?.get(member.discordUserId, thisYear),
         tiers.entries?.get(member.discordUserId, thisYear - 1),
       ]);
+      // The member's path decides which freshness rule applies.
+      // eslint-disable-next-line no-await-in-loop -- one member at a time
+      const sources = await memberSources(ctx, member);
+      const at = sources ? snapshotAt : undefined;
       const now = deps.now();
       const noEarlierYear =
         current !== undefined &&
         current.stats.activeYears.every((year) => year >= thisYear);
       if (
-        isFresh(current, member.meetupId, thisYear, now, snapshotAt) &&
+        isFresh(current, member.meetupId, thisYear, now, at) &&
         (noEarlierYear ||
-          isFresh(previous, member.meetupId, thisYear - 1, now, snapshotAt))
+          isFresh(previous, member.meetupId, thisYear - 1, now, at))
       ) {
         // eslint-disable-next-line no-await-in-loop -- one build in flight, by design
         const moved = await store.advanceRun(
@@ -966,7 +1002,13 @@ export async function runBackfillTick(
       let outcome: MemberOutcome;
       try {
         // eslint-disable-next-line no-await-in-loop -- one build in flight, by design
-        outcome = await buildMember(ctx, member, undefined, tokenRoom());
+        outcome = await buildMember(
+          ctx,
+          member,
+          undefined,
+          tokenRoom(),
+          sources,
+        );
       } finally {
         // eslint-disable-next-line no-await-in-loop -- one build in flight, by design
         await cache.remove(memberLease).catch(() => undefined);

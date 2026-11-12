@@ -120,6 +120,13 @@ export interface SnapshotReader {
   hostedEvents(meetupId: string): Promise<HostedEvent[]>;
   /** YES/ATTENDED member ids per event. */
   attendeesOf(eventIds: string[]): Promise<Record<string, string[]>>;
+  /** Flagged as undercounted by the snapshot: the token path from then on. */
+  isFlagged(meetupId: string): Promise<boolean>;
+  flagUndercounted(
+    meetupId: string,
+    snapshotCount: number,
+    selfCount: number,
+  ): Promise<void>;
 }
 
 interface RunRow {
@@ -477,8 +484,9 @@ export class PostgresSnapshotRepository
   }
 
   async hostedEvents(meetupId: string): Promise<HostedEvent[]> {
-    // Attendance is the stored YES + ATTENDED rows, so it agrees with the
-    // companions; an event whose RSVPs were never read uses Meetup's count.
+    // Attendance is Meetup's YES + ATTENDED total from the listing, the same
+    // number the token path reads (its totalCount counts the RSVPs the
+    // organizer view hides); the stored rows only when the listing had none.
     const result = await this.pool.query<
       EventRow & { stored: number; yes_count: number | null; read: boolean }
     >(
@@ -498,7 +506,7 @@ export class PostgresSnapshotRepository
         title,
         dateTime,
         eventUrl,
-        attendance: row.read ? row.stored : (row.yes_count ?? 0),
+        attendance: row.yes_count ?? row.stored,
       };
     });
   }
@@ -523,6 +531,28 @@ export class PostgresSnapshotRepository
       byEvent[row.event_id]?.push(row.member_id);
     });
     return byEvent;
+  }
+
+  async isFlagged(meetupId: string): Promise<boolean> {
+    const result = await this.pool.query(
+      'SELECT 1 FROM wrapped_snapshot_flags WHERE meetup_id = $1',
+      [meetupId],
+    );
+    return (result.rowCount ?? 0) > 0;
+  }
+
+  async flagUndercounted(
+    meetupId: string,
+    snapshotCount: number,
+    selfCount: number,
+  ): Promise<void> {
+    await this.pool.query(
+      `INSERT INTO wrapped_snapshot_flags (meetup_id, snapshot_count, self_count)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (meetup_id) DO UPDATE
+         SET snapshot_count = EXCLUDED.snapshot_count, self_count = EXCLUDED.self_count`,
+      [meetupId, snapshotCount, selfCount],
+    );
   }
 
   async totals(): Promise<{ events: number; rsvps: number }> {

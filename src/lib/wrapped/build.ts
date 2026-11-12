@@ -300,6 +300,7 @@ export async function buildWrappedYear(
     stats: { ...stats, topTypes },
     companions: named,
     builtAt: now().toISOString(),
+    ...(deps.attendees ? { builtFrom: 'snapshot' as const } : {}),
   };
 }
 

@@ -4,7 +4,8 @@
  * (build.ts) stays the fallback for a member the snapshot cannot serve:
  * before the first full pull, a member with nothing stored (joined after the
  * last run, or invisible to the organizer view), or a member whose own token
- * counts clearly more past RSVPs than the snapshot holds.
+ * counted clearly more past RSVPs than the snapshot holds (flagged in
+ * wrapped_snapshot_flags, so that sticks).
  *
  * Privacy is unchanged: other people's Meetup ids reach only the companion
  * and cohort rankings, exactly where the token path's attendee lists go;
@@ -53,7 +54,10 @@ export function snapshotWrapped(reader: SnapshotReader): SnapshotWrapped {
   return {
     sources: async (linkedMeetupId, selfPastCount) => {
       try {
-        if (!(await reader.isReady())) {
+        if (
+          !(await reader.isReady()) ||
+          (await reader.isFlagged(linkedMeetupId))
+        ) {
           return undefined;
         }
         const [events, hosted] = await Promise.all([
@@ -76,8 +80,18 @@ export function snapshotWrapped(reader: SnapshotReader): SnapshotWrapped {
           ) {
             logger.info(
               `Snapshot holds ${events.length} past RSVPs for Meetup member ${linkedMeetupId}, ` +
-                `their token counts ${counted}: using the token path`,
+                `their token counts ${counted}: flagged, the token path from now on`,
             );
+            // Durable, so the backfill does not overwrite the token build
+            // with the undercounted snapshot (it rebuilds their snapshot
+            // years on the token path instead).
+            await reader
+              .flagUndercounted(linkedMeetupId, events.length, counted)
+              .catch((error: unknown) => {
+                logger.warn(
+                  `Snapshot undercount flag not written: ${errorName(error)}`,
+                );
+              });
             return undefined;
           }
         }

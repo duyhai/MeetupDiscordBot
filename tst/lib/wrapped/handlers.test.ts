@@ -953,6 +953,21 @@ describe('runWrapped from the group snapshot', () => {
     expect(h2.withMeetupClient).toHaveBeenCalledOnce();
   });
 
+  it('no cross-check (no Meetup call) while the hourly slot is spent', async () => {
+    const h = harness();
+    await link(h.repo);
+    h.deps.snapshot = async () => snapshotWrapped(reader());
+    const selfPastCount = vi.fn(async () => 1);
+    h.deps.selfPastCount = selfPastCount;
+    h.deps.limiter.take('u1');
+    await runWrapped(
+      commandInteraction(),
+      { year: 2026, refresh: true },
+      h.deps,
+    );
+    expect(selfPastCount).not.toHaveBeenCalled();
+  });
+
   it('a stored-token count well above the snapshot’s takes the token path', async () => {
     const h = harness();
     await link(h.repo);

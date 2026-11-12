@@ -411,6 +411,7 @@ function within<T>(promise: Promise<T>, ms: number): Promise<T> {
             'wrapped_backfill_runs',
             'wrapped_entries',
             'wrapped_queue',
+            'wrapped_snapshot_flags',
           ]);
         } finally {
           // The schema is dropped first, in its own try, so a failure in

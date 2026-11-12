@@ -395,11 +395,16 @@ describe('POST /dashboard/wrapped/snapshot/run (Refresh snapshot now)', () => {
     isLeadership.mockResolvedValue(false);
     const cookie = await signIn(req);
     expect((await pressRefresh(req, cookie)).headers.location).toBe(
-      '/dashboard?backfill=not-leadership',
+      '/dashboard?backfill=snapshot-not-leadership',
     );
+    const home = await req
+      .get('/dashboard?backfill=snapshot-not-leadership')
+      .set('Cookie', cookie);
+    expect(home.text).toContain('can refresh the group snapshot');
+    expect(home.text).not.toContain('run the Wrapped backfill');
     isLeadership.mockRejectedValue(new Error('gateway down'));
     expect((await pressRefresh(req, cookie)).headers.location).toBe(
-      '/dashboard?backfill=unavailable',
+      '/dashboard?backfill=snapshot-unavailable',
     );
     expect(refreshSnapshot).not.toHaveBeenCalled();
   });

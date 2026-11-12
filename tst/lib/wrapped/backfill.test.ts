@@ -1396,3 +1396,69 @@ describe('the backfill over the group snapshot', () => {
     );
   });
 });
+
+describe('the backfill over the snapshot: per-member path (#156 review)', () => {
+  const people = [
+    {
+      discordUserId: '300000000000000001',
+      meetupId: 'p1',
+      events: [] as EventSummary[],
+    },
+  ];
+  const reader = () =>
+    new FakeSnapshotReader(
+      [ev('y26', '2026-04-01T19:00:00-07:00', 'Board game night')],
+      { y26: ['p1'] },
+    );
+
+  it('a token-only member keeps the 7-day rule: a 1-day-old copy older than the snapshot is not rebuilt', async () => {
+    const h = await harness({ linked: [...people, members[1]] });
+    const r = reader();
+    r.finishedAt = new Date(NOW.getTime() - 60_000);
+    h.deps.snapshot = async () => snapshotWrapped(r);
+    // m2 (not in the snapshot) has fresh token copies from yesterday.
+    for (const year of [2025, 2026]) {
+      // eslint-disable-next-line no-await-in-loop -- test setup
+      await h.entries.put(
+        members[1].discordUserId,
+        year,
+        {
+          meetupId: 'm2',
+          builtAt: new Date(NOW.getTime() - 24 * 60 * 60_000).toISOString(),
+          stats: { activeYears: [2025] } as never,
+          companions: { named: [], otherCount: 0 },
+        },
+        NOW,
+      );
+    }
+    const outcome = await runBackfillTick(h.deps);
+    expect(outcome).toMatchObject({ kind: 'ran', finishedRun: true });
+    expect(h.organizerUsedFor).not.toContain('m2');
+    expect(h.calls.n + h.organizerCalls.n).toBe(0);
+    expect(
+      (await h.entries.get(people[0].discordUserId, 2026))?.builtFrom,
+    ).toBe('snapshot');
+  });
+
+  it('a member flagged as undercounted gets every snapshot-built year rebuilt on the token path', async () => {
+    const flagged = { ...members[1], meetupId: 'm2' };
+    const h = await harness({ linked: [flagged] });
+    const r = new FakeSnapshotReader(
+      [ev('b1', '2025-07-04T10:00:00-07:00', 'Picnic')],
+      { b1: ['m2'] },
+    );
+    h.deps.snapshot = async () => snapshotWrapped(r);
+    await runBackfillTick(h.deps);
+    expect((await h.entries.get(flagged.discordUserId, 2025))?.builtFrom).toBe(
+      'snapshot',
+    );
+
+    // Their own token counted more than the snapshot holds (an on-demand build).
+    await r.flagUndercounted('m2', 1, 9);
+    h.clock.now += RUN_INTERVAL_MS + 1;
+    await runBackfillTick(h.deps);
+    expect(h.organizerUsedFor).toContain('m2');
+    const rebuilt = await h.entries.get(flagged.discordUserId, 2025);
+    expect(rebuilt?.builtFrom).toBeUndefined();
+  });
+});
