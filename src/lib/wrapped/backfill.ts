@@ -61,7 +61,10 @@ import {
   WrappedEntryStore,
 } from '../repositories/postgresWrappedEntryRepository.js';
 import { MemberRecord, MemberRepository } from '../repositories/types.js';
+import { PostgresSnapshotRepository } from '../repositories/postgresSnapshotRepository.js';
+import { SnapshotWrapped, snapshotWrapped } from '../snapshot/wrapped.js';
 import {
+  AttendeeReader,
   SourceDeps,
   WrappedMeetup,
   WrappedSources,
@@ -81,6 +84,11 @@ const logger = new Logger({ name: 'wrappedBackfill' });
 
 /** Meetup client calls a tick may start builds under; a build in flight finishes. */
 export const TICK_CALL_BUDGET = 150;
+/**
+ * Members built from the group snapshot a tick (no Meetup call, so not
+ * under MEMBERS_PER_TICK or the call budget): ~470 members in ~5 ticks.
+ */
+export const SNAPSHOT_MEMBERS_PER_TICK = 100;
 /** A new sweep starts this long after the last one finished. */
 export const RUN_INTERVAL_MS = 20 * 60 * 60_000;
 /** A current-year copy younger than this is left alone. */
@@ -136,6 +144,11 @@ export interface BackfillDeps {
    */
   withOrganizer<T>(fn: (meetup: OrganizerReads) => Promise<T>): Promise<T>;
   isPresent(discordUserId: string): Promise<boolean>;
+  /**
+   * The group snapshot: a member it holds is built from it, every year, with
+   * no Meetup call. Left out or rejecting, every member takes the token path.
+   */
+  snapshot?(): Promise<SnapshotWrapped>;
   /** Whether a build may start now: inside the sweep window and no digest running. */
   canStart(now: Date, cache: KeyValueCache): Promise<boolean>;
   /** #meetup-bot-alerts, plain. */
@@ -174,13 +187,15 @@ export function yearsFor(events: { dateTime: string }[], now: Date): number[] {
 /**
  * A past year's copy is final only once it was built after that year ended
  * (Pacific): a December copy misses the year's last events. A current-year
- * copy keeps for a week.
+ * copy keeps for a week, or, with a group snapshot, until the snapshot is
+ * newer than it (`snapshotAt`): each daily ingest makes one rebuild.
  */
 export function isFresh(
   copy: CachedWrapped | undefined,
   meetupId: string,
   year: number,
   now: Date,
+  snapshotAt?: Date,
 ): boolean {
   if (!copy || copy.meetupId !== meetupId) {
     return false;
@@ -192,6 +207,9 @@ export function isFresh(
   if (year < tz(dayjs(now)).year()) {
     const yearEnd = tz(dayjs(now)).year(year).startOf('year').add(1, 'year');
     return builtAt >= yearEnd.valueOf();
+  }
+  if (snapshotAt !== undefined) {
+    return builtAt >= snapshotAt.getTime();
   }
   return now.getTime() - builtAt < FRESH_CURRENT_YEAR_MS;
 }
@@ -375,6 +393,10 @@ function errorName(error: unknown): string {
 }
 
 interface MemberOutcome {
+  /** Built from the group snapshot (no Meetup call). */
+  viaSnapshot?: boolean;
+  /** Not in the snapshot and the tick has no token-path room left: nothing was read. */
+  deferred?: boolean;
   built: number;
   skipped: number;
   failed: number;
@@ -404,14 +426,20 @@ interface TickContext {
   calls: Counter;
   lists: RunMemo['lists'];
   log: SchedulerLog;
+  snapshot: SnapshotWrapped | undefined;
+  /** When the snapshot was last updated: the current year's freshness line. */
+  snapshotAt: Date | undefined;
 }
+
+/** Where a build reads attendees from: a Meetup client, or the snapshot. */
+type Reads = { meetup: WrappedMeetup } | { attendees: AttendeeReader };
 
 type Member = { discordUserId: string; meetupId: string };
 
 /** One year: fresh or being built elsewhere → skipped; else built and written to both tiers. */
 async function buildYear(
   ctx: TickContext,
-  meetup: WrappedMeetup,
+  reads: Reads,
   member: Member,
   year: number,
   sources: WrappedSources,
@@ -425,7 +453,7 @@ async function buildYear(
     member.meetupId,
     now,
   );
-  if (isFresh(copy, member.meetupId, year, now)) {
+  if (isFresh(copy, member.meetupId, year, now, ctx.snapshotAt)) {
     return 'skipped';
   }
   const lease = buildingKey(member.discordUserId, year);
@@ -440,7 +468,7 @@ async function buildYear(
   }
   try {
     const sourceDeps: SourceDeps = {
-      meetup,
+      ...reads,
       findByMeetupId: async (id) => (await deps.members()).findByMeetupId(id),
       isPresent: (id) => deps.isPresent(id),
       now: () => deps.now(),
@@ -451,7 +479,8 @@ async function buildYear(
       member.meetupId,
       year,
       sources,
-      { earlyFirstPageOnly: true },
+      // The snapshot has every page; Meetup reads keep to the first.
+      { earlyFirstPageOnly: 'meetup' in reads },
     );
     await writeEntry(tiers, member.discordUserId, year, wrapped, deps.now());
     return 'built';
@@ -463,14 +492,14 @@ async function buildYear(
 /** Each year in turn; stops (interrupted) when the sweep window closes. */
 async function buildYears(
   ctx: TickContext,
-  meetup: WrappedMeetup,
+  reads: Reads,
   member: Member,
   years: number[],
   sources: WrappedSources,
 ): Promise<MemberOutcome> {
   const outcome: MemberOutcome = { built: 0, skipped: 0, failed: 0 };
   for (const year of years) {
-    if (ctx.calls.n >= TICK_CALL_BUDGET) {
+    if ('meetup' in reads && ctx.calls.n >= TICK_CALL_BUDGET) {
       // Over budget: the next year waits for the next tick.
       outcome.interrupted = true;
       outcome.budgetSpent = true;
@@ -482,7 +511,7 @@ async function buildYears(
       return outcome;
     }
     // eslint-disable-next-line no-await-in-loop -- one build in flight, by design
-    const result = await buildYear(ctx, meetup, member, year, sources);
+    const result = await buildYear(ctx, reads, member, year, sources);
     outcome[result] += 1;
   }
   return outcome;
@@ -523,7 +552,7 @@ async function buildWithOrganizer(
       const hosted = await readHostedEvents(meetup, member.meetupId);
       return buildYears(
         ctx,
-        meetup,
+        { meetup },
         member,
         years ?? yearsFor(events, deps.now()),
         { events, hosted },
@@ -544,9 +573,26 @@ async function buildMember(
   ctx: TickContext,
   member: Member,
   years: number[] | undefined,
+  tokenRoom: boolean,
 ): Promise<MemberOutcome> {
   const { deps } = ctx;
   try {
+    const sources = ctx.snapshot
+      ? await ctx.snapshot.sources(member.meetupId)
+      : undefined;
+    if (sources) {
+      const outcome = await buildYears(
+        ctx,
+        { attendees: ctx.snapshot.attendees },
+        member,
+        years ?? yearsFor([...sources.events, ...sources.hosted], deps.now()),
+        sources,
+      );
+      return { ...outcome, viaSnapshot: true };
+    }
+    if (!tokenRoom) {
+      return { built: 0, skipped: 0, failed: 0, deferred: true };
+    }
     const token = await deps.memberToken(member.discordUserId);
     if (token !== undefined) {
       try {
@@ -562,7 +608,7 @@ async function buildMember(
           const hosted = await readHostedEvents(meetup, member.meetupId);
           return await buildYears(
             ctx,
-            meetup,
+            { meetup },
             member,
             years ?? yearsFor(events, deps.now()),
             { events, hosted },
@@ -652,6 +698,9 @@ function stopReason(outcome: MemberOutcome): string {
   if (outcome.budgetSpent) {
     return 'Wrapped backfill: the call budget is spent; the tick ends';
   }
+  if (outcome.deferred) {
+    return 'Wrapped backfill: the next member needs the token path and the tick has no room; the tick ends';
+  }
   return 'Wrapped backfill: the sweep window closed; the tick ends';
 }
 
@@ -674,9 +723,33 @@ export async function runBackfillTick(
     totals.skipped += o.skipped;
     totals.failed += o.failed;
   };
+  // Token-path builds (Meetup reads) and snapshot builds (none) have
+  // separate caps. With a snapshot, a member may still be built from it
+  // after the token room is gone; one that needs the token path then waits.
+  const built = { token: 0, snapshot: 0 };
+  const tokenRoom = () =>
+    built.token < MEMBERS_PER_TICK && calls.n < TICK_CALL_BUDGET;
+  const count = (o: MemberOutcome) => {
+    if (o.viaSnapshot) {
+      built.snapshot += 1;
+    } else {
+      built.token += 1;
+    }
+  };
+  let snapshot: SnapshotWrapped | undefined;
+  if (deps.snapshot) {
+    try {
+      snapshot = await deps.snapshot();
+    } catch (error) {
+      log.warn(
+        `Wrapped backfill: the group snapshot is unavailable (${errorName(error)}); token path only`,
+      );
+    }
+  }
+  const snapshotAt = snapshot ? await snapshot.updatedAt() : undefined;
   const capReached = () =>
-    totals.queued + totals.members >= MEMBERS_PER_TICK ||
-    calls.n >= TICK_CALL_BUDGET;
+    built.snapshot >= SNAPSHOT_MEMBERS_PER_TICK ||
+    (snapshotAt === undefined && !tokenRoom());
   const ran = (finishedRun: boolean): TickOutcome => ({
     kind: 'ran',
     ...totals,
@@ -694,6 +767,8 @@ export async function runBackfillTick(
       ? memoFor(openRun.id)
       : new Map<string, { ids: string[]; complete: boolean }>(),
     log,
+    snapshot,
+    snapshotAt,
   };
   let runId: number | undefined = openRun?.id;
   let recorded = 0;
@@ -743,15 +818,20 @@ export async function runBackfillTick(
           member.meetupId,
           deps.now(),
         );
-        if (isFresh(copy, member.meetupId, row.year, deps.now())) {
+        if (isFresh(copy, member.meetupId, row.year, deps.now(), snapshotAt)) {
           // eslint-disable-next-line no-await-in-loop -- one build in flight, by design
           await store.complete(row.discordUserId);
           totals.skipped += 1;
           continue;
         }
         // eslint-disable-next-line no-await-in-loop -- one build in flight, by design
-        const outcome = await buildMember(ctx, member, [row.year]);
-        if (outcome.leaseHeld || outcome.interrupted || outcome.fatal) {
+        const outcome = await buildMember(ctx, member, [row.year], tokenRoom());
+        if (
+          outcome.leaseHeld ||
+          outcome.interrupted ||
+          outcome.deferred ||
+          outcome.fatal
+        ) {
           totals.queued -= 1;
           // eslint-disable-next-line no-await-in-loop -- one build in flight, by design
           await store.unclaim(row.discordUserId);
@@ -763,6 +843,7 @@ export async function runBackfillTick(
           return ran(false);
         }
         add(outcome);
+        count(outcome);
         if (outcome.failed > 0) {
           failedRows.push(row.discordUserId);
         } else {
@@ -833,8 +914,9 @@ export async function runBackfillTick(
         current !== undefined &&
         current.stats.activeYears.every((year) => year >= thisYear);
       if (
-        isFresh(current, member.meetupId, thisYear, now) &&
-        (noEarlierYear || isFresh(previous, member.meetupId, thisYear - 1, now))
+        isFresh(current, member.meetupId, thisYear, now, snapshotAt) &&
+        (noEarlierYear ||
+          isFresh(previous, member.meetupId, thisYear - 1, now, snapshotAt))
       ) {
         // eslint-disable-next-line no-await-in-loop -- one build in flight, by design
         const moved = await store.advanceRun(
@@ -884,7 +966,7 @@ export async function runBackfillTick(
       let outcome: MemberOutcome;
       try {
         // eslint-disable-next-line no-await-in-loop -- one build in flight, by design
-        outcome = await buildMember(ctx, member, undefined);
+        outcome = await buildMember(ctx, member, undefined, tokenRoom());
       } finally {
         // eslint-disable-next-line no-await-in-loop -- one build in flight, by design
         await cache.remove(memberLease).catch(() => undefined);
@@ -893,6 +975,12 @@ export async function runBackfillTick(
         add({ ...outcome, failed: 0 });
         // eslint-disable-next-line no-await-in-loop -- the tick ends here
         return await fatal(outcome.fatal);
+      }
+      if (outcome.deferred) {
+        log.info(
+          'Wrapped backfill: the next member needs the token path and the tick has no room; the tick ends',
+        );
+        break;
       }
       if (outcome.leaseHeld || outcome.interrupted) {
         add({ ...outcome, failed: 0 });
@@ -920,6 +1008,7 @@ export async function runBackfillTick(
       cursor = member.discordUserId;
       totals.members += 1;
       add(outcome);
+      count(outcome);
     }
     if (remaining().length > 0) {
       return ran(false);
@@ -1069,6 +1158,10 @@ export async function productionBackfillDeps(
           new GqlMeetupClient(accessToken, { bypassCache: true }),
       }),
     isPresent: (discordUserId) => isServerMember(getClient, discordUserId),
+    // No cross-check here (it would cost a call a member): a member the
+    // snapshot undercounts is corrected by their next on-demand build.
+    snapshot: async () =>
+      snapshotWrapped(await PostgresSnapshotRepository.instance()),
     // The report job's window rule (no start from 17:45 UTC until 19:00)
     // and no overlap with a running identity digest.
     canStart: async (now, cache) =>

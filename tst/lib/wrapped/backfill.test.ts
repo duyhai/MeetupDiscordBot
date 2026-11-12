@@ -18,6 +18,7 @@ import {
   QUEUE_MAX_ATTEMPTS,
   RUN_INTERVAL_MS,
   RUN_NOW_KEY,
+  SNAPSHOT_MEMBERS_PER_TICK,
   TICK_CALL_BUDGET,
   isFresh,
   runBackfillTick,
@@ -37,6 +38,8 @@ import {
   NEXT_TICK_KEY,
 } from '../../../src/lib/wrapped/queue.js';
 import { FakeCache } from '../../web/fakeCache.js';
+import { snapshotWrapped } from '../../../src/lib/snapshot/wrapped.js';
+import { FakeSnapshotReader } from '../snapshot/fakes.js';
 import { FakeBackfillStore, FakeEntryStore } from './backfillFakes.js';
 
 /** 2026-12-10, 12:00 Pacific (20:00 UTC: outside the quiet hour). */
@@ -1281,6 +1284,115 @@ describe('startWrappedBackfillScheduler', () => {
     expect(setIntervalFn).not.toHaveBeenCalled();
     expect(log.warn).toHaveBeenCalledWith(
       expect.stringContaining('DATABASE_URL'),
+    );
+  });
+});
+
+describe('the backfill over the group snapshot', () => {
+  const crowd = (n: number, from = 0) =>
+    Array.from({ length: n }, (_, i) => ({
+      discordUserId: `2000000000000${String(10000 + from + i)}`,
+      meetupId: `s${from + i}`,
+      events: [] as EventSummary[],
+    }));
+  /** Every crowd member at one 2025 event and one 2026 event. */
+  const readerFor = (people: FakeMember[]) =>
+    new FakeSnapshotReader(
+      [
+        ev('x25', '2025-04-01T19:00:00-07:00', 'Picnic'),
+        ev('x26', '2026-04-01T19:00:00-07:00', 'Board game night'),
+      ],
+      {
+        x25: people.map((p) => p.meetupId),
+        x26: people.map((p) => p.meetupId),
+      },
+    );
+
+  it(`builds ${SNAPSHOT_MEMBERS_PER_TICK} snapshot members a tick, every year, with no Meetup call`, async () => {
+    const people = crowd(SNAPSHOT_MEMBERS_PER_TICK + 1);
+    const h = await harness({ linked: people });
+    h.deps.snapshot = async () => snapshotWrapped(readerFor(people));
+
+    const first = await runBackfillTick(h.deps);
+    expect(first).toMatchObject({
+      kind: 'ran',
+      members: SNAPSHOT_MEMBERS_PER_TICK,
+      built: SNAPSHOT_MEMBERS_PER_TICK * 2,
+      calls: 0,
+      finishedRun: false,
+    });
+    expect(h.calls.n + h.organizerCalls.n).toBe(0);
+    expect(await cachedYears(h, people[0])).toEqual([2025, 2026]);
+    const second = await runBackfillTick(h.deps);
+    expect(second).toMatchObject({ members: 1, finishedRun: true });
+  });
+
+  it('a member missing from the snapshot takes the token path under the token caps', async () => {
+    const people = crowd(3);
+    const h = await harness({ linked: [...people, ...members] });
+    h.deps.snapshot = async () => snapshotWrapped(readerFor(people));
+    await runBackfillTick(h.deps);
+    await runBackfillTick(h.deps);
+    expect(await cachedYears(h, people[2])).toEqual([2025, 2026]);
+    // m1 (own token) and m2 (organizer) were read from Meetup.
+    expect(h.calls.n).toBeGreaterThan(0);
+    expect(h.organizerUsedFor).toContain('m2');
+    expect(await cachedYears(h, members[0])).toEqual([2024, 2025, 2026]);
+  });
+
+  it('a current-year copy older than the snapshot is rebuilt; a newer one is left', async () => {
+    const people = crowd(2);
+    const h = await harness({ linked: people });
+    const reader = readerFor(people);
+    reader.finishedAt = new Date(NOW.getTime() - 60_000);
+    h.deps.snapshot = async () => snapshotWrapped(reader);
+    await runBackfillTick(h.deps);
+    const builtAt = (await h.entries.get(people[0].discordUserId, 2026))
+      ?.builtAt;
+
+    // A day later, the snapshot is newer than the copy: rebuilt.
+    h.clock.now += RUN_INTERVAL_MS + 1;
+    reader.finishedAt = new Date(h.clock.now - 60_000);
+    const rebuilt = await runBackfillTick(h.deps);
+    expect(rebuilt).toMatchObject({ built: 2, finishedRun: true });
+    const after = await h.entries.get(people[0].discordUserId, 2026);
+    expect(after?.builtAt).not.toBe(builtAt);
+
+    // Again, but with no new snapshot: everyone is fresh.
+    h.clock.now += RUN_INTERVAL_MS + 1;
+    expect(await runBackfillTick(h.deps)).toMatchObject({
+      built: 0,
+      calls: 0,
+    });
+  });
+
+  it('a failing snapshot leaves every member on the token path', async () => {
+    const h = await harness();
+    h.deps.snapshot = async () => {
+      throw new Error('pg down');
+    };
+    const first = await runBackfillTick(h.deps);
+    expect(first).toMatchObject({ kind: 'ran' });
+    expect(h.calls.n + h.organizerCalls.n).toBeGreaterThan(0);
+  });
+
+  it('isFresh with a snapshot time: the current year is fresh only when built after it', () => {
+    const at = new Date('2026-12-10T06:00:00Z');
+    const copy = (builtAt: string) => ({
+      meetupId: 'm',
+      builtAt,
+      stats: {} as never,
+      companions: { named: [], otherCount: 0 },
+    });
+    expect(isFresh(copy('2026-12-10T07:00:00Z'), 'm', 2026, NOW, at)).toBe(
+      true,
+    );
+    expect(isFresh(copy('2026-12-10T05:00:00Z'), 'm', 2026, NOW, at)).toBe(
+      false,
+    );
+    // A past year keeps its own rule.
+    expect(isFresh(copy('2026-01-02T09:00:00Z'), 'm', 2025, NOW, at)).toBe(
+      true,
     );
   });
 });
