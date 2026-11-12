@@ -18,13 +18,13 @@ Make the Meetup verification flow survive iOS browser-context switches (the "Can
 
 ## Decisions Made During Brainstorming
 
-| Question | Decision |
-|---|---|
-| Remove the Discord OAuth hop from the main flow? | **No.** The linked-role badge is V2's whole point; launching without it "is just basically V1." Double OAuth stays, made as smooth as possible. |
-| OAuth client | **arctic** (v3.7.x, actively maintained, TS-first, minimal deps) behind our own thin wrapper so it stays swappable; hand-roll only if its generic client fights Meetup's endpoint. `grant` and `express-session` are removed. |
-| Post-success destination | Deep link to **👋🏼welcome-to-the-server** (guild channel), web URL fallback. |
-| Button swap mechanics | Bot **edits the existing get-verified message in place** to the V2 button; V1 handler code deleted immediately after. |
-| iPhone verification without an iPhone | Three layers: cookie-less CI integration tests (mechanism-level proof), iPhone-owning mods smoke-test a staged button in 🤖bot-testing, alerts-channel monitoring + reversible swap script. |
+| Question                                         | Decision                                                                                                                                                                                                                      |
+| ------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Remove the Discord OAuth hop from the main flow? | **No.** The linked-role badge is V2's whole point; launching without it "is just basically V1." Double OAuth stays, made as smooth as possible.                                                                               |
+| OAuth client                                     | **arctic** (v3.7.x, actively maintained, TS-first, minimal deps) behind our own thin wrapper so it stays swappable; hand-roll only if its generic client fights Meetup's endpoint. `grant` and `express-session` are removed. |
+| Post-success destination                         | Deep link to **👋🏼welcome-to-the-server** (guild channel), web URL fallback.                                                                                                                                                   |
+| Button swap mechanics                            | Bot **edits the existing get-verified message in place** to the V2 button; V1 handler code deleted immediately after.                                                                                                         |
+| iPhone verification without an iPhone            | Three layers: cookie-less CI integration tests (mechanism-level proof), iPhone-owning mods smoke-test a staged button in 🤖bot-testing, alerts-channel monitoring + reversible swap script.                                   |
 
 ## Design
 
@@ -50,13 +50,13 @@ The Discord callback additionally fetches `/users/@me` with the new token and **
 
 ### 3. Routes (`src/app.ts` rewrite)
 
-| Route | Behavior |
-|---|---|
-| `GET /connect/discord?state=…` | Validate state → 302 to Discord authorize URL |
-| `GET /connect/meetup?state=…` | Validate state → 302 to Meetup authorize URL (chain target of the Discord callback; also keeps V1's link working during Phase 1) |
-| `GET /connect/discord/callback` | Validate state → exchange code → identity check → store `{id}-discord-tokens` → **307 to Meetup authorize with the same state** |
-| `GET /connect/meetup/callback` | Validate state → exchange code → store `{id}-meetup-tokens` → success landing page |
-| `GET /redirect/:url` | Unchanged (local-dev helper) |
+| Route                           | Behavior                                                                                                                         |
+| ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /connect/discord?state=…`  | Validate state → 302 to Discord authorize URL                                                                                    |
+| `GET /connect/meetup?state=…`   | Validate state → 302 to Meetup authorize URL (chain target of the Discord callback; also keeps V1's link working during Phase 1) |
+| `GET /connect/discord/callback` | Validate state → exchange code → identity check → store `{id}-discord-tokens` → **307 to Meetup authorize with the same state**  |
+| `GET /connect/meetup/callback`  | Validate state → exchange code → store `{id}-meetup-tokens` → success landing page                                               |
+| `GET /redirect/:url`            | Unchanged (local-dev helper)                                                                                                     |
 
 `/discord-meetup-connect` (generic, no user binding) is removed; the V2 button generates the per-user `/connect/discord?state=…` link. `grant`, `express-session`, `@types/express-session`, and the `grant/request-oauth/uuid` resolution pin are deleted from `package.json`.
 
@@ -92,5 +92,5 @@ Two deploy phases — the V1 handler must stay alive until the swap has proven o
 ## Out of Scope
 
 - Refresh-token rotation / long-lived Meetup sessions (tokens remain cache-TTL-bound).
-- Any change to onboarding *policy* (roles, nickname rules, digest cadence).
+- Any change to onboarding _policy_ (roles, nickname rules, digest cadence).
 - Attendance pipeline and shared-events features (next on the board).

@@ -638,3 +638,63 @@ describe('runSnapshotTick time cap', () => {
     });
   });
 });
+
+describe('events whose attendees left Meetup (short twice)', () => {
+  it('a read short in two runs is accepted as final: stored, not failing, counted hidden', async () => {
+    const env = setup();
+    env.group.events = past(2, 0, 6);
+    env.group.short.set('100', 0); // everyone left: Meetup counts 6, shows none
+    await tickUntilFinished(env);
+    expect(await env.store.failingEventCount()).toBe(1);
+    expect(env.store.events.get('100')?.rsvpError).toBe('ShortRsvpReadError');
+
+    env.advance(SNAPSHOT_RUN_INTERVAL_MS);
+    await tickUntilFinished(env);
+    expect(await env.store.failingEventCount()).toBe(0);
+    expect(await env.store.hiddenEventCount()).toBe(1);
+    expect(env.store.rsvps.get('100')).toEqual([]);
+    expect(env.store.events.get('100')?.rsvpsHidden).toBe(true);
+  });
+
+  it('a short read after a different error is not accepted yet', async () => {
+    const env = setup();
+    env.group.events = past(1, 0, 6);
+    env.group.failing.set('100', new TypeError('blip'));
+    await tickUntilFinished(env);
+    env.group.failing.clear();
+    env.group.short.set('100', 0);
+    env.advance(SNAPSHOT_RUN_INTERVAL_MS);
+    await tickUntilFinished(env);
+    expect(env.store.events.get('100')?.rsvpError).toBe('ShortRsvpReadError');
+    expect(await env.store.hiddenEventCount()).toBe(0);
+  });
+});
+
+describe('rate limits on the card and in #meetup-bot-alerts', () => {
+  it('one rate-limited tick alerts nobody; two in a row do; the card sees the failed tick', async () => {
+    const env = setup();
+    env.group.events = past(3);
+    env.group.failing.set('100', rateLimited());
+    expect(await runSnapshotTick(env.deps)).toMatchObject({
+      kind: 'failed',
+      error: 'RateLimited',
+    });
+    expect(env.alerts).toHaveLength(0);
+    expect(
+      JSON.parse((await env.cache.get(SNAPSHOT_LAST_TICK_KEY)) ?? '{}'),
+    ).toMatchObject({
+      error: 'RateLimited',
+    });
+    await runSnapshotTick(env.deps);
+    expect(env.alerts.map((a) => a.title)).toEqual([
+      'Group snapshot is failing',
+    ]);
+    // A good tick clears it, and the next single 429 is quiet again.
+    env.group.failing.clear();
+    await tickUntilFinished(env);
+    expect(env.alerts.map((a) => a.title)).toEqual([
+      'Group snapshot is failing',
+      'Group snapshot finished',
+    ]);
+  });
+});

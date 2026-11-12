@@ -46,7 +46,7 @@ pieces hosts feed into.
      chosen over Star/Resident/Homegrown because it says "one of us" without
      implying leadership or diminishing guest hosts). Keep the prefix in one
      constant so it's a one-line change. Not to be confused with the
-     Community Ambassador role. Leadership is still notified. Promoted hosts are *not* Meetup
+     Community Ambassador role. Leadership is still notified. Promoted hosts are _not_ Meetup
      organizers and don't represent the group.
 6. **Host-triggered announcement**: a button that sends Meetup's announcement
    email for the host's own event. Not automatic; the host chooses when.
@@ -129,7 +129,7 @@ accepts entries from any source, and there's a write path for flags.
   organizer token, advisory-locked refresh, account check against
   `MEETUP_ORGANIZER_MEMBER_ID`. Today it is used **only for reads** (identity
   sweep, reports). This project makes it the writer for every dashboard
-  Meetup action (*my call*: promoted hosts and host-triggered announcements
+  Meetup action (_my call_: promoted hosts and host-triggered announcements
   have no organizer clicking, so nothing else can do the write; approvals
   use it too so there's one path). **Verify first** that its OAuth grant
   allows `createEvent`, `editEvent`, `closeEventRsvps` and `announceEvent`;
@@ -146,15 +146,15 @@ accepts entries from any source, and there's a write path for flags.
 
 ## Users and tiers
 
-| Who | How we know | Can |
-|---|---|---|
-| Regular host | Guest Host role in Discord, or ≥1 past hosted event on Meetup, and not blacklisted | Everything on the host side; creating an event files a request |
-| Promoted host | Row in the new `promoted_hosts` table (active) | Same, but create publishes directly, titled `[Community Host] ` |
-| Leadership | **1.5 Leadership Team** role (1347289004932075521) only, checked live like the no-show workspace's record/void | Approve/deny, promote/demote. Moderators keep read access to these pages through the staff-dashboard gate but can't act |
+| Who           | How we know                                                                                                    | Can                                                                                                                     |
+| ------------- | -------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| Regular host  | Guest Host role in Discord, or ≥1 past hosted event on Meetup, and not blacklisted                             | Everything on the host side; creating an event files a request                                                          |
+| Promoted host | Row in the new `promoted_hosts` table (active)                                                                 | Same, but create publishes directly, titled `[Community Host] `                                                         |
+| Leadership    | **1.5 Leadership Team** role (1347289004932075521) only, checked live like the no-show workspace's record/void | Approve/deny, promote/demote. Moderators keep read access to these pages through the staff-dashboard gate but can't act |
 
 A leader who is also a host sees both sides.
 
-*Builder's call:* whether "promoted" is also mirrored as a Discord role. The
+_Builder's call:_ whether "promoted" is also mirrored as a Discord role. The
 source of truth is the table either way.
 
 ## Sign-in
@@ -170,7 +170,7 @@ source of truth is the table either way.
   10-minute cadence, so a demotion takes effect within 10 minutes.
 - Meetup sign-in uses the member's token only to learn who they are. Every
   Meetup action is done with the organizer credential.
-- *My call, Meetup-only sign-in:* allowed (Hai: "log in from either"). A
+- _My call, Meetup-only sign-in:_ allowed (Hai: "log in from either"). A
   Meetup member with no linked Discord is eligible if they have ≥1 past hosted
   event on Meetup. The blacklist gains a Meetup-member-id list alongside the
   Discord one, checked on both paths. Sessions are keyed by Meetup member id
@@ -187,28 +187,28 @@ header: Auto follows the device's setting; a choice is kept in that browser.
    published, announced), recent comments, quick actions.
 2. **Calendar**: group events a month at a time (this month to a year
    ahead), a busy/quiet shading per day, and US holidays (plus whatever
-   cultural dates leadership wants to add; *builder's call* on the source,
+   cultural dates leadership wants to add; _builder's call_ on the source,
    a static list is fine to start). Each day opens a popover listing all
    its events; a + on each day the form accepts opens the create form.
 3. **History**: heat map of hosted events by day, a calendar year at a time,
    filterable by event type, with the list of past events below it; a day
    on the map filters the list to that day.
-   - *Builder's call:* what "event type" is. Meetup has no reliable type
+   - _Builder's call:_ what "event type" is. Meetup has no reliable type
      field, so start with a small fixed set of types assigned by keyword
      from the title, plus manual correction by the host or leadership.
 4. **Create**: a fresh event or "copy" from a past event. The host picks the
    date on the calendar.
-   - *My call, fresh event:* the host fills in title, description, start
+   - _My call, fresh event:_ the host fills in title, description, start
      time, duration, RSVP limit and guest limit; the description starts
      pre-filled with `GUEST_HOST_EVENT_DESCRIPTION` for both tiers, and
      regular hosts' get the Host Tip in front as today.
-   - *My call, copy:* keeps the title (minus any `[Guest Host] ` prefix),
+   - _My call, copy:_ keeps the title (minus any `[Guest Host] ` prefix),
      description as written, duration, start time, RSVP settings and
      featured photo; no tip is added (it's already in there or the host
      removed it). Venue is copied only if the API supports setting it:
      `CreateEventInput` has no venue field today, so check `createEvent`'s
      input type; if it can't, the host is told to set the venue on Meetup.
-   - Approval publishes exactly what the host submitted. *My call:*
+   - Approval publishes exactly what the host submitted. _My call:_
      leadership can't edit a request; they approve, or deny with a reason
      and the host resubmits.
 5. **Comments**: every comment and reply on the host's events, newest first,
@@ -226,7 +226,7 @@ header: Auto follows the device's setting; a choice is kept in that browser.
   shows it to the host.
 - **Promoted host**: publish runs the same create path with the
   `[Community Host] ` prefix instead, immediately. A plain alert goes to `#meetup-bot-alerts` (no pings).
-- The Discord `/meetup_request_event` flow keeps working. *Builder's call:*
+- The Discord `/meetup_request_event` flow keeps working. _Builder's call:_
   whether its requests also show in the dashboard queue.
 - Create is idempotent per request: a retry after a partial failure must not
   create a second event. Reuse the existing failure messages' approach
@@ -246,7 +246,7 @@ header: Auto follows the device's setting; a choice is kept in that browser.
 - "Own" events are the host's ACTIVE events from Meetup's hostId filter:
   co-hosted events count, and so does an event that has started but not
   ended.
-- *Builder's call:* whether regular hosts can announce before approval
+- _Builder's call:_ whether regular hosts can announce before approval
   (they can't; the event doesn't exist yet).
 - **Guardrails (leadership, Stacey and Hai, 2026-11-10;
   `src/lib/hosts/announceSchedule.ts`):**
@@ -306,7 +306,7 @@ header: Auto follows the device's setting; a choice is kept in that browser.
   comments (new `event_comments` table, keyed by Meetup comment id). The bot
   does no classifying and adds no AI dependency.
 - **Flagging is done by Hai's scheduled Claude task** (Hai, 2026-11-02), which
-  reads the stored comments and marks complaints. *Builder's call:* the write
+  reads the stored comments and marks complaints. _Builder's call:_ the write
   path for it (a narrow authenticated endpoint, or a script run as a Heroku
   one-off like the repo's other operational scripts). Flags are a hint for a
   human, never an action. Until the task exists, the page simply shows no
@@ -365,6 +365,7 @@ across a DST change moves the window by an hour.
 
 All plain messages in `#meetup-bot-alerts` (1537755631602237473), no role
 pings:
+
 - new request in the queue;
 - a promoted host published an event;
 - a host announced an event;

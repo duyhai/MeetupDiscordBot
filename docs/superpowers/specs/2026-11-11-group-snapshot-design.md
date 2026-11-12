@@ -542,6 +542,46 @@ events, against the snapshot's rows.
   Rebuild (under the hourly limit), and the daily backfill rebuilds the
   current year once per ingest.
 
+## Follow-ups after PR 2 (2026-11-12)
+
+### Parity on recent events (read-only probe, 02:47 UTC, 8 calls)
+
+After the full pull: the 1,410 PAST events of the last 540 days, the 8
+linked members (A–H) with the most stored rows there. Each member's
+organizer-view history (YES/ATTENDED, PAST) restricted to those events, vs
+the snapshot's rows: **998 of 998 present, 0 missing, 0 extra** (A 137, B
+135, C 123, D 123, E 101, F 97, G 93, H 89). Meetup counts 17,481 RSVPs on
+those events and the snapshot stores 16,265 (7 % hidden, none of them these
+members'). With the old-event probe: 0 of 1,158 linked-member RSVPs missing.
+
+### Changes
+
+- **Snapshot members first.** Live (run 3), once the sweep reached members
+  not in the snapshot, each tick built 4 token-path members (2 calls each:
+  history and hosted, years already fresh) and stopped at the 5th, leaving
+  the snapshot members behind them waiting (13–35 a tick instead of 100).
+  The room accounting was right (4 members a tick); the order was the
+  problem. Now, with a snapshot, the sweep's single id-ordered pass builds
+  snapshot members (up to 100) and moves the cursor past a token-path member
+  who needs a build, recording them in `wrapped_backfill_deferred`; every
+  tick then drains deferred members with the token room left. The run
+  finishes when the pass is done and nothing is deferred. Without a
+  snapshot, the pass is as before.
+- **A snapshot read error ends the tick** (the backfill reads the snapshot
+  strictly), instead of sending a snapshot member down the token path to
+  overwrite their entries. On-demand builds still fall back.
+- **Events whose attendees left Meetup**: a read that is short again in a
+  later run (the event's last error was the short read) is accepted as
+  final: the rows Meetup shows are stored, the failure cleared, and
+  `rsvps_hidden` set. The card counts them separately ("N events have RSVPs
+  Meetup no longer shows").
+- **The undercount flag clears** when a later on-demand cross-check agrees
+  (the snapshot caught up); the backfill never clears it (no cross-check).
+- **Rate limits**: one rate-limited tick records `RateLimited` and alerts
+  nobody; a second in a row (the run's last error still `RateLimited`) gets
+  the daily "failing" alert. A failed tick now writes the card's last-tick
+  line too, with its error.
+
 ## Left to the builder
 
 - File layout (suggested: `src/lib/snapshot/{ingest,job,reader}.ts`,

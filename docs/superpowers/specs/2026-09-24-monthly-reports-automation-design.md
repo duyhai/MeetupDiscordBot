@@ -54,7 +54,7 @@ Changes to `meetup_get_host_event_stats` in
    platform-cancelled events (it filters to `PAST`/`ACTIVE`, plus `AUTOSCHED` until 2026-09-28, and
    the live schema has distinct `CANCELLED`/`CANCELLED_PERM`/
    `AUTOSCHED_CANCELLED` statuses), so the inflated counts come from events
-   that were *renamed* "cancelled" instead of being cancelled on the platform.
+   that were _renamed_ "cancelled" instead of being cancelled on the platform.
    Fix: skip events whose title matches `/cancell?ed/i` (case-insensitive), in
    the same way `[Open House]` events are skipped today, and defensively skip
    any cancelled `status` that slips through. The reported totals then need no

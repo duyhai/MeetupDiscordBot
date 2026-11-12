@@ -37,6 +37,8 @@ export interface RsvpWork {
   dateTime: Date;
   /** Meetup's YES + ATTENDED total from the listing. */
   yesCount: number | null;
+  /** The error class of the event's last failed read (an earlier run's). */
+  lastError: string | undefined;
 }
 
 export interface RsvpWorkQuery {
@@ -91,12 +93,18 @@ export interface SnapshotStore {
   ): Promise<void>;
   /** Live events whose last RSVP read failed. */
   failingEventCount(): Promise<number>;
-  /** One transaction: the event's rows replaced by these, rsvps_fetched_at set, failures cleared. */
+  /**
+   * One transaction: the event's rows replaced by these, rsvps_fetched_at
+   * set, failures cleared; `hidden` marks a short read accepted as final.
+   */
   replaceRsvps(
     eventId: string,
     rsvps: SnapshotRsvp[],
     fetchedAt: Date,
+    options?: { hidden?: boolean },
   ): Promise<void>;
+  /** Live events whose short read was accepted (attendees left Meetup). */
+  hiddenEventCount(): Promise<number>;
   advance(runId: number, delta: SnapshotDelta): Promise<void>;
   recordRequests(runId: number, calls: number): Promise<void>;
   /** last_error on the run; undefined clears it. */
@@ -127,6 +135,8 @@ export interface SnapshotReader {
     snapshotCount: number,
     selfCount: number,
   ): Promise<void>;
+  /** A later cross-check agreed: the snapshot path again. */
+  clearFlag(meetupId: string): Promise<void>;
 }
 
 interface RunRow {
@@ -353,8 +363,9 @@ export class PostgresSnapshotRepository
       event_id: string;
       date_time: Date;
       yes_count: number | null;
+      rsvp_error: string | null;
     }>(
-      `SELECT event_id, date_time, yes_count FROM meetup_events
+      `SELECT event_id, date_time, yes_count, rsvp_error FROM meetup_events
         WHERE ${NEEDS_RSVPS}
         ORDER BY date_time, event_id LIMIT $4`,
       [query.runStartedAt, query.now, query.settleDays, query.limit],
@@ -363,6 +374,7 @@ export class PostgresSnapshotRepository
       eventId: row.event_id,
       dateTime: row.date_time,
       yesCount: row.yes_count,
+      lastError: row.rsvp_error ?? undefined,
     }));
   }
 
@@ -377,6 +389,14 @@ export class PostgresSnapshotRepository
         WHERE event_id = $1`,
       [eventId, at, errorName.slice(0, 100)],
     );
+  }
+
+  async hiddenEventCount(): Promise<number> {
+    const result = await this.pool.query<{ n: string }>(
+      `SELECT count(*)::text AS n FROM meetup_events
+        WHERE rsvps_hidden AND deleted_at IS NULL`,
+    );
+    return Number(result.rows[0].n);
   }
 
   async failingEventCount(): Promise<number> {
@@ -399,6 +419,7 @@ export class PostgresSnapshotRepository
     eventId: string,
     rsvps: SnapshotRsvp[],
     fetchedAt: Date,
+    options: { hidden?: boolean } = {},
   ): Promise<void> {
     // Last wins for a member listed twice (a page boundary moving under us).
     const byMember = new Map(rsvps.map((r) => [r.memberId, r.status]));
@@ -419,9 +440,10 @@ export class PostgresSnapshotRepository
         }
         await client.query(
           `UPDATE meetup_events
-              SET rsvps_fetched_at = $2, rsvp_failures = 0, rsvp_failed_at = NULL, rsvp_error = NULL
+              SET rsvps_fetched_at = $2, rsvp_failures = 0, rsvp_failed_at = NULL, rsvp_error = NULL,
+                  rsvps_hidden = $3
             WHERE event_id = $1`,
-          [eventId, fetchedAt],
+          [eventId, fetchedAt, options.hidden === true],
         );
       },
     );
@@ -552,6 +574,13 @@ export class PostgresSnapshotRepository
        ON CONFLICT (meetup_id) DO UPDATE
          SET snapshot_count = EXCLUDED.snapshot_count, self_count = EXCLUDED.self_count`,
       [meetupId, snapshotCount, selfCount],
+    );
+  }
+
+  async clearFlag(meetupId: string): Promise<void> {
+    await this.pool.query(
+      'DELETE FROM wrapped_snapshot_flags WHERE meetup_id = $1',
+      [meetupId],
     );
   }
 

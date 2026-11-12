@@ -417,11 +417,12 @@ export function dashboardPageDeps(): DashboardPageDeps {
       snapshot: async () => {
         const store = await PostgresSnapshotRepository.instance();
         const now = new Date();
-        const [lastRun, openRun, totals, failing] = await Promise.all([
+        const [lastRun, openRun, totals, failing, hidden] = await Promise.all([
           store.lastFinishedRun(),
           store.openRun(),
           store.totals(),
           store.failingEventCount(),
+          store.hiddenEventCount(),
         ]);
         const pending = openRun
           ? await store.pendingRsvpCount({
@@ -445,6 +446,7 @@ export function dashboardPageDeps(): DashboardPageDeps {
           ...totals,
           pending,
           failing,
+          hidden,
           pace: snapshotTuning(),
           lastTick,
           now,

@@ -50,12 +50,12 @@ two, for a benefit (catching transient swaps) the owner does not need.
 
 ### Fields tracked
 
-| Field | Source | Notes |
-| --- | --- | --- |
-| Global avatar | `user.avatar` | The obvious vector |
-| Server avatar | `member.avatar` | Per-guild override; visible only here, so the stealthiest |
-| Server nickname | `member.nickname` | The bot writes this itself (see below) |
-| Username / global name | `user.username`, `user.globalName` | Discord rate-limits these; cheap to include |
+| Field                  | Source                             | Notes                                                     |
+| ---------------------- | ---------------------------------- | --------------------------------------------------------- |
+| Global avatar          | `user.avatar`                      | The obvious vector                                        |
+| Server avatar          | `member.avatar`                    | Per-guild override; visible only here, so the stealthiest |
+| Server nickname        | `member.nickname`                  | The bot writes this itself (see below)                    |
+| Username / global name | `user.username`, `user.globalName` | Discord rate-limits these; cheap to include               |
 
 ### The bot's own writes
 
@@ -88,7 +88,7 @@ updated_at           TIMESTAMPTZ NOT NULL DEFAULT now()
 ```
 
 The two BYTEA columns hold the 64px image behind the hash beside them, so a
-change's *before* picture comes out of our own database rather than a CDN that
+change's _before_ picture comes out of our own database rather than a CDN that
 may have purged it. See Thumbnails below.
 
 `member_identity_changes` -- append-only log, one row per field change:
@@ -112,12 +112,12 @@ Index on `(detected_at)` for the digest and report ranges, and on
 
 Measured against the live plan: essential-0, 1 GB, currently 7.99 MB used.
 
-| | |
-| --- | --- |
-| Baseline | 2,008 rows x ~250 B = **~0.5 MB**, static |
-| Baseline thumbnails | up to two per member, ~2-4 KB each: **~8-16 MB**, static |
-| Change log, text only | ~200 B/row |
-| Thumbnails | ~2-4 KB per image at 64px webp |
+|                       |                                                          |
+| --------------------- | -------------------------------------------------------- |
+| Baseline              | 2,008 rows x ~250 B = **~0.5 MB**, static                |
+| Baseline thumbnails   | up to two per member, ~2-4 KB each: **~8-16 MB**, static |
+| Change log, text only | ~200 B/row                                               |
+| Thumbnails            | ~2-4 KB per image at 64px webp                           |
 
 At an assumed 2-4 identity changes per member per year: 4-8k rows/year, so
 roughly **1-2 MB/year** of text. Thumbnails apply only to avatar changes, at
@@ -165,7 +165,7 @@ hashes:
   thumb column is written only when the caller supplies a value for it, so a
   nickname edit cannot discard an avatar image. An explicit NULL does clear
   it, because a thumb describes the hash stored beside it and a superseded
-  image under a new hash would make the *next* change's before-image wrong
+  image under a new hash would make the _next_ change's before-image wrong
   rather than merely missing.
 
 The cost is one-time: the backfill fetches a thumbnail per avatar-having
@@ -191,7 +191,7 @@ fetches on a dyno with an R14 history. (The unlinked digest was removed on
 2026-10-17; the identity digest keeps 18:00, and the dashboard's build job
 keeps its member passes out of 17:45–19:00 UTC.)
 
-The claim is taken *before* the sweep and released if any of the work fails,
+The claim is taken _before_ the sweep and released if any of the work fails,
 so a restart mid-hour neither redoes a discarded full pass nor consumes the
 day on a digest that never posted. The 24h window is anchored to the digest
 hour rather than to the run time, so consecutive days are exactly contiguous
@@ -233,7 +233,7 @@ document string and `writeFileSync`'s copy at once -- roughly 3-4x the raw
 bytes on a 512 MB dyno with an R14 history. The cap is therefore ~10 MB and
 `days` is capped at 90.
 
-The size check runs *before* the rows are fetched, as a `count(*)` /
+The size check runs _before_ the rows are fetched, as a `count(*)` /
 `sum(octet_length(...))` aggregate that transfers no thumbnails: a guard that
 measures what is already in memory fires after the damage. A refused range
 names a concrete narrower window rather than only saying no.
@@ -256,7 +256,7 @@ tests cover the repository against real Postgres, following
 
 ## Out of scope
 
-- Detecting *similarity* between avatars. Only exact hash changes are
+- Detecting _similarity_ between avatars. Only exact hash changes are
   recorded. Two members with visually similar but not byte-identical photos
   will not be flagged; the digest surfaces changes for a human to judge.
 - Automatic enforcement. No kicks, no role removal, no messaging the member.

@@ -9,6 +9,7 @@ Hai's brief: "Make the design an aesthetic blend of Meetup and Discord's colors 
 The dashboard is a work tool. Staff open it to check what needs doing, act on it, and leave, so the look should make that faster and not only prettier.
 
 Two-Tone gives each brand colour one job:
+
 - **Blurple** marks what you can act on: buttons, the current page in the nav, links.
 - **Coral** marks what needs a person: to-do counts, warnings, no-show badges.
 - **Green** marks done.
@@ -52,35 +53,36 @@ The neutrals are quiet slate greys in both light and dark mode.
 
 The light values are defined on `:root`. The dark values sit under `@media (prefers-color-scheme: dark)`, together with `color-scheme: dark`.
 
-| Token | Light | Dark |
-|---|---|---|
-| `--bg` | `#f5f5fa` | `#17181f` |
-| `--surface` | `#ffffff` | `#20212b` |
-| `--raised` | `#f1f1f8` | `#2a2b37` |
-| `--fg` | `#191a24` | `#eeeef6` |
-| `--muted` | `#555869` | `#a9abbd` |
-| `--line` | `#dedfea` | `#363847` |
-| `--field` (form borders, added) | `#7c7f93` | `#7a7d93` |
-| `--sel` | `#ebecfb` | `#2f3150` |
-| `--accent` | `#4f5bd5` (was `#5865f2`) | `#8d96ff` (was `#7984ff`) |
-| `--btn` (white text) | `#4752c4` | `#5865f2` |
-| `--btn-hover` (white text, added) | `#3940a0` | `#4752c4` |
-| `--btn-fg` (added) | `#ffffff` | `#ffffff` |
-| `--focus` | `#5865f2` | `#a3aaff` |
-| `--attn` | `#c9283a` | `#ff7d88` |
-| `--attn-soft` | `#fde3e6` | `#46252c` |
-| `--attn-ink` | `#9c1c2c` | `#ffbac0` |
-| `--accent-soft` | `#e8e9fd` | `#30335e` |
-| `--accent-ink` | `#3940a0` | `#cbcffd` |
-| `--ok-soft` | `#ddf2e5` | `#203a2b` |
-| `--ok-ink` | `#1f693d` | `#8fd8ab` |
-| Header rule | `#5865f2` for 60%, then `#e8414f` | `#7984ff`, then `#ff6b77` |
+| Token                             | Light                             | Dark                      |
+| --------------------------------- | --------------------------------- | ------------------------- |
+| `--bg`                            | `#f5f5fa`                         | `#17181f`                 |
+| `--surface`                       | `#ffffff`                         | `#20212b`                 |
+| `--raised`                        | `#f1f1f8`                         | `#2a2b37`                 |
+| `--fg`                            | `#191a24`                         | `#eeeef6`                 |
+| `--muted`                         | `#555869`                         | `#a9abbd`                 |
+| `--line`                          | `#dedfea`                         | `#363847`                 |
+| `--field` (form borders, added)   | `#7c7f93`                         | `#7a7d93`                 |
+| `--sel`                           | `#ebecfb`                         | `#2f3150`                 |
+| `--accent`                        | `#4f5bd5` (was `#5865f2`)         | `#8d96ff` (was `#7984ff`) |
+| `--btn` (white text)              | `#4752c4`                         | `#5865f2`                 |
+| `--btn-hover` (white text, added) | `#3940a0`                         | `#4752c4`                 |
+| `--btn-fg` (added)                | `#ffffff`                         | `#ffffff`                 |
+| `--focus`                         | `#5865f2`                         | `#a3aaff`                 |
+| `--attn`                          | `#c9283a`                         | `#ff7d88`                 |
+| `--attn-soft`                     | `#fde3e6`                         | `#46252c`                 |
+| `--attn-ink`                      | `#9c1c2c`                         | `#ffbac0`                 |
+| `--accent-soft`                   | `#e8e9fd`                         | `#30335e`                 |
+| `--accent-ink`                    | `#3940a0`                         | `#cbcffd`                 |
+| `--ok-soft`                       | `#ddf2e5`                         | `#203a2b`                 |
+| `--ok-ink`                        | `#1f693d`                         | `#8fd8ab`                 |
+| Header rule                       | `#5865f2` for 60%, then `#e8414f` | `#7984ff`, then `#ff6b77` |
 
 Verify every text/background pair against AA. If a pair fails, adjust that token and record the change here.
 
 `tst/web/contrast.test.ts` parses these values out of `STYLE` and checks each pair: 4.5:1 for text, 3:1 for the focus ring, form-field borders and the current-tab marker.
 
 Changes made in Task 1 (2026-10-17):
+
 - **`--accent`.** As link text, `#5865f2` measured 4.24:1 on `--bg`, 4.10:1 on `--raised` and 3.93:1 on `--sel` in light mode. Dark `#7984ff` measured 4.37:1 on `--raised` and 3.91:1 on `--sel`. They are now `#4f5bd5` (light, at least 4.62:1 on every surface, including `--accent-soft`) and `#8d96ff` (dark, at least 4.51:1). The header rule and the focus ring keep `#5865f2` / `#7984ff` and `#a3aaff`, since they are not text and pass 3:1.
 - **`--field`, added.** `--line` is about 1.3:1 on `--surface`, which is fine for decorative card borders but not for the border that shows where an input is (WCAG 1.4.11). Inputs, selects and textareas use `--field` (at least 3.51:1 light, 3.46:1 dark).
 - **`--btn-hover` and `--btn-fg`, added.** They give primary buttons a hover colour that keeps white text at AA (light 8.70:1, dark 6.42:1). `--accent-ink` would fail with white text in dark mode.
@@ -88,6 +90,7 @@ Changes made in Task 1 (2026-10-17):
 Fonts are the system stack. Code and copy boxes use the `ui-monospace` stack.
 
 Changes made in Task 3 (2026-10-17):
+
 - **`CHART_COLORS`.** The old series colours passed 3:1 on both surfaces, but only just (3.05 to 3.47 on dark), and all five sat at the same lightness (L* 46 to 49), so coral and green were hard to tell apart under red-green deficiencies. They are now blurple `#5462ec`, coral `#d42c3a`, green `#1ea666`, amber `#986600` and violet `#a070f2`. Each meets 3:1 on `#ffffff` and on `#20212b`, and the green is at least 12 L* lighter than the blurple and the coral. `tst/web/contrast.test.ts` checks both.
 - **Dashes.** Line series 2, 3 and 4 get literal dash patterns (`8 4`, `2 3`, `10 3 2 3`), so crossing lines differ by more than colour. Bars stay solid: they sit side by side in a fixed order.
 
@@ -101,12 +104,12 @@ Changes made in Task 3 (2026-10-17):
 - **Tables.** Below about 640 px, rows become stacked cards with a label on each cell. Each column's label is literal text in the markup.
 - **Badges and status pills.**
 
-  | Style | Meaning |
-  |---|---|
-  | Coral soft | Needs attention (to do, warning to send) |
-  | Blurple soft | In progress or suspension |
-  | Green soft | Done |
-  | Grey | Neutral |
+  | Style        | Meaning                                  |
+  | ------------ | ---------------------------------------- |
+  | Coral soft   | Needs attention (to do, warning to send) |
+  | Blurple soft | In progress or suspension                |
+  | Green soft   | Done                                     |
+  | Grey         | Neutral                                  |
 
 - **Buttons.**
   - Primary is blurple.

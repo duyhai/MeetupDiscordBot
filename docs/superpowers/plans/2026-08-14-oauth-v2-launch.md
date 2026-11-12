@@ -26,34 +26,36 @@
 
 ## File Structure
 
-| File | Responsibility |
-|---|---|
-| `src/lib/client/oauth/state.ts` (new) | `createOAuthState` / `resolveOAuthState` — the uuid↔user cache binding |
-| `src/lib/client/oauth/providers.ts` (new) | arctic wrapper: authorize URLs, code exchanges, `fetchDiscordUserId` |
-| `src/util/meetup.ts` (modify) | `showMeetupTokenUrl` uses `createOAuthState` (V1 path, unchanged behavior) |
-| `src/constants.ts` (modify) | `GUILD_ID`, `WELCOME_CHANNEL_ID`, `GET_VERIFIED_CHANNEL_ID` |
-| `src/templates/authLanding.ts` (modify) | success → welcome-channel deep link; error → get-verified deep link |
-| `src/app.ts` (rewrite) | cookie-free routes; grant/express-session gone |
-| `src/configuration.ts` (modify) | drop the `grant` section |
-| `package.json` (modify) | + arctic; − grant, express-session, @types/express-session, cookie-signature, @types/cookie-signature, grant resolution pin |
-| `src/lib/helpers/onboardUser.ts` (modify) | export `onboardUserCommon` |
-| `src/buttonMenu/meetup/syncAccountV2.ts` (modify) | consolidation + per-user OAuth link button |
-| `scripts/swapVerifyButton.ts` (new) | one-off button swap with `--rollback` |
-| `tst/lib/client/oauth/state.test.ts` (new) | state helper |
-| `tst/lib/client/oauth/providers.test.ts` (new) | URL construction + nock'd exchanges |
-| `tst/templates/authLanding.test.ts` (new) | landing-page links |
-| `tst/integration/app.routes.test.ts` (replace) | cookie-less chain + error paths |
+| File                                              | Responsibility                                                                                                              |
+| ------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `src/lib/client/oauth/state.ts` (new)             | `createOAuthState` / `resolveOAuthState` — the uuid↔user cache binding                                                      |
+| `src/lib/client/oauth/providers.ts` (new)         | arctic wrapper: authorize URLs, code exchanges, `fetchDiscordUserId`                                                        |
+| `src/util/meetup.ts` (modify)                     | `showMeetupTokenUrl` uses `createOAuthState` (V1 path, unchanged behavior)                                                  |
+| `src/constants.ts` (modify)                       | `GUILD_ID`, `WELCOME_CHANNEL_ID`, `GET_VERIFIED_CHANNEL_ID`                                                                 |
+| `src/templates/authLanding.ts` (modify)           | success → welcome-channel deep link; error → get-verified deep link                                                         |
+| `src/app.ts` (rewrite)                            | cookie-free routes; grant/express-session gone                                                                              |
+| `src/configuration.ts` (modify)                   | drop the `grant` section                                                                                                    |
+| `package.json` (modify)                           | + arctic; − grant, express-session, @types/express-session, cookie-signature, @types/cookie-signature, grant resolution pin |
+| `src/lib/helpers/onboardUser.ts` (modify)         | export `onboardUserCommon`                                                                                                  |
+| `src/buttonMenu/meetup/syncAccountV2.ts` (modify) | consolidation + per-user OAuth link button                                                                                  |
+| `scripts/swapVerifyButton.ts` (new)               | one-off button swap with `--rollback`                                                                                       |
+| `tst/lib/client/oauth/state.test.ts` (new)        | state helper                                                                                                                |
+| `tst/lib/client/oauth/providers.test.ts` (new)    | URL construction + nock'd exchanges                                                                                         |
+| `tst/templates/authLanding.test.ts` (new)         | landing-page links                                                                                                          |
+| `tst/integration/app.routes.test.ts` (replace)    | cookie-less chain + error paths                                                                                             |
 
 ---
 
 ### Task 1: OAuth state helper
 
 **Files:**
+
 - Create: `src/lib/client/oauth/state.ts`
 - Modify: `src/util/meetup.ts:20-31` (showMeetupTokenUrl)
 - Test: `tst/lib/client/oauth/state.test.ts`
 
 **Interfaces:**
+
 - Consumes: `ApplicationCache` from `src/util/cache.js` (existing), `uuid`.
 - Produces (used by Tasks 4, 5): `createOAuthState(discordUserId: string): Promise<string>` and `resolveOAuthState(state: string): Promise<string | undefined>`. Key format stays `maskedUserId-{uuid}` — V1 and the existing meetup callback keep working unmodified.
 
@@ -168,11 +170,13 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 ### Task 2: arctic provider wrapper
 
 **Files:**
+
 - Create: `src/lib/client/oauth/providers.ts`
 - Modify: `package.json` (arctic is already in the worktree's node_modules from plan prep — commit the dependency)
 - Test: `tst/lib/client/oauth/providers.test.ts`
 
 **Interfaces:**
+
 - Consumes: `Configuration` (`discord.oauthClientId/oauthSecret`, `meetup.apiKey/apiSecret`), `BASE_DISCORD_BOT_URL`, `debugRedirect`, `BASIC_MEETUP_AUTH_SCOPES` from `src/constants.js`, `Tokens`/`APIAccessTokenResponse` from `src/lib/client/discord/types.js`, `arctic`.
 - Produces (used by Task 4):
   - `buildDiscordAuthUrl(state: string): string` — includes `prompt=none`
@@ -216,7 +220,9 @@ afterEach(() => {
 describe('authorize URL construction', () => {
   it('builds the Discord URL with state, scopes, and prompt=none', () => {
     const url = new URL(buildDiscordAuthUrl('state-abc'));
-    expect(url.origin + url.pathname).toBe('https://discord.com/oauth2/authorize');
+    expect(url.origin + url.pathname).toBe(
+      'https://discord.com/oauth2/authorize',
+    );
     expect(url.searchParams.get('state')).toBe('state-abc');
     expect(url.searchParams.get('prompt')).toBe('none');
     expect(url.searchParams.get('scope')).toContain('identify');
@@ -366,7 +372,9 @@ export function buildDiscordAuthUrl(state: string): string {
 }
 
 export async function exchangeDiscordCode(code: string): Promise<Tokens> {
-  return toTokens(await discordProvider().validateAuthorizationCode(code, null));
+  return toTokens(
+    await discordProvider().validateAuthorizationCode(code, null),
+  );
 }
 
 export async function fetchDiscordUserId(accessToken: string): Promise<string> {
@@ -449,11 +457,13 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 ### Task 3: Landing-page destinations + constants
 
 **Files:**
+
 - Modify: `src/constants.ts` (after the log-channel constants, ~line 55)
 - Modify: `src/templates/authLanding.ts:16-17` (deepLink/webLink)
 - Test: `tst/templates/authLanding.test.ts`
 
 **Interfaces:**
+
 - Produces: `GUILD_ID`, `WELCOME_CHANNEL_ID`, `GET_VERIFIED_CHANNEL_ID` in `src/constants.js`; `getAuthLandingPage(status, message)` (same signature) now routes success → welcome channel, error → get-verified channel.
 
 - [ ] **Step 1: Write the failing test**
@@ -521,9 +531,11 @@ import {
 ```
 
 ```typescript
-  const targetChannelId = isSuccess ? WELCOME_CHANNEL_ID : GET_VERIFIED_CHANNEL_ID;
-  const deepLink = `discord://-/channels/${GUILD_ID}/${targetChannelId}`;
-  const webLink = `https://discord.com/channels/${GUILD_ID}/${targetChannelId}`;
+const targetChannelId = isSuccess
+  ? WELCOME_CHANNEL_ID
+  : GET_VERIFIED_CHANNEL_ID;
+const deepLink = `discord://-/channels/${GUILD_ID}/${targetChannelId}`;
+const webLink = `https://discord.com/channels/${GUILD_ID}/${targetChannelId}`;
 ```
 
 Everything else in the template (auto-redirect script, styles, button) stays as is.
@@ -545,12 +557,14 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 ### Task 4: Rewrite app.ts cookie-free; delete grant + express-session
 
 **Files:**
+
 - Rewrite: `src/app.ts`
 - Modify: `src/configuration.ts` (drop `grant` key + `GrantConfig` import + the `ConfigurationSchema.grant` field)
 - Modify: `package.json` (remove deps)
 - Replace: `tst/integration/app.routes.test.ts`
 
 **Interfaces:**
+
 - Consumes: Task 1 `resolveOAuthState`; Task 2 provider functions; Task 3 landing pages; `ApplicationCache`.
 - Produces: routes `GET /connect/discord`, `GET /connect/discord/callback`, `GET /connect/meetup`, `GET /connect/meetup/callback`, `GET /redirect/:url` (unchanged). Handlers exported by name for tests: `discordConnectHandler`, `discordConnectCallbackHandler`, `meetupConnectHandler`, `meetupConnectCallbackHandler`. **V1 compatibility:** V1's link points at `/connect/meetup?state=…`, served by the new `meetupConnectHandler`.
 
@@ -782,7 +796,9 @@ export const discordConnectCallbackHandler: RequestHandler = (async (
   }
   if (req.query.error || !req.query.code) {
     logger.warn(`Discord authorize denied: ${JSON.stringify(req.query)}`);
-    return res.status(200).send(getAuthLandingPage('error', strings.providerDenied));
+    return res
+      .status(200)
+      .send(getAuthLandingPage('error', strings.providerDenied));
   }
   try {
     const tokens = await exchangeDiscordCode(String(req.query.code));
@@ -813,7 +829,9 @@ export const meetupConnectCallbackHandler: RequestHandler = (async (
   }
   if (req.query.error || !req.query.code) {
     logger.warn(`Meetup authorize denied: ${JSON.stringify(req.query)}`);
-    return res.status(200).send(getAuthLandingPage('error', strings.providerDenied));
+    return res
+      .status(200)
+      .send(getAuthLandingPage('error', strings.providerDenied));
   }
   try {
     const tokens = await exchangeMeetupCode(String(req.query.code));
@@ -887,10 +905,12 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 ### Task 5: V2 handler consolidation + per-user link
 
 **Files:**
+
 - Modify: `src/lib/helpers/onboardUser.ts:75` (`onboardUserCommon` gains `export`)
 - Modify: `src/buttonMenu/meetup/syncAccountV2.ts`
 
 **Interfaces:**
+
 - Consumes: `onboardUserCommon(interaction, userId, gender, nickname?)` (newly exported), `createOAuthState` (Task 1), `generateOAuthUrl` from `src/constants.js` (existing — builds `/connect/discord?state=…` with the debugRedirect wrapper for dev).
 - Produces: no new exports. The V2 button flow now: per-user link button → cookie-free chain → shared onboarding implementation.
 
@@ -906,21 +926,21 @@ In `src/buttonMenu/meetup/syncAccountV2.ts`:
 2. Replace the OAuth-link block (the `editReply` that today points at `discordBotUrl('discord-meetup-connect')`) with a per-user link button:
 
 ```typescript
-        const state = await createOAuthState(interaction.user.id);
-        const oauthUrl = generateOAuthUrl('discord', { state });
-        const connectButton = new ButtonBuilder()
-          .setLabel('Connect Discord + Meetup')
-          .setEmoji('🧲')
-          .setStyle(ButtonStyle.Link)
-          .setURL(oauthUrl);
-        const row =
-          new ActionRowBuilder<MessageActionRowComponentBuilder>().addComponents(
-            connectButton,
-          );
-        await interaction.editReply({
-          content: 'Please connect your Discord and Meetup accounts:',
-          components: [row],
-        });
+const state = await createOAuthState(interaction.user.id);
+const oauthUrl = generateOAuthUrl('discord', { state });
+const connectButton = new ButtonBuilder()
+  .setLabel('Connect Discord + Meetup')
+  .setEmoji('🧲')
+  .setStyle(ButtonStyle.Link)
+  .setURL(oauthUrl);
+const row =
+  new ActionRowBuilder<MessageActionRowComponentBuilder>().addComponents(
+    connectButton,
+  );
+await interaction.editReply({
+  content: 'Please connect your Discord and Meetup accounts:',
+  components: [row],
+});
 ```
 
 (The spin-waits for `discordTokenKey`/`meetupTokenKey` that follow stay exactly as they are.)
@@ -928,12 +948,12 @@ In `src/buttonMenu/meetup/syncAccountV2.ts`:
 3. Replace the duplicated onboarding block — the nickname-setting code (`guildMember.setNickname` and the invisible-character fallback), the gender `switch` adding lounge roles, and the `removeServerRole(guild, user.id, 'onboarding')` call — with:
 
 ```typescript
-      await onboardUserCommon(
-        interaction,
-        cachedUser.id,
-        userInfo.self.gender,
-        cleanedName,
-      );
+await onboardUserCommon(
+  interaction,
+  cachedUser.id,
+  userInfo.self.gender,
+  cleanedName,
+);
 ```
 
 Delete the now-unused local `strings.invisibleCharacter`, the `isAdmin` import if nothing else in the file uses it, and the `addServerRole`/`removeServerRole` imports if now unused (the reward-role calls `addRewardRole`/`removeRewardRole` stay).
@@ -957,9 +977,11 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 ### Task 6: swapVerifyButton script (with --rollback)
 
 **Files:**
+
 - Create: `scripts/swapVerifyButton.ts`
 
 **Interfaces:**
+
 - Consumes: `GET_VERIFIED_CHANNEL_ID` from `src/constants.js`; `DISCORD_API_KEY` env.
 - Produces: a script run manually at rollout step 3 (NOT during this plan's execution). Forward: finds the bot message whose component has custom_id `sync_meetup_account`, replaces the button with the V2 one and appends the badge line. `--rollback`: finds `sync_meetup_account_v2`, restores the V1 button and removes the badge line.
 

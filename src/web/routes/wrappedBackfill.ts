@@ -53,6 +53,8 @@ export interface SnapshotStatus {
   pending: number;
   /** Live events whose last RSVP read failed. */
   failing: number;
+  /** Live events whose short read was accepted (attendees left Meetup). */
+  hidden: number;
   /** The configured pace (SNAPSHOT_CALLS_PER_TICK, SNAPSHOT_CONCURRENCY). */
   pace: SnapshotTuning;
   /** The last tick that ran; undefined when none in the last day. */
@@ -170,11 +172,17 @@ async function snapshotLine(
   const tickAt = lastTick ? Date.parse(lastTick.at) : Number.NaN;
   const lastTickText = Number.isFinite(tickAt)
     ? ` · last tick ${age(new Date(tickAt), status.now)} ago: ${n(lastTick?.calls ?? 0)} calls, ` +
-      `${n(lastTick?.fetched ?? 0)} events read`
+      `${n(lastTick?.fetched ?? 0)} events read` +
+      (lastTick?.error ? ` (failed: ${lastTick.error})` : '')
     : '';
   parts.push(
     `Pace: ${n(pace.callsPerTick)} Meetup calls a tick, ${n(pace.concurrency)} at a time${lastTickText}.`,
   );
+  if (status.hidden > 0) {
+    parts.push(
+      `${n(status.hidden)} events have RSVPs Meetup no longer shows (their attendees left Meetup).`,
+    );
+  }
   if (status.failing > 0) {
     parts.push(
       `${n(status.failing)} events failed their last RSVP read; they are retried each run.`,

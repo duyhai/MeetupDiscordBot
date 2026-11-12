@@ -40,6 +40,7 @@ export interface SnapshotWrapped {
   sources(
     linkedMeetupId: string,
     selfPastCount?: () => Promise<number | undefined>,
+    options?: { strict?: boolean },
   ): Promise<WrappedSources | undefined>;
   attendees: AttendeeReader;
   /** When the latest snapshot run finished; undefined before any. Never throws. */
@@ -52,12 +53,14 @@ function errorName(error: unknown): string {
 
 export function snapshotWrapped(reader: SnapshotReader): SnapshotWrapped {
   return {
-    sources: async (linkedMeetupId, selfPastCount) => {
+    sources: async (linkedMeetupId, selfPastCount, options) => {
       try {
-        if (
-          !(await reader.isReady()) ||
-          (await reader.isFlagged(linkedMeetupId))
-        ) {
+        if (!(await reader.isReady())) {
+          return undefined;
+        }
+        const flagged = await reader.isFlagged(linkedMeetupId);
+        if (flagged && !selfPastCount) {
+          // Only a cross-check that agrees can clear the flag.
           return undefined;
         }
         const [events, hosted] = await Promise.all([
@@ -94,9 +97,30 @@ export function snapshotWrapped(reader: SnapshotReader): SnapshotWrapped {
               });
             return undefined;
           }
+          if (flagged) {
+            if (counted === undefined) {
+              return undefined;
+            }
+            // The snapshot has caught up (a later ingest read what it
+            // lacked): back on the snapshot path.
+            logger.info(
+              `Snapshot now holds ${events.length} past RSVPs for Meetup member ${linkedMeetupId} ` +
+                `(their token counts ${counted}): flag cleared`,
+            );
+            await reader.clearFlag(linkedMeetupId).catch((error: unknown) => {
+              logger.warn(
+                `Snapshot undercount flag not cleared: ${errorName(error)}`,
+              );
+            });
+          }
         }
         return { events, hosted };
       } catch (error) {
+        if (options?.strict) {
+          // The backfill: an unreadable snapshot must not send a snapshot
+          // member down the token path (it would overwrite their entries).
+          throw error;
+        }
         logger.warn(
           `Snapshot unreadable, using the token path: ${errorName(error)}`,
         );

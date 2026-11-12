@@ -31,11 +31,13 @@
 The pure comparison at the core of both detection paths. No I/O.
 
 **Files:**
+
 - Create: `src/lib/repositories/identityTypes.ts`
 - Create: `src/lib/helpers/identityDiff.ts`
 - Test: `tst/lib/helpers/identityDiff.test.ts`
 
 **Interfaces:**
+
 - Consumes: nothing.
 - Produces:
   - `type IdentityField = 'user_avatar' | 'member_avatar' | 'nickname' | 'username' | 'global_name'`
@@ -132,11 +134,7 @@ Expected: FAIL — `diffIdentity is not a function`
 ```ts
 // src/lib/repositories/identityTypes.ts
 export type IdentityField =
-  | 'user_avatar'
-  | 'member_avatar'
-  | 'nickname'
-  | 'username'
-  | 'global_name';
+  'user_avatar' | 'member_avatar' | 'nickname' | 'username' | 'global_name';
 
 export interface IdentitySnapshot {
   discordUserId: string;
@@ -214,6 +212,7 @@ Expected: PASS (5 tests)
 - [ ] **Step 5: Mutation-test each assertion**
 
 Confirm each test fails when the bug is reintroduced, then restore:
+
 - Change `if (!before)` to `if (false)` → the no-baseline test must fail.
 - Change the filter to `!==` on a fixed field only → the multi-field test must fail.
 - Remove `?? null` → the clearing-nickname test must fail.
@@ -233,10 +232,12 @@ git commit -m "Add identity snapshot types and the diff function"
 Converts discord.js objects into an `IdentitySnapshot`, and builds CDN URLs.
 
 **Files:**
+
 - Create: `src/lib/helpers/identitySnapshot.ts`
 - Test: `tst/lib/helpers/identitySnapshot.test.ts`
 
 **Interfaces:**
+
 - Consumes: `IdentitySnapshot` from Task 1.
 - Produces:
   - `function snapshotMember(member: GuildMember): IdentitySnapshot`
@@ -380,11 +381,13 @@ git commit -m "Snapshot a GuildMember's identity fields and build CDN thumb urls
 Postgres persistence for the baseline and the change log, following `PostgresMemberRepository`'s lazy-schema singleton pattern.
 
 **Files:**
+
 - Create: `src/lib/repositories/postgresIdentityRepository.ts`
 - Create: `src/util/identityRepository.ts`
 - Test: `tst/integration/postgresIdentityRepository.test.ts`
 
 **Interfaces:**
+
 - Consumes: `IdentitySnapshot`, `IdentityChange`, `IdentityChangeRecord`, `ChangeSource` from Task 1.
 - Produces:
   - `class PostgresIdentityRepository` with `static instance(): Promise<PostgresIdentityRepository>`
@@ -539,9 +542,9 @@ describe.skipIf(!POSTGRES_AVAILABLE)('PostgresIdentityRepository', () => {
     expect(inRange.some((r) => r.discordUserId === snap.discordUserId)).toBe(
       true,
     );
-    expect(
-      outOfRange.some((r) => r.discordUserId === snap.discordUserId),
-    ).toBe(false);
+    expect(outOfRange.some((r) => r.discordUserId === snap.discordUserId)).toBe(
+      false,
+    );
   });
 
   it('reports storage stats', async () => {
@@ -865,10 +868,12 @@ git commit -m "Add Postgres identity baseline and change-log repository"
 Best-effort retrieval of 64px avatars from Discord's CDN.
 
 **Files:**
+
 - Create: `src/lib/helpers/identityThumbs.ts`
 - Test: `tst/lib/helpers/identityThumbs.test.ts`
 
 **Interfaces:**
+
 - Consumes: `avatarThumbUrl` (Task 2), `IdentityChange` (Task 1).
 - Produces: `function fetchChangeThumbs(changes: IdentityChange[], guildId: string): Promise<Map<string, { oldThumb: Buffer | null; newThumb: Buffer | null }>>`
 
@@ -1047,10 +1052,12 @@ git commit -m "Fetch 64px avatar thumbnails best-effort from Discord's CDN"
 The single entry point both detection paths call: diff, fetch thumbs, persist, update baseline.
 
 **Files:**
+
 - Create: `src/lib/helpers/identityMonitor.ts`
 - Test: `tst/lib/helpers/identityMonitor.test.ts`
 
 **Interfaces:**
+
 - Consumes: everything from Tasks 1-4.
 - Produces:
   - `function recordIdentityFor(member: GuildMember, source: ChangeSource): Promise<IdentityChange[]>`
@@ -1122,7 +1129,12 @@ describe('recordIdentityFor', () => {
 
   it('records the change and advances the baseline', async () => {
     const member = fakeMember({
-      user: { username: 'someone', globalName: 'Someone', avatar: 'bbb', bot: false },
+      user: {
+        username: 'someone',
+        globalName: 'Someone',
+        avatar: 'bbb',
+        bot: false,
+      },
     });
 
     const changes = await recordIdentityFor(member, 'event');
@@ -1184,10 +1196,7 @@ import { GuildMember } from 'discord.js';
 import { Logger } from 'tslog';
 
 import { ApplicationIdentityRepository } from '../../util/identityRepository.js';
-import {
-  ChangeSource,
-  IdentityChange,
-} from '../repositories/identityTypes.js';
+import { ChangeSource, IdentityChange } from '../repositories/identityTypes.js';
 import { diffIdentity } from './identityDiff.js';
 import { snapshotMember } from './identitySnapshot.js';
 import { fetchChangeThumbs } from './identityThumbs.js';
@@ -1281,12 +1290,14 @@ git commit -m "Add identity change recording and silent baseline updates"
 Wires real-time detection, and stops the bot's own nickname writes from becoming noise.
 
 **Files:**
+
 - Create: `src/events/identityEvents.ts`
 - Modify: `src/index.ts` (import and register)
 - Modify: `src/lib/helpers/onboardUser.ts` (call `updateBaselineSilently` after `setNickname`)
 - Test: `tst/events/identityEvents.test.ts`
 
 **Interfaces:**
+
 - Consumes: `recordIdentityFor`, `updateBaselineSilently` (Task 5).
 - Produces: `function registerIdentityEvents(client: Client): void`
 
@@ -1426,15 +1437,15 @@ import { registerIdentityEvents } from './events/identityEvents.js';
 and register it inside the `clientReady` handler, immediately after `startUnlinkedDigestScheduler(client);`:
 
 ```ts
-  registerIdentityEvents(client);
+registerIdentityEvents(client);
 ```
 
 In `src/lib/helpers/onboardUser.ts`, inside `onboardUserCommon`, immediately after the existing `logger.info(\`Explicitly set ${fullUsername}'s nickname to ${targetNickName}\`);` line, add:
 
 ```ts
-    // The bot just wrote this nickname. Advance the baseline so its own write
-    // is not reported as a suspicious name change in the daily digest.
-    await updateBaselineSilently(guildMember);
+// The bot just wrote this nickname. Advance the baseline so its own write
+// is not reported as a suspicious name change in the daily digest.
+await updateBaselineSilently(guildMember);
 ```
 
 and add to that file's imports:
@@ -1470,10 +1481,12 @@ git commit -m "Detect identity changes from gateway events"
 Reconciles anything missed while the dyno was down, and performs the silent first population.
 
 **Files:**
+
 - Create: `src/lib/helpers/identitySweep.ts`
 - Test: `tst/lib/helpers/identitySweep.test.ts`
 
 **Interfaces:**
+
 - Consumes: `recordIdentityFor` (Task 5).
 - Produces: `function runIdentitySweep(client: Client, source: ChangeSource): Promise<{ scanned: number; changed: number }>`
 
@@ -1613,7 +1626,9 @@ export async function runIdentitySweep(
       logger.warn(`Sweep failed for ${member.id}: ${String(error)}`);
     }
   }
-  logger.info(`Identity sweep (${source}): ${scanned} scanned, ${changed} changed`);
+  logger.info(
+    `Identity sweep (${source}): ${scanned} scanned, ${changed} changed`,
+  );
   return { scanned, changed };
 }
 ```
@@ -1644,11 +1659,13 @@ git commit -m "Add identity reconciliation sweep and backfill pass"
 Formats and posts the daily summary, including revert annotation and storage stats.
 
 **Files:**
+
 - Create: `src/lib/helpers/identityDigest.ts`
 - Modify: `src/index.ts` (start the scheduler)
 - Test: `tst/lib/helpers/identityDigest.test.ts`
 
 **Interfaces:**
+
 - Consumes: `IdentityChangeRecord` (Task 1), repository (Task 3), `runIdentitySweep` (Task 7).
 - Produces:
   - `function formatIdentityDigest(changes: IdentityChangeRecord[], stats: { changeCount: number; totalBytes: number }): LogEntry | undefined`
@@ -1710,7 +1727,7 @@ describe('annotateReverts', () => {
     expect(out[0].revertedAt).toBeUndefined();
   });
 
-  it('does not treat another member\'s change as a revert', () => {
+  it("does not treat another member's change as a revert", () => {
     const out = annotateReverts([
       change({ id: '1', discordUserId: 'u1' }),
       change({
@@ -1936,7 +1953,7 @@ import { startIdentityDigestScheduler } from './lib/helpers/identityDigest.js';
 and inside `clientReady`, after `registerIdentityEvents(client);`:
 
 ```ts
-  startIdentityDigestScheduler(client);
+startIdentityDigestScheduler(client);
 ```
 
 - [ ] **Step 4: Run test to verify it passes**
@@ -1966,10 +1983,12 @@ git commit -m "Post a daily identity change digest with revert annotation"
 Builds the self-contained report from change records.
 
 **Files:**
+
 - Create: `src/lib/helpers/identityReport.ts`
 - Test: `tst/lib/helpers/identityReport.test.ts`
 
 **Interfaces:**
+
 - Consumes: `IdentityChangeRecord` (Task 1).
 - Produces:
   - `function renderIdentityReport(changes: IdentityChangeRecord[], range: { from: Date; to: Date }): string`
@@ -2220,10 +2239,12 @@ git commit -m "Render a self-contained HTML identity change report"
 Role-gated command that delivers the report as a file attachment.
 
 **Files:**
+
 - Create: `src/commands/meetup/identityReport.ts`
 - Test: `tst/commands/meetup/identityReport.test.ts`
 
 **Interfaces:**
+
 - Consumes: `renderIdentityReport`, `estimateReportBytes`, `MAX_REPORT_BYTES` (Task 9), repository (Task 3), `requireModOrOrganizer` and `withDiscordFileAttachment` (existing, `src/util/discord.ts`).
 - Produces: the slash command; no exported functions other than the class.
 
@@ -2257,7 +2278,9 @@ describe('buildReportAttachment', () => {
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.fileName).toMatch(/^identity-report-\d{4}-\d{2}-\d{2}\.html$/);
+    expect(result.fileName).toMatch(
+      /^identity-report-\d{4}-\d{2}-\d{2}\.html$/,
+    );
     expect(result.html).toContain('<!doctype html>');
   });
 
@@ -2322,8 +2345,7 @@ const strings = {
 };
 
 export type ReportAttachment =
-  | { ok: true; fileName: string; html: string }
-  | { ok: false; reason: string };
+  { ok: true; fileName: string; html: string } | { ok: false; reason: string };
 
 export function buildReportAttachment(
   changes: IdentityChangeRecord[],
@@ -2433,10 +2455,12 @@ git commit -m "Add /meetup_identity_report delivering a self-contained HTML file
 The one-time silent population, and end-to-end confirmation.
 
 **Files:**
+
 - Create: `scripts/backfillIdentityBaseline.ts`
 - Modify: `README.md` (document the command and the backfill step)
 
 **Interfaces:**
+
 - Consumes: `runIdentitySweep` (Task 7).
 - Produces: a runnable script; no exports.
 

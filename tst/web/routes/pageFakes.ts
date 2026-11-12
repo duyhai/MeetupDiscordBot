@@ -1209,6 +1209,7 @@ export function fakePageDeps(
         rsvps: 0,
         pending: 0,
         failing: 0,
+        hidden: 0,
         pace: { callsPerTick: 150, concurrency: 1 },
         lastTick: undefined,
         now: new Date(),
