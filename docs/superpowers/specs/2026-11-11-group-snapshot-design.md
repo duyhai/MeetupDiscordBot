@@ -399,8 +399,7 @@ seeded snapshot writes the entry `readEntry` serves, with zero Meetup calls.
   ticks ≈ 2.7 h** at 150 calls a tick (one constant to raise if the lead
   wants it faster).
 - Organizer-view history counts for four linked members recorded for PR 2's
-  parity check (Meetup ids 38181472: 114, 483183672: 13, 156079422: 84,
-  353019842: 21).
+  parity check (four members, by label only: 114, 13, 84 and 21 past RSVPs; the ids stay out of the public repo).
 
 ## After the lead's review of PR 1 (2026-11-11)
 
@@ -495,16 +494,16 @@ the 8 linked members with the most stored rows, organizer view of their own
 history (`getMemberRsvpEvents`, YES/ATTENDED, PAST) restricted to those
 events, against the snapshot's rows.
 
-| Meetup id | org history (all) | org, in read events | snapshot | missing in snapshot | extra in snapshot |
-| --------- | ----------------- | ------------------- | -------- | ------------------- | ----------------- |
-| 178526752 | 96                | 30                  | 30       | 0                   | 0                 |
-| 232931436 | 260               | 27                  | 28       | 0                   | 1                 |
-| 53687112  | 144               | 28                  | 28       | 0                   | 0                 |
-| 24809812  | 189               | 20                  | 20       | 0                   | 0                 |
-| 189486786 | 34                | 16                  | 16       | 0                   | 0                 |
-| 194247553 | 28                | 15                  | 15       | 0                   | 0                 |
-| 4232418   | 47                | 13                  | 13       | 0                   | 0                 |
-| 158110442 | 15                | 11                  | 12       | 0                   | 1                 |
+| Member   | org history (all) | org, in read events | snapshot | missing in snapshot | extra in snapshot |
+| -------- | ----------------- | ------------------- | -------- | ------------------- | ----------------- |
+| member A | 96                | 30                  | 30       | 0                   | 0                 |
+| member B | 260               | 27                  | 28       | 0                   | 1                 |
+| member C | 144               | 28                  | 28       | 0                   | 0                 |
+| member D | 189               | 20                  | 20       | 0                   | 0                 |
+| member E | 34                | 16                  | 16       | 0                   | 0                 |
+| member F | 28                | 15                  | 15       | 0                   | 0                 |
+| member G | 47                | 13                  | 13       | 0                   | 0                 |
+| member H | 15                | 11                  | 12       | 0                   | 1                 |
 
 - **0 of 160 linked-member RSVPs missing** from the snapshot; it even has 2
   the member-history read lacks. Across those events Meetup counts 5,505
