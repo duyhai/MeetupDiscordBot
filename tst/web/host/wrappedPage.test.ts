@@ -30,6 +30,8 @@ import {
   signInWithMeetup,
 } from './hostHarness.js';
 import { FakeCache } from '../fakeCache.js';
+import { snapshotWrapped } from '../../../src/lib/snapshot/wrapped.js';
+import { FakeSnapshotReader } from '../../lib/snapshot/fakes.js';
 import { NEXT_TICK_KEY } from '../../../src/lib/wrapped/queue.js';
 import {
   FakeBackfillStore,
@@ -1126,5 +1128,73 @@ describe('POST /host/wrapped/rebuild', () => {
       .send({ year: '2026' });
     expect(res.status).toBe(403);
     expect(h.meetup.getSelfPastRsvpEvents).not.toHaveBeenCalled();
+  });
+});
+
+describe('/host/wrapped from the group snapshot', () => {
+  const reader = () =>
+    new FakeSnapshotReader(
+      [
+        {
+          id: 'g1',
+          title: 'Board game night',
+          dateTime: '2026-03-10T03:00:00Z',
+          eventUrl: 'https://www.meetup.com/g/events/1/',
+        },
+        {
+          id: 'g2',
+          title: 'Hot pot dinner',
+          dateTime: '2026-04-10T03:00:00Z',
+          eventUrl: 'https://www.meetup.com/g/events/2/',
+          hosts: [ME],
+        },
+      ],
+      { g1: [ME, LINKED.id, 'unlinked-77'], g2: [ME] },
+    );
+
+  it('builds with no stored token and no Meetup call, spending the shared slot', async () => {
+    const h = await harness({ hasToken: false });
+    h.deps.snapshot = async () => snapshotWrapped(reader());
+    const sid = await signInWithDiscord(h.req);
+    const res = await h.req.get('/host/wrapped?year=2026').set('Cookie', sid);
+    expect(res.status).toBe(200);
+    expect(res.text).not.toContain('href="/host/auth/meetup/start"');
+    expect(h.meetup.getSelfPastRsvpEvents).not.toHaveBeenCalled();
+    expect(h.meetup.getEventRsvps).not.toHaveBeenCalled();
+    const stored = await readWrapped(h.wrappedCache, USER, 2026, ME);
+    expect(stored?.stats.attendedThisYear).toBe(2);
+    expect(stored?.stats.hosting?.thisYear).toBe(1);
+    expect(JSON.stringify(stored)).not.toContain('unlinked-77');
+    expect(res.text).not.toContain('unlinked-77');
+    expect(h.deps.limiter.take(USER)).toBe(false);
+  });
+
+  it('Rebuild uses the snapshot too', async () => {
+    const h = await harness({ hasToken: false });
+    h.deps.snapshot = async () => snapshotWrapped(reader());
+    await writeWrapped(h.wrappedCache, USER, 2026, cached, NOW);
+    const sid = await signInWithDiscord(h.req);
+    const res = await h.req
+      .post('/host/wrapped/rebuild')
+      .set('Cookie', sid)
+      .set('Origin', ORIGIN)
+      .type('form')
+      .send({ _csrf: h.csrf(), year: '2026' });
+    expect(res.status).toBe(303);
+    expect(res.headers.location).toBe('/host/wrapped?year=2026');
+    expect(
+      (await readWrapped(h.wrappedCache, USER, 2026, ME))?.stats
+        .attendedThisYear,
+    ).toBe(2);
+    expect(h.meetup.getSelfPastRsvpEvents).not.toHaveBeenCalled();
+  });
+
+  it('a member the snapshot does not hold, with no token, still gets the sign-in page', async () => {
+    const h = await harness({ hasToken: false });
+    h.deps.snapshot = async () =>
+      snapshotWrapped(new FakeSnapshotReader([], {}));
+    const sid = await signInWithDiscord(h.req);
+    const res = await h.req.get('/host/wrapped').set('Cookie', sid);
+    expect(res.text).toContain('href="/host/auth/meetup/start"');
   });
 });

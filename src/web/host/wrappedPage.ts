@@ -19,9 +19,14 @@ import { describeBuildError } from '../../lib/reports/buildJob.js';
 import { WrappedBackfillStore } from '../../lib/repositories/postgresWrappedBackfillRepository.js';
 import { WrappedEntryStore } from '../../lib/repositories/postgresWrappedEntryRepository.js';
 import {
+  SnapshotWrapped,
+  buildWrappedFromSnapshot,
+} from '../../lib/snapshot/wrapped.js';
+import {
   BuildDeps,
   BuildResult,
   WrappedMeetup,
+  WrappedSources,
   buildWrapped,
 } from '../../lib/wrapped/build.js';
 import {
@@ -113,7 +118,16 @@ export interface WrappedPageDeps {
   queue?: () => Promise<WrappedBackfillStore>;
   /** The durable Wrapped store; left out or rejecting, Redis alone. */
   entries?: () => Promise<WrappedEntryStore>;
+  /**
+   * The group snapshot: a member it can serve is built from it, with no
+   * Meetup token. Left out or rejecting, the token path.
+   */
+  snapshot?: () => Promise<SnapshotWrapped>;
+  /** The member's stored token's past-RSVP count, the snapshot's cross-check. */
+  selfPastCount?: (discordUserId: string) => Promise<number | undefined>;
 }
+
+type FromSnapshot = { snapshot: SnapshotWrapped; sources: WrappedSources };
 
 /** `?year=`: this calendar year (Pacific) unless a year 2015..this year. */
 export function wrappedYear(query: unknown, now: Date): number {
@@ -572,8 +586,9 @@ export function registerWrappedPage(
     session: HostSession,
     discordUserId: string,
     year: number,
-    accessToken: string,
+    accessToken: string | undefined,
     tiers: WrappedTiers,
+    fromSnapshot: FromSnapshot | undefined,
   ): Promise<Outcome> {
     const { cache } = tiers;
     const lease = buildingKey(discordUserId, year);
@@ -589,22 +604,39 @@ export function registerWrappedPage(
     let claimed = false;
     const run = (async (): Promise<Outcome> => {
       try {
-        const result = await buildWrapped(
-          {
-            meetup: deps.meetupClient(accessToken),
-            claimBuild: () => {
-              claimed = deps.limiter.take(discordUserId);
-              return claimed;
-            },
-            organizerRsvps: deps.organizerRsvps,
-            findByMeetupId: deps.findByMeetupId,
-            isPresent: deps.isPresent,
-            now,
+        const shared = {
+          claimBuild: () => {
+            claimed = deps.limiter.take(discordUserId);
+            return claimed;
           },
-          session.userId,
-          year,
-          deps.groupId,
-        );
+          findByMeetupId: deps.findByMeetupId,
+          isPresent: deps.isPresent,
+          now,
+        };
+        let result: BuildResult;
+        if (fromSnapshot) {
+          result = await buildWrappedFromSnapshot(
+            { ...shared, attendees: fromSnapshot.snapshot.attendees },
+            session.userId,
+            year,
+            fromSnapshot.sources,
+          );
+        } else if (accessToken !== undefined) {
+          result = await buildWrapped(
+            {
+              ...shared,
+              meetup: deps.meetupClient(accessToken),
+              organizerRsvps: deps.organizerRsvps,
+            },
+            session.userId,
+            year,
+            deps.groupId,
+          );
+        } else {
+          throw new Error(
+            'Wrapped (web) build with neither snapshot nor token',
+          );
+        }
         if (result.kind === 'built') {
           await writeEntry(tiers, discordUserId, year, result.wrapped, now());
           await dropQueued(discordUserId, year);
@@ -651,6 +683,30 @@ export function registerWrappedPage(
       return await Promise.race([run, slow]);
     } finally {
       clearTimeout(timer);
+    }
+  }
+
+  /** The snapshot's sources for the member, or undefined for the token path. Never throws. */
+  async function snapshotSources(
+    discordUserId: string,
+    meetupId: string,
+  ): Promise<FromSnapshot | undefined> {
+    if (!deps.snapshot) {
+      return undefined;
+    }
+    try {
+      const snapshot = await deps.snapshot();
+      const count = deps.selfPastCount;
+      const sources = await snapshot.sources(
+        meetupId,
+        count ? () => count(discordUserId) : undefined,
+      );
+      return sources ? { snapshot, sources } : undefined;
+    } catch (error: unknown) {
+      logger.warn(
+        `Wrapped (web) snapshot unavailable, using the token path: ${error instanceof Error ? error.name : 'Error'}`,
+      );
+      return undefined;
     }
   }
 
@@ -926,8 +982,11 @@ export function registerWrappedPage(
     year: number,
     tiers: WrappedTiers,
   ) {
-    const token = await deps.memberToken(discordUserId);
-    if (token === undefined) {
+    const fromSnapshot = await snapshotSources(discordUserId, session.userId);
+    const token = fromSnapshot
+      ? undefined
+      : await deps.memberToken(discordUserId);
+    if (!fromSnapshot && token === undefined) {
       await message(
         res,
         session,
@@ -941,7 +1000,14 @@ export function registerWrappedPage(
       );
       return;
     }
-    const outcome = await build(session, discordUserId, year, token, tiers);
+    const outcome = await build(
+      session,
+      discordUserId,
+      year,
+      token,
+      tiers,
+      fromSnapshot,
+    );
     if (outcome.kind === 'built') {
       await render(res, session, year, outcome.wrapped, tiers);
       return;
@@ -1040,12 +1106,22 @@ export function registerWrappedPage(
     }
     const discordUserId = session.discordUserId;
     const tiers = await tiersFor();
-    const token = await deps.memberToken(discordUserId);
-    if (token === undefined) {
+    const fromSnapshot = await snapshotSources(discordUserId, session.userId);
+    const token = fromSnapshot
+      ? undefined
+      : await deps.memberToken(discordUserId);
+    if (!fromSnapshot && token === undefined) {
       back({ notice: 'no-token' });
       return;
     }
-    const outcome = await build(session, discordUserId, year, token, tiers);
+    const outcome = await build(
+      session,
+      discordUserId,
+      year,
+      token,
+      tiers,
+      fromSnapshot,
+    );
     switch (outcome.kind) {
       case 'built':
         back();
