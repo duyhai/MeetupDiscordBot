@@ -52,21 +52,21 @@ Branch `feat/host-dashboard-signin` off `main`. No Meetup writes, no new Discord
 
 ## File structure
 
-| File                                                           | Responsibility                                                                                                                                             |
-| -------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `src/web/session.ts` (modify)                                  | `SessionStore` gains options (key prefix, revocation prefix, user-id pattern, extra-field check); MAC domain parameter on sign/verify. Defaults unchanged. |
-| `src/web/oauthCookie.ts` (modify)                              | MAC domain parameter, default `oauth:`.                                                                                                                    |
-| `src/web/pages.ts` (modify)                                    | `layout` gains `site: 'staff' \| 'host'` (brand, nav, sign-out path, title suffix); host nav; host and heat-map/calendar CSS in `STYLE`.                   |
-| `src/lib/repositories/postgresPromotedHostRepository.ts` (new) | `promoted_hosts` + `promoted_host_events` schema; `isPromoted(memberId)`. Writes come in PR 3.                                                             |
-| `src/lib/hosts/eligibility.ts` (new)                           | `resolveHost(deps, who)` → eligible/refused + tier; Meetup blacklist constant.                                                                             |
-| `src/lib/hosts/eventTypes.ts` (new)                            | Keyword event-type classifier, `stripHostPrefix`.                                                                                                          |
-| `src/lib/hosts/holidays.ts` (new)                              | Holidays recognised from event titles by keyword (not dates; Hai's PR 128 review).                                                                         |
-| `src/lib/hosts/hostEvents.ts` (new)                            | Organizer reads: hosted past/upcoming events, group calendar; short in-process cache.                                                                      |
-| `src/web/host/meetupSignIn.ts` (new)                           | Meetup authorize URL with a `host-` state, code exchange reuse, minimal `self { id name }` lookup.                                                         |
-| `src/web/host/hostRouter.ts` (new)                             | Public sign-in routes, gate with tier re-check, unsafe-method guard, logout, error handler.                                                                |
-| `src/web/host/hostPages.ts` (new)                              | Home, calendar, history pages; heat map SVG.                                                                                                               |
-| `src/web/host/hostDeps.ts` (new)                               | Production wiring, `hostRouterFromEnv`.                                                                                                                    |
-| `src/app.ts` (modify)                                          | Forward `host-` Meetup states; mount `/host`.                                                                                                              |
+| File | Responsibility |
+|---|---|
+| `src/web/session.ts` (modify) | `SessionStore` gains options (key prefix, revocation prefix, user-id pattern, extra-field check); MAC domain parameter on sign/verify. Defaults unchanged. |
+| `src/web/oauthCookie.ts` (modify) | MAC domain parameter, default `oauth:`. |
+| `src/web/pages.ts` (modify) | `layout` gains `site: 'staff' \| 'host'` (brand, nav, sign-out path, title suffix); host nav; host and heat-map/calendar CSS in `STYLE`. |
+| `src/lib/repositories/postgresPromotedHostRepository.ts` (new) | `promoted_hosts` + `promoted_host_events` schema; `isPromoted(memberId)`. Writes come in PR 3. |
+| `src/lib/hosts/eligibility.ts` (new) | `resolveHost(deps, who)` → eligible/refused + tier; Meetup blacklist constant. |
+| `src/lib/hosts/eventTypes.ts` (new) | Keyword event-type classifier, `stripHostPrefix`. |
+| `src/lib/hosts/holidays.ts` (new) | Holidays recognised from event titles by keyword (not dates; Hai's PR 128 review). |
+| `src/lib/hosts/hostEvents.ts` (new) | Organizer reads: hosted past/upcoming events, group calendar; short in-process cache. |
+| `src/web/host/meetupSignIn.ts` (new) | Meetup authorize URL with a `host-` state, code exchange reuse, minimal `self { id name }` lookup. |
+| `src/web/host/hostRouter.ts` (new) | Public sign-in routes, gate with tier re-check, unsafe-method guard, logout, error handler. |
+| `src/web/host/hostPages.ts` (new) | Home, calendar, history pages; heat map SVG. |
+| `src/web/host/hostDeps.ts` (new) | Production wiring, `hostRouterFromEnv`. |
+| `src/app.ts` (modify) | Forward `host-` Meetup states; mount `/host`. |
 
 ### Task 1: Plan and Step 0 record
 
@@ -77,12 +77,10 @@ Branch `feat/host-dashboard-signin` off `main`. No Meetup writes, no new Discord
 ### Task 2: Session and cookie primitives take a domain
 
 **Files:**
-
 - Modify: `src/web/session.ts`, `src/web/oauthCookie.ts`
 - Test: `tst/web/session.test.ts`, `tst/web/oauthCookie.test.ts`
 
 **Interfaces:**
-
 - Produces:
   - `signSessionId(sid, secret, domain = 'sid')`, `verifySignedSessionId(value, secret, domain = 'sid')`.
   - `sealOAuthCookie(payload, secret, domain = 'oauth')`, `openOAuthCookie(value, secret, now, domain = 'oauth')`.
@@ -103,12 +101,10 @@ Branch `feat/host-dashboard-signin` off `main`. No Meetup writes, no new Discord
 ### Task 3: Promoted-hosts table (read side)
 
 **Files:**
-
 - Create: `src/lib/repositories/postgresPromotedHostRepository.ts`
 - Test: `tst/integration/postgresPromotedHostRepository.test.ts`
 
 **Interfaces:**
-
 - Produces: `PostgresPromotedHostRepository.instance()`, `isPromoted(meetupMemberId: string): Promise<boolean>`, `PROMOTED_HOST_SCHEMA`.
 - Schema (ensured on first use, like the other repositories):
   - `promoted_hosts(meetup_member_id TEXT PRIMARY KEY, active BOOLEAN NOT NULL, reason TEXT NOT NULL, changed_by TEXT NOT NULL, changed_at TIMESTAMPTZ NOT NULL, version INT NOT NULL DEFAULT 1)`.
@@ -122,12 +118,10 @@ Branch `feat/host-dashboard-signin` off `main`. No Meetup writes, no new Discord
 ### Task 4: Who is a host, and which tier
 
 **Files:**
-
 - Create: `src/lib/hosts/eligibility.ts`; modify `src/constants.ts` (add `GUEST_HOST_MEETUP_BLACKLIST: string[] = []`, `COMMUNITY_HOST_PREFIX = '[Community Host] '`, `GUEST_HOST_PREFIX = '[Guest Host] '`).
 - Test: `tst/lib/hosts/eligibility.test.ts`
 
 **Interfaces:**
-
 - Produces:
   ```ts
   export type HostTier = 'regular' | 'promoted';
@@ -135,22 +129,13 @@ Branch `feat/host-dashboard-signin` off `main`. No Meetup writes, no new Discord
     discordIdForMeetup(meetupId: string): Promise<string | undefined>;
     meetupIdForDiscord(discordId: string): Promise<string | undefined>;
     hasGuestHostRole(discordId: string): Promise<boolean>; // live; throws when Discord is unreachable
-    pastHostedCount(meetupId: string): Promise<number>; // organizer credential; throws when unreadable
+    pastHostedCount(meetupId: string): Promise<number>;    // organizer credential; throws when unreadable
     isPromoted(meetupId: string): Promise<boolean>;
   }
   export type HostResolution =
-    | {
-        kind: 'host';
-        meetupMemberId: string;
-        discordUserId?: string;
-        tier: HostTier;
-        hostedCount: number;
-      }
+    | { kind: 'host'; meetupMemberId: string; discordUserId?: string; tier: HostTier; hostedCount: number }
     | { kind: 'refused'; reason: 'not-linked' | 'blacklisted' | 'not-a-host' };
-  export function resolveHost(
-    deps: HostResolveDeps,
-    who: { meetupMemberId: string } | { discordUserId: string },
-  ): Promise<HostResolution>;
+  export function resolveHost(deps: HostResolveDeps, who: { meetupMemberId: string } | { discordUserId: string }): Promise<HostResolution>;
   ```
 - Rules (spec "Users and tiers"): Discord path with no linked Meetup id → `not-linked`. Blacklisted if the Discord id is in `GUEST_HOST_BLACKLIST` or the Meetup id is in `GUEST_HOST_MEETUP_BLACKLIST` → `blacklisted` (checked before any Meetup read). Host if Guest Host role (when a Discord id is known) or `pastHostedCount ≥ 1`. Tier `promoted` if `isPromoted`. A dependency that throws propagates (the caller answers 503).
 
@@ -160,12 +145,10 @@ Branch `feat/host-dashboard-signin` off `main`. No Meetup writes, no new Discord
 ### Task 5: Meetup sign-in plumbing
 
 **Files:**
-
 - Create: `src/web/host/meetupSignIn.ts`; modify `src/lib/client/oauth/providers.ts` (export `meetupRedirectUri`), `src/app.ts`.
 - Test: `tst/web/host/meetupSignIn.test.ts`, `tst/app.test.ts` (add cases).
 
 **Interfaces:**
-
 - Produces:
   - `HOST_STATE_PREFIX = 'host-'`; `newHostState(): string` (`host-` + 32 random base64url chars); `isHostState(s: string): boolean` (`/^host-[A-Za-z0-9_-]{32,64}$/`).
   - `buildHostMeetupAuthUrl(state: string): string` (same authorize endpoint, client, `basic` scope and redirect URI as `buildMeetupAuthUrl`).
@@ -178,49 +161,29 @@ Branch `feat/host-dashboard-signin` off `main`. No Meetup writes, no new Discord
 ### Task 6: The host router
 
 **Files:**
-
 - Create: `src/web/host/hostRouter.ts`, `src/web/host/hostSession.ts`; modify `src/web/pages.ts` (`layout` `site`, host login/error pages), `src/web/discordOAuth.ts` (`hostRedirectUri()`, `buildHostLoginUrl`, `exchangeHostCode` sharing the existing code with a redirect parameter).
 - Test: `tst/web/host/hostHarness.ts`, `tst/web/host/hostRouter.auth.test.ts`, `tst/web/host/hostRouter.session.test.ts`.
 
 **Interfaces:**
-
 - Consumes: Task 2 primitives, Task 4 `resolveHost`, Task 5 helpers, `baseSecurityHeaders`, `FixedWindowLimiter`, cookies helpers.
 - Produces:
   ```ts
-  export interface HostSession extends DashboardSession {
-    // userId = Meetup member id, username = display name
-    discordUserId: string | null;
-    tier: HostTier;
-    via: 'discord' | 'meetup';
+  export interface HostSession extends DashboardSession { // userId = Meetup member id, username = display name
+    discordUserId: string | null; tier: HostTier; via: 'discord' | 'meetup';
   }
   export const HOST_SESSION_OPTIONS: SessionStoreOptions<HostSession>; // 'host-session-', 'host-user-valid-after-', /^[0-9]{1,20}$/
   export interface HostRouterDeps {
     cache: () => Promise<KeyValueCache>;
-    resolve: (
-      who: { meetupMemberId: string } | { discordUserId: string },
-    ) => Promise<HostResolution>;
-    discord: DashboardOAuth; // host redirect URI
-    meetup: {
-      buildAuthUrl(state: string): string;
-      exchangeCode(code: string): Promise<string>;
-      fetchSelf(token: string): Promise<{ id: string; name: string }>;
-    };
-    sessionSecret: string;
-    origin: string;
-    requireHttps?: boolean;
+    resolve: (who: { meetupMemberId: string } | { discordUserId: string }) => Promise<HostResolution>;
+    discord: DashboardOAuth;                 // host redirect URI
+    meetup: { buildAuthUrl(state: string): string; exchangeCode(code: string): Promise<string>; fetchSelf(token: string): Promise<{ id: string; name: string }> };
+    sessionSecret: string; origin: string; requireHttps?: boolean;
     audit: (entry: LogEntry) => Promise<unknown>;
-    now?: () => number;
-    loginLimiter?: FixedWindowLimiter;
-    actionLimiter?: FixedWindowLimiter;
-    refusedAuditLimiter?: FixedWindowLimiter;
+    now?: () => number; loginLimiter?: FixedWindowLimiter; actionLimiter?: FixedWindowLimiter; refusedAuditLimiter?: FixedWindowLimiter;
     pages?: (router: express.Router) => void; // mounted behind the gate and the guard
   }
   export function createHostRouter(deps: HostRouterDeps): express.Router;
-  export function hostLocals(res: Response): {
-    session: HostSession;
-    sid: string;
-    nonce: string;
-  };
+  export function hostLocals(res: Response): { session: HostSession; sid: string; nonce: string };
   ```
 - Routes: `GET /login`; `GET /auth/discord/start`, `GET /auth/discord/callback`; `GET /auth/meetup/start`, `GET /auth/meetup/complete`; gated `POST /logout`, plus `pages`. Cookies: `host_oauth` (path `/host/auth`, MAC domain `host-oauth`, holds state + PKCE verifier for Discord or state alone for Meetup, plus which provider), `host_sid` (path `/host`, MAC domain `host-sid`).
 - Gate: same as the staff gate, but the re-check calls `resolve({ meetupMemberId })` (Meetup path) and also the Discord id when the session has one: `host` → `markRoleChecked(sid, session, { tier, discordUserId })`; `refused` → `revokeUser(memberId)`, audit "Host session ended", 403; throw → 503, session kept. Single-flight per member, like `recheckRole`.
@@ -232,43 +195,20 @@ Branch `feat/host-dashboard-signin` off `main`. No Meetup writes, no new Discord
 ### Task 7: Host data (organizer reads, types, holidays)
 
 **Files:**
-
 - Create: `src/lib/hosts/eventTypes.ts`, `src/lib/hosts/holidays.ts`, `src/lib/hosts/hostEvents.ts`; modify `src/lib/client/meetup/queries.ts` + `gqlClient.ts` only if the existing `getGroupEvents` lacks a needed field (it has id, title, dateTime, eventUrl, eventHosts, status).
 - Test: `tst/lib/hosts/eventTypes.test.ts`, `tst/lib/hosts/holidays.test.ts`, `tst/lib/hosts/hostEvents.test.ts`.
 
 **Interfaces:**
-
 - Produces:
   - `EVENT_TYPES = ['games','food','outdoors','active','arts','nightlife','learning','social'] as const`, `EventType`, `EVENT_TYPE_LABELS: Record<EventType, string>`, `classifyEventType(title: string): EventType` (first keyword match after `stripHostPrefix`, word-boundary, case-insensitive; `social` when nothing matches), `stripHostPrefix(title)` (removes a leading `[Guest Host] ` or `[Community Host] `, repeatedly).
     - Keywords: games: board game, game night, trivia, mahjong, poker, escape room, puzzle; food: dinner, lunch, brunch, breakfast, food, boba, cafe, coffee, dim sum, hot pot, hotpot, kbbq, bbq, ramen, potluck, baking, cooking, restaurant, tea; outdoors: hike, hiking, beach, picnic, park, camping, kayak, biking, bike, garden; active: volleyball, badminton, basketball, pickleball, tennis, bowling, climbing, bouldering, yoga, run, running, gym, soccer, dance, dancing, skating; arts: museum, art, painting, pottery, craft, movie, film, concert, theater, theatre, book club, photography; nightlife: karaoke, bar, drinks, happy hour, club, rooftop, wine; learning: workshop, talk, panel, class, networking, career, language.
   - `matchHolidays(title: string): string[]`: holiday names an event's title mentions, by word-bounded keyword (`HOLIDAYS` list, e.g. Friendsgiving → Thanksgiving, Tết/CNY → Lunar New Year, which shadows New Year's). Never by date: members spend the day itself with family, and the group's celebration is usually on another day (Hai, PR 128 review). Leadership extends the list.
   - ```ts
-    export interface HostEvent {
-      id: string;
-      title: string;
-      dateTime: string;
-      eventUrl: string;
-      type: EventType;
-      hosts: { id: string; name: string }[];
-    }
-    export interface HostEventsDeps {
-      fetchGroupEvents(filter: GroupEventFilter): Promise<HostEvent[]>;
-      now(): Date;
-    }
-    export function hostedEvents(
-      deps,
-      memberId: string,
-      which: 'past' | 'upcoming',
-    ): Promise<HostEvent[]>; // PAST / ACTIVE, hostId filter, newest first for past, soonest first for upcoming
-    export function groupCalendar(
-      deps,
-      weeks = 8,
-    ): Promise<{ days: CalendarDay[] }>; // ACTIVE events from the Monday of this Pacific week for `weeks` weeks
-    export interface CalendarDay {
-      day: string;
-      events: HostEvent[];
-      busy: 0 | 1 | 2 | 3;
-    }
+    export interface HostEvent { id: string; title: string; dateTime: string; eventUrl: string; type: EventType; hosts: { id: string; name: string }[] }
+    export interface HostEventsDeps { fetchGroupEvents(filter: GroupEventFilter): Promise<HostEvent[]>; now(): Date }
+    export function hostedEvents(deps, memberId: string, which: 'past' | 'upcoming'): Promise<HostEvent[]>; // PAST / ACTIVE, hostId filter, newest first for past, soonest first for upcoming
+    export function groupCalendar(deps, weeks = 8): Promise<{ days: CalendarDay[] }>; // ACTIVE events from the Monday of this Pacific week for `weeks` weeks
+    export interface CalendarDay { day: string; events: HostEvent[]; busy: 0 | 1 | 2 | 3 }
     export function attendanceUrl(eventUrl: string): string | undefined; // `${eventUrl}attendees/` for https://www.meetup.com/... URLs only
     ```
   - Production `fetchGroupEvents` = `withOrganizerMeetup` + `getPaginatedData(getGroupEvents)`, cached in-process 5 minutes per filter (max 200 entries, single-flight), so a page load is at most one Meetup round per list.
@@ -280,12 +220,10 @@ Branch `feat/host-dashboard-signin` off `main`. No Meetup writes, no new Discord
 ### Task 8: Host pages and styling
 
 **Files:**
-
 - Create: `src/web/host/hostPages.ts`, `src/web/host/heatMap.ts`; modify `src/web/pages.ts` (`STYLE`, host nav).
 - Test: `tst/web/host/hostPages.test.ts`, `tst/web/host/heatMap.test.ts`, `tst/web/contrast.test.ts` (new pairs).
 
 **Interfaces:**
-
 - Consumes: Task 6 `hostLocals`, Task 7 data functions.
 - Produces: `registerHostPages(router, deps: HostPageDeps)` with `GET /` (home), `GET /calendar`, `GET /history?type=<EventType>`; `heatMap(days: Map<string, number>, endDay: string): SafeHtml` (53 weeks ending at `endDay`, Sunday-first columns, literal classes `hm0`…`hm4` for 0, 1, 2, 3–4, 5+ events, `<title>` per cell "YYYY-MM-DD: n events", plus a text total for screen readers).
 - Home: greeting with `memberText(name)`, tier pill (Regular host / Community Host), upcoming hosted events (date, title, type, "View on Meetup"), the next 14 days' group load in one line, a nudge card when `discordUserId` is null ("Link your Discord account…"), links to Calendar and History. Pending approval and announced statuses arrive in PR 2/3.
@@ -299,12 +237,10 @@ Branch `feat/host-dashboard-signin` off `main`. No Meetup writes, no new Discord
 ### Task 9: Production wiring
 
 **Files:**
-
 - Create: `src/web/host/hostDeps.ts`; modify `src/app.ts`, `src/index.ts` (hand the Discord client to the host deps on ready, like `setDashboardClient`).
 - Test: `tst/web/host/hostDeps.test.ts`, `tst/integration/app.routes.test.ts` (add `/host` cases).
 
 **Interfaces:**
-
 - Produces: `hostRouterFromEnv(env = process.env): express.Router` (disabled page when `DASHBOARD_SESSION_SECRET` is missing, like the staff one); `setHostClient(client)`.
 - Production deps: `resolve` from Task 4 with `PostgresMemberRepository` (`findByMeetupId`, `findByDiscordId`), `discordRoleCheck(getClient, SERVER_ROLES.guest_host)`, organizer `getGroupEventsCount({ status: ['PAST'], hostId })`, `PostgresPromotedHostRepository.isPromoted`; cache = the dashboard's timed cache; audit = `logActivity` (no pings).
 
@@ -343,90 +279,52 @@ Schema read without auth (`api.meetup.com/gql-ext` introspection): `Event` has `
 
 ## File structure
 
-| File                                                                                                                                                         | Responsibility                                                                                                                              |
-| ------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| `src/lib/repositories/postgresEventRequestRepository.ts` (new)                                                                                               | `event_requests` + append-only `event_request_events`; create, get, list, CAS transitions.                                                  |
-| `src/lib/hosts/eventRequest.ts` (new)                                                                                                                        | Form parsing/validation (`parseRequestForm`), copy fields from a Meetup event (`copyFromEvent`), the Meetup input (`createInputFor`). Pure. |
-| `src/lib/hosts/publishRequest.ts` (new)                                                                                                                      | `publishRequest(deps, id, actor)`: CAS, create (resume-aware), RSVP close + re-apply, record outcome, alert.                                |
-| `src/lib/client/meetup/queries.ts`, `gqlClient.ts`, `mutations.ts` (modify)                                                                                  | `getEventForCopy(eventId)`; `createEvent` payload also selects `errors`.                                                                    |
-| `src/lib/client/meetup/createEventWithPhotoFallback.ts` (new), `src/commands/meetup/createEvent.ts` (modify)                                                 | `createEventWithPhotoFallback` moves out of the command file so the publish path shares it; the command imports it back.                    |
-| `src/web/host/createPage.ts` (new)                                                                                                                           | `GET/POST /host/create`, `GET /host/requests/:id`.                                                                                          |
-| `src/web/host/hostPages.ts` (modify)                                                                                                                         | Calendar "Host on this day" links, history "Copy" buttons, home "Your requests".                                                            |
-| `src/web/routes/hostRequests.ts` (new)                                                                                                                       | Staff queue `GET /dashboard/hosts/requests`, `POST …/:id/approve`, `…/:id/deny`, `…/:id/retry`.                                             |
-| `src/web/host/hostDeps.ts`, `src/web/dashboardDeps.ts`, `src/web/routes/dashboardPages.ts`, `src/lib/reports/dashboardPaths.ts`, `src/web/pages.ts` (modify) | Wiring, nav link, paths, CSS.                                                                                                               |
+| File | Responsibility |
+|---|---|
+| `src/lib/repositories/postgresEventRequestRepository.ts` (new) | `event_requests` + append-only `event_request_events`; create, get, list, CAS transitions. |
+| `src/lib/hosts/eventRequest.ts` (new) | Form parsing/validation (`parseRequestForm`), copy fields from a Meetup event (`copyFromEvent`), the Meetup input (`createInputFor`). Pure. |
+| `src/lib/hosts/publishRequest.ts` (new) | `publishRequest(deps, id, actor)`: CAS, create (resume-aware), RSVP close + re-apply, record outcome, alert. |
+| `src/lib/client/meetup/queries.ts`, `gqlClient.ts`, `mutations.ts` (modify) | `getEventForCopy(eventId)`; `createEvent` payload also selects `errors`. |
+| `src/lib/client/meetup/createEventWithPhotoFallback.ts` (new), `src/commands/meetup/createEvent.ts` (modify) | `createEventWithPhotoFallback` moves out of the command file so the publish path shares it; the command imports it back. |
+| `src/web/host/createPage.ts` (new) | `GET/POST /host/create`, `GET /host/requests/:id`. |
+| `src/web/host/hostPages.ts` (modify) | Calendar "Host on this day" links, history "Copy" buttons, home "Your requests". |
+| `src/web/routes/hostRequests.ts` (new) | Staff queue `GET /dashboard/hosts/requests`, `POST …/:id/approve`, `…/:id/deny`, `…/:id/retry`. |
+| `src/web/host/hostDeps.ts`, `src/web/dashboardDeps.ts`, `src/web/routes/dashboardPages.ts`, `src/lib/reports/dashboardPaths.ts`, `src/web/pages.ts` (modify) | Wiring, nav link, paths, CSS. |
 
 ### Task 1: Event request store
 
 **Files:** create `src/lib/repositories/postgresEventRequestRepository.ts`; test `tst/integration/postgresEventRequestRepository.test.ts`.
 
 **Interfaces (produces):**
-
 ```ts
-export type EventRequestStatus =
-  'pending' | 'publishing' | 'published' | 'failed' | 'denied';
+export type EventRequestStatus = 'pending' | 'publishing' | 'published' | 'failed' | 'denied';
 export interface EventRequestFields {
-  kind: 'fresh' | 'copy';
-  sourceEventId: string | null;
-  title: string;
-  description: string;
-  startLocal: string;
-  duration: string;
-  rsvpLimit: number;
-  guestLimit: number;
-  featuredPhotoId: number | null;
-  venueId: string | null;
-  howToFindUs: string | null;
+  kind: 'fresh' | 'copy'; sourceEventId: string | null;
+  title: string; description: string; startLocal: string; duration: string;
+  rsvpLimit: number; guestLimit: number;
+  featuredPhotoId: number | null; venueId: string | null; howToFindUs: string | null;
 }
 export interface EventRequest extends EventRequestFields {
-  id: string;
-  meetupMemberId: string;
-  discordUserId: string | null;
-  hostName: string;
-  tier: 'regular' | 'promoted';
-  status: EventRequestStatus;
-  denyReason: string | null;
-  failure: string | null;
-  decidedBy: string | null;
-  decidedAt: Date | null;
-  meetupEventId: string | null;
-  eventUrl: string | null;
-  version: number;
-  createdAt: Date;
-  updatedAt: Date;
+  id: string; meetupMemberId: string; discordUserId: string | null;
+  hostName: string; tier: 'regular' | 'promoted';
+  status: EventRequestStatus; denyReason: string | null; failure: string | null;
+  decidedBy: string | null; decidedAt: Date | null;
+  meetupEventId: string | null; eventUrl: string | null;
+  version: number; createdAt: Date; updatedAt: Date;
 }
 class PostgresEventRequestRepository {
   static instance(): Promise<PostgresEventRequestRepository>;
-  create(
-    input: EventRequestFields & {
-      meetupMemberId;
-      discordUserId;
-      hostName;
-      tier;
-    },
-  ): Promise<EventRequest>;
-  get(id: string): Promise<EventRequest | undefined>; // non-numeric id → undefined
+  create(input: EventRequestFields & { meetupMemberId; discordUserId; hostName; tier }): Promise<EventRequest>;
+  get(id: string): Promise<EventRequest | undefined>;           // non-numeric id → undefined
   listForMember(meetupMemberId: string, limit = 20): Promise<EventRequest[]>; // newest first
-  listByStatus(
-    statuses: EventRequestStatus[],
-    limit = 100,
-  ): Promise<EventRequest[]>; // oldest first
+  listByStatus(statuses: EventRequestStatus[], limit = 100): Promise<EventRequest[]>; // oldest first
   /** CAS: one caller wins. `stuckBefore`: a 'publishing' row last updated before it also counts as allowed. */
-  startPublishing(
-    id,
-    seenVersion,
-    actor: string,
-    from: ('pending' | 'failed' | 'publishing')[],
-    stuckBefore?: Date,
-  ): Promise<EventRequest | undefined>;
-  recordCreated(id, meetupEventId, eventUrl): Promise<void>; // only while 'publishing'
-  finish(
-    id,
-    outcome: { status: 'published' } | { status: 'failed'; failure: string },
-  ): Promise<EventRequest>;
+  startPublishing(id, seenVersion, actor: string, from: ('pending'|'failed'|'publishing')[], stuckBefore?: Date): Promise<EventRequest | undefined>;
+  recordCreated(id, meetupEventId, eventUrl): Promise<void>;     // only while 'publishing'
+  finish(id, outcome: { status: 'published' } | { status: 'failed'; failure: string }): Promise<EventRequest>;
   deny(id, seenVersion, actor, reason): Promise<EventRequest | undefined>; // pending only
 }
 ```
-
 Every state change bumps `version`, sets `updated_at`, and inserts an `event_request_events` row (`request_id, action, actor, detail, version, at`) in the same transaction; history is append-only (trigger, as `promoted_host_events`). CHECKs: ids by pattern, status enum, title 1–80, deny reason 1–500, failure ≤ 1000, `start_local ~ '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$'`, `meetup_event_id` digits.
 
 - [ ] Tests (integration, :55432): create/get round trip; `startPublishing` twice concurrently with the same version → exactly one row back; wrong version → undefined; `from` excludes the current status → undefined; stuck `publishing` admitted only before `stuckBefore`; `recordCreated` outside `publishing` is a no-op; `deny` only from `pending`; history rows per change with the produced version; history UPDATE/DELETE refused; `listForMember` newest first, other members excluded.
@@ -437,7 +335,6 @@ Every state change bumps `version`, sets `updated_at`, and inserts an `event_req
 **Files:** create `src/lib/hosts/eventRequest.ts`, `src/lib/client/meetup/createEventWithPhotoFallback.ts`; modify `queries.ts`, `gqlClient.ts`, `types.ts`, `mutations.ts`, `src/commands/meetup/createEvent.ts`; tests `tst/lib/hosts/eventRequest.test.ts`, `tst/lib/client/meetup/createEventWithPhotoFallback.test.ts` (move existing cases if any).
 
 **Interfaces (produces):**
-
 ```ts
 export const DURATIONS = ['PT1H','PT1H30M','PT2H','PT2H30M','PT3H','PT4H','PT5H','PT6H'] as const;
 export type FormResult = { ok: true; value: { title; day; time; duration } } | { ok: false; errors: Partial<Record<'title'|'day'|'time'|'duration', string>> };
@@ -448,7 +345,6 @@ export function freshFields(tier: HostTier, tip: string): Pick<EventRequestField
 export function createInputFor(req: EventRequest, tierAtPublish: HostTier): CreateEventInput; // prefix by tierAtPublish, eventHosts [Number(req.meetupMemberId)], template defaults
 GqlMeetupClient.getEventForCopy(eventId): Promise<CopySource | undefined>;
 ```
-
 - [ ] Tests: title too long for the tier's prefix, newline, control chars, empty, prefix stripped; day today/past/>365 days refused, tomorrow accepted; time not on 15 minutes refused; unknown duration refused; arrays (repeated fields) refused; copy maps every field and falls back for out-of-range duration/limits; fresh adds the tip only for regular; `createInputFor` uses `[Community Host] ` for promoted, `[Guest Host] ` for regular, sets venue/howToFindUs only when present, `publishStatus: 'PUBLISHED'`; photo fallback behaviour unchanged.
 - [ ] FAIL → implement → PASS → commit.
 
@@ -457,39 +353,18 @@ GqlMeetupClient.getEventForCopy(eventId): Promise<CopySource | undefined>;
 **Files:** create `src/lib/hosts/publishRequest.ts`; test `tst/lib/hosts/publishRequest.test.ts`.
 
 **Interfaces:**
-
 ```ts
 export interface PublishDeps {
-  requests: Pick<
-    PostgresEventRequestRepository,
-    'get' | 'startPublishing' | 'recordCreated' | 'finish'
-  >;
-  meetup: <T>(
-    fn: (
-      m: Pick<GqlMeetupClient, 'createEvent' | 'closeEventRsvps' | 'editEvent'>,
-    ) => Promise<T>,
-  ) => Promise<T>; // organizer credential, NO 401 re-run of writes
+  requests: Pick<PostgresEventRequestRepository, 'get'|'startPublishing'|'recordCreated'|'finish'>;
+  meetup: <T>(fn: (m: Pick<GqlMeetupClient,'createEvent'|'closeEventRsvps'|'editEvent'>) => Promise<T>) => Promise<T>; // organizer credential, NO 401 re-run of writes
   tierOf: (meetupMemberId: string) => Promise<HostTier | 'not-a-host'>;
   alert: (entry: LogEntry) => Promise<unknown>;
   now: () => Date;
 }
-export type PublishOutcome =
-  | { code: 'published'; request }
-  | { code: 'failed'; request }
-  | { code: 'stale' }
-  | { code: 'not-found' }
-  | { code: 'not-a-host' };
-export function publishRequest(
-  deps,
-  id: string,
-  seenVersion: number,
-  actor: string,
-  from: ('pending' | 'failed' | 'publishing')[],
-): Promise<PublishOutcome>;
+export type PublishOutcome = { code: 'published'; request } | { code: 'failed'; request } | { code: 'stale' } | { code: 'not-found' } | { code: 'not-a-host' };
+export function publishRequest(deps, id: string, seenVersion: number, actor: string, from: ('pending'|'failed'|'publishing')[]): Promise<PublishOutcome>;
 ```
-
 Order: CAS (`startPublishing`, `stuckBefore = now − 10 min`) → `tierOf` (a member who is no longer a host → `finish failed` "no longer a host", alert) → if no `meetupEventId`: `createEventWithPhotoFallback`, then `recordCreated` at once → `closeEventRsvps` + `editEvent({ rsvpSettings })` → `finish published`. Any throw → `finish failed` with fixed text saying what exists ("Created <url> but the RSVP settings were not applied: set them on Meetup, then Retry" / "Nothing was created on Meetup: Retry"). `meetup` here must not reuse `withOrganizerMeetup`'s 401 re-run around writes: get the token once, one call each; a 401 is a failure (retry is safe because of resume).
-
 - [ ] Tests: two concurrent publishes of one request → one `createEvent`; resume with an event id skips `createEvent`; prefix follows the tier at publish (promoted→regular demotion between submit and approve gives `[Guest Host] `); createEvent throws → failed "Nothing was created"; RSVP step throws → failed naming the URL; not-a-host → failed, no Meetup call; alert on failure, none on success from the queue (the route alerts), no mentions.
 - [ ] FAIL → implement → PASS → commit.
 
@@ -534,7 +409,6 @@ Approved by Hai (via the lead session, 2026-11-09). One PR off `main` at `66d052
   - `position: fixed` placement clamped to the viewport, so the `.table-scroll` box never clips the panel.
 
   Without JS, the panel opens inline inside the cell.
-
 - **Calendar cell:** the day number is plain text. A `+` link (`aria-label="Host an event on Fri, Nov 20"`) opens the create form for that day, on every day from tomorrow on. The popover lists every event that day (time, title link, holiday badges, hosts) and ends with **Host on this day**, the same text and target as the day-by-day list. Past days keep only their date.
 - **Heat map by year:**
   - Each day that has events is an SVG `<a>` to `/host/history?year=Y&day=D` (keeping `type`), with `aria-label` and a native `<title>` giving the date and each event's time and title.

@@ -51,11 +51,11 @@ Discord side's reason for storing bytes: the URL will not resolve forever.
 
 ### Fields tracked
 
-| Field         | Source           | Notes                             |
-| ------------- | ---------------- | --------------------------------- |
+| Field | Source | Notes |
+| --- | --- | --- |
 | Profile photo | `memberPhoto.id` | The vector that matters at events |
-| Display name  | `name`           | How they appear on the RSVP list  |
-| Username      | `username`       | Rarely changed; free to include   |
+| Display name | `name` | How they appear on the RSVP list |
+| Username | `username` | Rarely changed; free to include |
 
 ## The organizer credential
 
@@ -178,7 +178,7 @@ belongs to.
 
 The Discord side already has this bug latent. `member_identity` is keyed on
 `discord_user_id` alone while storing per-guild fields, and `identityEvents`
-records the member from _every_ guild in cache while `identitySweep` takes
+records the member from *every* guild in cache while `identitySweep` takes
 `guilds.first()`. With one guild it is invisible. With two — a test server, a
 staging guild, or the community-fork direction in `IDEAS.md` — the two guilds'
 nicknames alternate into one row and emit a permanent stream of false
@@ -232,7 +232,7 @@ meetup_identity
   PRIMARY KEY (scope_id, meetup_member_id)
 ```
 
-**Why the baselines carry images.** A change's _before_ picture cannot be
+**Why the baselines carry images.** A change's *before* picture cannot be
 fetched at change time. Discord purges a superseded avatar, and Meetup's
 baseline stores a photo id rather than the URL that served it, so on the
 Meetup side the old photo is unreachable the instant it changes — `old_thumb`
@@ -252,7 +252,7 @@ time is not enough on its own: a baseline can exist with an identifier but no
 image — every Discord baseline that predates the thumb columns, any written by
 onboarding's `updateBaselineSilently`, and any whose first-sighting fetch
 failed — and that member's next change would then have no before-image. So
-both sweeps heal: for an _unchanged_ member whose baseline has a hash or
+both sweeps heal: for an *unchanged* member whose baseline has a hash or
 `photo_id` but a NULL thumb, they fetch the current image (still served under
 that same identifier) and store it through the same column-conditional upsert.
 A member whose images are present still costs zero writes. Healing is bounded
@@ -325,12 +325,12 @@ back to the raw Meetup id when no link exists.
 The Meetup group is ~6,000 members against Discord's 2,008, so this roughly
 quadruples the monitored population.
 
-|                     |                                                                                                                                          |
-| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| Baseline            | 6,000 rows x ~250 B = **~1.5 MB**, static                                                                                                |
+| | |
+| --- | --- |
+| Baseline | 6,000 rows x ~250 B = **~1.5 MB**, static |
 | Baseline thumbnails | ~2-4 KB each, one per Meetup member and up to two per Discord member: across both platforms' ~8,000 baseline rows, **~25-35 MB**, static |
-| Change log          | ~200 B/row, shared table                                                                                                                 |
-| Thumbnails          | ~2-4 KB each, avatar changes only                                                                                                        |
+| Change log | ~200 B/row, shared table |
+| Thumbnails | ~2-4 KB each, avatar changes only |
 
 Against essential-0's 1 GB with 8 MB used, comfortable. Baseline thumbnails are
 a one-time static cost that does not grow with time — the row is overwritten,
@@ -342,7 +342,7 @@ sweep, once a day. Sequential, matching the Discord sweep's reasoning about
 the 2-connection pool.
 
 Thumbnail requests are the new cost. A steady-state sweep fetches one image per
-_changed_ photo, a handful a day. A backfill fetches one per member with a
+*changed* photo, a handful a day. A backfill fetches one per member with a
 photo — ~6,000 on Meetup and up to two each for the Discord members who have an
 avatar — sequential and bounded at 5s apiece, so it runs for tens of minutes
 rather than seconds. That is a one-time price for every later change having a
@@ -397,7 +397,7 @@ now migrates.) They ship with this work:
 
 - **Unbounded CDN fetch.** `identityThumbs` calls `fetch(url)` with no
   `AbortSignal`. Undici imposes no total-request deadline, and that call sits
-  inside the digest _after_ the day-claim is taken — so a stalled connection
+  inside the digest *after* the day-claim is taken — so a stalled connection
   hangs the digest without throwing, the catch never releases the claim, and
   the result is no digest, no error and no retry. An
   `AbortSignal.timeout(5_000)` degrades it to the documented best-effort null
@@ -449,7 +449,6 @@ now migrates.) They ship with this work:
 
   The digest title states the actual span of the rows it contains, since
   there is no longer a nominal window to quote.
-
 - **Connection budget.** This pool's `max: 3` plus the member repository's
   `max: 5` is 8 per dyno — but the full picture also includes the suspension
   repository's pool (`max: 5`) and, once the Meetup API credential store

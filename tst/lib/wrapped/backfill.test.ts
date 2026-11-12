@@ -17,6 +17,7 @@ import {
   OrganizerReads,
   QUEUE_MAX_ATTEMPTS,
   RUN_INTERVAL_MS,
+  LAST_ERROR_KEY,
   RUN_NOW_KEY,
   SNAPSHOT_MEMBERS_PER_TICK,
   TICK_CALL_BUDGET,
@@ -1532,5 +1533,19 @@ describe('snapshot-first sweep (#156 follow-up)', () => {
     });
     expect(h.calls.n + h.organizerCalls.n).toBe(0);
     expect((await h.store.openRun())?.cursor).toBeUndefined();
+    // Not silent: the once-a-day alert and the card's last error.
+    expect(h.alert).toHaveBeenCalledWith(
+      expect.objectContaining({ title: 'Wrapped backfill is failing' }),
+    );
+    expect(
+      JSON.parse((await h.cache.get(LAST_ERROR_KEY)) ?? '{}'),
+    ).toMatchObject({ error: 'TypeError' });
+    await runBackfillTick(h.deps);
+    expect(h.alert).toHaveBeenCalledTimes(1);
+
+    // Readable again: the next tick clears the card's last error.
+    h.deps.snapshot = async () => snapshotWrapped(reader);
+    await runBackfillTick(h.deps);
+    expect(await h.cache.get(LAST_ERROR_KEY)).toBeUndefined();
   });
 });

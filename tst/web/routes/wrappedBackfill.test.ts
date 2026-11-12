@@ -502,3 +502,23 @@ describe('Home Wrapped backfill card: hidden RSVPs and a failed last tick', () =
     expect(out).toContain('2 events read (failed: RateLimited).');
   });
 });
+
+describe('Home Wrapped backfill card: the last failed tick', () => {
+  it('says the last tick failed, with the error class and time only', async () => {
+    const out = await render(
+      control({
+        status: async () => ({
+          lastRun: undefined,
+          openRun: undefined,
+          queueLength: 0,
+          nextTickAt: undefined,
+          entries: 0,
+          lastError: { at: '2026-12-10T19:55:00Z', error: 'TypeError' },
+        }),
+      }),
+    );
+    expect(out).toContain(
+      'Last tick failed (TypeError) at Dec 10, 2026 11:55 AM Pacific; the backfill retries every 5 minutes.',
+    );
+  });
+});

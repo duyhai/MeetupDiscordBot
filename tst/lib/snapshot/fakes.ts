@@ -181,6 +181,7 @@ export class FakeSnapshotStore implements SnapshotStore {
         dateTime: e.dateTime,
         yesCount: e.yesCount,
         lastError: e.rsvpError,
+        hidden: e.rsvpsHidden,
       }));
   }
 

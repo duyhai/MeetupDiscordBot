@@ -16,7 +16,10 @@ import {
 import { SnapshotRun } from '../../lib/repositories/postgresSnapshotRepository.js';
 import { LastSnapshotTick, SnapshotTuning } from '../../lib/snapshot/ingest.js';
 import { BackfillRun } from '../../lib/repositories/postgresWrappedBackfillRepository.js';
-import { RUN_INTERVAL_MS } from '../../lib/wrapped/backfill.js';
+import {
+  BackfillLastError,
+  RUN_INTERVAL_MS,
+} from '../../lib/wrapped/backfill.js';
 import { tz } from '../../util/timezone.js';
 import { dashboardLocals } from '../dashboardRouter.js';
 import { SafeHtml, html, localUrl } from '../html.js';
@@ -40,6 +43,8 @@ export interface BackfillStatus {
   nextTickAt: Date | undefined;
   /** Rows in wrapped_entries. */
   entries: number;
+  /** The last tick that ended on a fatal error, within a day; cleared by a good tick. */
+  lastError?: BackfillLastError;
 }
 
 /** The group snapshot's state, for one line on the card. */
@@ -248,8 +253,17 @@ export async function wrappedBackfillCard(
       : '';
   return html`<div class="card">
     <h2>Wrapped backfill</h2>
-    ${backfillNotice(view.backfillNotice)} ${last} ${running} ${queue} ${form}
-    ${await snapshotLine(deps, view.csrfToken)}
+    ${backfillNotice(view.backfillNotice)} ${last} ${running}
+    ${
+      status.lastError
+        ? html`<p class="note attn">
+            Last tick failed (${status.lastError.error}) at
+            ${pacificDateTime(new Date(status.lastError.at))} Pacific; the
+            backfill retries every 5 minutes.
+          </p>`
+        : ''
+    }
+    ${queue} ${form} ${await snapshotLine(deps, view.csrfToken)}
   </div>`;
 }
 

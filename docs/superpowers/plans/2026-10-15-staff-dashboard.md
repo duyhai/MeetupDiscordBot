@@ -32,21 +32,21 @@
 - All existing slash commands keep working with unchanged output.
 - Tests: unit via `yarn test`; integration via `vitest.integration.config.ts` only against throwaway containers on unusual ports (postgres:16 on `55432`, redis:7 on `56379`), never the dev stack on 5432/6379. Stop colima afterwards if you started it.
 - No production reads or writes, no Discord posts, no Meetup calls with real credentials. Never print tokens or secrets.
-- Commits end with `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`. PR descriptions end with `🤖 Generated with [Claude Code](https://claude.com/claude-code)` and carry the note: _deploys between 18:00 and 19:00 UTC restart the bot during the daily identity sweep._ No force-push, never merge.
+- Commits end with `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`. PR descriptions end with `🤖 Generated with [Claude Code](https://claude.com/claude-code)` and carry the note: *deploys between 18:00 and 19:00 UTC restart the bot during the daily identity sweep.* No force-push, never merge.
 
 ## Prerequisites (Hai)
 
-| Needed for  | Item                                                                                                                                                                                                                                                                                                                                                                               |
-| ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| PR 1 deploy | Add redirect URI `https://meetup-discord-bot.herokuapp.com/dashboard/auth/callback` to the bot's application in the Discord developer portal (OAuth2 → Redirects). Optional for local testing: `http://localhost:5000/dashboard/auth/callback`.                                                                                                                                    |
-| PR 1 deploy | `heroku config:set -a meetup-discord-bot DASHBOARD_SESSION_SECRET="$(openssl rand -base64 48)"` (Hai runs it; never pasted into chat). The dashboard serves a "not configured" page until it is set; the bot is unaffected.                                                                                                                                                        |
-| —           | Resolved 2026-10-15, kept as constants in `src/constants.ts` (no env vars): report-ready notice goes to #meetup-bot-alerts, the existing `BOT_ALERTS_CHANNEL_ID` (`1537755631602237473`, Hai's choice); `NO_SHOW_POLICY_URL = 'https://15genasian.notion.site/1b1176bcb5de453687cd7aa5c0cd239b'` (public, no login); `NO_SHOW_APPEAL_URL = 'https://forms.gle/tPiPYQ2DpAVZPL1T9'`. |
-| PR 3 merge  | Run the backfill as a one-off dyno (command in Task 3.8).                                                                                                                                                                                                                                                                                                                          |
+| Needed for | Item |
+|---|---|
+| PR 1 deploy | Add redirect URI `https://meetup-discord-bot.herokuapp.com/dashboard/auth/callback` to the bot's application in the Discord developer portal (OAuth2 → Redirects). Optional for local testing: `http://localhost:5000/dashboard/auth/callback`. |
+| PR 1 deploy | `heroku config:set -a meetup-discord-bot DASHBOARD_SESSION_SECRET="$(openssl rand -base64 48)"` (Hai runs it; never pasted into chat). The dashboard serves a "not configured" page until it is set; the bot is unaffected. |
+| — | Resolved 2026-10-15, kept as constants in `src/constants.ts` (no env vars): report-ready notice goes to #meetup-bot-alerts, the existing `BOT_ALERTS_CHANNEL_ID` (`1537755631602237473`, Hai's choice); `NO_SHOW_POLICY_URL = 'https://15genasian.notion.site/1b1176bcb5de453687cd7aa5c0cd239b'` (public, no login); `NO_SHOW_APPEAL_URL = 'https://forms.gle/tPiPYQ2DpAVZPL1T9'`. |
+| PR 3 merge | Run the backfill as a one-off dyno (command in Task 3.8). |
 
 ## Review Focus
 
 1. **Stale or forged login callback** (state replayed, opened in another browser, cookie missing): expect a generic "link expired, sign in again" page and no session. Pinned in Task 1.7 (`rejects a callback whose state does not match the login cookie`, `rejects a replayed state`).
-2. **Member loses the role mid-session or leaves the server**: locked out within 10 minutes; Discord returning _Unknown Member_ is a denial, Discord being down is a 503 that keeps the session. Pinned in Task 1.3 (`treats Unknown Member as denied`) and Task 1.8 (`re-checks the role after 10 minutes and destroys the session when it is gone`, `keeps the session but answers 503 when Discord is unreachable at re-check`).
+2. **Member loses the role mid-session or leaves the server**: locked out within 10 minutes; Discord returning *Unknown Member* is a denial, Discord being down is a 503 that keeps the session. Pinned in Task 1.3 (`treats Unknown Member as denied`) and Task 1.8 (`re-checks the role after 10 minutes and destroys the session when it is gone`, `keeps the session but answers 503 when Discord is unreachable at re-check`).
 3. **Hostile display names** (`<script>`, RTL override, zero-width characters) in the header now and on every page later: rendered inert and direction-isolated. Pinned in Task 1.2 and Task 1.6 (`escapes and isolates the signed-in username`).
 4. **Back-dated builds of old months** (backfill, manual refresh of last year): classifications must reflect what was true at the end of that month, not today's 12-month window or later suspensions. Pinned in Task 2.3 (`classifies a finished month as of its end, ignoring later suspensions`, `refreshing a finished month after a new suspension still lists the member`).
 5. **Two people acting on the same workspace card**: the second gets "someone just updated this, reload" and nothing is half-written (suspension row without workspace row or vice versa). Pinned in Task 4.1 (`refuses a stale version and writes nothing`, `rolls back the suspension when the workspace update fails`).
@@ -59,26 +59,25 @@ Branch `feat/dashboard-1-auth` off `main`. Draft PR against `main`.
 
 ## File structure
 
-| File                                        | Responsibility                                                 |
-| ------------------------------------------- | -------------------------------------------------------------- |
-| `src/constants.ts` (modify)                 | `SERVER_ROLES.leadership`                                      |
-| `src/web/html.ts`                           | Escaping, `html` tagged template, `SafeHtml`, `memberText`     |
-| `src/web/roleGate.ts`                       | Which roles admit; live guild-member check                     |
-| `src/web/cookies.ts`                        | Parse and serialize cookies with fixed security attributes     |
-| `src/web/session.ts`                        | Signed session id, Redis-backed session store, absolute expiry |
-| `src/web/rateLimit.ts`                      | In-process fixed-window limiter + middleware                   |
-| `src/web/discordOAuth.ts`                   | Authorize URL, code exchange (PKCE), `/users/@me`              |
-| `src/web/pages.ts`                          | Layout, home, login, error pages (strings)                     |
-| `src/web/dashboardRouter.ts`                | Routes, security headers, session gate, CSRF, error handler    |
-| `src/web/dashboardDeps.ts`                  | Builds the router from env; holds the Discord client           |
-| `src/app.ts`, `src/index.ts` (modify)       | Mount `/dashboard`, `trust proxy`, hand over the client        |
-| `tst/web/*.test.ts`, `tst/web/fakeCache.ts` | Unit tests                                                     |
-| `tst/integration/dashboardSession.test.ts`  | Session store against throwaway Redis                          |
+| File | Responsibility |
+|---|---|
+| `src/constants.ts` (modify) | `SERVER_ROLES.leadership` |
+| `src/web/html.ts` | Escaping, `html` tagged template, `SafeHtml`, `memberText` |
+| `src/web/roleGate.ts` | Which roles admit; live guild-member check |
+| `src/web/cookies.ts` | Parse and serialize cookies with fixed security attributes |
+| `src/web/session.ts` | Signed session id, Redis-backed session store, absolute expiry |
+| `src/web/rateLimit.ts` | In-process fixed-window limiter + middleware |
+| `src/web/discordOAuth.ts` | Authorize URL, code exchange (PKCE), `/users/@me` |
+| `src/web/pages.ts` | Layout, home, login, error pages (strings) |
+| `src/web/dashboardRouter.ts` | Routes, security headers, session gate, CSRF, error handler |
+| `src/web/dashboardDeps.ts` | Builds the router from env; holds the Discord client |
+| `src/app.ts`, `src/index.ts` (modify) | Mount `/dashboard`, `trust proxy`, hand over the client |
+| `tst/web/*.test.ts`, `tst/web/fakeCache.ts` | Unit tests |
+| `tst/integration/dashboardSession.test.ts` | Session store against throwaway Redis |
 
 ### Task 1.1: Leadership role constant
 
 **Files:**
-
 - Modify: `src/constants.ts` (the `SERVER_ROLES` object)
 - Test: `tst/web/roleGate.test.ts` (created in Task 1.3; this task only adds the constant)
 
@@ -107,12 +106,10 @@ Id read from the Discord API (guild roles) on 2026-10-15. `ServerRoles` widens a
 ### Task 1.2: HTML escaping and templating
 
 **Files:**
-
 - Create: `src/web/html.ts`
 - Test: `tst/web/html.test.ts`
 
 **Interfaces:**
-
 - Produces: `class SafeHtml { readonly value: string }`, `escapeHtml(input: string): string`, `html(strings, ...values: HtmlValue[]): SafeHtml`, `memberText(text: string): SafeHtml`, `safeHref(url: string): string | undefined`, `type HtmlValue = SafeHtml | string | number | null | undefined | false | HtmlValue[]`.
 
 - [ ] **Step 1: Write the failing tests**
@@ -145,11 +142,9 @@ describe('html', () => {
 
   it('inserts SafeHtml unescaped and flattens arrays', () => {
     const items = ['<a>', 'b'].map((x) => html`<li>${x}</li>`);
-    expect(
-      html`<ul>
-        ${items}
-      </ul>`.value,
-    ).toBe('<ul><li>&lt;a&gt;</li><li>b</li></ul>');
+    expect(html`<ul>${items}</ul>`.value).toBe(
+      '<ul><li>&lt;a&gt;</li><li>b</li></ul>',
+    );
   });
 
   it('renders null, undefined and false as nothing', () => {
@@ -192,7 +187,9 @@ describe('safeHref', () => {
 
 describe('memberText', () => {
   it('escapes and isolates direction', () => {
-    expect(memberText('‮evil<b>').value).toBe('<bdi>‮evil&lt;b&gt;</bdi>');
+    expect(memberText('‮evil<b>').value).toBe(
+      '<bdi>‮evil&lt;b&gt;</bdi>',
+    );
   });
 });
 ```
@@ -216,7 +213,13 @@ export class SafeHtml {
 }
 
 export type HtmlValue =
-  SafeHtml | string | number | null | undefined | false | HtmlValue[];
+  | SafeHtml
+  | string
+  | number
+  | null
+  | undefined
+  | false
+  | HtmlValue[];
 
 export function escapeHtml(input: string): string {
   return input
@@ -300,12 +303,10 @@ export function safeHref(url: string): string | undefined {
 ### Task 1.3: Role gate
 
 **Files:**
-
 - Create: `src/web/roleGate.ts`
 - Test: `tst/web/roleGate.test.ts`
 
 **Interfaces:**
-
 - Consumes: `SERVER_ROLES.moderator`, `SERVER_ROLES.leadership`, `GUILD_ID` from `src/constants.ts`.
 - Produces: `DASHBOARD_ROLE_IDS: string[]`, `hasDashboardRole(roleIds: Iterable<string>): boolean`, `type AccessCheck = (discordUserId: string) => Promise<boolean>`, `class DashboardUnavailableError extends Error`, `discordAccessCheck(getClient: () => Client | undefined): AccessCheck`.
 
@@ -387,18 +388,18 @@ describe('discordAccessCheck', () => {
     const { client } = clientReturning(
       vi.fn().mockResolvedValue(memberWith([SERVER_ROLES.organizer])),
     );
-    await expect(discordAccessCheck(() => client as never)('1')).resolves.toBe(
-      false,
-    );
+    await expect(
+      discordAccessCheck(() => client as never)('1'),
+    ).resolves.toBe(false);
   });
 
   it('refuses a member with only the Admin role and the Administrator permission', async () => {
     const { client } = clientReturning(
       vi.fn().mockResolvedValue(memberWith([ADMIN_ROLE_ID], true)),
     );
-    await expect(discordAccessCheck(() => client as never)('1')).resolves.toBe(
-      false,
-    );
+    await expect(
+      discordAccessCheck(() => client as never)('1'),
+    ).resolves.toBe(false);
   });
 
   it('treats Unknown User as denied', async () => {
@@ -411,33 +412,33 @@ describe('discordAccessCheck', () => {
       {},
     );
     const { client } = clientReturning(vi.fn().mockRejectedValue(unknownUser));
-    await expect(discordAccessCheck(() => client as never)('1')).resolves.toBe(
-      false,
-    );
+    await expect(
+      discordAccessCheck(() => client as never)('1'),
+    ).resolves.toBe(false);
   });
 
   it('treats Unknown Member as denied', async () => {
     const { client } = clientReturning(
       vi.fn().mockRejectedValue(unknownMember()),
     );
-    await expect(discordAccessCheck(() => client as never)('1')).resolves.toBe(
-      false,
-    );
+    await expect(
+      discordAccessCheck(() => client as never)('1'),
+    ).resolves.toBe(false);
   });
 
   it('propagates other Discord failures so callers fail closed with a retry', async () => {
     const { client } = clientReturning(
       vi.fn().mockRejectedValue(new Error('gateway down')),
     );
-    await expect(
-      discordAccessCheck(() => client as never)('1'),
-    ).rejects.toThrow('gateway down');
+    await expect(discordAccessCheck(() => client as never)('1')).rejects.toThrow(
+      'gateway down',
+    );
   });
 
   it('is unavailable before the Discord client is ready', async () => {
-    await expect(
-      discordAccessCheck(() => undefined)('1'),
-    ).rejects.toBeInstanceOf(DashboardUnavailableError);
+    await expect(discordAccessCheck(() => undefined)('1')).rejects.toBeInstanceOf(
+      DashboardUnavailableError,
+    );
   });
 });
 ```
@@ -520,12 +521,10 @@ If the `DiscordAPIError` constructor signature in the installed discord.js diffe
 ### Task 1.4: Cookies and the session store
 
 **Files:**
-
 - Create: `src/web/cookies.ts`, `src/web/session.ts`, `tst/web/fakeCache.ts`
 - Test: `tst/web/cookies.test.ts`, `tst/web/session.test.ts`, `tst/integration/dashboardSession.test.ts`
 
 **Interfaces:**
-
 - Consumes: `KeyValueCache` from `src/lib/cache/base.ts`.
 - Produces:
   - `parseCookies(header: string | undefined): Map<string, string>`
@@ -600,9 +599,9 @@ describe('parseCookies', () => {
 
 describe('serializeCookie', () => {
   it('always sets HttpOnly, Secure and SameSite=Lax', () => {
-    expect(
-      serializeCookie('s', 'v', { path: '/dashboard', maxAgeSec: 60 }),
-    ).toBe('s=v; Path=/dashboard; HttpOnly; Secure; SameSite=Lax; Max-Age=60');
+    expect(serializeCookie('s', 'v', { path: '/dashboard', maxAgeSec: 60 })).toBe(
+      's=v; Path=/dashboard; HttpOnly; Secure; SameSite=Lax; Max-Age=60',
+    );
   });
   it('clears with Max-Age=0', () => {
     expect(clearCookie('s', '/dashboard')).toBe(
@@ -661,10 +660,7 @@ describe('SessionStore', () => {
     expect(a.sid).not.toBe(b.sid);
     expect(a.session.csrfToken).not.toBe(b.session.csrfToken);
     expect(a.session.csrfToken.length).toBeGreaterThanOrEqual(43);
-    expect([...cache.ttls.values()]).toEqual([
-      SESSION_TTL_SEC,
-      SESSION_TTL_SEC,
-    ]);
+    expect([...cache.ttls.values()]).toEqual([SESSION_TTL_SEC, SESSION_TTL_SEC]);
     await expect(store.get(a.sid)).resolves.toEqual(a.session);
   });
 
@@ -963,14 +959,7 @@ const REDIS_AVAILABLE = Boolean(process.env.REDISCLOUD_URL);
     const store = new SessionStore(cache);
     await store.create({ userId: '2', username: 'B' });
     // RedisCache has no TTL getter; reach the client for the assertion only.
-    const client = (
-      cache as unknown as {
-        client: {
-          keys(p: string): Promise<string[]>;
-          ttl(k: string): Promise<number>;
-        };
-      }
-    ).client;
+    const client = (cache as unknown as { client: { keys(p: string): Promise<string[]>; ttl(k: string): Promise<number> } }).client;
     const [key] = await client.keys('dashboard-session-*');
     const ttl = await client.ttl(key);
     expect(ttl).toBeGreaterThan(0);
@@ -984,11 +973,9 @@ Run against a throwaway container (never 6379):
 ```bash
 docker run -d --rm --name dash-redis-test -p 127.0.0.1:56379:6379 redis:7
 ```
-
 ```bash
 REDISCLOUD_URL=redis://127.0.0.1:56379 yarn vitest run --config vitest.integration.config.ts tst/integration/dashboardSession.test.ts
 ```
-
 ```bash
 docker stop dash-redis-test
 ```
@@ -1000,12 +987,10 @@ Expected: 2 passed. (If colima was started for this, `colima stop` afterwards.)
 ### Task 1.5: Rate limiter
 
 **Files:**
-
 - Create: `src/web/rateLimit.ts`
 - Test: `tst/web/rateLimit.test.ts`
 
 **Interfaces:**
-
 - Produces: `class FixedWindowLimiter { constructor(limit: number, windowMs: number, now?: () => number, maxKeys?: number); take(key: string): boolean; retryAfterSec(key: string): number }`.
 
 In-process on purpose: the app runs on one web dyno, and Redis has no atomic increment in `KeyValueCache`. Note this assumption in the PR.
@@ -1088,9 +1073,7 @@ export class FixedWindowLimiter {
 
   retryAfterSec(key: string): number {
     const entry = this.hits.get(key);
-    return entry
-      ? Math.max(1, Math.ceil((entry.resetAt - this.now()) / 1000))
-      : 1;
+    return entry ? Math.max(1, Math.ceil((entry.resetAt - this.now()) / 1000)) : 1;
   }
 
   private evict(at: number) {
@@ -1111,12 +1094,10 @@ export class FixedWindowLimiter {
 ### Task 1.6: Discord OAuth helpers and pages
 
 **Files:**
-
 - Create: `src/web/discordOAuth.ts`, `src/web/pages.ts`
 - Test: `tst/web/discordOAuth.test.ts`, `tst/web/pages.test.ts`
 
 **Interfaces:**
-
 - Consumes: `Discord`, `generateState`, `generateCodeVerifier` from `arctic`; `boundedFetch`; `Configuration.discord`; `BASE_DISCORD_BOT_URL`; `html`, `memberText`.
 - Produces:
   - `dashboardRedirectUri(): string`
@@ -1176,12 +1157,14 @@ describe('dashboard Discord OAuth', () => {
   });
 
   it('exchanges a code for an access token', async () => {
-    nock('https://discord.com').post('/api/oauth2/token').reply(200, {
-      access_token: 'at',
-      token_type: 'Bearer',
-      expires_in: 600,
-      scope: 'identify',
-    });
+    nock('https://discord.com')
+      .post('/api/oauth2/token')
+      .reply(200, {
+        access_token: 'at',
+        token_type: 'Bearer',
+        expires_in: 600,
+        scope: 'identify',
+      });
     await expect(exchangeDashboardCode('code', 'v'.repeat(43))).resolves.toBe(
       'at',
     );
@@ -1374,28 +1357,24 @@ export function layout({
   const account = user
     ? html`<span>Signed in as ${memberText(user.username)}</span>
         <form method="post" action="/dashboard/logout">
-          <input type="hidden" name="_csrf" value="${user.csrfToken}" />
+          <input type="hidden" name="_csrf" value="${user.csrfToken}">
           <button type="submit">Sign out</button>
         </form>`
     : '';
   return html`<!doctype html>
-    <html lang="en">
-      <head>
-        <meta charset="utf-8" />
-        <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <meta name="robots" content="noindex, nofollow" />
-        <title>${title} · 1.5 Gen Asians staff</title>
-        <style nonce="${nonce}">
-          ${new SafeHtml(STYLE)}
-        </style>
-      </head>
-      <body>
-        <header>
-          <strong>1.5 Gen Asians staff dashboard</strong>${account}
-        </header>
-        <main>${body}</main>
-      </body>
-    </html>`.value;
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>${title} · 1.5 Gen Asians staff</title>
+<style nonce="${nonce}">${new SafeHtml(STYLE)}</style>
+</head>
+<body>
+<header><strong>1.5 Gen Asians staff dashboard</strong>${account}</header>
+<main>${body}</main>
+</body>
+</html>`.value;
 }
 
 export function homePage(user: PageUser, nonce: string): string {
@@ -1456,12 +1435,10 @@ export function errorPage(
 ### Task 1.7: Router — headers, login start, callback
 
 **Files:**
-
 - Create: `src/web/dashboardRouter.ts`
 - Test: `tst/web/dashboardRouter.auth.test.ts`
 
 **Interfaces:**
-
 - Consumes: everything from Tasks 1.2–1.6.
 - Produces:
 
@@ -1494,9 +1471,7 @@ export function createDashboardRouter(deps: DashboardDeps): express.Router;
 export const OAUTH_COOKIE = 'dash_oauth';
 export const PUBLIC_ROUTE_PATHS: readonly string[]; // ['/login', '/auth/start', '/auth/callback']
 /** Every route behind the gate, derived from the router stack (PR 3's access matrix uses this). */
-export function protectedRouteList(
-  router: express.Router,
-): { method: string; path: string }[];
+export function protectedRouteList(router: express.Router): { method: string; path: string }[];
 ```
 
 Test harness used by Tasks 1.7 and 1.8 (put at the top of each test file):
@@ -1525,8 +1500,7 @@ function makeApp(overrides: Partial<DashboardDeps> = {}) {
     checkAccess: vi.fn().mockResolvedValue(true),
     oauth: {
       buildLoginUrl: vi.fn(
-        (state: string) =>
-          `https://discord.com/oauth2/authorize?state=${state}`,
+        (state: string) => `https://discord.com/oauth2/authorize?state=${state}`,
       ),
       exchangeCode: vi.fn().mockResolvedValue('access'),
       fetchIdentity: vi.fn().mockResolvedValue(USER),
@@ -1595,9 +1569,7 @@ describe('dashboard sign-in', () => {
     const sessionCookie = await signIn(app);
     expect(sessionCookie).toMatch(/^dash_sid=.+/);
     expect(deps.checkAccess).toHaveBeenCalledWith(USER.id);
-    const home = await request(app)
-      .get('/dashboard')
-      .set('Cookie', sessionCookie);
+    const home = await request(app).get('/dashboard').set('Cookie', sessionCookie);
     expect(home.status).toBe(200);
     expect(home.text).toContain('<bdi>Mod</bdi>');
     expect(deps.audit).toHaveBeenCalledWith(
@@ -1633,9 +1605,7 @@ describe('dashboard sign-in', () => {
       .set('Cookie', `dash_oauth=${state}`);
     expect(cb.status).toBe(403);
     expect(cb.text).toContain('only for Moderators');
-    expect(
-      [...cache.values.keys()].some((k) => k.startsWith('dashboard-session-')),
-    ).toBe(false);
+    expect([...cache.values.keys()].some((k) => k.startsWith('dashboard-session-'))).toBe(false);
     expect(deps.audit).toHaveBeenCalledWith(
       expect.objectContaining({ title: 'Dashboard sign-in refused' }),
     );
@@ -1708,15 +1678,15 @@ describe('dashboard sign-in', () => {
       .get(`/dashboard/auth/callback?state=${state}&code=c`)
       .set('Cookie', `dash_oauth=${state}`);
     expect(cb.status).toBe(503);
-    expect(JSON.stringify(cb.headers['set-cookie'] ?? [])).not.toContain(
-      'dash_sid=',
-    );
+    expect(JSON.stringify(cb.headers['set-cookie'] ?? [])).not.toContain('dash_sid=');
   });
 
   it('sends HSTS', async () => {
     const { app } = makeApp();
     const res = await request(app).get('/dashboard/login');
-    expect(res.headers['strict-transport-security']).toBe('max-age=15552000');
+    expect(res.headers['strict-transport-security']).toBe(
+      'max-age=15552000',
+    );
   });
 
   it('sets no session cookie on a refused or failed callback', async () => {
@@ -1752,9 +1722,7 @@ describe('dashboard sign-in', () => {
 
   it('rate-limits the callback as well as the start', async () => {
     const { FixedWindowLimiter } = await import('../../src/web/rateLimit.js');
-    const { app } = makeApp({
-      loginLimiter: new FixedWindowLimiter(1, 60_000),
-    });
+    const { app } = makeApp({ loginLimiter: new FixedWindowLimiter(1, 60_000) });
     await request(app).get('/dashboard/auth/callback?state=a&code=c');
     const second = await request(app).get(
       '/dashboard/auth/callback?state=a&code=c',
@@ -1764,9 +1732,7 @@ describe('dashboard sign-in', () => {
 
   it('rate-limits sign-in per IP', async () => {
     const { FixedWindowLimiter } = await import('../../src/web/rateLimit.js');
-    const { app } = makeApp({
-      loginLimiter: new FixedWindowLimiter(2, 60_000),
-    });
+    const { app } = makeApp({ loginLimiter: new FixedWindowLimiter(2, 60_000) });
     await request(app).get('/dashboard/auth/start');
     await request(app).get('/dashboard/auth/start');
     const third = await request(app).get('/dashboard/auth/start');
@@ -2026,9 +1992,7 @@ export function createDashboardRouter(deps: DashboardDeps): express.Router {
       fail(res, 403);
       return;
     }
-    const { sid } = await (
-      await sessions()
-    ).create({
+    const { sid } = await (await sessions()).create({
       userId: identity.id,
       username: identity.username,
     });
@@ -2054,10 +2018,7 @@ export function createDashboardRouter(deps: DashboardDeps): express.Router {
     next: NextFunction,
   ) {
     const signedOut = () => {
-      res.append(
-        'Set-Cookie',
-        clearCookie(SESSION_COOKIE, SESSION_COOKIE_PATH),
-      );
+      res.append('Set-Cookie', clearCookie(SESSION_COOKIE, SESSION_COOKIE_PATH));
       if (req.method === 'GET' || req.method === 'HEAD') {
         res.redirect(302, '/dashboard/login');
       } else {
@@ -2123,19 +2084,14 @@ export function createDashboardRouter(deps: DashboardDeps): express.Router {
     }
     const { session } = locals(res);
     if (!actionLimiter.take(session.userId)) {
-      res.set(
-        'Retry-After',
-        String(actionLimiter.retryAfterSec(session.userId)),
-      );
+      res.set('Retry-After', String(actionLimiter.retryAfterSec(session.userId)));
       fail(res, 429);
       return;
     }
     const origin = req.headers.origin;
     const body = req.body as Record<string, unknown> | undefined;
     const token =
-      typeof body?._csrf === 'string'
-        ? body._csrf
-        : req.headers['x-csrf-token'];
+      typeof body?._csrf === 'string' ? body._csrf : req.headers['x-csrf-token'];
     if (
       req.headers['sec-fetch-site'] === 'cross-site' ||
       (origin !== undefined && origin !== deps.origin) ||
@@ -2177,7 +2133,6 @@ export function createDashboardRouter(deps: DashboardDeps): express.Router {
 ```
 
 Notes for the implementer:
-
 - `res.append('Set-Cookie', …)` before `res.redirect` keeps both the cleared OAuth cookie and the session cookie. `req.ip` needs `app.set('trust proxy', 1)` on Heroku (Task 1.9).
 - The stack-walk test in Task 1.8 depends on Express 5 layer internals (`layer.name`, `layer.route.path`, `layer.route.methods`, `layer.handle.stack`). Check them against `node_modules/router/lib/layer.js` before writing the test; if a name differs (e.g. the body parser's layer name), fix the test's expected names, never the structure. `express.urlencoded`'s layer name is expected to be `urlencodedParser`.
 - `dashboardSessionGate` must stay a named function: the test finds it by name.
@@ -2189,7 +2144,6 @@ Notes for the implementer:
 ### Task 1.8: Router — session gate, role re-check, CSRF, logout
 
 **Files:**
-
 - Test: `tst/web/dashboardRouter.session.test.ts` (harness from Task 1.7)
 - Modify only if a test exposes a bug: `src/web/dashboardRouter.ts`
 
@@ -2213,13 +2167,8 @@ describe('dashboard session gate', () => {
     const { app } = makeApp();
     const cookie = await signIn(app);
     const tampered = `${cookie.slice(0, -2)}xx`;
-    expect(
-      (await request(app).get('/dashboard').set('Cookie', tampered)).status,
-    ).toBe(302);
-    expect(
-      (await request(app).get('/dashboard').set('Cookie', 'dash_sid=abc.def'))
-        .status,
-    ).toBe(302);
+    expect((await request(app).get('/dashboard').set('Cookie', tampered)).status).toBe(302);
+    expect((await request(app).get('/dashboard').set('Cookie', 'dash_sid=abc.def')).status).toBe(302);
   });
 
   it('serves pages without re-checking the role inside 10 minutes', async () => {
@@ -2228,9 +2177,7 @@ describe('dashboard session gate', () => {
     const { app } = makeApp({ checkAccess, now: () => now });
     const cookie = await signIn(app);
     now = 9 * 60 * 1000;
-    expect(
-      (await request(app).get('/dashboard').set('Cookie', cookie)).status,
-    ).toBe(200);
+    expect((await request(app).get('/dashboard').set('Cookie', cookie)).status).toBe(200);
     expect(checkAccess).toHaveBeenCalledTimes(1);
   });
 
@@ -2243,15 +2190,11 @@ describe('dashboard session gate', () => {
     checkAccess.mockResolvedValue(false);
     const res = await request(app).get('/dashboard').set('Cookie', cookie);
     expect(res.status).toBe(403);
-    expect(
-      [...cache.values.keys()].some((k) => k.startsWith('dashboard-session-')),
-    ).toBe(false);
+    expect([...cache.values.keys()].some((k) => k.startsWith('dashboard-session-'))).toBe(false);
     expect(deps.audit).toHaveBeenCalledWith(
       expect.objectContaining({ title: 'Dashboard session ended' }),
     );
-    expect(
-      (await request(app).get('/dashboard').set('Cookie', cookie)).status,
-    ).toBe(302);
+    expect((await request(app).get('/dashboard').set('Cookie', cookie)).status).toBe(302);
   });
 
   it('keeps the session but answers 503 when Discord is unreachable at re-check', async () => {
@@ -2261,12 +2204,8 @@ describe('dashboard session gate', () => {
     const cookie = await signIn(app);
     now = 11 * 60 * 1000;
     checkAccess.mockRejectedValueOnce(new Error('down'));
-    expect(
-      (await request(app).get('/dashboard').set('Cookie', cookie)).status,
-    ).toBe(503);
-    expect(
-      (await request(app).get('/dashboard').set('Cookie', cookie)).status,
-    ).toBe(200);
+    expect((await request(app).get('/dashboard').set('Cookie', cookie)).status).toBe(503);
+    expect((await request(app).get('/dashboard').set('Cookie', cookie)).status).toBe(200);
   });
 
   it('expires the session 12 hours after sign-in', async () => {
@@ -2274,9 +2213,7 @@ describe('dashboard session gate', () => {
     const { app } = makeApp({ now: () => now });
     const cookie = await signIn(app);
     now = 12 * 60 * 60 * 1000;
-    expect(
-      (await request(app).get('/dashboard').set('Cookie', cookie)).status,
-    ).toBe(302);
+    expect((await request(app).get('/dashboard').set('Cookie', cookie)).status).toBe(302);
   });
 });
 
@@ -2311,15 +2248,11 @@ describe('routes are gated by construction', () => {
     expect(gate).toBeGreaterThan(-1);
     const beforeGate = stack.slice(0, gate);
     expect(
-      beforeGate
-        .filter((l) => l.route)
-        .map((l) => l.route.path)
-        .sort(),
+      beforeGate.filter((l) => l.route).map((l) => l.route.path).sort(),
     ).toEqual([...PUBLIC_ROUTE_PATHS].sort());
-    expect(beforeGate.filter((l) => !l.route).map((l) => l.name)).toEqual([
-      'securityHeaders',
-      'urlencodedParser',
-    ]);
+    expect(
+      beforeGate.filter((l) => !l.route).map((l) => l.name),
+    ).toEqual(['securityHeaders', 'urlencodedParser']);
     // The gate is followed directly by the protected router, and nothing
     // after it but the error handler.
     const after = stack.slice(gate + 1);
@@ -2342,9 +2275,10 @@ describe('routes are gated by construction', () => {
     const { app } = withDummies();
     const cookie = await signIn(app);
     for (const method of ['post', 'put', 'delete'] as const) {
-      const res = await request(app)
-        [method]('/dashboard/dummy')
-        .set('Cookie', cookie);
+      const res = await request(app)[method]('/dashboard/dummy').set(
+        'Cookie',
+        cookie,
+      );
       expect(res.status).toBe(403);
     }
     expect(
@@ -2359,21 +2293,17 @@ describe('routes are gated by construction', () => {
       (await request(app).get('/dashboard').set('Cookie', cookie)).text,
     )[1];
     expect(
-      (
-        await request(app)
-          .post('/dashboard/dummy')
-          .set('Cookie', cookie)
-          .type('form')
-          .send({ _csrf: token })
-      ).status,
+      (await request(app)
+        .post('/dashboard/dummy')
+        .set('Cookie', cookie)
+        .type('form')
+        .send({ _csrf: token })).status,
     ).toBe(200);
     expect(
-      (
-        await request(app)
-          .delete('/dashboard/dummy')
-          .set('Cookie', cookie)
-          .set('X-CSRF-Token', token)
-      ).status,
+      (await request(app)
+        .delete('/dashboard/dummy')
+        .set('Cookie', cookie)
+        .set('X-CSRF-Token', token)).status,
     ).toBe(200);
   });
 
@@ -2418,60 +2348,44 @@ describe('dashboard CSRF and logout', () => {
       (await request(app).get('/dashboard').set('Cookie', cookie)).text,
     );
     expect(
-      (
-        await request(app)
-          .post('/dashboard/logout')
-          .set('Cookie', cookie)
-          .set('Origin', 'null')
-          .type('form')
-          .send({ _csrf: token })
-      ).status,
+      (await request(app)
+        .post('/dashboard/logout')
+        .set('Cookie', cookie)
+        .set('Origin', 'null')
+        .type('form')
+        .send({ _csrf: token })).status,
     ).toBe(403);
     expect(
-      (
-        await request(app)
-          .post('/dashboard/logout')
-          .set('Cookie', cookie)
-          .set('Sec-Fetch-Site', 'cross-site')
-          .type('form')
-          .send({ _csrf: token })
-      ).status,
+      (await request(app)
+        .post('/dashboard/logout')
+        .set('Cookie', cookie)
+        .set('Sec-Fetch-Site', 'cross-site')
+        .type('form')
+        .send({ _csrf: token })).status,
     ).toBe(403);
   });
 
   it('rejects a POST with the wrong token or a foreign Origin', async () => {
     const { app } = makeApp();
     const cookie = await signIn(app);
-    const token = csrfFrom(
-      (await request(app).get('/dashboard').set('Cookie', cookie)).text,
-    );
+    const token = csrfFrom((await request(app).get('/dashboard').set('Cookie', cookie)).text);
     expect(
-      (
-        await request(app)
-          .post('/dashboard/logout')
-          .set('Cookie', cookie)
-          .type('form')
-          .send({ _csrf: 'nope' })
-      ).status,
+      (await request(app).post('/dashboard/logout').set('Cookie', cookie).type('form').send({ _csrf: 'nope' })).status,
     ).toBe(403);
     expect(
-      (
-        await request(app)
-          .post('/dashboard/logout')
-          .set('Cookie', cookie)
-          .set('Origin', 'https://evil.example')
-          .type('form')
-          .send({ _csrf: token })
-      ).status,
+      (await request(app)
+        .post('/dashboard/logout')
+        .set('Cookie', cookie)
+        .set('Origin', 'https://evil.example')
+        .type('form')
+        .send({ _csrf: token })).status,
     ).toBe(403);
   });
 
   it('logs out with a valid token and the session no longer works', async () => {
     const { app } = makeApp();
     const cookie = await signIn(app);
-    const token = csrfFrom(
-      (await request(app).get('/dashboard').set('Cookie', cookie)).text,
-    );
+    const token = csrfFrom((await request(app).get('/dashboard').set('Cookie', cookie)).text);
     const out = await request(app)
       .post('/dashboard/logout')
       .set('Cookie', cookie)
@@ -2480,9 +2394,7 @@ describe('dashboard CSRF and logout', () => {
       .send({ _csrf: token });
     expect(out.status).toBe(303);
     expect(out.headers.location).toBe('/dashboard/login');
-    expect(
-      (await request(app).get('/dashboard').set('Cookie', cookie)).status,
-    ).toBe(302);
+    expect((await request(app).get('/dashboard').set('Cookie', cookie)).status).toBe(302);
   });
 
   it('answers unknown dashboard paths with the generic 404 page when signed in', async () => {
@@ -2515,26 +2427,24 @@ describe('dashboard CSRF and logout', () => {
   4. In the callback, delete `!safeEqual(state, bound) ||`.
   5. In `SessionStore.get`, delete the absolute-expiry check.
   6. In `hasDashboardRole`, add `SERVER_ROLES.organizer` to `DASHBOARD_ROLE_IDS`.
-     6b. In `discordAccessCheck`, return `true` when `member.permissions.has(PermissionFlagsBits.Administrator)`.
-  7. Remove `limit(loginLimiter, byIp)` from the callback route.
-  8. In `dashboardUnsafeMethodGuard`, skip the token check when `origin === deps.origin`.
-  9. Mount one route with `router.post(...)` directly on the outer router instead of the protected one.
-  10. In `markRoleChecked`, drop the re-read.
-  11. In `serializeCookie`, drop `'Secure'`.
-      Record the result per mutation in the PR description.
+  6b. In `discordAccessCheck`, return `true` when `member.permissions.has(PermissionFlagsBits.Administrator)`.
+  8. Remove `limit(loginLimiter, byIp)` from the callback route.
+  9. In `dashboardUnsafeMethodGuard`, skip the token check when `origin === deps.origin`.
+  10. Mount one route with `router.post(...)` directly on the outer router instead of the protected one.
+  11. In `markRoleChecked`, drop the re-read.
+  7. In `serializeCookie`, drop `'Secure'`.
+  Record the result per mutation in the PR description.
 
 - [ ] **Step 4: Commit** — `"Test the dashboard session gate, role re-check and CSRF"`.
 
 ### Task 1.9: Mount in the app
 
 **Files:**
-
 - Create: `src/web/dashboardDeps.ts`
 - Modify: `src/app.ts` (before the 404 handler), `src/index.ts` (`clientReady`)
 - Test: `tst/web/dashboardDeps.test.ts`
 
 **Interfaces:**
-
 - Produces: `setDashboardClient(client: Client | undefined): void`, `dashboardRouterFromEnv(env?: Record<string, string | undefined>): express.Router`, `MIN_SESSION_SECRET_LENGTH = 32`.
 
 - [ ] **Step 1: Write the failing tests**
@@ -2561,9 +2471,9 @@ describe('dashboardRouterFromEnv', () => {
   });
 
   it('refuses a session secret shorter than 32 characters', async () => {
-    const res = await request(
-      appWith({ DASHBOARD_SESSION_SECRET: 'short' }),
-    ).get('/dashboard/login');
+    const res = await request(appWith({ DASHBOARD_SESSION_SECRET: 'short' })).get(
+      '/dashboard/login',
+    );
     expect(res.status).toBe(503);
   });
 
@@ -2574,6 +2484,7 @@ describe('dashboardRouterFromEnv', () => {
     expect(res.status).toBe(200);
     expect(res.text).toContain('Sign in with Discord');
   });
+
 });
 ```
 
@@ -2635,9 +2546,7 @@ function notConfiguredRouter(): express.Router {
         layout({
           title: 'Not available',
           nonce,
-          body: html`<div class="card">
-            <p>The staff dashboard is not set up yet.</p>
-          </div>`,
+          body: html`<div class="card"><p>The staff dashboard is not set up yet.</p></div>`,
         }),
       );
   });
@@ -2697,14 +2606,13 @@ Branch `fix/redirect-allow-list`. Right after PR 1 merges, before anyone is sent
 `/redirect/:url` in `src/app.ts` 307s to any base64-encoded URL, on the same origin as the staff login. It cannot simply be removed or limited to localhost: production's own Meetup connect flow passes through it (production logs show `Redirecting to https://meetup-discord-bot.herokuapp.com/connect/meetup/callback`), because `debugRedirect` in `src/constants.ts` always builds the trampoline URL and Meetup does not accept localhost redirect URIs.
 
 **Allowed targets**, parsed with `URL` and compared exactly:
-
 - The app's own origin, derived from the configured base, not a hard-coded string: `new URL(debugRedirect('/')).origin`, or a new `PUBLIC_APP_ORIGIN` constant that both `debugRedirect` and the check use.
 - `http://localhost:<port>` and `http://127.0.0.1:<port>` (`http:` only, exact hostname).
 
 Everything else gets 400 with the branded error page: other hosts, look-alikes (`meetup-discord-bot.herokuapp.com.evil.example`, `localhost.evil.example`), userinfo (`https://x@evil.example`), other schemes (`javascript:`, `data:`, `https://localhost`). Malformed base64 or URLs also get 400 instead of throwing.
 
-| #    | Task                                                                                            | Tests (file → names)                                                                                                                                                                                                                                                                                                                                                                                    | Acceptance                                                                 |
-| ---- | ----------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| # | Task | Tests (file → names) | Acceptance |
+|---|---|---|---|
 | 1b.1 | Allow-list in the `/redirect/:url` handler, with the allowed origin shared with `debugRedirect` | `tst/integration/app.routes.test.ts` → `still redirects the production Meetup callback through the trampoline (query appended)`, `redirects to a localhost target with the query appended`, `redirects to a 127.0.0.1 target`, `refuses an external host`, `refuses look-alike hosts`, `refuses userinfo`, `refuses javascript:, data: and https://localhost`, `answers 400 to malformed base64 or URL` | Production Meetup connect flow unchanged; local dev trampoline still works |
 
 ---
@@ -2729,19 +2637,18 @@ SELECT access_token, refresh_token, expires_at FROM oauth_credentials WHERE key 
 COMMIT;
 ```
 
-All reads and writes happen on the transaction's client (the pool is `max: 1`; a nested pool query would deadlock).
-
+  All reads and writes happen on the transaction's client (the pool is `max: 1`; a nested pool query would deadlock).
 - A persist failure keeps the existing rule: use the fresh token for this run, log loudly, and never fall through to the seed.
 - In-process de-dup sits on top: concurrent callers in one process share one in-flight promise.
 - Callers fetch a token per batch, not once per run. On a 401 from a reused token they call `getOrganizerAccessToken({ forceRefresh: true })` once and retry.
 - `meetupSweep.ts` switches to this helper. Its behaviour changes on purpose (token reuse, cross-process lock); the existing sweep tests must still pass.
 
-| #    | Task                                                                                   | Tests (file → names)                                                                                                                                                                                                                                                                                                                                                                                              | Acceptance                                                                                                                                                                                                                                                                        |
-| ---- | -------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 2a.1 | `withLockedCredential` on the credential repository                                    | `tst/integration/postgresCredentialRepository.test.ts` → `serializes two independent repository instances racing to refresh` (two pools against the same throwaway Postgres; refresh nock counts exactly one call; both callers get the same access token), `rolls back on a thrown refresh`                                                                                                                      | Throwaway pg :55432                                                                                                                                                                                                                                                               |
-| 2a.2 | `organizerMeetupClient.ts`                                                             | `tst/lib/helpers/organizerMeetupClient.test.ts` → `reuses an access token with more than 5 minutes left`, `refreshes inside 5 minutes of expiry`, `forceRefresh refreshes even when valid`, `concurrent in-process callers share one refresh`, `falls back to the config seed only when the stored refresh fails`, `persist failure keeps the fresh token for this run`, `returns undefined without DATABASE_URL` | Mutation-check the 5-minute boundary and the seed fallback                                                                                                                                                                                                                        |
-| 2a.3 | Switch the sweep; 401 retry                                                            | `meetupSweep` tests → `retries once with a forced refresh on 401`, existing tests green                                                                                                                                                                                                                                                                                                                           |                                                                                                                                                                                                                                                                                   |
-| 2a.4 | Read-only visibility check (needs Hai's go-ahead to use the real organizer credential) | —                                                                                                                                                                                                                                                                                                                                                                                                                 | The slash commands use the invoking mod's token today. Before PR 2 relies on the organizer token, confirm it can see `NO_SHOW` and `ATTENDED` RSVPs: one read-only `getEventRsvps` on a past event, counts only, no names printed. Hai runs it or explicitly approves running it. |
+| # | Task | Tests (file → names) | Acceptance |
+|---|---|---|---|
+| 2a.1 | `withLockedCredential` on the credential repository | `tst/integration/postgresCredentialRepository.test.ts` → `serializes two independent repository instances racing to refresh` (two pools against the same throwaway Postgres; refresh nock counts exactly one call; both callers get the same access token), `rolls back on a thrown refresh` | Throwaway pg :55432 |
+| 2a.2 | `organizerMeetupClient.ts` | `tst/lib/helpers/organizerMeetupClient.test.ts` → `reuses an access token with more than 5 minutes left`, `refreshes inside 5 minutes of expiry`, `forceRefresh refreshes even when valid`, `concurrent in-process callers share one refresh`, `falls back to the config seed only when the stored refresh fails`, `persist failure keeps the fresh token for this run`, `returns undefined without DATABASE_URL` | Mutation-check the 5-minute boundary and the seed fallback |
+| 2a.3 | Switch the sweep; 401 retry | `meetupSweep` tests → `retries once with a forced refresh on 401`, existing tests green | |
+| 2a.4 | Read-only visibility check (needs Hai's go-ahead to use the real organizer credential) | — | The slash commands use the invoking mod's token today. Before PR 2 relies on the organizer token, confirm it can see `NO_SHOW` and `ATTENDED` RSVPs: one read-only `getEventRsvps` on a past event, counts only, no names printed. Hai runs it or explicitly approves running it. |
 
 ## Renew organizer login (added 2026-10-15, Hai via the lead)
 
@@ -2779,11 +2686,11 @@ All reads and writes happen on the transaction's client (the pool is `max: 1`; a
 - **Logging.** Every renewal attempt goes to the staff moderation channel, accepted or refused, naming the actor as `<@id>` and the reason (wrong account / bootstrap missing / success). It never includes tokens or the Meetup account's details beyond "matches" / "does not match".
 - **Unchanged:** `/meetup_get_token sweep_credential:True` keeps working. The config seed `MEETUP_ORGANIZER_REFRESH_TOKEN` stays as a recovery path.
 
-| #    | Task                                                                            | Tests (file → names)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    | Acceptance                                   |
-| ---- | ------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------- |
-| 2a.5 | Credential schema: `member_id`, `failing_since`; record the id on store/refresh | `tst/integration/postgresCredentialRepository.test.ts` → `adds the columns idempotently`, `records the member id on the first successful refresh`, `marks and clears failing_since inside the lock`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |                                              |
-| 2a.6 | Episode-based alert with renew link + recovery post                             | `tst/lib/helpers/organizerMeetupClient.test.ts` → `alerts once per failure episode`, `does not re-alert across restarts while failing`, `posts one recovery message when it works again`, `alert links the renew page and never includes the error body`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | Reuses the existing alert title              |
-| 2a.7 | Renew routes + callback branch                                                  | `tst/web/routes/organizerLogin.test.ts` → `signed out → 302 / wrong role → 403 on every route`, `start requires CSRF`, `complete refuses a state from another session`, `complete refuses a replayed state`, `stores the right account through the locked write`, `refuses the wrong account and stores nothing`, `bootstrap: uses MEETUP_ORGANIZER_MEMBER_ID when none is recorded`, `bootstrap: refuses when neither is set`, `logs each attempt to the moderation channel with <@id> and no token`; `tst/integration/app.routes.test.ts` → `the Meetup callback hands an organizer-renew state to the dashboard completion path`, `member-link states are unaffected`; integration → `a renewal concurrent with a refresh is serialized by the lock` | Works through the #109 trampoline allow-list |
+| # | Task | Tests (file → names) | Acceptance |
+|---|---|---|---|
+| 2a.5 | Credential schema: `member_id`, `failing_since`; record the id on store/refresh | `tst/integration/postgresCredentialRepository.test.ts` → `adds the columns idempotently`, `records the member id on the first successful refresh`, `marks and clears failing_since inside the lock` | |
+| 2a.6 | Episode-based alert with renew link + recovery post | `tst/lib/helpers/organizerMeetupClient.test.ts` → `alerts once per failure episode`, `does not re-alert across restarts while failing`, `posts one recovery message when it works again`, `alert links the renew page and never includes the error body` | Reuses the existing alert title |
+| 2a.7 | Renew routes + callback branch | `tst/web/routes/organizerLogin.test.ts` → `signed out → 302 / wrong role → 403 on every route`, `start requires CSRF`, `complete refuses a state from another session`, `complete refuses a replayed state`, `stores the right account through the locked write`, `refuses the wrong account and stores nothing`, `bootstrap: uses MEETUP_ORGANIZER_MEMBER_ID when none is recorded`, `bootstrap: refuses when neither is set`, `logs each attempt to the moderation channel with <@id> and no token`; `tst/integration/app.routes.test.ts` → `the Meetup callback hands an organizer-renew state to the dashboard completion path`, `member-link states are unaffected`; integration → `a renewal concurrent with a refresh is serialized by the lock` | Works through the #109 trampoline allow-list |
 
 ---
 
@@ -2793,20 +2700,20 @@ Branch `feat/dashboard-2-snapshots`. Starts after PR 2a merges. Full-code addend
 
 ## File structure
 
-| File                                                               | Responsibility                                                                                                                                                                        |
-| ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `src/lib/reports/period.ts`                                        | `Period` (`{ year, month }`), Pacific bounds, `previousPeriod`, `periodKey('2026-09')`, `parsePeriodKey`, `isFinished(period, now)`                                                   |
-| `src/lib/reports/meetupMonth.ts`                                   | `getEventsYearMonth` (moved from the command, re-exported there), `fetchMonthRsvps`: one pass per event for `ATTENDED`/`YES`/`NO_SHOW`                                                |
-| `src/lib/reports/hallOfFameReport.ts`                              | `buildHallOfFameReport` → JSON-safe payload; `formatHostingStatsText` (the command's attachment, byte-identical)                                                                      |
-| `src/lib/reports/noShowReport.ts`                                  | `buildNoShowReport` → JSON-safe payload with `asOf`; `toNoShowCases` for the existing text/CSV formatters                                                                             |
-| `src/lib/repositories/dashboardPool.ts`                            | One shared `pg.Pool` (`max: 3` on the web dyno; `PG_POOL_MAX` overrides it for scripts) + idempotent `DASHBOARD_SCHEMA_SQL`                                                           |
-| `src/lib/repositories/postgresReportSnapshotRepository.ts`         | `report_snapshots` reads/writes                                                                                                                                                       |
-| `src/lib/repositories/postgresLinkProgressRepository.ts`           | `link_progress_daily`                                                                                                                                                                 |
-| `src/lib/reports/linkProgress.ts`                                  | Pure counting from guild members + member links                                                                                                                                       |
-| `src/lib/reports/buildJob.ts`                                      | Due-plan, lease, build, alerts, report-ready notice, scheduler, `requestRebuild`                                                                                                      |
-| `src/lib/helpers/discordLogger.ts` (modify)                        | Superseded in PR 4 (no pings): no role-notice helper. The report-ready notice is a plain `logAlert` embed with `allowedMentions: { parse: [] }`, and no log function sends `content`. |
-| `src/lib/repositories/postgresSuspensionRepository.ts` (modify)    | `listByMemberIds(ids: string[], before?: Date)`: one `member_id = ANY($1)` query                                                                                                      |
-| `src/commands/meetup/getEventStats.ts`, `noShowReport.ts` (modify) | Call the services; output unchanged                                                                                                                                                   |
+| File | Responsibility |
+|---|---|
+| `src/lib/reports/period.ts` | `Period` (`{ year, month }`), Pacific bounds, `previousPeriod`, `periodKey('2026-09')`, `parsePeriodKey`, `isFinished(period, now)` |
+| `src/lib/reports/meetupMonth.ts` | `getEventsYearMonth` (moved from the command, re-exported there), `fetchMonthRsvps`: one pass per event for `ATTENDED`/`YES`/`NO_SHOW` |
+| `src/lib/reports/hallOfFameReport.ts` | `buildHallOfFameReport` → JSON-safe payload; `formatHostingStatsText` (the command's attachment, byte-identical) |
+| `src/lib/reports/noShowReport.ts` | `buildNoShowReport` → JSON-safe payload with `asOf`; `toNoShowCases` for the existing text/CSV formatters |
+| `src/lib/repositories/dashboardPool.ts` | One shared `pg.Pool` (`max: 3` on the web dyno; `PG_POOL_MAX` overrides it for scripts) + idempotent `DASHBOARD_SCHEMA_SQL` |
+| `src/lib/repositories/postgresReportSnapshotRepository.ts` | `report_snapshots` reads/writes |
+| `src/lib/repositories/postgresLinkProgressRepository.ts` | `link_progress_daily` |
+| `src/lib/reports/linkProgress.ts` | Pure counting from guild members + member links |
+| `src/lib/reports/buildJob.ts` | Due-plan, lease, build, alerts, report-ready notice, scheduler, `requestRebuild` |
+| `src/lib/helpers/discordLogger.ts` (modify) | Superseded in PR 4 (no pings): no role-notice helper. The report-ready notice is a plain `logAlert` embed with `allowedMentions: { parse: [] }`, and no log function sends `content`. |
+| `src/lib/repositories/postgresSuspensionRepository.ts` (modify) | `listByMemberIds(ids: string[], before?: Date)`: one `member_id = ANY($1)` query |
+| `src/commands/meetup/getEventStats.ts`, `noShowReport.ts` (modify) | Call the services; output unchanged |
 
 ## Connection budget
 
@@ -2882,15 +2789,15 @@ CREATE TABLE IF NOT EXISTS dashboard_notices (
 
 ## Tasks
 
-| #   | Task                                                                                 | Tests (file → names)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    | Acceptance                                                                                                            |
-| --- | ------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| 2.1 | Golden tests of current command output, before touching it                           | `tst/commands/meetup/getEventStats.golden.test.ts`, `tst/commands/meetup/noShowReport.golden.test.ts`. Mock at the **GraphQL HTTP layer** (nock on `https://api.meetup.com/gql-ext` with a responder that honours the query's filter variables: status, dates, `rsvpStatus`, `hostId`, pagination), not `GqlMeetupClient` methods. Fixtures (synthetic names) in `tst/fixtures/meetup/`: zero no-shows (early-exit message), cleared members, a departed member, a DST month (March/November), multi-page RSVPs, new vs returning hosts. Golden the attachment text, the CSV and the Discord message text.                                                                                                                                                                                                                                                                                                              | Goldens committed and green on unmodified code                                                                        |
-| 2.2 | `period.ts`                                                                          | `tst/lib/reports/period.test.ts` → `bounds are Pacific midnights across DST`, `previousPeriod wraps January`, `parsePeriodKey rejects 2026-13, 2026-1, 26-01, ../`, `isFinished flips at Pacific month start`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |                                                                                                                       |
-| 2.3 | `meetupMonth.ts` + `noShowReport.ts` + `hallOfFameReport.ts`; commands switched over | `tst/lib/reports/noShowReport.test.ts` → `classifies a finished month as of its end, ignoring later suspensions`, `refreshing a finished month after a new suspension still lists the member`, `counts no-shows only up to asOf`, `stores no upcoming RSVPs or descriptions`, `marks a month without attendance incomplete`, `adds prior suspensions to warnings`, `flags members who hosted a past event`; `tst/lib/reports/hallOfFameReport.test.ts` → `counts attendance from one RSVP pass`, `payload is JSON round-trippable`                                                                                                                                                                                                                                                                                                                                                                                      | 2.1 goldens still green (proof of no drift)                                                                           |
-| 2.4 | `dashboardPool.ts` + snapshot repository                                             | `tst/integration/postgresReportSnapshotRepository.test.ts` → `save then getCurrent`, `current month updates in place`, `finished-month rebuild supersedes and keeps history`, `concurrent saves leave exactly one current row`, `schema is idempotent`, `listSummaries pages without payloads`, `PG_POOL_MAX overrides the pool size`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   | Throwaway pg :55432                                                                                                   |
-| 2.5 | Link progress (pure + repository)                                                    | `tst/lib/reports/linkProgress.test.ts` → `counts linked only among current non-bot members`, `excludes onboarding from unlinked`, `counts Reverify-tagged`; `tst/integration/postgresLinkProgressRepository.test.ts` → `upsert is idempotent per day`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |                                                                                                                       |
-| 2.6 | Build job                                                                            | `tst/lib/reports/buildJob.test.ts` → `never starts 18:00–19:00 UTC`, `defers while the identity digest claim is held without its done marker`, `previous month rebuilt daily from the 2nd to the 7th after 16:00 UTC`, `current month due once per UTC day after 16:00`, `link progress due once per day`, `a missing Redis done-key does not rebuild a month Postgres shows as built`, `lease release only removes its own claim`, `failure releases the claim and alerts once per day`, `recovery alert after failures`, `report-ready is a plain alert with allowedMentions { parse: [] }` (was a role-mention test; superseded in PR 4, no pings), `report-ready posts once per period across restarts`, `report-ready for the latest finished month even when the backfill built it`, `failed report-ready post is retried`, `requestRebuild refuses while a build runs`, `requestRebuild refused 18:00–19:00 UTC` | Mutation-check the due-plan, both guards and the lease                                                                |
-| 2.7 | Wire the scheduler into `index.ts`; PR                                               | `tst/lib/reports/buildJob.scheduler.test.ts` → `tick swallows and logs errors`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          | Draft PR. The bot already posts to #meetup-bot-alerts; no mention permission is needed (superseded in PR 4: no pings) |
+| # | Task | Tests (file → names) | Acceptance |
+|---|---|---|---|
+| 2.1 | Golden tests of current command output, before touching it | `tst/commands/meetup/getEventStats.golden.test.ts`, `tst/commands/meetup/noShowReport.golden.test.ts`. Mock at the **GraphQL HTTP layer** (nock on `https://api.meetup.com/gql-ext` with a responder that honours the query's filter variables: status, dates, `rsvpStatus`, `hostId`, pagination), not `GqlMeetupClient` methods. Fixtures (synthetic names) in `tst/fixtures/meetup/`: zero no-shows (early-exit message), cleared members, a departed member, a DST month (March/November), multi-page RSVPs, new vs returning hosts. Golden the attachment text, the CSV and the Discord message text. | Goldens committed and green on unmodified code |
+| 2.2 | `period.ts` | `tst/lib/reports/period.test.ts` → `bounds are Pacific midnights across DST`, `previousPeriod wraps January`, `parsePeriodKey rejects 2026-13, 2026-1, 26-01, ../`, `isFinished flips at Pacific month start` | |
+| 2.3 | `meetupMonth.ts` + `noShowReport.ts` + `hallOfFameReport.ts`; commands switched over | `tst/lib/reports/noShowReport.test.ts` → `classifies a finished month as of its end, ignoring later suspensions`, `refreshing a finished month after a new suspension still lists the member`, `counts no-shows only up to asOf`, `stores no upcoming RSVPs or descriptions`, `marks a month without attendance incomplete`, `adds prior suspensions to warnings`, `flags members who hosted a past event`; `tst/lib/reports/hallOfFameReport.test.ts` → `counts attendance from one RSVP pass`, `payload is JSON round-trippable` | 2.1 goldens still green (proof of no drift) |
+| 2.4 | `dashboardPool.ts` + snapshot repository | `tst/integration/postgresReportSnapshotRepository.test.ts` → `save then getCurrent`, `current month updates in place`, `finished-month rebuild supersedes and keeps history`, `concurrent saves leave exactly one current row`, `schema is idempotent`, `listSummaries pages without payloads`, `PG_POOL_MAX overrides the pool size` | Throwaway pg :55432 |
+| 2.5 | Link progress (pure + repository) | `tst/lib/reports/linkProgress.test.ts` → `counts linked only among current non-bot members`, `excludes onboarding from unlinked`, `counts Reverify-tagged`; `tst/integration/postgresLinkProgressRepository.test.ts` → `upsert is idempotent per day` | |
+| 2.6 | Build job | `tst/lib/reports/buildJob.test.ts` → `never starts 18:00–19:00 UTC`, `defers while the identity digest claim is held without its done marker`, `previous month rebuilt daily from the 2nd to the 7th after 16:00 UTC`, `current month due once per UTC day after 16:00`, `link progress due once per day`, `a missing Redis done-key does not rebuild a month Postgres shows as built`, `lease release only removes its own claim`, `failure releases the claim and alerts once per day`, `recovery alert after failures`, `report-ready is a plain alert with allowedMentions { parse: [] }` (was a role-mention test; superseded in PR 4, no pings), `report-ready posts once per period across restarts`, `report-ready for the latest finished month even when the backfill built it`, `failed report-ready post is retried`, `requestRebuild refuses while a build runs`, `requestRebuild refused 18:00–19:00 UTC` | Mutation-check the due-plan, both guards and the lease |
+| 2.7 | Wire the scheduler into `index.ts`; PR | `tst/lib/reports/buildJob.scheduler.test.ts` → `tick swallows and logs errors` | Draft PR. The bot already posts to #meetup-bot-alerts; no mention permission is needed (superseded in PR 4: no pings) |
 
 ---
 
@@ -2900,32 +2807,32 @@ Branch `feat/dashboard-3-pages`. Starts after PR 2 merges. Full-code addendum fi
 
 ## File structure
 
-| File                                                                                                                           | Responsibility                                                                                                                                                                 |
-| ------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `src/web/links.ts`                                                                                                             | `meetupProfileUrl(id)` / `discordProfileUrl(id)` → `undefined` unless all digits (Meetup `^\d{1,20}$`, Discord `^\d{17,20}$`); `memberLink(...)`; every href passes `safeHref` |
-| `src/web/paging.ts`                                                                                                            | `parsePage(query)` (1-based, cap 10 000), page links, `PAGE_SIZE = 50`                                                                                                         |
-| `src/web/charts.ts`                                                                                                            | Inline SVG line/bar charts drawn on the server. Presentation attributes only (`fill=`, `stroke=`), never `style=""`, which the nonce'd CSP blocks. No third-party JS.          |
-| `src/web/routes/home.ts`, `hallOfFame.ts`, `noShowHistory.ts`, `suspensions.ts`, `identity.ts`, `linkProgress.ts`, `trends.ts` | One file per page: data fetch + render; each exports a `register(router)` passed to `protectedRoutes`                                                                          |
-| `src/web/routes/refresh.ts`                                                                                                    | `POST /dashboard/reports/:type/:period/refresh` → `requestRebuild` (guard handles CSRF and rate limit)                                                                         |
-| `src/lib/repositories/postgresSuspensionRepository.ts` (modify)                                                                | `listPage({ state: 'active' \| 'past' \| 'voided', offset, limit })` including void fields                                                                                     |
-| `src/lib/repositories/postgresIdentityRepository.ts` (modify)                                                                  | `listChangesPage({ since, until, platform, subjectId, beforeId, limit })` keyset; `getChangeThumb(id, side)` returning one `Buffer`                                            |
-| `scripts/backfillReports.ts`                                                                                                   | Resumable all-time backfill                                                                                                                                                    |
+| File | Responsibility |
+|---|---|
+| `src/web/links.ts` | `meetupProfileUrl(id)` / `discordProfileUrl(id)` → `undefined` unless all digits (Meetup `^\d{1,20}$`, Discord `^\d{17,20}$`); `memberLink(...)`; every href passes `safeHref` |
+| `src/web/paging.ts` | `parsePage(query)` (1-based, cap 10 000), page links, `PAGE_SIZE = 50` |
+| `src/web/charts.ts` | Inline SVG line/bar charts drawn on the server. Presentation attributes only (`fill=`, `stroke=`), never `style=""`, which the nonce'd CSP blocks. No third-party JS. |
+| `src/web/routes/home.ts`, `hallOfFame.ts`, `noShowHistory.ts`, `suspensions.ts`, `identity.ts`, `linkProgress.ts`, `trends.ts` | One file per page: data fetch + render; each exports a `register(router)` passed to `protectedRoutes` |
+| `src/web/routes/refresh.ts` | `POST /dashboard/reports/:type/:period/refresh` → `requestRebuild` (guard handles CSRF and rate limit) |
+| `src/lib/repositories/postgresSuspensionRepository.ts` (modify) | `listPage({ state: 'active' \| 'past' \| 'voided', offset, limit })` including void fields |
+| `src/lib/repositories/postgresIdentityRepository.ts` (modify) | `listChangesPage({ since, until, platform, subjectId, beforeId, limit })` keyset; `getChangeThumb(id, side)` returning one `Buffer` |
+| `scripts/backfillReports.ts` | Resumable all-time backfill |
 
 Pages use form POSTs only (no `fetch`), so the CSP needs no `connect-src`. If a page ever uses `fetch`, add `connect-src 'self'`.
 
 ## Tasks
 
-| #   | Task                                          | Tests (file → names)                                                                                                                                                                                                                                                                                                                                | Acceptance                                                                                                                                                                                                                                                                                                       |
-| --- | --------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 3.1 | Links and paging                              | `tst/web/links.test.ts` → `refuses non-digit ids`, `refuses 21-digit ids`, `event links pass safeHref or render as text`; `tst/web/paging.test.ts` → `clamps page`, `ignores junk`                                                                                                                                                                  |                                                                                                                                                                                                                                                                                                                  |
-| 3.2 | Access matrix derived from the router         | `tst/web/routes/access.test.ts` iterates `protectedRouteList(router)` (never a hand list) → for each GET: `signed out → 302`, `role gone at re-check → 403`, `allowed → 200`; for each unsafe method: `no token → 403`                                                                                                                              | A new route without coverage is impossible: the list comes from the stack                                                                                                                                                                                                                                        |
-| 3.3 | Home                                          | `home.test.ts` → `shows latest month counts`, `says "not built yet" with no snapshot`, `marks incomplete months`                                                                                                                                                                                                                                    |                                                                                                                                                                                                                                                                                                                  |
-| 3.4 | Hall of Fame page + copy-ready text + refresh | `hallOfFame.test.ts` → `escapes host names and event titles`, `copy text comes from a readonly textarea value`, `copy text matches the command's ready-to-post block`, `refresh refused while a build runs`, `refresh refused 18:00–19:00 UTC`                                                                                                      | Copy button reads the `<textarea readonly>` value; never script-embedded text                                                                                                                                                                                                                                    |
-| 3.5 | No-show history (per month, per member)       | `noShowHistory.test.ts` → `per-member view lists every month the member appears in`, `member id must be digits`, `paginates at 50`, `shows asOf`                                                                                                                                                                                                    | Per-member lookup uses `payload->'cases' @> '[{"memberId":"…"}]'` with a GIN index on `payload jsonb_path_ops`                                                                                                                                                                                                   |
-| 3.6 | Suspension records                            | `suspensions.test.ts` + integration `listPage` tests → `active/past split matches /meetup_list_suspensions`, `shows void reason and who voided`                                                                                                                                                                                                     |                                                                                                                                                                                                                                                                                                                  |
-| 3.7 | Identity changes + thumbnails                 | `identity.test.ts` → `filters by date, platform, member`, `keyset paging is stable`, `thumb route serves only PNG/JPEG/WebP by magic bytes`, `thumb route 404s for a missing side`, `thumb response is no-store and nosniff`                                                                                                                        | Thumbs read one row per request (`SELECT old_thumb … WHERE id=$1`)                                                                                                                                                                                                                                               |
-| 3.8 | Link progress + trends                        | `charts.test.ts` → `escapes labels`, `uses no style attributes`, `handles a single point and all-zero series`; `trends.test.ts` → `reads summaries only`                                                                                                                                                                                            |                                                                                                                                                                                                                                                                                                                  |
-| 3.9 | Backfill script                               | `tst/scripts/backfillReports.test.ts` → `refuses to start 18:00–19:00 UTC`, `skips months with a snapshot unless --force`, `posts progress every 12 months via REST`, `never logs in to the gateway or registers commands`, `stores no-attendance months as incomplete`, `uses asOf = month end`, `reads suspension history in one query per batch` | Discord via `@discordjs/rest` (`rest.post(Routes.channelMessages(BOT_ALERTS_CHANNEL_ID), { body: { embeds, allowed_mentions: { parse: [] } } })`), no `Client`. `PG_POOL_MAX=2`. Hai runs `heroku run:detached -a meetup-discord-bot "PG_POOL_MAX=2 yarn tsx scripts/backfillReports.ts"`, never 18:00–19:00 UTC |
+| # | Task | Tests (file → names) | Acceptance |
+|---|---|---|---|
+| 3.1 | Links and paging | `tst/web/links.test.ts` → `refuses non-digit ids`, `refuses 21-digit ids`, `event links pass safeHref or render as text`; `tst/web/paging.test.ts` → `clamps page`, `ignores junk` | |
+| 3.2 | Access matrix derived from the router | `tst/web/routes/access.test.ts` iterates `protectedRouteList(router)` (never a hand list) → for each GET: `signed out → 302`, `role gone at re-check → 403`, `allowed → 200`; for each unsafe method: `no token → 403` | A new route without coverage is impossible: the list comes from the stack |
+| 3.3 | Home | `home.test.ts` → `shows latest month counts`, `says "not built yet" with no snapshot`, `marks incomplete months` | |
+| 3.4 | Hall of Fame page + copy-ready text + refresh | `hallOfFame.test.ts` → `escapes host names and event titles`, `copy text comes from a readonly textarea value`, `copy text matches the command's ready-to-post block`, `refresh refused while a build runs`, `refresh refused 18:00–19:00 UTC` | Copy button reads the `<textarea readonly>` value; never script-embedded text |
+| 3.5 | No-show history (per month, per member) | `noShowHistory.test.ts` → `per-member view lists every month the member appears in`, `member id must be digits`, `paginates at 50`, `shows asOf` | Per-member lookup uses `payload->'cases' @> '[{"memberId":"…"}]'` with a GIN index on `payload jsonb_path_ops` |
+| 3.6 | Suspension records | `suspensions.test.ts` + integration `listPage` tests → `active/past split matches /meetup_list_suspensions`, `shows void reason and who voided` | |
+| 3.7 | Identity changes + thumbnails | `identity.test.ts` → `filters by date, platform, member`, `keyset paging is stable`, `thumb route serves only PNG/JPEG/WebP by magic bytes`, `thumb route 404s for a missing side`, `thumb response is no-store and nosniff` | Thumbs read one row per request (`SELECT old_thumb … WHERE id=$1`) |
+| 3.8 | Link progress + trends | `charts.test.ts` → `escapes labels`, `uses no style attributes`, `handles a single point and all-zero series`; `trends.test.ts` → `reads summaries only` | |
+| 3.9 | Backfill script | `tst/scripts/backfillReports.test.ts` → `refuses to start 18:00–19:00 UTC`, `skips months with a snapshot unless --force`, `posts progress every 12 months via REST`, `never logs in to the gateway or registers commands`, `stores no-attendance months as incomplete`, `uses asOf = month end`, `reads suspension history in one query per batch` | Discord via `@discordjs/rest` (`rest.post(Routes.channelMessages(BOT_ALERTS_CHANNEL_ID), { body: { embeds, allowed_mentions: { parse: [] } } })`), no `Client`. `PG_POOL_MAX=2`. Hai runs `heroku run:detached -a meetup-discord-bot "PG_POOL_MAX=2 yarn tsx scripts/backfillReports.ts"`, never 18:00–19:00 UTC |
 
 ---
 
@@ -2984,28 +2891,28 @@ Rows are synced from the no-show snapshot for every month from `WORKSPACE_FIRST_
 
 ## Transition rules (`src/lib/workspace/transitions.ts`, pure)
 
-| Action              | Allowed from                                                 | To                                                                                                                              | Note required     | Classification |
-| ------------------- | ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------- | ----------------- | -------------- |
-| `copy_warning`      | `new`, `warning_copied`                                      | `warning_copied`                                                                                                                | no                | warning        |
-| `mark_sent`         | `new`, `warning_copied`                                      | `warning_sent`                                                                                                                  | no                | warning        |
-| `hold`              | `new`, `warning_copied`, `warning_sent`                      | `on_hold`                                                                                                                       | yes               | any            |
-| `skip`              | `new`, `warning_copied`, `warning_sent`, `on_hold`           | `skipped`                                                                                                                       | yes               | any            |
-| `reopen`            | `on_hold`, `skipped`                                         | the status before the hold/skip, read from the events log (so `warning_sent` is remembered and the warning can't be sent twice) | no                | any            |
-| `record_suspension` | `new`, `warning_copied`, `warning_sent`, `on_hold`, `voided` | `suspended`                                                                                                                     | no                | suspension     |
-| `link_suspension`   | `new`, `warning_copied`, `warning_sent`, `on_hold`, `voided` | `suspended`                                                                                                                     | no                | suspension     |
-| `void`              | `suspended`                                                  | `voided`                                                                                                                        | yes (void reason) | any            |
-| `edit_notes`        | any                                                          | unchanged                                                                                                                       | n/a               | any            |
+| Action | Allowed from | To | Note required | Classification |
+|---|---|---|---|---|
+| `copy_warning` | `new`, `warning_copied` | `warning_copied` | no | warning |
+| `mark_sent` | `new`, `warning_copied` | `warning_sent` | no | warning |
+| `hold` | `new`, `warning_copied`, `warning_sent` | `on_hold` | yes | any |
+| `skip` | `new`, `warning_copied`, `warning_sent`, `on_hold` | `skipped` | yes | any |
+| `reopen` | `on_hold`, `skipped` | the status before the hold/skip, read from the events log (so `warning_sent` is remembered and the warning can't be sent twice) | no | any |
+| `record_suspension` | `new`, `warning_copied`, `warning_sent`, `on_hold`, `voided` | `suspended` | no | suspension |
+| `link_suspension` | `new`, `warning_copied`, `warning_sent`, `on_hold`, `voided` | `suspended` | no | suspension |
+| `void` | `suspended` | `voided` | yes (void reason) | any |
+| `edit_notes` | any | unchanged | n/a | any |
 
 `reopen` replaces the earlier `release_hold`. "Copy suspension message" is client-only: it changes no status and writes nothing, so it is not an action. `record_suspension`, `link_suspension` and `void` are Leadership-only (`LEADERSHIP_ONLY_ACTIONS`).
 
 ## Tasks
 
-| #   | Task                                                                                                                                                                                         | Tests (file → names)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            | Acceptance                                                                                                                                                                                                 |
-| --- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 4.1 | Schema + repository; suspension insert/void inside the workspace transaction (`insertSuspensionInTx`, `voidSuspensionInTx` exported from `postgresSuspensionRepository.ts`, sharing its SQL) | `tst/integration/postgresNoShowWorkspaceRepository.test.ts` → `creates the suspension table first on a fresh database`, `sync from snapshot is idempotent and keeps edited rows`, `marks rows missing from a rebuild`, `refuses a stale version and writes nothing`, `rolls back the suspension when the workspace update fails`, `refuses when a live suspension after the period start exists and offers to link it`, `same-date ON CONFLICT links the existing row`, `every action writes exactly one event row`, `events are never updated` |                                                                                                                                                                                                            |
-| 4.2 | Transitions                                                                                                                                                                                  | `tst/lib/workspace/transitions.test.ts` → full matrix: every (status, action, classification) triple → allowed or refused; `note required for hold, skip, void`, `blank-after-trim note refused`, `reopen restores warning_sent`, `reopen restores new`, `record_suspension allowed from voided`                                                                                                                                                                                                                                                | Mutation-check                                                                                                                                                                                             |
-| 4.3 | Templates                                                                                                                                                                                    | `tst/lib/workspace/templates.test.ts` → `fee doubles: $10, $20, $40`, `days double: 30, 60, 120`, `host waiver omits the fee sentence`, `first name is the first word of the Meetup name, falls back to "there"`, `no-show list uses Pacific dates`, `end_date is the last suspended day (suspension date + days - 1)`, `links use NO_SHOW_POLICY_URL and NO_SHOW_APPEAL_URL`, `text is plain (escaped only when rendered)`                                                                                                                     | Templates copied verbatim from the spec. Constants: `NO_SHOW_POLICY_URL = 'https://15genasian.notion.site/1b1176bcb5de453687cd7aa5c0cd239b'`, `NO_SHOW_APPEAL_URL = 'https://forms.gle/tPiPYQ2DpAVZPL1T9'` |
-| 4.4 | Service: actions + moderation log + live upcoming RSVPs / act-by / 💵                                                                                                                        | `tst/lib/workspace/service.test.ts` → `record suspension writes the same row /meetup_record_suspension would`, `duration follows 30 × 2^prior as of the chosen date`, `logs each action to the moderation channel naming the actor as <@id>`, `upcoming RSVPs and act-by are computed live and cached ≤6h (derived fields only)`, `raw descriptions never reach Postgres`, `Meetup down shows "Meetup unavailable"`                                                                                                                             | Parity test compares against `recordCsvRows` output for the same member/date                                                                                                                               |
-| 4.5 | Routes + page (registered via `protectedRoutes`)                                                                                                                                             | `tst/web/routes/workspace.test.ts` → `every action requires CSRF` (from `protectedRouteList`), `stale version → 409 "someone just updated this, reload"`, `Open on Meetup only for digit ids`, `record suspension needs the confirm step`, `notes are escaped in the card and history`, `copy reads the readonly textarea`, `action rate limit`                                                                                                                                                                                                 | Form POSTs only                                                                                                                                                                                            |
-| 4.6 | Outcomes on no-show history (PR 3 page)                                                                                                                                                      | `noShowHistory.test.ts` → `shows workspace outcome per member`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |                                                                                                                                                                                                            |
-| 4.7 | Manual walkthrough + PR                                                                                                                                                                      | Hai and Stacey walk one month end to end on local data                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          | Draft PR; adds `NO_SHOW_POLICY_URL` / `NO_SHOW_APPEAL_URL` constants                                                                                                                                       |
+| # | Task | Tests (file → names) | Acceptance |
+|---|---|---|---|
+| 4.1 | Schema + repository; suspension insert/void inside the workspace transaction (`insertSuspensionInTx`, `voidSuspensionInTx` exported from `postgresSuspensionRepository.ts`, sharing its SQL) | `tst/integration/postgresNoShowWorkspaceRepository.test.ts` → `creates the suspension table first on a fresh database`, `sync from snapshot is idempotent and keeps edited rows`, `marks rows missing from a rebuild`, `refuses a stale version and writes nothing`, `rolls back the suspension when the workspace update fails`, `refuses when a live suspension after the period start exists and offers to link it`, `same-date ON CONFLICT links the existing row`, `every action writes exactly one event row`, `events are never updated` | |
+| 4.2 | Transitions | `tst/lib/workspace/transitions.test.ts` → full matrix: every (status, action, classification) triple → allowed or refused; `note required for hold, skip, void`, `blank-after-trim note refused`, `reopen restores warning_sent`, `reopen restores new`, `record_suspension allowed from voided` | Mutation-check |
+| 4.3 | Templates | `tst/lib/workspace/templates.test.ts` → `fee doubles: $10, $20, $40`, `days double: 30, 60, 120`, `host waiver omits the fee sentence`, `first name is the first word of the Meetup name, falls back to "there"`, `no-show list uses Pacific dates`, `end_date is the last suspended day (suspension date + days - 1)`, `links use NO_SHOW_POLICY_URL and NO_SHOW_APPEAL_URL`, `text is plain (escaped only when rendered)` | Templates copied verbatim from the spec. Constants: `NO_SHOW_POLICY_URL = 'https://15genasian.notion.site/1b1176bcb5de453687cd7aa5c0cd239b'`, `NO_SHOW_APPEAL_URL = 'https://forms.gle/tPiPYQ2DpAVZPL1T9'` |
+| 4.4 | Service: actions + moderation log + live upcoming RSVPs / act-by / 💵 | `tst/lib/workspace/service.test.ts` → `record suspension writes the same row /meetup_record_suspension would`, `duration follows 30 × 2^prior as of the chosen date`, `logs each action to the moderation channel naming the actor as <@id>`, `upcoming RSVPs and act-by are computed live and cached ≤6h (derived fields only)`, `raw descriptions never reach Postgres`, `Meetup down shows "Meetup unavailable"` | Parity test compares against `recordCsvRows` output for the same member/date |
+| 4.5 | Routes + page (registered via `protectedRoutes`) | `tst/web/routes/workspace.test.ts` → `every action requires CSRF` (from `protectedRouteList`), `stale version → 409 "someone just updated this, reload"`, `Open on Meetup only for digit ids`, `record suspension needs the confirm step`, `notes are escaped in the card and history`, `copy reads the readonly textarea`, `action rate limit` | Form POSTs only |
+| 4.6 | Outcomes on no-show history (PR 3 page) | `noShowHistory.test.ts` → `shows workspace outcome per member` | |
+| 4.7 | Manual walkthrough + PR | Hai and Stacey walk one month end to end on local data | Draft PR; adds `NO_SHOW_POLICY_URL` / `NO_SHOW_APPEAL_URL` constants |

@@ -16,7 +16,7 @@
 - Classification: 1 no-show in trailing 12 months → warning; 2+ → suspension candidate.
 - Cancelled events: skip titles matching `/cancell?ed/i` and any `status` of `CANCELLED`, `CANCELLED_PERM`, `AUTOSCHED_CANCELLED`.
 - `[Open House]` events stay excluded from host stats (existing behavior).
-- Every occurrence of a recurring event counts; only the _display_ collapses by title.
+- Every occurrence of a recurring event counts; only the *display* collapses by title.
 - Melissa executes warnings/suspensions — the bot only reports and records.
 - Unit tests: `yarn test <path>`. Lint: `yarn lint`. All files ESM with `.js` import suffixes.
 
@@ -25,12 +25,10 @@
 ### Task 1: Hall of Fame pure helpers — cancelled filtering and host stats
 
 **Files:**
-
 - Create: `src/lib/helpers/hallOfFame.ts`
 - Test: `tst/lib/helpers/hallOfFame.test.ts`
 
 **Interfaces:**
-
 - Consumes: `Event`, `BaseUserInfo` from `src/lib/client/meetup/types.js`.
 - Produces: `isCancelledEvent(event: Pick<Event, 'title' | 'status'>): boolean`; `interface HostStats { host: BaseUserInfo; events: Event[] }`; `collectHostStats(events: Event[]): { hostStats: HostStats[]; totalEvents: number }` (hostStats sorted by event count descending; cancelled and `[Open House]` events excluded; per-event hosts deduped by member id).
 
@@ -62,40 +60,25 @@ export function makeEvent(overrides: Partial<Event> = {}): Event {
 }
 
 export function host(id: string, name = `Host ${id}`) {
-  return {
-    member: {
-      id,
-      name,
-      gender: 'NONE',
-      memberUrl: `https://meetup.com/members/${id}`,
-    },
-  };
+  return { member: { id, name, gender: 'NONE', memberUrl: `https://meetup.com/members/${id}` } };
 }
 
 describe('isCancelledEvent', () => {
   it('matches cancelled titles in either spelling, any case', () => {
     expect(isCancelledEvent(makeEvent({ title: 'CANCELED: Hike' }))).toBe(true);
-    expect(isCancelledEvent(makeEvent({ title: 'Trivia (cancelled)' }))).toBe(
-      true,
-    );
+    expect(isCancelledEvent(makeEvent({ title: 'Trivia (cancelled)' }))).toBe(true);
     expect(isCancelledEvent(makeEvent({ title: 'Trivia Night' }))).toBe(false);
   });
 
   it('matches cancelled statuses', () => {
     expect(isCancelledEvent(makeEvent({ status: 'CANCELLED' }))).toBe(true);
-    expect(isCancelledEvent(makeEvent({ status: 'CANCELLED_PERM' }))).toBe(
-      true,
-    );
-    expect(isCancelledEvent(makeEvent({ status: 'AUTOSCHED_CANCELLED' }))).toBe(
-      true,
-    );
+    expect(isCancelledEvent(makeEvent({ status: 'CANCELLED_PERM' }))).toBe(true);
+    expect(isCancelledEvent(makeEvent({ status: 'AUTOSCHED_CANCELLED' }))).toBe(true);
     expect(isCancelledEvent(makeEvent({ status: 'PAST' }))).toBe(false);
   });
 
   it('does not match titles merely containing "cancel"', () => {
-    expect(isCancelledEvent(makeEvent({ title: 'How to cancel plans' }))).toBe(
-      false,
-    );
+    expect(isCancelledEvent(makeEvent({ title: 'How to cancel plans' }))).toBe(false);
   });
 });
 
@@ -190,8 +173,7 @@ export function collectHostStats(events: Event[]): {
   totalEvents: number;
 } {
   const countable = events.filter(
-    (event) =>
-      !isCancelledEvent(event) && !event.title.includes('[Open House]'),
+    (event) => !isCancelledEvent(event) && !event.title.includes('[Open House]'),
   );
   const byHost = new Map<string, HostStats>();
   for (const event of countable) {
@@ -230,12 +212,10 @@ git commit -m "Add cancelled filtering and host stat collection for Hall of Fame
 ### Task 2: Hall of Fame ready-to-post formatting
 
 **Files:**
-
 - Modify: `src/lib/helpers/hallOfFame.ts`
 - Test: `tst/lib/helpers/hallOfFame.test.ts`
 
 **Interfaces:**
-
 - Consumes: `HostStats` from Task 1; `tz` from `src/util/timezone.js`; `dayjs`.
 - Produces: `formatHallOfFamePost(input: { periodLabel: string; hostStats: HostStats[]; totalEvents: number; newHostIds: Set<string> }): string` — ranked hosts, recurring titles collapsed as `Title ×N (dates)`, 🆕 flag, a "New hosts" section listing each new host's co-hosts, and totals computed from the same data.
 
@@ -248,21 +228,9 @@ import { formatHallOfFamePost } from '../../../src/lib/helpers/hallOfFame.js';
 
 describe('formatHallOfFamePost', () => {
   const events = [
-    makeEvent({
-      title: 'Trivia Night',
-      dateTime: '2026-09-03T18:00:00Z',
-      eventHosts: [host('a', 'Alice')],
-    }),
-    makeEvent({
-      title: 'Trivia Night',
-      dateTime: '2026-09-10T18:00:00Z',
-      eventHosts: [host('a', 'Alice')],
-    }),
-    makeEvent({
-      title: 'Hike',
-      dateTime: '2026-09-06T09:00:00Z',
-      eventHosts: [host('a', 'Alice'), host('b', 'Bob')],
-    }),
+    makeEvent({ title: 'Trivia Night', dateTime: '2026-09-03T18:00:00Z', eventHosts: [host('a', 'Alice')] }),
+    makeEvent({ title: 'Trivia Night', dateTime: '2026-09-10T18:00:00Z', eventHosts: [host('a', 'Alice')] }),
+    makeEvent({ title: 'Hike', dateTime: '2026-09-06T09:00:00Z', eventHosts: [host('a', 'Alice'), host('b', 'Bob')] }),
   ];
 
   function post(newHostIds = new Set<string>()) {
@@ -411,12 +379,10 @@ git commit -m "Add ready-to-post Hall of Fame formatting with recurring-title co
 ### Task 3: Wire Hall of Fame into `meetup_get_host_event_stats` with new-host detection
 
 **Files:**
-
 - Modify: `src/commands/meetup/getEventStats.ts` (the `meetupGetHostEventStatsHandler` method and module top)
 - No new unit test (thin fetch/wiring layer; logic was tested in Tasks 1–2). Manual verification step included.
 
 **Interfaces:**
-
 - Consumes: `collectHostStats`, `formatHallOfFamePost`, `isCancelledEvent` from `src/lib/helpers/hallOfFame.js`; `meetupClient.getGroupEvents(paginationInput, filter)` which returns `{ groupByUrlname: { events: { totalCount, edges, pageInfo } } }`.
 - Produces: `findNewHostIds(meetupClient: GqlMeetupClient, hostIds: string[], beforeIso: string): Promise<Set<string>>` (module-level function in `getEventStats.ts`, exported for reuse awareness but used only here).
 
@@ -459,7 +425,9 @@ logger.info('Fetching data');
 await interaction.editReply({ content: 'Sit tight! Fetching data.' });
 
 const pastEvents = await getEventsYearMonth(meetupClient, year, month);
-const countableEvents = pastEvents.filter((event) => !isCancelledEvent(event));
+const countableEvents = pastEvents.filter(
+  (event) => !isCancelledEvent(event),
+);
 
 // Attendance counts for the detailed attachment (unchanged data, but only
 // for countable events).
@@ -573,14 +541,7 @@ This cannot run in CI. Ask the human partner (or use dev credentials via `yarn d
 ```graphql
 query {
   groupByUrlname(urlname: "<group urlname>") {
-    events(
-      first: 1
-      filter: {
-        hostId: "<known long-time host id>"
-        beforeDateTime: "2026-01-01T00:00:00Z"
-        status: [PAST]
-      }
-    ) {
+    events(first: 1, filter: { hostId: "<known long-time host id>", beforeDateTime: "2026-01-01T00:00:00Z", status: [PAST] }) {
       totalCount
     }
   }
@@ -601,12 +562,10 @@ git commit -m "Produce ready-to-post Hall of Fame with cancelled filtering and n
 ### Task 4: No Show pure helpers — tally, classification, penalty, act-by, report format
 
 **Files:**
-
 - Create: `src/lib/helpers/noShowReport.ts`
 - Test: `tst/lib/helpers/noShowReport.test.ts`
 
 **Interfaces:**
-
 - Consumes: `BaseUserInfo`, `Event` from `src/lib/client/meetup/types.js`; `dayjs`, `tz`.
 - Produces:
   - `tallyNoShows(resultsPerEvent: { event: Event; rsvps: { member: BaseUserInfo }[] }[]): Map<string, { member: BaseUserInfo; events: Event[] }>`
@@ -634,12 +593,7 @@ import {
 } from '../../../src/lib/helpers/noShowReport.js';
 
 function member(id: string, name = `Member ${id}`): BaseUserInfo {
-  return {
-    id,
-    name,
-    gender: 'NONE',
-    memberUrl: `https://meetup.com/members/${id}`,
-  };
+  return { id, name, gender: 'NONE', memberUrl: `https://meetup.com/members/${id}` };
 }
 
 let nextId = 0;
@@ -747,12 +701,7 @@ describe('formatNoShowReport', () => {
 
   it('notes when a candidate has no upcoming RSVPs', () => {
     const report = formatNoShowReport('2026 September', [
-      {
-        ...suspension,
-        nextRsvpEvent: undefined,
-        actBy: undefined,
-        actNow: undefined,
-      },
+      { ...suspension, nextRsvpEvent: undefined, actBy: undefined, actNow: undefined },
     ]);
     expect(report).toContain('no upcoming RSVPs');
   });
@@ -899,13 +848,11 @@ git commit -m "Add no-show classification, penalty, and report formatting helper
 ### Task 5: Suspension repository (types, Postgres, integration test)
 
 **Files:**
-
 - Modify: `src/lib/repositories/types.ts` (append)
 - Create: `src/lib/repositories/postgresSuspensionRepository.ts`
 - Test: `tst/integration/postgresSuspensionRepository.test.ts`
 
 **Interfaces:**
-
 - Consumes: `pg`, existing repository conventions.
 - Produces (appended to `src/lib/repositories/types.ts`):
 
@@ -1194,12 +1141,10 @@ git commit -m "Add Postgres suspension_records repository"
 ### Task 6: Suspension CSV parser
 
 **Files:**
-
 - Create: `src/lib/helpers/suspensionCsv.ts`
 - Test: `tst/lib/helpers/suspensionCsv.test.ts`
 
 **Interfaces:**
-
 - Consumes: `SuspensionInsert` from `src/lib/repositories/types.js`.
 - Produces: `parseSuspensionCsv(text: string): SuspensionInsert[]` — expects header `member_id,duration_days,suspended_at,notes`; throws `Error` naming the first bad row. Dates parsed as `YYYY-MM-DD`.
 
@@ -1253,9 +1198,9 @@ describe('parseSuspensionCsv', () => {
   });
 
   it('rejects a bad date with the row number', () => {
-    expect(() => parseSuspensionCsv(`${HEADER}\n123,30,Jan 15,`)).toThrow(
-      /row 2/i,
-    );
+    expect(() =>
+      parseSuspensionCsv(`${HEADER}\n123,30,Jan 15,`),
+    ).toThrow(/row 2/i);
   });
 });
 ```
@@ -1338,12 +1283,10 @@ git commit -m "Add suspension CSV parser for recording and backfill"
 > Later ruling (Hai, 2026-10-17): `/meetup_record_suspension` and `/meetup_void_suspension` are 1.5 Leadership Team only, by the role itself (`requireModOrOrganizer(interaction, msg, ['leadership'], { allowAdmin: false })`). The moderators-and-organizers check in the code below is superseded.
 
 **Files:**
-
 - Create: `src/commands/meetup/recordSuspension.ts`
 - Modify: `src/commands/index.ts` (register `MeetupRecordSuspensionCommands`)
 
 **Interfaces:**
-
 - Consumes: `PostgresSuspensionRepository.instance()`, `recommendedSuspensionDays` (Task 4), `parseSuspensionCsv` (Task 6), `discordCommandWrapper`, `keepReplyVisible`, `requireModOrOrganizer` from `src/util/discord.js`.
 - Produces: slash command `meetup_record_suspension` with options `members` (string, optional: comma-separated Meetup member IDs), `date` (string, optional `YYYY-MM-DD`, default today), `csv` (attachment, optional). Exactly one of `members` / `csv` must be provided.
 
@@ -1458,10 +1401,7 @@ export class MeetupRecordSuspensionCommands {
         // prior count, and a moderator may list the same member twice.
         for (const memberId of memberIds) {
           // eslint-disable-next-line no-await-in-loop
-          const priorCount = await repo.countSuspensionsBefore(
-            memberId,
-            suspendedAt,
-          );
+          const priorCount = await repo.countSuspensionsBefore(memberId, suspendedAt);
           const durationDays = recommendedSuspensionDays(priorCount);
           // eslint-disable-next-line no-await-in-loop
           await repo.insert({
@@ -1521,7 +1461,7 @@ git commit -m "Add /meetup_record_suspension with bulk-ID and CSV modes"
 
 > **Amended 2026-09-27 — read the spec's Policy section before implementing.**
 > The snippets below predate two confirmed rules: the 12-month window is measured
-> back from _today_, not from the report month, and only no-shows after the member's
+> back from *today*, not from the report month, and only no-shows after the member's
 > most recent suspension count. Without the reset, the no-shows behind a suspension
 > stay in the window and suspend the member again, doubled, for the same no-shows.
 > Prior suspensions use `countSuspensionsBefore(memberId, date)`.
@@ -1535,13 +1475,11 @@ git commit -m "Add /meetup_record_suspension with bulk-ID and CSV modes"
 > and leaves `suspended_at` blank. See the spec's Phase 3 section.
 
 **Files:**
-
 - Create: `src/commands/meetup/noShowReport.ts`
 - Modify: `src/commands/meetup/getEventStats.ts` — export `getEventsYearMonth` (add `export` keyword; no behavior change)
 - Modify: `src/commands/index.ts` (register `MeetupNoShowReportCommands`)
 
 **Interfaces:**
-
 - Consumes: `getEventsYearMonth` (exported from `getEventStats.ts`), `getPaginatedData`, `meetupClient.getGroupEvents` / `getEventRsvps`, helpers from Task 4, `PostgresSuspensionRepository`, `withDiscordFileAttachment`, `requireModOrOrganizer`, `tz`, `dayjs`.
 - Produces: slash command `meetup_run_noshow_report` with required `year` and `month` (1–12; whole-year mode is intentionally not offered — the policy window is monthly).
 
@@ -1582,10 +1520,7 @@ import { getEventsYearMonth } from './getEventStats.js';
 const logger = new Logger({ name: 'MeetupNoShowReportCommands' });
 
 /** NO_SHOW rsvps per event, fetched in parallel (existing pattern). */
-async function getNoShowsPerEvent(
-  meetupClient: GqlMeetupClient,
-  events: Event[],
-) {
+async function getNoShowsPerEvent(meetupClient: GqlMeetupClient, events: Event[]) {
   return Promise.all(
     events.map(async (event) => {
       const rsvps = await getPaginatedData(async (paginationInput) => {
@@ -1657,14 +1592,16 @@ export class MeetupNoShowReportCommands {
           .set('month', month - 1)
           .endOf('month');
         const windowStart = monthEnd.subtract(12, 'month');
-        const windowEvents = await getPaginatedData(async (paginationInput) => {
-          const result = await meetupClient.getGroupEvents(paginationInput, {
-            status: ['PAST'],
-            afterDateTime: windowStart.toISOString(),
-            beforeDateTime: monthEnd.toISOString(),
-          });
-          return result.groupByUrlname.events;
-        });
+        const windowEvents = await getPaginatedData(
+          async (paginationInput) => {
+            const result = await meetupClient.getGroupEvents(paginationInput, {
+              status: ['PAST'],
+              afterDateTime: windowStart.toISOString(),
+              beforeDateTime: monthEnd.toISOString(),
+            });
+            return result.groupByUrlname.events;
+          },
+        );
         const windowTally = tallyNoShows(
           await getNoShowsPerEvent(meetupClient, windowEvents),
         );
@@ -1721,10 +1658,7 @@ export class MeetupNoShowReportCommands {
           };
           if (classification === 'suspension') {
             // eslint-disable-next-line no-await-in-loop
-            const priorSuspensions = await repo.countSuspensionsBefore(
-              memberId,
-              today,
-            );
+            const priorSuspensions = await repo.countSuspensionsBefore(memberId, today);
             noShowCase.priorSuspensions = priorSuspensions;
             noShowCase.recommendedDays =
               recommendedSuspensionDays(priorSuspensions);
@@ -1788,7 +1722,6 @@ git commit -m "Add /meetup_run_noshow_report with 12-month classification and pe
 ### Task 9: Final verification and runbook
 
 **Files:**
-
 - Modify: `README.md` — only if it documents commands (check first; follow its existing style if adding).
 
 - [ ] **Step 1: Full check**

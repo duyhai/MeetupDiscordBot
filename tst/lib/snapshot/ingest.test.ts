@@ -698,3 +698,22 @@ describe('rate limits on the card and in #meetup-bot-alerts', () => {
     ]);
   });
 });
+
+describe('an accepted event inside the settle window', () => {
+  it('stays accepted when re-read short (no failed/accepted flapping)', async () => {
+    const env = setup();
+    env.group.events = [{ id: '700', status: 'PAST', daysAgo: 3, members: 6 }];
+    env.group.short.set('700', 0);
+    await tickUntilFinished(env); // run 1: failed
+    env.advance(SNAPSHOT_RUN_INTERVAL_MS);
+    await tickUntilFinished(env); // run 2: accepted
+    expect(env.store.events.get('700')?.rsvpsHidden).toBe(true);
+    env.advance(SNAPSHOT_RUN_INTERVAL_MS);
+    await tickUntilFinished(env); // run 3: still in the window, re-read short
+    expect(env.store.events.get('700')).toMatchObject({
+      rsvpsHidden: true,
+      rsvpFailures: 0,
+    });
+    expect(await env.store.failingEventCount()).toBe(0);
+  });
+});

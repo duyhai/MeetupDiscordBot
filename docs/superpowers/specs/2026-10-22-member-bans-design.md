@@ -41,20 +41,20 @@ Staff keep banned members in a "Banned Members" tab of the no-show tracker workb
 
 ## Data model: `member_bans`, one table, created on first use under the existing locks
 
-| Column                                  | Notes                                                                                                       |
-| --------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
-| `id`                                    | serial                                                                                                      |
-| `member_id`                             | text; Meetup id, digits only                                                                                |
-| `member_name`                           | text                                                                                                        |
-| `banned_on`                             | date, nullable; NULL means "date unknown"                                                                   |
-| `notes`                                 | text; staff-written. The import writes only a fixed provenance line.                                        |
-| `recorded_by`                           | Discord id                                                                                                  |
-| `created_at`                            |                                                                                                             |
-| `photo`                                 | bytea, nullable                                                                                             |
-| `photo_source`                          | `'upload'`, `'profile'` (a live avatar or Meetup photo) or `'identity-thumb'` (a stored identity thumbnail) |
-| `photo_updated_at`                      |                                                                                                             |
-| `photo_updated_by`                      | Discord id, or NULL when the sweep filled it                                                                |
-| `lifted_at`, `lifted_by`, `lift_reason` |                                                                                                             |
+| Column | Notes |
+|---|---|
+| `id` | serial |
+| `member_id` | text; Meetup id, digits only |
+| `member_name` | text |
+| `banned_on` | date, nullable; NULL means "date unknown" |
+| `notes` | text; staff-written. The import writes only a fixed provenance line. |
+| `recorded_by` | Discord id |
+| `created_at` | |
+| `photo` | bytea, nullable |
+| `photo_source` | `'upload'`, `'profile'` (a live avatar or Meetup photo) or `'identity-thumb'` (a stored identity thumbnail) |
+| `photo_updated_at` | |
+| `photo_updated_by` | Discord id, or NULL when the sweep filled it |
+| `lifted_at`, `lifted_by`, `lift_reason` | |
 
 - **Lifting.** A ban is lifted the way a suspension is voided: the row stays and gains who lifted it, when and why.
 - **One active ban.** A partial unique index allows at most one active (unlifted) ban per member.
@@ -88,7 +88,6 @@ Staff keep banned members in a "Banned Members" tab of the no-show tracker workb
   **Metadata strip (controller ruling 2026-10-22).** The canvas re-encode drops metadata, but a forged post need not come from the canvas, and Safari's canvas JPEG may carry a minimal EXIF APP1. So the server strips rather than refuses, with container-level byte surgery, no decoding, and allow-lists only (`stripImageMetadata`). JPEG: the whole file is walked; before the first scan only JFIF (APP0), Adobe (APP14), the tables and the frame header are kept; between scans only the tables and further scans; APPn and COM are dropped everywhere (ICC included); the output ends at EOI. WebP: a VP8X file keeps only its header, alpha and image chunks (so EXIF, XMP and ICC go) and gets new flags and a new RIFF size; a plain VP8/VP8L file must be exactly one chunk. PNG (sweep sources only; uploads stay WebP or JPEG): only image and colour chunks are kept, so text, EXIF, time, ICC and animation chunks go. Anything malformed is refused. The sweep fill strips the same way.
 
   An upload replaces any existing photo, including one the sweep filled in. Staff can always correct the photo; the sweep cannot.
-
 - **CSP.** Unchanged. The page doesn't preview through a `blob:` URL; the preview is the canvas itself, so `img-src` stays `'self'`. The upload is a normal form post, so `connect-src` stays `'none'`.
 
 ### Sweep fill (daily identity sweep, never overwrites)
@@ -125,7 +124,6 @@ The Suspensions page gets a Banned tab, Two-Tone styled, with stacked cards on p
   - where the photo came from: "Uploaded by …" or "From their profile on …".
 
   Leadership also sees "Upload photo" (or "Replace photo") and "Lift ban" (reason required).
-
 - **Lifted bans.** Each shows who lifted it, when and why. The photo is kept, so the person can still be recognised if they return.
 - **Add ban (Leadership).** A form with member id, name, optional date and notes. It refuses a second active ban for the same member.
 - **Import bans (Leadership).** A textarea where staff paste CSV text with the columns `member_id,member_name,banned_on,notes`; `banned_on` may be blank.

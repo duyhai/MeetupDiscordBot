@@ -257,6 +257,9 @@ export class PostgresWrappedBackfillRepository implements WrappedBackfillStore {
        )
        INSERT INTO wrapped_backfill_deferred (run_id, discord_user_id)
        SELECT id, $3 FROM moved
+       -- Unreachable in practice: the cursor only moves forward, so a member
+       -- is deferred once per run. Were it hit, the cursor still moved and
+       -- the caller would end the tick as if another process had moved it.
        ON CONFLICT DO NOTHING
        RETURNING run_id`,
       [id, from ?? null, to],

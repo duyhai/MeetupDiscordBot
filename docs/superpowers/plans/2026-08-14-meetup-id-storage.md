@@ -25,41 +25,39 @@
 
 ## File Structure
 
-| File                                                          | Responsibility                                                                             |
-| ------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
-| `src/lib/repositories/types.ts` (new)                         | `MemberRecord`, `MemberUpsert`, `OnboardMethod`, `MemberRepository` interface              |
-| `src/lib/repositories/inMemoryMemberRepository.ts` (new)      | Map-backed repo for local dev + unit tests                                                 |
-| `src/lib/repositories/postgresMemberRepository.ts` (new)      | `pg` pool repo, ensures schema lazily                                                      |
-| `src/util/memberRepository.ts` (new)                          | `ApplicationMemberRepository()` selector on `DATABASE_URL` (mirrors `src/util/cache.ts`)   |
-| `scripts/createLogChannels.ts` (new)                          | One-off: create the two log channels, print IDs                                            |
-| `src/constants.ts` (modify)                                   | `BOT_ACTIVITY_LOG_CHANNEL_ID`, `BOT_ALERTS_CHANNEL_ID`                                     |
-| `src/lib/helpers/discordLogger.ts` (new)                      | `logActivity` / `logAlert`, never throw                                                    |
-| `src/util/discord.ts` (modify)                                | wrapper hooks: activity on success, alert on error; `hasAnyServerRole`                     |
-| `src/lib/helpers/memberLink.ts` (new)                         | `recordMeetupLink` (duplicate rules), `recordManualOnboard`, `DuplicateMeetupAccountError` |
-| `src/lib/helpers/onboardUser.ts` (modify)                     | wire `recordMeetupLink` into `selfOnboardUser`, `recordManualOnboard` into `onboardUser`   |
-| `src/buttonMenu/meetup/syncAccountV2.ts` (modify)             | wire `recordMeetupLink` with `'sync_v2'`                                                   |
-| `src/commands/meetup/unlinkAccount.ts` (new)                  | `/meetup_unlink` mod/organizer command                                                     |
-| `src/lib/helpers/unlinkedDigest.ts` (new)                     | digest collection, formatting, scheduler                                                   |
-| `src/index.ts` (modify)                                       | start digest scheduler on `clientReady`                                                    |
-| `tst/lib/repositories/inMemoryMemberRepository.test.ts` (new) | repo semantics                                                                             |
-| `tst/integration/postgresMemberRepository.test.ts` (new)      | real-Postgres CRUD, gated on `DATABASE_URL`                                                |
-| `tst/lib/helpers/discordLogger.test.ts` (new)                 | posts embeds; never throws                                                                 |
-| `tst/lib/helpers/memberLink.test.ts` (new)                    | duplicate/change/manual rules                                                              |
-| `tst/lib/helpers/unlinkedDigest.test.ts` (new)                | collection filter + formatting + shouldRun                                                 |
-| `tst/commands/meetup/util/discord.test.ts` (new)              | wrapper hooks + `hasAnyServerRole`                                                         |
+| File | Responsibility |
+|---|---|
+| `src/lib/repositories/types.ts` (new) | `MemberRecord`, `MemberUpsert`, `OnboardMethod`, `MemberRepository` interface |
+| `src/lib/repositories/inMemoryMemberRepository.ts` (new) | Map-backed repo for local dev + unit tests |
+| `src/lib/repositories/postgresMemberRepository.ts` (new) | `pg` pool repo, ensures schema lazily |
+| `src/util/memberRepository.ts` (new) | `ApplicationMemberRepository()` selector on `DATABASE_URL` (mirrors `src/util/cache.ts`) |
+| `scripts/createLogChannels.ts` (new) | One-off: create the two log channels, print IDs |
+| `src/constants.ts` (modify) | `BOT_ACTIVITY_LOG_CHANNEL_ID`, `BOT_ALERTS_CHANNEL_ID` |
+| `src/lib/helpers/discordLogger.ts` (new) | `logActivity` / `logAlert`, never throw |
+| `src/util/discord.ts` (modify) | wrapper hooks: activity on success, alert on error; `hasAnyServerRole` |
+| `src/lib/helpers/memberLink.ts` (new) | `recordMeetupLink` (duplicate rules), `recordManualOnboard`, `DuplicateMeetupAccountError` |
+| `src/lib/helpers/onboardUser.ts` (modify) | wire `recordMeetupLink` into `selfOnboardUser`, `recordManualOnboard` into `onboardUser` |
+| `src/buttonMenu/meetup/syncAccountV2.ts` (modify) | wire `recordMeetupLink` with `'sync_v2'` |
+| `src/commands/meetup/unlinkAccount.ts` (new) | `/meetup_unlink` mod/organizer command |
+| `src/lib/helpers/unlinkedDigest.ts` (new) | digest collection, formatting, scheduler |
+| `src/index.ts` (modify) | start digest scheduler on `clientReady` |
+| `tst/lib/repositories/inMemoryMemberRepository.test.ts` (new) | repo semantics |
+| `tst/integration/postgresMemberRepository.test.ts` (new) | real-Postgres CRUD, gated on `DATABASE_URL` |
+| `tst/lib/helpers/discordLogger.test.ts` (new) | posts embeds; never throws |
+| `tst/lib/helpers/memberLink.test.ts` (new) | duplicate/change/manual rules |
+| `tst/lib/helpers/unlinkedDigest.test.ts` (new) | collection filter + formatting + shouldRun |
+| `tst/commands/meetup/util/discord.test.ts` (new) | wrapper hooks + `hasAnyServerRole` |
 
 ---
 
 ### Task 1: Repository types + InMemoryMemberRepository
 
 **Files:**
-
 - Create: `src/lib/repositories/types.ts`
 - Create: `src/lib/repositories/inMemoryMemberRepository.ts`
 - Test: `tst/lib/repositories/inMemoryMemberRepository.test.ts`
 
 **Interfaces:**
-
 - Consumes: nothing.
 - Produces (used by every later task):
 
@@ -77,10 +75,7 @@ export interface MemberRecord {
   lastSyncedAt: Date;
 }
 
-export type MemberUpsert = Omit<
-  MemberRecord,
-  'firstOnboardedAt' | 'lastSyncedAt'
->;
+export type MemberUpsert = Omit<MemberRecord, 'firstOnboardedAt' | 'lastSyncedAt'>;
 
 export interface MemberRepository {
   upsert(member: MemberUpsert): Promise<MemberRecord>;
@@ -210,9 +205,7 @@ export class InMemoryMemberRepository implements MemberRepository {
     return { ...record };
   }
 
-  async findByDiscordId(
-    discordUserId: string,
-  ): Promise<MemberRecord | undefined> {
+  async findByDiscordId(discordUserId: string): Promise<MemberRecord | undefined> {
     const record = this.members.get(discordUserId);
     return record ? { ...record } : undefined;
   }
@@ -256,13 +249,11 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 ### Task 2: PostgresMemberRepository + selector + gated integration test
 
 **Files:**
-
 - Create: `src/lib/repositories/postgresMemberRepository.ts`
 - Create: `src/util/memberRepository.ts`
 - Test: `tst/integration/postgresMemberRepository.test.ts`
 
 **Interfaces:**
-
 - Consumes: `MemberRepository`, `MemberRecord`, `MemberUpsert` from `src/lib/repositories/types.js`; `InMemoryMemberRepository` from Task 1.
 - Produces:
   - `PostgresMemberRepository.instance(): Promise<PostgresMemberRepository>` (async static, mirrors `RedisCache.instance()`; ensures schema on first call).
@@ -296,7 +287,7 @@ const POSTGRES_AVAILABLE = Boolean(process.env.DATABASE_URL);
 if (!POSTGRES_AVAILABLE) {
   // eslint-disable-next-line no-console
   console.warn(
-    'Skipping PostgresMemberRepository integration tests: set DATABASE_URL to a reachable Postgres to run them.',
+    'Skipping PostgresMemberRepository integration tests: set DATABASE_URL to a reachable Postgres to run them.'
   );
 }
 
@@ -329,7 +320,7 @@ const freshMember = () => ({
 
       expect(stored.firstOnboardedAt).toBeInstanceOf(Date);
       expect(await repo.findByDiscordId(member.discordUserId)).toMatchObject(
-        member,
+        member
       );
       expect(await repo.findByMeetupId(member.meetupId)).toMatchObject(member);
     });
@@ -344,23 +335,15 @@ const freshMember = () => ({
     });
 
     it('allows multiple NULL meetup_id rows but rejects duplicate meetup_id', async () => {
-      const manualA = {
-        ...freshMember(),
-        meetupId: null,
-        onboardMethod: 'manual' as const,
-      };
-      const manualB = {
-        ...freshMember(),
-        meetupId: null,
-        onboardMethod: 'manual' as const,
-      };
+      const manualA = { ...freshMember(), meetupId: null, onboardMethod: 'manual' as const };
+      const manualB = { ...freshMember(), meetupId: null, onboardMethod: 'manual' as const };
       await repo.upsert(manualA);
       await repo.upsert(manualB); // two NULLs must coexist
 
       const linked = freshMember();
       await repo.upsert(linked);
       await expect(
-        repo.upsert({ ...freshMember(), meetupId: linked.meetupId }),
+        repo.upsert({ ...freshMember(), meetupId: linked.meetupId })
       ).rejects.toThrow(); // unique violation on meetup_id
     });
 
@@ -371,14 +354,14 @@ const freshMember = () => ({
 
       expect(await repo.findByDiscordId(member.discordUserId)).toBeUndefined();
     });
-  },
+  }
 );
 ```
 
 - [ ] **Step 3: Run test to verify it fails**
 
 Run: `DATABASE_URL=postgres://postgres:pw@localhost:5432/postgres yarn test:integration tst/integration/postgresMemberRepository.test.ts`
-(Start Postgres first: `docker run --rm -d -p 5432:5432 -e POSTGRES_PASSWORD=pw --name plan-pg postgres`. If Docker is unavailable on this machine, run the suite without `DATABASE_URL` and confirm it _skips with the warning_ — the real run then happens in CI/rollout.)
+(Start Postgres first: `docker run --rm -d -p 5432:5432 -e POSTGRES_PASSWORD=pw --name plan-pg postgres`. If Docker is unavailable on this machine, run the suite without `DATABASE_URL` and confirm it *skips with the warning* — the real run then happens in CI/rollout.)
 Expected: FAIL — cannot resolve `postgresMemberRepository.js`.
 
 - [ ] **Step 4: Write the implementation**
@@ -482,17 +465,15 @@ export class PostgresMemberRepository implements MemberRepository {
         member.meetupMemberUrl,
         member.onboardMethod,
         member.onboardedBy,
-      ],
+      ]
     );
     return toRecord(result.rows[0]);
   }
 
-  async findByDiscordId(
-    discordUserId: string,
-  ): Promise<MemberRecord | undefined> {
+  async findByDiscordId(discordUserId: string): Promise<MemberRecord | undefined> {
     const result = await this.pool.query<MemberRow>(
       'SELECT * FROM members WHERE discord_user_id = $1',
-      [discordUserId],
+      [discordUserId]
     );
     return result.rows[0] ? toRecord(result.rows[0]) : undefined;
   }
@@ -500,7 +481,7 @@ export class PostgresMemberRepository implements MemberRepository {
   async findByMeetupId(meetupId: string): Promise<MemberRecord | undefined> {
     const result = await this.pool.query<MemberRow>(
       'SELECT * FROM members WHERE meetup_id = $1',
-      [meetupId],
+      [meetupId]
     );
     return result.rows[0] ? toRecord(result.rows[0]) : undefined;
   }
@@ -525,12 +506,11 @@ import { InMemoryMemberRepository } from '../lib/repositories/inMemoryMemberRepo
 import { PostgresMemberRepository } from '../lib/repositories/postgresMemberRepository.js';
 import { MemberRepository } from '../lib/repositories/types.js';
 
-export const ApplicationMemberRepository =
-  async (): Promise<MemberRepository> => {
-    return process.env.DATABASE_URL
-      ? PostgresMemberRepository.instance()
-      : InMemoryMemberRepository.instance();
-  };
+export const ApplicationMemberRepository = async (): Promise<MemberRepository> => {
+  return process.env.DATABASE_URL
+    ? PostgresMemberRepository.instance()
+    : InMemoryMemberRepository.instance();
+};
 ```
 
 - [ ] **Step 5: Run tests to verify they pass**
@@ -553,12 +533,10 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 ### Task 3: Create the two log channels + constants
 
 **Files:**
-
 - Create: `scripts/createLogChannels.ts`
 - Modify: `src/constants.ts` (append after `LGBTQ_CHANNEL_ID`, line ~50)
 
 **Interfaces:**
-
 - Consumes: nothing from earlier tasks.
 - Produces: `BOT_ACTIVITY_LOG_CHANNEL_ID` and `BOT_ALERTS_CHANNEL_ID` string constants in `src/constants.ts` — Task 4's logger reads these.
 
@@ -628,7 +606,7 @@ BOT_ALERTS_CHANNEL_ID = '14xxxxxxxxxxxxxxxxx'
 
 - [ ] **Step 3: Add the printed IDs to constants**
 
-In `src/constants.ts`, directly below the `LGBTQ_CHANNEL_ID` line, add (using the _actual_ IDs printed in Step 2):
+In `src/constants.ts`, directly below the `LGBTQ_CHANNEL_ID` line, add (using the *actual* IDs printed in Step 2):
 
 ```typescript
 // Meetup bot log channels (created by scripts/createLogChannels.ts)
@@ -656,12 +634,10 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 ### Task 4: discordLogger helper
 
 **Files:**
-
 - Create: `src/lib/helpers/discordLogger.ts`
 - Test: `tst/lib/helpers/discordLogger.test.ts`
 
 **Interfaces:**
-
 - Consumes: `BOT_ACTIVITY_LOG_CHANNEL_ID`, `BOT_ALERTS_CHANNEL_ID` from `src/constants.js` (Task 3).
 - Produces (used by Tasks 5–9):
 
@@ -687,15 +663,9 @@ import { Client, TextChannel } from 'discord.js';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { BOT_ACTIVITY_LOG_CHANNEL_ID } from '../../../src/constants.js';
-import {
-  logActivity,
-  logAlert,
-} from '../../../src/lib/helpers/discordLogger.js';
+import { logActivity, logAlert } from '../../../src/lib/helpers/discordLogger.js';
 
-function makeClient(
-  sendMock: ReturnType<typeof vi.fn>,
-  options?: { fetchFails?: boolean },
-) {
+function makeClient(sendMock: ReturnType<typeof vi.fn>, options?: { fetchFails?: boolean }) {
   const channel = Object.create(TextChannel.prototype) as TextChannel;
   (channel as any).send = sendMock;
   return {
@@ -719,7 +689,7 @@ describe('discordLogger', () => {
     await logActivity(client, { title: 'User onboarded' });
 
     expect(client.channels.fetch).toHaveBeenCalledWith(
-      BOT_ACTIVITY_LOG_CHANNEL_ID,
+      BOT_ACTIVITY_LOG_CHANNEL_ID
     );
     expect(sendMock).toHaveBeenCalledTimes(1);
     const payload = sendMock.mock.calls[0][0];
@@ -794,7 +764,7 @@ async function postToChannel(
   client: Client,
   channelId: string,
   color: number,
-  entry: LogEntry,
+  entry: LogEntry
 ): Promise<void> {
   try {
     const channel = await client.channels.fetch(channelId);
@@ -822,16 +792,8 @@ async function postToChannel(
   }
 }
 
-export async function logActivity(
-  client: Client,
-  entry: LogEntry,
-): Promise<void> {
-  await postToChannel(
-    client,
-    BOT_ACTIVITY_LOG_CHANNEL_ID,
-    COLORS.activity,
-    entry,
-  );
+export async function logActivity(client: Client, entry: LogEntry): Promise<void> {
+  await postToChannel(client, BOT_ACTIVITY_LOG_CHANNEL_ID, COLORS.activity, entry);
 }
 
 export async function logAlert(client: Client, entry: LogEntry): Promise<void> {
@@ -859,12 +821,10 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 ### Task 5: discordCommandWrapper hooks + hasAnyServerRole
 
 **Files:**
-
 - Modify: `src/util/discord.ts` (wrapper at lines 22–43; add `hasAnyServerRole` near `isAdmin`)
 - Test: `tst/commands/meetup/util/discord.test.ts`
 
 **Interfaces:**
-
 - Consumes: `logActivity`, `logAlert` from Task 4.
 - Produces:
   - `discordCommandWrapper` (same signature) now also posts an activity entry on success and an alert entry on error.
@@ -899,9 +859,7 @@ function makeInteraction(overrides: Record<string, unknown> = {}) {
     user: { id: 'user-1', username: 'testUser', toString: () => '<@user-1>' },
     commandName: 'test_command',
     isChatInputCommand: () => true,
-    reply: vi
-      .fn()
-      .mockResolvedValue({ delete: vi.fn().mockResolvedValue(undefined) }),
+    reply: vi.fn().mockResolvedValue({ delete: vi.fn().mockResolvedValue(undefined) }),
     editReply: vi.fn().mockResolvedValue(undefined),
     ...overrides,
   } as unknown as CommandInteraction;
@@ -984,7 +942,7 @@ Add above `discordCommandWrapper`:
 
 ```typescript
 export function describeInteraction(
-  interaction: ButtonInteraction | CommandInteraction | ModalSubmitInteraction,
+  interaction: ButtonInteraction | CommandInteraction | ModalSubmitInteraction
 ): string {
   if (interaction.isChatInputCommand?.()) {
     return `/${interaction.commandName}`;
@@ -1004,7 +962,7 @@ Replace the body of `discordCommandWrapper` with:
 ```typescript
 export async function discordCommandWrapper(
   interaction: ButtonInteraction | CommandInteraction | ModalSubmitInteraction,
-  commandFn: () => Promise<void>,
+  commandFn: () => Promise<void>
 ) {
   const message = await interaction.reply({
     content: 'Executing command',
@@ -1063,12 +1021,10 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 ### Task 6: memberLink helper (duplicate rules)
 
 **Files:**
-
 - Create: `src/lib/helpers/memberLink.ts`
 - Test: `tst/lib/helpers/memberLink.test.ts`
 
 **Interfaces:**
-
 - Consumes: `ApplicationMemberRepository()` (Task 2), `logActivity`/`logAlert` (Task 4), `linkStr` from `src/util/discord.js`.
 - Produces (used by Task 7):
 
@@ -1086,16 +1042,13 @@ export interface MeetupLinkInfo {
 export function recordMeetupLink(
   interaction: ButtonInteraction | CommandInteraction,
   info: MeetupLinkInfo,
-  method: 'self_onboard' | 'sync_v2',
+  method: 'self_onboard' | 'sync_v2'
 ): Promise<void>;
 
 // Never throws. Skips the write when the target already has a linked row.
 export function recordManualOnboard(
-  interaction:
-    | CommandInteraction
-    | MessageContextMenuCommandInteraction
-    | UserContextMenuCommandInteraction,
-  targetUserId: string,
+  interaction: CommandInteraction | MessageContextMenuCommandInteraction | UserContextMenuCommandInteraction,
+  targetUserId: string
 ): Promise<void>;
 ```
 
@@ -1144,9 +1097,7 @@ describe('recordMeetupLink', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     repo = new InMemoryMemberRepository();
-    vi.mocked(memberRepository.ApplicationMemberRepository).mockResolvedValue(
-      repo,
-    );
+    vi.mocked(memberRepository.ApplicationMemberRepository).mockResolvedValue(repo);
   });
 
   it('stores a new link and logs activity', async () => {
@@ -1166,7 +1117,7 @@ describe('recordMeetupLink', () => {
     await recordMeetupLink(makeInteraction('discord-1'), info, 'self_onboard');
 
     await expect(
-      recordMeetupLink(makeInteraction('discord-2'), info, 'sync_v2'),
+      recordMeetupLink(makeInteraction('discord-2'), info, 'sync_v2')
     ).rejects.toThrow(DuplicateMeetupAccountError);
 
     expect(await repo.findByDiscordId('discord-2')).toBeUndefined();
@@ -1178,12 +1129,10 @@ describe('recordMeetupLink', () => {
     await recordMeetupLink(
       makeInteraction(),
       { ...info, meetupId: 'meetup-2' },
-      'self_onboard',
+      'self_onboard'
     );
 
-    expect((await repo.findByDiscordId('discord-1'))?.meetupId).toBe(
-      'meetup-2',
-    );
+    expect((await repo.findByDiscordId('discord-1'))?.meetupId).toBe('meetup-2');
     expect(vi.mocked(discordLogger.logAlert)).toHaveBeenCalledTimes(1);
   });
 
@@ -1197,11 +1146,11 @@ describe('recordMeetupLink', () => {
 
   it('swallows repository failures and alerts instead of throwing', async () => {
     vi.mocked(memberRepository.ApplicationMemberRepository).mockRejectedValue(
-      new Error('db down'),
+      new Error('db down')
     );
 
     await expect(
-      recordMeetupLink(makeInteraction(), info, 'self_onboard'),
+      recordMeetupLink(makeInteraction(), info, 'self_onboard')
     ).resolves.toBeUndefined();
     expect(vi.mocked(discordLogger.logAlert)).toHaveBeenCalledTimes(1);
   });
@@ -1213,9 +1162,7 @@ describe('recordManualOnboard', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     repo = new InMemoryMemberRepository();
-    vi.mocked(memberRepository.ApplicationMemberRepository).mockResolvedValue(
-      repo,
-    );
+    vi.mocked(memberRepository.ApplicationMemberRepository).mockResolvedValue(repo);
   });
 
   it('records a null-meetup row and alerts (deprecated flow)', async () => {
@@ -1233,9 +1180,7 @@ describe('recordManualOnboard', () => {
   it('does not overwrite an existing linked row', async () => {
     await recordMeetupLink(makeInteraction('target-1'), info, 'self_onboard');
     vi.clearAllMocks();
-    vi.mocked(memberRepository.ApplicationMemberRepository).mockResolvedValue(
-      repo,
-    );
+    vi.mocked(memberRepository.ApplicationMemberRepository).mockResolvedValue(repo);
 
     await recordManualOnboard(makeInteraction('mod-1') as any, 'target-1');
 
@@ -1244,10 +1189,10 @@ describe('recordManualOnboard', () => {
 
   it('never throws on repository failure', async () => {
     vi.mocked(memberRepository.ApplicationMemberRepository).mockRejectedValue(
-      new Error('db down'),
+      new Error('db down')
     );
     await expect(
-      recordManualOnboard(makeInteraction('mod-1') as any, 'target-1'),
+      recordManualOnboard(makeInteraction('mod-1') as any, 'target-1')
     ).resolves.toBeUndefined();
   });
 });
@@ -1300,7 +1245,7 @@ export interface MeetupLinkInfo {
 export async function recordMeetupLink(
   interaction: ButtonInteraction | CommandInteraction,
   info: MeetupLinkInfo,
-  method: 'self_onboard' | 'sync_v2',
+  method: 'self_onboard' | 'sync_v2'
 ): Promise<void> {
   const { client, user } = interaction;
   const meetupLink = linkStr(info.meetupName, info.meetupMemberUrl);
@@ -1368,7 +1313,7 @@ export async function recordManualOnboard(
     | CommandInteraction
     | MessageContextMenuCommandInteraction
     | UserContextMenuCommandInteraction,
-  targetUserId: string,
+  targetUserId: string
 ): Promise<void> {
   const { client, user: mod } = interaction;
   try {
@@ -1416,12 +1361,10 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 ### Task 7: Wire memberLink into all onboarding flows
 
 **Files:**
-
 - Modify: `src/lib/helpers/onboardUser.ts` (`selfOnboardUser` ~line 144; `onboardUser` ~line 123)
 - Modify: `src/buttonMenu/meetup/syncAccountV2.ts` (after membership check, ~line 102)
 
 **Interfaces:**
-
 - Consumes: `recordMeetupLink`, `recordManualOnboard` (Task 6). `userInfo.self` provides `{ id, name, gender, memberUrl }` (see `UserFragment` in `src/lib/client/meetup/queries.ts`).
 - Produces: no new exports — behavior change only. After this task every onboard path writes a row.
 
@@ -1436,21 +1379,21 @@ import { recordMeetupLink } from './memberLink.js';
 In `selfOnboardUser`, insert the `recordMeetupLink` call **immediately before** the existing `onboardUserCommon(...)` call — a `DuplicateMeetupAccountError` must abort onboarding before any nickname/role changes, and `discordCommandWrapper` turns the throw into the user-facing error reply:
 
 ```typescript
-await recordMeetupLink(
-  interaction,
-  {
-    meetupId: userInfo.self.id,
-    meetupName: userInfo.self.name,
-    meetupMemberUrl: userInfo.self.memberUrl,
-  },
-  'self_onboard',
-);
-await onboardUserCommon(
-  interaction,
-  discordUser.id,
-  userInfo.self.gender,
-  cleanedName,
-);
+  await recordMeetupLink(
+    interaction,
+    {
+      meetupId: userInfo.self.id,
+      meetupName: userInfo.self.name,
+      meetupMemberUrl: userInfo.self.memberUrl,
+    },
+    'self_onboard'
+  );
+  await onboardUserCommon(
+    interaction,
+    discordUser.id,
+    userInfo.self.gender,
+    cleanedName
+  );
 ```
 
 - [ ] **Step 2: Wire the V2 sync button**
@@ -1464,15 +1407,15 @@ import { recordMeetupLink } from '../../lib/helpers/memberLink.js';
 Immediately after the non-member check block (after the `throw new Error(...)` for non-members, before the `cleanedName` computation), insert:
 
 ```typescript
-await recordMeetupLink(
-  interaction,
-  {
-    meetupId: userInfo.self.id,
-    meetupName: userInfo.self.name,
-    meetupMemberUrl: userInfo.self.memberUrl,
-  },
-  'sync_v2',
-);
+      await recordMeetupLink(
+        interaction,
+        {
+          meetupId: userInfo.self.id,
+          meetupName: userInfo.self.name,
+          meetupMemberUrl: userInfo.self.memberUrl,
+        },
+        'sync_v2'
+      );
 ```
 
 - [ ] **Step 3: Wire manual onboards**
@@ -1486,7 +1429,7 @@ import { recordManualOnboard, recordMeetupLink } from './memberLink.js';
 In the `onboardUser` function (the manual flow), after `onboardUserCommon(...)` and before the moderator follow-up, insert:
 
 ```typescript
-await recordManualOnboard(interaction, userId);
+  await recordManualOnboard(interaction, userId);
 ```
 
 - [ ] **Step 4: Typecheck, run full unit suite**
@@ -1509,11 +1452,9 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 ### Task 8: /meetup_unlink command
 
 **Files:**
-
 - Create: `src/commands/meetup/unlinkAccount.ts`
 
 **Interfaces:**
-
 - Consumes: `ApplicationMemberRepository()` (Task 2), `logActivity` (Task 4), `hasAnyServerRole`, `isAdmin`, `discordCommandWrapper` (Task 5). Registered automatically via the barrel import below.
 - Produces: `/meetup_unlink user:<User>` slash command, usable by moderators, organizers, and admins.
 
@@ -1551,7 +1492,7 @@ const strings = {
 export class UnlinkAccountCommands {
   @Slash({
     name: 'meetup_unlink',
-    description: "Remove a member's stored Meetup link (mods/organizers only)",
+    description: 'Remove a member\'s stored Meetup link (mods/organizers only)',
   })
   async meetupUnlinkHandler(
     @SlashOption({
@@ -1561,14 +1502,11 @@ export class UnlinkAccountCommands {
       required: true,
     })
     user: User,
-    interaction: CommandInteraction,
+    interaction: CommandInteraction
   ) {
     await discordCommandWrapper(interaction, async () => {
       const member = await interaction.guild.members.fetch(interaction.user.id);
-      if (
-        !isAdmin(member) &&
-        !hasAnyServerRole(member, ['moderator', 'organizer'])
-      ) {
+      if (!isAdmin(member) && !hasAnyServerRole(member, ['moderator', 'organizer'])) {
         throw new Error(strings.notAllowed);
       }
 
@@ -1584,7 +1522,7 @@ export class UnlinkAccountCommands {
 
       await repo.remove(user.id);
       logger.info(
-        `${interaction.user.username} unlinked member record for ${user.username}`,
+        `${interaction.user.username} unlinked member record for ${user.username}`
       );
       await logActivity(interaction.client, {
         title: 'Member record unlinked',
@@ -1632,13 +1570,11 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 ### Task 9: Daily unlinked-member digest
 
 **Files:**
-
 - Create: `src/lib/helpers/unlinkedDigest.ts`
 - Modify: `src/index.ts` (`clientReady` handler, ~line 41)
 - Test: `tst/lib/helpers/unlinkedDigest.test.ts`
 
 **Interfaces:**
-
 - Consumes: `ApplicationMemberRepository()` (Task 2), `ApplicationCache()` from `src/util/cache.js` (existing — `exclusive_set(key, value): Promise<boolean>`), `logAlert` (Task 4), `SERVER_ROLES` from `src/constants.js`.
 - Produces:
 
@@ -1647,11 +1583,9 @@ export const DIGEST_UTC_HOUR = 17;
 export function shouldRunDigestNow(now: Date): boolean;
 export function collectUnlinkedMemberIds(
   members: { id: string; isBot: boolean; hasOnboardingRole: boolean }[],
-  rows: MemberRecord[],
+  rows: MemberRecord[]
 ): string[];
-export function formatUnlinkedDigest(
-  unlinkedIds: string[],
-): LogEntry | undefined;
+export function formatUnlinkedDigest(unlinkedIds: string[]): LogEntry | undefined;
 export function startUnlinkedDigestScheduler(client: Client): void;
 ```
 
@@ -1764,21 +1698,21 @@ export function shouldRunDigestNow(now: Date): boolean {
 
 export function collectUnlinkedMemberIds(
   members: { id: string; isBot: boolean; hasOnboardingRole: boolean }[],
-  rows: MemberRecord[],
+  rows: MemberRecord[]
 ): string[] {
   const linkedIds = new Set(
-    rows.filter((row) => row.meetupId !== null).map((row) => row.discordUserId),
+    rows.filter((row) => row.meetupId !== null).map((row) => row.discordUserId)
   );
   return members
     .filter(
       (member) =>
-        !member.isBot && !member.hasOnboardingRole && !linkedIds.has(member.id),
+        !member.isBot && !member.hasOnboardingRole && !linkedIds.has(member.id)
     )
     .map((member) => member.id);
 }
 
 export function formatUnlinkedDigest(
-  unlinkedIds: string[],
+  unlinkedIds: string[]
 ): LogEntry | undefined {
   if (unlinkedIds.length === 0) {
     return undefined;
@@ -1819,7 +1753,7 @@ async function runDigestOnce(client: Client): Promise<void> {
       isBot: member.user.bot,
       hasOnboardingRole: member.roles.cache.has(SERVER_ROLES.onboarding),
     })),
-    rows,
+    rows
   );
 
   const entry = formatUnlinkedDigest(unlinked);
@@ -1840,7 +1774,7 @@ export function startUnlinkedDigestScheduler(client: Client): void {
       return;
     }
     runDigestOnce(client).catch((error) =>
-      logger.error(`Unlinked digest failed: ${String(error)}`),
+      logger.error(`Unlinked digest failed: ${String(error)}`)
     );
   };
   tick();
@@ -1859,7 +1793,7 @@ import { startUnlinkedDigestScheduler } from './lib/helpers/unlinkedDigest.js';
 In the `client.once('clientReady', ...)` handler, after `await client.initApplicationCommands();`, add:
 
 ```typescript
-startUnlinkedDigestScheduler(client);
+  startUnlinkedDigestScheduler(client);
 ```
 
 - [ ] **Step 5: Run tests to verify they pass**

@@ -366,9 +366,10 @@ async function rsvpPhase(
       batch.map(async (next) => {
         const read = await readEventRsvps(meetup, next.eventId, calls);
         if (read && isShortRead(read, next.yesCount)) {
-          if (next.lastError === SHORT_READ) {
-            // Short in an earlier run too: not a glitch but an event whose
-            // attendees have left Meetup since. What Meetup shows is final.
+          if (next.lastError === SHORT_READ || next.hidden) {
+            // Short in an earlier run too (or already accepted, re-read in
+            // the settle window): not a glitch but an event whose attendees
+            // have left Meetup since. What Meetup shows is final.
             return { ...read, hidden: true };
           }
           throw new ShortRsvpReadError();

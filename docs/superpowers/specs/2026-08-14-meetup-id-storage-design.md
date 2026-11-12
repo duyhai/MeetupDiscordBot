@@ -28,16 +28,16 @@ Additionally, give organizers visibility into what the bot does via two new Disc
 
 ## Decisions Made During Brainstorming
 
-| Question                    | Decision                                                                                                                                                                |
-| --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Purpose of stored Meetup ID | Lookup + duplicate prevention + future-feature foundation (all of the above)                                                                                            |
-| Log channel content         | General bot-activity channel logs everything the bot does; separate anomaly/alert channel that organizers and mods keep unmuted                                         |
-| Channel placement           | Activity channel in `📜Logs`; alerts channel in `🏢1.5 Leadership Team`                                                                                                 |
-| Channel creation            | Claude creates both via one-off script with the bot token, then hardcodes IDs in `constants.ts`                                                                         |
-| Manual onboards             | Get a DB row with `meetup_id = NULL` so they can be alerted on; manual flow is deprecated                                                                               |
-| Unlinked members            | **Alert-only** daily digest to the alerts channel; no auto re-gating in this iteration                                                                                  |
-| Architecture                | Minimal: `pg` driver, one repository module, `discordLogger` helper, in-process daily job                                                                               |
-| Deferred                    | Drizzle ORM + migrations + internal event bus → issue #35. OAuth UX fixes (iPhone `Cannot GET /` session bug, return-to-Discord landing page) → separate follow-up spec |
+| Question | Decision |
+|---|---|
+| Purpose of stored Meetup ID | Lookup + duplicate prevention + future-feature foundation (all of the above) |
+| Log channel content | General bot-activity channel logs everything the bot does; separate anomaly/alert channel that organizers and mods keep unmuted |
+| Channel placement | Activity channel in `📜Logs`; alerts channel in `🏢1.5 Leadership Team` |
+| Channel creation | Claude creates both via one-off script with the bot token, then hardcodes IDs in `constants.ts` |
+| Manual onboards | Get a DB row with `meetup_id = NULL` so they can be alerted on; manual flow is deprecated |
+| Unlinked members | **Alert-only** daily digest to the alerts channel; no auto re-gating in this iteration |
+| Architecture | Minimal: `pg` driver, one repository module, `discordLogger` helper, in-process daily job |
+| Deferred | Drizzle ORM + migrations + internal event bus → issue #35. OAuth UX fixes (iPhone `Cannot GET /` session bug, return-to-Discord landing page) → separate follow-up spec |
 
 ## Design
 
@@ -70,11 +70,11 @@ Mirrors the existing `ApplicationCache` pattern (Redis vs in-memory selected by 
 
 ### 3. Write paths
 
-| Path                                                               | Row written                                                                                                                                   |
-| ------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| `selfOnboardUser` helper (live V1 button + `/meetup_self_onboard`) | Upsert: `meetup_id`, `meetup_name`, `meetup_member_url`, `onboard_method='self_onboard'`                                                      |
-| V2 sync button handler                                             | Same upsert with `onboard_method='sync_v2'`                                                                                                   |
-| Manual `onboardUser` (slash + context menu)                        | Insert/keep row: `meetup_id=NULL`, `onboard_method='manual'`, `onboarded_by=<mod's Discord ID>`. A later self-link upgrades the row in place. |
+| Path | Row written |
+|---|---|
+| `selfOnboardUser` helper (live V1 button + `/meetup_self_onboard`) | Upsert: `meetup_id`, `meetup_name`, `meetup_member_url`, `onboard_method='self_onboard'` |
+| V2 sync button handler | Same upsert with `onboard_method='sync_v2'` |
+| Manual `onboardUser` (slash + context menu) | Insert/keep row: `meetup_id=NULL`, `onboard_method='manual'`, `onboarded_by=<mod's Discord ID>`. A later self-link upgrades the row in place. |
 
 A DB write failure during onboarding must not block the user's onboarding; it is logged to the alerts channel instead.
 
@@ -91,10 +91,10 @@ Checks run in this order:
 
 Created once via `scripts/createLogChannels.ts` (bot token, inherits category permissions), IDs then hardcoded in `constants.ts`:
 
-| Channel                   | Category                                       | Constant                      |
-| ------------------------- | ---------------------------------------------- | ----------------------------- |
-| `🟥🤖meetup-bot-activity` | `📜Logs` (`932896530447364146`)                | `BOT_ACTIVITY_LOG_CHANNEL_ID` |
-| `🟥🚨meetup-bot-alerts`   | `🏢1.5 Leadership Team` (`912463487257686066`) | `BOT_ALERTS_CHANNEL_ID`       |
+| Channel | Category | Constant |
+|---|---|---|
+| `🟥🤖meetup-bot-activity` | `📜Logs` (`932896530447364146`) | `BOT_ACTIVITY_LOG_CHANNEL_ID` |
+| `🟥🚨meetup-bot-alerts` | `🏢1.5 Leadership Team` (`912463487257686066`) | `BOT_ALERTS_CHANNEL_ID` |
 
 Renaming/repositioning later in Discord is safe; IDs are stable.
 
@@ -110,17 +110,17 @@ Renaming/repositioning later in Discord is safe; IDs are stable.
 
 Event coverage:
 
-| Event                                                               | Activity                 | Alert |
-| ------------------------------------------------------------------- | ------------------------ | ----- |
-| Any command/button invocation (via `discordCommandWrapper` success) | ✅                       |       |
-| Any command error (via `discordCommandWrapper` catch)               |                          | ✅    |
-| Onboard success (any path)                                          | ✅ (with Meetup profile) |       |
-| Manual onboard (deprecated flow used)                               | ✅                       | ✅    |
-| Duplicate Meetup ID blocked                                         |                          | ✅    |
-| Meetup account changed on re-link                                   |                          | ✅    |
-| Non-member onboard attempt                                          |                          | ✅    |
-| Badge sync, event announced/created                                 | ✅                       |       |
-| DB write failure                                                    |                          | ✅    |
+| Event | Activity | Alert |
+|---|---|---|
+| Any command/button invocation (via `discordCommandWrapper` success) | ✅ | |
+| Any command error (via `discordCommandWrapper` catch) | | ✅ |
+| Onboard success (any path) | ✅ (with Meetup profile) | |
+| Manual onboard (deprecated flow used) | ✅ | ✅ |
+| Duplicate Meetup ID blocked | | ✅ |
+| Meetup account changed on re-link | | ✅ |
+| Non-member onboard attempt | | ✅ |
+| Badge sync, event announced/created | ✅ | |
+| DB write failure | | ✅ |
 
 ### 7. Daily unlinked-member digest
 

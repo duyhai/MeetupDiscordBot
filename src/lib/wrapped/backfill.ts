@@ -686,6 +686,29 @@ async function linkedMembers(deps: BackfillDeps): Promise<Member[]> {
 
 const seconds = (ms: number) => (ms / 1000).toFixed(1);
 
+/** The last failed tick, for the staff card: the error class and when; a day's TTL. */
+export const LAST_ERROR_KEY = 'wrapped-backfill-last-error';
+const LAST_ERROR_TTL_SEC = 24 * 60 * 60;
+
+export interface BackfillLastError {
+  at: string;
+  error: string;
+}
+
+async function recordLastError(
+  deps: Pick<BackfillDeps, 'now'>,
+  cache: KeyValueCache,
+  error: unknown,
+): Promise<void> {
+  const last: BackfillLastError = {
+    at: deps.now().toISOString(),
+    error: errorName(error),
+  };
+  await cache
+    .set(LAST_ERROR_KEY, JSON.stringify(last), LAST_ERROR_TTL_SEC)
+    .catch(() => undefined);
+}
+
 /** "Wrapped backfill is failing", once per UTC day, by error class only. */
 async function alertFailingOnce(
   deps: Pick<BackfillDeps, 'now' | 'alert'>,
@@ -809,8 +832,11 @@ export async function runBackfillTick(
       recorded = calls.n;
     }
   };
+  let failedThisTick = false;
   const fatal = async (error: unknown): Promise<TickOutcome> => {
+    failedThisTick = true;
     log.error(`Wrapped backfill: ${errorName(error)}; the tick ends`);
+    await recordLastError(deps, cache, error);
     await alertFailingOnce(deps, cache, error, log);
     return ran(false);
   };
@@ -858,7 +884,8 @@ export async function runBackfillTick(
           log.warn(
             `Wrapped backfill: the group snapshot is unreadable (${errorName(error)}); the tick ends`,
           );
-          return ran(false);
+          // eslint-disable-next-line no-await-in-loop -- the tick ends here
+          return await fatal(error);
         }
         if (
           isFresh(
@@ -1030,8 +1057,10 @@ export async function runBackfillTick(
         log.warn(
           `Wrapped backfill: the group snapshot is unreadable (${errorName(error)}); the tick ends`,
         );
-        stopped = true;
-        break;
+        // A persistent reader failure would otherwise stall every tick in
+        // silence: the once-a-day "failing" alert and the card's last error.
+        // eslint-disable-next-line no-await-in-loop -- the tick ends here
+        return await fatal(error);
       }
       // A member whose current year is fresh and whose previous year is
       // final (or who has no earlier year: the current entry lists every
@@ -1185,6 +1214,10 @@ export async function runBackfillTick(
     // Whatever the exit: the tick's calls on the run. A tick with no run of
     // its own used a local map, so there is nothing of its own to clear.
     await settle();
+    if (!failedThisTick) {
+      // A tick that ended without a fatal error clears the card's last error.
+      await cache.remove(LAST_ERROR_KEY).catch(() => undefined);
+    }
   }
 }
 

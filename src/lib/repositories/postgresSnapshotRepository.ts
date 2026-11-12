@@ -39,6 +39,8 @@ export interface RsvpWork {
   yesCount: number | null;
   /** The error class of the event's last failed read (an earlier run's). */
   lastError: string | undefined;
+  /** A short read was already accepted for it (rsvps_hidden). */
+  hidden: boolean;
 }
 
 export interface RsvpWorkQuery {
@@ -364,8 +366,9 @@ export class PostgresSnapshotRepository
       date_time: Date;
       yes_count: number | null;
       rsvp_error: string | null;
+      rsvps_hidden: boolean;
     }>(
-      `SELECT event_id, date_time, yes_count, rsvp_error FROM meetup_events
+      `SELECT event_id, date_time, yes_count, rsvp_error, rsvps_hidden FROM meetup_events
         WHERE ${NEEDS_RSVPS}
         ORDER BY date_time, event_id LIMIT $4`,
       [query.runStartedAt, query.now, query.settleDays, query.limit],
@@ -375,6 +378,7 @@ export class PostgresSnapshotRepository
       dateTime: row.date_time,
       yesCount: row.yes_count,
       lastError: row.rsvp_error ?? undefined,
+      hidden: row.rsvps_hidden,
     }));
   }
 

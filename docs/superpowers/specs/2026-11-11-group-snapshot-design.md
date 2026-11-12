@@ -576,7 +576,16 @@ members'). With the old-event probe: 0 of 1,158 linked-member RSVPs missing.
   `rsvps_hidden` set. The card counts them separately ("N events have RSVPs
   Meetup no longer shows").
 - **The undercount flag clears** when a later on-demand cross-check agrees
-  (the snapshot caught up); the backfill never clears it (no cross-check).
+  (the snapshot caught up). That only happens on an on-demand build with a
+  free hourly slot and a stored token; the backfill never clears it (no
+  cross-check). So a flagged member may stay on the token path a long time,
+  which is harmless: the token path is today's build.
+- **A snapshot read error in the backfill** goes through the tick's fatal
+  path: the once-a-day "Wrapped backfill is failing" alert, and the card's
+  "Last tick failed (…)" line (`wrapped-backfill-last-error`, a day's TTL,
+  cleared by the next tick that ends without a fatal error).
+- An accepted (hidden) event re-read inside the settle window stays
+  accepted when it reads short again.
 - **Rate limits**: one rate-limited tick records `RateLimited` and alerts
   nobody; a second in a row (the run's last error still `RateLimited`) gets
   the daily "failing" alert. A failed tick now writes the card's last-tick

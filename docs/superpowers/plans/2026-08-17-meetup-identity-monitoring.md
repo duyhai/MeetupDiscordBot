@@ -51,15 +51,15 @@
 
 Identity helpers move into their own folder and shed the redundant prefix:
 
-| Now                                      | After                                     |
-| ---------------------------------------- | ----------------------------------------- |
-| `src/lib/helpers/identityDiff.ts`        | `src/lib/helpers/identity/diff.ts`        |
-| `src/lib/helpers/identitySnapshot.ts`    | `src/lib/helpers/identity/snapshot.ts`    |
-| `src/lib/helpers/identityThumbs.ts`      | `src/lib/helpers/identity/thumbs.ts`      |
-| `src/lib/helpers/identityMonitor.ts`     | `src/lib/helpers/identity/monitor.ts`     |
-| `src/lib/helpers/identitySweep.ts`       | `src/lib/helpers/identity/sweep.ts`       |
-| `src/lib/helpers/identityDigest.ts`      | `src/lib/helpers/identity/digest.ts`      |
-| `src/lib/helpers/identityReport.ts`      | `src/lib/helpers/identity/report.ts`      |
+| Now | After |
+| --- | --- |
+| `src/lib/helpers/identityDiff.ts` | `src/lib/helpers/identity/diff.ts` |
+| `src/lib/helpers/identitySnapshot.ts` | `src/lib/helpers/identity/snapshot.ts` |
+| `src/lib/helpers/identityThumbs.ts` | `src/lib/helpers/identity/thumbs.ts` |
+| `src/lib/helpers/identityMonitor.ts` | `src/lib/helpers/identity/monitor.ts` |
+| `src/lib/helpers/identitySweep.ts` | `src/lib/helpers/identity/sweep.ts` |
+| `src/lib/helpers/identityDigest.ts` | `src/lib/helpers/identity/digest.ts` |
+| `src/lib/helpers/identityReport.ts` | `src/lib/helpers/identity/report.ts` |
 | `src/lib/helpers/identitySuppression.ts` | `src/lib/helpers/identity/suppression.ts` |
 
 Tests mirror the move under `tst/lib/helpers/identity/`. New Meetup files join the same folder: `identity/meetupSnapshot.ts`, `identity/meetupSweep.ts`.
@@ -73,13 +73,11 @@ Tests mirror the move under `tst/lib/helpers/identity/`. New Meetup files join t
 Pure file move plus import rewrites. No behaviour change — a reviewer should see zero logic in the diff.
 
 **Files:**
-
 - Move: the eight `src/lib/helpers/identity*.ts` files listed above
 - Move: the eight matching `tst/lib/helpers/identity*.test.ts` files
 - Modify: every importer (`src/index.ts`, `src/events/identityEvents.ts`, `src/commands/meetup/identityReport.ts`, `src/lib/helpers/onboardUser.ts`, `tst/integration/*`)
 
 **Interfaces:**
-
 - Consumes: nothing.
 - Produces: all existing exports at new paths. No symbol is renamed.
 
@@ -141,13 +139,11 @@ git commit -m "Group identity helpers into their own folder"
 The schema rework. `platform` and `scope_id` join the key; `deleteMemberIdentity` arrives; the pool drops to 2.
 
 **Files:**
-
 - Modify: `src/lib/repositories/identityTypes.ts`
 - Modify: `src/lib/repositories/postgresIdentityRepository.ts`
 - Test: `tst/integration/postgresIdentityRepository.test.ts`
 
 **Interfaces:**
-
 - Consumes: nothing new.
 - Produces:
   - `type IdentityPlatform = 'discord' | 'meetup'`
@@ -163,98 +159,95 @@ The schema rework. `platform` and `scope_id` join the key; `deleteMemberIdentity
 Add to `tst/integration/postgresIdentityRepository.test.ts`:
 
 ```ts
-it("keeps two guilds' baselines for the same member apart", async () => {
-  const userId = `discord-${crypto.randomUUID()}`;
-  await repo.putSnapshot({
-    scopeId: 'guild-a',
-    discordUserId: userId,
-    username: 'someone',
-    globalName: 'Someone',
-    nickname: 'In Guild A',
-    userAvatarHash: 'aaa',
-    memberAvatarHash: null,
-  });
-  await repo.putSnapshot({
-    scopeId: 'guild-b',
-    discordUserId: userId,
-    username: 'someone',
-    globalName: 'Someone',
-    nickname: 'In Guild B',
-    userAvatarHash: 'aaa',
-    memberAvatarHash: null,
+  it('keeps two guilds\' baselines for the same member apart', async () => {
+    const userId = `discord-${crypto.randomUUID()}`;
+    await repo.putSnapshot({
+      scopeId: 'guild-a',
+      discordUserId: userId,
+      username: 'someone',
+      globalName: 'Someone',
+      nickname: 'In Guild A',
+      userAvatarHash: 'aaa',
+      memberAvatarHash: null,
+    });
+    await repo.putSnapshot({
+      scopeId: 'guild-b',
+      discordUserId: userId,
+      username: 'someone',
+      globalName: 'Someone',
+      nickname: 'In Guild B',
+      userAvatarHash: 'aaa',
+      memberAvatarHash: null,
+    });
+
+    // Nickname and per-guild avatar are guild-scoped facts. A single global
+    // key would make these two rows overwrite each other, and every sweep
+    // would then report a nickname change that never happened.
+    expect((await repo.getSnapshot('guild-a', userId))?.nickname).toBe(
+      'In Guild A',
+    );
+    expect((await repo.getSnapshot('guild-b', userId))?.nickname).toBe(
+      'In Guild B',
+    );
   });
 
-  // Nickname and per-guild avatar are guild-scoped facts. A single global
-  // key would make these two rows overwrite each other, and every sweep
-  // would then report a nickname change that never happened.
-  expect((await repo.getSnapshot('guild-a', userId))?.nickname).toBe(
-    'In Guild A',
-  );
-  expect((await repo.getSnapshot('guild-b', userId))?.nickname).toBe(
-    'In Guild B',
-  );
-});
+  it('erases one member without touching another', async () => {
+    const mine = `discord-${crypto.randomUUID()}`;
+    const theirs = `discord-${crypto.randomUUID()}`;
+    for (const id of [mine, theirs]) {
+      // eslint-disable-next-line no-await-in-loop
+      await repo.recordChanges(
+        [
+          {
+            platform: 'discord',
+            scopeId: 'guild-a',
+            subjectId: id,
+            field: 'nickname',
+            oldValue: 'A',
+            newValue: 'B',
+          },
+        ],
+        'event',
+        new Map(),
+      );
+    }
 
-it('erases one member without touching another', async () => {
-  const mine = `discord-${crypto.randomUUID()}`;
-  const theirs = `discord-${crypto.randomUUID()}`;
-  for (const id of [mine, theirs]) {
-    // eslint-disable-next-line no-await-in-loop
+    const removed = await repo.deleteMemberIdentity('discord', 'guild-a', mine);
+
+    expect(removed).toBeGreaterThan(0);
+    const remaining = await repo.listChangesBetween(
+      new Date(Date.now() - 60_000),
+      new Date(Date.now() + 60_000),
+    );
+    expect(remaining.some((r) => r.subjectId === mine)).toBe(false);
+    expect(remaining.some((r) => r.subjectId === theirs)).toBe(true);
+  });
+
+  it('records platform and scope on every change', async () => {
+    const id = `meetup-${crypto.randomUUID()}`;
+    const start = new Date(Date.now() - 1000);
     await repo.recordChanges(
       [
         {
-          platform: 'discord',
-          scopeId: 'guild-a',
+          platform: 'meetup',
+          scopeId: '7595882',
           subjectId: id,
-          field: 'nickname',
-          oldValue: 'A',
-          newValue: 'B',
+          field: 'photo',
+          oldValue: 'p1',
+          newValue: 'p2',
         },
       ],
-      'event',
+      'sweep',
       new Map(),
     );
-  }
 
-  const removed = await repo.deleteMemberIdentity('discord', 'guild-a', mine);
-
-  expect(removed).toBeGreaterThan(0);
-  const remaining = await repo.listChangesBetween(
-    new Date(Date.now() - 60_000),
-    new Date(Date.now() + 60_000),
-  );
-  expect(remaining.some((r) => r.subjectId === mine)).toBe(false);
-  expect(remaining.some((r) => r.subjectId === theirs)).toBe(true);
-});
-
-it('records platform and scope on every change', async () => {
-  const id = `meetup-${crypto.randomUUID()}`;
-  const start = new Date(Date.now() - 1000);
-  await repo.recordChanges(
-    [
-      {
-        platform: 'meetup',
-        scopeId: '7595882',
-        subjectId: id,
-        field: 'photo',
-        oldValue: 'p1',
-        newValue: 'p2',
-      },
-    ],
-    'sweep',
-    new Map(),
-  );
-
-  const rows = await repo.listChangesBetween(
-    start,
-    new Date(Date.now() + 1000),
-  );
-  const mine = rows.find((r) => r.subjectId === id);
-  // The digest and report both filter on these; a NULL here silently drops
-  // Meetup rows out of every surface.
-  expect(mine?.platform).toBe('meetup');
-  expect(mine?.scopeId).toBe('7595882');
-});
+    const rows = await repo.listChangesBetween(start, new Date(Date.now() + 1000));
+    const mine = rows.find((r) => r.subjectId === id);
+    // The digest and report both filter on these; a NULL here silently drops
+    // Meetup rows out of every surface.
+    expect(mine?.platform).toBe('meetup');
+    expect(mine?.scopeId).toBe('7595882');
+  });
 ```
 
 Every existing test in this file must also be updated to the new signatures — `putSnapshot` snapshots gain `scopeId`, `getSnapshot` takes two arguments, and change objects gain `platform` and `scopeId`.
@@ -398,13 +391,11 @@ git commit -m "Scope the identity key by platform and guild or group"
 Every caller now supplies a scope. This closes M2 and adds the M3 test.
 
 **Files:**
-
 - Modify: `src/lib/helpers/identity/snapshot.ts`, `diff.ts`, `monitor.ts`, `sweep.ts`
 - Modify: `src/events/identityEvents.ts`
 - Test: the matching files under `tst/lib/helpers/identity/`, `tst/events/identityEvents.test.ts`
 
 **Interfaces:**
-
 - Consumes: Task 2's types.
 - Produces:
   - `snapshotMember(member: GuildMember): IdentitySnapshot` — reads `member.guild.id` into `scopeId`
@@ -417,57 +408,52 @@ Every caller now supplies a scope. This closes M2 and adds the M3 test.
 In `tst/lib/helpers/identity/monitor.test.ts` — the M3 gap. This is the one the branch never had:
 
 ```ts
-it('records the change before advancing the baseline', async () => {
-  const member = fakeMember({
-    user: {
-      username: 'someone',
-      globalName: 'Someone',
-      avatar: 'bbb',
-      bot: false,
-    },
+  it('records the change before advancing the baseline', async () => {
+    const member = fakeMember({
+      user: { username: 'someone', globalName: 'Someone', avatar: 'bbb', bot: false },
+    });
+
+    await recordIdentityFor(member, 'event');
+
+    // Load-bearing and previously untested: swapping these two writes left
+    // every test in the branch green. Crash between them in this order and
+    // the next sweep re-records a harmless duplicate; reversed, the baseline
+    // advances while the evidence is lost for good.
+    expect(repo.recordChanges.mock.invocationCallOrder[0]).toBeLessThan(
+      repo.putSnapshot.mock.invocationCallOrder[0],
+    );
   });
-
-  await recordIdentityFor(member, 'event');
-
-  // Load-bearing and previously untested: swapping these two writes left
-  // every test in the branch green. Crash between them in this order and
-  // the next sweep re-records a harmless duplicate; reversed, the baseline
-  // advances while the evidence is lost for good.
-  expect(repo.recordChanges.mock.invocationCallOrder[0]).toBeLessThan(
-    repo.putSnapshot.mock.invocationCallOrder[0],
-  );
-});
 ```
 
 In `tst/lib/helpers/identity/sweep.test.ts`:
 
 ```ts
-it('sweeps the configured guild, not whichever is first in cache', async () => {
-  const client = fakeClientWithGuilds(['other-guild', GUILD_ID]);
+  it('sweeps the configured guild, not whichever is first in cache', async () => {
+    const client = fakeClientWithGuilds(['other-guild', GUILD_ID]);
 
-  await runIdentitySweep(client, 'sweep');
+    await runIdentitySweep(client, 'sweep');
 
-  // guilds.first() is insertion-ordered and effectively arbitrary. Sweeping
-  // the wrong guild would diff one guild's members against another guild's
-  // baselines and report every nickname as changed.
-  expect(vi.mocked(recordIdentityFor).mock.calls[0][0].guild.id).toBe(GUILD_ID);
-});
+    // guilds.first() is insertion-ordered and effectively arbitrary. Sweeping
+    // the wrong guild would diff one guild's members against another guild's
+    // baselines and report every nickname as changed.
+    expect(vi.mocked(recordIdentityFor).mock.calls[0][0].guild.id).toBe(GUILD_ID);
+  });
 ```
 
 In `tst/events/identityEvents.test.ts`:
 
 ```ts
-it('records only the configured guild on userUpdate', async () => {
-  const { client, handlers } = fakeClient(['other-guild', GUILD_ID]);
-  registerIdentityEvents(client);
+  it('records only the configured guild on userUpdate', async () => {
+    const { client, handlers } = fakeClient(['other-guild', GUILD_ID]);
+    registerIdentityEvents(client);
 
-  await handlers.get('userUpdate')?.({ id: 'u1' }, { id: 'u1' });
+    await handlers.get('userUpdate')?.({ id: 'u1' }, { id: 'u1' });
 
-  // Recording every cached guild writes two guilds' per-guild facts against
-  // one member and produces permanent false nickname alerts.
-  expect(recordIdentityFor).toHaveBeenCalledTimes(1);
-  expect(vi.mocked(recordIdentityFor).mock.calls[0][0].guild.id).toBe(GUILD_ID);
-});
+    // Recording every cached guild writes two guilds' per-guild facts against
+    // one member and produces permanent false nickname alerts.
+    expect(recordIdentityFor).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(recordIdentityFor).mock.calls[0][0].guild.id).toBe(GUILD_ID);
+  });
 ```
 
 - [ ] **Step 2: Run to verify failure**
@@ -486,10 +472,10 @@ Expected: FAIL — the ordering assertion fails (proving the gap was real), and 
 `sweep.ts` — replace `guilds.first()`:
 
 ```ts
-// Resolve the configured guild explicitly. guilds.first() is insertion-
-// ordered, so with a second guild present (test server, staging, a fork)
-// the sweep would diff one guild's members against another's baselines.
-const guild = await client.guilds.fetch(GUILD_ID);
+  // Resolve the configured guild explicitly. guilds.first() is insertion-
+  // ordered, so with a second guild present (test server, staging, a fork)
+  // the sweep would diff one guild's members against another's baselines.
+  const guild = await client.guilds.fetch(GUILD_ID);
 ```
 
 `identityEvents.ts` — the `userUpdate` handler resolves only `GUILD_ID` instead of iterating the cache, and wraps its whole body in the try/catch rather than only the `recordIdentityFor` call.
@@ -520,13 +506,11 @@ git commit -m "Scope Discord identity tracking to the configured guild"
 M1 plus four smaller defects. Grouped because each is a few lines and they share one test run.
 
 **Files:**
-
 - Modify: `src/lib/helpers/identity/thumbs.ts`, `report.ts`, `digest.ts`
 - Modify: `src/commands/meetup/identityReport.ts`
 - Test: `tst/lib/helpers/identity/thumbs.test.ts`, `report.test.ts`
 
 **Interfaces:**
-
 - Consumes: Task 2's types.
 - Produces: `IdentityReportError` (an `Error` subclass with `readonly alertHandled = true`) exported from `src/commands/meetup/identityReport.ts`.
 
@@ -535,54 +519,48 @@ M1 plus four smaller defects. Grouped because each is a few lines and they share
 In `thumbs.test.ts`:
 
 ```ts
-it('gives up on a stalled CDN instead of hanging', async () => {
-  nock('https://cdn.discordapp.com')
-    .get('/avatars/u1/aaa.webp')
-    .query({ size: '64' })
-    .delayConnection(10_000)
-    .reply(200, Buffer.from([1, 2]));
+  it('gives up on a stalled CDN instead of hanging', async () => {
+    nock('https://cdn.discordapp.com')
+      .get('/avatars/u1/aaa.webp')
+      .query({ size: '64' })
+      .delayConnection(10_000)
+      .reply(200, Buffer.from([1, 2]));
 
-  const thumbs = await fetchChangeThumbs(
-    [
-      {
-        platform: 'discord',
-        scopeId: 'g1',
-        subjectId: 'u1',
-        field: 'user_avatar',
-        oldValue: 'aaa',
-        newValue: null,
-      },
-    ],
-    'g1',
-  );
+    const thumbs = await fetchChangeThumbs(
+      [
+        {
+          platform: 'discord',
+          scopeId: 'g1',
+          subjectId: 'u1',
+          field: 'user_avatar',
+          oldValue: 'aaa',
+          newValue: null,
+        },
+      ],
+      'g1',
+    );
 
-  // This fetch runs inside the digest AFTER the day-claim is taken. A stall
-  // hangs the digest without throwing, so the catch never releases the
-  // claim: no digest, no error, no retry until a restart.
-  expect(thumbs.get('discord:g1:u1:user_avatar')?.oldThumb).toBeNull();
-}, 15_000);
+    // This fetch runs inside the digest AFTER the day-claim is taken. A stall
+    // hangs the digest without throwing, so the catch never releases the
+    // claim: no digest, no error, no retry until a restart.
+    expect(thumbs.get('discord:g1:u1:user_avatar')?.oldThumb).toBeNull();
+  }, 15_000);
 ```
 
 In `report.test.ts`:
 
 ```ts
-it('does not throw on an unrecognised field from an older row', () => {
-  const html = renderIdentityReport(
-    [
-      change({
-        field: 'legacy_field' as never,
-        oldThumb: null,
-        newThumb: null,
-      }),
-    ],
-    range,
-  );
+  it('does not throw on an unrecognised field from an older row', () => {
+    const html = renderIdentityReport(
+      [change({ field: 'legacy_field' as never, oldThumb: null, newThumb: null })],
+      range,
+    );
 
-  // FIELD_LABELS lookup yields undefined, and this project builds without
-  // strictNullChecks -- escapeHtml guarding only null would throw on
-  // .replace and destroy the entire report.
-  expect(html).toContain('<!doctype html>');
-});
+    // FIELD_LABELS lookup yields undefined, and this project builds without
+    // strictNullChecks -- escapeHtml guarding only null would throw on
+    // .replace and destroy the entire report.
+    expect(html).toContain('<!doctype html>');
+  });
 ```
 
 - [ ] **Step 2: Run to verify failure**
@@ -662,7 +640,6 @@ git commit -m "Bound the CDN fetch and fix four review findings"
 The organizer credential: seeded from Heroku config, maintained in Postgres, surfaced through the existing token command.
 
 **Files:**
-
 - Modify: `src/lib/client/oauth/providers.ts`
 - Create: `src/lib/repositories/postgresCredentialRepository.ts`
 - Create: `src/util/credentialRepository.ts`
@@ -671,7 +648,6 @@ The organizer credential: seeded from Heroku config, maintained in Postgres, sur
 - Test: `tst/lib/client/oauth/refresh.test.ts`, `tst/integration/postgresCredentialRepository.test.ts`
 
 **Interfaces:**
-
 - Consumes: `Tokens` from `src/lib/client/discord/types.js` (`{ accessToken, refreshToken?, expiresAt? }`).
 - Produces:
   - `refreshMeetupToken(refreshToken: string): Promise<Tokens>`
@@ -708,11 +684,13 @@ describe('refreshMeetupToken', () => {
   });
 
   it('surfaces the rotated refresh token when one comes back', async () => {
-    nock('https://secure.meetup.com').post('/oauth2/access').reply(200, {
-      access_token: 'new-access',
-      refresh_token: 'ROTATED',
-      expires_in: 3600,
-    });
+    nock('https://secure.meetup.com')
+      .post('/oauth2/access')
+      .reply(200, {
+        access_token: 'new-access',
+        refresh_token: 'ROTATED',
+        expires_in: 3600,
+      });
 
     // Whether Meetup rotates cannot be known without performing a refresh.
     // If it does and the new token is dropped, the next sweep authenticates
@@ -721,9 +699,7 @@ describe('refreshMeetupToken', () => {
   });
 
   it('throws with the status when Meetup rejects the refresh', async () => {
-    nock('https://secure.meetup.com')
-      .post('/oauth2/access')
-      .reply(400, 'invalid_grant');
+    nock('https://secure.meetup.com').post('/oauth2/access').reply(400, 'invalid_grant');
 
     await expect(refreshMeetupToken('revoked')).rejects.toThrow(/400/);
   });
@@ -747,9 +723,7 @@ In `providers.ts`, beside the existing exchange (reuse its endpoint and client c
  * expire after an hour, so anything that must run on a schedule -- the daily
  * Meetup sweep -- needs this rather than a stored access token.
  */
-export async function refreshMeetupToken(
-  refreshToken: string,
-): Promise<Tokens> {
+export async function refreshMeetupToken(refreshToken: string): Promise<Tokens> {
   const body = new URLSearchParams({
     client_id: Configuration.meetup.apiKey,
     client_secret: Configuration.meetup.apiSecret,
@@ -795,25 +769,25 @@ In `configuration.ts`, add `organizerRefreshToken: process.env.MEETUP_ORGANIZER_
 
 In `getToken.ts`, append the refresh token to the ephemeral reply, gated to organizers:
 
-````ts
-const isOrganizer = await hasAnyServerRole(
-  await interaction.guild.members.fetch(interaction.user.id),
-  ['moderator', 'organizer'],
-);
-const refreshSection =
-  isOrganizer && tokens.refreshToken
-    ? [
-        '',
-        '🔁 **Refresh token** — long-lived, unlike the access token above.',
-        'Set this as `MEETUP_ORGANIZER_REFRESH_TOKEN` in Heroku config to',
-        'enable Meetup-side identity monitoring. Treat it as a password:',
-        'it does not expire until revoked.',
-        '```',
-        tokens.refreshToken,
-        '```',
-      ]
-    : [];
-````
+```ts
+        const isOrganizer = await hasAnyServerRole(
+          await interaction.guild.members.fetch(interaction.user.id),
+          ['moderator', 'organizer'],
+        );
+        const refreshSection =
+          isOrganizer && tokens.refreshToken
+            ? [
+                '',
+                '🔁 **Refresh token** — long-lived, unlike the access token above.',
+                'Set this as `MEETUP_ORGANIZER_REFRESH_TOKEN` in Heroku config to',
+                'enable Meetup-side identity monitoring. Treat it as a password:',
+                'it does not expire until revoked.',
+                '```',
+                tokens.refreshToken,
+                '```',
+              ]
+            : [];
+```
 
 - [ ] **Step 4: Run to verify pass**
 
@@ -841,12 +815,10 @@ git commit -m "Add Meetup token refresh and the organizer credential store"
 The GraphQL query and client method the sweep reads from.
 
 **Files:**
-
 - Modify: `src/lib/client/meetup/queries.ts`, `src/lib/client/meetup/gqlClient.ts`, `src/lib/client/meetup/types.ts`
 - Test: `tst/integration/meetupMemberships.wiring.test.ts`
 
 **Interfaces:**
-
 - Consumes: `getPaginatedData` from `src/lib/client/meetup/paginationHelper.js`, `PaginationInput`.
 - Produces: `getGroupMemberships(input: PaginationInput)` on `GqlMeetupClient`, returning `{ groupByUrlname: { memberships: PaginatedData<MeetupGroupMember> } }` where
 
@@ -864,46 +836,44 @@ export interface MeetupGroupMember {
 Guards what actually goes on the wire, following `tst/integration/getBadges.wiring.test.ts`:
 
 ```ts
-it('requests photo id and thumb url, paginated', async () => {
-  const sent: string[] = [];
-  nock('https://api.meetup.com')
-    .post('/gql-ext')
-    .times(2)
-    .reply(200, (_uri, body) => {
-      sent.push(JSON.stringify(body));
-      return {
-        data: {
-          groupByUrlname: {
-            memberships: {
-              pageInfo: { hasNextPage: false, endCursor: null },
-              edges: [
-                {
-                  node: {
-                    id: 'm1',
-                    name: 'Jane D.',
-                    username: 'janed',
-                    memberPhoto: { id: 'p1', thumbUrl: 'https://x/p1.jpg' },
+  it('requests photo id and thumb url, paginated', async () => {
+    const sent: string[] = [];
+    nock('https://api.meetup.com')
+      .post('/gql-ext')
+      .times(2)
+      .reply(200, (_uri, body) => {
+        sent.push(JSON.stringify(body));
+        return {
+          data: {
+            groupByUrlname: {
+              memberships: {
+                pageInfo: { hasNextPage: false, endCursor: null },
+                edges: [
+                  {
+                    node: {
+                      id: 'm1',
+                      name: 'Jane D.',
+                      username: 'janed',
+                      memberPhoto: { id: 'p1', thumbUrl: 'https://x/p1.jpg' },
+                    },
                   },
-                },
-              ],
+                ],
+              },
             },
           },
-        },
-      };
-    });
+        };
+      });
 
-  const client = new GqlMeetupClient('token');
-  const result = await client.getGroupMemberships({ first: 100 });
+    const client = new GqlMeetupClient('token');
+    const result = await client.getGroupMemberships({ first: 100 });
 
-  const all = sent.join('\n');
-  // memberPhoto.id is the change signal -- without it the sweep can never
-  // detect a photo change, only a name change.
-  expect(all).toContain('memberPhoto');
-  expect(all).toContain('thumbUrl');
-  expect(result.groupByUrlname.memberships.edges[0].node.memberPhoto?.id).toBe(
-    'p1',
-  );
-});
+    const all = sent.join('\n');
+    // memberPhoto.id is the change signal -- without it the sweep can never
+    // detect a photo change, only a name change.
+    expect(all).toContain('memberPhoto');
+    expect(all).toContain('thumbUrl');
+    expect(result.groupByUrlname.memberships.edges[0].node.memberPhoto?.id).toBe('p1');
+  });
 ```
 
 - [ ] **Step 2: Run to verify failure**
@@ -969,12 +939,10 @@ git commit -m "Query Meetup group memberships with photo id and thumb url"
 The Meetup analogue of the Discord detection path, reusing the shared change log.
 
 **Files:**
-
 - Create: `src/lib/helpers/identity/meetupSnapshot.ts`, `src/lib/helpers/identity/meetupSweep.ts`
 - Test: `tst/lib/helpers/identity/meetupSnapshot.test.ts`, `meetupSweep.test.ts`
 
 **Interfaces:**
-
 - Consumes: `MeetupGroupMember` (Task 6), `IdentityChange` (Task 2), the identity repository, `fetchChangeThumbs`.
 - Produces:
   - `interface MeetupSnapshot { scopeId: string; meetupMemberId: string; name: string | null; username: string | null; photoId: string | null; }`
@@ -991,42 +959,42 @@ The repository gains `getMeetupSnapshot(scopeId, memberId)`, `putMeetupSnapshot(
 `meetupSnapshot.test.ts` covers: all fields read; a member with no photo yields `photoId: null`; an absent baseline yields no changes (the backfill property); a photo change emits `field: 'photo'` with `platform: 'meetup'` and the group's `scopeId`; a name change emits `field: 'name'`.
 
 ```ts
-it('emits no changes for a first sighting', () => {
-  // Backfill: the first sighting IS the baseline. Otherwise enabling the
-  // feature reports ~6,000 Meetup members as having changed.
-  expect(diffMeetupIdentity(undefined, base)).toEqual([]);
-});
+  it('emits no changes for a first sighting', () => {
+    // Backfill: the first sighting IS the baseline. Otherwise enabling the
+    // feature reports ~6,000 Meetup members as having changed.
+    expect(diffMeetupIdentity(undefined, base)).toEqual([]);
+  });
 
-it('stamps meetup platform and the group scope', () => {
-  const out = diffMeetupIdentity(base, { ...base, photoId: 'p2' });
+  it('stamps meetup platform and the group scope', () => {
+    const out = diffMeetupIdentity(base, { ...base, photoId: 'p2' });
 
-  expect(out).toEqual([
-    {
-      platform: 'meetup',
-      scopeId: '7595882',
-      subjectId: 'm1',
-      field: 'photo',
-      oldValue: 'p1',
-      newValue: 'p2',
-    },
-  ]);
-});
+    expect(out).toEqual([
+      {
+        platform: 'meetup',
+        scopeId: '7595882',
+        subjectId: 'm1',
+        field: 'photo',
+        oldValue: 'p1',
+        newValue: 'p2',
+      },
+    ]);
+  });
 ```
 
 `meetupSweep.test.ts` covers: every member scanned; `source` passed through; only changed members counted; one member throwing does not abandon the rest; and — the credential path —
 
 ```ts
-it('alerts and stops when the credential cannot be refreshed', async () => {
-  vi.mocked(refreshMeetupToken).mockRejectedValue(new Error('invalid_grant'));
+  it('alerts and stops when the credential cannot be refreshed', async () => {
+    vi.mocked(refreshMeetupToken).mockRejectedValue(new Error('invalid_grant'));
 
-  await runMeetupSweep('sweep', fakeClient());
+    await runMeetupSweep('sweep', fakeClient());
 
-  // A silently dead sweep is the worst outcome: monitoring looks healthy
-  // while watching nothing. This alert is the only way expiry is visible.
-  expect(logAlert).toHaveBeenCalledTimes(1);
-  const [, entry] = vi.mocked(logAlert).mock.calls[0];
-  expect(entry.description).toContain('MEETUP_ORGANIZER_REFRESH_TOKEN');
-});
+    // A silently dead sweep is the worst outcome: monitoring looks healthy
+    // while watching nothing. This alert is the only way expiry is visible.
+    expect(logAlert).toHaveBeenCalledTimes(1);
+    const [, entry] = vi.mocked(logAlert).mock.calls[0];
+    expect(entry.description).toContain('MEETUP_ORGANIZER_REFRESH_TOKEN');
+  });
 ```
 
 - [ ] **Step 2: Run to verify failure**
@@ -1088,27 +1056,27 @@ async function resolveOrganizerTokens(): Promise<Tokens | undefined> {
 When that returns `undefined`, the sweep posts exactly one alert and stops:
 
 ```ts
-const tokens = await resolveOrganizerTokens();
-if (!tokens) {
-  const remedy =
-    'Could not obtain a Meetup organizer token, so the Meetup sweep was skipped. ' +
-    'To fix: run `/meetup_get_token`, copy the refresh token, and set ' +
-    '`MEETUP_ORGANIZER_REFRESH_TOKEN` in Heroku config.';
-  // The only way credential expiry becomes visible. A sweep that fails
-  // quietly leaves monitoring looking healthy while watching nothing, so
-  // this fires on the first failure rather than after a retry streak.
-  // The backfill script has no client and surfaces this through its exit
-  // code instead.
-  if (client) {
-    await logAlert(client, {
-      title: 'Meetup identity monitoring is not running',
-      description: remedy,
-    });
-  } else {
-    logger.error(remedy);
+  const tokens = await resolveOrganizerTokens();
+  if (!tokens) {
+    const remedy =
+      'Could not obtain a Meetup organizer token, so the Meetup sweep was skipped. ' +
+      'To fix: run `/meetup_get_token`, copy the refresh token, and set ' +
+      '`MEETUP_ORGANIZER_REFRESH_TOKEN` in Heroku config.';
+    // The only way credential expiry becomes visible. A sweep that fails
+    // quietly leaves monitoring looking healthy while watching nothing, so
+    // this fires on the first failure rather than after a retry streak.
+    // The backfill script has no client and surfaces this through its exit
+    // code instead.
+    if (client) {
+      await logAlert(client, {
+        title: 'Meetup identity monitoring is not running',
+        description: remedy,
+      });
+    } else {
+      logger.error(remedy);
+    }
+    return { scanned: 0, changed: 0 };
   }
-  return { scanned: 0, changed: 0 };
-}
 ```
 
 Members are then processed sequentially, each in its own try/catch, matching the Discord sweep's reasoning about the connection pool.
@@ -1140,54 +1108,52 @@ git commit -m "Add the Meetup identity sweep"
 One digest, one report, both platforms — the point of the shared change log.
 
 **Files:**
-
 - Modify: `src/lib/helpers/identity/digest.ts`, `report.ts`
 - Test: `tst/lib/helpers/identity/digest.test.ts`, `report.test.ts`
 
 **Interfaces:**
-
 - Consumes: everything prior.
 - Produces: `runIdentityDigestOnce` also runs `runMeetupSweep`; digest lines and report rows carry a platform label and resolve a Discord mention where a link exists.
 
 - [ ] **Step 1: Write the failing tests**
 
 ```ts
-it('labels which platform each change came from', () => {
-  const entry = formatIdentityDigest(
-    [
-      change({ platform: 'discord', subjectId: 'u1' }),
-      change({ platform: 'meetup', subjectId: 'm1', field: 'photo' }),
-    ],
-    stats,
-    new Map(),
-  );
+  it('labels which platform each change came from', () => {
+    const entry = formatIdentityDigest(
+      [
+        change({ platform: 'discord', subjectId: 'u1' }),
+        change({ platform: 'meetup', subjectId: 'm1', field: 'photo' }),
+      ],
+      stats,
+      new Map(),
+    );
 
-  // Without the label an organizer cannot tell which profile to go look at.
-  expect(entry?.description).toContain('Discord');
-  expect(entry?.description).toContain('Meetup');
-});
+    // Without the label an organizer cannot tell which profile to go look at.
+    expect(entry?.description).toContain('Discord');
+    expect(entry?.description).toContain('Meetup');
+  });
 
-it('names the linked Discord member for a Meetup change', () => {
-  const entry = formatIdentityDigest(
-    [change({ platform: 'meetup', subjectId: 'm1', field: 'photo' })],
-    stats,
-    new Map([['m1', 'u1']]),
-  );
+  it('names the linked Discord member for a Meetup change', () => {
+    const entry = formatIdentityDigest(
+      [change({ platform: 'meetup', subjectId: 'm1', field: 'photo' })],
+      stats,
+      new Map([['m1', 'u1']]),
+    );
 
-  // 'member m1 changed their photo' is unactionable; '@someone' is not.
-  expect(entry?.description).toContain('<@u1>');
-});
+    // 'member m1 changed their photo' is unactionable; '@someone' is not.
+    expect(entry?.description).toContain('<@u1>');
+  });
 
-it('falls back to the raw Meetup id when no link exists', () => {
-  const entry = formatIdentityDigest(
-    [change({ platform: 'meetup', subjectId: 'm1', field: 'photo' })],
-    stats,
-    new Map(),
-  );
+  it('falls back to the raw Meetup id when no link exists', () => {
+    const entry = formatIdentityDigest(
+      [change({ platform: 'meetup', subjectId: 'm1', field: 'photo' })],
+      stats,
+      new Map(),
+    );
 
-  // Only 9 members are linked today, so this is the common case for now.
-  expect(entry?.description).toContain('m1');
-});
+    // Only 9 members are linked today, so this is the common case for now.
+    expect(entry?.description).toContain('m1');
+  });
 ```
 
 Plus a report test asserting a Meetup row renders its thumbnails and platform column.
@@ -1229,13 +1195,11 @@ git commit -m "Surface both platforms in the digest and the report"
 ### Task 9: Meetup backfill script and documentation
 
 **Files:**
-
 - Create: `scripts/backfillMeetupIdentity.ts`
 - Modify: `scripts/backfillIdentityBaseline.ts` (scope argument)
 - Modify: `README.md`
 
 **Interfaces:**
-
 - Consumes: `runMeetupSweep`, `runIdentitySweep`.
 - Produces: a runnable script; no exports.
 
@@ -1244,16 +1208,16 @@ git commit -m "Surface both platforms in the digest and the report"
 Mirrors `backfillIdentityBaseline.ts` but needs no Discord client — only `DATABASE_URL`, the Meetup credentials, and `MEETUP_ORGANIZER_REFRESH_TOKEN`. It calls `runMeetupSweep('backfill')` with no client, logs `scanned`/`changed`, and exits non-zero if `changed > 0`, because on a fresh table that means the silent-baseline rule is broken.
 
 ```ts
-const result = await runMeetupSweep('backfill');
-logger.info(
-  `Meetup backfill complete: ${result.scanned} scanned, ${result.changed} changes recorded (expected 0 on a fresh table)`,
-);
-if (result.changed > 0) {
-  logger.error(
-    'Backfill recorded changes on what should be a fresh table -- do not proceed to the digest until this is understood.',
+  const result = await runMeetupSweep('backfill');
+  logger.info(
+    `Meetup backfill complete: ${result.scanned} scanned, ${result.changed} changes recorded (expected 0 on a fresh table)`,
   );
-  process.exit(1);
-}
+  if (result.changed > 0) {
+    logger.error(
+      'Backfill recorded changes on what should be a fresh table -- do not proceed to the digest until this is understood.',
+    );
+    process.exit(1);
+  }
 ```
 
 - [ ] **Step 2: Verify the whole suite**
