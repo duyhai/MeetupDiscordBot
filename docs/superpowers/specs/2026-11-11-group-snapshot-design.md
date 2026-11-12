@@ -561,7 +561,7 @@ are _my calls_; two went to the lead (below).
    usable token make one cheap cross-check, `getSelfPastRsvpCount`, against
    the snapshot's count of that member's YES/ATTENDED past rows; Meetup
    higher than local by more than `SNAPSHOT_COUNT_SLACK = 2` (events newer
-   than the last ingest) ⇒ token path, logged by Discord id. The backfill
+   than the last ingest) ⇒ token path, logged by Meetup id. The backfill
    does not cross-check (it would cost a call per member); a member it
    undercounts is corrected on their next on-demand build. The live probe
    also compares the two counts for a handful of linked members.
