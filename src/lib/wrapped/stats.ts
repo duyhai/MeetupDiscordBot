@@ -242,6 +242,33 @@ function rankCompanions(
     );
 }
 
+/**
+ * Every counted event attended (or hosted) in `year`, date ascending: the
+ * events behind attendedThisYear, by the same rule. The website's Wrapped
+ * heat map reads it from the snapshot's sources at render time.
+ */
+export function attendedInYear(
+  attended: WrappedEvent[],
+  hosted: HostedEvent[],
+  year: number,
+): WrappedEvent[] {
+  return cleanEvents(
+    [
+      ...attended,
+      ...hosted.map(({ attendance: _attendance, ...event }) => event),
+    ],
+    countsAsAttended,
+  )
+    .filter((event) => isInYear(event.dateTime, year))
+    .sort(byDate)
+    .map(({ id, title, dateTime, eventUrl }) => ({
+      id,
+      title,
+      dateTime,
+      eventUrl,
+    }));
+}
+
 export function computeWrapped(input: WrappedInput): {
   stats: WrappedStats;
   companions: Companion[];

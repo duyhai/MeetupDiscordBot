@@ -6,6 +6,7 @@ import {
   TOP_HOSTED,
   WrappedEvent,
   WrappedInput,
+  attendedInYear,
   computeWrapped,
   isInYear,
 } from '../../../src/lib/wrapped/stats.js';
@@ -377,5 +378,39 @@ describe('computeWrapped', () => {
     expect(companions).toEqual([
       { meetupId: 'new', sharedCount: 1, sharedEventIds: ['2'] },
     ]);
+  });
+});
+
+describe('attendedInYear', () => {
+  const e = (id: string, dateTime: string, title = `Event ${id}`) => ({
+    id,
+    title,
+    dateTime,
+    eventUrl: `https://www.meetup.com/e/${id}/`,
+  });
+
+  it('is the events behind attendedThisYear: hosted included, deduped, cancelled out, date order', () => {
+    const attended = [
+      e('2', '2026-05-01T02:00:00Z'),
+      e('1', '2026-01-10T02:00:00Z'),
+      e('3', '2026-06-01T02:00:00Z', 'CANCELLED: Picnic'),
+      // 31 Dec 2025, 6 PM Pacific: last year's.
+      e('4', '2026-01-01T02:00:00Z'),
+    ];
+    const hosted = [
+      { ...e('2', '2026-05-01T02:00:00Z'), attendance: 9 },
+      { ...e('5', '2026-08-01T02:00:00Z'), attendance: 4 },
+    ];
+    const events = attendedInYear(attended, hosted, 2026);
+    expect(events.map((x) => x.id)).toEqual(['1', '2', '5']);
+    expect(events[2]).toEqual(e('5', '2026-08-01T02:00:00Z'));
+    const stats = computeWrapped({
+      year: 2026,
+      selfMeetupId: 'me',
+      attended,
+      hosted,
+      attendeesByEvent: {},
+    }).stats;
+    expect(stats.attendedThisYear).toBe(events.length);
   });
 });

@@ -1,6 +1,5 @@
 import dayjs from 'dayjs';
 
-import { HostEvent } from '../../lib/hosts/hostEvents.js';
 import { SafeHtml, SafeUrl, html } from '../html.js';
 import { timeLabel } from './hostPageKit.js';
 
@@ -77,21 +76,29 @@ function rect(x: number, y: number, count: number, label: string): SafeHtml {
 }
 
 /** "Sat, Mar 7, 2026", then one "7:00 PM · Title" line per event. */
-function tipLines(day: string, events: HostEvent[]): string[] {
+function tipLines(day: string, events: HeatEvent[]): string[] {
   return [
     dayjs(day).format('ddd, MMM D, YYYY'),
     ...events.map((e) => `${timeLabel(e.dateTime)} · ${e.title}`),
   ];
 }
 
+/** What a cell needs of an event: when, and a title for its tooltip. */
+export interface HeatEvent {
+  dateTime: string;
+  title: string;
+}
+
 export interface HeatYear {
-  /** The host's events by Pacific day (YYYY-MM-DD). */
-  byDay: Map<string, HostEvent[]>;
+  /** The events by Pacific day (YYYY-MM-DD). */
+  byDay: Map<string, HeatEvent[]>;
   year: number;
   /** Today, Pacific: the current year's map stops here. */
   today: string;
   /** The day filter's link for a day with events. */
   dayLink: (day: string) => SafeUrl;
+  /** What the events are to the member, for the map's label. */
+  verb?: 'hosted' | 'attended';
 }
 
 /**
@@ -107,6 +114,7 @@ export function heatMapYear({
   year,
   today,
   dayLink,
+  verb = 'hosted',
 }: HeatYear): SafeHtml {
   const first = dayjs(`${year}-01-01`);
   const yearEnd = dayjs(`${year}-12-31`);
@@ -181,7 +189,7 @@ export function heatMapYear({
       <svg
         class="heat"
         role="group"
-        aria-label="Events hosted per day in ${String(year)}: ${total} in total"
+        aria-label="Events ${verb} per day in ${String(year)}: ${total} in total"
         viewBox="0 0 ${String(width)} ${String(height)}"
         width="${String(width)}"
         height="${String(height)}"

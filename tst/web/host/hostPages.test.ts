@@ -221,9 +221,63 @@ describe('host calendar', () => {
     expect(cell('26')).not.toContain('Thanksgiving');
     expect(res.text).toContain('<span class="badge info">Thanksgiving</span>');
     expect(res.text).toContain('3 events');
-    // A past day shows no count: only upcoming events are read.
+    // A past day is never "Free": it is not a day to pick any more.
     expect(res.text).not.toMatch(/<td class="cal past">(?:(?!<\/td>)[^])*Free/);
     expect(res.text).not.toContain('style=');
+  });
+});
+
+describe('host calendar past days', () => {
+  it('greys out this month’s past days with what happened, and offers nothing to host on them', async () => {
+    const fetch = vi.fn(async (filter: { status?: string[] }) => {
+      return filter.status?.[0] === 'PAST'
+        ? [
+            ev('p1', '2026-11-02T19:00:00-08:00', 'Monday mahjong'),
+            // Ended earlier today: in both lists, shown once.
+            ev('t1', '2026-11-03T09:00:00-08:00', 'Breakfast club'),
+          ]
+        : [
+            ev('t1', '2026-11-03T09:00:00-08:00', 'Breakfast club'),
+            ev('f1', '2026-11-07T19:00:00-08:00', 'Future fondue'),
+          ];
+    });
+    const req = await pagesApp(fetch);
+    const sid = await signInWithDiscord(req);
+    const res = await req.get('/host/calendar').set('Cookie', sid);
+    expect(res.status).toBe(200);
+    // Both lists, for the same window (Mon Oct 26 to Mon Dec 7, Pacific).
+    const window = {
+      afterDateTime: '2026-10-26T07:00:00.000Z',
+      beforeDateTime: '2026-12-07T08:00:00.000Z',
+    };
+    expect(fetch).toHaveBeenCalledWith({ status: ['ACTIVE'], ...window });
+    expect(fetch).toHaveBeenCalledWith({ status: ['PAST'], ...window });
+    const past =
+      /<td class="cal past">\s*<div class="cal-head">\s*<span class="cal-day"\s*>2<(?:(?!<\/td>)[^])*<\/td>/.exec(
+        res.text,
+      )?.[0];
+    expect(past).toBeDefined();
+    expect(past).toContain('<span class="cal-count">1 event</span>');
+    expect(past).toContain('Monday mahjong');
+    expect(past).not.toContain('cal-add');
+    expect(past).not.toContain('Host on this day');
+    expect(res.text.match(/Breakfast club/g)).toHaveLength(2);
+    // The day list has it too, marked past and greyed.
+    expect(res.text).toMatch(
+      /<li class="past">\s*<h3>\s*Mon, Nov 2 <span class="badge neutral">Past<\/span>/,
+    );
+    expect(res.text).toContain('<span class="swatch past"></span> Past');
+  });
+
+  it('a future month reads no past events', async () => {
+    const fetch = vi.fn(async () => []);
+    const req = await pagesApp(fetch);
+    const sid = await signInWithDiscord(req);
+    await req.get('/host/calendar?month=2026-12').set('Cookie', sid);
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(fetch.mock.calls[0]).toEqual([
+      expect.objectContaining({ status: ['ACTIVE'] }),
+    ]);
   });
 });
 
@@ -357,8 +411,15 @@ describe('host history', () => {
     // This year by default: the 2025 event is on the 2025 page.
     expect(res.text).toContain('2 events in 2026.');
     expect(res.text).toMatch(/<strong>2026<\/strong>/);
-    // Every row can be copied.
-    expect(res.text.match(/>Copy this event<\/a/g)).toHaveLength(3);
+    // Every row can be copied, opened on Meetup and taken attendance for,
+    // on one line: two named icons and one worded button.
+    expect(res.text.match(/aria-label="Copy this event"/g)).toHaveLength(3);
+    expect(res.text.match(/aria-label="View on Meetup"/g)).toHaveLength(3);
+    expect(res.text).toMatch(
+      /<span>Take attendance<\/span\s*><span class="sr-only"> on Meetup<\/span><\/a/,
+    );
+    expect(res.text).not.toContain('>Copy this event<');
+    expect(res.text).toContain('<div class="actions row one-line">');
     expect(res.text).toContain('<td class="type" data-label="Type">');
     expect(res.text).toContain('<td class="event" data-label="Event">');
     expect(res.text).toContain('<span class="when">Thu, Oct 1, 2026</span>');
@@ -465,7 +526,7 @@ describe('host history', () => {
     expect(day.text).toContain('Morning walk');
     expect(day.text).toContain('Board game night');
     expect(day.text).not.toContain('Old hike');
-    expect(day.text.match(/>Copy this event<\/a/g)).toHaveLength(2);
+    expect(day.text.match(/aria-label="Copy this event"/g)).toHaveLength(2);
     // With a type: Clear keeps it.
     const typed = await req
       .get('/host/history?type=outdoors&year=2026&day=2026-10-01')
