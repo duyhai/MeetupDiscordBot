@@ -23,6 +23,7 @@ import { dashboardLocals } from './dashboardRouter.js';
 import { SafeHtml, html, localUrl, staticRaw } from './html.js';
 import { discordProfileUrl, discordUserLink } from './links.js';
 import { errorPage, layout, navKeyFor } from './pages.js';
+import { KIT_SCRIPT } from './ui/script.js';
 
 const logger = new Logger({ name: 'dashboard' });
 
@@ -46,44 +47,22 @@ const logger = new Logger({ name: 'dashboard' });
 // eslint-disable-next-line @stylistic/max-len -- one line, so the script text is exactly what runs
 export const BAN_PHOTO_SCRIPT = staticRaw`document.querySelectorAll('form[data-ban-photo]').forEach(function(f){var note=f.querySelector('[data-ban-photo-nojs]'),label=f.querySelector('label'),input=f.querySelector('input[type=file]'),field=f.querySelector('input[name=photo]'),canvas=f.querySelector('canvas'),status=f.querySelector('[data-ban-photo-status]'),button=f.querySelector('button[type=submit]');if(!note||!label||!input||!field||!canvas||!status||!button){return;}note.hidden=true;if(typeof createImageBitmap!=='function'||typeof HTMLCanvasElement==='undefined'||!HTMLCanvasElement.prototype.toBlob){status.textContent='This browser cannot prepare the photo. Use a current Chrome, Edge, Firefox or Safari.';return;}label.hidden=false;var run=0,steps=[0.8,0.7,0.6,0.5];function fail(mine,t){if(mine===run){field.value='';button.disabled=true;status.textContent=t;}}f.addEventListener('submit',function(e){if(button.disabled||!field.value){e.preventDefault();}});function done(mine,blob){blob.arrayBuffer().then(function(buf){if(mine!==run){return;}var b=new Uint8Array(buf),s='';for(var k=0;k<b.length;k+=8192){s+=String.fromCharCode.apply(null,b.subarray(k,k+8192));}field.value=btoa(s).split('+').join('-').split('/').join('_').replace(/=+$/,'');status.textContent='Ready: '+Math.ceil(b.length/1024)+' KB';button.disabled=false;},function(){fail(mine,'That photo could not be prepared. Try another picture.');});}function encode(mine,type,i){canvas.toBlob(function(blob){if(mine!==run){return;}if(!blob){fail(mine,'That photo could not be prepared. Try another picture.');return;}if(type==='image/webp'&&blob.type!=='image/webp'){encode(mine,'image/jpeg',0);return;}if(type==='image/jpeg'&&blob.type!=='image/jpeg'){fail(mine,'This browser could not make a JPEG or WebP photo. Use a current Chrome, Edge, Firefox or Safari.');return;}if(blob.size>153600){if(i+1<steps.length){encode(mine,type,i+1);}else{fail(mine,'That photo is still too large after compressing. Try a smaller picture.');}return;}done(mine,blob);},type,steps[i]);}input.addEventListener('change',function(){run+=1;var mine=run;field.value='';button.disabled=true;var file=input.files&&input.files[0];if(!file){status.textContent='';return;}status.textContent='Preparing the photo.';new Promise(function(ok){ok(createImageBitmap(file,{imageOrientation:'from-image'}));}).catch(function(){return createImageBitmap(file);}).then(function(bmp){if(mine!==run){return;}var w=bmp.width,h=bmp.height,s=Math.min(1,512/Math.max(w,h));canvas.width=Math.max(1,Math.round(w*s));canvas.height=Math.max(1,Math.round(h*s));canvas.getContext('2d').drawImage(bmp,0,0,canvas.width,canvas.height);if(bmp.close){bmp.close();}canvas.hidden=false;encode(mine,'image/webp',0);},function(){fail(mine,'That file could not be read as a picture.');});});});`;
 
-/**
- * Fixed text for the workspace's copy boxes. A button[data-copy-near] copies
- * the textarea inside its [data-copy-box] (found by position: ids are never
- * interpolated); with data-then-submit it submits its form only after the
- * copy succeeded (Copy warning, then status warning_copied), disabling the
- * button first; clicks while a write is pending are ignored, so a double
- * click sends once. A Copy warning click never submits natively. With no
- * clipboard, or a refused write, it says to copy by hand, as COPY_SCRIPT
- * does, and submits nothing. No ids, no data.
- */
-// eslint-disable-next-line @stylistic/max-len -- one line, so the script text is exactly what runs
-export const WORKSPACE_SCRIPT = staticRaw`document.querySelectorAll('button[data-copy-near]').forEach(function(b){var busy=false;b.addEventListener('click',function(e){var submit=b.hasAttribute('data-then-submit')?b.form:null;if(submit){e.preventDefault();}var box=b.closest('[data-copy-box]');var t=box?box.querySelector('textarea'):null;if(busy||!t){return;}t.select();if(!navigator.clipboard){b.textContent='Select the text and copy it';return;}busy=true;navigator.clipboard.writeText(t.value).then(function(){if(submit){b.disabled=true;submit.submit();}else{busy=false;b.textContent='Copied';}},function(){busy=false;b.textContent='Select the text and copy it';});});});`;
-
-/** Fixed text: copies the value of the textarea named by data-copy. Never carries data. */
-// eslint-disable-next-line @stylistic/max-len -- one line, so the script text is exactly what runs
-export const COPY_SCRIPT = staticRaw`document.querySelectorAll('button[data-copy]').forEach(function(b){b.addEventListener('click',function(){var t=document.getElementById(b.getAttribute('data-copy'));if(!t){return;}t.select();if(!navigator.clipboard){b.textContent='Select the text and copy it';return;}navigator.clipboard.writeText(t.value).then(function(){b.textContent='Copied';},function(){b.textContent='Select the text and copy it';});});});`;
-
 export function dashboardPage(
   res: Response,
   page: {
     title: string;
     body: SafeHtml;
     status?: number;
-    /** true: COPY_SCRIPT; 'workspace': WORKSPACE_SCRIPT; 'bans': BAN_PHOTO_SCRIPT; each with the page nonce. */
-    script?: boolean | 'workspace' | 'bans';
+    /** 'bans': BAN_PHOTO_SCRIPT too, after the kit's, with the page nonce. */
+    script?: 'bans';
   },
 ): void {
   const { session, nonce } = dashboardLocals(res);
-  const scriptBody =
-    page.script === 'workspace'
-      ? WORKSPACE_SCRIPT
-      : page.script === 'bans'
-        ? BAN_PHOTO_SCRIPT
-        : page.script === true
-          ? COPY_SCRIPT
-          : undefined;
+  // The UI kit's one script (copy buttons, modals), once on every page.
   // prettier-ignore
-  const script = scriptBody ? html`<script nonce="${nonce}">${scriptBody}</script>` : '';
+  const kit = html`<script nonce="${nonce}">${KIT_SCRIPT}</script>`;
+  // prettier-ignore
+  const bans = page.script === 'bans' ? html`<script nonce="${nonce}">${BAN_PHOTO_SCRIPT}</script>` : '';
   res
     .status(page.status ?? 200)
     .type('html')
@@ -94,7 +73,7 @@ export function dashboardPage(
         user: session,
         // The route decides the current tab, by comparison with the nav's own paths.
         current: navKeyFor(res.req?.originalUrl),
-        body: html`${page.body}${script}`,
+        body: html`${page.body}${kit}${bans}`,
       }),
     );
 }

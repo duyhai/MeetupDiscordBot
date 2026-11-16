@@ -15,7 +15,7 @@ import {
 } from '../../../src/lib/workspace/types.js';
 import { UpcomingEntry } from '../../../src/lib/workspace/upcoming.js';
 import { escapeHtml } from '../../../src/web/html.js';
-import { WORKSPACE_SCRIPT } from '../../../src/web/pageKit.js';
+import { KIT_SCRIPT } from '../../../src/web/ui/script.js';
 import {
   DashboardPageDeps,
   registerAllProtectedRoutes,
@@ -272,7 +272,7 @@ describe('GET /dashboard/no-shows/:period (month cards)', () => {
     const escaped = '&lt;/textarea&gt;&lt;script&gt;alert(1)&lt;/script&gt;';
     // In the notes textarea, and in the history (inside <bdi>).
     expect(res.text).toContain(
-      `<textarea name="note" rows="3" maxlength="2000">${escaped}</textarea>`,
+      `<textarea name="note" rows="5" maxlength="2000">${escaped}</textarea>`,
     );
     expect(res.text).toContain(`<bdi>${escaped}</bdi>`);
     expect(res.text).toContain('<details><summary>History</summary>');
@@ -315,7 +315,7 @@ describe('GET /dashboard/no-shows/:period (month cards)', () => {
     expect(boxes).toHaveLength(2);
     for (const card of cards(res.text)) {
       expect(card).toMatch(
-        /data-copy-box>[\s\S]*?<textarea class="copy" readonly[^>]*>[\s\S]*?<\/textarea>[\s\S]*?data-copy-near/,
+        /data-copy-box>[\s\S]*?<textarea class="copy" readonly[^>]*>[\s\S]*?<\/textarea>[\s\S]*?data-copy=""/,
       );
     }
     const scripts = [
@@ -324,7 +324,7 @@ describe('GET /dashboard/no-shows/:period (month cards)', () => {
     // The theme script in <head>, then the page's own.
     expect(scripts).toHaveLength(2);
     expect(scripts[0][1]).toBe(THEME_SCRIPT.value);
-    expect(scripts[1][1]).toBe(WORKSPACE_SCRIPT.value);
+    expect(scripts[1][1]).toBe(KIT_SCRIPT.value);
     expect(res.raw.match(/<script/g)).toHaveLength(2);
     // No message text in any attribute or script.
     expect(res.text).not.toMatch(/data-text=/);
@@ -437,7 +437,10 @@ describe('GET /dashboard/no-shows/:period (month cards)', () => {
       expect(texts[0]).toContain('$10 admin fee');
       // The record, not the report's counted no-shows.
       expect(texts[0]).not.toContain('our records show');
-      expect(raw).toContain('Copy suspension message');
+      expect(raw).toContain('Copy message');
+      expect(raw).toContain(
+        '<summary class="button ghost">Suspension message</summary>',
+      );
       expect(raw).not.toContain('value="copy_warning"');
       expect(card).toContain(
         'Earlier suspensions: 0 · This suspension: 30 days (plus a $10 admin fee to rejoin)',
@@ -488,7 +491,7 @@ describe('GET /dashboard/no-shows/:period (month cards)', () => {
       expect(texts).toEqual([expected(0, false)]);
       expect(raw).not.toContain('value="copy_warning"');
       expect(card).not.toContain('Copy warning');
-      expect(card).toContain('Copy suspension message');
+      expect(card).toContain('Copy message');
     });
 
     it('a row a rebuild dropped still shows the message, with a note that hosting was not checked', async () => {
@@ -539,9 +542,182 @@ describe('GET /dashboard/no-shows/:period (month cards)', () => {
         expect(raw).not.toContain('data-copy-box');
         expect(card).toContain('Voided — no message to send.');
         expect(card).not.toContain('Copy warning');
-        expect(card).not.toContain('Copy suspension message');
+        expect(card).not.toContain('Copy message');
       },
     );
+  });
+
+  describe('inputs open in modals, never inline (Hai, 2026-11-16)', () => {
+    /** The card as it first renders: every dialog removed. */
+    const closed = (card: string) =>
+      card.replace(/<dialog class="ui-dialog">[\s\S]*?<\/dialog>/g, '');
+    /** Each dialog's markup, in card order. */
+    const dialogs = (card: string) =>
+      [...card.matchAll(/<dialog class="ui-dialog">([\s\S]*?)<\/dialog>/g)].map(
+        (m) => m[1],
+      );
+    const dialogWith = (card: string, text: string) => {
+      const found = dialogs(card).filter((d) => d.includes(text));
+      expect(found).toHaveLength(1);
+      return found[0];
+    };
+    const OCT_17 = new Date('2026-10-17T16:00:00Z');
+    const suspended = (leader: boolean) =>
+      setup({
+        seed: seed([
+          suspensionCardRow({ status: 'suspended', suspensionRecordId: 31 }),
+        ]),
+        records: [
+          suspensionRecord({
+            id: 31,
+            memberId: '2001',
+            suspendedAt: new Date('2026-09-20T00:00:00Z'),
+            durationDays: 30,
+          }),
+        ],
+        leader,
+        start: OCT_17,
+      });
+
+    it('no textarea, copy button or Open on Meetup sits in a card outside a dialog', async () => {
+      const { get } = await setup({ leader: true });
+      const res = await get(MONTH);
+      const all = cards(res.text);
+      expect(all).toHaveLength(2);
+      for (const card of all) {
+        expect(closed(card)).not.toContain('<textarea');
+        expect(closed(card)).not.toContain('data-copy');
+        expect(closed(card)).not.toContain('Open on Meetup');
+        // Each dialog has a title for the script to label it by.
+        for (const d of dialogs(card)) {
+          expect(d).toMatch(/<h2 class="ui-dialog-title" data-modal-title>/);
+        }
+      }
+    });
+
+    it('Suspend member opens the draft, Copy message, Open on Meetup and the hint', async () => {
+      const { get } = await setup();
+      const [, suspension] = cards((await get(MONTH)).text);
+      expect(suspension).toContain(
+        '<details class="ui-modal" data-modal><summary class="button">Suspend member</summary>',
+      );
+      const d = dialogWith(suspension, 'Suspend Member 1');
+      expect(d).toMatch(/<textarea class="copy" readonly rows="8">Hello/);
+      expect(d).toContain(
+        '<button type="button" data-copy="">Copy message</button>',
+      );
+      expect(d).toContain(
+        '<a href="https://www.meetup.com/members/2001/" rel="noopener noreferrer" target="_blank">Open on Meetup</a>',
+      );
+      expect(words(d)).toContain(
+        '(send the message there while signed in as the organizer account)',
+      );
+      expect(d).toMatch(
+        /<button type="button" class="ghost" data-modal-close>\s*Close\s*<\/button>/,
+      );
+    });
+
+    it('Send warning holds the copy_warning form: copy, then submit', async () => {
+      const { get } = await setup();
+      const [warning] = cards((await get(MONTH)).text);
+      expect(warning).toContain(
+        '<summary class="button">Send warning</summary>',
+      );
+      const d = dialogWith(warning, 'value="copy_warning"');
+      expect(d).toContain(
+        '<form method="post" action="/dashboard/no-shows/2026-09/rows/1" data-copy-box>',
+      );
+      expect(d).toContain(
+        '<button type="submit" data-copy="" data-then-submit>Copy warning</button>',
+      );
+      expect(d).toContain('name="_csrf"');
+      expect(d).toContain('Open on Meetup');
+    });
+
+    it('Void suspension asks for a reason and confirms, explaining what voiding does', async () => {
+      const { get } = await suspended(true);
+      const [card] = cards((await get(MONTH)).text);
+      expect(closed(card)).toContain(
+        '<summary class="button danger">Void suspension</summary>',
+      );
+      // The only void submit is inside the dialog: no one-click void.
+      expect(closed(card)).not.toContain('value="void"');
+      const d = dialogWith(card, 'value="void"');
+      expect(d).toContain(
+        '<form method="post" action="/dashboard/no-shows/2026-09/rows/2">',
+      );
+      expect(d).toContain('name="_csrf"');
+      expect(d).toContain('name="version"');
+      expect(d).toContain(
+        '<textarea name="note" rows="3" maxlength="500" required></textarea>',
+      );
+      const text = words(d);
+      expect(text).toContain('Void this suspension?');
+      expect(text).toContain('Voiding marks suspension #31 as void');
+      expect(text).toContain('Nothing changes on Meetup');
+      expect(text).toContain('posted to the moderation log');
+      expect(d).toContain(
+        '<button type="button" class="ghost" data-modal-close>Cancel</button>',
+      );
+      expect(d).toContain(
+        '<button type="submit" class="danger strong">Void this suspension</button>',
+      );
+    });
+
+    it('Void suspension is Leadership only', async () => {
+      const { get } = await suspended(false);
+      const [card] = cards((await get(MONTH)).text);
+      expect(card).not.toContain('Void suspension');
+      expect(card).not.toContain('value="void"');
+    });
+
+    it('notes show as text; Edit notes opens the textarea and Save', async () => {
+      const { get } = await setup({
+        seed: seed([warningRow({ notes: 'Call back on Friday' })]),
+      });
+      const [card] = cards((await get(MONTH)).text);
+      expect(words(closed(card))).toContain('Notes: Call back on Friday');
+      expect(closed(card)).toContain(
+        '<summary class="button ghost">Edit notes</summary>',
+      );
+      const d = dialogWith(card, 'value="edit_notes"');
+      expect(d).toMatch(
+        /<textarea name="note" rows="5" maxlength="2000">\s*Call back on Friday<\/textarea>/,
+      );
+      expect(d).toContain('<button type="submit">Save notes</button>');
+    });
+
+    it('a card without notes shows no Notes line', async () => {
+      const { get } = await setup({ seed: seed([warningRow()]) });
+      const [card] = cards((await get(MONTH)).text);
+      expect(card).not.toContain('class="ws-notes"');
+      expect(card).toContain(
+        '<summary class="button ghost">Edit notes</summary>',
+      );
+    });
+
+    it.each([
+      ['hold', 'Put on hold', 'Put this card on hold'],
+      ['skip', 'Skip', 'Skip this card'],
+    ])('%s asks why in a modal', async (action, label, confirm) => {
+      const { get } = await setup({ seed: seed([warningRow()]) });
+      const [card] = cards((await get(MONTH)).text);
+      expect(closed(card)).toContain(
+        `<summary class="button ghost">${label}</summary>`,
+      );
+      const d = dialogWith(card, `value="${action}"`);
+      expect(d).toContain(
+        '<textarea name="note" rows="3" maxlength="2000" required></textarea>',
+      );
+      expect(d).toContain(`<button type="submit">${confirm}</button>`);
+    });
+
+    it('the History details stays a collapsible in the card', async () => {
+      const { get } = await setup();
+      for (const card of cards((await get(MONTH)).text)) {
+        expect(closed(card)).toContain('<details><summary>History</summary>');
+      }
+    });
   });
 
   it('Copy warning submits copy_warning only after copying', async () => {
@@ -552,12 +728,12 @@ describe('GET /dashboard/no-shows/:period (month cards)', () => {
       [
         '<form method="post" action="/dashboard/no-shows/2026-09/rows/1" data-copy-box>',
         '[\\s\\S]*?name="action" value="copy_warning"[\\s\\S]*?',
-        '<button type="submit" data-copy-near data-then-submit>Copy warning</button></form>',
+        '<button type="submit" data-copy="" data-then-submit>Copy warning</button></form>',
       ].join(''),
     );
     expect(warning).toMatch(copyForm);
     expect(suspension).toMatch(
-      /<div data-copy-box>[\s\S]*?<button type="button" data-copy-near>Copy suspension message<\/button><\/div>/,
+      /<div data-copy-box>[\s\S]*?<button type="button" data-copy="">Copy message<\/button><\/div>/,
     );
     expect(suspension).not.toContain('data-then-submit');
   });
@@ -569,7 +745,7 @@ describe('GET /dashboard/no-shows/:period (month cards)', () => {
     const res = await get(MONTH);
     const [warning] = cards(res.text);
     expect(warning).toContain(
-      '<button type="button" data-copy-near>Copy warning</button>',
+      '<button type="button" data-copy="">Copy warning</button>',
     );
     expect(warning).not.toContain('value="copy_warning"');
   });
@@ -942,7 +1118,7 @@ describe('GET /dashboard/no-shows/:period (month cards)', () => {
     expect(res.status).toBe(200);
     // The parser drops one newline right after <textarea>: the template's own.
     expect(res.raw).toContain(
-      '<textarea name="note" rows="3" maxlength="2000">\n\nfirst line blank</textarea>',
+      '<textarea name="note" rows="5" maxlength="2000">\n\nfirst line blank</textarea>',
     );
   });
 

@@ -52,7 +52,14 @@ import {
 } from '../../lib/workspace/types.js';
 import { UpcomingEntry, actByFor } from '../../lib/workspace/upcoming.js';
 import { dashboardLocals } from '../dashboardRouter.js';
-import { SafeHtml, html, localUrl, memberText, staticHtml } from '../html.js';
+import {
+  SafeHtml,
+  SafeUrl,
+  html,
+  localUrl,
+  memberText,
+  staticHtml,
+} from '../html.js';
 import {
   discordUserLink,
   eventLink,
@@ -75,6 +82,8 @@ import { PAGE_SIZE, pageNav, parsePage } from '../paging.js';
 import type { DashboardPageDeps } from './dashboardPages.js';
 import { isNoShowPayload } from './noShowHistory.js';
 import { refreshForm, refreshNotice } from './refresh.js';
+import { copyBox, copyButton, copyText } from '../ui/copy.js';
+import { confirmModal, modal } from '../ui/modal.js';
 import {
   LeadershipAnswer,
   WORKSPACE_RESULT_MESSAGES,
@@ -368,13 +377,31 @@ function suspensionBody(v: CardView): SafeHtml | '' {
     </p>`;
 }
 
-function copyBox(text: string, label: string): SafeHtml {
-  // RCDATA: escaped text, never an attribute or a script.
-  const box = html`<textarea class="copy" readonly rows="8">${text}</textarea>`;
-  return html`<div data-copy-box>
-    ${box}<button type="button" data-copy-near>${label}</button>
-  </div>`;
+/** Where the message goes: the member's Meetup profile, opened by the organizer account. */
+function meetupLine(profile: SafeUrl | undefined): SafeHtml | '' {
+  return profile
+    ? html`<p>
+        <a href="${profile}" rel="noopener noreferrer" target="_blank"
+          >Open on Meetup</a
+        >
+        <span class="muted"
+          >(send the message there while signed in as the organizer
+          account)</span
+        >
+      </p>`
+    : '';
 }
+
+/**
+ * What a card's message part renders: a modal (its trigger sits with the
+ * card's actions), or a line of text in the card, or nothing.
+ */
+interface MessagePart {
+  modal: SafeHtml | '';
+  inline: SafeHtml | '';
+}
+
+const NO_MESSAGE: MessagePart = { modal: '', inline: '' };
 
 /**
  * A suspended card: the suspension message of its live linked record, never
@@ -386,10 +413,17 @@ function copyBox(text: string, label: string): SafeHtml {
  * record (voided outside the workspace, not yet followed) there is nothing
  * to send.
  */
-function suspendedMessageBody(v: CardView): SafeHtml {
+function suspendedMessage(
+  v: CardView,
+  profile: SafeUrl | undefined,
+): MessagePart {
   const s = cardSuspension(v);
+  const none: MessagePart = {
+    modal: '',
+    inline: html`<p class="muted">Suspended — see the record above.</p>`,
+  };
   if (!s.recorded) {
-    return html`<p class="muted">Suspended — see the record above.</p>`;
+    return none;
   }
   const c = v.noShowCase;
   let text: string;
@@ -403,7 +437,7 @@ function suspendedMessageBody(v: CardView): SafeHtml {
       durationDays: s.days,
     });
   } catch {
-    return html`<p class="muted">Suspended — see the record above.</p>`;
+    return none;
   }
   const unchecked = c
     ? ''
@@ -411,69 +445,88 @@ function suspendedMessageBody(v: CardView): SafeHtml {
         This member is not in the latest report, so hosting could not be
         checked. If they have hosted, remove the admin fee sentence.
       </p>`;
-  return html`${unchecked}${copyBox(text, 'Copy suspension message')}`;
+  return {
+    modal: modal({
+      trigger: { label: 'Suspension message', tone: 'ghost' },
+      title: `Suspension message for ${v.row.memberName || 'this member'}`,
+      body: html`${unchecked}${copyBox(text, 'Copy message')}
+      ${meetupLine(profile)}`,
+    }),
+    inline: '',
+  };
 }
 
-function messageBody(
+function messagePart(
   v: CardView,
-  form: (action: WorkspaceAction, inner: SafeHtml, box?: boolean) => SafeHtml,
+  fields: (action: WorkspaceAction) => SafeHtml,
+  rowUrl: SafeUrl,
   actions: Set<WorkspaceAction>,
-): SafeHtml | '' {
+  profile: SafeUrl | undefined,
+): MessagePart {
   if (v.row.status === 'suspended') {
-    return suspendedMessageBody(v);
+    return suspendedMessage(v, profile);
   }
   if (v.row.status === 'voided') {
-    return html`<p class="muted">Voided — no message to send.</p>`;
+    return {
+      modal: '',
+      inline: html`<p class="muted">Voided — no message to send.</p>`,
+    };
   }
   const c = v.noShowCase;
   if (!c || !v.row.inLatestSnapshot) {
-    return '';
+    return NO_MESSAGE;
   }
   const s = cardSuspension(v);
   const hostWaiver = c.hostedPastEvent === true;
+  const warning = v.row.classification === 'warning';
   let text: string;
   try {
-    text =
-      v.row.classification === 'warning'
-        ? warningMessage({
-            memberName: v.row.memberName,
-            event: c.counted[0],
-            // A warning always speaks of the next suspension.
-            priorSuspensions: priorCount(v.records, v.now),
-            hostWaiver,
-          })
-        : suspensionMessage({
-            memberName: v.row.memberName,
-            counted: c.counted,
-            priorSuspensions: s.prior,
-            hostWaiver,
-            suspendedOn: s.suspendedOn,
-          });
+    text = warning
+      ? warningMessage({
+          memberName: v.row.memberName,
+          event: c.counted[0],
+          // A warning always speaks of the next suspension.
+          priorSuspensions: priorCount(v.records, v.now),
+          hostWaiver,
+        })
+      : suspensionMessage({
+          memberName: v.row.memberName,
+          counted: c.counted,
+          priorSuspensions: s.prior,
+          hostWaiver,
+          suspendedOn: s.suspendedOn,
+        });
   } catch {
     // A stored event without a usable date: no message, never a 500.
-    return html`<p class="muted">
-      The message could not be written from the stored report.
-    </p>`;
+    return {
+      modal: '',
+      inline: html`<p class="muted">
+        The message could not be written from the stored report.
+      </p>`,
+    };
   }
-  // RCDATA: escaped text, never an attribute or a script.
-  const box = html`<textarea class="copy" readonly rows="8">${text}</textarea>`;
-  if (v.row.classification === 'warning' && actions.has('copy_warning')) {
-    return form(
-      'copy_warning',
-      html`${box}
-        <button type="submit" data-copy-near data-then-submit>
-          Copy warning
-        </button>`,
-      true,
-    );
-  }
-  const label =
-    v.row.classification === 'warning'
-      ? 'Copy warning'
-      : 'Copy suspension message';
-  return html`<div data-copy-box>
-    ${box}<button type="button" data-copy-near>${label}</button>
-  </div>`;
+  const name = v.row.memberName || 'this member';
+  // Copy warning: copies, then submits copy_warning (status Warning copied).
+  const copy =
+    warning && actions.has('copy_warning')
+      ? html`<form method="post" action="${rowUrl}" data-copy-box>
+          ${fields('copy_warning')}${copyText(text)}${copyButton({
+            label: 'Copy warning',
+            target: 'near',
+            thenSubmit: true,
+          })}
+        </form>`
+      : copyBox(text, warning ? 'Copy warning' : 'Copy message');
+  return {
+    modal: modal({
+      trigger: warning
+        ? { label: 'Send warning', tone: 'primary' }
+        : { label: 'Suspend member', tone: 'primary' },
+      title: warning ? `Warning for ${name}` : `Suspend ${name}`,
+      body: html`${copy} ${meetupLine(profile)}`,
+    }),
+    inline: '',
+  };
 }
 
 function historyBody(events: WorkspaceEvent[]): SafeHtml {
@@ -502,9 +555,15 @@ function historyBody(events: WorkspaceEvent[]): SafeHtml {
   </ul>`;
 }
 
-/** Actions that park or reopen a card: secondary (ghost) buttons. */
-const SECONDARY_ACTIONS: ReadonlySet<WorkspaceAction> =
-  new Set<WorkspaceAction>(['hold', 'skip', 'reopen']);
+const HOLD_TIP =
+  'The card moves to On hold until someone presses Reopen, which puts it ' +
+  'back where it was. Say why, so the next person knows.';
+const SKIP_TIP =
+  'The card moves to Skipped and no message is sent for it. Reopen puts ' +
+  'it back where it was. Say why, so the next person knows.';
+const NOTES_TIP =
+  'For staff only: shown on this card. Each save is kept in the card ' +
+  'history and posted to the moderation log.';
 
 /** One member card: a pure function of what the page read for this row. */
 function cardHtml(v: CardView): SafeHtml {
@@ -521,55 +580,57 @@ function cardHtml(v: CardView): SafeHtml {
     ),
   );
   const rowUrl = localUrl(workspaceRowPath(row.period, row.id));
-  const hidden = html`<input type="hidden" name="_csrf" value="${v.csrf}" />
-    <input type="hidden" name="version" value="${row.version}" />`;
-  function form(
-    action: WorkspaceAction,
-    inner: SafeHtml,
-    box = false,
-  ): SafeHtml {
-    const fields = html`${hidden}
-      <input type="hidden" name="action" value="${action}" />${inner}`;
-    return box
-      ? html`<form method="post" action="${rowUrl}" data-copy-box>
-          ${fields}
-        </form>`
-      : html`<form method="post" action="${rowUrl}">${fields}</form>`;
-  }
-  function button(
-    action: WorkspaceAction,
-    label: string,
-    extra: SafeHtml | '' = '',
-  ): SafeHtml | '' {
-    if (!actions.has(action)) {
-      return '';
-    }
-    // Voiding undoes a suspension: the destructive (coral ghost) button.
-    // Parking or reopening a card is secondary: ghost. Marking it sent is
-    // the card's main action: primary.
-    if (action === 'void') {
-      return form(
-        action,
-        html`${extra}<button type="submit" class="danger">${label}</button>`,
-      );
-    }
-    return SECONDARY_ACTIONS.has(action)
-      ? form(
-          action,
-          html`${extra}<button type="submit" class="ghost">${label}</button>`,
-        )
-      : form(action, html`${extra}<button type="submit">${label}</button>`);
-  }
+  /** An action's fields: the CSRF token, the row version and the action. */
+  const fields = (action: WorkspaceAction) =>
+    html`<input type="hidden" name="_csrf" value="${v.csrf}" />
+      <input type="hidden" name="version" value="${row.version}" />
+      <input type="hidden" name="action" value="${action}" />`;
+  const form = (action: WorkspaceAction, inner: SafeHtml) =>
+    html`<form method="post" action="${rowUrl}">
+      ${fields(action)}${inner}
+    </form>`;
   const noteBox = (label: string, max: number) =>
     html`<label class="field"
       >${label}
-      <textarea name="note" rows="2" maxlength="${max}" required></textarea>
+      <textarea name="note" rows="3" maxlength="${max}" required></textarea>
     </label>`;
+  /**
+   * An action that needs a note (hold, skip, void): a button opening a
+   * confirm modal with the note field, so nothing opens inline.
+   */
+  const noteAction = (
+    action: 'hold' | 'skip' | 'void',
+    copy: {
+      trigger: string;
+      title: string;
+      /** The confirm button: never the trigger's own words. */
+      confirm: string;
+      tip: SafeHtml | string;
+      field: string;
+      max: number;
+    },
+  ): SafeHtml | '' => {
+    if (!actions.has(action)) {
+      return '';
+    }
+    // Voiding undoes a suspension: the destructive (coral) button. Parking
+    // a card is secondary: ghost.
+    const danger = action === 'void';
+    return confirmModal({
+      trigger: { label: copy.trigger, tone: danger ? 'danger' : 'ghost' },
+      title: copy.title,
+      tip: copy.tip,
+      action: rowUrl,
+      fields: html`${fields(action)}${noteBox(copy.field, copy.max)}`,
+      confirmLabel: copy.confirm,
+      tone: danger ? 'danger' : 'primary',
+    });
+  };
   // One line: the textarea's text is exactly the stored notes. The parser
   // drops one newline right after the start tag, so the template writes its
   // own and notes that begin with a newline keep it.
   // prettier-ignore
-  const notesArea = html`<textarea name="note" rows="3" maxlength="${NOTES_MAX}">\n${row.notes}</textarea>`;
+  const notesArea = html`<textarea name="note" rows="5" maxlength="${NOTES_MAX}">\n${row.notes}</textarea>`;
   const unlinked = v.records.filter(
     (r) => inLinkWindow(r, row.period) && r.id !== row.suspensionRecordId,
   );
@@ -597,6 +658,8 @@ function cardHtml(v: CardView): SafeHtml {
         }`,
   );
   const profile = meetupProfileUrl(row.memberId);
+  const message = messagePart(v, fields, rowUrl, actions, profile);
+  const recordId = v.linked?.id ?? row.suspensionRecordId;
   return html`<div class="card ws-card">
     <h2>
       ${memberLink({ id: row.memberId, name: row.memberName })}
@@ -616,25 +679,46 @@ function cardHtml(v: CardView): SafeHtml {
           </p>`
     }
     ${caseBody(v)} ${upcomingBody(v.upcoming, v.now)} ${suspensionBody(v)}
-    ${outsideBody} ${elsewhereBody} ${messageBody(v, form, actions)}
+    ${outsideBody} ${elsewhereBody} ${message.inline}
+    ${message.modal ? '' : meetupLine(profile)}
     ${
-      profile
-        ? html`<p>
-            <a href="${profile}" rel="noopener noreferrer" target="_blank"
-              >Open on Meetup</a
-            >
-            <span class="muted"
-              >(send the message there while signed in as the organizer
-              account)</span
-            >
+      row.notes.trim()
+        ? html`<p class="ws-notes">
+            <strong>Notes:</strong> ${memberText(row.notes.trim())}
           </p>`
         : ''
     }
     <div class="actions">
-      ${button('mark_sent', 'Mark as sent')}
-      ${button('hold', 'Put on hold', noteBox('Why', NOTES_MAX))}
-      ${button('skip', 'Skip', noteBox('Why', NOTES_MAX))}
-      ${button('reopen', 'Reopen')}
+      ${message.modal}
+      ${
+        actions.has('mark_sent')
+          ? form('mark_sent', html`<button type="submit">Mark as sent</button>`)
+          : ''
+      }
+      ${noteAction('hold', {
+        trigger: 'Put on hold',
+        title: 'Put this card on hold',
+        confirm: 'Put this card on hold',
+        tip: HOLD_TIP,
+        field: 'Why',
+        max: NOTES_MAX,
+      })}
+      ${noteAction('skip', {
+        trigger: 'Skip',
+        title: 'Skip this card',
+        confirm: 'Skip this card',
+        tip: SKIP_TIP,
+        field: 'Why',
+        max: NOTES_MAX,
+      })}
+      ${
+        actions.has('reopen')
+          ? form(
+              'reopen',
+              html`<button type="submit" class="ghost">Reopen</button>`,
+            )
+          : ''
+      }
       ${
         actions.has('record_suspension')
           ? html`<a
@@ -644,13 +728,33 @@ function cardHtml(v: CardView): SafeHtml {
             >`
           : ''
       }
-      ${button('void', 'Void suspension', noteBox('Reason', VOID_REASON_MAX))}
+      ${noteAction('void', {
+        trigger: 'Void suspension',
+        title: 'Void this suspension?',
+        confirm: 'Void this suspension',
+        tip: html`Voiding marks
+        ${recordId === null ? 'the suspension record' : `suspension #${recordId}`}
+        as void: it stops counting toward this member's later suspension lengths
+        and admin fees, and leaves the active suspensions list. The card moves
+        to Voided, where a suspension can be recorded again. Nothing changes on
+        Meetup: if the member was removed there, re-admit them on Meetup
+        yourself. The reason is kept with the record and posted to the
+        moderation log.`,
+        field: 'Reason',
+        max: VOID_REASON_MAX,
+      })}
+      ${confirmModal({
+        trigger: { label: 'Edit notes', tone: 'ghost' },
+        title: 'Notes',
+        tip: NOTES_TIP,
+        action: rowUrl,
+        fields: html`${fields('edit_notes')}<label class="field"
+            >Notes ${notesArea}</label
+          >`,
+        confirmLabel: 'Save notes',
+        tone: 'primary',
+      })}
     </div>
-    ${form(
-      'edit_notes',
-      html`<label class="field">Notes ${notesArea} </label>
-        <button type="submit" class="ghost">Save notes</button>`,
-    )}
     <details>
       <summary>History</summary>
       ${historyBody(v.events)}
@@ -1015,7 +1119,6 @@ export function registerWorkspaceRoutes(
     );
     dashboardPage(res, {
       title: `No-show workspace ${label}`,
-      script: 'workspace',
       body: html`<div class="card">
           <h1>No-show workspace — ${label}</h1>
           ${workspaceResultNotice(req.query.result)}

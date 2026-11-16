@@ -32,6 +32,7 @@ import { PAGE_SIZE, pageNav, parsePage } from '../paging.js';
 import { neutralizeMentions } from '../../lib/helpers/neutralizeMentions.js';
 import type { DashboardPageDeps } from './dashboardPages.js';
 import { refreshForm, refreshNotice } from './refresh.js';
+import { copyButton } from '../ui/copy.js';
 
 const WHAT = 'The Hall of Fame report';
 
@@ -155,7 +156,7 @@ function mentionCard(
     <h2>Ready to post (with mentions)</h2>
     <textarea id="hof-post-mentions" class="copy" readonly>${post}</textarea>
     ${note}
-    <p><button type="button" data-copy="hof-post-mentions">Copy</button></p>
+    <p>${copyButton({ label: 'Copy', target: { id: 'hof-post-mentions' } })}</p>
   </div>`;
 }
 
@@ -332,7 +333,6 @@ export function registerHallOfFameRoutes(
     );
     dashboardPage(res, {
       title: `Hall of Fame ${label}`,
-      script: true,
       body: html`<div class="card">
           ${head}
           <p class="muted">
@@ -354,7 +354,7 @@ export function registerHallOfFameRoutes(
         <div class="card">
           <h2>Ready to post</h2>
           <textarea id="hof-post" class="copy" readonly>${post}</textarea>
-          <p><button type="button" data-copy="hof-post">Copy</button></p>
+          <p>${copyButton({ label: 'Copy', target: { id: 'hof-post' } })}</p>
         </div>
         ${mentionCard(payload, period, links.ok ? links.value : undefined)}`,
     });

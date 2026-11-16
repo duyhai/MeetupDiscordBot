@@ -285,7 +285,33 @@ dl.stats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:var(--s2
 .actions.row>.button:not(.icon-only){padding-left:var(--s3);padding-right:var(--s3)}
 .button svg.icon{flex:none;display:block}
 .ws-card h2{display:flex;flex-wrap:wrap;align-items:center;gap:var(--s2)}
-.ws-card details{border-top:1px solid var(--line);margin-top:var(--s4);padding-top:var(--s2)}
+.ws-card>details:not(.ui-modal){border-top:1px solid var(--line);margin-top:var(--s4);padding-top:var(--s2)}
+.ws-notes{overflow-wrap:anywhere}
+.ws-notes bdi{white-space:pre-wrap}
+/* UI kit (src/web/ui): modal and confirmModal. With JavaScript, KIT_SCRIPT turns each summary into a button and the
+   dialog opens in the top layer, so nothing on the page moves; without it the details opens its panel in place. The
+   dialog's own padding is 0 (the box inside pads), so a click on the dialog element itself is a backdrop click. */
+details.ui-modal{margin:0}
+details.ui-modal[open]{flex-basis:100%}
+.ui-modal>summary{list-style:none}
+.ui-modal>summary::-webkit-details-marker{display:none}
+details.ui-modal>dialog{display:block;position:static;width:auto;max-width:none;max-height:none;margin:var(--s2) 0 0;
+box-shadow:none}
+details.ui-modal [data-modal-close]{display:none}
+.ui-dialog{width:min(36rem,calc(100vw - 2 * var(--s4)));max-height:calc(100dvh - 2 * var(--s4));padding:0;
+color:var(--fg);background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);
+box-shadow:0 12px 40px rgb(0 0 0 / .35);overflow:auto;overscroll-behavior:contain}
+.ui-dialog::backdrop{background:rgb(11 9 18 / .6)}
+.ui-dialog-box{padding:var(--s4)}
+@media (min-width:640px){.ui-dialog-box{padding:var(--s5)}}
+.ui-dialog-title{margin:0 0 var(--s3)}
+.ui-dialog-body>:last-child{margin-bottom:0}
+.ui-dialog-body label.field{margin:0 0 var(--s3)}
+.ui-tip{color:var(--muted);margin:0 0 var(--s3)}
+.ui-dialog-body [data-copy-box] textarea{margin-bottom:var(--s3)}
+.ui-dialog-actions{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:var(--s2);margin-top:var(--s4)}
+.ui-dialog button.danger.strong,.ui-dialog button.danger.strong:hover{color:var(--attn-ink);background:var(--attn-soft);
+border-color:var(--attn)}
 @media (max-width:1023.98px){table.stack.bans,table.stack.bans tbody{display:block;width:100%}
 table.stack.bans thead{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
 table.stack.bans tr{display:block;background:var(--raised);border:1px solid var(--line);border-radius:var(--radius-ctl);

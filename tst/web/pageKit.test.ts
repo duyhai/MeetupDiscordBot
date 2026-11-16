@@ -1,12 +1,10 @@
 import { Response } from 'express';
-import fs from 'fs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { AttendanceEvidence } from '../../src/lib/reports/types.js';
 import {
-  COPY_SCRIPT,
+  BAN_PHOTO_SCRIPT,
   PAGE_LOAD_DEADLINE_MS,
-  WORKSPACE_SCRIPT,
   builtByHtml,
   dashboardPage,
   load,
@@ -16,7 +14,8 @@ import {
   parseRouteMonth,
   zeroNoShowNote,
 } from '../../src/web/pageKit.js';
-import { html, isSafeHtml } from '../../src/web/html.js';
+import { html } from '../../src/web/html.js';
+import { KIT_SCRIPT } from '../../src/web/ui/script.js';
 
 const NOW = new Date('2026-10-05T16:15:00Z');
 
@@ -130,55 +129,7 @@ describe('pageKit', () => {
     }
   });
 
-  it('WORKSPACE_SCRIPT has no interpolation and finds its textarea by position', () => {
-    const source = fs.readFileSync(
-      new URL('../../src/web/pageKit.ts', import.meta.url),
-      'utf8',
-    );
-    const start = source.indexOf('export const WORKSPACE_SCRIPT');
-    expect(start).toBeGreaterThan(-1);
-    const end = source.indexOf('`;', start);
-    const definition = source.slice(start, end + 2);
-    expect(definition).not.toContain('${');
-    expect(definition).toMatch(
-      /^export const WORKSPACE_SCRIPT = staticRaw`[^`]*`;$/,
-    );
-    expect(isSafeHtml(WORKSPACE_SCRIPT)).toBe(true);
-    expect(WORKSPACE_SCRIPT.value).toContain("closest('[data-copy-box]')");
-    expect(WORKSPACE_SCRIPT.value).not.toContain('getElementById');
-    // The clipboard fallback is COPY_SCRIPT's.
-    expect(WORKSPACE_SCRIPT.value).toContain("'Select the text and copy it'");
-  });
-
-  it('COPY_SCRIPT has no interpolation', () => {
-    const source = fs.readFileSync(
-      new URL('../../src/web/pageKit.ts', import.meta.url),
-      'utf8',
-    );
-    const start = source.indexOf('export const COPY_SCRIPT');
-    expect(start).toBeGreaterThan(-1);
-    // Up to the next top-level export, so a later line of the definition
-    // cannot hide an interpolation.
-    const end = source.indexOf('\nexport ', start + 1);
-    expect(end).toBeGreaterThan(start);
-    const definition = source.slice(start, end);
-    expect(definition).toContain('COPY_SCRIPT');
-    expect(definition).not.toContain('${');
-    // One staticRaw template literal and nothing else.
-    expect(definition).toMatch(
-      /^export const COPY_SCRIPT = staticRaw`[^`]*`;\s*$/,
-    );
-    expect(isSafeHtml(COPY_SCRIPT)).toBe(true);
-    expect(COPY_SCRIPT.value).toContain('button[data-copy]');
-  });
-
-  it('COPY_SCRIPT falls back when the clipboard API is missing', () => {
-    expect(COPY_SCRIPT.value).toContain(
-      "if(!navigator.clipboard){b.textContent='Select the text and copy it';return;}",
-    );
-  });
-
-  it('dashboardPage embeds COPY_SCRIPT verbatim with the nonce', () => {
+  function capture() {
     const sent: { status?: number; body?: string } = {};
     const res = {
       locals: {
@@ -198,17 +149,30 @@ describe('pageKit', () => {
         return res;
       },
     });
-    dashboardPage(res, {
-      title: 'T',
-      body: html`<p>x</p>`,
-      script: true,
-    });
+    return { res, sent };
+  }
+
+  it('dashboardPage embeds KIT_SCRIPT once, verbatim, with the nonce', () => {
+    const { res, sent } = capture();
+    dashboardPage(res, { title: 'T', body: html`<p>x</p>` });
     expect(sent.status).toBe(200);
-    expect(sent.body).toContain(
-      `<script nonce="N0NCE">${COPY_SCRIPT.value}</script>`,
-    );
+    const kit = `<script nonce="N0NCE">${KIT_SCRIPT.value}</script>`;
+    expect(sent.body?.split(kit)).toHaveLength(2);
+    expect(sent.body).not.toContain(BAN_PHOTO_SCRIPT.value);
     expect(sent.body).toContain('<a href="/dashboard">Home</a>');
     expect(sent.body).toContain('<a href="/dashboard/sessions">Sessions</a>');
+  });
+
+  it("dashboardPage adds the ban photo script after the kit's for 'bans'", () => {
+    const { res, sent } = capture();
+    dashboardPage(res, { title: 'T', body: html`<p>x</p>`, script: 'bans' });
+    const body = sent.body ?? '';
+    const kit = body.indexOf(`<script nonce="N0NCE">${KIT_SCRIPT.value}`);
+    const bans = body.indexOf(
+      `<script nonce="N0NCE">${BAN_PHOTO_SCRIPT.value}</script>`,
+    );
+    expect(kit).toBeGreaterThan(-1);
+    expect(bans).toBeGreaterThan(kit);
   });
 });
 
