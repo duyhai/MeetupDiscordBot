@@ -349,6 +349,7 @@ details.ui-collapsible>summary:hover{background:var(--raised)}
 .ui-collapsible-body>:last-child{margin-bottom:0}
 .ui-dialog-body .ui-record{border-top:1px solid var(--line);margin-top:var(--s4);padding-top:var(--s3)}
 .ui-dialog-body .ui-record h3{margin-top:0}
+.ui-dialog-body .ui-record form+p{margin-top:var(--s3)}
 @media (max-width:1023.98px){table.stack.bans,table.stack.bans tbody{display:block;width:100%}
 table.stack.bans thead{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
 table.stack.bans tr{display:block;background:var(--raised);border:1px solid var(--line);border-radius:var(--radius-ctl);
