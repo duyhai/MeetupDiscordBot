@@ -361,21 +361,31 @@ describe('button variants', () => {
     const { get } = await setup();
     const text = collapse((await get('/dashboard/no-shows/2026-09')).text);
     expect(text).toContain('<button type="submit">Mark as sent</button>');
+    // Hold, skip and notes open a modal (a ghost trigger), whose confirm
+    // button is primary.
     expect(text).toContain(
-      '<button type="submit" class="ghost">Put on hold</button>',
+      '<summary class="button ghost">Put on hold</summary>',
     );
-    expect(text).toContain('<button type="submit" class="ghost">Skip</button>');
+    expect(text).toContain('<button type="submit">Put on hold</button>');
+    expect(text).toContain('<summary class="button ghost">Skip</summary>');
+    expect(text).toContain('<button type="submit">Skip</button>');
     expect(text).toContain(
       '<button type="submit" class="ghost">Reopen</button>',
     );
     expect(text).toContain(
-      '<button type="submit" class="ghost">Save notes</button>',
+      '<summary class="button ghost">Edit notes</summary>',
     );
+    expect(text).toContain('<button type="submit">Save notes</button>');
     expect(text).toContain(
       '<button type="submit" class="ghost">Refresh from Meetup</button>',
     );
-    // The copy buttons are the card's main action.
-    expect(text).toMatch(/<button type="button" data-copy-near>Copy /);
+    // The message modal's trigger is the card's main action.
+    expect(text).toMatch(
+      /<summary class="button">(Send warning|Suspend member)<\/summary>/,
+    );
+    expect(text).toMatch(
+      /<button type="(button|submit)" data-copy="[^"]*"( data-then-submit)?>Copy /,
+    );
   });
 
   it('a suspended card voids with the destructive button', async () => {
@@ -419,7 +429,10 @@ describe('button variants', () => {
       (await req.get('/dashboard/no-shows/2026-09').set('Cookie', cookie)).text,
     );
     expect(text).toContain(
-      '<button type="submit" class="danger">Void suspension</button>',
+      '<summary class="button danger">Void suspension</summary>',
+    );
+    expect(text).toContain(
+      '<button type="submit" class="danger strong">Void suspension</button>',
     );
   });
 

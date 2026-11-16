@@ -1,7 +1,8 @@
 /**
- * The host tables' icons, inline SVG (no external asset, nothing the CSP
- * has to admit). Decorative: each sits in a control that carries its own
- * accessible name, so they are aria-hidden and never focusable.
+ * The UI kit's icons (first drawn for the host tables), inline SVG (no
+ * external asset, nothing the CSP has to admit). Decorative: each sits in a
+ * control that carries its own accessible name, so they are aria-hidden and
+ * never focusable.
  */
 import { html } from '../html.js';
 

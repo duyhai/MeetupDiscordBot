@@ -10,10 +10,8 @@ import {
   HallOfFamePayload,
   MemberRef,
 } from '../../../src/lib/reports/types.js';
-import {
-  COPY_SCRIPT,
-  PAGE_LOAD_DEADLINE_MS,
-} from '../../../src/web/pageKit.js';
+import { PAGE_LOAD_DEADLINE_MS } from '../../../src/web/pageKit.js';
+import { KIT_SCRIPT } from '../../../src/web/ui/script.js';
 import {
   DashboardPageDeps,
   registerAllProtectedRoutes,
@@ -123,7 +121,7 @@ describe('Hall of Fame month page', () => {
     expect(scripts[1][1]).toMatch(/^ nonce="[^"]+"$/);
     // One nonce per page, matching the CSP header's.
     expect(scripts[0][1]).toBe(scripts[1][1]);
-    expect(scripts[1][2]).toBe(COPY_SCRIPT.value);
+    expect(scripts[1][2]).toBe(KIT_SCRIPT.value);
   });
 
   it("copy text matches the command's ready-to-post block", async () => {

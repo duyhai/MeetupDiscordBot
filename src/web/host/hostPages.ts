@@ -61,7 +61,7 @@ import {
   unavailable,
 } from './hostPageKit.js';
 import { CALENDAR_SCRIPT, HISTORY_SCRIPT } from './hostScripts.js';
-import { COPY_ICON, MEETUP_MARK } from './icons.js';
+import { COPY_ICON, MEETUP_MARK } from '../ui/icons.js';
 import { HOST_BASE, HostSession } from './hostSession.js';
 
 const logger = new Logger({ name: 'hostDashboard' });
