@@ -16,6 +16,7 @@ import { createHostRouter } from '../../../src/web/host/hostRouter.js';
 import {
   WrappedPageDeps,
   registerWrappedPage,
+  wrappedDay,
   wrappedYear,
   yearList,
 } from '../../../src/web/host/wrappedPage.js';
@@ -383,6 +384,19 @@ describe('wrappedYear', () => {
   });
 });
 
+describe('wrappedDay', () => {
+  it.each([
+    ['2026-03-09', '2026-03-09'],
+    ['2025-03-09', undefined],
+    ['2026-02-30', undefined],
+    ['2026-3-9', undefined],
+    [['2026-03-09'], undefined],
+    [undefined, undefined],
+  ])('%s → %s', (query, day) => {
+    expect(wrappedDay(query, 2026)).toBe(day);
+  });
+});
+
 describe('yearList', () => {
   it('is this year, then every earlier active year, newest first, from any copy', () => {
     const w2024 = {
@@ -405,6 +419,28 @@ describe('yearList', () => {
 });
 
 describe('GET /host/wrapped', () => {
+  it('names companions from the day cache: a second render asks Discord for nobody', async () => {
+    const h = await harness();
+    const displayName = vi.fn(h.deps.displayName);
+    h.deps.displayName = displayName;
+    await writeWrapped(h.wrappedCache, USER, 2026, cached, NOW);
+    const sid = await signInWithDiscord(h.req);
+    const first = await h.req.get('/host/wrapped?year=2026').set('Cookie', sid);
+    expect(first.text).toContain('Linked &lt;Pal&gt;');
+    expect(displayName).toHaveBeenCalledWith('d-linked');
+    // Only the name is kept, under the Discord id.
+    expect(h.wrappedCache.values.get('wrapped:name:d-linked')).toBe(
+      'Linked <Pal>',
+    );
+    displayName.mockClear();
+    const second = await h.req
+      .get('/host/wrapped?year=2026')
+      .set('Cookie', sid);
+    expect(second.text).toContain('Linked &lt;Pal&gt;');
+    // d-gone has no name, so it is asked again (and still counted).
+    expect(displayName.mock.calls.map(([id]) => id)).toEqual(['d-gone']);
+  });
+
   it('renders a cached Wrapped without asking for a token or Meetup', async () => {
     const h = await harness();
     await writeWrapped(h.wrappedCache, USER, 2026, cached, NOW);
@@ -1187,6 +1223,65 @@ describe('/host/wrapped from the group snapshot', () => {
         .attendedThisYear,
     ).toBe(2);
     expect(h.meetup.getSelfPastRsvpEvents).not.toHaveBeenCalled();
+  });
+
+  it('a stored Wrapped shows the year as a heat map, with no Meetup call', async () => {
+    const h = await harness();
+    h.deps.snapshot = async () => snapshotWrapped(reader());
+    const selfPastCount = vi.fn(async () => 2);
+    h.deps.selfPastCount = selfPastCount;
+    await writeWrapped(h.wrappedCache, USER, 2026, cached, NOW);
+    const sid = await signInWithDiscord(h.req);
+    const res = await h.req.get('/host/wrapped?year=2026').set('Cookie', sid);
+    expect(res.status).toBe(200);
+    expect(res.text).toContain('class="heat"');
+    expect(res.text).toContain(
+      'aria-label="Events attended per day in 2026: 2 in total"',
+    );
+    // Each day with events links to its own listing.
+    expect(res.text).toContain(
+      'href="/host/wrapped?year=2026&amp;day=2026-03-09"',
+    );
+    expect(res.text).toContain('Board game night');
+    // The tooltip script runs, under the page's nonce.
+    expect(res.text).toMatch(/<script nonce="[^"]+">\(function\(\)\{var svg=/);
+    expect(selfPastCount).not.toHaveBeenCalled();
+    expect(h.meetup.getSelfPastRsvpEvents).not.toHaveBeenCalled();
+  });
+
+  it('?day= lists that day under the map; a day outside the year is ignored', async () => {
+    const h = await harness();
+    h.deps.snapshot = async () => snapshotWrapped(reader());
+    await writeWrapped(h.wrappedCache, USER, 2026, cached, NOW);
+    const sid = await signInWithDiscord(h.req);
+    const day = strip(
+      (
+        await h.req
+          .get('/host/wrapped?year=2026&day=2026-04-09')
+          .set('Cookie', sid)
+      ).text,
+    );
+    expect(day).toContain('<h3>Thu, Apr 9</h3>');
+    expect(day).toContain('Hot pot dinner');
+    expect(day).toContain('Clear the day');
+    const elsewhere = (
+      await h.req
+        .get('/host/wrapped?year=2026&day=2025-04-09')
+        .set('Cookie', sid)
+    ).text;
+    expect(elsewhere).not.toContain('Clear the day');
+  });
+
+  it('no snapshot for the member: the page goes without the map', async () => {
+    const h = await harness();
+    h.deps.snapshot = async () =>
+      snapshotWrapped(new FakeSnapshotReader([], {}));
+    await writeWrapped(h.wrappedCache, USER, 2026, cached, NOW);
+    const sid = await signInWithDiscord(h.req);
+    const res = await h.req.get('/host/wrapped?year=2026').set('Cookie', sid);
+    expect(res.status).toBe(200);
+    expect(res.text).not.toContain('class="heat"');
+    expect(res.text).toContain('Linked &lt;Pal&gt;');
   });
 
   it('a member the snapshot does not hold, with no token, still gets the sign-in page', async () => {

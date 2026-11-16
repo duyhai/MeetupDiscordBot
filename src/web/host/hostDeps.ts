@@ -44,6 +44,7 @@ import { registerWrappedPage } from './wrappedPage.js';
 import {
   discordUsername,
   displayName,
+  displayNames,
   ensureServerMember,
   isServerMember,
 } from './serverJoin.js';
@@ -222,6 +223,8 @@ export function hostRouterFromEnv(
           isServerMember(() => discordClient, discordUserId),
         displayName: (discordUserId) =>
           displayName(() => discordClient, discordUserId),
+        displayNames: (discordUserIds) =>
+          displayNames(() => discordClient, discordUserIds),
         limiter: wrappedBuildLimiter,
         alert: alertVia(() => discordClient),
         groupId: Configuration.meetup.groupId,

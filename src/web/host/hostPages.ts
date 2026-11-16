@@ -61,6 +61,7 @@ import {
   unavailable,
 } from './hostPageKit.js';
 import { CALENDAR_SCRIPT, HISTORY_SCRIPT } from './hostScripts.js';
+import { COPY_ICON, MEETUP_MARK } from './icons.js';
 import { HOST_BASE, HostSession } from './hostSession.js';
 
 const logger = new Logger({ name: 'hostDashboard' });
@@ -94,19 +95,23 @@ function tierBadge(session: HostSession): SafeHtml {
     : html`<span class="badge neutral">Guest Host</span>`;
 }
 
+/** The event on Meetup: the Meetup mark alone, named for screen readers and on hover. */
 function meetupButton(event: HostEvent): SafeHtml {
   const href = safeHref(event.eventUrl);
   return href
     ? html`<a
-        class="button ghost"
+        class="button ghost icon-only"
         href="${href}"
         rel="noopener noreferrer"
         target="_blank"
-        >View on Meetup</a
+        aria-label="View on Meetup"
+        title="View on Meetup"
+        >${MEETUP_MARK}</a
       >`
     : html``;
 }
 
+/** The one action with words: "Take attendance" by the Meetup mark (read as "… on Meetup"). */
 function attendanceButton(event: HostEvent): SafeHtml {
   const url = attendanceUrl(event.eventUrl);
   const href = url ? safeHref(url) : undefined;
@@ -116,9 +121,22 @@ function attendanceButton(event: HostEvent): SafeHtml {
         href="${href}"
         rel="noopener noreferrer"
         target="_blank"
-        >Take attendance on Meetup</a
+        title="Take attendance on Meetup"
+        >${MEETUP_MARK}<span>Take attendance</span
+        ><span class="sr-only"> on Meetup</span></a
       >`
     : html``;
+}
+
+/** A new request from this event's details: the copy icon alone. */
+function copyButton(event: HostEvent): SafeHtml {
+  return html`<a
+    class="button ghost icon-only"
+    href="${copyLink(event.id)}"
+    aria-label="Copy this event"
+    title="Copy this event"
+    >${COPY_ICON}</a
+  >`;
 }
 
 /** Days with no group event in the next two weeks, from today (Pacific). */
@@ -248,7 +266,7 @@ function homeBody(
             }
           </td>
           <td class="buttons" data-label="Actions">
-            <div class="actions">
+            <div class="actions row">
               ${meetupButton(event)}
               ${
                 announcements
@@ -453,9 +471,14 @@ function calendarCell(day: CalendarDay, today: string): SafeHtml {
   );
   const number = html`<span class="cal-day">${dayText}</span>`;
   if (day.day < today) {
-    // Only published (upcoming) events are read, so a past day's count
-    // would be wrong: it shows the date only.
-    return html`<td class="cal past">${number}</td>`;
+    // What already happened, greyed out: no busy shading (it is not a
+    // choice any more) and no +.
+    return day.events.length === 0
+      ? html`<td class="cal past">${number}</td>`
+      : html`<td class="cal past">
+          <div class="cal-head">${number}</div>
+          ${dayPopover(day, today)}
+        </td>`;
   }
   const add = canHostOn(day.day, today)
     ? html`<a
@@ -553,31 +576,33 @@ function calendarBody(
         ${week.map((d) => monthCell(d))}
       </tr>`,
   );
-  const listed = days.filter(
-    (d) => inMonth(d) && d.day >= today && d.events.length > 0,
-  );
-  const list = listed.map(
-    (d) =>
-      html`<li>
-        <h3>${dayLabel(d.day)}</h3>
-        ${
-          d.day > today
-            ? html`<p>
-                <a href="${createDayLink(d.day)}">Host on this day</a>
-              </p>`
-            : ''
-        }
-        <ul>
-          ${d.events.map((e) => html`<li>${eventLine(e)}</li>`)}
-        </ul>
-      </li>`,
-  );
+  const listed = days.filter((d) => inMonth(d) && d.events.length > 0);
+  const list = listed.map((d) => {
+    const inner = html`<h3>
+        ${dayLabel(d.day)}${d.day < today ? html` <span class="badge neutral">Past</span>` : ''}
+      </h3>
+      ${
+        d.day > today
+          ? html`<p>
+              <a href="${createDayLink(d.day)}">Host on this day</a>
+            </p>`
+          : ''
+      }
+      <ul>
+        ${d.events.map((e) => html`<li>${eventLine(e)}</li>`)}
+      </ul>`;
+    // The class is one of two literals: a past day is greyed out.
+    return d.day < today
+      ? html`<li class="past">${inner}</li>`
+      : html`<li>${inner}</li>`;
+  });
   return html`<div class="card">
       <h1>Calendar</h1>
       <p>
         The group's published events, a month at a time. Pick a free or quiet
         day for your event: open a day's count to see its events, or press + to
-        host on that day.
+        host on that day. Days that have passed are greyed out, with what
+        happened on them.
       </p>
       ${monthNav(month, today)}
       <p class="cal-legend">
@@ -585,6 +610,7 @@ function calendarBody(
         <span class="swatch busy1"></span> 1 event
         <span class="swatch busy2"></span> 2 events
         <span class="swatch busy3"></span> 3 or more
+        <span class="swatch past"></span> Past
       </p>
       <div class="table-scroll">
         <table class="cal-grid">
@@ -794,12 +820,9 @@ function historyBody(
           ${eventLink(event)}${excludedBadge(event)}
         </td>
         <td class="type" data-label="Type">${EVENT_TYPE_LABELS[event.type]}</td>
-        <td data-label="Actions">
-          <div class="actions">
-            ${meetupButton(event)}${attendanceButton(event)}
-            <a class="button ghost" href="${copyLink(event.id)}"
-              >Copy this event</a
-            >
+        <td class="buttons" data-label="Actions">
+          <div class="actions row one-line">
+            ${attendanceButton(event)}${meetupButton(event)}${copyButton(event)}
           </div>
         </td>
       </tr>`,
@@ -857,9 +880,9 @@ function historyBody(
       <h2>${selected ? EVENT_TYPE_LABELS[selected] : 'Past events'}</h2>
       ${dayFilter}
       <p class="muted">
-        "Take attendance on Meetup" opens the event's attendee list, where hosts
-        mark who came and who did not show. "Copy this event" starts a new
-        request with its details.
+        "Take attendance" opens the event's attendee list on Meetup, where hosts
+        mark who came and who did not show. The Meetup mark opens the event, and
+        the copy icon starts a new request with its details.
       </p>
       ${
         rows.length === 0

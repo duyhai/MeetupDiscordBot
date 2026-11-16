@@ -73,12 +73,15 @@ function busyOf(n: number): CalendarDay['busy'] {
 
 /**
  * The group's published events for `days` days from `startDay`
- * (YYYY-MM-DD, Pacific), one entry per Pacific day.
+ * (YYYY-MM-DD, Pacific), one entry per Pacific day. With `past`, a window
+ * that starts before today also reads the events that already happened in
+ * it (Meetup's PAST status: published events that have ended).
  */
 async function calendarDays(
   deps: HostEventsDeps,
   startDay: string,
   days: number,
+  { past = false }: { past?: boolean } = {},
 ): Promise<CalendarDay[]> {
   // Day arithmetic on calendar dates, then each end turned into Pacific
   // midnight on its own: a tz'd dayjs keeps its offset through add(), so
@@ -86,13 +89,23 @@ async function calendarDays(
   const endDay = dayjs(startDay).add(days, 'day').format('YYYY-MM-DD');
   const start = dayjs.tz(startDay, PACIFIC);
   const end = dayjs.tz(endDay, PACIFIC);
-  const events = await deps.fetchGroupEvents({
-    status: ['ACTIVE'],
+  const window = {
     afterDateTime: start.toISOString(),
     beforeDateTime: end.toISOString(),
-  });
+  };
+  const today = tz(dayjs(deps.now())).format('YYYY-MM-DD');
+  const [active, ended] = await Promise.all([
+    deps.fetchGroupEvents({ status: ['ACTIVE'], ...window }),
+    past && startDay < today
+      ? deps.fetchGroupEvents({ status: ['PAST'], ...window })
+      : Promise.resolve<HostEvent[]>([]),
+  ]);
+  // An event that ends while the page is read may be in both lists.
+  const events = [
+    ...new Map([...ended, ...active].map((e) => [e.id, e])).values(),
+  ];
   const byDay = new Map<string, HostEvent[]>();
-  for (const event of [...events].sort(byTime)) {
+  for (const event of events.sort(byTime)) {
     const day = pacificDay(event.dateTime);
     byDay.set(day, [...(byDay.get(day) ?? []), event]);
   }
@@ -129,7 +142,8 @@ export async function groupCalendar(
 /**
  * One month (YYYY-MM) as whole Monday-first weeks: from the Monday on or
  * before the 1st to the Sunday on or after the last day. The days around
- * the month are in the list too; the page leaves them blank.
+ * the month are in the list too; the page leaves them blank. Days before
+ * today carry the events that already happened, for the page to grey out.
  */
 export async function monthCalendar(
   deps: HostEventsDeps,
@@ -141,7 +155,7 @@ export async function monthCalendar(
   const end = dayjs(mondayOf(last)).add(6, 'day');
   // Rounded hours, not diff('day'): a spring-forward day is 23 h long.
   const days = Math.round(end.diff(dayjs(start), 'hour') / 24) + 1;
-  return calendarDays(deps, start, days);
+  return calendarDays(deps, start, days, { past: true });
 }
 
 /**

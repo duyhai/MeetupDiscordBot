@@ -4,8 +4,11 @@ import {
   GuildMember,
   RESTJSONErrorCodes,
 } from 'discord.js';
+import { Logger } from 'tslog';
 
 import { GUILD_ID } from '../../constants.js';
+
+const logger = new Logger({ name: 'serverJoin' });
 
 /** Where the member stands in our Discord server after a join attempt. */
 export interface ServerJoin {
@@ -166,4 +169,71 @@ export async function displayName(
   } finally {
     clearTimeout(timer);
   }
+}
+
+/** Up to this many misses are read one by one over REST: one window of Discord's guild-member bucket (five reads). */
+export const SINGLE_READS_MAX = 5;
+/** Discord's cap on user_ids in one request-guild-members. */
+const BATCH_MAX = 100;
+
+/**
+ * Display names for several members at once, for a Wrapped naming ~20
+ * people. The bot's member cache first; up to SINGLE_READS_MAX misses go
+ * over REST like displayName; more go in one gateway request-guild-members
+ * by id (one round trip, where REST queues them five to a window, measured
+ * at 2–3 s for 20). Any failure there (a gateway rate limit, the timeout)
+ * falls back to the REST reads, so the worst case is today's. Members not
+ * on the server, or not answered in time, are left out (counted, not
+ * named). Never throws.
+ */
+export async function displayNames(
+  getClient: () => Client | undefined,
+  discordUserIds: string[],
+  timeoutMs = 3000,
+): Promise<Record<string, string>> {
+  const names: Record<string, string> = {};
+  const client = getClient();
+  if (!client || discordUserIds.length === 0) {
+    return names;
+  }
+  let missing: string[];
+  try {
+    const guild = await client.guilds.fetch(GUILD_ID);
+    missing = discordUserIds.filter((id) => {
+      const cached = guild.members.cache.get(id);
+      if (cached) {
+        names[id] = cached.displayName;
+        return false;
+      }
+      return true;
+    });
+    if (missing.length > SINGLE_READS_MAX) {
+      for (let i = 0; i < missing.length; i += BATCH_MAX) {
+        // eslint-disable-next-line no-await-in-loop -- rarely a second batch; one gateway request at a time
+        const fetched = await guild.members.fetch({
+          user: missing.slice(i, i + BATCH_MAX),
+          time: timeoutMs,
+        });
+        fetched.forEach((member) => {
+          names[member.id] = member.displayName;
+        });
+      }
+      return names;
+    }
+  } catch (error: unknown) {
+    // The REST reads below, for whoever is still unnamed.
+    logger.warn(
+      `Batched member names failed, reading one by one: ${error instanceof Error ? error.name : 'Error'}`,
+    );
+    missing = discordUserIds.filter((id) => names[id] === undefined);
+  }
+  await Promise.all(
+    missing.map(async (id) => {
+      const name = await displayName(getClient, id, timeoutMs);
+      if (name !== undefined) {
+        names[id] = name;
+      }
+    }),
+  );
+  return names;
 }

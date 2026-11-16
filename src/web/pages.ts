@@ -277,6 +277,13 @@ dl.stats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:var(--s2
 .stat.done dd{color:var(--ok-ink)}
 .actions{display:flex;flex-wrap:wrap;gap:var(--s2);align-items:flex-start;margin:var(--s3) 0}
 .actions form{margin:0}
+/* A table row's actions on one line: icon-only links (the Meetup mark, copy) beside the one worded button. */
+.actions.row{align-items:center;margin:0}
+@media (min-width:640px){.actions.one-line{flex-wrap:nowrap}
+.actions.one-line>*{white-space:nowrap}}
+.button.icon-only{padding:var(--s2);min-width:var(--tap)}
+.actions.row>.button:not(.icon-only){padding-left:var(--s3);padding-right:var(--s3)}
+.button svg.icon{flex:none;display:block}
 .ws-card h2{display:flex;flex-wrap:wrap;align-items:center;gap:var(--s2)}
 .ws-card details{border-top:1px solid var(--line);margin-top:var(--s4);padding-top:var(--s2)}
 @media (max-width:1023.98px){table.stack.bans,table.stack.bans tbody{display:block;width:100%}
@@ -302,6 +309,10 @@ alt text (attr(data-label) / ""), since the thead is hidden here and the label i
 table.stack td::before{content:attr(data-label);float:left;width:calc(66.667% - var(--s3));margin-left:-66.667%;
 padding-right:var(--s3);box-sizing:content-box;font-size:var(--t-sm);font-weight:600;color:var(--muted)}
 table.stack td.rank{display:none}
+table.stack td.buttons{padding-left:0}
+.actions.row{gap:var(--s1)}
+.actions.row>.button:not(.icon-only){gap:var(--s1);padding-left:var(--s2);padding-right:var(--s2)}
+table.stack td.buttons::before{float:none;display:block;width:auto;margin:0 0 var(--s1);padding:0}
 .rank-inline{display:inline}
 .actions>form:has(textarea){flex:1 1 100%}
 form.filters label{flex:1 1 100%}
@@ -380,7 +391,11 @@ table.stack tr.offer-row td::before{content:none}
 .recreate-offer form{margin:var(--s2) 0 0}
 .wrap-anywhere{overflow-wrap:anywhere}
 .field-error{display:block;margin-top:var(--s1);color:var(--attn-ink);font-size:var(--t-sm);font-weight:600}
-td.cal.past{color:var(--muted);background:var(--bg)}
+td.cal.past,.swatch.past{color:var(--muted);background:var(--bg)}
+td.cal.past .cal-day,td.cal.past .cal-count{color:var(--muted)}
+td.cal.past .cal-panel{color:var(--fg)}
+ol.cal-list>li.past{color:var(--muted)}
+ol.cal-list>li.past a{color:inherit}
 td.cal.out{background:var(--bg)}
 td.busy0,.swatch.busy0{background:var(--ok-soft)}
 td.busy1,.swatch.busy1{background:var(--surface)}

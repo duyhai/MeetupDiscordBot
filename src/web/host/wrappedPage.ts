@@ -36,11 +36,14 @@ import {
   buildingKey,
 } from '../../lib/wrapped/cache.js';
 import { CompanionDeps, NamedCompanion } from '../../lib/wrapped/companions.js';
+import { resolveDisplayNames } from '../../lib/wrapped/displayNames.js';
+import { pacificDay } from '../../lib/hosts/hostEvents.js';
 import {
   HostedRanked,
   NamedCohort,
   TopType,
   WrappedEvent,
+  attendedInYear,
 } from '../../lib/wrapped/stats.js';
 import {
   nextTickAt,
@@ -64,7 +67,9 @@ import {
   safeHref,
 } from '../html.js';
 import { FixedWindowLimiter } from '../rateLimit.js';
-import { hostPage } from './hostPageKit.js';
+import { heatMapYear } from './heatMap.js';
+import { dayLabel, hostPage } from './hostPageKit.js';
+import { HISTORY_SCRIPT } from './hostScripts.js';
 import { hostLocals } from './hostRouter.js';
 import { HOST_BASE, HostSession } from './hostSession.js';
 
@@ -104,8 +109,17 @@ export interface WrappedPageDeps {
   organizerRsvps: BuildDeps['organizerRsvps'];
   findByMeetupId: CompanionDeps['findByMeetupId'];
   isPresent: CompanionDeps['isPresent'];
-  /** A linked companion's server display name; undefined → counted. */
+  /**
+   * A linked companion's server display name; undefined → counted. Behind
+   * a day's Redis cache (displayNames.ts): Discord's member reads are
+   * throttled to five a window.
+   */
   displayName: (discordUserId: string) => Promise<string | undefined>;
+  /**
+   * Several at once (serverJoin.ts displayNames: one gateway request for
+   * many); left out, displayName for each.
+   */
+  displayNames?: (discordUserIds: string[]) => Promise<Record<string, string>>;
   /** wrappedBuildLimiter in production: the slot /wrapped takes. */
   limiter: FixedWindowLimiter;
   /** #meetup-bot-alerts, plain (no mentions). */
@@ -120,7 +134,8 @@ export interface WrappedPageDeps {
   entries?: () => Promise<WrappedEntryStore>;
   /**
    * The group snapshot: a member it can serve is built from it, with no
-   * Meetup token. Left out or rejecting, the token path.
+   * Meetup token. Left out or rejecting, the token path. A stored entry's
+   * heat map is read from it too (no cross-check, so no Meetup call).
    */
   snapshot?: () => Promise<SnapshotWrapped>;
   /** The member's stored token's past-RSVP count, the snapshot's cross-check. */
@@ -157,6 +172,17 @@ export function yearList(
     }),
   );
   return [...years].sort((a, b) => b - a);
+}
+
+/** `?day=YYYY-MM-DD` inside the Wrapped year: that day's events under the heat map. */
+export function wrappedDay(query: unknown, year: number): string | undefined {
+  if (typeof query !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(query)) {
+    return undefined;
+  }
+  return dayjs(query).format('YYYY-MM-DD') === query &&
+    query.startsWith(`${String(year)}-`)
+    ? query
+    : undefined;
 }
 
 /** Every `?notice=` code: fixed texts only; the code itself is never shown. */
@@ -224,8 +250,11 @@ function profileLink(discordUserId: string, name: string): SafeHtml {
     : text;
 }
 
-/** One of the member's own events: Pacific date and a Meetup link (text when the URL is not one). */
-function eventItem(event: WrappedEvent): SafeHtml {
+/** One of the member's own events: Pacific date (or time, under a day's heading) and a Meetup link (text when the URL is not one). */
+function eventItem(
+  event: WrappedEvent,
+  when: 'date' | 'time' = 'date',
+): SafeHtml {
   const href = safeHref(event.eventUrl);
   const title = memberText(event.title);
   const link = href
@@ -234,13 +263,19 @@ function eventItem(event: WrappedEvent): SafeHtml {
       >`
     : title;
   return html`<li>
-    <time>${tz(dayjs(event.dateTime)).format('ll')}</time> · ${link}
+    <time
+      >${tz(dayjs(event.dateTime)).format(when === 'date' ? 'll' : 'LT')}</time
+    >
+    · ${link}
   </li>`;
 }
 
-function eventList(events: WrappedEvent[]): SafeHtml {
+function eventList(
+  events: WrappedEvent[],
+  when: 'date' | 'time' = 'date',
+): SafeHtml {
   return html`<ul class="event-list">
-    ${events.map(eventItem)}
+    ${events.map((event) => eventItem(event, when))}
   </ul>`;
 }
 
@@ -407,6 +442,52 @@ function topTypeItem(
   </li>`;
 }
 
+/** The heat map's data: the year's attended events and the picked day. */
+export interface WrappedHeat {
+  events: WrappedEvent[];
+  /** Pacific today: the current year's map stops here. */
+  today: string;
+  day?: string;
+}
+
+/**
+ * The year's attended events as My history's heat map: a day with events
+ * links to `?day=`, which lists them under it.
+ */
+function heatCard(year: number, heat: WrappedHeat): SafeHtml {
+  const byDay = new Map<string, WrappedEvent[]>();
+  heat.events.forEach((event) => {
+    const day = pacificDay(event.dateTime);
+    byDay.set(day, [...(byDay.get(day) ?? []), event]);
+  });
+  const picked = heat.day ? (byDay.get(heat.day) ?? []) : undefined;
+  return html`<div class="card">
+    <h2>Your year, day by day</h2>
+    ${heatMapYear({
+      byDay,
+      year,
+      today: heat.today,
+      verb: 'attended',
+      dayLink: (day) => pageLink(WRAPPED_PATH, { year: String(year), day }),
+    })}
+    ${
+      heat.day && picked
+        ? html`<h3>${dayLabel(heat.day)}</h3>
+            ${
+              picked.length > 0
+                ? eventList(picked, 'time')
+                : html`<p class="muted">No events that day.</p>`
+            }
+            <p>
+              <a href="${pageLink(WRAPPED_PATH, { year: String(year) })}"
+                >Clear the day</a
+              >
+            </p>`
+        : ''
+    }
+  </div>`;
+}
+
 function firstEventText(wrapped: CachedWrapped): SafeHtml {
   const { firstEvent } = wrapped.stats;
   if (!firstEvent) {
@@ -432,12 +513,15 @@ export function wrappedBody({
   years,
   displayNames,
   notice: noticeHtml = '',
+  heat,
 }: {
   session: HostSession;
   wrapped: CachedWrapped;
   years: number[];
   displayNames: Record<string, string>;
   notice?: SafeHtml | '';
+  /** Undefined when the snapshot cannot serve the member: no map. */
+  heat?: WrappedHeat;
 }): SafeHtml {
   const { stats } = wrapped;
   const { year } = stats;
@@ -478,6 +562,7 @@ export function wrappedBody({
         </div>
       </dl>
     </div>
+    ${heat ? heatCard(year, heat) : ''}
     <div class="card">
       <h2>First event with us</h2>
       <p>${firstEventText(wrapped)}</p>
@@ -568,6 +653,41 @@ const FINAL_NOTICES: readonly NoticeCode[] = [
   'queued',
   'already-queued',
 ];
+
+/** One GET's phase timings, logged as a line (counts and ms only, no ids). */
+interface Timing {
+  startedMs: number;
+  phases: Record<string, number>;
+  names?: { cached: number; looked: number };
+}
+
+async function timed<T>(
+  timing: Timing | undefined,
+  phase: string,
+  work: Promise<T>,
+): Promise<T> {
+  if (!timing) {
+    return work;
+  }
+  const started = Date.now();
+  try {
+    return await work;
+  } finally {
+    timing.phases[phase] = Date.now() - started;
+  }
+}
+
+function logTiming(year: number, timing: Timing): void {
+  const phases = Object.entries(timing.phases)
+    .map(([phase, ms]) => `${phase} ${String(ms)} ms`)
+    .join(', ');
+  const names = timing.names
+    ? `; names ${String(timing.names.cached)} cached, ${String(timing.names.looked)} from Discord`
+    : '';
+  logger.info(
+    `Wrapped page (${String(year)}) in ${String(Date.now() - timing.startedMs)} ms: ${phases}${names}`,
+  );
+}
 
 export function registerWrappedPage(
   router: express.Router,
@@ -828,30 +948,72 @@ export function registerWrappedPage(
     }
   }
 
-  /** Every named person's display name (companions and cohorts), through the bot, in parallel. */
+  /** The bot's names for ids Redis did not have. */
+  const lookupNames =
+    deps.displayNames ??
+    (async (discordUserIds: string[]) => {
+      const names: Record<string, string> = {};
+      await Promise.all(
+        discordUserIds.map(async (id) => {
+          try {
+            const name = await deps.displayName(id);
+            if (name !== undefined) {
+              names[id] = name;
+            }
+          } catch {
+            // Counted, not named.
+          }
+        }),
+      );
+      return names;
+    });
+
+  /**
+   * Every named person's display name (companions and cohorts): the day's
+   * Redis cache, then the bot for the rest. Anyone unnamed is counted.
+   */
   async function namesFor(
     wrapped: CachedWrapped,
+    cache: KeyValueCache,
+    timing?: Timing,
   ): Promise<Record<string, string>> {
-    const names: Record<string, string> = {};
-    const ids = new Set<string>([
+    const ids = [
       ...wrapped.companions.named.map((c) => c.discordUserId),
       ...wrapped.stats.topTypes.flatMap((top) =>
         top.cohort.named.map((c) => c.discordUserId),
       ),
-    ]);
-    await Promise.all(
-      [...ids].map(async (discordUserId) => {
-        try {
-          const name = await deps.displayName(discordUserId);
-          if (name !== undefined) {
-            names[discordUserId] = name;
-          }
-        } catch {
-          // Counted, not named.
-        }
-      }),
-    );
-    return names;
+    ];
+    const resolved = await resolveDisplayNames(cache, ids, lookupNames);
+    if (timing) {
+      timing.names = resolved;
+    }
+    return resolved.names;
+  }
+
+  /**
+   * The year's attended events for the heat map, from the snapshot's
+   * sources (no cross-check: no Meetup call). Undefined when there is no
+   * snapshot or it cannot serve the member (not held, or flagged as
+   * undercounted): the page goes without the map. Never throws.
+   */
+  async function heatEvents(
+    meetupId: string,
+    year: number,
+  ): Promise<WrappedEvent[] | undefined> {
+    if (!deps.snapshot) {
+      return undefined;
+    }
+    try {
+      const sources = await (await deps.snapshot()).sources(meetupId);
+      return sources
+        ? attendedInYear(sources.events, sources.hosted, year)
+        : undefined;
+    } catch (error: unknown) {
+      logger.warn(
+        `Wrapped (web) heat map unavailable: ${error instanceof Error ? error.name : 'Error'}`,
+      );
+      return undefined;
+    }
   }
 
   async function render(
@@ -862,18 +1024,29 @@ export function registerWrappedPage(
     tiers: WrappedTiers,
     noticeHtml: SafeHtml | '' = '',
     status = 200,
+    extra: { day?: string; timing?: Timing } = {},
   ) {
+    const { timing } = extra;
     const thisYear = tz(dayjs(now())).year();
-    const current =
+    // Independent reads, so in parallel: this year's copy (the picker),
+    // the names, and the heat map's events.
+    const [current, displayNames, events] = await Promise.all([
       year === thisYear
         ? undefined
-        : await readEntry(
-            tiers,
-            session.discordUserId ?? '',
-            thisYear,
-            session.userId,
-            now(),
-          );
+        : timed(
+            timing,
+            'this-year',
+            readEntry(
+              tiers,
+              session.discordUserId ?? '',
+              thisYear,
+              session.userId,
+              now(),
+            ),
+          ),
+      timed(timing, 'names', namesFor(wrapped, tiers.cache, timing)),
+      timed(timing, 'heat', heatEvents(session.userId, year)),
+    ]);
     hostPage(res, {
       title: `Wrapped ${year}`,
       current: 'wrapped',
@@ -882,10 +1055,17 @@ export function registerWrappedPage(
         session,
         wrapped,
         years: yearList(thisYear, wrapped, current),
-        displayNames: await namesFor(wrapped),
+        displayNames,
         notice: noticeHtml,
+        heat: events
+          ? { events, today: pacificDay(now()), day: extra.day }
+          : undefined,
       }),
+      script: events ? HISTORY_SCRIPT : undefined,
     });
+    if (timing) {
+      logTiming(year, timing);
+    }
   }
 
   /**
@@ -1043,7 +1223,8 @@ export function registerWrappedPage(
       return;
     }
     const discordUserId = session.discordUserId;
-    const tiers = await tiersFor();
+    const timing: Timing = { startedMs: Date.now(), phases: {} };
+    const tiers = await timed(timing, 'tiers', tiersFor());
     const { cache } = tiers;
     // Minutes from the limiter itself, never the URL: it is in-process and
     // the source of truth, and a hand-typed notice can't say "0 minutes".
@@ -1059,15 +1240,16 @@ export function registerWrappedPage(
         : code
           ? notice(code, minutes)
           : '';
-    const cached = await readEntry(
-      tiers,
-      discordUserId,
-      year,
-      session.userId,
-      now(),
+    const cached = await timed(
+      timing,
+      'entry',
+      readEntry(tiers, discordUserId, year, session.userId, now()),
     );
     if (cached) {
-      await render(res, session, year, cached, tiers, noticeHtml);
+      await render(res, session, year, cached, tiers, noticeHtml, 200, {
+        day: wrappedDay(req.query.day, year),
+        timing,
+      });
       return;
     }
     if (!code && deps.limiter.isLimited(discordUserId)) {
