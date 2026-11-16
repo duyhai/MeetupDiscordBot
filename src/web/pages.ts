@@ -392,6 +392,9 @@ table.stack tr.offer-row td::before{content:none}
 .wrap-anywhere{overflow-wrap:anywhere}
 .field-error{display:block;margin-top:var(--s1);color:var(--attn-ink);font-size:var(--t-sm);font-weight:600}
 td.cal.past,.swatch.past{color:var(--muted);background:var(--bg)}
+/* Past days (and their swatch) are faintly hatched: a flat --bg is too close to 1 event's --surface in dark mode. */
+td.cal.past,.swatch.past{background:repeating-linear-gradient(135deg,var(--bg) 0 6px,var(--raised) 6px 8px)}
+.swatch.past{border-style:dashed}
 td.cal.past .cal-day,td.cal.past .cal-count{color:var(--muted)}
 td.cal.past .cal-panel{color:var(--fg)}
 ol.cal-list>li.past{color:var(--muted)}

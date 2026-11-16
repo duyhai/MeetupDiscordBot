@@ -36,7 +36,10 @@ import {
   buildingKey,
 } from '../../lib/wrapped/cache.js';
 import { CompanionDeps, NamedCompanion } from '../../lib/wrapped/companions.js';
-import { resolveDisplayNames } from '../../lib/wrapped/displayNames.js';
+import {
+  NameLookup,
+  resolveDisplayNames,
+} from '../../lib/wrapped/displayNames.js';
 import { pacificDay } from '../../lib/hosts/hostEvents.js';
 import {
   HostedRanked,
@@ -117,9 +120,11 @@ export interface WrappedPageDeps {
   displayName: (discordUserId: string) => Promise<string | undefined>;
   /**
    * Several at once (serverJoin.ts displayNames: one gateway request for
-   * many); left out, displayName for each.
+   * many; null = not on the server); left out, displayName for each.
    */
-  displayNames?: (discordUserIds: string[]) => Promise<Record<string, string>>;
+  displayNames?: NameLookup;
+  /** The bot's in-memory member names (no request), checked before Redis. */
+  liveDisplayNames?: (discordUserIds: string[]) => Record<string, string>;
   /** wrappedBuildLimiter in production: the slot /wrapped takes. */
   limiter: FixedWindowLimiter;
   /** #meetup-bot-alerts, plain (no mentions). */
@@ -949,10 +954,10 @@ export function registerWrappedPage(
   }
 
   /** The bot's names for ids Redis did not have. */
-  const lookupNames =
+  const lookupNames: NameLookup =
     deps.displayNames ??
     (async (discordUserIds: string[]) => {
-      const names: Record<string, string> = {};
+      const names: Record<string, string | null> = {};
       await Promise.all(
         discordUserIds.map(async (id) => {
           try {
@@ -969,8 +974,9 @@ export function registerWrappedPage(
     });
 
   /**
-   * Every named person's display name (companions and cohorts): the day's
-   * Redis cache, then the bot for the rest. Anyone unnamed is counted.
+   * Every named person's display name (companions and cohorts): the bot's
+   * memory, the day's Redis cache, then the bot for the rest. Anyone
+   * unnamed is counted.
    */
   async function namesFor(
     wrapped: CachedWrapped,
@@ -983,7 +989,12 @@ export function registerWrappedPage(
         top.cohort.named.map((c) => c.discordUserId),
       ),
     ];
-    const resolved = await resolveDisplayNames(cache, ids, lookupNames);
+    const resolved = await resolveDisplayNames(
+      cache,
+      ids,
+      lookupNames,
+      deps.liveDisplayNames,
+    );
     if (timing) {
       timing.names = resolved;
     }

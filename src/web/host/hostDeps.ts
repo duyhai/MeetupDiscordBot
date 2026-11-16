@@ -42,6 +42,7 @@ import { createHostRouter } from './hostRouter.js';
 import { registerCreatePages } from './createPage.js';
 import { registerWrappedPage } from './wrappedPage.js';
 import {
+  cachedDisplayNames,
   discordUsername,
   displayName,
   displayNames,
@@ -225,6 +226,8 @@ export function hostRouterFromEnv(
           displayName(() => discordClient, discordUserId),
         displayNames: (discordUserIds) =>
           displayNames(() => discordClient, discordUserIds),
+        liveDisplayNames: (discordUserIds) =>
+          cachedDisplayNames(() => discordClient, discordUserIds),
         limiter: wrappedBuildLimiter,
         alert: alertVia(() => discordClient),
         groupId: Configuration.meetup.groupId,

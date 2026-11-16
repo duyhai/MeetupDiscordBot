@@ -1,8 +1,14 @@
-import { Client, DiscordAPIError, RESTJSONErrorCodes } from 'discord.js';
+import {
+  Client,
+  DiscordAPIError,
+  RESTJSONErrorCodes,
+  Status,
+} from 'discord.js';
 import { describe, expect, it, vi } from 'vitest';
 
 import { GUILD_ID } from '../../../src/constants.js';
 import {
+  cachedDisplayNames,
   discordUsername,
   displayName,
   displayNames,
@@ -224,11 +230,14 @@ describe('displayNames', () => {
     fetch: (
       options: string | { user: string[]; time: number },
     ) => Promise<unknown>,
+    shardStatus: Status | 'no shard' = Status.Ready,
   ) => {
     const membersFetch = vi.fn(fetch);
     const client = {
       guilds: {
         fetch: vi.fn().mockResolvedValue({
+          shard:
+            shardStatus === 'no shard' ? undefined : { status: shardStatus },
           members: {
             cache: new Map(
               Object.entries(cached).map(([id, name]) => [
@@ -249,8 +258,17 @@ describe('displayNames', () => {
         .filter((id) => !skip.includes(id))
         .map((id) => [id, { id, displayName: `Pal ${id.slice(-1)}` }]),
     );
+  const rest = async (options: unknown) => {
+    if (typeof options !== 'string') {
+      throw new Error('no gateway here');
+    }
+    if (options.endsWith('9')) {
+      throw unknownMember();
+    }
+    return { displayName: `Pal ${options.slice(-1)}` };
+  };
 
-  it('many misses: the cache, then one batched request for the rest', async () => {
+  it('many misses on a Ready shard: the cache, then one batched request; whoever it lacks is not on the server', async () => {
     const all = ids(8);
     const { client, membersFetch } = withGuild(
       { [all[0]]: 'Cached' },
@@ -260,26 +278,39 @@ describe('displayNames', () => {
     expect(membersFetch).toHaveBeenCalledTimes(1);
     expect(membersFetch).toHaveBeenCalledWith({
       user: all.slice(1),
-      time: 3000,
+      time: expect.any(Number) as number,
     });
     expect(names[all[0]]).toBe('Cached');
     expect(names[all[1]]).toBe('Pal 1');
-    // Not on the server: left out, so counted.
-    expect(all[7] in names).toBe(false);
+    expect(names[all[7]]).toBeNull();
   });
 
-  it('a few misses are read one by one over REST, never the gateway', async () => {
-    const few = ids(3);
-    const { client, membersFetch } = withGuild({}, async (options) => {
-      if (typeof options !== 'string') {
-        throw new Error('no batch for a few');
-      }
-      return { displayName: `Pal ${options.slice(-1)}` };
+  it('a shard that is not Ready (reconnecting) never gets the gateway request: REST instead', async () => {
+    const statuses = [
+      Status.Reconnecting,
+      Status.Connecting,
+      'no shard',
+    ] as const;
+    const runs = await Promise.all(
+      statuses.map(async (status) => {
+        const { client, membersFetch } = withGuild({}, rest, status);
+        const names = await displayNames(() => client, ids(8));
+        return { names, calls: membersFetch.mock.calls.map(([o]) => o) };
+      }),
+    );
+    runs.forEach(({ names, calls }) => {
+      expect(Object.keys(names)).toHaveLength(8);
+      expect(calls.every((o) => typeof o === 'string')).toBe(true);
     });
+  });
+
+  it('a few misses are read one by one over REST; Unknown Member is "not on the server"', async () => {
+    const few = [...ids(2), '300000000000000009'];
+    const { client, membersFetch } = withGuild({}, rest);
     expect(await displayNames(() => client, few)).toEqual({
       [few[0]]: 'Pal 0',
       [few[1]]: 'Pal 1',
-      [few[2]]: 'Pal 2',
+      [few[2]]: null,
     });
     expect(membersFetch.mock.calls.map(([o]) => o)).toEqual(few);
   });
@@ -298,10 +329,46 @@ describe('displayNames', () => {
     expect(membersFetch).toHaveBeenCalledTimes(8);
   });
 
+  it('stays within its budget: a Discord that never answers leaves them unanswered, not absent', async () => {
+    // The gateway request rejects at its `time`, as discord.js does; REST
+    // reads never answer.
+    const { client } = withGuild({}, (options) => {
+      if (typeof options === 'string') {
+        return new Promise(() => undefined);
+      }
+      return new Promise((_, reject) => {
+        setTimeout(() => {
+          reject(new Error('GuildMembersTimeout'));
+        }, options.time);
+      });
+    });
+    const started = Date.now();
+    const names = await displayNames(() => client, ids(8), 200);
+    expect(Date.now() - started).toBeLessThan(1000);
+    expect(names).toEqual({});
+  });
+
   it('no bot or no ids: no names, no calls', async () => {
     expect(await displayNames(() => undefined, ids(8))).toEqual({});
     const { client, membersFetch } = withGuild({}, async () => new Map());
     expect(await displayNames(() => client, [])).toEqual({});
     expect(membersFetch).not.toHaveBeenCalled();
+  });
+});
+
+describe('cachedDisplayNames', () => {
+  it('reads only the bot’s memory: no request, unknown ids left out', () => {
+    const client = {
+      guilds: {
+        cache: new Map([
+          [
+            GUILD_ID,
+            { members: { cache: new Map([['a', { displayName: 'Ann' }]]) } },
+          ],
+        ]),
+      },
+    } as unknown as Client;
+    expect(cachedDisplayNames(() => client, ['a', 'b'])).toEqual({ a: 'Ann' });
+    expect(cachedDisplayNames(() => undefined, ['a'])).toEqual({});
   });
 });
