@@ -366,9 +366,11 @@ describe('button variants', () => {
     expect(text).toContain(
       '<summary class="button ghost">Put on hold</summary>',
     );
-    expect(text).toContain('<button type="submit">Put on hold</button>');
+    expect(text).toContain(
+      '<button type="submit">Put this card on hold</button>',
+    );
     expect(text).toContain('<summary class="button ghost">Skip</summary>');
-    expect(text).toContain('<button type="submit">Skip</button>');
+    expect(text).toContain('<button type="submit">Skip this card</button>');
     expect(text).toContain(
       '<button type="submit" class="ghost">Reopen</button>',
     );
@@ -432,7 +434,7 @@ describe('button variants', () => {
       '<summary class="button danger">Void suspension</summary>',
     );
     expect(text).toContain(
-      '<button type="submit" class="danger strong">Void suspension</button>',
+      '<button type="submit" class="danger strong">Void this suspension</button>',
     );
   });
 

@@ -660,7 +660,7 @@ describe('GET /dashboard/no-shows/:period (month cards)', () => {
         '<button type="button" class="ghost" data-modal-close>Cancel</button>',
       );
       expect(d).toContain(
-        '<button type="submit" class="danger strong">Void suspension</button>',
+        '<button type="submit" class="danger strong">Void this suspension</button>',
       );
     });
 
@@ -697,9 +697,9 @@ describe('GET /dashboard/no-shows/:period (month cards)', () => {
     });
 
     it.each([
-      ['hold', 'Put on hold'],
-      ['skip', 'Skip'],
-    ])('%s asks why in a modal', async (action, label) => {
+      ['hold', 'Put on hold', 'Put this card on hold'],
+      ['skip', 'Skip', 'Skip this card'],
+    ])('%s asks why in a modal', async (action, label, confirm) => {
       const { get } = await setup({ seed: seed([warningRow()]) });
       const [card] = cards((await get(MONTH)).text);
       expect(closed(card)).toContain(
@@ -709,7 +709,7 @@ describe('GET /dashboard/no-shows/:period (month cards)', () => {
       expect(d).toContain(
         '<textarea name="note" rows="3" maxlength="2000" required></textarea>',
       );
-      expect(d).toContain(`<button type="submit">${label}</button>`);
+      expect(d).toContain(`<button type="submit">${confirm}</button>`);
     });
 
     it('the History details stays a collapsible in the card', async () => {

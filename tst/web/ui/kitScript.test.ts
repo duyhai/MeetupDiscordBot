@@ -13,14 +13,20 @@ const settle = () =>
 
 type Write = (text: string) => Promise<void>;
 
-/** Runs the real script text against stubs (no DOM library here). */
-function runKit(document: unknown, navigator: unknown = {}) {
+/** Runs the real script text against stubs (kitDom.test.ts runs it in jsdom). */
+function runKit(
+  document: unknown,
+  navigator: unknown = {},
+  window: unknown = { addEventListener: () => undefined },
+) {
   // eslint-disable-next-line @typescript-eslint/no-implied-eval -- the fixed script text, run against stubs
-  const run = new Function('document', 'navigator', KIT_SCRIPT.value) as (
-    document: unknown,
-    navigator: unknown,
-  ) => void;
-  run(document, navigator);
+  const run = new Function(
+    'document',
+    'navigator',
+    'window',
+    KIT_SCRIPT.value,
+  ) as (document: unknown, navigator: unknown, window: unknown) => void;
+  run(document, navigator, window);
 }
 
 /**
@@ -223,12 +229,17 @@ function element(extra: Record<string, unknown> = {}) {
 }
 
 /** One details[data-modal] with its summary, dialog, title and close button. */
-function modalHarness(options: { showModal?: boolean } = {}) {
+function modalHarness(
+  options: { showModal?: boolean; textarea?: boolean } = {},
+) {
   const title = { id: '' };
   const close = element();
   const dialog = element({
     open: false,
     querySelector: (selector: string) => {
+      if (selector === 'textarea') {
+        return options.textarea ? {} : null;
+      }
       return selector === '[data-modal-title]' ? title : null;
     },
     querySelectorAll: (selector: string) => {
@@ -323,12 +334,35 @@ describe('KIT_SCRIPT: modal', () => {
     expect(button.focus).toHaveBeenCalledTimes(1);
   });
 
-  it('a click on the backdrop (the dialog itself) closes it; one inside does not', () => {
+  it('a press and release on the backdrop (the dialog itself) closes it; one inside does not', () => {
     const h = modalHarness();
     h.created[0].fire('click');
-    h.dialog.fire('click', { target: {} });
+    const inside = {};
+    h.dialog.fire('pointerdown', { target: inside });
+    h.dialog.fire('click', { target: inside });
     expect(h.dialog.open).toBe(true);
+    h.dialog.fire('pointerdown', { target: h.dialog });
     h.dialog.fire('click', { target: h.dialog });
+    expect(h.dialog.open).toBe(false);
+  });
+
+  it('a drag that starts inside and ends on the backdrop does not close it', () => {
+    const h = modalHarness();
+    h.created[0].fire('click');
+    // Selecting text in a field and letting go outside the box: the click
+    // lands on the dialog element itself.
+    h.dialog.fire('pointerdown', { target: {} });
+    h.dialog.fire('click', { target: h.dialog });
+    expect(h.dialog.open).toBe(true);
+  });
+
+  it('a dialog with a textarea never closes from the backdrop', () => {
+    const h = modalHarness({ textarea: true });
+    h.created[0].fire('click');
+    h.dialog.fire('pointerdown', { target: h.dialog });
+    h.dialog.fire('click', { target: h.dialog });
+    expect(h.dialog.open).toBe(true);
+    h.close.fire('click');
     expect(h.dialog.open).toBe(false);
   });
 

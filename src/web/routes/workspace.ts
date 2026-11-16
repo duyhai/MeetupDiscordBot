@@ -603,6 +603,8 @@ function cardHtml(v: CardView): SafeHtml {
     copy: {
       trigger: string;
       title: string;
+      /** The confirm button: never the trigger's own words. */
+      confirm: string;
       tip: SafeHtml | string;
       field: string;
       max: number;
@@ -620,7 +622,7 @@ function cardHtml(v: CardView): SafeHtml {
       tip: copy.tip,
       action: rowUrl,
       fields: html`${fields(action)}${noteBox(copy.field, copy.max)}`,
-      confirmLabel: copy.trigger,
+      confirmLabel: copy.confirm,
       tone: danger ? 'danger' : 'primary',
     });
   };
@@ -696,6 +698,7 @@ function cardHtml(v: CardView): SafeHtml {
       ${noteAction('hold', {
         trigger: 'Put on hold',
         title: 'Put this card on hold',
+        confirm: 'Put this card on hold',
         tip: HOLD_TIP,
         field: 'Why',
         max: NOTES_MAX,
@@ -703,6 +706,7 @@ function cardHtml(v: CardView): SafeHtml {
       ${noteAction('skip', {
         trigger: 'Skip',
         title: 'Skip this card',
+        confirm: 'Skip this card',
         tip: SKIP_TIP,
         field: 'Why',
         max: NOTES_MAX,
@@ -727,6 +731,7 @@ function cardHtml(v: CardView): SafeHtml {
       ${noteAction('void', {
         trigger: 'Void suspension',
         title: 'Void this suspension?',
+        confirm: 'Void this suspension',
         tip: html`Voiding marks
         ${recordId === null ? 'the suspension record' : `suspension #${recordId}`}
         as void: it stops counting toward this member's later suspension lengths
