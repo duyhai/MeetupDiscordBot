@@ -10,7 +10,10 @@ import { generateCodeVerifier, generateState } from 'arctic';
 import { Logger } from 'tslog';
 
 import { KeyValueCache } from '../lib/cache/base.js';
-import { DASHBOARD_BASE } from '../lib/reports/dashboardPaths.js';
+import {
+  DASHBOARD_BASE,
+  DASHBOARD_PATHS,
+} from '../lib/reports/dashboardPaths.js';
 import { LogEntry } from '../lib/helpers/discordLogger.js';
 import {
   clearCookie,
@@ -24,6 +27,7 @@ import {
   HomeOrganizerStatus,
   errorPage,
   homePage,
+  settingsPage,
   loginPage,
   logoutUnconfirmedPage,
 } from './pages.js';
@@ -105,19 +109,25 @@ export interface DashboardDeps {
    */
   protectedRoutes?: (router: express.Router) => void;
   /**
-   * The shared organizer login's status for the home page. Read-only; never
-   * returns tokens. Left out, the home page links to the page without a status.
+   * The shared organizer login's status for the Settings page. Read-only;
+   * never returns tokens. Left out, Settings links to the login page without
+   * a status.
    */
-  homeStatus?: () => Promise<OrganizerCredentialStatus | undefined>;
+  organizerLoginStatus?: () => Promise<OrganizerCredentialStatus | undefined>;
   /**
-   * Report cards for the home page, given the session's CSRF token (for the
-   * cards' own forms) and the `?wrapped=` notice code from the query. Must
-   * not throw; left out, the home page shows the welcome text only.
+   * Report cards for the home page, given the session's CSRF token. Must not
+   * throw; left out, the home page shows the welcome text only.
    */
   homeReports?: (view: HomeReportsView) => Promise<SafeHtml>;
+  /**
+   * The Settings page's job cards (Wrapped announcement, Wrapped backfill),
+   * given the session's CSRF token (for the cards' own forms) and the
+   * `?wrapped=` / `?backfill=` notice codes. Must not throw.
+   */
+  settingsCards?: (view: HomeReportsView) => Promise<SafeHtml>;
 }
 
-/** What the home page hands its report cards. */
+/** What the home and Settings pages hand their cards. */
 export interface HomeReportsView {
   csrfToken: string;
   /** req.query.wrapped, unparsed: the cards render fixed text for a known code only. */
@@ -137,11 +147,11 @@ const locals = (res: Response) => res.locals as Locals;
 async function organizerStatus(
   deps: DashboardDeps,
 ): Promise<HomeOrganizerStatus | undefined> {
-  if (!deps.homeStatus) {
+  if (!deps.organizerLoginStatus) {
     return undefined;
   }
   try {
-    const status = await deps.homeStatus();
+    const status = await deps.organizerLoginStatus();
     if (!status || !status.stored) {
       return { kind: 'not-set-up' };
     }
@@ -151,7 +161,7 @@ async function organizerStatus(
   } catch (error) {
     // The name only: a database error message can carry connection details.
     logger.warn(
-      `Dashboard home organizer status failed: ${error instanceof Error ? error.name : 'Error'}`,
+      `Dashboard settings organizer status failed: ${error instanceof Error ? error.name : 'Error'}`,
     );
     return { kind: 'unavailable' };
   }
@@ -740,13 +750,34 @@ export function createDashboardRouter(deps: DashboardDeps): express.Router {
       logger.warn(
         `Dashboard home reports failed: ${error instanceof Error ? error.name : 'Error'}`,
       );
-      // The cards are extra: the welcome and organizer cards still render.
+      // The cards are extra: the welcome card still renders.
       reports = undefined;
+    }
+    send(res, 200, homePage(session, nonce, reports));
+  }) as RequestHandler);
+
+  protectedRouter.get(DASHBOARD_PATHS.settings, (async (req, res) => {
+    const { session, nonce } = locals(res);
+    let cards: SafeHtml | undefined;
+    try {
+      cards = deps.settingsCards
+        ? await deps.settingsCards({
+            csrfToken: session.csrfToken,
+            notice: (req.query as Record<string, unknown>).wrapped,
+            backfillNotice: (req.query as Record<string, unknown>).backfill,
+          })
+        : undefined;
+    } catch (error) {
+      logger.warn(
+        `Dashboard settings cards failed: ${error instanceof Error ? error.name : 'Error'}`,
+      );
+      // The cards are extra: the organizer login card still renders.
+      cards = undefined;
     }
     send(
       res,
       200,
-      homePage(session, nonce, await organizerStatus(deps), reports),
+      settingsPage(session, nonce, await organizerStatus(deps), cards),
     );
   }) as RequestHandler);
 

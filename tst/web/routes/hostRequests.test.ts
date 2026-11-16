@@ -143,7 +143,7 @@ describe('host request queue', () => {
     expect(res.text).toContain('Approve and publish');
     expect(res.text).toContain(`action="${QUEUE}/1/deny"`);
     expect(res.text).toContain('name="version" value="1"');
-    expect(res.text).toContain('aria-current="page">Host requests');
+    expect(res.text).toContain('aria-current="page">Requests');
   });
 
   it('the Approve form carries the five reviewer boxes, none required', async () => {

@@ -8,7 +8,7 @@ import {
   DashboardPageDeps,
   registerAllProtectedRoutes,
 } from '../../../src/web/routes/dashboardPages.js';
-import { renderHomeReports } from '../../../src/web/routes/home.js';
+import { renderSettingsCards } from '../../../src/web/routes/home.js';
 import {
   WRAPPED_ANNOUNCE_PATH,
   WRAPPED_NOTICES,
@@ -54,11 +54,11 @@ const render = async (
   wrappedAnnounce: DashboardPageDeps['wrappedAnnounce'],
   view: { csrfToken?: string; notice?: unknown } = { csrfToken: 'tok' },
 ) =>
-  (await renderHomeReports(fakePageDeps({ wrappedAnnounce }), view)).value
+  (await renderSettingsCards(fakePageDeps({ wrappedAnnounce }), view)).value
     .replace(/\s+/g, ' ')
     .replace(/> </g, '><');
 
-describe('Home Wrapped card', () => {
+describe('Settings Wrapped card', () => {
   it('shows the configured date, hour and channel, and that this year is not posted yet, with Post now', async () => {
     const out = await render(control());
     expect(out).toContain('<h2>Wrapped announcement</h2>');
@@ -142,7 +142,7 @@ describe('Home Wrapped card', () => {
     );
     expect(out).toContain('Unavailable right now.');
     expect(out).not.toContain('secret');
-    expect(out).toContain('identity changes in the last 7 days');
+    expect(out).toContain('<h2>Wrapped backfill</h2>');
   });
 
   it('without a CSRF token (a bare render) there is no form', async () => {
@@ -164,13 +164,13 @@ async function setup(
     audit,
     protectedRoutes: (r) =>
       registerAllProtectedRoutes(r, { organizer: fakeOrganizerDeps(), pages }),
-    homeReports: (view) => renderHomeReports(pages, view),
+    settingsCards: (view) => renderSettingsCards(pages, view),
   });
   return { req, isLeadership, audit, postNow };
 }
 
 async function tokenOf(req: Client, cookie: string): Promise<string> {
-  const page = await req.get('/dashboard').set('Cookie', cookie);
+  const page = await req.get('/dashboard/settings').set('Cookie', cookie);
   expect(page.status).toBe(200);
   return /name="_csrf" value="([^"]+)"/.exec(page.text)?.[1] ?? '';
 }
@@ -190,21 +190,23 @@ describe('POST /dashboard/wrapped/announce', () => {
     isLeadership.mockResolvedValue(false);
     const res = await pressPostNow(req, await signIn(req));
     expect(res.status).toBe(303);
-    expect(res.headers.location).toBe('/dashboard?wrapped=not-leadership');
+    expect(res.headers.location).toBe(
+      '/dashboard/settings?wrapped=not-leadership',
+    );
     expect(isLeadership).toHaveBeenCalledWith(USER.id);
     expect(postNow).not.toHaveBeenCalled();
   });
 
-  it('Leadership posts now; the outcome comes back as a notice on the home page', async () => {
+  it('Leadership posts now; the outcome comes back as a notice on the Settings page', async () => {
     const { req, isLeadership, postNow, audit } = await setup();
     isLeadership.mockResolvedValue(true);
     const cookie = await signIn(req);
     const res = await pressPostNow(req, cookie);
     expect(res.status).toBe(303);
-    expect(res.headers.location).toBe('/dashboard?wrapped=posted');
+    expect(res.headers.location).toBe('/dashboard/settings?wrapped=posted');
     expect(postNow).toHaveBeenCalledTimes(1);
     const home = await req
-      .get('/dashboard?wrapped=posted')
+      .get('/dashboard/settings?wrapped=posted')
       .set('Cookie', cookie);
     expect(home.text).toContain(WRAPPED_NOTICES.posted);
     // Audited in the activity log, naming who pressed it: no post text.
@@ -228,7 +230,7 @@ describe('POST /dashboard/wrapped/announce', () => {
     });
     isLeadership.mockResolvedValue(true);
     const res = await pressPostNow(req, await signIn(req));
-    expect(res.headers.location).toBe(`/dashboard?wrapped=${outcome}`);
+    expect(res.headers.location).toBe(`/dashboard/settings?wrapped=${outcome}`);
     expect(audit).not.toHaveBeenCalledWith(
       expect.objectContaining({ title: 'Wrapped announcement posted' }),
     );
@@ -238,7 +240,9 @@ describe('POST /dashboard/wrapped/announce', () => {
     const { req, isLeadership, postNow } = await setup();
     isLeadership.mockRejectedValue(new Error('discord down'));
     const res = await pressPostNow(req, await signIn(req));
-    expect(res.headers.location).toBe('/dashboard?wrapped=unavailable');
+    expect(res.headers.location).toBe(
+      '/dashboard/settings?wrapped=unavailable',
+    );
     expect(postNow).not.toHaveBeenCalled();
   });
 
@@ -251,9 +255,9 @@ describe('POST /dashboard/wrapped/announce', () => {
     isLeadership.mockResolvedValue(true);
     const cookie = await signIn(req);
     const res = await pressPostNow(req, cookie);
-    expect(res.headers.location).toBe('/dashboard?wrapped=error');
+    expect(res.headers.location).toBe('/dashboard/settings?wrapped=error');
     const home = await req
-      .get('/dashboard?wrapped=error')
+      .get('/dashboard/settings?wrapped=error')
       .set('Cookie', cookie);
     expect(home.text).toContain(WRAPPED_NOTICES.error);
     expect(home.text).not.toContain('secret');

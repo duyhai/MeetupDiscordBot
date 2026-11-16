@@ -27,15 +27,17 @@ import {
   isPastYear,
 } from '../../lib/wrapped/announce.js';
 import type { HomeReportsView } from '../dashboardRouter.js';
-import { SafeHtml, html, localUrl } from '../html.js';
+import type { EventRequest } from '../../lib/repositories/postgresEventRequestRepository.js';
+import { SafeHtml, html, localUrl, memberText } from '../html.js';
 import { monthCell, pacificDateTime, zeroNoShowNote } from '../pageKit.js';
 import type { DashboardPageDeps } from './dashboardPages.js';
+import { collapsible } from '../ui/index.js';
+import { whenLabel } from './hostRequests.js';
+import { identityChangesTable, isListRow } from './identity.js';
 import { WRAPPED_ANNOUNCE_PATH, wrappedNotice } from './wrappedAnnounce.js';
 import { wrappedBackfillCard } from './wrappedBackfill.js';
 
 const logger = new Logger({ name: 'dashboard' });
-
-const DAY_MS = 24 * 3600 * 1000;
 
 /** The one line a failed card shows. Fixed text: nothing from the error reaches the page. */
 const UNAVAILABLE = html`<p class="muted">Unavailable right now.</p>`;
@@ -66,19 +68,20 @@ async function card(
   try {
     const result = await Promise.race([render(), deadline]);
     if (result === TIMED_OUT) {
-      logger.warn(`Dashboard home ${name} card timed out`);
+      logger.warn(`Dashboard ${name} card timed out`);
       return unavailable;
     }
     return result;
   } catch (error) {
     logger.warn(
-      `Dashboard home ${name} card failed: ${error instanceof Error ? error.name : 'Error'}`,
+      `Dashboard ${name} card failed: ${error instanceof Error ? error.name : 'Error'}`,
     );
     return unavailable;
   }
 }
 
-function monthBody(
+/** The month's no-show and Hall of Fame summaries, each linking to its page. */
+function reportsBody(
   period: Period,
   noShow: SnapshotMeta | undefined,
   hallOfFame: SnapshotMeta | undefined,
@@ -97,6 +100,11 @@ function monthBody(
     historyPath === undefined
       ? ''
       : html` (<a href="${localUrl(historyPath)}">no-show history</a>)`;
+  const famePath = linkableMonthPath(DASHBOARD_PATHS.hallOfFameMonth, period);
+  const fame =
+    famePath === undefined
+      ? html`Hall of Fame`
+      : html`<a href="${localUrl(famePath)}">Hall of Fame</a>`;
   return html`<p>
       No-shows: ${num(noShow.summary, 'noShows')} no-show RSVPs,
       ${num(noShow.summary, 'warnings')} warnings,
@@ -104,7 +112,7 @@ function monthBody(
       candidates${history}
     </p>
     <p>
-      Hall of Fame: ${num(hallOfFame.summary, 'events')} events,
+      ${fame}: ${num(hallOfFame.summary, 'events')} events,
       ${num(hallOfFame.summary, 'hosts')} hosts
       (${num(hallOfFame.summary, 'newHosts')} new)
     </p>
@@ -112,62 +120,58 @@ function monthBody(
     <p class="muted">Built ${pacificDateTime(noShow.builtAt)} Pacific</p>`;
 }
 
-async function monthCard(
-  snapshotsOnce: Promise<Awaited<ReturnType<DashboardPageDeps['snapshots']>>>,
-  period: Period,
-  now: Date,
-  open: boolean,
-): Promise<SafeHtml> {
-  const snapshots = await snapshotsOnce;
-  const [noShow, hallOfFame] = await Promise.all([
-    snapshots.getCurrentMeta('no_show', period),
-    snapshots.getCurrentMeta('hall_of_fame', period),
-  ]);
-  return html`<div class="card">
-    <h2>${monthCell(DASHBOARD_PATHS.hallOfFameMonth, period)}</h2>
-    ${open ? html`<p class="muted">So far this month</p>` : ''}
-    ${monthBody(period, noShow, hallOfFame, now)}
-  </div>`;
+/** The workspace months' counts and states: one aggregate, never row lists. */
+interface WorkspaceRead {
+  counts: Map<string, Partial<Record<WorkspaceStatus, number>>>;
+  states: Map<string, boolean>;
 }
 
-/**
- * Open workspace items for the latest finished and the open month: one
- * aggregate (statusCounts) over at most those two months, and each month's
- * state, never row lists. A month not set up yet says so, like the months
- * list. Months before the workspace have no line; with none, no card.
- */
-async function workspaceCard(
+async function readWorkspace(
   deps: Pick<DashboardPageDeps, 'workspace'>,
   months: Period[],
-): Promise<SafeHtml> {
+): Promise<WorkspaceRead> {
   if (months.length === 0) {
-    return html``;
+    return { counts: new Map(), states: new Map() };
   }
   const ws = await deps.workspace();
   const [counts, states] = await Promise.all([
     ws.statusCounts(months),
     Promise.all(months.map((p) => ws.monthState(p))),
   ]);
-  // Each month: three tiles. Classes are literals; only the counts are data.
-  const month = (p: Period, i: number) => {
-    const heading = html`<h3>
-      ${monthCell(DASHBOARD_PATHS.workspaceMonth, p)}
-    </h3>`;
-    if (!states[i]) {
-      return html`<section class="ws-month">
-        ${heading}
-        <p class="muted">Not set up yet</p>
-      </section>`;
-    }
-    const c = counts.get(periodKey(p)) ?? {};
-    const sum = (list: readonly WorkspaceStatus[]) =>
-      list.reduce((n, s) => n + num(c, s), 0);
-    return html`<section class="ws-month">
-      ${heading}
+  return {
+    counts,
+    states: new Map(months.map((p, i) => [periodKey(p), Boolean(states[i])])),
+  };
+}
+
+/** A month's workspace tiles; To do is undefined when there is nothing to count. */
+function workspaceSection(
+  period: Period,
+  read: WorkspaceRead | undefined,
+): { body: SafeHtml; todo?: number } {
+  // prettier-ignore
+  const heading = html`<h3>${monthCell(DASHBOARD_PATHS.workspaceMonth, period)} no-show workspace</h3>`;
+  if (read === undefined) {
+    return { body: html`${heading}${UNAVAILABLE}` };
+  }
+  if (!read.states.get(periodKey(period))) {
+    return {
+      body: html`${heading}
+        <p class="muted">Not set up yet</p>`,
+    };
+  }
+  const c = read.counts.get(periodKey(period)) ?? {};
+  const sum = (list: readonly WorkspaceStatus[]) =>
+    list.reduce((n, s) => n + num(c, s), 0);
+  const todo = sum(OPEN_STATUSES);
+  // Three tiles. Classes are literals; only the counts are data.
+  return {
+    todo,
+    body: html`${heading}
       <dl class="stats">
         <div class="stat todo">
           <dt>To do</dt>
-          <dd>${sum(OPEN_STATUSES)}</dd>
+          <dd>${todo}</dd>
         </div>
         <div class="stat">
           <dt>On hold</dt>
@@ -177,16 +181,102 @@ async function workspaceCard(
           <dt>Done</dt>
           <dd>${sum(DONE_STATUSES)}</dd>
         </div>
-      </dl>
-    </section>`;
+      </dl>`,
   };
+}
+
+/** How many waiting requests the home page reads; more shows as "50+". */
+const PENDING_READ = 50;
+/** How many of them it lists. */
+const PENDING_SHOWN = 5;
+
+/** Waiting host requests, oldest first (as the queue is worked): a count, the first few, and the queue link. */
+function hostRequestsSection(pending: EventRequest[] | undefined): {
+  body: SafeHtml;
+  meta: string;
+  open: boolean;
+} {
+  // prettier-ignore
+  const queue = html`<p><a href="${localUrl(dashboardPath(DASHBOARD_PATHS.hostRequests))}">Open the host requests queue</a></p>`;
+  if (pending === undefined) {
+    return { body: html`${UNAVAILABLE}${queue}`, meta: '', open: false };
+  }
+  if (pending.length === 0) {
+    return {
+      body: html`<p class="muted">No requests are waiting.</p>
+        ${queue}`,
+      meta: 'None waiting',
+      open: false,
+    };
+  }
+  const count =
+    pending.length >= PENDING_READ ? `${PENDING_READ}+` : `${pending.length}`;
+  const items = pending
+    .slice(0, PENDING_SHOWN)
+    .map(
+      (r) =>
+        html`<li>
+          <strong>${memberText(r.title)}</strong> · ${memberText(r.hostName)} ·
+          ${whenLabel(r.startLocal)}
+        </li>`,
+    );
+  const more =
+    pending.length > PENDING_SHOWN
+      ? html`<p class="muted">
+          ${
+            pending.length >= PENDING_READ
+              ? 'And more in the queue.'
+              : `And ${pending.length - PENDING_SHOWN} more in the queue.`
+          }
+        </p>`
+      : '';
+  return {
+    body: html`<ul>
+        ${items}
+      </ul>
+      ${more}${queue}`,
+    meta: `${count} waiting`,
+    open: true,
+  };
+}
+
+/** The latest identity changes, inline: at most IDENTITY_SHOWN rows, newest first. */
+const IDENTITY_SHOWN = 10;
+
+async function identityCard(
+  deps: Pick<DashboardPageDeps, 'identity'>,
+): Promise<SafeHtml> {
+  const reader = await deps.identity();
+  const rows = await reader.listChangesPage({ limit: IDENTITY_SHOWN });
+  if (!Array.isArray(rows) || !rows.every(isListRow)) {
+    throw new TypeError('identity rows');
+  }
+  const names =
+    rows.length === 0
+      ? new Map<string, string>()
+      : await reader.listIdentityNames(
+          rows.map((r) => ({
+            platform: r.platform,
+            scopeId: r.scopeId,
+            subjectId: r.subjectId,
+          })),
+        );
+  if (!(names instanceof Map)) {
+    throw new TypeError('identity names');
+  }
+  // prettier-ignore
+  const all = html`<p><a href="${localUrl(dashboardPath(DASHBOARD_PATHS.identity))}">See all identity changes</a></p>`;
   return html`<div class="card">
-    <h2>
-      <a href="${localUrl(dashboardPath(DASHBOARD_PATHS.workspace))}"
-        >No-show workspace</a
-      >
-    </h2>
-    ${months.map(month)}
+    <h2>Identity changes</h2>
+    ${
+      rows.length === 0
+        ? html`<p class="muted">No identity changes recorded yet.</p>`
+        : html`<p class="muted">
+              The latest ${IDENTITY_SHOWN}, newest first. Dates are Pacific.
+            </p>
+            ${identityChangesTable(rows, names)}`
+    }
+    ${all}
   </div>`;
 }
 
@@ -249,101 +339,174 @@ async function wrappedCard(
   </div>`;
 }
 
+/** Runs one part of a card; a failure or the deadline gives undefined. Logs the class name only. */
+async function part<T>(
+  name: string,
+  deadline: Promise<typeof TIMED_OUT>,
+  run: () => Promise<T>,
+): Promise<T | undefined> {
+  try {
+    const result = await Promise.race([run(), deadline]);
+    if (result === TIMED_OUT) {
+      logger.warn(`Dashboard home ${name} timed out`);
+      return undefined;
+    }
+    return result;
+  } catch (error) {
+    logger.warn(
+      `Dashboard home ${name} failed: ${error instanceof Error ? error.name : 'Error'}`,
+    );
+    return undefined;
+  }
+}
+
+/** The shared deadline: resolves TIMED_OUT after HOME_REPORTS_DEADLINE_MS, unref'd. */
+function startDeadline(): {
+  deadline: Promise<typeof TIMED_OUT>;
+  stop: () => void;
+} {
+  let timer: NodeJS.Timeout | undefined;
+  const deadline = new Promise<typeof TIMED_OUT>((resolve) => {
+    timer = setTimeout(() => resolve(TIMED_OUT), HOME_REPORTS_DEADLINE_MS);
+    timer.unref();
+  });
+  return { deadline, stop: () => clearTimeout(timer) };
+}
+
 /**
- * The Home page's report cards. Reads summaries and meta only, never a full
- * payload. Never rejects: each card degrades on its own. `view` carries the
- * CSRF token for the cards' own forms and the `?wrapped=` notice code.
+ * The Home page's cards. One card groups what staff work on: each month
+ * (the open one first, open; the latest finished one folded) as a
+ * collapsible with its workspace counts, its no-show summary and its Hall
+ * of Fame summary, then the waiting host requests. Then the latest
+ * identity changes, inline. Reads summaries, counts and meta only, never a
+ * full report payload. Never rejects: each part degrades on its own.
  */
 export async function renderHomeReports(
   deps: Pick<
     DashboardPageDeps,
-    | 'now'
-    | 'snapshots'
-    | 'identity'
-    | 'linkProgress'
-    | 'workspace'
-    | 'wrappedAnnounce'
-    | 'wrappedBackfill'
+    'now' | 'snapshots' | 'identity' | 'workspace' | 'eventRequests'
   >,
-  view: Partial<HomeReportsView> = {},
+  _view: Partial<HomeReportsView> = {},
 ): Promise<SafeHtml> {
-  let timer: NodeJS.Timeout | undefined;
+  const { deadline, stop } = startDeadline();
   try {
     const now = deps.now();
     const open = periodOf(now);
     const finished = previousPeriod(open);
-    const deadline = new Promise<typeof TIMED_OUT>((resolve) => {
-      timer = setTimeout(() => resolve(TIMED_OUT), HOME_REPORTS_DEADLINE_MS);
-      timer.unref();
-    });
-    // One lookup, shared; a rejection reaches each month card's own catch.
+    const months = [open, finished];
+    // One lookup, shared; a rejection reaches each month's own catch.
     const snapshotsOnce = Promise.resolve().then(() => deps.snapshots());
     snapshotsOnce.catch(() => undefined);
-    const workspaceMonthsShown = [finished, open].filter((p) =>
+    // The aggregate reads oldest first.
+    const workspaceMonths = [finished, open].filter((p) =>
       isWorkspaceMonth(p, now),
     );
-    const [
-      workspace,
-      finishedCard,
-      openCard,
-      identityCard,
-      linkCard,
-      wrapped,
-      backfill,
-    ] = await Promise.all([
-      card('workspace', deadline, () =>
-        workspaceCard(deps, workspaceMonthsShown),
-      ),
-      card('finished month', deadline, () =>
-        monthCard(snapshotsOnce, finished, now, false),
-      ),
-      card('open month', deadline, () =>
-        monthCard(snapshotsOnce, open, now, true),
-      ),
-      card('identity', deadline, async () => {
-        const identity = await deps.identity();
-        const changes = await identity.countChangesSince(
-          new Date(now.getTime() - 7 * DAY_MS),
+    const workspaceRead: Promise<WorkspaceRead | undefined> = part(
+      'workspace',
+      deadline,
+      () => readWorkspace(deps, workspaceMonths),
+    );
+    const reportsRead: Promise<SafeHtml[]> = Promise.all(
+      months.map(async (p) => {
+        const body = await part(
+          `${periodKey(p)} reports`,
+          deadline,
+          async () => {
+            const snapshots = await snapshotsOnce;
+            const [noShow, hallOfFame] = await Promise.all([
+              snapshots.getCurrentMeta('no_show', p),
+              snapshots.getCurrentMeta('hall_of_fame', p),
+            ]);
+            return reportsBody(p, noShow, hallOfFame, now);
+          },
         );
-        return html`<div class="card">
-          <h2>Identity changes</h2>
-          <p>
-            <a href="${localUrl(dashboardPath(DASHBOARD_PATHS.identity))}"
-              >${num({ changes }, 'changes')} identity changes in the last 7
-              days</a
-            >
-          </p>
-        </div>`;
+        return body ?? UNAVAILABLE;
       }),
-      card('link progress', deadline, async () => {
-        const [day] = await (await deps.linkProgress()).listDays(1);
-        return html`<div class="card">
-          <h2>
-            <a href="${localUrl(dashboardPath(DASHBOARD_PATHS.linkProgress))}"
-              >Link progress</a
-            >
-          </h2>
-          ${
-            day
-              ? html`<p>
-                  Linked ${day.linked}, unlinked ${day.unlinked}, onboarding
-                  ${day.onboarding} on ${day.day}
-                </p>`
-              : html`<p class="muted">No link progress recorded yet.</p>`
-          }
-        </div>`;
-      }),
-      card('wrapped', deadline, () => wrappedCard(deps, view)),
-      card('wrapped backfill', deadline, () => wrappedBackfillCard(deps, view)),
+    );
+    const pendingRead: Promise<EventRequest[] | undefined> = part(
+      'host requests',
+      deadline,
+      async () =>
+        (await deps.eventRequests()).listByStatus(
+          ['pending'],
+          PENDING_READ,
+          'oldest',
+        ),
+    );
+    const identityRead: Promise<SafeHtml | undefined> = part(
+      'identity',
+      deadline,
+      () => identityCard(deps),
+    );
+    const [workspace, reports, pending, identity] = await Promise.all([
+      workspaceRead,
+      reportsRead,
+      pendingRead,
+      identityRead,
     ]);
-    // The workspace card first: it is what staff act on.
-    return html`${workspace}${finishedCard}${openCard}${identityCard}${linkCard}${wrapped}${backfill}`;
+    const monthSections = months.map((p, i) => {
+      const ws = workspaceMonths.some((m) => periodKey(m) === periodKey(p))
+        ? workspaceSection(p, workspace)
+        : undefined;
+      const metaParts = [
+        p === open ? 'So far this month' : '',
+        ws?.todo === undefined ? '' : `${ws.todo} to do`,
+      ].filter((t) => t !== '');
+      return collapsible({
+        summary: monthLabel(p),
+        meta: metaParts.join(' · '),
+        open: p === open,
+        body: html`${ws ? ws.body : ''}
+          <h3>Reports</h3>
+          ${reports[i]}`,
+      });
+    });
+    const requests = hostRequestsSection(pending);
+    const overview = html`<div class="card">
+      <h2>This month and last</h2>
+      ${monthSections}
+      ${collapsible({
+        summary: 'Host requests',
+        meta: requests.meta,
+        open: requests.open,
+        body: requests.body,
+      })}
+    </div>`;
+    const identityHtml =
+      identity ??
+      html`<div class="card">
+        <h2>Identity changes</h2>
+        ${UNAVAILABLE}
+      </div>`;
+    return html`${overview}${identityHtml}`;
   } catch (error) {
     logger.warn(
       `Dashboard home reports failed: ${error instanceof Error ? error.name : 'Error'}`,
     );
     return html``;
   } finally {
-    clearTimeout(timer);
+    stop();
+  }
+}
+
+/**
+ * The Settings page's job cards: the Wrapped announcement and the Wrapped
+ * backfill. `view` carries the CSRF token for the cards' own forms and the
+ * `?wrapped=` / `?backfill=` notice codes their POSTs redirect back with.
+ * Never rejects: each card degrades on its own.
+ */
+export async function renderSettingsCards(
+  deps: Pick<DashboardPageDeps, 'now' | 'wrappedAnnounce' | 'wrappedBackfill'>,
+  view: Partial<HomeReportsView> = {},
+): Promise<SafeHtml> {
+  const { deadline, stop } = startDeadline();
+  try {
+    const [wrapped, backfill] = await Promise.all([
+      card('wrapped', deadline, () => wrappedCard(deps, view)),
+      card('wrapped backfill', deadline, () => wrappedBackfillCard(deps, view)),
+    ]);
+    return html`${wrapped}${backfill}`;
+  } finally {
+    stop();
   }
 }

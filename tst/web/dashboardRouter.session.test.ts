@@ -782,40 +782,46 @@ describe('errors after the response started', () => {
   });
 });
 
-describe('dashboard home organizer status', () => {
+describe('Settings organizer status', () => {
   const status = (over: Record<string, unknown> = {}) => ({
     stored: true,
     failingSince: null,
     ...over,
   });
 
-  it('home shows the organizer login status from homeStatus', async () => {
+  it('Settings shows the organizer login status from organizerLoginStatus', async () => {
     const { req } = await makeApp({
-      homeStatus: async () => status() as never,
+      organizerLoginStatus: async () => status() as never,
     });
     const cookie = await signIn(req);
-    const res = await req.get('/dashboard').set('Cookie', cookie);
+    const res = await req.get('/dashboard/settings').set('Cookie', cookie);
     expect(res.status).toBe(200);
     expect(res.text).toContain('OK (no failure on record)');
     expect(res.text).toContain('href="/dashboard/organizer-login"');
+    // Home no longer carries it.
+    const home = await req.get('/dashboard').set('Cookie', cookie);
+    expect(home.status).toBe(200);
+    expect(home.text).not.toContain('href="/dashboard/organizer-login"');
   });
 
-  it('home shows Not set up when there is no credential store', async () => {
-    const { req } = await makeApp({ homeStatus: async () => undefined });
+  it('Settings shows Not set up when there is no credential store', async () => {
+    const { req } = await makeApp({
+      organizerLoginStatus: async () => undefined,
+    });
     const cookie = await signIn(req);
-    const res = await req.get('/dashboard').set('Cookie', cookie);
+    const res = await req.get('/dashboard/settings').set('Cookie', cookie);
     expect(res.text).toContain('Not set up');
   });
 
-  it('home still answers 200 with "Status unavailable" when homeStatus throws', async () => {
+  it('Settings still answers 200 with "Status unavailable" when organizerLoginStatus throws', async () => {
     fake.logged.length = 0;
     const { req } = await makeApp({
-      homeStatus: async () => {
+      organizerLoginStatus: async () => {
         throw new Error('db down');
       },
     });
     const cookie = await signIn(req);
-    const res = await req.get('/dashboard').set('Cookie', cookie);
+    const res = await req.get('/dashboard/settings').set('Cookie', cookie);
     expect(res.status).toBe(200);
     expect(res.text).toContain('Status unavailable');
     expect(res.text).not.toContain('db down');
@@ -824,11 +830,11 @@ describe('dashboard home organizer status', () => {
     expect(warning).not.toContain('db down');
   });
 
-  it('signed-out home still redirects', async () => {
+  it('signed-out Settings still redirects', async () => {
     const { req } = await makeApp({
-      homeStatus: async () => status() as never,
+      organizerLoginStatus: async () => status() as never,
     });
-    const res = await req.get('/dashboard');
+    const res = await req.get('/dashboard/settings');
     expect(res.status).toBe(302);
     expect(res.headers.location).toBe('/dashboard/login');
   });

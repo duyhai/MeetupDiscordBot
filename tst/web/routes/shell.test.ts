@@ -131,7 +131,7 @@ describe('page shell', () => {
       expect(text.match(/<header[\s>]/g)).toHaveLength(1);
       expect(text.match(/<main[\s>]/g)).toHaveLength(1);
       expect(text).toContain('<main id="main"');
-      expect(text).toMatch(/<nav class="site" aria-label="[^"]+">/);
+      expect(text).toMatch(/<nav class="site" aria-label="[^"]+"[^>]*>/);
       // The nav sits between the header and main, not inside main.
       const main = text.indexOf('<main');
       expect(text.indexOf('<nav class="site"')).toBeGreaterThan(
@@ -162,32 +162,58 @@ describe('page shell', () => {
     );
     expect(links).toEqual([
       ['/dashboard', 'Home'],
-      ['/dashboard/no-shows', 'No-show workspace'],
-      ['/dashboard/hosts/requests', 'Host requests'],
-      ['/dashboard/hosts/promotion', 'Host promotion'],
-      ['/dashboard/hall-of-fame', 'Hall of Fame'],
-      ['/dashboard/no-show-history', 'No-show history'],
+      ['/dashboard/no-shows', 'Workspace'],
+      ['/dashboard/no-show-history', 'History'],
       ['/dashboard/suspensions', 'Suspensions'],
-      ['/dashboard/identity', 'Identity changes'],
+      ['/dashboard/hosts/requests', 'Requests'],
+      ['/dashboard/hosts/promotion', 'Promotion'],
+      ['/dashboard/hall-of-fame', 'Hall of Fame'],
       ['/dashboard/events', 'Event changes'],
+      ['/dashboard/identity', 'Identity changes'],
       ['/dashboard/link-progress', 'Link progress'],
       ['/dashboard/trends', 'Trends'],
+      ['/dashboard/settings', 'General'],
       ['/dashboard/sessions', 'Sessions'],
     ]);
   });
 
+  it('groups the pages into four accordion sections after Home', async () => {
+    const { get } = await setup();
+    const nav = siteNav((await get('/dashboard/sessions')).text);
+    expect(nav).toContain('data-accordion');
+    const groups = [
+      ...nav.matchAll(
+        /<details class="nav-group" data-nav-group[^>]*>\s*<summary[^>]*>([^<]+)<\/summary>([\s\S]*?)<\/details>/g,
+      ),
+    ].map((m) => [
+      m[1],
+      [...m[2].matchAll(/<a href="[^"]+"[^>]*>([^<]+)<\/a>/g)].map((a) => a[1]),
+    ]);
+    expect(groups).toEqual([
+      ['No-shows', ['Workspace', 'History', 'Suspensions']],
+      [
+        'Hosts &amp; events',
+        ['Requests', 'Promotion', 'Hall of Fame', 'Event changes'],
+      ],
+      ['Members', ['Identity changes', 'Link progress', 'Trends']],
+      ['Settings', ['General', 'Sessions']],
+    ]);
+    // Home is a plain link before the first group.
+    expect(nav.indexOf('>Home</a>')).toBeLessThan(nav.indexOf('<details'));
+  });
+
   it.each([
     ['/dashboard', 'Home'],
-    ['/dashboard/no-shows', 'No-show workspace'],
-    ['/dashboard/no-shows/2026-09', 'No-show workspace'],
-    ['/dashboard/no-shows/2026-09/rows/1/suspend', 'No-show workspace'],
-    ['/dashboard/hosts/requests', 'Host requests'],
-    ['/dashboard/hosts/promotion', 'Host promotion'],
-    ['/dashboard/hosts/promotion/123456', 'Host promotion'],
+    ['/dashboard/no-shows', 'Workspace'],
+    ['/dashboard/no-shows/2026-09', 'Workspace'],
+    ['/dashboard/no-shows/2026-09/rows/1/suspend', 'Workspace'],
+    ['/dashboard/hosts/requests', 'Requests'],
+    ['/dashboard/hosts/promotion', 'Promotion'],
+    ['/dashboard/hosts/promotion/123456', 'Promotion'],
     ['/dashboard/hall-of-fame', 'Hall of Fame'],
     ['/dashboard/hall-of-fame/2026-09', 'Hall of Fame'],
-    ['/dashboard/no-show-history', 'No-show history'],
-    ['/dashboard/no-show-history/members/123456', 'No-show history'],
+    ['/dashboard/no-show-history', 'History'],
+    ['/dashboard/no-show-history/members/123456', 'History'],
     ['/dashboard/suspensions', 'Suspensions'],
     ['/dashboard/identity', 'Identity changes'],
     ['/dashboard/events', 'Event changes'],
@@ -196,13 +222,28 @@ describe('page shell', () => {
     ['/dashboard/trends', 'Trends'],
     ['/dashboard/sessions', 'Sessions'],
     ['/dashboard/sessions?done=done', 'Sessions'],
+    ['/dashboard/settings', 'General'],
   ])('%s marks only "%s" as the current page', async (path, label) => {
     const { get } = await setup();
     const res = await get(path);
     expect(res.status).toBe(200);
     expect(currentItems(res.text)).toEqual([label]);
     // Exactly one nav link carries aria-current at all.
-    expect(siteNav(res.text).match(/aria-current=/g)).toHaveLength(1);
+    const nav = siteNav(res.text);
+    expect(nav.match(/aria-current=/g)).toHaveLength(1);
+    // Its group (if any) is the one open group, its summary marked; no other is.
+    const open = [
+      ...nav.matchAll(/<details[^>]*\sopen[^>]*>([\s\S]*?)<\/details>/g),
+    ];
+    if (label === 'Home') {
+      expect(open).toHaveLength(0);
+      expect(nav).not.toContain('class="here"');
+    } else {
+      expect(open).toHaveLength(1);
+      expect(open[0][1]).toContain('aria-current="page"');
+      expect(open[0][1]).toMatch(/<summary class="here">/);
+      expect(nav.match(/class="here"/g)).toHaveLength(1);
+    }
   });
 
   it('a page outside the nav (organizer login) marks nothing current', async () => {
@@ -323,6 +364,7 @@ describe('navKeyFor', () => {
     ['/dashboard/sessions', 'sessions'],
     ['/dashboard/sessions/', 'sessions'],
     ['/dashboard/sessions//', 'sessions'],
+    ['/dashboard/settings', 'settings'],
     ['/Dashboard/Sessions', 'sessions'],
     ['/dashboard/no-shows/2026-09/rows/1', 'workspace'],
     ['/dashboard/no-showsx', undefined],

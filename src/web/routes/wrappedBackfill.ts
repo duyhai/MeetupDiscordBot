@@ -267,7 +267,8 @@ export async function wrappedBackfillCard(
   </div>`;
 }
 
-const back = (code: BackfillNoticeCode) => `/dashboard?backfill=${code}`;
+const back = (code: BackfillNoticeCode) =>
+  `/dashboard/settings?backfill=${code}`;
 
 /**
  * POST /dashboard/wrapped/backfill/run: asks the next tick to start a run;

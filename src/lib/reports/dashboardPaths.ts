@@ -48,6 +48,7 @@ export const DASHBOARD_PATHS = {
   eventChanges: '/events',
   eventHistory: '/events/:eventId',
   eventSnapshot: '/events/snapshot',
+  settings: '/settings',
 } as const;
 
 export type DashboardPathTemplate =

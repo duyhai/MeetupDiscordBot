@@ -8,6 +8,9 @@
 import { JSDOM } from 'jsdom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { html, localUrl } from '../../../src/web/html.js';
+import { copyButton, copyText } from '../../../src/web/ui/copy.js';
+import { modal } from '../../../src/web/ui/modal.js';
 import { KIT_SCRIPT } from '../../../src/web/ui/script.js';
 import { registerAllProtectedRoutes } from '../../../src/web/routes/dashboardPages.js';
 import { closeServers, makeApp, signIn } from '../dashboardHarness.js';
@@ -73,8 +76,12 @@ interface Win {
   navigator: object;
   eval(code: string): unknown;
   Event: new (type: string) => object;
-  KeyboardEvent: new (type: string, init: { key: string }) => object;
+  KeyboardEvent: new (
+    type: string,
+    init: { key: string; bubbles?: boolean },
+  ) => object;
   MouseEvent: new (type: string, init: { bubbles: boolean }) => object;
+  setTimeout(fn: (value?: unknown) => void, ms: number): number;
   HTMLDialogElement: { prototype: object };
   FormData: new (form: El) => {
     get(name: string): unknown;
@@ -343,5 +350,133 @@ describe('KIT_SCRIPT in a real DOM', () => {
     copy.click();
     await settle();
     expect(writeText).toHaveBeenCalledTimes(1);
+  });
+});
+
+/** A bare page holding `body`, loaded like `load` (dialog polyfill, Esc, clipboard). */
+function bare(body: string) {
+  return load(`<!doctype html><html><body><main>${body}</main></body></html>`);
+}
+
+describe('KIT_SCRIPT in a real DOM: #159 review hardening', () => {
+  it('Esc while the clipboard write is pending: the copy-then-submit form is never sent', async () => {
+    const markup = modal({
+      trigger: { label: 'Send warning', tone: 'primary' },
+      title: 'Warning',
+      body: html`<form
+        method="post"
+        action="${localUrl('/dashboard/x')}"
+        data-copy-box
+      >
+        ${copyText('Hello')}${copyButton({ label: 'Copy warning', target: 'near', thenSubmit: true })}
+      </form>`,
+    }).value;
+    const { window, document, run, writeText } = bare(markup);
+    let resolveWrite: () => void = () => undefined;
+    writeText.mockImplementation(
+      () =>
+        new Promise<undefined>((resolve) => {
+          resolveWrite = () => resolve(undefined);
+        }),
+    );
+    const submit = vi.fn();
+    (
+      window as unknown as {
+        HTMLFormElement: { prototype: { submit: () => void } };
+      }
+    ).HTMLFormElement.prototype.submit = submit;
+    run();
+    const b = trigger(document, 'Send warning');
+    const d = b.nextElementSibling as HTMLDialogElement;
+    b.click();
+    const copy = d.querySelector<HTMLButtonElement>('button[data-copy]');
+    copy.click();
+    expect(writeText).toHaveBeenCalledTimes(1);
+    document.dispatchEvent(
+      new window.KeyboardEvent('keydown', { key: 'Escape' }),
+    );
+    expect(d.hasAttribute('open')).toBe(false);
+    resolveWrite();
+    await settle();
+    expect(submit).not.toHaveBeenCalled();
+    expect(copy.disabled).toBe(false);
+    expect(copy.textContent).toBe('Copy warning');
+  });
+
+  it('no textarea: a press on the backdrop released inside the box keeps it open; one released on the backdrop closes it', () => {
+    const markup = modal({
+      trigger: { label: 'Details' },
+      title: 'Details',
+      body: html`<p>Read only.</p>`,
+    }).value;
+    const { window, document, run } = bare(markup);
+    run();
+    const b = trigger(document, 'Details');
+    const d = b.nextElementSibling as HTMLDialogElement;
+    const box = d.querySelector('.ui-dialog-box');
+    const fire = (target: El, type: string) =>
+      target.dispatchEvent(new window.MouseEvent(type, { bubbles: true }));
+    b.click();
+    // Pressed on the backdrop, let go on the box: the click's target is the
+    // dialog (their common ancestor), as in a browser.
+    fire(d, 'pointerdown');
+    fire(box, 'pointerup');
+    fire(d, 'click');
+    expect(d.hasAttribute('open')).toBe(true);
+    fire(d, 'pointerdown');
+    fire(d, 'pointerup');
+    fire(d, 'click');
+    expect(d.hasAttribute('open')).toBe(false);
+    expect(document.activeElement).toBe(b);
+  });
+});
+
+describe('KIT_SCRIPT in a real DOM: the nav accordion', () => {
+  const groups = (document: Document) =>
+    document.querySelectorAll<El & { open: boolean }>(
+      'nav.site details[data-nav-group]',
+    );
+
+  it('the page renders the current page’s group open; opening another closes it', async () => {
+    const { window, document, run } = load(await monthPage());
+    run();
+    const all = [...groups(document)];
+    expect(all.map((g) => g.querySelector('summary')?.textContent)).toEqual([
+      'No-shows',
+      'Hosts & events',
+      'Members',
+      'Settings',
+    ]);
+    expect(all.map((g) => g.open)).toEqual([true, false, false, false]);
+    expect(all[0].querySelector('[aria-current="page"]')?.textContent).toBe(
+      'Workspace',
+    );
+    // The parse-time toggle of the open group (browsers fire one too) runs
+    // first, and changes nothing: no other group is open.
+    await new Promise((r) => {
+      window.setTimeout(r, 0);
+    });
+    expect(all.map((g) => g.open)).toEqual([true, false, false, false]);
+    // As a summary press does: the browser sets open, and its toggle event
+    // follows asynchronously (jsdom fires it too, but has no summary
+    // activation behaviour).
+    all[2].open = true;
+    await new Promise((r) => {
+      window.setTimeout(r, 0);
+    });
+    expect(all.map((g) => g.open)).toEqual([false, false, true, false]);
+  });
+
+  it('keyboard: Esc in an open group closes it and puts focus on its summary', async () => {
+    const { window, document, run } = load(await monthPage());
+    run();
+    const [noShows] = [...groups(document)];
+    const link = noShows.querySelector('a');
+    link.focus();
+    link.dispatchEvent(
+      new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }),
+    );
+    expect(noShows.open).toBe(false);
+    expect(document.activeElement).toBe(noShows.querySelector('summary'));
   });
 });

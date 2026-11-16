@@ -117,7 +117,7 @@ describe('dashboardRouterFromEnv', () => {
     );
   });
 
-  it('passes the same organizer deps credentialStatus to the router as homeStatus', () => {
+  it('passes the same organizer deps credentialStatus to the router as organizerLoginStatus', () => {
     vi.mocked(organizerLoginDeps).mockClear();
     vi.mocked(createDashboardRouter).mockClear();
     dashboardRouterFromEnv({ DASHBOARD_SESSION_SECRET: 'k'.repeat(48) });
@@ -125,8 +125,9 @@ describe('dashboardRouterFromEnv', () => {
     const deps = vi.mocked(createDashboardRouter).mock.calls[0][0];
     const built = vi.mocked(organizerLoginDeps).mock.results[0]
       .value as ReturnType<typeof organizerLoginDeps>;
-    expect(deps.homeStatus).toBeDefined();
-    expect(deps.homeStatus).toBe(built.credentialStatus);
+    expect(deps.organizerLoginStatus).toBeDefined();
+    expect(deps.organizerLoginStatus).toBe(built.credentialStatus);
+    expect(deps.settingsCards).toBeDefined();
   });
 
   it('redirects plain HTTP to HTTPS when the origin is HTTPS', async () => {

@@ -23,7 +23,6 @@ import { dashboardLocals } from './dashboardRouter.js';
 import { SafeHtml, html, localUrl, staticRaw } from './html.js';
 import { discordProfileUrl, discordUserLink } from './links.js';
 import { errorPage, layout, navKeyFor } from './pages.js';
-import { KIT_SCRIPT } from './ui/script.js';
 
 const logger = new Logger({ name: 'dashboard' });
 
@@ -53,14 +52,13 @@ export function dashboardPage(
     title: string;
     body: SafeHtml;
     status?: number;
-    /** 'bans': BAN_PHOTO_SCRIPT too, after the kit's, with the page nonce. */
+    /** 'bans': BAN_PHOTO_SCRIPT too, at the end of the body, with the page nonce. */
     script?: 'bans';
   },
 ): void {
   const { session, nonce } = dashboardLocals(res);
-  // The UI kit's one script (copy buttons, modals), once on every page.
-  // prettier-ignore
-  const kit = html`<script nonce="${nonce}">${KIT_SCRIPT}</script>`;
+  // The UI kit's script comes from layout (every signed-in page); the bans
+  // photo script does not depend on it.
   // prettier-ignore
   const bans = page.script === 'bans' ? html`<script nonce="${nonce}">${BAN_PHOTO_SCRIPT}</script>` : '';
   res
@@ -73,7 +71,7 @@ export function dashboardPage(
         user: session,
         // The route decides the current tab, by comparison with the nav's own paths.
         current: navKeyFor(res.req?.originalUrl),
-        body: html`${page.body}${kit}${bans}`,
+        body: html`${page.body}${bans}`,
       }),
     );
 }

@@ -83,6 +83,7 @@ import type { DashboardPageDeps } from './dashboardPages.js';
 import { isNoShowPayload } from './noShowHistory.js';
 import { refreshForm, refreshNotice } from './refresh.js';
 import { copyBox, copyButton, copyText } from '../ui/copy.js';
+import { linkButton } from '../ui/linkButton.js';
 import { confirmModal, modal } from '../ui/modal.js';
 import {
   LeadershipAnswer,
@@ -170,6 +171,43 @@ const priorBefore = (records: SuspensionRecord[], day: Date): number =>
 function priorCount(records: SuspensionRecord[], now: Date): number {
   return priorBefore(records, utcMidnight(pacificToday(now)));
 }
+
+/** Why the earliest date is what it is, when a live record sets it: the start of a sentence. */
+function onFileText(through: string | undefined): string {
+  return through
+    ? `This member has a suspension on file through ${recordDay(utcMidnight(through))}. ` +
+        "A new one can't overlap it or be dated before it, so "
+    : '';
+}
+
+/**
+ * The length and fee of a suspension dated `day`, from the live records
+ * before it: the record step's own maths (recommendedSuspensionDays,
+ * feeDollars). One wording for the confirm page and the Suspend member
+ * pop-up.
+ */
+function lengthLine(day: string, today: string, prior: number): SafeHtml {
+  return html`<p>
+    Length: 30 days × 2 per earlier suspension, counted from the suspensions
+    dated before the chosen day.
+    ${day === today ? 'Dated today' : 'Dated the chosen day'} that is
+    <strong>${recommendedSuspensionDays(prior)} days</strong>
+    (${plural(prior, 'earlier suspension', 'earlier suspensions')}), plus a
+    $${feeDollars(prior)} admin fee to rejoin (none for a member who has
+    hosted).
+  </p>`;
+}
+
+const RSVP_LINE = html`<p>
+  Their upcoming RSVPs will be removed on Meetup by whoever applies the
+  suspension.
+</p>`;
+
+const notesForRecord = (notes: string): SafeHtml =>
+  html`<p>
+    Notes for the record:
+    ${notes ? memberText(notes) : html`<span class="muted">none</span>`}
+  </p>`;
 
 /**
  * The earliest date the confirm page offers: the later of the month's 1st
@@ -377,6 +415,25 @@ function suspensionBody(v: CardView): SafeHtml | '' {
     </p>`;
 }
 
+/**
+ * In a message pop-up: Open on Meetup as a button (a link styled by the
+ * kit, new tab), then where to send from.
+ */
+function meetupButton(profile: SafeUrl | undefined): SafeHtml | '' {
+  return profile
+    ? html`<p>
+          ${linkButton({
+            href: profile,
+            label: 'Open on Meetup',
+            external: true,
+          })}
+        </p>
+        <p class="muted">
+          (send the message there while signed in as the organizer account)
+        </p>`
+    : '';
+}
+
 /** Where the message goes: the member's Meetup profile, opened by the organizer account. */
 function meetupLine(profile: SafeUrl | undefined): SafeHtml | '' {
   return profile
@@ -399,6 +456,8 @@ function meetupLine(profile: SafeUrl | undefined): SafeHtml | '' {
 interface MessagePart {
   modal: SafeHtml | '';
   inline: SafeHtml | '';
+  /** The modal holds the record form, so the card shows no Record suspension link. */
+  carriesRecord?: boolean;
 }
 
 const NO_MESSAGE: MessagePart = { modal: '', inline: '' };
@@ -450,10 +509,59 @@ function suspendedMessage(
       trigger: { label: 'Suspension message', tone: 'ghost' },
       title: `Suspension message for ${v.row.memberName || 'this member'}`,
       body: html`${unchecked}${copyBox(text, 'Copy message')}
-      ${meetupLine(profile)}`,
+      ${meetupButton(profile)}`,
     }),
     inline: '',
   };
+}
+
+/**
+ * The Suspend member pop-up's last part, for Leadership on a card that can
+ * be recorded: today's length and fee (the confirm page's wording and
+ * maths, from the same live records), the record form posting what the
+ * confirm page posts, dated today, and a link to the confirm page for
+ * another date. When a live record runs past today, it says so instead.
+ */
+function recordSection(
+  v: CardView,
+  fields: (action: WorkspaceAction) => SafeHtml,
+  rowUrl: SafeUrl,
+): SafeHtml {
+  const { row } = v;
+  const today = pacificToday(v.now);
+  const { min, through } = earliestDay(v.records, row.period);
+  if (min > today) {
+    return html`<section class="ui-record">
+      <h3>Record suspension</h3>
+      <p class="note attn">
+        ${onFileText(through)}it can't be recorded from here right now.
+      </p>
+    </section>`;
+  }
+  const prior = priorBefore(v.records, utcMidnight(today));
+  return html`<section class="ui-record">
+    <h3>Record suspension</h3>
+    ${
+      through
+        ? html`<p>
+            ${onFileText(through)}the earliest date is
+            ${recordDay(utcMidnight(min))}.
+          </p>`
+        : ''
+    }
+    ${lengthLine(today, today, prior)} ${RSVP_LINE} ${notesForRecord(row.notes)}
+    <form method="post" action="${rowUrl}">
+      ${fields('record_suspension')}
+      <input type="hidden" name="confirm" value="yes" />
+      <input type="hidden" name="date" value="${today}" />
+      <button type="submit">Record suspension</button>
+    </form>
+    <p>
+      <a href="${localUrl(workspaceRowPath(row.period, row.id, 'suspend'))}"
+        >Use a different date…</a
+      >
+    </p>
+  </section>`;
 }
 
 function messagePart(
@@ -517,15 +625,20 @@ function messagePart(
           })}
         </form>`
       : copyBox(text, warning ? 'Copy warning' : 'Copy message');
+  // Recording is Leadership only: the section renders only when the card
+  // offers the action (cardHtml's filter); the POST checks again, live.
+  const carriesRecord = !warning && actions.has('record_suspension');
   return {
     modal: modal({
       trigger: warning
         ? { label: 'Send warning', tone: 'primary' }
         : { label: 'Suspend member', tone: 'primary' },
       title: warning ? `Warning for ${name}` : `Suspend ${name}`,
-      body: html`${copy} ${meetupLine(profile)}`,
+      body: html`${copy} ${meetupButton(profile)}
+      ${carriesRecord ? recordSection(v, fields, rowUrl) : ''}`,
     }),
     inline: '',
+    carriesRecord,
   };
 }
 
@@ -720,7 +833,7 @@ function cardHtml(v: CardView): SafeHtml {
           : ''
       }
       ${
-        actions.has('record_suspension')
+        actions.has('record_suspension') && !message.carriesRecord
           ? html`<a
               class="button"
               href="${localUrl(workspaceRowPath(row.period, row.id, 'suspend'))}"
@@ -1232,10 +1345,7 @@ export function registerWorkspaceRoutes(
               it. Nothing was recorded.
             </p>`
           : workspaceResultNotice('out-of-order');
-    const onFile = through
-      ? `This member has a suspension on file through ${recordDay(utcMidnight(through))}. ` +
-        "A new one can't overlap it or be dated before it, so "
-      : '';
+    const onFile = onFileText(through);
     if (min > today) {
       dashboardPage(res, {
         title: 'Record suspension',
@@ -1255,7 +1365,6 @@ export function registerWorkspaceRoutes(
     }
     const day = chosenDay(req.query.date, period, now, min);
     const prior = priorBefore(records, utcMidnight(day));
-    const days = recommendedSuspensionDays(prior);
     const confirmUrl = localUrl(workspaceRowPath(period, row.id, 'suspend'));
     dashboardPage(res, {
       title: 'Record suspension',
@@ -1272,15 +1381,7 @@ export function registerWorkspaceRoutes(
               </p>`
             : ''
         }
-        <p>
-          Length: 30 days × 2 per earlier suspension, counted from the
-          suspensions dated before the chosen day.
-          ${day === today ? 'Dated today' : 'Dated the chosen day'} that is
-          <strong>${days} days</strong>
-          (${plural(prior, 'earlier suspension', 'earlier suspensions')}), plus
-          a $${feeDollars(prior)} admin fee to rejoin (none for a member who has
-          hosted).
-        </p>
+        ${lengthLine(day, today, prior)}
         <form method="get" action="${confirmUrl}">
           <label
             >Suspension date
@@ -1296,14 +1397,7 @@ export function registerWorkspaceRoutes(
             Show the length for this date
           </button>
         </form>
-        <p>
-          Their upcoming RSVPs will be removed on Meetup by whoever applies the
-          suspension.
-        </p>
-        <p>
-          Notes for the record:
-          ${row.notes ? memberText(row.notes) : html`<span class="muted">none</span>`}
-        </p>
+        ${RSVP_LINE} ${notesForRecord(row.notes)}
         <form
           method="post"
           action="${localUrl(workspaceRowPath(period, row.id))}"

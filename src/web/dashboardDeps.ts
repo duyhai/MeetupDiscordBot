@@ -100,7 +100,7 @@ import {
   DashboardPageDeps,
   registerAllProtectedRoutes,
 } from './routes/dashboardPages.js';
-import { renderHomeReports } from './routes/home.js';
+import { renderHomeReports, renderSettingsCards } from './routes/home.js';
 import { SessionStore } from './session.js';
 import {
   DASHBOARD_CACHE_TIMEOUT_MS,
@@ -533,7 +533,8 @@ export function dashboardRouterFromEnv(
         organizer: organizerDeps,
         pages: pageDeps,
       }),
-    homeStatus: organizerDeps.credentialStatus,
+    organizerLoginStatus: organizerDeps.credentialStatus,
     homeReports: (view) => renderHomeReports(pageDeps, view),
+    settingsCards: (view) => renderSettingsCards(pageDeps, view),
   });
 }

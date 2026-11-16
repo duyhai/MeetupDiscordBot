@@ -53,7 +53,7 @@ export function wrappedNotice(code: unknown): SafeHtml | '' {
     : html`<p class="note attn">${WRAPPED_NOTICES[code]}</p>`;
 }
 
-const back = (code: WrappedNoticeCode) => `/dashboard?wrapped=${code}`;
+const back = (code: WrappedNoticeCode) => `/dashboard/settings?wrapped=${code}`;
 
 /**
  * POST /dashboard/wrapped/announce: posts the "your Wrapped is ready" notice
