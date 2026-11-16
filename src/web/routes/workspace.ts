@@ -554,8 +554,10 @@ function recordSection(
       ${fields('record_suspension')}
       <input type="hidden" name="confirm" value="yes" />
       <input type="hidden" name="date" value="${today}" />
+      <input type="hidden" name="from" value="popup" />
       <button type="submit">Record suspension</button>
     </form>
+    <p class="muted">The length and fee are checked again when you record.</p>
     <p>
       <a href="${localUrl(workspaceRowPath(row.period, row.id, 'suspend'))}"
         >Use a different date…</a
@@ -1334,10 +1336,14 @@ export function registerWorkspaceRoutes(
     const today = pacificToday(now);
     const { min, through } = earliestDay(records, period);
     const latest = latestRecord(records);
-    // Only this page's own code; the date is the record's, never the request's.
+    // Only this page's own codes; the date is the record's, never the request's.
+    const dayChanged =
+      req.query.result === 'day-changed'
+        ? workspaceResultNotice('day-changed')
+        : '';
     const outOfOrder =
       req.query.result !== 'out-of-order'
-        ? ''
+        ? dayChanged
         : latest
           ? html`<p class="note attn">
               This member already has a suspension dated

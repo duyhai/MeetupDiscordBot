@@ -154,7 +154,8 @@ background:transparent;color:var(--muted);
 .palette-pick select{min-height:32px;padding:0 var(--s2);border-radius:var(--radius-pill);font-size:var(--t-sm);color:var(--fg)}
 /* Site nav (ui/nav.ts accordionNav): top-level links and details groups. Without scripting an open group takes its
    own row with its links under the summary; with scripting (KIT_SCRIPT keeps one group open) the open group's links
-   are a second row under the bar, and the bar reserves that row's height. */
+   are a second row under the bar, and the bar always reserves that row (an empty band when no group is open), so
+   opening or closing a group never moves the page. */
 nav.site{position:relative;background:var(--surface);border-bottom:1px solid var(--line)}
 nav.site .tabs{display:flex;flex-wrap:wrap;gap:0 var(--s1);max-width:var(--width);margin:0 auto;padding:0 var(--s2)}
 nav.site details{margin:0}
@@ -172,9 +173,11 @@ nav.site details[open]>summary{color:var(--fg)}
 nav.site a:focus-visible,nav.site summary:focus-visible{outline-offset:-3px}
 nav.site details[open]{flex-basis:100%}
 nav.site .nav-sub{display:flex;flex-wrap:wrap;gap:0 var(--s1);padding-left:var(--s4)}
-@media (scripting:enabled){nav.site:has(details[open]){padding-bottom:calc(var(--tap) + 1px)}
+@media (scripting:enabled){nav.site{padding-bottom:calc(var(--tap) + 1px)}
+nav.site::after{content:"";position:absolute;left:0;right:0;bottom:0;height:var(--tap);background:var(--raised);
+border-top:1px solid var(--line)}
 nav.site details[open]{flex-basis:auto}
-nav.site .nav-sub{position:absolute;left:0;right:0;bottom:0;flex-wrap:nowrap;overflow-x:auto;scrollbar-width:thin;
+nav.site .nav-sub{position:absolute;z-index:1;left:0;right:0;bottom:0;flex-wrap:nowrap;overflow-x:auto;scrollbar-width:thin;
 padding:0 max(var(--s2),calc((100% - var(--width)) / 2 + var(--s2)));background:var(--raised);
 border-top:1px solid var(--line)}
 nav.site .nav-sub a{font-size:var(--t-sm)}}
@@ -541,7 +544,7 @@ nav.type-filter a,nav.status-filter a{display:inline-flex;align-items:center;min
 :root[data-palette="quiet"] nav.site a:hover,:root[data-palette="quiet"] nav.site summary:hover{background:transparent;color:var(--fg)}
 :root[data-palette="quiet"] nav.site a[aria-current="page"],:root[data-palette="quiet"] nav.site summary.here{font-weight:500;
   border-bottom-color:var(--fg)}
-:root[data-palette="quiet"] nav.site .nav-sub{background:var(--bg)}
+:root[data-palette="quiet"] nav.site .nav-sub,:root[data-palette="quiet"] nav.site::after{background:var(--bg)}
 :root[data-palette="quiet"] details.ui-collapsible{border-width:0 0 1px;border-radius:0}
 :root[data-palette="quiet"] details.ui-collapsible>summary,:root[data-palette="quiet"] .ui-collapsible-body{padding-left:0;
   padding-right:0}

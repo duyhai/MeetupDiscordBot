@@ -534,7 +534,7 @@ export function dashboardRouterFromEnv(
         pages: pageDeps,
       }),
     organizerLoginStatus: organizerDeps.credentialStatus,
-    homeReports: (view) => renderHomeReports(pageDeps, view),
+    homeReports: () => renderHomeReports(pageDeps),
     settingsCards: (view) => renderSettingsCards(pageDeps, view),
   });
 }

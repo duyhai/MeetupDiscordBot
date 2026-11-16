@@ -231,9 +231,14 @@ const seededWorkspace = () =>
     events: [],
   });
 
+const MONTH_KEYS: Record<string, string> = {
+  'September 2026': '2026-09',
+  'October 2026': '2026-10',
+};
+
 /** A month's three workspace tiles, as the collapsed markup reads them. */
 const tiles = (month: string, todo: number, hold: number, done: number) =>
-  `${month}</a> no-show workspace</h3><dl class="stats">` +
+  `href="/dashboard/no-shows/${MONTH_KEYS[month]}">No-show workspace</a></h3><dl class="stats">` +
   `<div class="stat todo"><dt>To do</dt><dd>${todo}</dd></div>` +
   `<div class="stat"><dt>On hold</dt><dd>${hold}</dd></div>` +
   `<div class="stat done"><dt>Done</dt><dd>${done}</dd></div></dl>`;
@@ -281,6 +286,11 @@ describe('Home: one card, a collapsible per month (Hai, 2026-11-16)', () => {
     expect(sept.indexOf('<dl class="stats">')).toBeLessThan(
       sept.indexOf('8 no-show RSVPs'),
     );
+    // The heading inside does not repeat the month the collapsible names.
+    expect(sept).toContain(
+      '<h3><a href="/dashboard/no-shows/2026-09">No-show workspace</a></h3>',
+    );
+    expect(sept).not.toContain('September 2026 no-show workspace');
     const oct = monthSection(out, 'October 2026');
     expect(oct).toContain(tiles('October 2026', 0, 0, 1));
     expect(oct).toContain('The October 2026 reports have not been built yet.');
@@ -406,9 +416,11 @@ describe('Home open workspace items card', () => {
     const out = await render({ workspace: async () => ws });
     expect(out).toContain(tiles('September 2026', 3, 1, 3));
     expect(out).toContain(
-      'October 2026</a> no-show workspace</h3><p class="muted">Not set up yet</p>',
+      'href="/dashboard/no-shows/2026-10">No-show workspace</a></h3><p class="muted">Not set up yet</p>',
     );
-    expect(out).not.toContain('October 2026</a> no-show workspace</h3><dl');
+    expect(out).not.toContain(
+      'href="/dashboard/no-shows/2026-10">No-show workspace</a></h3><dl',
+    );
     expect(ws.monthState).toHaveBeenCalledTimes(2);
     expect(ws.listRows).not.toHaveBeenCalled();
   });
@@ -447,7 +459,7 @@ describe('Home open workspace items card', () => {
       .replace(/\s+/g, ' ')
       .replace(/> </g, '><');
     expect(out).toContain(tiles('September 2026', 3, 1, 3));
-    expect(out).not.toContain('August 2026</a> no-show workspace');
+    expect(out).not.toContain('2026-08">No-show workspace');
     expect(out).not.toContain('/dashboard/no-shows/2026-08');
   });
 
@@ -461,7 +473,7 @@ describe('Home open workspace items card', () => {
         }),
       )
     ).value;
-    expect(out).not.toContain('no-show workspace');
+    expect(out).not.toContain('No-show workspace');
     expect(ws.statusCounts).not.toHaveBeenCalled();
   });
 });

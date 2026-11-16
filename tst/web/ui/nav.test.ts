@@ -83,7 +83,12 @@ describe('accordionNav', () => {
     const { STYLE } = await import('../../../src/web/pages.js');
     const css = STYLE.value;
     expect(css).toContain('@media (scripting:enabled){');
-    expect(css).toContain('nav.site:has(details[open])');
+    // The second row is always reserved, open group or not, so opening or
+    // closing one (Esc included) never moves the page.
+    expect(css).toContain(
+      '@media (scripting:enabled){nav.site{padding-bottom:calc(var(--tap) + 1px)}',
+    );
+    expect(css).not.toContain(':has(details[open])');
     // Without scripting the open group takes its own row, links in place.
     expect(css).toContain('nav.site details[open]{flex-basis:100%}');
   });

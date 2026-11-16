@@ -656,6 +656,7 @@ describe('GET /dashboard/no-shows/:period (month cards)', () => {
           'name="action" value="record_suspension"',
           'name="confirm" value="yes"',
           '<input type="hidden" name="date" value="2026-10-05" />',
+          '<input type="hidden" name="from" value="popup" />',
           '<button type="submit">Record suspension</button>',
         ].join('[\\s\\S]*'),
       );
@@ -672,6 +673,9 @@ describe('GET /dashboard/no-shows/:period (month cards)', () => {
           'Dated today that is 30 days (0 earlier suspensions), plus a $10 admin fee to rejoin',
         );
         expect(d).toMatch(RECORD_FORM);
+        expect(words(d)).toContain(
+          'The length and fee are checked again when you record.',
+        );
         expect(d).toContain(
           '<a href="/dashboard/no-shows/2026-09/rows/2/suspend">Use a different date…</a>',
         );
@@ -1622,6 +1626,19 @@ describe('GET /dashboard/no-shows/:period/rows/:rowId/suspend (confirm)', () => 
     expect(res.text).toContain(`<bdi>${RTL}</bdi>`);
     expect(res.text).toContain('Member 1');
     expect(res.text).toContain('href="/dashboard/no-shows/2026-09">Cancel</a>');
+  });
+
+  it('after a pop-up sent across midnight, says the day changed and shows today', async () => {
+    const { get } = await setup({ records: [prior()], leader: true });
+    const res = await get(`${CONFIRM}?result=day-changed`);
+    expect(res.status).toBe(200);
+    expect(words(res.text)).toContain(
+      'The day changed since you opened this; check the length for today. Nothing was recorded.',
+    );
+    expect(words(res.text)).toContain('Dated today that is 60 days');
+    // Any other code is never echoed.
+    const other = await get(`${CONFIRM}?result=%3Cb%3E`);
+    expect(other.text).not.toContain('The day changed');
   });
 
   describe('a chosen date', () => {

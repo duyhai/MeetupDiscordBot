@@ -322,6 +322,62 @@ describe('workspace action routes', () => {
     expect(perform).not.toHaveBeenCalled();
   });
 
+  describe('the Suspend member pop-up form (from=popup) across midnight Pacific', () => {
+    // PAGE_NOW is 2026-10-05 in Pacific time: the day the pop-up was rendered.
+    const popupForm = {
+      action: 'record_suspension',
+      confirm: 'yes',
+      version: '1',
+      date: '2026-10-05',
+      from: 'popup',
+    };
+
+    it('sent the same day, it records as dated', async () => {
+      const { post, perform } = await setup({ leader: true });
+      const res = await post(ROW, popupForm);
+      expect(location(res)).toBe(`${MONTH}?result=done`);
+      expect(perform).toHaveBeenCalledTimes(1);
+      expect(perform.mock.calls[0][0]).toMatchObject({
+        action: 'record_suspension',
+      });
+    });
+
+    it('rendered on day N and sent on day N+1: nothing is recorded; the confirm page for today opens', async () => {
+      const { post, perform, advance } = await setup({ leader: true });
+      advance(24 * 3600 * 1000);
+      const res = await post(ROW, popupForm);
+      expect(res.status).toBe(303);
+      expect(location(res)).toBe(
+        '/dashboard/no-shows/2026-09/rows/1/suspend?result=day-changed',
+      );
+      expect(perform).not.toHaveBeenCalled();
+    });
+
+    it('the confirm page form (no marker) keeps taking a chosen earlier date', async () => {
+      const { post, perform, advance } = await setup({ leader: true });
+      advance(24 * 3600 * 1000);
+      const { from: _from, ...confirmForm } = popupForm;
+      const res = await post(ROW, confirmForm);
+      expect(location(res)).toBe(`${MONTH}?result=done`);
+      expect(perform).toHaveBeenCalledTimes(1);
+    });
+
+    it('a Moderator is still refused before the day check', async () => {
+      const { post, perform, advance } = await setup({ leader: false });
+      advance(24 * 3600 * 1000);
+      const res = await post(ROW, popupForm);
+      expect(location(res)).toBe(`${MONTH}?result=not-leadership`);
+      expect(perform).not.toHaveBeenCalled();
+    });
+
+    it('the notice is fixed text', () => {
+      expect(workspaceResultNotice('day-changed').valueOf()).toBeTruthy();
+      expect(WORKSPACE_RESULT_MESSAGES['day-changed']).toContain(
+        'Nothing was recorded.',
+      );
+    });
+  });
+
   it('the route refuses a date outside the month-to-today range, like the service', async () => {
     const { post, perform } = await setup({ leader: true });
     for (const date of ['2026-08-31', '2026-10-06']) {

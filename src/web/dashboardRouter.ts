@@ -115,10 +115,10 @@ export interface DashboardDeps {
    */
   organizerLoginStatus?: () => Promise<OrganizerCredentialStatus | undefined>;
   /**
-   * Report cards for the home page, given the session's CSRF token. Must not
-   * throw; left out, the home page shows the welcome text only.
+   * Report cards for the home page (no forms). Must not throw; left out, the
+   * home page shows the welcome text only.
    */
-  homeReports?: (view: HomeReportsView) => Promise<SafeHtml>;
+  homeReports?: () => Promise<SafeHtml>;
   /**
    * The Settings page's job cards (Wrapped announcement, Wrapped backfill),
    * given the session's CSRF token (for the cards' own forms) and the
@@ -127,10 +127,10 @@ export interface DashboardDeps {
   settingsCards?: (view: HomeReportsView) => Promise<SafeHtml>;
 }
 
-/** What the home and Settings pages hand their cards. */
+/** What the Settings page hands its cards (their forms and their POSTs' notices). */
 export interface HomeReportsView {
   csrfToken: string;
-  /** req.query.wrapped, unparsed: the cards render fixed text for a known code only. */
+  /** req.query.wrapped (the Wrapped announcement card's notice), unparsed: fixed text for a known code only. */
   notice: unknown;
   /** req.query.backfill, likewise. */
   backfillNotice: unknown;
@@ -739,13 +739,7 @@ export function createDashboardRouter(deps: DashboardDeps): express.Router {
     const { session, nonce } = locals(res);
     let reports: SafeHtml | undefined;
     try {
-      reports = deps.homeReports
-        ? await deps.homeReports({
-            csrfToken: session.csrfToken,
-            notice: (req.query as Record<string, unknown>).wrapped,
-            backfillNotice: (req.query as Record<string, unknown>).backfill,
-          })
-        : undefined;
+      reports = deps.homeReports ? await deps.homeReports() : undefined;
     } catch (error) {
       logger.warn(
         `Dashboard home reports failed: ${error instanceof Error ? error.name : 'Error'}`,

@@ -177,6 +177,35 @@ describe('page shell', () => {
     ]);
   });
 
+  it('the grouped nav reaches exactly the twelve pages it had before, plus Settings', async () => {
+    const { get } = await setup();
+    const nav = siteNav((await get('/dashboard/sessions')).text);
+    const paths = [...nav.matchAll(/<a href="([^"]+)"/g)].map((m) => m[1]);
+    const before = [
+      '/dashboard',
+      '/dashboard/no-shows',
+      '/dashboard/hosts/requests',
+      '/dashboard/hosts/promotion',
+      '/dashboard/hall-of-fame',
+      '/dashboard/no-show-history',
+      '/dashboard/suspensions',
+      '/dashboard/identity',
+      '/dashboard/events',
+      '/dashboard/link-progress',
+      '/dashboard/trends',
+      '/dashboard/sessions',
+    ];
+    expect(paths).toHaveLength(13);
+    expect([...paths].sort()).toEqual(
+      [...before, '/dashboard/settings'].sort(),
+    );
+    // Each one answers.
+    for (const path of paths) {
+      // eslint-disable-next-line no-await-in-loop -- one page at a time
+      expect((await get(path)).status, path).toBe(200);
+    }
+  });
+
   it('groups the pages into four accordion sections after Home', async () => {
     const { get } = await setup();
     const nav = siteNav((await get('/dashboard/sessions')).text);

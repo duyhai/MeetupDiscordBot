@@ -29,7 +29,7 @@ import {
 import type { HomeReportsView } from '../dashboardRouter.js';
 import type { EventRequest } from '../../lib/repositories/postgresEventRequestRepository.js';
 import { SafeHtml, html, localUrl, memberText } from '../html.js';
-import { monthCell, pacificDateTime, zeroNoShowNote } from '../pageKit.js';
+import { pacificDateTime, zeroNoShowNote } from '../pageKit.js';
 import type { DashboardPageDeps } from './dashboardPages.js';
 import { collapsible } from '../ui/index.js';
 import { whenLabel } from './hostRequests.js';
@@ -149,8 +149,12 @@ function workspaceSection(
   period: Period,
   read: WorkspaceRead | undefined,
 ): { body: SafeHtml; todo?: number } {
+  // The collapsible's title already names the month.
+  const path = linkableMonthPath(DASHBOARD_PATHS.workspaceMonth, period);
   // prettier-ignore
-  const heading = html`<h3>${monthCell(DASHBOARD_PATHS.workspaceMonth, period)} no-show workspace</h3>`;
+  const heading = path === undefined
+    ? html`<h3>No-show workspace</h3>`
+    : html`<h3><a href="${localUrl(path)}">No-show workspace</a></h3>`;
   if (read === undefined) {
     return { body: html`${heading}${UNAVAILABLE}` };
   }
@@ -386,7 +390,6 @@ export async function renderHomeReports(
     DashboardPageDeps,
     'now' | 'snapshots' | 'identity' | 'workspace' | 'eventRequests'
   >,
-  _view: Partial<HomeReportsView> = {},
 ): Promise<SafeHtml> {
   const { deadline, stop } = startDeadline();
   try {
