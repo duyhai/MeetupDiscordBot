@@ -9,6 +9,7 @@ import {
 import { tz } from '../util/timezone.js';
 import { SafeHtml, html, localUrl, memberText, staticRaw } from './html.js';
 import { THEME_SCRIPT, themeToggle } from './theme.js';
+import { KIT_SCRIPT, accordionNav, linkButton } from './ui/index.js';
 
 export interface PageUser {
   username: string;
@@ -151,13 +152,36 @@ background:transparent;color:var(--muted);
 .palette-pick{display:inline-flex;align-items:center;gap:var(--s2);font-size:var(--t-sm);color:var(--muted)}
 .palette-pick[hidden]{display:none}
 .palette-pick select{min-height:32px;padding:0 var(--s2);border-radius:var(--radius-pill);font-size:var(--t-sm);color:var(--fg)}
-nav.site{background:var(--surface);border-bottom:1px solid var(--line);overflow-x:auto;scrollbar-width:thin}
-nav.site .tabs{display:flex;gap:var(--s1);max-width:var(--width);margin:0 auto;padding:0 var(--s2)}
-nav.site a{flex:0 0 auto;display:inline-flex;align-items:center;min-height:var(--tap);padding:0 var(--s3);
-color:var(--muted);text-decoration:none;white-space:nowrap;font-weight:500;border-bottom:3px solid transparent}
-nav.site a:hover{color:var(--fg);background:var(--raised)}
-nav.site a[aria-current="page"]{color:var(--fg);font-weight:700;border-bottom-color:var(--accent)}
-nav.site a:focus-visible{outline-offset:-3px}
+/* Site nav (ui/nav.ts accordionNav): top-level links and details groups. Without scripting an open group takes its
+   own row with its links under the summary; with scripting (KIT_SCRIPT keeps one group open) the open group's links
+   are a second row under the bar, and the bar always reserves that row (an empty band when no group is open), so
+   opening or closing a group never moves the page. */
+nav.site{position:relative;background:var(--surface);border-bottom:1px solid var(--line)}
+nav.site .tabs{display:flex;flex-wrap:wrap;gap:0 var(--s1);max-width:var(--width);margin:0 auto;padding:0 var(--s2)}
+nav.site details{margin:0}
+nav.site a,nav.site summary{flex:0 0 auto;display:inline-flex;align-items:center;gap:var(--s2);min-height:var(--tap);
+padding:0 var(--s3);color:var(--muted);text-decoration:none;white-space:nowrap;font-weight:500;
+border-bottom:3px solid transparent}
+nav.site summary{list-style:none;cursor:pointer}
+nav.site summary::-webkit-details-marker{display:none}
+nav.site summary::after{content:"";width:.4em;height:.4em;border:solid currentColor;border-width:0 2px 2px 0;
+transform:translateY(-2px) rotate(45deg)}
+nav.site details[open]>summary::after{transform:translateY(2px) rotate(-135deg)}
+nav.site a:hover,nav.site summary:hover{color:var(--fg);background:var(--raised)}
+nav.site a[aria-current="page"],nav.site summary.here{color:var(--fg);font-weight:700;border-bottom-color:var(--accent)}
+nav.site details[open]>summary{color:var(--fg)}
+nav.site a:focus-visible,nav.site summary:focus-visible{outline-offset:-3px}
+nav.site details[open]{flex-basis:100%}
+nav.site .nav-sub{display:flex;flex-wrap:wrap;gap:0 var(--s1);padding-left:var(--s4)}
+@media (scripting:enabled){nav.site{padding-bottom:calc(var(--tap) + 1px)}
+nav.site::after{content:"";position:absolute;left:0;right:0;bottom:0;height:var(--tap);background:var(--raised);
+border-top:1px solid var(--line)}
+nav.site details[open]{flex-basis:auto}
+nav.site .nav-sub{position:absolute;z-index:1;left:0;right:0;bottom:0;flex-wrap:nowrap;overflow-x:auto;scrollbar-width:thin;
+padding:0 max(var(--s2),calc((100% - var(--width)) / 2 + var(--s2)));background:var(--raised);
+border-top:1px solid var(--line)}
+nav.site .nav-sub a{font-size:var(--t-sm)}}
+@media (max-width:479.98px){nav.site a,nav.site summary{padding:0 var(--s2)}}
 main{display:block;max-width:var(--width);margin:0 auto;padding:var(--s5) var(--s4) var(--s6)}
 main:focus{outline:none}
 .card{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:var(--s4);
@@ -312,6 +336,23 @@ box-shadow:0 12px 40px rgb(0 0 0 / .35);overflow:auto;overscroll-behavior:contai
 .ui-dialog-actions{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:var(--s2);margin-top:var(--s4)}
 .ui-dialog button.danger.strong,.ui-dialog button.danger.strong:hover{color:var(--attn-ink);background:var(--attn-soft);
 border-color:var(--attn)}
+/* UI kit: collapsible. A details section: the summary is the heading line, with a chevron and a muted note. */
+details.ui-collapsible{border:1px solid var(--line);border-radius:var(--radius-ctl);margin:0 0 var(--s3)}
+details.ui-collapsible>summary{display:flex;flex-wrap:wrap;align-items:center;gap:var(--s1) var(--s3);min-height:var(--tap);
+padding:var(--s2) var(--s3);list-style:none}
+details.ui-collapsible>summary::-webkit-details-marker{display:none}
+details.ui-collapsible>summary::before{content:"";flex:none;width:.45em;height:.45em;border:solid currentColor;
+border-width:0 2px 2px 0;transform:rotate(-45deg);transition:transform 150ms ease}
+details.ui-collapsible[open]>summary::before{transform:rotate(45deg)}
+details.ui-collapsible>summary:hover{background:var(--raised)}
+.ui-collapsible-title{font-weight:700}
+.ui-collapsible-meta{color:var(--muted);font-weight:500;font-size:var(--t-sm)}
+.ui-collapsible-body{padding:0 var(--s3) var(--s3)}
+.ui-collapsible-body>:first-child{margin-top:var(--s2)}
+.ui-collapsible-body>:last-child{margin-bottom:0}
+.ui-dialog-body .ui-record{border-top:1px solid var(--line);margin-top:var(--s4);padding-top:var(--s3)}
+.ui-dialog-body .ui-record h3{margin-top:0}
+.ui-dialog-body .ui-record form+p{margin-top:var(--s3)}
 @media (max-width:1023.98px){table.stack.bans,table.stack.bans tbody{display:block;width:100%}
 table.stack.bans thead{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
 table.stack.bans tr{display:block;background:var(--raised);border:1px solid var(--line);border-radius:var(--radius-ctl);
@@ -455,9 +496,12 @@ nav.type-filter a,nav.status-filter a{display:inline-flex;align-items:center;min
 :root[data-palette="potluck"] header.site::after{height:6px;
   background:repeating-linear-gradient(90deg,var(--rule-a) 0 24px,var(--rule-b) 24px 48px,var(--ok-ink) 48px 72px,var(--accent) 72px 96px)}
 :root[data-palette="potluck"] nav.site{border-bottom:0;padding:var(--s2) 0}
-:root[data-palette="potluck"] nav.site a{border:2px solid transparent;border-radius:var(--radius-pill);min-height:var(--tap);margin:2px 0}
-:root[data-palette="potluck"] nav.site a[aria-current="page"]{border-color:var(--fg);background:var(--sel);color:var(--fg)}
-:root[data-palette="potluck"] nav.site a:hover{background:var(--sel)}
+:root[data-palette="potluck"] nav.site a,:root[data-palette="potluck"] nav.site summary{border:2px solid transparent;
+  border-radius:var(--radius-pill);min-height:var(--tap);margin:2px 0}
+:root[data-palette="potluck"] nav.site a[aria-current="page"],:root[data-palette="potluck"] nav.site summary.here{
+  border-color:var(--fg);background:var(--sel);color:var(--fg)}
+:root[data-palette="potluck"] nav.site a:hover,:root[data-palette="potluck"] nav.site summary:hover{background:var(--sel)}
+:root[data-palette="potluck"] details.ui-collapsible{border:2px solid var(--fg);border-radius:18px 14px 20px 12px}
 :root[data-palette="potluck"] button,:root[data-palette="potluck"] .button{border-radius:var(--radius-pill);border-width:2px;
   box-shadow:0 4px 0 var(--btn-hover)}
 :root[data-palette="potluck"] button:active,:root[data-palette="potluck"] .button:active{transform:translateY(3px);
@@ -496,9 +540,14 @@ nav.type-filter a,nav.status-filter a{display:inline-flex;align-items:center;min
 :root[data-palette="quiet"] header.site::after{height:1px;background:var(--line)}
 :root[data-palette="quiet"] header.site .brand{font-weight:500;font-size:var(--t-base);letter-spacing:.02em}
 :root[data-palette="quiet"] nav.site{background:var(--bg)}
-:root[data-palette="quiet"] nav.site a{font-weight:400;border-bottom-width:1px}
-:root[data-palette="quiet"] nav.site a:hover{background:transparent;color:var(--fg)}
-:root[data-palette="quiet"] nav.site a[aria-current="page"]{font-weight:500;border-bottom-color:var(--fg)}
+:root[data-palette="quiet"] nav.site a,:root[data-palette="quiet"] nav.site summary{font-weight:400;border-bottom-width:1px}
+:root[data-palette="quiet"] nav.site a:hover,:root[data-palette="quiet"] nav.site summary:hover{background:transparent;color:var(--fg)}
+:root[data-palette="quiet"] nav.site a[aria-current="page"],:root[data-palette="quiet"] nav.site summary.here{font-weight:500;
+  border-bottom-color:var(--fg)}
+:root[data-palette="quiet"] nav.site .nav-sub,:root[data-palette="quiet"] nav.site::after{background:var(--bg)}
+:root[data-palette="quiet"] details.ui-collapsible{border-width:0 0 1px;border-radius:0}
+:root[data-palette="quiet"] details.ui-collapsible>summary,:root[data-palette="quiet"] .ui-collapsible-body{padding-left:0;
+  padding-right:0}
 :root[data-palette="quiet"] .card{background:transparent;border:0;border-top:1px solid var(--line);padding:var(--s5) 0;margin:0}
 :root[data-palette="quiet"] main>.card:first-child{border-top:0;padding-top:0}
 :root[data-palette="quiet"] h1{font-size:1.6rem;font-weight:500;letter-spacing:.01em}
@@ -526,72 +575,121 @@ nav.type-filter a,nav.status-filter a{display:inline-flex;align-items:center;min
 transition:none!important}button:active,.button:active{transform:none}}
 `;
 
-/** The site nav's pages, in order. Links and labels are fixed. */
-const NAV_ITEMS = [
-  { key: 'home', path: DASHBOARD_BASE, label: 'Home' },
-  {
-    key: 'workspace',
-    path: dashboardPath(DASHBOARD_PATHS.workspace),
-    label: 'No-show workspace',
-  },
-  {
-    key: 'hostRequests',
-    path: dashboardPath(DASHBOARD_PATHS.hostRequests),
-    label: 'Host requests',
-  },
-  {
-    key: 'hostPromotion',
-    path: dashboardPath(DASHBOARD_PATHS.hostPromotion),
-    label: 'Host promotion',
-  },
-  {
-    key: 'hallOfFame',
-    path: dashboardPath(DASHBOARD_PATHS.hallOfFame),
-    label: 'Hall of Fame',
-  },
-  {
-    key: 'noShowHistory',
-    path: dashboardPath(DASHBOARD_PATHS.noShowHistory),
-    label: 'No-show history',
-  },
-  {
-    key: 'suspensions',
-    path: dashboardPath(DASHBOARD_PATHS.suspensions),
-    label: 'Suspensions',
-  },
-  {
-    key: 'identity',
-    path: dashboardPath(DASHBOARD_PATHS.identity),
-    label: 'Identity changes',
-  },
-  {
-    key: 'eventChanges',
-    path: dashboardPath(DASHBOARD_PATHS.eventChanges),
-    label: 'Event changes',
-  },
-  {
-    key: 'linkProgress',
-    path: dashboardPath(DASHBOARD_PATHS.linkProgress),
-    label: 'Link progress',
-  },
-  {
-    key: 'trends',
-    path: dashboardPath(DASHBOARD_PATHS.trends),
-    label: 'Trends',
-  },
-  {
-    key: 'sessions',
-    path: dashboardPath(DASHBOARD_PATHS.sessions),
-    label: 'Sessions',
-  },
-] as const;
+/** Every page the nav names. */
+export type NavKey =
+  | 'home'
+  | 'workspace'
+  | 'noShowHistory'
+  | 'suspensions'
+  | 'hostRequests'
+  | 'hostPromotion'
+  | 'hallOfFame'
+  | 'eventChanges'
+  | 'identity'
+  | 'linkProgress'
+  | 'trends'
+  | 'settings'
+  | 'sessions';
 
-export type NavKey = (typeof NAV_ITEMS)[number]['key'];
+interface NavPage {
+  key: NavKey;
+  path: string;
+  label: string;
+}
+
+const page = (key: NavKey, path: string, label: string): NavPage => ({
+  key,
+  path,
+  label,
+});
+
+/**
+ * The site nav, in order: Home, then four groups by what staff are doing
+ * (no-show follow-up; hosts and their events; members; the dashboard's own
+ * settings). Links and labels are fixed.
+ */
+const NAV: readonly (NavPage | { group: string; pages: readonly NavPage[] })[] =
+  [
+    { key: 'home', path: DASHBOARD_BASE, label: 'Home' },
+    {
+      group: 'No-shows',
+      pages: [
+        page(
+          'workspace',
+          dashboardPath(DASHBOARD_PATHS.workspace),
+          'Workspace',
+        ),
+        page(
+          'noShowHistory',
+          dashboardPath(DASHBOARD_PATHS.noShowHistory),
+          'History',
+        ),
+        page(
+          'suspensions',
+          dashboardPath(DASHBOARD_PATHS.suspensions),
+          'Suspensions',
+        ),
+      ],
+    },
+    {
+      group: 'Hosts & events',
+      pages: [
+        page(
+          'hostRequests',
+          dashboardPath(DASHBOARD_PATHS.hostRequests),
+          'Requests',
+        ),
+        page(
+          'hostPromotion',
+          dashboardPath(DASHBOARD_PATHS.hostPromotion),
+          'Promotion',
+        ),
+        page(
+          'hallOfFame',
+          dashboardPath(DASHBOARD_PATHS.hallOfFame),
+          'Hall of Fame',
+        ),
+        page(
+          'eventChanges',
+          dashboardPath(DASHBOARD_PATHS.eventChanges),
+          'Event changes',
+        ),
+      ],
+    },
+    {
+      group: 'Members',
+      pages: [
+        page(
+          'identity',
+          dashboardPath(DASHBOARD_PATHS.identity),
+          'Identity changes',
+        ),
+        page(
+          'linkProgress',
+          dashboardPath(DASHBOARD_PATHS.linkProgress),
+          'Link progress',
+        ),
+        page('trends', dashboardPath(DASHBOARD_PATHS.trends), 'Trends'),
+      ],
+    },
+    {
+      group: 'Settings',
+      pages: [
+        page('settings', dashboardPath(DASHBOARD_PATHS.settings), 'General'),
+        page('sessions', dashboardPath(DASHBOARD_PATHS.sessions), 'Sessions'),
+      ],
+    },
+  ];
+
+/** Every nav page, flat. */
+const NAV_PAGES: readonly NavPage[] = NAV.flatMap((e) => {
+  return 'group' in e ? e.pages : [e];
+});
 
 /**
  * The nav item a request path belongs to, by comparing it with the fixed nav
  * paths: Home only for /dashboard itself, any other item for its path or a
- * path under it. undefined for pages outside the nav (organizer login).
+ * path under it. undefined for pages outside the nav.
  */
 export function navKeyFor(requestPath: string | undefined): NavKey | undefined {
   if (typeof requestPath !== 'string') {
@@ -609,25 +707,29 @@ export function navKeyFor(requestPath: string | undefined): NavKey | undefined {
   if (path === DASHBOARD_BASE) {
     return 'home';
   }
-  return NAV_ITEMS.find(
+  return NAV_PAGES.find(
     (item) =>
       item.key !== 'home' &&
       (path === item.path || path.startsWith(`${item.path}/`)),
   )?.key;
 }
 
-/** The tab bar; aria-current is a literal, on the item the caller named. */
+/** The accordion nav (ui/nav.ts); the current page's group renders open. */
 function siteNav(current: NavKey | undefined): SafeHtml {
-  // prettier-ignore
-  const links = NAV_ITEMS.map((item) => {
-    const href = localUrl(item.path);
-    return item.key === current
-      ? html`<a href="${href}" aria-current="page">${item.label}</a>`
-      : html`<a href="${href}">${item.label}</a>`;
+  const link = (p: NavPage) => ({
+    key: p.key,
+    href: localUrl(p.path),
+    label: p.label,
   });
-  return html`<nav class="site" aria-label="Dashboard pages">
-    <div class="tabs">${links}</div>
-  </nav>`;
+  return accordionNav<NavKey>({
+    label: 'Dashboard pages',
+    current,
+    entries: NAV.map((e) => {
+      return 'group' in e
+        ? { group: e.group, links: e.pages.map(link) }
+        : link(e);
+    }),
+  });
 }
 
 export function layout({
@@ -655,6 +757,10 @@ export function layout({
       </div>`
     : '';
   const nav = user ? siteNav(current) : '';
+  // The UI kit's one script (nav accordion, copy buttons, modals), once on
+  // every signed-in page, after the content it wires.
+  // prettier-ignore
+  const kit = user ? html`<script nonce="${nonce}">${KIT_SCRIPT}</script>` : '';
   // prettier-ignore
   return html`<!doctype html>
 <html lang="en">
@@ -671,11 +777,12 @@ export function layout({
 <header class="site"><div class="bar"><strong class="brand">1.5 Gen Asians staff dashboard</strong>${themeToggle()}${account}</div></header>
 ${nav}
 <main id="main" tabindex="-1">${body}</main>
+${kit}
 </body>
 </html>`.value;
 }
 
-/** What the home page says about the shared organizer login. No tokens or ids. */
+/** What the Settings page says about the shared organizer login. No tokens or ids. */
 export type HomeOrganizerStatus =
   | { kind: 'ok' }
   | { kind: 'failing'; since: Date }
@@ -698,7 +805,6 @@ function organizerStatusText(status: HomeOrganizerStatus): string {
 export function homePage(
   user: PageUser,
   nonce: string,
-  organizer?: HomeOrganizerStatus,
   reports?: SafeHtml,
 ): string {
   return layout({
@@ -710,18 +816,53 @@ export function homePage(
         <h1>Welcome</h1>
         ${
           reports
-            ? html`<p>Latest reports:</p>`
+            ? html`<p class="muted">
+                What needs doing, newest month first. Organizer login and the
+                Wrapped jobs are under Settings.
+              </p>`
             : html`<p>
                 Reports will appear here once the monthly build job is running.
               </p>`
         }
       </div>
-      ${reports ?? ''}
+      ${reports ?? ''}`,
+  });
+}
+
+/**
+ * Settings: the shared organizer login (status and the login page) and the
+ * cards for the Wrapped jobs. The cards carry their own forms, which post to
+ * the same endpoints as before.
+ */
+export function settingsPage(
+  user: PageUser,
+  nonce: string,
+  organizer?: HomeOrganizerStatus,
+  cards?: SafeHtml,
+): string {
+  return layout({
+    title: 'Settings',
+    nonce,
+    user,
+    current: 'settings',
+    body: html`<div class="card">
+        <h1>Settings</h1>
+        <p class="muted">
+          The shared organizer login and the Wrapped jobs. Changes here are 1.5
+          Leadership Team only.
+        </p>
+      </div>
       <div class="card">
         <h2>Organizer login</h2>
         ${organizer ? html`<p>${organizerStatusText(organizer)}</p>` : ''}
-        <p><a href="/dashboard/organizer-login">Organizer login</a></p>
-      </div>`,
+        <p>
+          ${linkButton({
+            href: localUrl('/dashboard/organizer-login'),
+            label: 'Organizer login',
+          })}
+        </p>
+      </div>
+      ${cards ?? ''}`,
   });
 }
 

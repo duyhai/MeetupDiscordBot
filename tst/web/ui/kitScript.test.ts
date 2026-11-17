@@ -165,6 +165,49 @@ describe('KIT_SCRIPT: copy', () => {
     expect(h.submit).toHaveBeenCalledTimes(1);
   });
 
+  it('a dialog closed while the write is pending never submits afterwards (#159 review)', async () => {
+    let resolveWrite: () => void = () => undefined;
+    const writeText = vi.fn<Write>(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveWrite = resolve;
+        }),
+    );
+    const h = harness({ thenSubmit: true, clipboard: { writeText } });
+    h.click();
+    expect(writeText).toHaveBeenCalledTimes(1);
+    // Esc: the dialog's close handler resets the button (bumps its token).
+    (h.button as unknown as { _kitReset: () => void })._kitReset();
+    resolveWrite();
+    await settle();
+    expect(h.submit).not.toHaveBeenCalled();
+    expect(h.button.disabled).toBe(false);
+    expect(h.button.textContent).toBe('Copy warning');
+    // A fresh press after reopening copies and submits as usual.
+    h.click();
+    expect(writeText).toHaveBeenCalledTimes(2);
+    resolveWrite();
+    await settle();
+    expect(h.submit).toHaveBeenCalledTimes(1);
+  });
+
+  it('a refused write after the dialog closed leaves the label alone', async () => {
+    let rejectWrite: () => void = () => undefined;
+    const writeText = vi.fn<Write>(
+      () =>
+        new Promise<void>((_resolve, reject) => {
+          rejectWrite = () => reject(new Error('denied'));
+        }),
+    );
+    const h = harness({ thenSubmit: true, clipboard: { writeText } });
+    h.click();
+    (h.button as unknown as { _kitReset: () => void })._kitReset();
+    rejectWrite();
+    await settle();
+    expect(h.button.textContent).toBe('Copy warning');
+    expect(h.submit).not.toHaveBeenCalled();
+  });
+
   it('a copy-only button never submits, and can copy again', async () => {
     const writeText = vi.fn<Write>(async () => undefined);
     const h = harness({ thenSubmit: false, clipboard: { writeText } });
@@ -339,11 +382,31 @@ describe('KIT_SCRIPT: modal', () => {
     h.created[0].fire('click');
     const inside = {};
     h.dialog.fire('pointerdown', { target: inside });
+    h.dialog.fire('pointerup', { target: inside });
     h.dialog.fire('click', { target: inside });
     expect(h.dialog.open).toBe(true);
     h.dialog.fire('pointerdown', { target: h.dialog });
+    h.dialog.fire('pointerup', { target: h.dialog });
     h.dialog.fire('click', { target: h.dialog });
     expect(h.dialog.open).toBe(false);
+  });
+
+  it('a press on the backdrop released inside the box does not close it (#159 review)', () => {
+    const h = modalHarness();
+    h.created[0].fire('click');
+    // The click lands on the dialog (the nearest common ancestor), but the
+    // release was inside the box.
+    h.dialog.fire('pointerdown', { target: h.dialog });
+    h.dialog.fire('pointerup', { target: {} });
+    h.dialog.fire('click', { target: h.dialog });
+    expect(h.dialog.open).toBe(true);
+  });
+
+  it('a click with no pointer events first (a synthetic click) does not close it', () => {
+    const h = modalHarness();
+    h.created[0].fire('click');
+    h.dialog.fire('click', { target: h.dialog });
+    expect(h.dialog.open).toBe(true);
   });
 
   it('a drag that starts inside and ends on the backdrop does not close it', () => {
@@ -352,6 +415,7 @@ describe('KIT_SCRIPT: modal', () => {
     // Selecting text in a field and letting go outside the box: the click
     // lands on the dialog element itself.
     h.dialog.fire('pointerdown', { target: {} });
+    h.dialog.fire('pointerup', { target: h.dialog });
     h.dialog.fire('click', { target: h.dialog });
     expect(h.dialog.open).toBe(true);
   });
@@ -360,6 +424,7 @@ describe('KIT_SCRIPT: modal', () => {
     const h = modalHarness({ textarea: true });
     h.created[0].fire('click');
     h.dialog.fire('pointerdown', { target: h.dialog });
+    h.dialog.fire('pointerup', { target: h.dialog });
     h.dialog.fire('click', { target: h.dialog });
     expect(h.dialog.open).toBe(true);
     h.close.fire('click');
@@ -371,6 +436,68 @@ describe('KIT_SCRIPT: modal', () => {
     expect(h.created).toHaveLength(0);
     expect(h.parent.insertBefore).not.toHaveBeenCalled();
     expect(h.parent.removeChild).not.toHaveBeenCalled();
+  });
+});
+
+/** One nav [data-accordion] with three details[data-nav-group]. */
+function accordionHarness(openIndex?: number) {
+  const groups = [0, 1, 2].map((i) => {
+    const summary = { focus: vi.fn() };
+    const g = element({
+      open: i === openIndex,
+      querySelector: (selector: string) => {
+        return selector === 'summary' ? summary : null;
+      },
+    }) as ReturnType<typeof element> & { open: boolean };
+    return { g, summary };
+  });
+  const nav = {
+    querySelectorAll: (selector: string) => {
+      return selector === 'details[data-nav-group]'
+        ? groups.map((x) => x.g)
+        : [];
+    },
+  };
+  const document = {
+    querySelectorAll: (selector: string) => {
+      return selector === '[data-accordion]' ? [nav] : [];
+    },
+  };
+  runKit(document);
+  /** As the browser does: set open, then fire toggle. */
+  const toggle = (i: number, open: boolean) => {
+    groups[i].g.open = open;
+    groups[i].g.fire('toggle');
+  };
+  return { groups, toggle };
+}
+
+describe('KIT_SCRIPT: nav accordion', () => {
+  it('opening one group closes the others', () => {
+    const h = accordionHarness(0);
+    h.toggle(2, true);
+    expect(h.groups.map((x) => x.g.open)).toEqual([false, false, true]);
+    h.toggle(1, true);
+    expect(h.groups.map((x) => x.g.open)).toEqual([false, true, false]);
+  });
+
+  it('closing a group opens nothing else', () => {
+    const h = accordionHarness(1);
+    h.toggle(1, false);
+    expect(h.groups.map((x) => x.g.open)).toEqual([false, false, false]);
+  });
+
+  it('Esc inside an open group closes it and focuses its summary; other keys do nothing', () => {
+    const h = accordionHarness(1);
+    const g = h.groups[1];
+    g.g.fire('keydown', { key: 'Enter' } as never);
+    expect(g.g.open).toBe(true);
+    g.g.fire('keydown', { key: 'Escape' } as never);
+    expect(g.g.open).toBe(false);
+    expect(g.summary.focus).toHaveBeenCalledTimes(1);
+    // Esc on a closed group: nothing.
+    g.g.fire('keydown', { key: 'Escape' } as never);
+    expect(g.summary.focus).toHaveBeenCalledTimes(1);
   });
 });
 

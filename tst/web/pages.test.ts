@@ -1,7 +1,12 @@
 // tst/web/pages.test.ts
 import { describe, expect, it } from 'vitest';
 
-import { errorPage, homePage, loginPage } from '../../src/web/pages.js';
+import {
+  errorPage,
+  homePage,
+  loginPage,
+  settingsPage,
+} from '../../src/web/pages.js';
 
 describe('dashboard pages', () => {
   it('escapes and isolates the signed-in username', () => {
@@ -30,31 +35,40 @@ describe('dashboard pages', () => {
     );
     expect(errorPage(503, 'n')).toContain('try again in a minute');
   });
-  describe('home organizer login card', () => {
+  it('home has no organizer login card: it moved to Settings', () => {
+    const page = homePage({ username: 'A', csrfToken: 't' }, 'n');
+    expect(page).toContain('Welcome');
+    expect(page).not.toContain('/dashboard/organizer-login');
+  });
+
+  describe('Settings organizer login card', () => {
     const user = { username: 'A', csrfToken: 't' };
 
-    it('home links to the organizer login page', () => {
-      const page = homePage(user, 'n', { kind: 'ok' });
-      expect(page).toContain('Organizer login');
-      expect(page).toContain('<a href="/dashboard/organizer-login">');
-      expect(page).toContain('Welcome');
+    it('links to the organizer login page as a button', () => {
+      const page = settingsPage(user, 'n', { kind: 'ok' });
+      expect(page).toContain(
+        '<a class="button ghost" href="/dashboard/organizer-login">Organizer login</a>',
+      );
+      expect(page).toContain('<h1>Settings</h1>');
+      // Settings is the current page in the nav, its group open.
+      expect(page).toContain('aria-current="page">General</a>');
     });
 
-    it('home without an organizer status still links to the page', () => {
-      const page = homePage(user, 'n');
-      expect(page).toContain('<a href="/dashboard/organizer-login">');
+    it('without an organizer status still links to the page', () => {
+      const page = settingsPage(user, 'n');
+      expect(page).toContain('href="/dashboard/organizer-login"');
       expect(page).not.toContain('Not set up');
       expect(page).not.toContain('Status unavailable');
     });
 
     it('shows OK when no failure is on record', () => {
-      expect(homePage(user, 'n', { kind: 'ok' })).toContain(
+      expect(settingsPage(user, 'n', { kind: 'ok' })).toContain(
         'OK (no failure on record)',
       );
     });
 
     it('shows the failing-since time in Pacific time', () => {
-      const page = homePage(user, 'n', {
+      const page = settingsPage(user, 'n', {
         kind: 'failing',
         since: new Date('2026-10-15T20:30:00Z'),
       });
@@ -62,13 +76,13 @@ describe('dashboard pages', () => {
     });
 
     it('shows Not set up', () => {
-      expect(homePage(user, 'n', { kind: 'not-set-up' })).toContain(
+      expect(settingsPage(user, 'n', { kind: 'not-set-up' })).toContain(
         'Not set up',
       );
     });
 
     it('shows Status unavailable', () => {
-      expect(homePage(user, 'n', { kind: 'unavailable' })).toContain(
+      expect(settingsPage(user, 'n', { kind: 'unavailable' })).toContain(
         'Status unavailable',
       );
     });

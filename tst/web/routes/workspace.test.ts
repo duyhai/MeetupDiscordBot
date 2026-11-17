@@ -303,7 +303,7 @@ describe('GET /dashboard/no-shows/:period (month cards)', () => {
     expect(bad).not.toContain('Open on Meetup');
     expect(bad).not.toContain('meetup.com/members/12a');
     expect(good).toContain(
-      '<a href="https://www.meetup.com/members/2001/" rel="noopener noreferrer" target="_blank">Open on Meetup</a>',
+      '<a class="button ghost" href="https://www.meetup.com/members/2001/" rel="noopener noreferrer" target="_blank">Open on Meetup</a>',
     );
   });
 
@@ -606,12 +606,21 @@ describe('GET /dashboard/no-shows/:period (month cards)', () => {
       expect(d).toContain(
         '<button type="button" data-copy="">Copy message</button>',
       );
+      // Open on Meetup is a link styled as a button, new tab as before.
       expect(d).toContain(
-        '<a href="https://www.meetup.com/members/2001/" rel="noopener noreferrer" target="_blank">Open on Meetup</a>',
+        '<a class="button ghost" href="https://www.meetup.com/members/2001/" rel="noopener noreferrer" target="_blank">Open on Meetup</a>',
       );
       expect(words(d)).toContain(
         '(send the message there while signed in as the organizer account)',
       );
+      // In order: the draft, Copy, Open on Meetup, the hint.
+      const at = (t: string) => d.indexOf(t);
+      expect(at('<textarea class="copy"')).toBeLessThan(at('Copy message'));
+      expect(at('Copy message')).toBeLessThan(at('Open on Meetup'));
+      expect(at('Open on Meetup')).toBeLessThan(at('organizer account'));
+      // A Moderator's pop-up has no record section.
+      expect(d).not.toContain('Record suspension');
+      expect(d).not.toContain('value="record_suspension"');
       expect(d).toMatch(
         /<button type="button" class="ghost" data-modal-close>\s*Close\s*<\/button>/,
       );
@@ -631,7 +640,115 @@ describe('GET /dashboard/no-shows/:period (month cards)', () => {
         '<button type="submit" data-copy="" data-then-submit>Copy warning</button>',
       );
       expect(d).toContain('name="_csrf"');
-      expect(d).toContain('Open on Meetup');
+      // The same button-styled link as Suspend member.
+      expect(d).toContain(
+        '<a class="button ghost" href="https://www.meetup.com/members/2000/" rel="noopener noreferrer" target="_blank">Open on Meetup</a>',
+      );
+      expect(d).not.toContain('Record suspension');
+    });
+
+    describe('Suspend member carries Record suspension for Leadership', () => {
+      const RECORD_FORM = new RegExp(
+        [
+          '<form method="post" action="/dashboard/no-shows/2026-09/rows/2">',
+          'name="_csrf"',
+          'name="version" value="1"',
+          'name="action" value="record_suspension"',
+          'name="confirm" value="yes"',
+          '<input type="hidden" name="date" value="2026-10-05" />',
+          '<input type="hidden" name="from" value="popup" />',
+          '<button type="submit">Record suspension</button>',
+        ].join('[\\s\\S]*'),
+      );
+
+      it("after the hint: today's length and fee, the confirm form, and a link for another date", async () => {
+        const { get } = await setup({ leader: true });
+        const [, suspension] = cards((await get(MONTH)).text);
+        const d = dialogWith(suspension, 'Suspend Member 1');
+        expect(d).toContain('<h3>Record suspension</h3>');
+        expect(d.indexOf('organizer account')).toBeLessThan(
+          d.indexOf('<h3>Record suspension</h3>'),
+        );
+        expect(words(d)).toContain(
+          'Dated today that is 30 days (0 earlier suspensions), plus a $10 admin fee to rejoin',
+        );
+        expect(d).toMatch(RECORD_FORM);
+        expect(words(d)).toContain(
+          'The length and fee are checked again when you record.',
+        );
+        expect(d).toContain(
+          '<a href="/dashboard/no-shows/2026-09/rows/2/suspend">Use a different date…</a>',
+        );
+        // The card itself no longer carries the separate link.
+        expect(closed(suspension)).not.toContain('Record suspension…');
+        expect(closed(suspension)).not.toContain('value="record_suspension"');
+      });
+
+      it('the length, fee and notes read exactly as on the confirm page', async () => {
+        const options = {
+          seed: seed([
+            warningRow(),
+            suspensionCardRow({ notes: 'second time' }),
+          ]),
+          records: [
+            suspensionRecord({
+              memberId: '2001',
+              suspendedAt: new Date('2026-03-02T00:00:00Z'),
+            }),
+          ],
+          leader: true,
+        };
+        const { get } = await setup(options);
+        const [, suspension] = cards((await get(MONTH)).text);
+        const popup = words(dialogWith(suspension, 'Suspend Member 1'));
+        const confirm = words((await get(CONFIRM)).text);
+        const length =
+          /Length: [^.]+\. Dated today [^)]+\), plus a \$\d+ admin fee to rejoin \(none for a member who has hosted\)\./;
+        const fromPopup = length.exec(popup)?.[0];
+        expect(fromPopup).toContain('60 days (1 earlier suspension)');
+        expect(fromPopup).toContain('$20 admin fee');
+        expect(length.exec(confirm)?.[0]).toBe(fromPopup);
+        for (const line of [
+          'Their upcoming RSVPs will be removed on Meetup by whoever applies the suspension.',
+          'Notes for the record: second time',
+        ]) {
+          expect(popup).toContain(line);
+          expect(confirm).toContain(line);
+        }
+      });
+
+      it('a live record running past today: says so, no form and no date link', async () => {
+        const { get } = await setup({
+          leader: true,
+          records: [
+            suspensionRecord({
+              id: 9,
+              memberId: '2001',
+              suspendedAt: new Date('2026-09-20T00:00:00Z'),
+              durationDays: 30,
+            }),
+          ],
+        });
+        const [, suspension] = cards((await get(MONTH)).text);
+        const d = dialogWith(suspension, 'Suspend Member 1');
+        expect(words(d)).toContain(
+          'This member has a suspension on file through Oct 19, 2026.',
+        );
+        expect(words(d)).toContain('recorded from here right now.');
+        expect(d).not.toContain('value="record_suspension"');
+        expect(d).not.toContain('/suspend"');
+      });
+
+      it('a voided card (no message pop-up) keeps the card-level link', async () => {
+        const { get } = await setup({
+          leader: true,
+          seed: seed([suspensionCardRow({ status: 'voided' })]),
+        });
+        const [card] = cards((await get(MONTH)).text);
+        expect(closed(card)).toContain(
+          '<a class="button" href="/dashboard/no-shows/2026-09/rows/2/suspend">Record suspension…</a>',
+        );
+      });
     });
 
     it('Void suspension asks for a reason and confirms, explaining what voiding does', async () => {
@@ -1012,8 +1129,10 @@ describe('GET /dashboard/no-shows/:period (month cards)', () => {
     });
     const res = await get(MONTH);
     const [open, suspended] = cards(res.text);
+    // Recording sits in the Suspend member pop-up.
+    expect(open).toContain('value="record_suspension"');
     expect(open).toContain(
-      '<a class="button" href="/dashboard/no-shows/2026-09/rows/2/suspend">Record suspension…</a>',
+      '<a href="/dashboard/no-shows/2026-09/rows/2/suspend">Use a different date…</a>',
     );
     expect(suspended).toContain('value="void"');
     expect(suspended).toContain('maxlength="500"');
@@ -1401,7 +1520,8 @@ describe('banned members in the workspace', () => {
     const res = await get(MONTH);
     expect(res.text).not.toContain('Ban status unavailable');
     const card = cards(res.text).find((c) => c.includes('/2001/'));
-    expect(card).toContain('/suspend"');
+    // The record section (here: the outside record runs past today).
+    expect(card).toContain('<h3>Record suspension</h3>');
     expect(card).toContain('value="link_suspension"');
   });
 
@@ -1465,9 +1585,7 @@ describe('GET /dashboard/no-shows (months list)', () => {
   it('the nav links the workspace', async () => {
     const { get } = await setup();
     const res = await get('/dashboard/hall-of-fame');
-    expect(res.text).toContain(
-      '<a href="/dashboard/no-shows">No-show workspace</a>',
-    );
+    expect(res.text).toContain('<a href="/dashboard/no-shows">Workspace</a>');
   });
 });
 
@@ -1508,6 +1626,19 @@ describe('GET /dashboard/no-shows/:period/rows/:rowId/suspend (confirm)', () => 
     expect(res.text).toContain(`<bdi>${RTL}</bdi>`);
     expect(res.text).toContain('Member 1');
     expect(res.text).toContain('href="/dashboard/no-shows/2026-09">Cancel</a>');
+  });
+
+  it('after a pop-up sent across midnight, says the day changed and shows today', async () => {
+    const { get } = await setup({ records: [prior()], leader: true });
+    const res = await get(`${CONFIRM}?result=day-changed`);
+    expect(res.status).toBe(200);
+    expect(words(res.text)).toContain(
+      'The day changed since you opened this; check the length for today. Nothing was recorded.',
+    );
+    expect(words(res.text)).toContain('Dated today that is 60 days');
+    // Any other code is never echoed.
+    const other = await get(`${CONFIRM}?result=%3Cb%3E`);
+    expect(other.text).not.toContain('The day changed');
   });
 
   describe('a chosen date', () => {

@@ -5,7 +5,7 @@ import { LogEntry } from '../../../src/lib/helpers/discordLogger.js';
 import { SnapshotRun } from '../../../src/lib/repositories/postgresSnapshotRepository.js';
 import { BackfillRun } from '../../../src/lib/repositories/postgresWrappedBackfillRepository.js';
 import { registerAllProtectedRoutes } from '../../../src/web/routes/dashboardPages.js';
-import { renderHomeReports } from '../../../src/web/routes/home.js';
+import { renderSettingsCards } from '../../../src/web/routes/home.js';
 import {
   BACKFILL_NOTICES,
   SNAPSHOT_REFRESH_PATH,
@@ -88,11 +88,11 @@ const render = async (
     csrfToken: 'tok',
   },
 ) =>
-  (await renderHomeReports(fakePageDeps({ wrappedBackfill }), view)).value
+  (await renderSettingsCards(fakePageDeps({ wrappedBackfill }), view)).value
     .replace(/\s+/g, ' ')
     .replace(/> </g, '><');
 
-describe('Home Wrapped backfill card', () => {
+describe('Settings Wrapped backfill card', () => {
   it('with no run yet, says so and offers Run now to leadership', async () => {
     const out = await render(control());
     expect(out).toContain('<h2>Wrapped backfill</h2>');
@@ -174,7 +174,7 @@ describe('Home Wrapped backfill card', () => {
     );
     expect(out).toContain('Unavailable right now.');
     expect(out).not.toContain('secret');
-    expect(out).toContain('identity changes in the last 7 days');
+    expect(out).toContain('<h2>Wrapped announcement</h2>');
   });
 
   it('without a CSRF token (a bare render) there is no form', async () => {
@@ -194,13 +194,13 @@ async function setup(overrides: Partial<WrappedBackfillControl> = {}) {
     audit,
     protectedRoutes: (r) =>
       registerAllProtectedRoutes(r, { organizer: fakeOrganizerDeps(), pages }),
-    homeReports: (view) => renderHomeReports(pages, view),
+    settingsCards: (view) => renderSettingsCards(pages, view),
   });
   return { req, isLeadership, audit, runNow };
 }
 
 async function tokenOf(req: Client, cookie: string): Promise<string> {
-  const page = await req.get('/dashboard').set('Cookie', cookie);
+  const page = await req.get('/dashboard/settings').set('Cookie', cookie);
   expect(page.status).toBe(200);
   return /name="_csrf" value="([^"]+)"/.exec(page.text)?.[1] ?? '';
 }
@@ -220,7 +220,9 @@ describe('POST /dashboard/wrapped/backfill/run', () => {
     isLeadership.mockResolvedValue(false);
     const res = await pressRunNow(req, await signIn(req));
     expect(res.status).toBe(303);
-    expect(res.headers.location).toBe('/dashboard?backfill=not-leadership');
+    expect(res.headers.location).toBe(
+      '/dashboard/settings?backfill=not-leadership',
+    );
     expect(isLeadership).toHaveBeenCalledWith(USER.id);
     expect(runNow).not.toHaveBeenCalled();
   });
@@ -231,10 +233,10 @@ describe('POST /dashboard/wrapped/backfill/run', () => {
     const cookie = await signIn(req);
     const res = await pressRunNow(req, cookie);
     expect(res.status).toBe(303);
-    expect(res.headers.location).toBe('/dashboard?backfill=requested');
+    expect(res.headers.location).toBe('/dashboard/settings?backfill=requested');
     expect(runNow).toHaveBeenCalledWith(USER.id);
     const home = await req
-      .get('/dashboard?backfill=requested')
+      .get('/dashboard/settings?backfill=requested')
       .set('Cookie', cookie);
     expect(home.text).toContain(BACKFILL_NOTICES.requested);
     expect(audit).toHaveBeenCalledWith(
@@ -251,7 +253,9 @@ describe('POST /dashboard/wrapped/backfill/run', () => {
     });
     isLeadership.mockResolvedValue(true);
     const res = await pressRunNow(req, await signIn(req));
-    expect(res.headers.location).toBe('/dashboard?backfill=already-running');
+    expect(res.headers.location).toBe(
+      '/dashboard/settings?backfill=already-running',
+    );
     expect(audit).not.toHaveBeenCalledWith(
       expect.objectContaining({ title: 'Wrapped backfill requested' }),
     );
@@ -261,7 +265,9 @@ describe('POST /dashboard/wrapped/backfill/run', () => {
     const { req, isLeadership, runNow } = await setup();
     isLeadership.mockRejectedValue(new Error('gateway down'));
     const res = await pressRunNow(req, await signIn(req));
-    expect(res.headers.location).toBe('/dashboard?backfill=unavailable');
+    expect(res.headers.location).toBe(
+      '/dashboard/settings?backfill=unavailable',
+    );
     expect(runNow).not.toHaveBeenCalled();
   });
 });
@@ -282,7 +288,7 @@ const snapshotRun = (over: Partial<SnapshotRun> = {}): SnapshotRun => ({
   ...over,
 });
 
-describe('Home Wrapped backfill card: the group snapshot line', () => {
+describe('Settings Wrapped backfill card: the group snapshot line', () => {
   const NOW = new Date('2026-12-10T20:00:00Z');
   const withSnapshot = (
     status: Awaited<ReturnType<WrappedBackfillControl['snapshot']>>,
@@ -399,16 +405,16 @@ describe('POST /dashboard/wrapped/snapshot/run (Refresh snapshot now)', () => {
     isLeadership.mockResolvedValue(false);
     const cookie = await signIn(req);
     expect((await pressRefresh(req, cookie)).headers.location).toBe(
-      '/dashboard?backfill=snapshot-not-leadership',
+      '/dashboard/settings?backfill=snapshot-not-leadership',
     );
     const home = await req
-      .get('/dashboard?backfill=snapshot-not-leadership')
+      .get('/dashboard/settings?backfill=snapshot-not-leadership')
       .set('Cookie', cookie);
     expect(home.text).toContain('can refresh the group snapshot');
     expect(home.text).not.toContain('run the Wrapped backfill');
     isLeadership.mockRejectedValue(new Error('gateway down'));
     expect((await pressRefresh(req, cookie)).headers.location).toBe(
-      '/dashboard?backfill=snapshot-unavailable',
+      '/dashboard/settings?backfill=snapshot-unavailable',
     );
     expect(refreshSnapshot).not.toHaveBeenCalled();
   });
@@ -423,10 +429,12 @@ describe('POST /dashboard/wrapped/snapshot/run (Refresh snapshot now)', () => {
     isLeadership.mockResolvedValue(true);
     const cookie = await signIn(req);
     const res = await pressRefresh(req, cookie);
-    expect(res.headers.location).toBe('/dashboard?backfill=snapshot-requested');
+    expect(res.headers.location).toBe(
+      '/dashboard/settings?backfill=snapshot-requested',
+    );
     expect(refreshSnapshot).toHaveBeenCalledWith(USER.id);
     const home = await req
-      .get('/dashboard?backfill=snapshot-requested')
+      .get('/dashboard/settings?backfill=snapshot-requested')
       .set('Cookie', cookie);
     expect(home.text).toContain(BACKFILL_NOTICES['snapshot-requested']);
     expect(audit).toHaveBeenCalledWith(
@@ -435,16 +443,16 @@ describe('POST /dashboard/wrapped/snapshot/run (Refresh snapshot now)', () => {
 
     refreshSnapshot.mockResolvedValue('already-requested');
     expect((await pressRefresh(req, cookie)).headers.location).toBe(
-      '/dashboard?backfill=snapshot-already-requested',
+      '/dashboard/settings?backfill=snapshot-already-requested',
     );
     refreshSnapshot.mockResolvedValue('already-running');
     expect((await pressRefresh(req, cookie)).headers.location).toBe(
-      '/dashboard?backfill=snapshot-already-running',
+      '/dashboard/settings?backfill=snapshot-already-running',
     );
   });
 });
 
-describe('Home Wrapped backfill card: the snapshot pace', () => {
+describe('Settings Wrapped backfill card: the snapshot pace', () => {
   it('shows the configured pace and the last tick', async () => {
     const out = await render(
       control({
@@ -473,7 +481,7 @@ describe('Home Wrapped backfill card: the snapshot pace', () => {
   });
 });
 
-describe('Home Wrapped backfill card: hidden RSVPs and a failed last tick', () => {
+describe('Settings Wrapped backfill card: hidden RSVPs and a failed last tick', () => {
   it('counts events whose attendees left Meetup, and shows a failed last tick', async () => {
     const out = await render(
       control({
@@ -503,7 +511,7 @@ describe('Home Wrapped backfill card: hidden RSVPs and a failed last tick', () =
   });
 });
 
-describe('Home Wrapped backfill card: the last failed tick', () => {
+describe('Settings Wrapped backfill card: the last failed tick', () => {
   it('says the last tick failed, with the error class and time only', async () => {
     const out = await render(
       control({

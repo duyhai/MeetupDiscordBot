@@ -154,6 +154,32 @@ export default defineConfig(
       ],
     },
   },
+  // jsdom is a devDependency, pruned from the Heroku slug: a src/ import of
+  // it would pass the tests and crash the dyno at boot. Tests only.
+  {
+    files: ['src/**/*.ts'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          paths: [
+            {
+              name: 'jsdom',
+              message:
+                'jsdom is a devDependency (pruned on Heroku): use it in tst/ only.',
+            },
+          ],
+          patterns: [
+            {
+              group: ['jsdom/*'],
+              message:
+                'jsdom is a devDependency (pruned on Heroku): use it in tst/ only.',
+            },
+          ],
+        },
+      ],
+    },
+  },
   // Disables stylistic rules that conflict with Prettier and enables the
   // prettier/prettier rule (options come from .prettierrc.json)
   prettierRecommended,

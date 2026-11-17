@@ -113,7 +113,7 @@ const isOptionalText = (v: unknown): boolean =>
   v === null || v === undefined || typeof v === 'string';
 
 /** A row this page can render; anything else is the 503 page, never a 500. */
-function isListRow(row: unknown): row is IdentityChangeListItem {
+export function isListRow(row: unknown): row is IdentityChangeListItem {
   if (typeof row !== 'object' || row === null) {
     return false;
   }
@@ -279,22 +279,29 @@ function changesTable(
     return html`<p>No identity changes match these filters.</p>
       ${pager(q, rows)}`;
   }
+  return html`${identityChangesTable(rows, names)} ${pager(q, rows)}`;
+}
+
+/** The changes as the page's table (no filters, no pager): the home page shows the latest ones. */
+export function identityChangesTable(
+  rows: IdentityChangeListItem[],
+  names: IdentityNames,
+): SafeHtml {
   return html`<table class="stack">
-      <thead>
-        <tr>
-          <th>Detected (Pacific)</th>
-          <th>Platform</th>
-          <th>Member</th>
-          <th>Field</th>
-          <th>Before</th>
-          <th>After</th>
-        </tr>
-      </thead>
-      <tbody>
-        ${rows.map((row) => changeRow(row, names))}
-      </tbody>
-    </table>
-    ${pager(q, rows)}`;
+    <thead>
+      <tr>
+        <th>Detected (Pacific)</th>
+        <th>Platform</th>
+        <th>Member</th>
+        <th>Field</th>
+        <th>Before</th>
+        <th>After</th>
+      </tr>
+    </thead>
+    <tbody>
+      ${rows.map((row) => changeRow(row, names))}
+    </tbody>
+  </table>`;
 }
 
 export function registerIdentityRoutes(

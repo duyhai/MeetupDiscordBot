@@ -159,7 +159,7 @@ function checklistRecord(ticked: ChecklistKey[] | undefined): SafeHtml | '' {
       </p>`;
 }
 
-const whenLabel = (startLocal: string) =>
+export const whenLabel = (startLocal: string) =>
   dayjs(startLocal).format('ddd, MMM D, YYYY [at] h:mm A');
 
 /** Each status as the queue names it, on the badge and the filter chip. */

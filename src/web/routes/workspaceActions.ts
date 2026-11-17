@@ -6,6 +6,7 @@ import {
   monthPath,
   workspaceRowPath,
 } from '../../lib/reports/dashboardPaths.js';
+import { pacificToday } from '../../lib/helpers/suspensionList.js';
 import { Period } from '../../lib/reports/period.js';
 import {
   LeadershipRefusal,
@@ -103,6 +104,7 @@ export type WorkspaceResultCode =
   | 'not-leadership'
   | 'leadership-unavailable'
   | 'error'
+  | 'day-changed'
   | WorkspaceSyncCode;
 
 /** Fixed text per code. Nothing from the request or the database is ever shown. */
@@ -136,6 +138,8 @@ export const WORKSPACE_RESULT_MESSAGES = {
   'leadership-unavailable':
     'Discord could not be reached to check your role. Nothing was changed; try again in a minute.',
   error: 'That did not save. Please try again in a minute.',
+  'day-changed':
+    'The day changed since you opened this; check the length for today. Nothing was recorded.',
   synced: 'The workspace was updated from the stored report.',
   current: 'The workspace already matches the stored report.',
   older: 'A newer report is already in the workspace.',
@@ -321,6 +325,21 @@ export function registerWorkspaceActionRoutes(
     // confirm page shows it instead.
     if (action === 'record_suspension' && field(body, 'confirm') !== 'yes') {
       res.redirect(303, workspaceRowPath(period, rowId, 'suspend'));
+      return;
+    }
+    // The Suspend member pop-up dates its form the day it was rendered and
+    // says "Dated today". Opened before midnight Pacific and sent after, it
+    // would record yesterday: show the confirm page for today instead, so
+    // the length and fee are read fresh before anything is recorded.
+    if (
+      action === 'record_suspension' &&
+      field(body, 'from') === 'popup' &&
+      field(body, 'date') !== pacificToday(now)
+    ) {
+      res.redirect(
+        303,
+        `${workspaceRowPath(period, rowId, 'suspend')}?result=day-changed`,
+      );
       return;
     }
     const refusal = formRefusal(action, body, period, now);

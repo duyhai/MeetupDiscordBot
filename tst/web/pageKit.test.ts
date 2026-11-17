@@ -163,7 +163,7 @@ describe('pageKit', () => {
     expect(sent.body).toContain('<a href="/dashboard/sessions">Sessions</a>');
   });
 
-  it("dashboardPage adds the ban photo script after the kit's for 'bans'", () => {
+  it("dashboardPage adds the ban photo script for 'bans'; the kit's comes once, from layout", () => {
     const { res, sent } = capture();
     dashboardPage(res, { title: 'T', body: html`<p>x</p>`, script: 'bans' });
     const body = sent.body ?? '';
@@ -172,7 +172,10 @@ describe('pageKit', () => {
       `<script nonce="N0NCE">${BAN_PHOTO_SCRIPT.value}</script>`,
     );
     expect(kit).toBeGreaterThan(-1);
-    expect(bans).toBeGreaterThan(kit);
+    expect(bans).toBeGreaterThan(-1);
+    expect(body.split(KIT_SCRIPT.value)).toHaveLength(2);
+    // The kit script sits after main, so it wires the whole page.
+    expect(kit).toBeGreaterThan(body.indexOf('</main>'));
   });
 });
 

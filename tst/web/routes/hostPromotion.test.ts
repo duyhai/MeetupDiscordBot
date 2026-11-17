@@ -192,7 +192,7 @@ describe('host promotion page', () => {
     expect(candidates.indexOf('/777"')).toBeLessThan(
       candidates.indexOf('/888"'),
     );
-    expect(res.text).toContain('aria-current="page">Host promotion');
+    expect(res.text).toContain('aria-current="page">Promotion');
   });
 
   it('a slow Meetup still shows the Community Hosts and says to reload', async () => {
