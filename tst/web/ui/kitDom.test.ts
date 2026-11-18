@@ -461,9 +461,9 @@ describe('KIT_SCRIPT in a real DOM: the nav accordion', () => {
     run();
     const all = [...groups(document)];
     expect(all.map((g) => g.querySelector('summary')?.textContent)).toEqual([
-      'No-shows',
+      'Member moderation',
       'Hosts & events',
-      'Members',
+      'Analytics',
       'Settings',
     ]);
     expect(all.map((g) => g.open)).toEqual([true, false, false, false]);

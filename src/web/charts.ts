@@ -40,6 +40,8 @@ export interface ChartInput {
 const DEFAULT_WIDTH = 720;
 const DEFAULT_HEIGHT = 260;
 const HEX = /^#[0-9a-f]{6}$/i;
+/** At most this many y-axis labels and gridlines. */
+const MAX_TICKS = 12;
 /** Per-bar <title> tooltips only up to this many categories. */
 export const MAX_TOOLTIP_CATEGORIES = 60;
 
@@ -51,6 +53,25 @@ function fmt(n: number): string {
 /** A drawable value: finite and positive, else 0. */
 function clean(v: number): number {
   return Number.isFinite(v) && v > 0 ? v : 0;
+}
+
+/**
+ * The y axis's step: 1, 2 or 5 times a power of ten, giving about four
+ * gridlines up to `max`, and never below 1 (the charts hold counts).
+ */
+export function niceStep(max: number): number {
+  const raw = Math.max(1, max) / 4;
+  const magnitude = 10 ** Math.floor(Math.log10(raw));
+  const norm = raw / magnitude;
+  let nice = 10;
+  if (norm <= 1) {
+    nice = 1;
+  } else if (norm <= 2) {
+    nice = 2;
+  } else if (norm <= 5) {
+    nice = 5;
+  }
+  return Math.max(1, nice * magnitude);
 }
 
 /** A size: a finite whole number from 100 to 2000, else the default. */
@@ -176,10 +197,14 @@ export function chart(input: ChartInput): SafeHtml {
   const plotH = height - pad.top - pad.bottom;
   const baseline = pad.top + plotH;
   const n = input.categories.length;
-  const yMax = Math.max(
+  const dataMax = Math.max(
     1,
     ...input.series.flatMap((s) => s.values.slice(0, n).map(clean)),
   );
+  // The scale tops out at the first gridline at or above the data, so the
+  // top line is a labelled value.
+  const yStep = niceStep(dataMax);
+  const yMax = Math.ceil(dataMax / yStep) * yStep;
   const y = (v: number) => baseline - (clean(v) / yMax) * plotH;
   const slot = plotW / n;
   const x = (i: number) => pad.left + slot * (i + 0.5);
@@ -239,7 +264,22 @@ export function chart(input: ChartInput): SafeHtml {
       );
     }
     const points = values.map((v, i) => `${fmt(x(i))},${fmt(y(v))}`).join(' ');
-    return seriesGroup(si, own, line(si, points, color));
+    // A dot per point carrying its value as a hover title, as the bars do
+    // (up to MAX_TOOLTIP_CATEGORIES; past that the data table has them).
+    const dots = tooltips
+      ? values.map((v, i) => {
+          // One line, so the hover text has no stray whitespace.
+          const tip = `${input.categories[i]} · ${s.label}: ${clean(v)}`;
+          return html`<circle
+            cx="${fmt(x(i))}"
+            cy="${fmt(y(v))}"
+            r="3"
+            fill="${color}"
+            ><title>${tip}</title></circle
+          >`;
+        })
+      : [];
+    return seriesGroup(si, own, [line(si, points, color), ...dots]);
   });
 
   const step = Math.max(1, Math.ceil(n / 12));
@@ -255,7 +295,28 @@ export function chart(input: ChartInput): SafeHtml {
       >${c}</text
     >`;
   });
-  const ticks = [...new Set([0, Math.round(yMax / 2), Math.round(yMax)])];
+  // niceStep keeps this near five lines; the cap is a backstop so no value
+  // (a huge or non-finite one) can make the loop run on.
+  const ticks: number[] = [];
+  for (let v = 0; v <= yMax && ticks.length < MAX_TICKS; v += yStep) {
+    ticks.push(v);
+  }
+  // Horizontal gridlines behind the marks, one per labelled value above 0
+  // (the baseline is drawn on its own).
+  const grid = ticks
+    .slice(1)
+    .map(
+      (v) =>
+        html`<line
+          class="grid"
+          x1="${pad.left}"
+          y1="${fmt(y(v))}"
+          x2="${width - pad.right}"
+          y2="${fmt(y(v))}"
+          stroke="#d0d7de"
+          stroke-dasharray="3 3"
+        />`,
+    );
   const yLabels = ticks.map(
     (v) =>
       html`<text
@@ -293,7 +354,7 @@ export function chart(input: ChartInput): SafeHtml {
         y2="${fmt(baseline)}"
         stroke="#8c959f"
       />
-      ${yLabels}${xLabels}${marks}
+      ${grid}${yLabels}${xLabels}${marks}
       <text x="${pad.left}" y="${height - 6}" font-size="11">${legend}</text>
     </svg>
     <details>

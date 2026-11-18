@@ -7,6 +7,7 @@ import { parseUtcDateStrict } from '../helpers/suspensionCsv.js';
 import { pacificToday } from '../helpers/suspensionList.js';
 import { DASHBOARD_PATHS, dashboardPath } from '../reports/dashboardPaths.js';
 import type { PostgresBanRepository } from '../repositories/postgresBanRepository.js';
+import { withDeadline } from '../../util/deadline.js';
 import { postWithoutWaiting } from '../workspace/service.js';
 import { BanCsvError, parseBanCsv } from './banCsv.js';
 import {
@@ -33,7 +34,16 @@ export interface BanServiceDeps {
   moderationLog(entry: LogEntry): Promise<unknown>;
   /** Live Discord check for the 1.5 Leadership Team role. Rejects when Discord cannot answer. */
   isLeadership(discordUserId: string): Promise<boolean>;
+  /**
+   * The member's name on Meetup, for an Add ban whose Name was left blank:
+   * undefined when Meetup does not know them (not in the group any more).
+   * May reject; bounded by BAN_NAME_LOOKUP_MS. Left out, the name stays blank.
+   */
+  meetupMemberName?: (memberId: string) => Promise<string | undefined>;
 }
+
+/** How long Add ban waits for the Meetup name before recording without it. */
+export const BAN_NAME_LOOKUP_MS = 5_000;
 
 export type BanResultCode =
   | 'recorded'
@@ -69,8 +79,8 @@ interface Gate {
   leadershipConfirmed?: boolean;
 }
 
-/** `${PUBLIC_APP_ORIGIN}/dashboard/suspensions?state=banned`. */
-export const BANNED_TAB_URL = `${PUBLIC_APP_ORIGIN}${dashboardPath(DASHBOARD_PATHS.suspensions)}?state=banned`;
+/** `${PUBLIC_APP_ORIGIN}/dashboard/bans`: the Banned page. */
+export const BANNED_TAB_URL = `${PUBLIC_APP_ORIGIN}${dashboardPath(DASHBOARD_PATHS.bans)}`;
 
 const DISCORD_ID = /^[0-9]{17,20}$/;
 /** 1-20 ASCII digits, no leading zero (PR review M4): `0123` is not member 123. */
@@ -174,6 +184,29 @@ function banInsertOf(
   };
 }
 
+/**
+ * The member's Meetup name for a blank Name, trimmed and cut to
+ * BAN_NAME_MAX code points; '' when Meetup does not know them, fails or is
+ * slower than BAN_NAME_LOOKUP_MS (the ban is recorded either way).
+ */
+async function meetupName(
+  deps: BanServiceDeps,
+  memberId: string,
+): Promise<string> {
+  const lookup = deps.meetupMemberName;
+  if (!lookup) {
+    return '';
+  }
+  try {
+    const name = await withDeadline(BAN_NAME_LOOKUP_MS, () => lookup(memberId));
+    const clean = formText(name);
+    return clean ? [...clean].slice(0, BAN_NAME_MAX).join('') : '';
+  } catch (error: unknown) {
+    logger.warn(`Ban name lookup failed: ${errorClass(error)}`);
+    return '';
+  }
+}
+
 /** One staff Add ban. A repository error propagates; the route answers it. */
 export async function recordBan(
   deps: BanServiceDeps,
@@ -195,7 +228,15 @@ export async function recordBan(
   if (refused !== undefined) {
     return { code: refused };
   }
-  const outcome = await (await deps.repository()).record(checked.insert);
+  // After the gate, so only Leadership spends a Meetup read.
+  const insert =
+    checked.insert.memberName === ''
+      ? {
+          ...checked.insert,
+          memberName: await meetupName(deps, checked.insert.memberId),
+        }
+      : checked.insert;
+  const outcome = await (await deps.repository()).record(insert);
   if (outcome.ok === false) {
     return { code: 'already-banned' };
   }

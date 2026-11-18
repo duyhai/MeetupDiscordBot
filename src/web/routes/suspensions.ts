@@ -1,37 +1,43 @@
-import express, { RequestHandler, Response } from 'express';
-import { BanState } from '../../lib/bans/types.js';
+import express, { RequestHandler } from 'express';
+import { Logger } from 'tslog';
 
 import { pacificToday, utcDateOnly } from '../../lib/helpers/suspensionList.js';
 import {
+  DASHBOARD_BASE,
   DASHBOARD_PATHS,
   dashboardPath,
 } from '../../lib/reports/dashboardPaths.js';
 import {
+  SuspensionDateEdit,
   SuspensionPageRow,
   SuspensionState,
 } from '../../lib/repositories/postgresSuspensionRepository.js';
+import {
+  DateEditCode,
+  FIRST_SUSPENSION_DAY,
+} from '../../lib/suspensions/dateEdit.js';
 import { dashboardLocals } from '../dashboardRouter.js';
-import { SafeHtml, html, memberText, pageLink } from '../html.js';
+import { SafeHtml, html, localUrl, memberText, pageLink } from '../html.js';
 import { discordUserLink, memberHistoryLink, memberLink } from '../links.js';
 import { loadStaffNames, staffLink } from '../staffNames.js';
 import {
   dashboardPage,
   load,
   loadOptional,
+  parseRowId,
+  notFound,
+  pacificDate,
   pacificDateTime,
   unavailable,
 } from '../pageKit.js';
 import { PAGE_SIZE, pageNav, parsePage } from '../paging.js';
-import {
-  banResultNotice,
-  banStaffIds,
-  bannedTabBody,
-  isBanRow,
-  parseBanShow,
-} from './bannedTab.js';
+import { confirmModal } from '../ui/modal.js';
+import { bannedTabPath } from './bannedTab.js';
 import type { DashboardPageDeps } from './dashboardPages.js';
 import { LeadershipDisplayCache } from './workspace.js';
-import { leadershipOf } from './workspaceActions.js';
+import { leadershipOf, withDeadline } from './workspaceActions.js';
+
+const logger = new Logger({ name: 'dashboard' });
 
 const WHAT = 'Suspension records';
 const STATES: readonly SuspensionState[] = ['active', 'past', 'voided'];
@@ -42,18 +48,60 @@ const TAB_LABELS: Record<SuspensionState, string> = {
 };
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
 
-/** A Suspensions page tab: the three record tabs, or the Banned tab. */
-type SuspensionTab = SuspensionState | 'banned';
-
-/**
- * `?state=`: 'banned' is its own branch (the Banned tab); otherwise one of
- * the three record tabs (a plain string), else active.
- */
-function parseState(value: unknown): SuspensionTab {
-  if (value === 'banned') {
-    return 'banned';
-  }
+/** `?state=`: one of the three record tabs (a plain string), else active. */
+function parseState(value: unknown): SuspensionState {
   return STATES.find((s) => s === value) ?? 'active';
+}
+
+/** '/dashboard/suspensions/12/date': only for a record id from 1 to 2^31-1. Throws RangeError. */
+export function suspensionDatePath(id: number): string {
+  if (!Number.isSafeInteger(id) || id < 1 || id > 2 ** 31 - 1) {
+    throw new RangeError('suspensionDatePath needs a record id');
+  }
+  return `${DASHBOARD_BASE}${DASHBOARD_PATHS.suspensionDate.replace(':id', String(id))}`;
+}
+
+/** Fixed text per Edit date result. Nothing from the request is echoed. */
+export const DATE_EDIT_MESSAGES = {
+  'date-changed':
+    'Date changed. The length and end date were worked out again, and the old date is kept on the record.',
+  'date-unchanged': 'That is already the date. Nothing changed.',
+  'not-live': 'That suspension is voided or no longer exists. Nothing changed.',
+  'date-taken':
+    'This member already has another suspension on that date. Nothing changed.',
+  overlaps:
+    'On that date this suspension would overlap another of this member’s suspensions. Nothing changed.',
+  reorders:
+    'Another suspension sits between the old and new dates; void and re-record instead. Nothing changed.',
+  'linked-month':
+    'This suspension is linked to a no-show workspace card, and that date is ' +
+    'outside the card’s month. Void it on the card and record it again to ' +
+    'move it to another month.',
+  'bad-date': `The date must be a real date from ${FIRST_SUSPENSION_DAY} through today.`,
+  invalid:
+    'That request could not be understood. Reload the page and try again.',
+  error: 'That did not save. Please try again in a minute.',
+  'not-leadership':
+    'Only the 1.5 Leadership Team can change a suspension date. Nothing changed.',
+  'leadership-unavailable':
+    'Discord could not be reached to check your role. Nothing changed; try again in a minute.',
+} as const satisfies Record<
+  DateEditCode | 'not-leadership' | 'leadership-unavailable',
+  string
+>;
+
+export type DateEditResult = keyof typeof DATE_EDIT_MESSAGES;
+
+export const isDateEditResult = (code: unknown): code is DateEditResult =>
+  typeof code === 'string' && Object.hasOwn(DATE_EDIT_MESSAGES, code);
+
+function dateEditNotice(code: unknown): SafeHtml | '' {
+  if (!isDateEditResult(code)) {
+    return '';
+  }
+  return code === 'date-changed'
+    ? html`<p class="note info">${DATE_EDIT_MESSAGES[code]}</p>`
+    : html`<p class="note attn">${DATE_EDIT_MESSAGES[code]}</p>`;
 }
 
 const isValidDate = (v: unknown): v is Date =>
@@ -115,26 +163,61 @@ function memberCell(row: SuspensionPageRow): SafeHtml {
   }${history ? html` · <a href="${history}">No-show history</a>` : ''}`;
 }
 
-function recordRow(
-  row: SuspensionPageRow,
-  voided: boolean,
+/** One date fix, as the record shows it. */
+function editLine(
+  edit: SuspensionDateEdit,
   names: Readonly<Record<string, string>>,
 ): SafeHtml {
+  return html`<li>
+    Was ${edit.oldDay} (${edit.oldDurationDays} days), changed to ${edit.newDay}
+    (${edit.newDurationDays} days) by ${staffLink(edit.editedBy, names)} on
+    ${pacificDate(edit.editedAt)}
+  </li>`;
+}
+
+interface RowView {
+  voided: boolean;
+  names: Readonly<Record<string, string>>;
+  edits: ReadonlyMap<number, SuspensionDateEdit[]>;
+  /** The Edit date pop-up's form, or undefined (not Leadership, or voided). */
+  editForm: ((row: SuspensionPageRow) => SafeHtml) | undefined;
+}
+
+function recordRow(row: SuspensionPageRow, view: RowView): SafeHtml {
+  const { voided, names } = view;
+  const edits = view.edits.get(row.id) ?? [];
   return html`<tr>
-    <td data-label="Record">#${row.id}</td>
-    <td data-label="Member">${memberCell(row)}</td>
-    <td data-label="Suspended">
-      ${utcDateOnly(row.suspendedAt)} through ${row.lastDay}
+    <td data-label="Record" class="rec-short">#${row.id}</td>
+    <td data-label="Member" class="rec-member">${memberCell(row)}</td>
+    <td data-label="Suspended" class="rec-dates">
+      <span class="nowrap">${utcDateOnly(row.suspendedAt)}</span> through
+      <span class="nowrap">${row.lastDay}</span>
+      ${
+        edits.length > 0
+          ? html`<ul class="rec-edits muted">
+              ${edits.map((e) => editLine(e, names))}
+            </ul>`
+          : ''
+      }
+      ${
+        view.editForm
+          ? html`<div class="rec-actions">${view.editForm(row)}</div>`
+          : ''
+      }
     </td>
-    <td data-label="Length">${row.durationDays} days</td>
-    <td data-label="Notes">${row.notes ? memberText(row.notes) : ''}</td>
+    <td data-label="Length" class="rec-short">${row.durationDays} days</td>
+    <td data-label="Notes" class="rec-text">
+      ${row.notes ? memberText(row.notes) : ''}
+    </td>
     ${
       voided
-        ? html`<td data-label="Voided">
+        ? html`<td data-label="Voided" class="rec-when">
               ${pacificDateTime(row.voidedAt ?? '')} Pacific
             </td>
-            <td data-label="Voided by">${staffLink(row.voidedBy, names)}</td>
-            <td data-label="Reason">
+            <td data-label="Voided by" class="rec-who">
+              ${staffLink(row.voidedBy, names)}
+            </td>
+            <td data-label="Reason" class="rec-text">
               ${row.voidReason ? memberText(row.voidReason) : ''}
             </td>`
         : ''
@@ -147,25 +230,15 @@ function tabLabel(label: string, count: number | undefined): string {
   return count === undefined ? label : `${label} (${Number(count) || 0})`;
 }
 
-/**
- * The tab nav. Each side's counts are optional: one store being down never
- * takes the other's tabs with it, it only drops those counts.
- */
+/** The three record tabs. Bans have their own page (Member moderation → Banned). */
 function tabs(
-  current: SuspensionTab,
+  current: SuspensionState,
   counts: Record<SuspensionState, number> | undefined,
-  activeBans: number | undefined,
 ): SafeHtml {
   const path = dashboardPath(DASHBOARD_PATHS.suspensions);
-  const entries: { tab: SuspensionTab; label: string }[] = [
-    ...STATES.map((state) => ({
-      tab: state,
-      label: tabLabel(TAB_LABELS[state], counts?.[state]),
-    })),
-    { tab: 'banned', label: tabLabel('Banned', activeBans) },
-  ];
   return html`<nav class="pager choices" aria-label="Suspension records">
-    ${entries.map(({ tab, label }) => {
+    ${STATES.map((tab) => {
+      const label = tabLabel(TAB_LABELS[tab], counts?.[tab]);
       return tab === current
         ? html`<strong>${label}</strong>`
         : html`<a href="${pageLink(path, { state: tab })}">${label}</a>`;
@@ -177,7 +250,7 @@ function recordsTable(
   state: SuspensionState,
   rows: SuspensionPageRow[],
   page: number,
-  names: Readonly<Record<string, string>>,
+  view: RowView,
 ): SafeHtml {
   const pager = pageNav(
     dashboardPath(DASHBOARD_PATHS.suspensions),
@@ -191,179 +264,154 @@ function recordsTable(
           ${pager}`
       : html`<p>No ${TAB_LABELS[state].toLowerCase()} suspensions.</p>`;
   }
-  const voided = state === 'voided';
-  return html`<table class="stack">
+  const { voided } = view;
+  return html`<table class="stack records">
       <thead>
         <tr>
-          <th>Record</th>
-          <th>Member</th>
-          <th>Suspended</th>
-          <th>Length</th>
-          <th>Notes</th>
+          <th class="rec-short">Record</th>
+          <th class="rec-member">Member</th>
+          <th class="rec-dates">Suspended</th>
+          <th class="rec-short">Length</th>
+          <th class="rec-text">Notes</th>
           ${
             voided
-              ? html`<th>Voided</th>
-                  <th>Voided by</th>
-                  <th>Reason</th>`
+              ? html`<th class="rec-when">Voided</th>
+                  <th class="rec-who">Voided by</th>
+                  <th class="rec-text">Reason</th>`
               : ''
           }
         </tr>
       </thead>
       <tbody>
-        ${rows.map((row) => recordRow(row, voided, names))}
+        ${rows.map((row) => recordRow(row, view))}
       </tbody>
     </table>
     ${pager}`;
 }
 
-type SuspensionRouteDeps = Pick<
-  DashboardPageDeps,
-  'now' | 'suspensions' | 'bans' | 'isLeadership' | 'staffNames'
->;
+const EDIT_DATE_TIP =
+  'Fixes the date this suspension starts. The length and end date are ' +
+  'worked out again from the member’s other live suspensions before the new ' +
+  'date, as when recording. The old date, the new one, you and the time are ' +
+  'kept on the record and posted to the moderation log. Other suspensions ' +
+  'are not changed: a date that passes another suspension, or overlaps ' +
+  'one, is refused. Nothing changes on Meetup.';
 
-/** What one render of the Banned tab shows besides the rows it reads. */
-export interface BannedTabRender {
-  show: BanState;
-  page: number;
-  notice: SafeHtml | '';
-  /** Whether to show the forms: a display answer, never the authority. */
-  leader: Promise<boolean> | boolean;
-  status?: number;
-}
-
-/**
- * The Banned tab: the ban rows and counts under the page deadline (a
- * failure is the 503 page); the suspension counts for the other tab labels
- * are optional, so a suspension outage only drops them. The suspension
- * list itself is never read here.
- */
-export async function renderBannedTab(
-  res: Response,
-  deps: Pick<DashboardPageDeps, 'now' | 'suspensions' | 'bans' | 'staffNames'>,
-  view: BannedTabRender,
-): Promise<void> {
-  const { show, page } = view;
-  const today = pacificToday(deps.now());
-  const [loaded, suspensionCounts, leader] = await Promise.all([
-    load(res, 'Bans', async () => {
-      const bans = await deps.bans();
-      const [banCounts, rows] = await Promise.all([
-        bans.countByState(),
-        bans.listPage({
-          state: show,
-          offset: (page - 1) * PAGE_SIZE,
-          limit: PAGE_SIZE,
-        }),
-      ]);
-      return { banCounts, rows };
-    }),
-    loadOptional('Suspension counts', async () =>
-      (await deps.suspensions()).countByState(today),
-    ),
-    view.leader,
-  ]);
-  if (!loaded.ok) {
-    return;
-  }
-  const { banCounts, rows } = loaded.value;
-  const counts = suspensionCounts.ok ? suspensionCounts.value : undefined;
-  if (!Array.isArray(rows) || !rows.every((row) => isBanRow(row, show))) {
-    unavailable(res, 'Bans');
-    return;
-  }
-  const staffNames = await loadStaffNames(deps.staffNames, banStaffIds(rows));
-  dashboardPage(res, {
-    title: 'Suspension records',
-    ...(view.status !== undefined && { status: view.status }),
-    // The photo forms' script, only where they render (Leadership, display).
-    ...(leader && show === 'active' && { script: 'bans' as const }),
-    body: html`<div class="card">
-      <h1>Suspension records</h1>
-      ${tabs('banned', counts, banCounts.active)}
-      ${bannedTabBody({
-        show,
-        rows,
-        counts: banCounts,
-        page,
-        notice: view.notice,
-        leader,
-        csrf: dashboardLocals(res).session.csrfToken,
-        today,
-        staffNames,
-      })}
-    </div>`,
+/** The Edit date pop-up for one live record: Leadership only (display; the POST asks Discord live). */
+function editDateForm(
+  row: SuspensionPageRow,
+  state: SuspensionState,
+  csrf: string,
+  today: string,
+): SafeHtml {
+  return confirmModal({
+    trigger: { label: 'Edit date', tone: 'ghost' },
+    title: `Change the date of suspension #${row.id}`,
+    tip: EDIT_DATE_TIP,
+    action: localUrl(suspensionDatePath(row.id)),
+    fields: html`<input type="hidden" name="_csrf" value="${csrf}" />
+      <input type="hidden" name="state" value="${state}" />
+      <label class="field"
+        >Suspended from
+        <input
+          type="date"
+          name="date"
+          value="${utcDateOnly(row.suspendedAt)}"
+          min="${FIRST_SUSPENSION_DAY}"
+          max="${today}"
+          required
+      /></label>`,
+    confirmLabel: 'Change the date',
+    tone: 'primary',
   });
 }
+
+type SuspensionRouteDeps = Pick<
+  DashboardPageDeps,
+  'now' | 'suspensions' | 'isLeadership' | 'staffNames' | 'suspensionActions'
+>;
+
+/** How long Edit date's service call may run before the route answers 'error'. */
+export const DATE_EDIT_DEADLINE_MS = 20_000;
 
 export function registerSuspensionRoutes(
   router: express.Router,
   deps: SuspensionRouteDeps,
 ): void {
   // As the workspace month page: a cached live answer (up to 60 s) decides
-  // only whether the Banned tab shows its forms. Every ban POST asks
-  // Discord live.
+  // only whether rows offer Edit date. The POST asks Discord live.
   const displayLeadership = new LeadershipDisplayCache(() =>
     deps.now().getTime(),
   );
   router.get(DASHBOARD_PATHS.suspensions, (async (req, res) => {
+    // The Banned tab moved to its own page (Member moderation → Banned):
+    // old links and bookmarks land there, with only the known parameters.
+    if (req.query.state === 'banned') {
+      // 302: a moved page, but not promised forever. Only the known
+      // parameters go along (show=lifted, a valid page).
+      const show = req.query.show === 'lifted' ? 'lifted' : undefined;
+      const page = parsePage(req.query.page);
+      const target = bannedTabPath(show ? { show } : {});
+      res.redirect(
+        302,
+        page > 1
+          ? `${target}${target.includes('?') ? '&' : '?'}page=${page}`
+          : target,
+      );
+      return;
+    }
     const state = parseState(req.query.state);
     const page = parsePage(req.query.page);
     const today = pacificToday(deps.now());
-    if (state === 'banned') {
-      const { session } = dashboardLocals(res);
-      await renderBannedTab(res, deps, {
-        show: parseBanShow(req.query.show),
-        page,
-        notice: banResultNotice(req.query.result),
-        // leadershipOf never rejects.
-        leader: displayLeadership
-          .get(session.userId, () =>
-            leadershipOf(deps.isLeadership, session.userId),
-          )
-          .then((answer) => answer === 'leader'),
-      });
-      return;
-    }
-    const [loaded, banCounts] = await Promise.all([
-      load(res, WHAT, async () => {
-        const reader = await deps.suspensions();
-        const [counts, rows] = await Promise.all([
-          reader.countByState(today),
-          reader.listPage({
-            state,
-            today,
-            offset: (page - 1) * PAGE_SIZE,
-            limit: PAGE_SIZE,
-          }),
-        ]);
-        return { counts, rows };
-      }),
-      // Outside load: a bans outage only drops the Banned count.
-      loadOptional('Ban counts', async () =>
-        (await deps.bans()).countByState(),
-      ),
-    ]);
+    const { session } = dashboardLocals(res);
+    // leadershipOf never rejects.
+    const leadership =
+      state === 'voided'
+        ? Promise.resolve(false)
+        : displayLeadership
+            .get(session.userId, () =>
+              leadershipOf(deps.isLeadership, session.userId),
+            )
+            .then((answer) => answer === 'leader');
+    const loaded = await load(res, WHAT, async () => {
+      const reader = await deps.suspensions();
+      const [counts, rows] = await Promise.all([
+        reader.countByState(today),
+        reader.listPage({
+          state,
+          today,
+          offset: (page - 1) * PAGE_SIZE,
+          limit: PAGE_SIZE,
+        }),
+      ]);
+      return { counts, rows };
+    });
     if (!loaded.ok) {
+      await leadership;
       return;
     }
     const { counts, rows } = loaded.value;
-    const activeBans = banCounts.ok ? banCounts.value.active : undefined;
     if (!Array.isArray(rows) || !rows.every((row) => isPageRow(row, state))) {
+      await leadership;
       unavailable(res, WHAT);
       return;
     }
-    const staffNames =
-      state === 'voided'
-        ? await loadStaffNames(
-            deps.staffNames,
-            rows.map((r) => r.voidedBy),
-          )
-        : {};
+    // Optional: a failing read only hides the "was …" lines.
+    const edits = await loadOptional('Suspension date edits', async () =>
+      (await deps.suspensions()).listDateEdits(rows.map((r) => r.id)),
+    );
+    const editMap = edits.ok ? edits.value : new Map<number, never[]>();
+    const staffNames = await loadStaffNames(deps.staffNames, [
+      ...rows.map((r) => r.voidedBy),
+      ...[...editMap.values()].flat().map((e) => e.editedBy),
+    ]);
+    const leader = await leadership;
+    const csrf = session.csrfToken;
     dashboardPage(res, {
       title: 'Suspension records',
       body: html`<div class="card">
         <h1>Suspension records</h1>
-        ${tabs(state, counts, activeBans)}
+        ${dateEditNotice(req.query.result)} ${tabs(state, counts)}
         ${
           state === 'active'
             ? html`<p class="muted">
@@ -380,8 +428,62 @@ export function registerSuspensionRoutes(
               </p>`
             : ''
         }
-        ${recordsTable(state, rows, page, staffNames)}
+        ${recordsTable(state, rows, page, {
+          voided: state === 'voided',
+          names: staffNames,
+          edits: editMap,
+          editForm: leader
+            ? (row) => editDateForm(row, state, csrf, today)
+            : undefined,
+        })}
       </div>`,
     });
+  }) as RequestHandler);
+
+  // POST /dashboard/suspensions/:id/date: Leadership's date fix. CSRF,
+  // Origin, Sec-Fetch-Site and the per-user rate limit are the router's
+  // unsafe-method guard; the Leadership check is live, every time.
+  router.post(DASHBOARD_PATHS.suspensionDate, (async (req, res) => {
+    const id = parseRowId(req.params.id);
+    if (id === undefined) {
+      notFound(res);
+      return;
+    }
+    const body = req.body as Record<string, unknown> | undefined;
+    const tab = body?.state === 'past' ? 'past' : 'active';
+    const back = (code: DateEditResult) =>
+      res.redirect(
+        303,
+        `${dashboardPath(DASHBOARD_PATHS.suspensions)}?state=${tab}&result=${code}`,
+      );
+    const { session } = dashboardLocals(res);
+    const answer = await leadershipOf(deps.isLeadership, session.userId);
+    if (answer !== 'leader') {
+      back(
+        answer === 'not-leader' ? 'not-leadership' : 'leadership-unavailable',
+      );
+      return;
+    }
+    if (Array.isArray(body?.date)) {
+      back('invalid');
+      return;
+    }
+    try {
+      const result = await withDeadline(DATE_EDIT_DEADLINE_MS, () =>
+        deps.suspensionActions.editDate({
+          // Always the session's user, never a form field.
+          actor: session.userId,
+          id,
+          date: body?.date,
+          leadershipConfirmed: true,
+        }),
+      );
+      back(result.code);
+    } catch (error: unknown) {
+      logger.warn(
+        `Dashboard suspension date edit failed: ${error instanceof Error ? error.name : 'Error'}`,
+      );
+      back('error');
+    }
   }) as RequestHandler);
 }

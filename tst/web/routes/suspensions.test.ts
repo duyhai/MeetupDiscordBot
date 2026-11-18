@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   SuspensionPageRow,
@@ -8,7 +8,9 @@ import {
   DashboardPageDeps,
   registerAllProtectedRoutes,
 } from '../../../src/web/routes/dashboardPages.js';
-import { closeServers, makeApp, signIn } from '../dashboardHarness.js';
+import type { DateEditCode } from '../../../src/lib/suspensions/dateEdit.js';
+import { isDateEditResult } from '../../../src/web/routes/suspensions.js';
+import { ORIGIN, closeServers, makeApp, signIn } from '../dashboardHarness.js';
 import {
   PAGE_NOW,
   fakeOrganizerDeps,
@@ -358,5 +360,206 @@ describe('suspension records page', () => {
       ],
     });
     expect((await get(`${PAGE}?state=voided`)).status).toBe(200);
+  });
+});
+
+describe('Edit date (Hai, 2026-11-17)', () => {
+  const LEAD = '223456789012345678';
+
+  async function editSetup(leader: boolean | Error = true) {
+    const reader = fakeSuspensions(
+      {
+        active: [
+          suspensionRow({
+            id: 12,
+            suspendedAt: new Date('2026-09-20T00:00:00Z'),
+          }),
+        ],
+        past: [suspensionRow({ id: 13 })],
+        voided: [
+          suspensionRow({
+            id: 14,
+            voidedAt: new Date('2026-09-03T02:00:00Z'),
+            voidedBy: LEAD,
+          }),
+        ],
+      },
+      [],
+      [],
+      [
+        {
+          recordId: 12,
+          oldDay: '2026-09-22',
+          newDay: '2026-09-20',
+          oldDurationDays: 30,
+          newDurationDays: 60,
+          editedBy: LEAD,
+          editedAt: new Date('2026-09-23T17:00:00Z'),
+        },
+      ],
+    );
+    const editDate = vi.fn(async () => ({ code: 'date-changed' as const }));
+    const isLeadership = vi.fn(async () => {
+      if (leader instanceof Error) {
+        throw leader;
+      }
+      return leader;
+    });
+    const { req } = await makeApp({
+      now: () => PAGE_NOW.getTime(),
+      protectedRoutes: (r) =>
+        registerAllProtectedRoutes(r, {
+          organizer: fakeOrganizerDeps(),
+          pages: fakePageDeps({
+            suspensions: async () => reader,
+            isLeadership,
+            suspensionActions: { editDate },
+            staffNames: async () => ({ [LEAD]: 'Hai' }),
+          }),
+        }),
+    });
+    const cookie = await signIn(req);
+    const home = await req.get('/dashboard').set('Cookie', cookie);
+    const token = /name="_csrf" value="([^"]+)"/.exec(home.text)?.[1] ?? '';
+    const get = (path: string) => req.get(path).set('Cookie', cookie);
+    const post = (path: string, body: Record<string, string>) =>
+      req
+        .post(path)
+        .set('Cookie', cookie)
+        .set('Origin', ORIGIN)
+        .type('form')
+        .send({ _csrf: token, ...body });
+    return { get, post, editDate, isLeadership };
+  }
+
+  it('Leadership gets Edit date on active and past records, never on voided ones', async () => {
+    const { get } = await editSetup(true);
+    const active = await get(PAGE);
+    expect(active.text).toContain('action="/dashboard/suspensions/12/date"');
+    expect(active.text).toMatch(/name="date"[^>]*value="2026-09-20"/);
+    expect(active.text).toContain('name="state" value="active"');
+    const past = await get(`${PAGE}?state=past`);
+    expect(past.text).toContain('action="/dashboard/suspensions/13/date"');
+    expect(past.text).toContain('name="state" value="past"');
+    const voided = await get(`${PAGE}?state=voided`);
+    expect(voided.text).not.toContain('/date"');
+  });
+
+  it('a Moderator sees no Edit date', async () => {
+    const { get } = await editSetup(false);
+    expect((await get(PAGE)).text).not.toContain('Edit date');
+  });
+
+  it('shows the old date, the new one, who and when on the record', async () => {
+    const { get } = await editSetup(false);
+    const text = words((await get(PAGE)).text);
+    expect(text).toContain(
+      'Was 2026-09-22 (30 days), changed to 2026-09-20 (60 days) by Hai on Sep 23, 2026',
+    );
+  });
+
+  it('POST: Leadership is asked live, the session user edits, back to the tab', async () => {
+    const { post, editDate, isLeadership } = await editSetup(true);
+    const res = await post('/dashboard/suspensions/12/date', {
+      date: '2026-09-18',
+      state: 'past',
+      actor: '999999999999999999',
+    });
+    expect(res.status).toBe(303);
+    expect(res.headers.location).toBe(
+      '/dashboard/suspensions?state=past&result=date-changed',
+    );
+    expect(isLeadership).toHaveBeenCalled();
+    expect(editDate).toHaveBeenCalledWith({
+      // The signed-in user (the harness's), never the form's actor field.
+      actor: '123456789012345678',
+      id: 12,
+      date: '2026-09-18',
+      leadershipConfirmed: true,
+    });
+  });
+
+  it('POST: a Moderator or an unreachable Discord changes nothing', async () => {
+    for (const [leader, code] of [
+      [false, 'not-leadership'],
+      [new Error('discord down'), 'leadership-unavailable'],
+    ] as const) {
+      // eslint-disable-next-line no-await-in-loop -- one app at a time
+      const { post, editDate } = await editSetup(leader);
+      // eslint-disable-next-line no-await-in-loop
+      const res = await post('/dashboard/suspensions/12/date', {
+        date: '2026-09-18',
+        state: '<b>',
+      });
+      expect(res.headers.location).toBe(
+        `/dashboard/suspensions?state=active&result=${code}`,
+      );
+      expect(editDate).not.toHaveBeenCalled();
+    }
+  });
+
+  it('POST: a junk id is a 404; a repeated date is invalid', async () => {
+    const { post, editDate } = await editSetup(true);
+    expect(
+      (await post('/dashboard/suspensions/abc/date', { date: '2026-09-18' }))
+        .status,
+    ).toBe(404);
+    const repeated = await post('/dashboard/suspensions/12/date', {
+      date: ['2026-09-18', '2026-09-19'] as unknown as string,
+    });
+    expect(repeated.headers.location).toContain('result=invalid');
+    expect(editDate).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [
+      'overlaps',
+      'On that date this suspension would overlap another of this member’s suspensions. Nothing changed.',
+    ],
+    [
+      'reorders',
+      'Another suspension sits between the old and new dates; void and re-record instead. Nothing changed.',
+    ],
+    [
+      'linked-month',
+      'This suspension is linked to a no-show workspace card, and that date is ' +
+        'outside the card’s month. Void it on the card and record it again to ' +
+        'move it to another month.',
+    ],
+    [
+      'date-taken',
+      'This member already has another suspension on that date. Nothing changed.',
+    ],
+  ])('?result=%s shows its own message', async (code, message) => {
+    const { get } = await editSetup(false);
+    const res = await get(`${PAGE}?result=${code}`);
+    expect(res.text).toContain(`<p class="note attn">${message}</p>`);
+  });
+
+  it('every editSuspensionDate code has a message', () => {
+    const codes: DateEditCode[] = [
+      'date-changed',
+      'date-unchanged',
+      'not-live',
+      'date-taken',
+      'overlaps',
+      'reorders',
+      'linked-month',
+      'bad-date',
+      'invalid',
+      'error',
+    ];
+    for (const code of codes) {
+      expect(isDateEditResult(code), code).toBe(true);
+    }
+  });
+
+  it('result codes are fixed text; unknown ones render nothing', async () => {
+    const { get } = await editSetup(false);
+    const ok = await get(`${PAGE}?result=date-changed`);
+    expect(ok.text).toContain('<p class="note info">Date changed.');
+    const junk = await get(`${PAGE}?result=%3Cb%3Ex`);
+    expect(junk.text).not.toContain('<b>x');
+    expect(junk.text).not.toContain('class="note attn"');
   });
 });

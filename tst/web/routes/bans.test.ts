@@ -44,7 +44,7 @@ afterEach(() => {
   return closeServers();
 });
 
-const TAB = '/dashboard/suspensions?state=banned';
+const TAB = '/dashboard/bans';
 const UPLOADER = '223456789012345678';
 const LIFTER = '323456789012345678';
 
@@ -87,15 +87,24 @@ const tbody = (body: string) =>
   /<tbody>([\s\S]*?)<\/tbody>/.exec(body)?.[1] ?? '';
 
 describe('Banned tab', () => {
-  it('the Suspensions tabs include Banned with the active count', async () => {
-    const { get } = await setup({
-      active: [banRow(), banRow()],
-      lifted: [banRow({ liftedAt: new Date('2026-10-01T17:00:00Z') })],
-    });
-    const res = await get('/dashboard/suspensions');
-    expect(res.status).toBe(200);
-    expect(words(res.text)).toContain('Banned (2)');
-    expect(res.text).toContain('href="/dashboard/suspensions?state=banned"');
+  it('is its own page; the old Suspensions ?state=banned link redirects here (Hai, 2026-11-17)', async () => {
+    const { get } = await setup({ active: [banRow()] });
+    const page = await get(TAB);
+    expect(page.status).toBe(200);
+    expect(page.text).toContain('<h1>Banned members</h1>');
+    const old = await get('/dashboard/suspensions?state=banned');
+    expect(old.status).toBe(302);
+    expect(old.headers.location).toBe('/dashboard/bans');
+    const lifted = await get(
+      '/dashboard/suspensions?state=banned&show=lifted&result=%3Cb%3E',
+    );
+    expect(lifted.headers.location).toBe('/dashboard/bans?show=lifted');
+    const paged = await get('/dashboard/suspensions?state=banned&page=3');
+    expect(paged.headers.location).toBe('/dashboard/bans?page=3');
+    const junkPage = await get('/dashboard/suspensions?state=banned&page=x');
+    expect(junkPage.headers.location).toBe('/dashboard/bans');
+    const records = await get('/dashboard/suspensions');
+    expect(words(records.text)).not.toContain('Banned (');
   });
 
   it('the Banned tab shows photo, member link, id, date or Date unknown, recorder, notes and photo source', async () => {
@@ -223,7 +232,7 @@ describe('Banned tab', () => {
       liftReason: 'Appeal granted',
     });
     const { get, bans } = await setup({ active: [banRow()], lifted: [lifted] });
-    const res = await get(`${TAB}&show=lifted`);
+    const res = await get(`${TAB}?show=lifted`);
     expect(res.status).toBe(200);
     expect(bans.listPage).toHaveBeenCalledWith({
       state: 'lifted',
@@ -238,14 +247,12 @@ describe('Banned tab', () => {
     expect(body).toContain(`href="https://discord.com/users/${LIFTER}"`);
     expect(words(body)).toContain('Oct 4, 2026');
     expect(body).toContain('<bdi>Appeal granted</bdi>');
-    expect(res.text).toContain(
-      'href="/dashboard/suspensions?state=banned&amp;show=active"',
-    );
+    expect(res.text).toContain('href="/dashboard/bans?show=active"');
   });
 
   it('an unknown show value falls back to active', async () => {
     const { get, bans } = await setup();
-    const res = await get(`${TAB}&show=everything`);
+    const res = await get(`${TAB}?show=everything`);
     expect(res.status).toBe(200);
     expect(bans.listPage).toHaveBeenLastCalledWith(
       expect.objectContaining({ state: 'active' }),
@@ -257,7 +264,7 @@ describe('Banned tab', () => {
     const res = await get(TAB);
     expect(res.status).toBe(200);
     expect(suspensions.listPage).not.toHaveBeenCalled();
-    expect(suspensions.countByState).toHaveBeenCalled();
+    expect(suspensions.countByState).not.toHaveBeenCalled();
     expect(words(res.text)).toContain('Active (1)');
   });
 
@@ -277,20 +284,7 @@ describe('Banned tab', () => {
     }
   });
 
-  it('a failing ban count leaves the suspension tabs up, labelled Banned with no count', async () => {
-    const { get } = await setup(undefined, undefined, {
-      bans: () => Promise.reject(new Error('down')),
-    });
-    const res = await get('/dashboard/suspensions');
-    expect(res.status).toBe(200);
-    expect(res.text).toMatch(
-      /<a href="\/dashboard\/suspensions\?state=banned">Banned<\/a>/,
-    );
-    expect(words(res.text)).not.toMatch(/Banned \(/);
-    expect(words(res.text)).toContain('Active (1)');
-  });
-
-  it('a failing suspension count leaves the Banned tab up, with no counts on the other tabs', async () => {
+  it('never reads the suspension counts', async () => {
     const { get, suspensions } = await setup({
       active: [banRow({ memberName: 'Still Shown' })],
     });
@@ -298,11 +292,7 @@ describe('Banned tab', () => {
     const res = await get(TAB);
     expect(res.status).toBe(200);
     expect(tbody(res.text)).toContain('<bdi>Still Shown</bdi>');
-    expect(res.text).toMatch(
-      /<a href="\/dashboard\/suspensions\?state=active">Active<\/a>/,
-    );
-    expect(words(res.text)).not.toMatch(/Past \(|Voided \(/);
-    expect(words(res.text)).toContain('Banned (1)');
+    expect(suspensions.countByState).not.toHaveBeenCalled();
   });
 
   it('a failing bans read is the 503 page', async () => {
@@ -348,7 +338,7 @@ describe('Banned tab names staff and links history (Hai, 2026-11-17)', () => {
     expect(words(active.text)).toContain('Uploaded by Stacey on');
     expect(active.text).not.toContain('>staff member<');
     expect(staffNames).toHaveBeenLastCalledWith([DISCORD_SUBJECT, B]);
-    const liftedTab = await get(`${TAB}&show=lifted`);
+    const liftedTab = await get(`${TAB}?show=lifted`);
     expect(liftedTab.text).toContain('<bdi>Kristen</bdi>');
   });
 
@@ -493,11 +483,27 @@ async function postSetup(
 
 const location = (res: { headers: Record<string, unknown> }) =>
   String(res.headers.location);
-const BACK = (code: string) =>
-  `/dashboard/suspensions?state=banned&result=${code}`;
+const BACK = (code: string) => `/dashboard/bans?result=${code}`;
 const ADD = { memberId: '424242', memberName: 'Ann', bannedOn: '', notes: '' };
 
 describe('ban forms on the Banned tab', () => {
+  it('the Add ban form sits above the list, Name optional, dated today (Hai, 2026-11-17)', async () => {
+    const { get } = await postSetup({ leader: true });
+    const res = await get(TAB);
+    const add =
+      /<form\s+class="ban-add"[\s\S]*?<\/form>/.exec(res.text)?.[0] ?? '';
+    expect(res.text.indexOf('<h2>Add a ban</h2>')).toBeLessThan(
+      res.text.indexOf('<table'),
+    );
+    expect(words(add)).toContain(
+      'Name (optional: left blank, it is taken from Meetup, and stays blank if Meetup no longer lists them)',
+    );
+    expect(add).not.toMatch(/name="memberName"[^>]*required/);
+    // PAGE_NOW is Oct 5, 2026 Pacific.
+    expect(add).toMatch(/name="bannedOn"[^>]*value="2026-10-05"/);
+    expect(add).not.toMatch(/name="bannedOn"[^>]*required/);
+  });
+
   it('a Moderator sees no ban forms; a Leader sees Add, Import and Lift', async () => {
     const moderator = await postSetup({ leader: false });
     const plain = await moderator.get(TAB);
@@ -528,7 +534,7 @@ describe('ban forms on the Banned tab', () => {
       (page.text.match(/name="_csrf"/g) ?? []).length,
     ).toBeGreaterThanOrEqual(3);
     // The lifted list has no Lift form.
-    const lifted = await leader.get(`${TAB}&show=lifted`);
+    const lifted = await leader.get(`${TAB}?show=lifted`);
     expect(lifted.text).not.toContain('/lift"');
   });
 
@@ -649,14 +655,14 @@ describe('ban forms on the Banned tab', () => {
 
   it('?result=<script> and unknown codes render no notice', async () => {
     const { get } = await postSetup();
-    const known = await get(`${TAB}&result=recorded`);
+    const known = await get(`${TAB}?result=recorded`);
     expect(known.text).toContain(BAN_RESULT_MESSAGES.recorded);
     expect(known.text).toContain('class="note info"');
-    const coral = await get(`${TAB}&result=already-banned`);
+    const coral = await get(`${TAB}?result=already-banned`);
     expect(coral.text).toContain('class="note attn"');
     for (const junk of ['%3Cscript%3E', 'toString', 'constructor', 'nope']) {
       // eslint-disable-next-line no-await-in-loop
-      const res = await get(`${TAB}&result=${junk}`);
+      const res = await get(`${TAB}?result=${junk}`);
       expect(res.status).toBe(200);
       expect(res.text).not.toContain('<script>');
       // The photo forms' no-JavaScript note is not a result notice.
@@ -788,7 +794,7 @@ describe('ban photo upload', () => {
       expect(form).toMatch(/<button type="submit" disabled>/);
     }
     // The lifted list offers no upload.
-    const lifted = await leader.get(`${TAB}&show=lifted`);
+    const lifted = await leader.get(`${TAB}?show=lifted`);
     expect(photoForms(lifted.text)).toEqual([]);
 
     const moderator = await postSetup({ leader: false, rows });

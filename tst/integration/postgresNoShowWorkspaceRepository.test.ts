@@ -25,6 +25,7 @@ import {
   SyncCase,
   WorkspaceAction,
 } from '../../src/lib/workspace/types.js';
+import { linkWindow } from '../../src/lib/workspace/months.js';
 import { useIsolatedSchema } from './isolatedSchema.js';
 
 // Requires DATABASE_URL against a throwaway Postgres; skipped otherwise.
@@ -657,6 +658,35 @@ const suspension = (
         ]);
       });
 
+      it('rowPosition ranks a card as listRows orders it: a skipped card moves to page 2', async () => {
+        const cases: SyncCase[] = [];
+        for (let i = 0; i < 55; i += 1) {
+          cases.push(
+            warning(String(2000 + i), `w${String(i).padStart(2, '0')}`),
+          );
+        }
+        await sync(cases);
+        const first = await repo.listRows(SEPTEMBER, { offset: 0, limit: 50 });
+        const acted = first[0];
+        expect(await repo.rowPosition(SEPTEMBER, acted.id)).toBe(1);
+        // Done now: behind every to-do card, so on page 2.
+        await pool.query(
+          `UPDATE noshow_workspace_rows SET status = 'skipped' WHERE id = $1`,
+          [acted.id],
+        );
+        const pos = await repo.rowPosition(SEPTEMBER, acted.id);
+        expect(pos).toBe(55);
+        const second = await repo.listRows(SEPTEMBER, {
+          offset: 50,
+          limit: 50,
+        });
+        expect(second.map((r) => r.id)).toContain(acted.id);
+        expect(second.findIndex((r) => r.id === acted.id) + 51).toBe(pos);
+        expect(await repo.rowPosition(OCTOBER, acted.id)).toBeUndefined();
+        expect(await repo.rowPosition(SEPTEMBER, 0)).toBeUndefined();
+        expect(await repo.rowPosition(SEPTEMBER, 2 ** 31)).toBeUndefined();
+      });
+
       it('getRow reads one row of the month and refuses junk ids', async () => {
         await sync([warning('111', 'Ann')]);
         const id = (await rowOf(SEPTEMBER, '111')).id;
@@ -1121,6 +1151,58 @@ const suspension = (
         await sync([warning(memberId)]);
         return (await rowOf(SEPTEMBER, memberId)).id;
       };
+
+      it('Edit date keeps a linked record inside its card month (lead review of #164)', async () => {
+        const id = await seedSuspension();
+        const recorded = okOf(
+          await act(id, 'record_suspension', {
+            suspendedOn: day('2026-10-03'),
+          }),
+        );
+        const recordId = (await stateOf(id)).suspension_record_id;
+        expect(recorded.ok).toBe(true);
+        const suspensions = await PostgresSuspensionRepository.instance();
+        // Out of September's window (it opens on Sep 1): refused, untouched.
+        expect(
+          await suspensions.editDate({
+            id: recordId,
+            suspendedAt: day('2026-08-20'),
+            editedBy: MOD,
+          }),
+        ).toEqual({ ok: false, reason: 'linked-month' });
+        // The window's end is excluded: September's runs to Nov 1 (UTC
+        // midnight), so Nov 1 is refused and Oct 31 is the last day taken.
+        expect(linkWindow(SEPTEMBER).until).toEqual(day('2026-11-01'));
+        expect(
+          await suspensions.editDate({
+            id: recordId,
+            suspendedAt: day('2026-11-01'),
+            editedBy: MOD,
+          }),
+        ).toEqual({ ok: false, reason: 'linked-month' });
+        expect(
+          await suspensions.editDate({
+            id: recordId,
+            suspendedAt: day('2026-10-31'),
+            editedBy: MOD,
+          }),
+        ).toMatchObject({ ok: true });
+        // Inside it: moved; the card still names the record, and voids it.
+        expect(
+          await suspensions.editDate({
+            id: recordId,
+            suspendedAt: day('2026-09-25'),
+            editedBy: MOD,
+          }),
+        ).toMatchObject({ ok: true });
+        expect((await stateOf(id)).suspension_record_id).toBe(recordId);
+        const [moved] = await suspensions.listByIds([recordId]);
+        expect(moved.suspendedAt).toEqual(day('2026-09-25'));
+        okOf(await act(id, 'void', { note: 'wrong date after all' }));
+        const [voided] = await suspensions.listByIds([recordId]);
+        expect(voided.voidedAt).toBeInstanceOf(Date);
+        expect((await stateOf(id)).status).toBe('voided');
+      });
 
       it('refuses a stale version and writes nothing', async () => {
         const id = await seedWarning();

@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 
 import {
   BUILD_UTC_HOUR,
-  canStartLinkProgress,
   canStartMonthBuild,
   DueItem,
   dueTimeToday,
@@ -36,13 +35,8 @@ function both(period: Period, iso: string): [ReportType, Period, string][] {
 function plan(
   now: string,
   entries: [ReportType, Period, string][] = [],
-  linkProgressWrittenToday = true,
 ): DueItem[] {
-  return planDueWork({
-    now: new Date(now),
-    builtAt: built(entries),
-    linkProgressWrittenToday,
-  });
+  return planDueWork({ now: new Date(now), builtAt: built(entries) });
 }
 
 const previousItems = (items: DueItem[]) =>
@@ -67,60 +61,26 @@ describe('buildSchedule', () => {
   });
 
   it('never starts 18:00–19:00 UTC', () => {
-    // Everything due (nothing built, no link progress) -- still nothing.
-    expect(plan('2026-10-05T18:00:00.000Z', [], false)).toEqual([]);
-    expect(plan('2026-10-05T18:59:59.999Z', [], false)).toEqual([]);
+    // Everything due (nothing built) -- still nothing.
+    expect(plan('2026-10-05T18:00:00.000Z', [])).toEqual([]);
+    expect(plan('2026-10-05T18:59:59.999Z', [])).toEqual([]);
     expect(isQuietHour(new Date('2026-10-05T18:00:00.000Z'))).toBe(true);
     expect(isQuietHour(new Date('2026-10-05T18:59:59.999Z'))).toBe(true);
     expect(isQuietHour(new Date('2026-10-05T17:59:59.999Z'))).toBe(false);
     expect(isQuietHour(new Date('2026-10-05T19:00:00.000Z'))).toBe(false);
     // 19:00 plans normally again; the hour before is covered by the
     // sweep-lead rules tested below.
-    expect(plan('2026-10-05T19:00:00.000Z', [], false)).not.toEqual([]);
+    expect(plan('2026-10-05T19:00:00.000Z', [])).not.toEqual([]);
   });
 
-  it('link progress may start 16:00–17:45 and 19:00–24:00 UTC, like a month', () => {
+  it('a month may start in hour 17, before the sweep lead', () => {
     // Hour 17 is open now that the unlinked digest is gone; 17:45 is the
-    // identity sweep's lead, the same as for a month.
-    expect(plan('2026-10-05T17:00:00.000Z', [], false)).toEqual([
+    // identity sweep's lead (tested below).
+    expect(plan('2026-10-05T17:00:00.000Z', [])).toEqual([
       { kind: 'month', period: SEPT, reason: 'previous-daily' },
       { kind: 'month', period: OCT, reason: 'current' },
-      { kind: 'link-progress', day: '2026-10-05' },
     ]);
-    expect(plan('2026-10-05T17:44:59.999Z', [], false)).toContainEqual({
-      kind: 'link-progress',
-      day: '2026-10-05',
-    });
-    for (const [iso, allowed] of [
-      ['2026-10-05T15:59:59.999Z', false],
-      ['2026-10-05T16:00:00.000Z', true],
-      ['2026-10-05T16:59:59.999Z', true],
-      ['2026-10-05T17:00:00.000Z', true],
-      ['2026-10-05T17:30:00.000Z', true],
-      ['2026-10-05T17:44:59.999Z', true],
-      ['2026-10-05T17:45:00.000Z', false],
-      ['2026-10-05T17:59:59.999Z', false],
-      ['2026-10-05T18:00:00.000Z', false],
-      ['2026-10-05T18:30:00.000Z', false],
-      ['2026-10-05T18:59:59.999Z', false],
-      ['2026-10-05T19:00:00.000Z', true],
-      ['2026-10-05T23:59:59.999Z', true],
-    ] as const) {
-      expect(canStartLinkProgress(new Date(iso)), iso).toBe(allowed);
-      // Link progress never starts when a month may not.
-      expect(canStartMonthBuild(new Date(iso)) || !allowed, iso).toBe(true);
-    }
-  });
-
-  it('link progress is allowed in exactly the hours 16, 17 (to :45) and 19–23 UTC', () => {
-    const open: number[] = [];
-    for (let hour = 0; hour < 24; hour += 1) {
-      const at = new Date(Date.UTC(2026, 9, 5, hour, 0));
-      if (canStartLinkProgress(at)) {
-        open.push(hour);
-      }
-    }
-    expect(open).toEqual([16, 17, 19, 20, 21, 22, 23]);
+    expect(canStartMonthBuild(new Date('2026-10-05T17:30:00.000Z'))).toBe(true);
   });
 
   it('17:44 can start a month and 17:45 cannot', () => {
@@ -134,32 +94,26 @@ describe('buildSchedule', () => {
     expect(canStartMonthBuild(new Date('2026-10-05T18:59:59.999Z'))).toBe(
       false,
     );
-    expect(plan('2026-10-05T17:44:59.999Z', [], false)).toEqual([
+    expect(plan('2026-10-05T17:44:59.999Z', [])).toEqual([
       { kind: 'month', period: SEPT, reason: 'previous-daily' },
       { kind: 'month', period: OCT, reason: 'current' },
-      { kind: 'link-progress', day: '2026-10-05' },
     ]);
-    expect(plan('2026-10-05T17:45:00.000Z', [], false)).toEqual([]);
+    expect(plan('2026-10-05T17:45:00.000Z', [])).toEqual([]);
   });
 
-  it('19:00 can do both', () => {
-    const at = new Date('2026-10-05T19:00:00.000Z');
-    expect(canStartMonthBuild(at)).toBe(true);
-    expect(canStartLinkProgress(at)).toBe(true);
-    expect(canStartLinkProgress(new Date('2026-10-05T23:59:59.999Z'))).toBe(
-      true,
-    );
-    expect(plan('2026-10-05T19:00:00.000Z', [], false)).toEqual([
+  it('19:00 can start a month again', () => {
+    expect(canStartMonthBuild(new Date('2026-10-05T19:00:00.000Z'))).toBe(true);
+    expect(canStartMonthBuild(new Date('2026-10-05T23:59:59.999Z'))).toBe(true);
+    expect(plan('2026-10-05T19:00:00.000Z', [])).toEqual([
       { kind: 'month', period: SEPT, reason: 'previous-daily' },
       { kind: 'month', period: OCT, reason: 'current' },
-      { kind: 'link-progress', day: '2026-10-05' },
     ]);
   });
 
   it('nothing is due before 16:00 UTC', () => {
-    expect(plan('2026-10-05T15:59:59.999Z', [], false)).toEqual([]);
-    expect(plan('2026-10-05T00:00:00.000Z', [], false)).toEqual([]);
-    expect(plan('2026-10-05T16:00:00.000Z', [], false)).not.toEqual([]);
+    expect(plan('2026-10-05T15:59:59.999Z', [])).toEqual([]);
+    expect(plan('2026-10-05T00:00:00.000Z', [])).toEqual([]);
+    expect(plan('2026-10-05T16:00:00.000Z', [])).not.toEqual([]);
   });
 
   it('previous month rebuilt daily from the 2nd to the 7th after 16:00 UTC', () => {
@@ -344,28 +298,23 @@ describe('buildSchedule', () => {
 
   it('pins periodOf (the Pacific month) as the current month, not the UTC month', () => {
     // 2026-10-01T16:00Z is 09:00 PDT on October 1st.
-    const items = plan('2026-10-01T16:00:00.000Z', [], false);
-    expect(items).toEqual([
-      { kind: 'month', period: OCT, reason: 'current' },
-      { kind: 'link-progress', day: '2026-10-01' },
-    ]);
+    const items = plan('2026-10-01T16:00:00.000Z', []);
+    expect(items).toEqual([{ kind: 'month', period: OCT, reason: 'current' }]);
     // Late on the UTC 1st, Pacific is still the 1st: same plan.
-    expect(plan('2026-10-01T23:59:59.999Z', [], false)).toEqual([
+    expect(plan('2026-10-01T23:59:59.999Z', [])).toEqual([
       { kind: 'month', period: OCT, reason: 'current' },
-      { kind: 'link-progress', day: '2026-10-01' },
     ]);
     // 03:00Z on the UTC 1st is still September 30th in Pacific, and before
     // 16:00 UTC: nothing is planned.
-    expect(plan('2026-10-01T03:00:00.000Z', [], false)).toEqual([]);
+    expect(plan('2026-10-01T03:00:00.000Z', [])).toEqual([]);
     // Early UTC 2nd is 17:00 PDT on the 1st (before 16:00 UTC: nothing).
-    expect(plan('2026-10-02T00:00:00.000Z', [], false)).toEqual([]);
+    expect(plan('2026-10-02T00:00:00.000Z', [])).toEqual([]);
     // December 1st across the PST offset: still December in Pacific.
-    expect(plan('2026-12-01T16:00:00.000Z', [], false)).toEqual([
+    expect(plan('2026-12-01T16:00:00.000Z', [])).toEqual([
       { kind: 'month', period: { year: 2026, month: 12 }, reason: 'current' },
-      { kind: 'link-progress', day: '2026-12-01' },
     ]);
     // January's previous month is December of the prior year.
-    expect(plan('2027-01-05T16:00:00.000Z', [], false)[0]).toEqual({
+    expect(plan('2027-01-05T16:00:00.000Z', [])[0]).toEqual({
       kind: 'month',
       period: { year: 2026, month: 12 },
       reason: 'previous-daily',
@@ -381,47 +330,23 @@ describe('buildSchedule', () => {
       '2026-11-01',
       '2026-11-02',
     ]) {
-      expect(plan(`${day}T15:59:59.999Z`, [], false)).toEqual([]);
-      expect(plan(`${day}T16:00:00.000Z`, [], false)).toContainEqual({
-        kind: 'link-progress',
-        day,
+      expect(plan(`${day}T15:59:59.999Z`, [])).toEqual([]);
+      expect(plan(`${day}T16:00:00.000Z`, [])).toContainEqual({
+        kind: 'month',
+        period: { year: 2026, month: Number(day.slice(5, 7)) },
+        reason: 'current',
       });
     }
   });
 
-  it('link progress due once per day', () => {
-    expect(
-      plan(
-        '2026-10-05T16:00:00.000Z',
-        [
-          ...both(SEPT, '2026-10-05T16:01:00.000Z'),
-          ...both(OCT, '2026-10-05T16:01:00.000Z'),
-        ],
-        false,
-      ),
-    ).toEqual([{ kind: 'link-progress', day: '2026-10-05' }]);
-    expect(
-      plan(
-        '2026-10-05T16:00:00.000Z',
-        [
-          ...both(SEPT, '2026-10-05T16:01:00.000Z'),
-          ...both(OCT, '2026-10-05T16:01:00.000Z'),
-        ],
-        true,
-      ),
-    ).toEqual([]);
-  });
-
-  it('items come in order: previous, current, link progress', () => {
-    expect(plan('2026-10-03T16:00:00.000Z', [], false)).toEqual([
+  it('items come in order: previous, current', () => {
+    expect(plan('2026-10-03T16:00:00.000Z', [])).toEqual([
       { kind: 'month', period: SEPT, reason: 'previous-daily' },
       { kind: 'month', period: OCT, reason: 'current' },
-      { kind: 'link-progress', day: '2026-10-03' },
     ]);
-    expect(plan('2026-10-20T16:00:00.000Z', [], false)).toEqual([
+    expect(plan('2026-10-20T16:00:00.000Z', [])).toEqual([
       { kind: 'month', period: SEPT, reason: 'previous-catch-up' },
       { kind: 'month', period: OCT, reason: 'current' },
-      { kind: 'link-progress', day: '2026-10-20' },
     ]);
   });
 });

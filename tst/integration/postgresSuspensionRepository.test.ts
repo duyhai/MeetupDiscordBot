@@ -251,6 +251,206 @@ if (!POSTGRES_AVAILABLE) {
       }
     });
 
+    describe('editDate (Hai, 2026-11-17)', () => {
+      const LEAD = '223456789012345678';
+      const day = (d: string) => new Date(`${d}T00:00:00Z`);
+      const insertOn = async (
+        d: string,
+        durationDays = 30,
+        memberId = 'm1',
+      ) => {
+        const inserted = await repo.insert({
+          ...record,
+          memberId,
+          suspendedAt: day(d),
+          durationDays,
+        });
+        if (!inserted) {
+          throw new Error('insert refused');
+        }
+        return inserted;
+      };
+
+      it('moves the date within the gap, keeps its length and keeps the edit', async () => {
+        await insertOn('2026-03-01');
+        const later = await insertOn('2026-11-08', 60);
+        const out = await repo.editDate({
+          id: later.id,
+          suspendedAt: day('2026-10-01'),
+          editedBy: LEAD,
+        });
+        // Still after the March record: one earlier live one, so 60 days.
+        expect(out).toMatchObject({
+          ok: true,
+          before: { suspendedAt: day('2026-11-08'), durationDays: 60 },
+          after: { suspendedAt: day('2026-10-01'), durationDays: 60 },
+        });
+        const [stored] = await repo.listByIds([later.id]);
+        expect(stored).toMatchObject({
+          suspendedAt: day('2026-10-01'),
+          durationDays: 60,
+        });
+        const edits = await repo.listDateEdits([later.id, 999]);
+        expect(edits.get(later.id)).toEqual([
+          expect.objectContaining({
+            recordId: later.id,
+            oldDay: '2026-11-08',
+            newDay: '2026-10-01',
+            oldDurationDays: 60,
+            newDurationDays: 60,
+            editedBy: LEAD,
+            editedAt: expect.any(Date) as unknown,
+          }),
+        ]);
+        expect(edits.has(999)).toBe(false);
+      });
+
+      it('refuses a move past another live record: void and re-record instead', async () => {
+        const march = await insertOn('2026-03-01');
+        const later = await insertOn('2026-11-08', 60);
+        for (const [id, to] of [
+          [later.id, '2026-02-01'],
+          [march.id, '2026-12-01'],
+        ] as const) {
+          expect(
+            // eslint-disable-next-line no-await-in-loop -- one case at a time
+            await repo.editDate({ id, suspendedAt: day(to), editedBy: LEAD }),
+          ).toEqual({ ok: false, reason: 'reorders' });
+        }
+        expect((await repo.listDateEdits([march.id, later.id])).size).toBe(0);
+      });
+
+      it('refuses a move that overlaps an earlier or a later record', async () => {
+        // March 1-30, then a 60-day one from June 1.
+        await insertOn('2026-03-01');
+        const june = await insertOn('2026-06-01', 60);
+        // Back into March's days.
+        expect(
+          await repo.editDate({
+            id: june.id,
+            suspendedAt: day('2026-03-15'),
+            editedBy: LEAD,
+          }),
+        ).toEqual({ ok: false, reason: 'overlaps' });
+        // A 30-day one that would run into a later record's first days.
+        const early = await insertOn('2026-01-01', 30, 'm3');
+        await insertOn('2026-04-10', 60, 'm3');
+        expect(
+          await repo.editDate({
+            id: early.id,
+            suspendedAt: day('2026-04-05'),
+            editedBy: LEAD,
+          }),
+        ).toEqual({ ok: false, reason: 'overlaps' });
+        // The day after the earlier one ends is fine.
+        expect(
+          await repo.editDate({
+            id: june.id,
+            suspendedAt: day('2026-03-31'),
+            editedBy: LEAD,
+          }),
+        ).toMatchObject({ ok: true, after: { durationDays: 60 } });
+      });
+
+      it('counts only live records before the new date, itself excluded', async () => {
+        await insertOn('2026-01-01');
+        const voided = await insertOn('2026-02-01');
+        await repo.void(voided.id, LEAD, 'typo');
+        await insertOn('2026-01-15', 30, 'm2');
+        const target = await insertOn('2026-03-01');
+        const out = await repo.editDate({
+          id: target.id,
+          suspendedAt: day('2026-04-01'),
+          editedBy: LEAD,
+        });
+        expect(out).toMatchObject({ ok: true, after: { durationDays: 60 } });
+      });
+
+      it('refuses a voided or unknown record, the same date and a taken date', async () => {
+        const a = await insertOn('2026-03-01');
+        const b = await insertOn('2026-04-01');
+        expect(
+          await repo.editDate({
+            id: a.id,
+            suspendedAt: day('2026-03-01'),
+            editedBy: LEAD,
+          }),
+        ).toEqual({ ok: false, reason: 'unchanged' });
+        expect(
+          await repo.editDate({
+            id: a.id,
+            suspendedAt: day('2026-04-01'),
+            editedBy: LEAD,
+          }),
+        ).toEqual({ ok: false, reason: 'date-taken' });
+        await repo.void(b.id, LEAD, 'typo');
+        expect(
+          await repo.editDate({
+            id: b.id,
+            suspendedAt: day('2026-05-01'),
+            editedBy: LEAD,
+          }),
+        ).toEqual({ ok: false, reason: 'not-live' });
+        for (const id of [0, 999999, 2 ** 31]) {
+          expect(
+            // eslint-disable-next-line no-await-in-loop -- one id at a time
+            await repo.editDate({
+              id,
+              suspendedAt: day('2026-05-01'),
+              editedBy: LEAD,
+            }),
+          ).toEqual({ ok: false, reason: 'not-live' });
+        }
+        // Nothing was kept for the refusals.
+        expect((await repo.listDateEdits([a.id, b.id])).size).toBe(0);
+        // A date freed by a void can be taken.
+        expect(
+          await repo.editDate({
+            id: a.id,
+            suspendedAt: day('2026-04-01'),
+            editedBy: LEAD,
+          }),
+        ).toMatchObject({ ok: true });
+      });
+
+      it('a database without the workspace table edits without the card check', async () => {
+        // This schema has the suspension tables only (the command's case).
+        const pool = (repo as unknown as { pool: pg.Pool }).pool;
+        const present = await pool.query<{ present: boolean }>(
+          `SELECT to_regclass('noshow_workspace_rows') IS NOT NULL AS present`,
+        );
+        expect(present.rows[0].present).toBe(false);
+        const a = await insertOn('2026-03-01');
+        expect(
+          await repo.editDate({
+            id: a.id,
+            suspendedAt: day('2026-01-10'),
+            editedBy: LEAD,
+          }),
+        ).toMatchObject({ ok: true });
+      });
+
+      it('lists edits newest first and refuses more than 50 ids', async () => {
+        const a = await insertOn('2026-03-01');
+        await repo.editDate({
+          id: a.id,
+          suspendedAt: day('2026-03-02'),
+          editedBy: LEAD,
+        });
+        await repo.editDate({
+          id: a.id,
+          suspendedAt: day('2026-03-03'),
+          editedBy: LEAD,
+        });
+        expect(
+          (await repo.listDateEdits([a.id])).get(a.id)?.map((e) => e.newDay),
+        ).toEqual(['2026-03-03', '2026-03-02']);
+        await expect(
+          repo.listDateEdits(Array.from({ length: 51 }, (_, i) => i + 1)),
+        ).rejects.toThrow(RangeError);
+      });
+    });
+
     describe('void', () => {
       it('returns the voided record with who voided it and why', async () => {
         const inserted = await repo.insert(record);

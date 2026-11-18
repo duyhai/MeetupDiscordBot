@@ -174,6 +174,8 @@ const sqlList = (statuses: readonly string[]) =>
 const STATUS_GROUP_ORDER =
   `CASE WHEN status IN (${sqlList(OPEN_STATUSES)}) THEN 0 ` +
   `WHEN status IN (${sqlList(PARKED_STATUSES)}) THEN 1 ELSE 2 END`;
+/** listRows' whole order; rowPosition ranks by the same one. */
+const LIST_ROWS_ORDER = `${STATUS_GROUP_ORDER}, in_latest_snapshot DESC, (classification = 'suspension') DESC, lower(member_name), id`;
 const MAX_MONTHS = 240;
 const MAX_EVENTS_PER_ROW = 10;
 const MAX_EVENT_ROWS = 50;
@@ -839,11 +841,33 @@ export class PostgresNoShowWorkspaceRepository {
     const offset = clampInt(page.offset, 0, Number.MAX_SAFE_INTEGER, 0);
     const result = await this.pool.query<RowRecord>(
       `SELECT ${ROW_COLUMNS} FROM noshow_workspace_rows WHERE period = $1::date
-        ORDER BY ${STATUS_GROUP_ORDER}, in_latest_snapshot DESC, (classification = 'suspension') DESC, lower(member_name), id
+        ORDER BY ${LIST_ROWS_ORDER}
         LIMIT $2 OFFSET $3`,
       [periodDate(period), limit, offset],
     );
     return result.rows.map(toRow);
+  }
+
+  /**
+   * The row's 1-based place in listRows' order for its month, so a redirect
+   * can name the page it is on now; undefined for an unknown row or id.
+   */
+  async rowPosition(
+    period: Period,
+    rowId: number,
+  ): Promise<number | undefined> {
+    if (!isRowId(rowId)) {
+      return undefined;
+    }
+    const result = await this.pool.query<{ pos: string }>(
+      `SELECT pos FROM (
+         SELECT id, row_number() OVER (ORDER BY ${LIST_ROWS_ORDER}) AS pos
+           FROM noshow_workspace_rows WHERE period = $1::date
+       ) t WHERE id = $2`,
+      [periodDate(period), rowId],
+    );
+    const pos = result.rows[0]?.pos;
+    return pos === undefined ? undefined : Number(pos);
   }
 
   async countRows(

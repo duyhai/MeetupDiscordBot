@@ -17,6 +17,7 @@ import { memberHistoryLink, memberLink } from '../links.js';
 import { staffLink } from '../staffNames.js';
 import { pacificDate, pacificDateTime } from '../pageKit.js';
 import { PAGE_SIZE, pageNav } from '../paging.js';
+import { collapsible } from '../ui/collapsible.js';
 
 export const BAN_STATES: readonly BanState[] = ['active', 'lifted'];
 
@@ -30,18 +31,19 @@ export function parseBanShow(value: unknown): BanState {
   return BAN_STATES.find((s) => s === value) ?? 'active';
 }
 
-/** '/dashboard/suspensions?state=banned', plus `show` and `result` when given. */
+/** '/dashboard/bans' (the Banned page), plus `show` and `result` when given. */
 export function bannedTabPath(
   params: { show?: BanState; result?: string } = {},
 ): string {
-  const query = new URLSearchParams({ state: 'banned' });
+  const query = new URLSearchParams();
   if (params.show !== undefined) {
     query.set('show', params.show);
   }
   if (params.result !== undefined && params.result !== '') {
     query.set('result', params.result);
   }
-  return `${dashboardPath(DASHBOARD_PATHS.suspensions)}?${query.toString()}`;
+  const search = query.toString();
+  return `${dashboardPath(DASHBOARD_PATHS.bans)}${search ? `?${search}` : ''}`;
 }
 
 const MAX_SERIAL = 2 ** 31 - 1;
@@ -322,10 +324,10 @@ function showChoices(
 
 function bansTable(view: BannedTabView): SafeHtml {
   const pager = pageNav(
-    dashboardPath(DASHBOARD_PATHS.suspensions),
+    dashboardPath(DASHBOARD_PATHS.bans),
     view.page,
     view.rows.length === PAGE_SIZE,
-    { state: 'banned', show: view.show },
+    { show: view.show },
   );
   if (view.rows.length === 0) {
     return view.page > 1
@@ -391,12 +393,18 @@ function leaderForms(view: BannedTabView): SafeHtml {
           required
       /></label>
       <label class="field"
-        >Name
+        >Name (optional: left blank, it is taken from Meetup, and stays blank if
+        Meetup no longer lists them)
         <input name="memberName" maxlength="${BAN_NAME_MAX}" autocomplete="off"
       /></label>
       <label class="field"
-        >Banned on (blank if unknown)
-        <input type="date" name="bannedOn" min="2013-03-01" max="${view.today}"
+        >Banned on (today unless changed; clear it if the date is unknown)
+        <input
+          type="date"
+          name="bannedOn"
+          min="2013-03-01"
+          max="${view.today}"
+          value="${view.today}"
       /></label>
       <label class="field"
         >Notes
@@ -404,34 +412,39 @@ function leaderForms(view: BannedTabView): SafeHtml {
       </label>
       <button type="submit">Add ban</button>
     </form>
-    <h2>Import bans</h2>
-    <form
-      class="ban-add"
-      method="post"
-      action="${localUrl(dashboardPath(DASHBOARD_PATHS.banImport))}"
-    >
-      ${csrfField(view.csrf)}
-      <p class="muted">
-        Paste CSV text whose first line is exactly
-        <code>${BAN_CSV_HEADER}</code>. banned_on may be blank. If any row is
-        refused, nothing is imported.
-      </p>
-      <label class="field"
-        >CSV
-        <textarea name="csv" rows="6" required></textarea>
-      </label>
-      <button type="submit">Import bans</button>
-    </form>`;
+    ${collapsible({
+      // Folded: the import is rare, and the list should stay near the top.
+      summary: 'Import bans from CSV',
+      body: html`<form
+        class="ban-add"
+        method="post"
+        action="${localUrl(dashboardPath(DASHBOARD_PATHS.banImport))}"
+      >
+        ${csrfField(view.csrf)}
+        <p class="muted">
+          Paste CSV text whose first line is exactly
+          <code>${BAN_CSV_HEADER}</code>. banned_on may be blank. If any row is
+          refused, nothing is imported.
+        </p>
+        <label class="field"
+          >CSV
+          <textarea name="csv" rows="6" required></textarea>
+        </label>
+        <button type="submit">Import bans</button>
+      </form>`,
+    })}`;
 }
 
-/** The Banned tab's content under the Suspensions tab nav. */
+/**
+ * The Banned page's content: the notice, then (Leadership) the Add ban and
+ * import forms at the top, then the list.
+ */
 export function bannedTabBody(view: BannedTabView): SafeHtml {
-  return html`${view.notice} ${showChoices(view.show, view.counts)}
+  return html`${view.notice}
     <p class="muted">
       Bans are recorded here only. Discord and Meetup access are changed by
       hand. A lifted ban keeps its photo.
     </p>
-    ${bansTable(view)}
     ${
       view.leader
         ? leaderForms(view)
@@ -439,5 +452,7 @@ export function bannedTabBody(view: BannedTabView): SafeHtml {
             Only the 1.5 Leadership Team can record, import, upload or lift a
             ban.
           </p>`
-    }`;
+    }
+    <h2>Banned members</h2>
+    ${showChoices(view.show, view.counts)} ${bansTable(view)}`;
 }

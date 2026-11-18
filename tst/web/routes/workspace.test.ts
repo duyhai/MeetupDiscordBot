@@ -818,25 +818,32 @@ describe('GET /dashboard/no-shows/:period (month cards)', () => {
         'hold',
         'Put on hold',
         'Put this card on hold',
-        'Not decided yet: the card stays open as On hold until someone reopens it.',
-        'stays visible as On hold, not done,',
+        'Not decided yet: the card stays open as On hold until someone reopens or skips it.',
+        [
+          'stays visible as On hold, not done,',
+          '(for a suspension, Leadership only) records the suspension',
+        ],
       ],
       [
         'skip',
         'Skip',
         'Skip this card',
         'Decided: no action needed. The card counts as done.',
-        'the card counts as done.',
+        ['the card counts as done.', 'waiting for the third no-show'],
       ],
-    ])('%s asks why in a modal', async (action, label, confirm, hint, tip) => {
+    ])('%s asks why in a modal', async (action, label, confirm, hint, tips) => {
       const { get } = await setup({ seed: seed([warningRow()]) });
       const [card] = cards((await get(MONTH)).text);
       expect(closed(card)).toContain(
         `<summary class="button ghost" title="${hint}">${label}</summary>`,
       );
-      expect(
-        dialogWith(card, `value="${action}"`).replace(/\s+/g, ' '),
-      ).toContain(tip);
+      const dialogText = dialogWith(card, `value="${action}"`).replace(
+        /\s+/g,
+        ' ',
+      );
+      for (const tip of tips) {
+        expect(dialogText).toContain(tip);
+      }
       const d = dialogWith(card, `value="${action}"`);
       expect(d).toContain(
         '<textarea name="note" rows="3" maxlength="2000" required></textarea>',
@@ -1465,6 +1472,16 @@ describe('month page sections, summary and position (Hai, 2026-11-17)', () => {
     expect(words(res.text)).toContain('To do 1 card');
     expect(words(res.text)).toContain('Done 2 cards');
     expect(idsIn(res.text, 'On hold')).toEqual(['2']);
+  });
+
+  it('over 50 cards, the section counts say "on this page" (lead review of #162)', async () => {
+    const many = Array.from({ length: 52 }, (_, i) =>
+      workspaceRow({ id: 100 + i, memberId: String(3000 + i), status: 'new' }),
+    );
+    const { get } = await setup({ seed: seed(many) });
+    const text = words((await get(MONTH)).text);
+    expect(text).toContain('To do 50 on this page');
+    expect(text).not.toContain('50 cards');
   });
 
   it('an empty section says so', async () => {
@@ -2167,6 +2184,7 @@ describe('workspace GETs', () => {
       'countByState',
       'listByIds',
       'listByMemberIds',
+      'listDateEdits',
       'listPage',
     ]);
   });

@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { Period } from '../../../src/lib/reports/period.js';
-import { LinkProgressDay } from '../../../src/lib/repositories/postgresLinkProgressRepository.js';
 import {
   DashboardPageDeps,
   registerAllProtectedRoutes,
@@ -11,12 +10,10 @@ import {
   PAGE_NOW,
   SEPT,
   SeedRow,
-  fakeLinkProgress,
   fakeOrganizerDeps,
   fakePageDeps,
   fakeSnapshots,
   fakeSuspensions,
-  linkDay,
   seedRow,
 } from './pageFakes.js';
 
@@ -45,14 +42,12 @@ const SEEDED: SeedRow[] = [
 interface Setup {
   rows?: SeedRow[];
   byMonth?: { month: string; count: number }[];
-  days?: LinkProgressDay[];
   pages?: Partial<DashboardPageDeps>;
 }
 
 async function setup({
   rows = SEEDED,
   byMonth = [{ month: '2026-09', count: 3 }],
-  days = [linkDay('2026-10-04')],
   pages = {},
 }: Setup = {}) {
   const snapshots = fakeSnapshots(rows);
@@ -62,7 +57,6 @@ async function setup({
   snapshots.listSummaries.mockRejectedValue(new Error('listSummaries read'));
   snapshots.listMemberNoShowMonths.mockRejectedValue(new Error('member read'));
   const suspensions = fakeSuspensions({}, byMonth);
-  const linkProgress = fakeLinkProgress(days);
   const { req } = await makeApp({
     now: () => PAGE_NOW.getTime(),
     protectedRoutes: (r) =>
@@ -71,14 +65,13 @@ async function setup({
         pages: fakePageDeps({
           snapshots: async () => snapshots,
           suspensions: async () => suspensions,
-          linkProgress: async () => linkProgress,
           ...pages,
         }),
       }),
   });
   const cookie = await signIn(req);
   const get = (path: string) => req.get(path).set('Cookie', cookie);
-  return { snapshots, suspensions, linkProgress, get };
+  return { snapshots, suspensions, get };
 }
 
 const words = (body: string) =>
@@ -117,12 +110,12 @@ describe('trends page', () => {
     expect(snapshots.getCurrent).not.toHaveBeenCalled();
     expect(snapshots.getCurrentMeta).not.toHaveBeenCalled();
     expect(snapshots.listSummaries).not.toHaveBeenCalled();
-    expect(res.text.match(/<svg\s+class="chart"/g)).toHaveLength(5);
+    expect(res.text.match(/<svg\s+class="chart"/g)).toHaveLength(4);
     expect(res.text).not.toMatch(/style\s*=/i);
   });
 
   it('defaults to 24 continuous months ending with the current Pacific month', async () => {
-    const { suspensions, linkProgress, get } = await setup();
+    const { suspensions, get } = await setup();
     const res = await get(PAGE);
     const months = dataTable(res.text, 'No-shows per month').map((r) => r[0]);
     expect(months).toHaveLength(24);
@@ -132,16 +125,14 @@ describe('trends page', () => {
     expect(suspensions.countByMonth).toHaveBeenCalledWith(
       new Date('2024-11-01T00:00:00Z'),
     );
-    expect(linkProgress.listDays).toHaveBeenCalledWith(24 * 31);
   });
 
   it('accepts only the fixed month ranges', async () => {
-    const { snapshots, linkProgress, get } = await setup();
+    const { snapshots, get } = await setup();
     expect((await get(`${PAGE}?months=12`)).status).toBe(200);
     expect(snapshots.listSummarySeries).toHaveBeenLastCalledWith('no_show', {
       months: 12,
     });
-    expect(linkProgress.listDays).toHaveBeenLastCalledWith(12 * 31);
     expect((await get(`${PAGE}?months=60`)).status).toBe(200);
     expect(snapshots.listSummarySeries).toHaveBeenLastCalledWith('no_show', {
       months: 60,
@@ -160,7 +151,7 @@ describe('trends page', () => {
   });
 
   it('months=all asks for 240', async () => {
-    const { snapshots, linkProgress, get } = await setup({
+    const { snapshots, get } = await setup({
       rows: [...SEEDED, hofRow({ year: 2019, month: 6 }, { events: 2 })],
     });
     const res = await get(`${PAGE}?months=all`);
@@ -171,7 +162,6 @@ describe('trends page', () => {
     expect(snapshots.listSummarySeries).toHaveBeenCalledWith('no_show', {
       months: 240,
     });
-    expect(linkProgress.listDays).toHaveBeenCalledWith(1000);
     // From the earliest stored month in either series to now.
     const months = dataTable(res.text, 'Events and distinct hosts per month');
     expect(months[0]).toEqual(['2019-06', '2', '0']);
@@ -243,33 +233,11 @@ describe('trends page', () => {
     ]);
   });
 
-  it('charts link progress from the last recorded day of each month', async () => {
-    const { get } = await setup({
-      days: [
-        linkDay('2026-10-04', { linked: 160, unlinked: 30 }),
-        linkDay('2026-09-30', { linked: 150, unlinked: 35 }),
-        linkDay('2026-09-15', { linked: 140, unlinked: 45 }),
-        linkDay('2026-08-31', { linked: 120, unlinked: 50 }),
-      ],
-    });
+  it('has no link progress chart (Hai, 2026-11-18)', async () => {
+    const { get } = await setup();
     const res = await get(PAGE);
-    const title = 'Link progress (last recorded day of each month)';
-    expect(rowFor(res.text, title, '2026-10')).toEqual([
-      '2026-10',
-      '160',
-      '30',
-    ]);
-    expect(rowFor(res.text, title, '2026-09')).toEqual([
-      '2026-09',
-      '150',
-      '35',
-    ]);
-    expect(rowFor(res.text, title, '2026-08')).toEqual([
-      '2026-08',
-      '120',
-      '50',
-    ]);
-    expect(rowFor(res.text, title, '2026-07')).toEqual(['2026-07', '0', '0']);
+    expect(res.text).not.toMatch(/link progress/i);
+    expect(res.text).not.toMatch(/Linked/);
   });
 
   it('labels no Hall of Fame number as attendance', async () => {
@@ -295,11 +263,6 @@ describe('trends page', () => {
       pages: { suspensions: async () => suspensions },
     });
     expect((await second.get(PAGE)).status).toBe(503);
-
-    const third = await setup({
-      pages: { linkProgress: () => Promise.reject(new Error('down')) },
-    });
-    expect((await third.get(PAGE)).status).toBe(503);
   });
 });
 

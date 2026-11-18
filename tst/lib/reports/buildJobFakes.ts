@@ -2,7 +2,6 @@ import { vi } from 'vitest';
 
 import { LogEntry } from '../../../src/lib/helpers/discordLogger.js';
 import { BuildJobDeps } from '../../../src/lib/reports/buildJob.js';
-import { LinkProgressCounts } from '../../../src/lib/reports/linkProgress.js';
 import { MonthReports } from '../../../src/lib/reports/monthReports.js';
 import { Period, periodKey } from '../../../src/lib/reports/period.js';
 import {
@@ -213,25 +212,6 @@ export class FakeNoticeStore {
   }
 }
 
-export class FakeLinkProgressStore {
-  readonly days = new Map<string, LinkProgressCounts>();
-
-  async hasDay(day: string): Promise<boolean> {
-    return this.days.has(day);
-  }
-
-  async upsertDay(day: string, counts: LinkProgressCounts): Promise<void> {
-    this.days.set(day, counts);
-  }
-}
-
-export const LINK_COUNTS: LinkProgressCounts = {
-  linked: 10,
-  unlinked: 5,
-  reverifyTagged: 2,
-  onboarding: 1,
-};
-
 export class Clock {
   private current: Date;
 
@@ -301,7 +281,6 @@ export interface Harness {
   cache: FakeCache;
   snapshots: FakeSnapshotStore;
   notices: FakeNoticeStore;
-  linkProgress: FakeLinkProgressStore;
   fetchMonthReports: ReturnType<
     typeof vi.fn<
       (
@@ -310,9 +289,6 @@ export interface Harness {
         cutoff: Date | undefined,
       ) => Promise<MonthReports>
     >
-  >;
-  collectLinkProgress: ReturnType<
-    typeof vi.fn<() => Promise<LinkProgressCounts>>
   >;
   alert: ReturnType<typeof vi.fn<(entry: LogEntry) => Promise<boolean>>>;
   recentAlertTitles: ReturnType<
@@ -327,7 +303,6 @@ export interface HarnessOptions {
   cache?: FakeCache;
   snapshots?: FakeSnapshotStore;
   notices?: FakeNoticeStore;
-  linkProgress?: FakeLinkProgressStore;
   reportReadyEnabled?: boolean;
 }
 
@@ -337,13 +312,11 @@ export function makeDeps(options: HarnessOptions = {}): Harness {
   const snapshots = options.snapshots ?? new FakeSnapshotStore();
   const notices =
     options.notices ?? new FakeNoticeStore(() => clock.now().getTime());
-  const linkProgress = options.linkProgress ?? new FakeLinkProgressStore();
   let leases = 0;
   const fetchMonthReports = vi.fn(
     (period: Period, _asOf: Date, _cutoff: Date | undefined) =>
       Promise.resolve(monthReports(period)),
   );
-  const collectLinkProgress = vi.fn(() => Promise.resolve({ ...LINK_COUNTS }));
   const alert = vi.fn((_entry: LogEntry) => Promise.resolve(true));
   const recentAlertTitles = vi.fn(
     async (): Promise<string[] | undefined> => [],
@@ -357,9 +330,7 @@ export function makeDeps(options: HarnessOptions = {}): Harness {
     cache: cacheSpy,
     snapshots,
     notices,
-    linkProgress,
     fetchMonthReports,
-    collectLinkProgress,
     alert,
     recentAlertTitles,
     reportReadyEnabled: () => options.reportReadyEnabled ?? true,
@@ -375,9 +346,7 @@ export function makeDeps(options: HarnessOptions = {}): Harness {
     cache,
     snapshots,
     notices,
-    linkProgress,
     fetchMonthReports,
-    collectLinkProgress,
     alert,
     recentAlertTitles,
     cacheSpy,

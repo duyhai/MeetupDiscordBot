@@ -16,7 +16,6 @@ import {
 } from '../lib/reports/buildJob.js';
 import { PostgresReportSnapshotRepository } from '../lib/repositories/postgresReportSnapshotRepository.js';
 import { PostgresIdentityRepository } from '../lib/repositories/postgresIdentityRepository.js';
-import { PostgresLinkProgressRepository } from '../lib/repositories/postgresLinkProgressRepository.js';
 import { PostgresMemberRepository } from '../lib/repositories/postgresMemberRepository.js';
 import { PostgresNoShowWorkspaceRepository } from '../lib/repositories/postgresNoShowWorkspaceRepository.js';
 import { PostgresBanRepository } from '../lib/repositories/postgresBanRepository.js';
@@ -28,6 +27,7 @@ import {
   uploadBanPhoto,
 } from '../lib/bans/service.js';
 import { PostgresSuspensionRepository } from '../lib/repositories/postgresSuspensionRepository.js';
+import { editSuspensionDate } from '../lib/suspensions/dateEdit.js';
 import { PostgresPromotedHostRepository } from '../lib/repositories/postgresPromotedHostRepository.js';
 import { PostgresEventAuditRepository } from '../lib/repositories/postgresEventAuditRepository.js';
 import {
@@ -242,6 +242,14 @@ function banActions(
     repository: () => PostgresBanRepository.instance(),
     moderationLog: workspaceModerationLog,
     isLeadership,
+    // A blank Name on Add ban: the member's name from the group roster
+    // (current members only; someone already removed stays blank).
+    meetupMemberName: async (memberId) =>
+      (
+        await withOrganizerMeetup(discordClient, (meetup) =>
+          meetup.getGroupMembersByIds([memberId]),
+        )
+      ).find((m) => String(m.id) === memberId)?.name,
   };
   return {
     record: (input) => recordBan(deps, input),
@@ -336,9 +344,19 @@ export function dashboardPageDeps(): DashboardPageDeps {
       );
     },
     suspensions: () => PostgresSuspensionRepository.instance(),
+    suspensionActions: {
+      editDate: (input) =>
+        editSuspensionDate(
+          {
+            now: () => new Date(),
+            repository: () => PostgresSuspensionRepository.instance(),
+            moderationLog: workspaceModerationLog,
+          },
+          input,
+        ),
+    },
     bans: () => PostgresBanRepository.instance(),
     identity: () => PostgresIdentityRepository.instance(),
-    linkProgress: () => PostgresLinkProgressRepository.instance(),
     memberLinks: () => PostgresMemberRepository.instance(),
     workspace: () => PostgresNoShowWorkspaceRepository.instance(),
     workspaceActions: {

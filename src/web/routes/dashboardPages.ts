@@ -8,11 +8,11 @@ import type {
   BanResultCode,
 } from '../../lib/bans/service.js';
 import { LogEntry } from '../../lib/helpers/discordLogger.js';
+import type { editSuspensionDate } from '../../lib/suspensions/dateEdit.js';
 import { RebuildResult } from '../../lib/reports/buildJob.js';
 import { Period } from '../../lib/reports/period.js';
 import { PostgresBanRepository } from '../../lib/repositories/postgresBanRepository.js';
 import { PostgresIdentityRepository } from '../../lib/repositories/postgresIdentityRepository.js';
-import { PostgresLinkProgressRepository } from '../../lib/repositories/postgresLinkProgressRepository.js';
 import { PostgresMemberRepository } from '../../lib/repositories/postgresMemberRepository.js';
 import { PostgresNoShowWorkspaceRepository } from '../../lib/repositories/postgresNoShowWorkspaceRepository.js';
 import { PostgresReportSnapshotRepository } from '../../lib/repositories/postgresReportSnapshotRepository.js';
@@ -44,7 +44,6 @@ import {
 } from './hostPromotion.js';
 import { HostRequestDeps, registerHostRequestRoutes } from './hostRequests.js';
 import { registerIdentityRoutes } from './identity.js';
-import { registerLinkProgressRoutes } from './linkProgress.js';
 import { registerNoShowHistoryRoutes } from './noShowHistory.js';
 import { registerRefreshRoute } from './refresh.js';
 import { registerSessionRoutes } from './sessions.js';
@@ -75,8 +74,20 @@ export type SnapshotPageReader = Pick<
  */
 export type SuspensionPageReader = Pick<
   PostgresSuspensionRepository,
-  'listPage' | 'countByState' | 'countByMonth' | 'listByMemberIds' | 'listByIds'
+  | 'listPage'
+  | 'countByState'
+  | 'countByMonth'
+  | 'listByMemberIds'
+  | 'listByIds'
+  | 'listDateEdits'
 >;
+
+/** Leadership's date fix on a suspension record (editSuspensionDate). May reject; the route answers 'error'. */
+export interface SuspensionActions {
+  editDate(
+    input: Parameters<typeof editSuspensionDate>[1],
+  ): ReturnType<typeof editSuspensionDate>;
+}
 
 /**
  * The ban reads the Banned tab, its photo route and the workspace use:
@@ -85,12 +96,6 @@ export type SuspensionPageReader = Pick<
 export type BanPageReader = Pick<
   PostgresBanRepository,
   'listPage' | 'countByState' | 'getPhoto' | 'activeMemberIds'
->;
-
-/** The link progress read (newest first, at most 1000 days): never upsert. */
-export type LinkProgressPageReader = Pick<
-  PostgresLinkProgressRepository,
-  'listDays'
 >;
 
 /** The Discord link lookup the Hall of Fame mention text uses: never upsert or remove. */
@@ -124,6 +129,7 @@ export type WorkspacePageReader = Pick<
   | 'linkedRecordIds'
   | 'statusesByMember'
   | 'statusesForMember'
+  | 'rowPosition'
 >;
 
 /** The workspace's state changes (the service). Each may reject; the routes answer 'error'. */
@@ -189,14 +195,14 @@ export interface DashboardPageDeps
   rebuild: (period: Period, requestedBy: string) => Promise<PageRebuildResult>;
   /** The suspension records store. */
   suspensions: () => Promise<SuspensionPageReader>;
+  /** Edit date (the route runs the live Leadership check first). */
+  suspensionActions: SuspensionActions;
   /** The member ban store (dashboard pool). */
   bans: () => Promise<BanPageReader>;
   /** Record, import, lift and photo upload (the ban service). */
   banActions: BanActions;
   /** The identity change store (pool of 2, shared with the sweeps). */
   identity: () => Promise<IdentityPageReader>;
-  /** The daily link progress counts. */
-  linkProgress: () => Promise<LinkProgressPageReader>;
   /** Meetup id -> Discord id links, for the Hall of Fame mention text. */
   memberLinks: () => Promise<MemberLinkPageReader>;
   /** The no-show workspace store (dashboard pool). */
@@ -234,7 +240,6 @@ export function registerDashboardPages(
   registerSuspensionRoutes(router, deps);
   registerBanRoutes(router, deps);
   registerIdentityRoutes(router, deps);
-  registerLinkProgressRoutes(router, deps);
   registerTrendsRoutes(router, deps);
   registerHostRequestRoutes(router, deps);
   registerHostPromotionRoutes(router, deps);

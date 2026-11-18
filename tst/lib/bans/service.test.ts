@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { BanRow } from '../../../src/lib/bans/types.js';
+import { BAN_NAME_MAX, BanRow } from '../../../src/lib/bans/types.js';
 import {
   BANNED_TAB_URL,
+  BAN_NAME_LOOKUP_MS,
   BanServiceDeps,
   banEntry,
   checkBanPhoto,
@@ -233,6 +234,90 @@ describe('recordBan', () => {
     expect(repo.lift).not.toHaveBeenCalled();
   });
 
+  describe('a blank Name is filled from Meetup (Hai, 2026-11-17)', () => {
+    it('asks Meetup after the gate and records its name', async () => {
+      const { deps, repo } = fakeDeps();
+      const meetupMemberName = vi.fn(async () => '  Rico\r\n ');
+      const out = await recordBan(
+        { ...deps, meetupMemberName },
+        { ...recordInput({ memberName: '' }), leadershipConfirmed: true },
+      );
+      expect(out.code).toBe('recorded');
+      expect(meetupMemberName).toHaveBeenCalledWith('424242');
+      expect(repo.record).toHaveBeenCalledWith(
+        expect.objectContaining({ memberName: 'Rico' }),
+      );
+    });
+
+    it('a typed name is kept and Meetup is not asked', async () => {
+      const { deps, repo } = fakeDeps();
+      const meetupMemberName = vi.fn(async () => 'Other');
+      await recordBan({ ...deps, meetupMemberName }, recordInput());
+      expect(meetupMemberName).not.toHaveBeenCalled();
+      expect(repo.record).toHaveBeenCalledWith(
+        expect.objectContaining({ memberName: 'Ann' }),
+      );
+    });
+
+    it('a Moderator never spends the Meetup read', async () => {
+      const { deps, repo } = fakeDeps(false);
+      const meetupMemberName = vi.fn(async () => 'Rico');
+      const out = await recordBan(
+        { ...deps, meetupMemberName },
+        recordInput({ memberName: '' }),
+      );
+      expect(out.code).toBe('not-leadership');
+      expect(meetupMemberName).not.toHaveBeenCalled();
+      expect(repo.record).not.toHaveBeenCalled();
+    });
+
+    it('unknown to Meetup, failing or too slow: recorded with a blank name', async () => {
+      for (const lookup of [
+        async () => undefined,
+        async () => {
+          throw new Error('meetup down');
+        },
+      ]) {
+        const { deps, repo } = fakeDeps();
+        // eslint-disable-next-line no-await-in-loop -- one case at a time
+        const out = await recordBan(
+          { ...deps, meetupMemberName: lookup },
+          recordInput({ memberName: '' }),
+        );
+        expect(out.code).toBe('recorded');
+        expect(repo.record).toHaveBeenCalledWith(
+          expect.objectContaining({ memberName: '' }),
+        );
+      }
+      vi.useFakeTimers();
+      const { deps, repo } = fakeDeps();
+      const pending = recordBan(
+        {
+          ...deps,
+          meetupMemberName: () => new Promise<string>(() => {}),
+        },
+        recordInput({ memberName: '' }),
+      );
+      await vi.advanceTimersByTimeAsync(BAN_NAME_LOOKUP_MS);
+      expect((await pending).code).toBe('recorded');
+      expect(repo.record).toHaveBeenCalledWith(
+        expect.objectContaining({ memberName: '' }),
+      );
+      vi.useRealTimers();
+    });
+
+    it('a long Meetup name is cut to the column limit', async () => {
+      const { deps, repo } = fakeDeps();
+      await recordBan(
+        { ...deps, meetupMemberName: async () => 'x'.repeat(BAN_NAME_MAX + 9) },
+        recordInput({ memberName: '' }),
+      );
+      expect(repo.record).toHaveBeenCalledWith(
+        expect.objectContaining({ memberName: 'x'.repeat(BAN_NAME_MAX) }),
+      );
+    });
+  });
+
   it('maps already-banned and posts nothing on a refusal', async () => {
     const { deps, repo } = fakeDeps();
     repo.record.mockResolvedValueOnce({
@@ -263,7 +348,7 @@ describe('recordBan', () => {
     expect(entry.description).toContain(`<@${LEAD}>`);
     expect(entry.description).toContain(`\n${BANNED_TAB_URL}`);
     expect(BANNED_TAB_URL).toBe(
-      'https://meetup-discord-bot.herokuapp.com/dashboard/suspensions?state=banned',
+      'https://meetup-discord-bot.herokuapp.com/dashboard/bans',
     );
     const text = JSON.stringify(entry);
     expect(text).not.toContain('Ann');

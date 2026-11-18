@@ -7,10 +7,27 @@ import { DASHBOARD_PATHS } from '../../lib/reports/dashboardPaths.js';
 import { dashboardLocals } from '../dashboardRouter.js';
 import { SafeHtml, html } from '../html.js';
 import { sniffImageType } from '../images.js';
-import { load, notFound, parseRowId } from '../pageKit.js';
-import { bannedTabPath } from './bannedTab.js';
+import { BanState } from '../../lib/bans/types.js';
+import { pacificToday } from '../../lib/helpers/suspensionList.js';
+import {
+  dashboardPage,
+  load,
+  notFound,
+  parseRowId,
+  unavailable,
+} from '../pageKit.js';
+import { PAGE_SIZE, parsePage } from '../paging.js';
+import { loadStaffNames } from '../staffNames.js';
+import {
+  banResultNotice,
+  banStaffIds,
+  bannedTabBody,
+  bannedTabPath,
+  isBanRow,
+  parseBanShow,
+} from './bannedTab.js';
 import type { DashboardPageDeps } from './dashboardPages.js';
-import { renderBannedTab } from './suspensions.js';
+import { LeadershipDisplayCache } from './workspace.js';
 import { leadershipOf, withDeadline } from './workspaceActions.js';
 
 export { BAN_RESULT_MESSAGES, banResultNotice } from './bannedTab.js';
@@ -62,6 +79,73 @@ function importRefusalNotice(errors: BanCsvError[]): SafeHtml {
   </div>`;
 }
 
+/** What one render of the Banned page shows besides the rows it reads. */
+export interface BannedPageRender {
+  show: BanState;
+  page: number;
+  notice: SafeHtml | '';
+  /** Whether to show the forms: a display answer, never the authority. */
+  leader: Promise<boolean> | boolean;
+  status?: number;
+}
+
+/**
+ * The Banned page (Member moderation → Banned): the ban rows and counts
+ * under the page deadline (a failure is the 503 page).
+ */
+export async function renderBannedPage(
+  res: Response,
+  deps: Pick<DashboardPageDeps, 'now' | 'bans' | 'staffNames'>,
+  view: BannedPageRender,
+): Promise<void> {
+  const { show, page } = view;
+  const today = pacificToday(deps.now());
+  const [loaded, leader] = await Promise.all([
+    load(res, 'Bans', async () => {
+      const bans = await deps.bans();
+      const [banCounts, rows] = await Promise.all([
+        bans.countByState(),
+        bans.listPage({
+          state: show,
+          offset: (page - 1) * PAGE_SIZE,
+          limit: PAGE_SIZE,
+        }),
+      ]);
+      return { banCounts, rows };
+    }),
+    view.leader,
+  ]);
+  if (!loaded.ok) {
+    return;
+  }
+  const { banCounts, rows } = loaded.value;
+  if (!Array.isArray(rows) || !rows.every((row) => isBanRow(row, show))) {
+    unavailable(res, 'Bans');
+    return;
+  }
+  const staffNames = await loadStaffNames(deps.staffNames, banStaffIds(rows));
+  dashboardPage(res, {
+    title: 'Banned members',
+    ...(view.status !== undefined && { status: view.status }),
+    // The photo forms' script, only where they render (Leadership, display).
+    ...(leader && show === 'active' && { script: 'bans' as const }),
+    body: html`<div class="card">
+      <h1>Banned members</h1>
+      ${bannedTabBody({
+        show,
+        rows,
+        counts: banCounts,
+        page,
+        notice: view.notice,
+        leader,
+        csrf: dashboardLocals(res).session.csrfToken,
+        today,
+        staffNames,
+      })}
+    </div>`,
+  });
+}
+
 /**
  * The ban routes. Routes go on `router` itself (protectedRouteList and the
  * access matrix only see those).
@@ -70,16 +154,33 @@ export function registerBanRoutes(
   router: express.Router,
   deps: Pick<
     DashboardPageDeps,
-    | 'now'
-    | 'bans'
-    | 'suspensions'
-    | 'banActions'
-    | 'isLeadership'
-    | 'staffNames'
+    'now' | 'bans' | 'banActions' | 'isLeadership' | 'staffNames'
   >,
 ): void {
   const back = (res: Response, code: BanResultCode) =>
     res.redirect(303, bannedTabPath({ result: code }));
+
+  // As the workspace month page: a cached live answer (up to 60 s) decides
+  // only whether the page shows its forms. Every ban POST asks Discord live.
+  const displayLeadership = new LeadershipDisplayCache(() =>
+    deps.now().getTime(),
+  );
+
+  // GET /dashboard/bans: the Banned page.
+  router.get(DASHBOARD_PATHS.bans, (async (req, res) => {
+    const { session } = dashboardLocals(res);
+    await renderBannedPage(res, deps, {
+      show: parseBanShow(req.query.show),
+      page: parsePage(req.query.page),
+      notice: banResultNotice(req.query.result),
+      // leadershipOf never rejects.
+      leader: displayLeadership
+        .get(session.userId, () =>
+          leadershipOf(deps.isLeadership, session.userId),
+        )
+        .then((answer) => answer === 'leader'),
+    });
+  }) as RequestHandler);
 
   /**
    * The live 1.5 Leadership Team check every ban POST starts with (the
@@ -163,7 +264,7 @@ export function registerBanRoutes(
     if ('errors' in result) {
       // Rendered in place, never echoing the CSV: fixed text and row
       // numbers only, and the textarea comes back empty.
-      await renderBannedTab(res, deps, {
+      await renderBannedPage(res, deps, {
         show: 'active',
         page: 1,
         notice: importRefusalNotice(result.errors),

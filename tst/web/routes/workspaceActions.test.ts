@@ -46,6 +46,7 @@ import {
   SEPT,
   fakeOrganizerDeps,
   fakePageDeps,
+  fakeWorkspace,
 } from './pageFakes.js';
 
 afterEach(() => {
@@ -69,6 +70,8 @@ async function setup(
     sync?: Sync;
     leader?: boolean | Error;
     actionLimiter?: FixedWindowLimiter;
+    /** The card's place in listRows' order (rowPosition); default 1. */
+    rowPosition?: () => Promise<number | undefined>;
   } = {},
 ) {
   const perform = vi.fn<Perform>(
@@ -95,6 +98,12 @@ async function setup(
           now: () => new Date(clock),
           isLeadership,
           workspaceActions: { perform, sync, moderationLog },
+          ...(options.rowPosition && {
+            workspace: async () => ({
+              ...fakeWorkspace(),
+              rowPosition: vi.fn(options.rowPosition),
+            }),
+          }),
         }),
       }),
   });
@@ -202,7 +211,8 @@ describe('workspace action routes', () => {
     const res = await post(ROW, { action: 'mark_sent', version: '1' });
     expect(res.status).toBe(409);
     expect(res.text).toContain('Someone just updated this card');
-    expect(res.text).toContain(`href="${MONTH}"`);
+    // Back to the card, where it is now; no result notice.
+    expect(res.text).toContain(`href="${MONTH}?row=1#acted"`);
     expect(perform).toHaveBeenCalledTimes(1);
   });
 
@@ -1016,5 +1026,43 @@ describe('workspace request deadlines', () => {
     expect(
       LEADERSHIP_CHECK_DEADLINE_MS + WORKSPACE_REQUEST_DEADLINE_MS,
     ).toBeLessThan(30_000);
+  });
+});
+
+describe('back on the card, on the page it is on now (lead review of #162)', () => {
+  it.each([
+    [50, `${MONTH}?result=done&row=1#acted`],
+    [51, `${MONTH}?result=done&page=2&row=1#acted`],
+    [101, `${MONTH}?result=done&page=3&row=1#acted`],
+  ])('position %i redirects to %s', async (pos, expected) => {
+    const { post } = await setup({ rowPosition: async () => pos });
+    const res = await post(ROW, { version: '1', action: 'mark_sent' });
+    expect(location(res)).toBe(expected);
+  });
+
+  it('an unknown or failing position leaves the page out', async () => {
+    for (const rowPosition of [
+      async () => undefined,
+      async () => {
+        throw new Error('db down');
+      },
+    ]) {
+      // eslint-disable-next-line no-await-in-loop -- one app at a time
+      const { post } = await setup({ rowPosition });
+      // eslint-disable-next-line no-await-in-loop
+      const res = await post(ROW, { version: '1', action: 'mark_sent' });
+      expect(location(res)).toBe(`${MONTH}?result=done&row=1#acted`);
+    }
+  });
+
+  it('the stale page links to the card on its page, with no result notice', async () => {
+    const { post } = await setup({
+      rowPosition: async () => 60,
+      perform: async () => ({ code: 'stale' }),
+    });
+    const res = await post(ROW, { version: '1', action: 'mark_sent' });
+    expect(res.status).toBe(409);
+    expect(res.text).toContain(`href="${MONTH}?page=2&amp;row=1#acted"`);
+    expect(res.text).not.toContain('result=');
   });
 });

@@ -32,8 +32,8 @@ import {
   IdentityChangeFilter,
   IdentityChangeListItem,
 } from '../../../src/lib/repositories/postgresIdentityRepository.js';
-import { LinkProgressDay } from '../../../src/lib/repositories/postgresLinkProgressRepository.js';
 import {
+  SuspensionDateEdit,
   SuspensionPageRow,
   SuspensionRecordState,
   SuspensionState,
@@ -45,7 +45,6 @@ import {
   BanPageReader,
   DashboardPageDeps,
   IdentityPageReader,
-  LinkProgressPageReader,
   MemberLinkPageReader,
   PageRebuildResult,
   SnapshotPageReader,
@@ -397,9 +396,19 @@ export function fakeSuspensions(
   rows: Partial<Record<SuspensionState, SuspensionPageRow[]>> = {},
   byMonth: { month: string; count: number }[] = [],
   records: SuspensionRecordState[] = [],
+  dateEdits: SuspensionDateEdit[] = [],
 ) {
   const tab = (state: SuspensionState) => rows[state] ?? [];
   return {
+    listDateEdits: vi.fn(
+      async (ids: number[]): Promise<Map<number, SuspensionDateEdit[]>> => {
+        const out = new Map<number, SuspensionDateEdit[]>();
+        for (const e of dateEdits.filter((d) => ids.includes(d.recordId))) {
+          out.set(e.recordId, [...(out.get(e.recordId) ?? []), e]);
+        }
+        return out;
+      },
+    ),
     listByMemberIds: vi.fn(
       async (memberIds: string[], before?: Date): Promise<SuspensionRecord[]> =>
         records
@@ -581,40 +590,6 @@ export function fakeIdentity(
   } satisfies IdentityPageReader;
 }
 
-/** One day of link progress counts. */
-export function linkDay(
-  day: string,
-  overrides: Partial<LinkProgressDay> = {},
-): LinkProgressDay {
-  return {
-    day,
-    linked: 100,
-    unlinked: 40,
-    reverifyTagged: 5,
-    onboarding: 3,
-    ...overrides,
-  };
-}
-
-/** `count` consecutive days ending the day before PAGE_NOW, newest first (like listDays). */
-export function linkDays(count: number): LinkProgressDay[] {
-  const end = Date.UTC(2026, 9, 4);
-  return Array.from({ length: count }, (_, i) =>
-    linkDay(new Date(end - i * 86_400_000).toISOString().slice(0, 10), {
-      linked: 200 - i,
-    }),
-  );
-}
-
-/** An in-memory LinkProgressPageReader over newest-first days, capped like the repository. */
-export function fakeLinkProgress(days: LinkProgressDay[] = linkDays(3)) {
-  return {
-    listDays: vi.fn(async (limit: number = 90): Promise<LinkProgressDay[]> =>
-      days.slice(0, Math.min(1000, limit)),
-    ),
-  } satisfies LinkProgressPageReader;
-}
-
 /**
  * A MemberLinkPageReader over a fixed meetup id -> discord id table. The
  * stored discord id is returned as is, valid or not, like the repository.
@@ -706,6 +681,15 @@ export function fakeWorkspace(seed: WorkspaceSeed = WORKSPACE_SEED()) {
         [...inMonth(period)]
           .sort((a, b) => statusGroup(a.status) - statusGroup(b.status))
           .slice(page.offset, page.offset + Math.min(50, page.limit)),
+    ),
+    rowPosition: vi.fn(
+      async (period: Period, rowId: number): Promise<number | undefined> => {
+        const ordered = [...inMonth(period)].sort(
+          (a, b) => statusGroup(a.status) - statusGroup(b.status),
+        );
+        const index = ordered.findIndex((r) => r.id === rowId);
+        return index === -1 ? undefined : index + 1;
+      },
     ),
     countRows: vi.fn(
       async (period: Period): Promise<{ total: number; inLatest: number }> => ({
@@ -1153,11 +1137,13 @@ export function fakePageDeps(
         { active: [banRow({ id: 1, hasPhoto: true })] },
         { 1: WEBP_BYTES },
       ),
-    linkProgress: async () => fakeLinkProgress(),
     memberLinks: async () => fakeMemberLinks(),
     workspace: async () => fakeWorkspace(),
     workspaceActions: fakeWorkspaceActions(),
     banActions: fakeBanActions(),
+    suspensionActions: {
+      editDate: vi.fn(async () => ({ code: 'date-changed' as const })),
+    },
     upcoming: vi.fn(
       async (_memberIds: string[]): Promise<Map<string, UpcomingEntry>> =>
         new Map(),

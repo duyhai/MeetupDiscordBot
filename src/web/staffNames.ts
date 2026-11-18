@@ -13,6 +13,44 @@ export type StaffNameLookup = (
 
 /** A page waits at most this long for names; past it, everyone is "staff member". */
 export const STAFF_NAMES_BUDGET_MS = 1500;
+/**
+ * After a lookup times out or fails, pages skip it for this long and go
+ * straight to "staff member", so a Discord outage costs one page the
+ * budget, not every page.
+ */
+export const STAFF_NAMES_BACKOFF_MS = 90_000;
+
+/** When the lookup may be tried again (in-process; one per lookup function). */
+export class StaffNameBackoff {
+  private until = 0;
+
+  constructor(private readonly now: () => number = Date.now) {}
+
+  get open(): boolean {
+    return this.now() >= this.until;
+  }
+
+  trip(): void {
+    this.until = this.now() + STAFF_NAMES_BACKOFF_MS;
+  }
+
+  reset(): void {
+    this.until = 0;
+  }
+}
+
+/** One backoff per lookup function: production has one; each test its own. */
+const backoffs = new WeakMap<StaffNameLookup, StaffNameBackoff>();
+
+function backoffFor(lookup: StaffNameLookup): StaffNameBackoff {
+  let backoff = backoffs.get(lookup);
+  if (!backoff) {
+    backoff = new StaffNameBackoff();
+    backoffs.set(lookup, backoff);
+  }
+  return backoff;
+}
+
 /** One page asks for at most this many ids (a page lists 50 rows, a few staff each). */
 export const STAFF_NAMES_MAX = 100;
 /** What a link says when the name is not known. */
@@ -23,13 +61,15 @@ const DISCORD_ID = /^[0-9]{17,20}$/;
 /**
  * One lookup for every staff id a page shows, within STAFF_NAMES_BUDGET_MS.
  * Never rejects: a missing lookup, a failure or a timeout is {} (each link
- * falls back). Only 17-20 digit ids are asked about; a name is kept only
+ * falls back), and a failure or timeout skips the lookup for
+ * STAFF_NAMES_BACKOFF_MS. Only 17-20 digit ids are asked about; a name is kept only
  * for an id that was asked and only as a non-empty string.
  */
 export async function loadStaffNames(
   lookup: StaffNameLookup | undefined,
   ids: Iterable<unknown>,
   budgetMs = STAFF_NAMES_BUDGET_MS,
+  backoff?: StaffNameBackoff,
 ): Promise<Record<string, string>> {
   const asked = [
     ...new Set(
@@ -41,15 +81,24 @@ export async function loadStaffNames(
   if (!lookup || asked.length === 0) {
     return {};
   }
+  const gate = backoff ?? backoffFor(lookup);
+  if (!gate.open) {
+    return {};
+  }
   let timer: NodeJS.Timeout | undefined;
-  const timeout = new Promise<Record<string, string>>((resolve) => {
-    timer = setTimeout(() => resolve({}), budgetMs);
+  const timeout = new Promise<'timeout'>((resolve) => {
+    timer = setTimeout(() => resolve('timeout'), budgetMs);
   });
   try {
-    const found = await Promise.race([
-      lookup(asked).catch((): Record<string, string> => ({})),
+    const answer = await Promise.race([
+      lookup(asked).catch((): 'failed' => 'failed'),
       timeout,
     ]);
+    if (answer === 'timeout' || answer === 'failed') {
+      gate.trip();
+      return {};
+    }
+    const found = answer;
     const names: Record<string, string> = {};
     for (const id of asked) {
       const name: unknown = Object.hasOwn(found, id) ? found[id] : undefined;

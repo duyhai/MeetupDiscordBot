@@ -37,6 +37,7 @@ import {
 } from '../pageKit.js';
 import { FixedWindowLimiter } from '../rateLimit.js';
 import type { AccessCheck } from '../roleGate.js';
+import { PAGE_SIZE } from '../paging.js';
 import type { DashboardPageDeps } from './dashboardPages.js';
 
 const logger = new Logger({ name: 'dashboard' });
@@ -229,7 +230,46 @@ function resultCode(result: WorkspaceActionResult): WorkspaceResultCode {
   return isResultCode(result.code) ? result.code : 'error';
 }
 
-function stalePage(res: Response, period: Period): void {
+/** How long a redirect waits for the card's page before leaving it out. */
+export const ROW_PAGE_DEADLINE_MS = 2_000;
+
+/**
+ * The month URL that lands on one card: its current page (listRows' order,
+ * PAGE_SIZE a page), `row` to open its section and mark it, and #acted.
+ * Without the position (unknown, or the read failed or was slow) the page
+ * is left out: page 1, as before. Never rejects.
+ */
+export async function actedCardPath(
+  workspace: DashboardPageDeps['workspace'],
+  period: Period,
+  rowId: number,
+  result?: WorkspaceResultCode,
+): Promise<string> {
+  let page = 1;
+  try {
+    const pos = await withDeadline(ROW_PAGE_DEADLINE_MS, async () =>
+      (await workspace()).rowPosition(period, rowId),
+    );
+    if (pos !== undefined && Number.isSafeInteger(pos) && pos > 0) {
+      page = Math.ceil(pos / PAGE_SIZE);
+    }
+  } catch (error: unknown) {
+    logger.warn(
+      `Workspace card position failed: ${error instanceof Error ? error.name : 'Error'}`,
+    );
+  }
+  const query = [
+    result === undefined ? '' : `result=${result}`,
+    page > 1 ? `page=${page}` : '',
+    `row=${rowId}`,
+  ]
+    .filter(Boolean)
+    .join('&');
+  return `${monthPath(DASHBOARD_PATHS.workspaceMonth, period)}?${query}#acted`;
+}
+
+/** The 409 page: Nothing saved, and a link back to that card where it is now. No result notice. */
+function stalePage(res: Response, back: string): void {
   dashboardPage(res, {
     title: 'Card changed',
     status: 409,
@@ -240,9 +280,7 @@ function stalePage(res: Response, period: Period): void {
         again.
       </p>
       <p>
-        <a href="${localUrl(monthPath(DASHBOARD_PATHS.workspaceMonth, period))}"
-          >Reload the workspace</a
-        >
+        <a href="${localUrl(back)}">Reload the workspace</a>
       </p>
     </div>`,
   });
@@ -258,7 +296,10 @@ function stalePage(res: Response, period: Period): void {
  */
 export function registerWorkspaceActionRoutes(
   router: express.Router,
-  deps: Pick<DashboardPageDeps, 'now' | 'workspaceActions' | 'isLeadership'>,
+  deps: Pick<
+    DashboardPageDeps,
+    'now' | 'workspaceActions' | 'isLeadership' | 'workspace'
+  >,
 ): void {
   const refusalPosts = new FixedWindowLimiter(
     1,
@@ -273,17 +314,19 @@ export function registerWorkspaceActionRoutes(
       notFound(res);
       return;
     }
-    // Back to the card acted on: `row` (a parsed id) opens its section and
-    // marks its heading with the fixed id #acted lands on.
-    const back = (code: WorkspaceResultCode) =>
+    // Back to the card acted on, on the page it is on now: `row` (a parsed
+    // id) opens its section and marks its heading with the fixed id #acted
+    // lands on.
+    const back = async (code: WorkspaceResultCode) => {
       res.redirect(
         303,
-        `${monthPath(DASHBOARD_PATHS.workspaceMonth, period)}?result=${code}&row=${rowId}#acted`,
+        await actedCardPath(deps.workspace, period, rowId, code),
       );
+    };
     const body = req.body as Record<string, unknown> | undefined;
     const action = field(body, 'action');
     if (!isAction(action)) {
-      back('invalid');
+      await back('invalid');
       return;
     }
     const { session } = dashboardLocals(res);
@@ -314,7 +357,7 @@ export function registerWorkspaceActionRoutes(
             leadershipRefusalEntry(period, rowId, action, session.userId, why),
           );
         }
-        back(
+        await back(
           why === 'not-leadership'
             ? 'not-leadership'
             : 'leadership-unavailable',
@@ -346,7 +389,7 @@ export function registerWorkspaceActionRoutes(
     }
     const refusal = formRefusal(action, body, period, now);
     if (refusal !== undefined) {
-      back(refusal);
+      await back(refusal);
       return;
     }
     let result: WorkspaceActionResult;
@@ -370,11 +413,11 @@ export function registerWorkspaceActionRoutes(
       logger.warn(
         `Dashboard workspace action failed: ${error instanceof Error ? error.name : 'Error'}`,
       );
-      back('error');
+      await back('error');
       return;
     }
     if (result.code === 'stale') {
-      stalePage(res, period);
+      stalePage(res, await actedCardPath(deps.workspace, period, rowId));
       return;
     }
     if (result.code === 'not-found') {
@@ -389,7 +432,7 @@ export function registerWorkspaceActionRoutes(
       );
       return;
     }
-    back(resultCode(result));
+    await back(resultCode(result));
   }) as RequestHandler);
 
   router.post(DASHBOARD_PATHS.workspaceSync, (async (req, res) => {
