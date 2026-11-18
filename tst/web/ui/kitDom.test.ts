@@ -506,109 +506,227 @@ describe('KIT_SCRIPT in a real DOM: the nav accordion', () => {
 });
 
 describe('KIT_SCRIPT in a real DOM: back on the acted card, where it was', () => {
-  const MONTH = 'http://localhost/dashboard/no-shows/2026-09';
+  const PATH = '/dashboard/no-shows/2026-09';
+  const MONTH = `http://localhost${PATH}`;
   const LANDING = `${MONTH}?result=done&row=2#acted`;
   const KEY = 'ui-keep-place';
   interface Storage {
     getItem(key: string): string | null;
     setItem(key: string, value: string): void;
+    removeItem(key: string): void;
   }
   type Landing = Win & {
     sessionStorage: Storage;
     scrollBy: (x: number, y: number) => void;
   };
-  /** jsdom has no layout: the card says where it is. */
-  const placeCard = (card: El | null, top: number) => {
+  const submitEvent = (window: Win) =>
+    new (
+      window as unknown as { Event: new (t: string, i: object) => object }
+    ).Event('submit', { bubbles: true, cancelable: true });
+  /** A place saved for row 2 on the September page, 300px down, two seconds ago. */
+  const place = (extra: object = {}) => ({
+    p: PATH,
+    r: '2',
+    t: 300,
+    at: Date.now() - 2_000,
+    ...extra,
+  });
+  /**
+   * jsdom has no layout: the card's top is a number that scrollBy moves,
+   * as a browser's would. It starts at 16, where the browser's fragment
+   * scroll put the acted heading.
+   */
+  function layout(window: Win, card: El | null) {
     expect(card).not.toBeNull();
+    const view = { top: 16 };
     (
       card as unknown as { getBoundingClientRect: () => object }
-    ).getBoundingClientRect = () => ({ top });
-  };
-  /** The page as a browser has it after the redirect: the fragment scroll put the acted card's heading near the top. */
-  async function landed(saved: object | undefined) {
-    const { window, document, run } = load(
-      await monthPage('/dashboard/no-shows/2026-09?result=done&row=2'),
-      LANDING,
-    );
-    const w = window as Landing;
-    if (saved !== undefined) {
-      w.sessionStorage.setItem(KEY, JSON.stringify(saved));
-    }
-    const scrollBy = vi.fn();
-    w.scrollBy = scrollBy;
-    const acted = document.getElementById('acted');
-    placeCard(acted?.closest('[data-keep-place]') ?? null, 16);
-    run();
+    ).getBoundingClientRect = () => ({ top: view.top });
+    const scrollBy = vi.fn((_x: number, y: number) => {
+      view.top -= y;
+    });
+    (window as Landing).scrollBy = scrollBy;
+    return { view, scrollBy };
+  }
+  /** jsdom runs the kit at readyState interactive; load follows. */
+  async function loaded(window: Win, document: Document) {
     if (document.readyState !== 'complete') {
       await new Promise((r) => {
         window.addEventListener('load', r);
       });
     }
-    return { w, document, acted, scrollBy };
+  }
+
+  async function landed(saved: object | undefined, url = LANDING) {
+    const page = load(
+      await monthPage('/dashboard/no-shows/2026-09?result=done&row=2'),
+      url,
+    );
+    const w = page.window as Landing;
+    if (saved !== undefined) {
+      w.sessionStorage.setItem(KEY, JSON.stringify(saved));
+    }
+    const acted = page.document.getElementById('acted');
+    const { view, scrollBy } = layout(
+      page.window,
+      acted?.closest('[data-keep-place]') ?? null,
+    );
+    return { ...page, w, acted, view, scrollBy };
   }
 
   it('puts the card back at the height it was when the action was sent, and focuses its heading', async () => {
-    const { w, document, acted, scrollBy } = await landed({
-      p: '/dashboard/no-shows/2026-09',
-      t: 300,
-      at: Date.now() - 2_000,
-    });
+    const { window, document, run, w, acted, view, scrollBy } =
+      await landed(place());
+    expect(document.readyState).not.toBe('complete');
+    run();
     // From 16px down the viewport back to 300px: scroll up by 284.
     expect(scrollBy).toHaveBeenCalledExactlyOnceWith(0, -284);
+    expect(view.top).toBe(300);
     expect(document.activeElement).toBe(acted);
     expect(acted?.getAttribute('tabindex')).toBe('-1');
-    // Used once: a later visit to the same link is a plain landing.
+    // Used once: a reload or Back to the same URL is a plain landing.
     expect(w.sessionStorage.getItem(KEY)).toBeNull();
+    // Load: the card has not moved since, so nothing scrolls again.
+    await loaded(window, document);
+    expect(scrollBy).toHaveBeenCalledTimes(1);
+  });
+
+  it('run after load (readyState complete): placed and focused at once, nothing waits for a load that has passed', async () => {
+    const { window, document, run, acted, view, scrollBy } =
+      await landed(place());
+    await loaded(window, document);
+    expect(document.readyState).toBe('complete');
+    run();
+    expect(scrollBy).toHaveBeenCalledExactlyOnceWith(0, -284);
+    expect(view.top).toBe(300);
+    expect(document.activeElement).toBe(acted);
+  });
+
+  it('the browser’s fragment scroll after the first placement is undone once at load', async () => {
+    const { window, document, run, view, scrollBy } = await landed(place());
+    run();
+    view.top = 16; // the browser scrolled to #acted after the kit ran
+    await loaded(window, document);
+    expect(scrollBy).toHaveBeenCalledTimes(2);
+    expect(view.top).toBe(300);
+  });
+
+  it.each(['wheel', 'touchstart', 'keydown', 'pointerdown'])(
+    'a %s by the reader before load: the page is left where the reader put it',
+    async (type) => {
+      const { window, document, run, view, scrollBy } = await landed(place());
+      run();
+      view.top = 16;
+      window.dispatchEvent(new window.Event(type));
+      await loaded(window, document);
+      expect(scrollBy).toHaveBeenCalledTimes(1);
+      expect(view.top).toBe(16);
+    },
+  );
+
+  it('focus already somewhere else (the reader clicked into the page) is not taken', async () => {
+    const { document, run, acted } = await landed(place());
+    const [link] = document.querySelectorAll('main a');
+    expect(link).toBeDefined();
+    link.focus();
+    run();
+    expect(document.activeElement).toBe(link);
+    expect(document.activeElement).not.toBe(acted);
   });
 
   it.each<[string, object | undefined]>([
     ['nothing saved (no JavaScript before, or a link)', undefined],
     [
-      'another page’s place',
-      { p: '/dashboard/no-shows/2026-10', t: 300, at: Date.now() },
+      'another row’s place (Skip on one card, then a landing for another)',
+      place({ r: '3' }),
     ],
+    ['another page’s place', place({ p: '/dashboard/no-shows/2026-10' })],
     [
       'a place saved over ten minutes ago',
-      {
-        p: '/dashboard/no-shows/2026-09',
-        t: 300,
-        at: Date.now() - 11 * 60_000,
-      },
+      place({ at: Date.now() - 11 * 60_000 }),
     ],
     [
       'a place saved in the future (clock change)',
-      { p: '/dashboard/no-shows/2026-09', t: 300, at: Date.now() + 60_000 },
+      place({ at: Date.now() + 60_000 }),
     ],
-    ['junk', { p: '/dashboard/no-shows/2026-09', t: '300', at: 'x' }],
+    ['junk', { p: PATH, r: '2', t: '300', at: 'x' }],
+    ['a row that is not digits', place({ r: '2"],a[x="' })],
   ])(
-    '%s: the browser’s own landing on the card stands, and its heading still takes focus',
+    '%s: the browser’s own landing stands, the heading still takes focus, and the entry is dropped',
     async (_why, saved) => {
-      const { document, acted, scrollBy } = await landed(saved);
+      const { window, document, run, w, acted, scrollBy } = await landed(saved);
+      run();
+      await loaded(window, document);
       expect(scrollBy).not.toHaveBeenCalled();
       expect(document.activeElement).toBe(acted);
+      expect(w.sessionStorage.getItem(KEY)).toBeNull();
     },
   );
 
-  it('a form sent from inside a card saves that card’s place; one outside a card saves nothing', async () => {
+  it('storage that throws on read and remove (private mode): no scroll, heading focused, no error', async () => {
+    const { window, document, run, acted, scrollBy } = await landed(undefined);
+    const boom = () => {
+      throw new Error('SecurityError');
+    };
+    Object.defineProperty(window, 'sessionStorage', {
+      configurable: true,
+      value: { getItem: boom, setItem: boom, removeItem: boom },
+    });
+    expect(run).not.toThrow();
+    await loaded(window, document);
+    expect(scrollBy).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(acted);
+  });
+
+  it('a page without #acted drops a saved place and scrolls nothing', async () => {
+    const { window, document, run, w, scrollBy } = await landed(place(), MONTH);
+    run();
+    await loaded(window, document);
+    expect(scrollBy).not.toHaveBeenCalled();
+    expect(w.sessionStorage.getItem(KEY)).toBeNull();
+  });
+
+  it('the Record suspension page keeps its row’s place and restarts its ten minutes; another row’s is dropped', async () => {
+    const confirm = await monthPage(
+      '/dashboard/no-shows/2026-09/rows/2/suspend',
+    );
+    const url = 'http://localhost/dashboard/no-shows/2026-09/rows/2/suspend';
+    const mine = load(confirm, url);
+    const saved = place({ at: Date.now() - 9 * 60_000 });
+    (mine.window as Landing).sessionStorage.setItem(KEY, JSON.stringify(saved));
+    mine.run();
+    const kept = JSON.parse(
+      (mine.window as Landing).sessionStorage.getItem(KEY) ?? 'null',
+    ) as { at: number };
+    expect(kept).toMatchObject({ p: PATH, r: '2', t: 300 });
+    expect(Math.abs(kept.at - Date.now())).toBeLessThan(5_000);
+
+    const other = load(confirm, url);
+    (other.window as Landing).sessionStorage.setItem(
+      KEY,
+      JSON.stringify(place({ r: '3' })),
+    );
+    other.run();
+    expect((other.window as Landing).sessionStorage.getItem(KEY)).toBeNull();
+  });
+
+  it('a form sent from inside a card saves that card’s row and place; one outside a card saves nothing', async () => {
     const { window, document, run } = load(await monthPage(), MONTH);
     const w = window as Landing;
     run();
     const card = document.querySelectorAll('[data-keep-place]')[0];
-    placeCard(card, 412);
+    expect(card.getAttribute('data-keep-place')).toBe('2');
+    layout(window, card).view.top = 412;
     const inCard = card.querySelector('form');
     expect(inCard).not.toBeNull();
-    inCard?.dispatchEvent(
-      new (
-        window as unknown as { Event: new (t: string, i: object) => object }
-      ).Event('submit', { bubbles: true, cancelable: true }),
-    );
+    inCard?.dispatchEvent(submitEvent(window));
     const saved = JSON.parse(w.sessionStorage.getItem(KEY) ?? 'null') as {
       p: string;
+      r: string;
       t: number;
       at: number;
     };
-    expect(saved.p).toBe('/dashboard/no-shows/2026-09');
-    expect(saved.t).toBe(412);
+    expect(saved).toMatchObject({ p: PATH, r: '2', t: 412 });
     expect(Math.abs(saved.at - Date.now())).toBeLessThan(5_000);
 
     w.sessionStorage.setItem(KEY, 'untouched');
@@ -616,11 +734,16 @@ describe('KIT_SCRIPT in a real DOM: back on the acted card, where it was', () =>
       (f) => f.closest('[data-keep-place]') === null,
     );
     expect(outside).toBeDefined();
-    outside?.dispatchEvent(
-      new (
-        window as unknown as { Event: new (t: string, i: object) => object }
-      ).Event('submit', { bubbles: true, cancelable: true }),
-    );
+    outside?.dispatchEvent(submitEvent(window));
     expect(w.sessionStorage.getItem(KEY)).toBe('untouched');
+  });
+
+  it('the result notice is the acted heading’s description, for screen readers', async () => {
+    const { document } = await landed(undefined);
+    const acted = document.getElementById('acted');
+    expect(acted?.getAttribute('aria-describedby')).toBe('acted-result');
+    expect(document.getElementById('acted-result')?.textContent?.trim()).toBe(
+      'Saved.',
+    );
   });
 });

@@ -40,7 +40,10 @@ function harness(options: {
   textarea?: boolean;
   byId?: string;
   /** The workspace card the form sits in ([data-keep-place]), and the window it is in. */
-  card?: { getBoundingClientRect(): { top: number } };
+  card?: {
+    getBoundingClientRect(): { top: number };
+    getAttribute(name: string): string | null;
+  };
   window?: unknown;
 }) {
   const submit = vi.fn();
@@ -134,7 +137,12 @@ describe('KIT_SCRIPT: copy', () => {
     const h = harness({
       thenSubmit: true,
       clipboard: { writeText },
-      card: { getBoundingClientRect: () => ({ top: 412.4 }) },
+      card: {
+        getBoundingClientRect: () => ({ top: 412.4 }),
+        getAttribute(name: string) {
+          return name === 'data-keep-place' ? '17' : null;
+        },
+      },
       window: {
         addEventListener: () => undefined,
         location: { pathname: '/dashboard/no-shows/2026-09', hash: '' },
@@ -146,7 +154,7 @@ describe('KIT_SCRIPT: copy', () => {
     h.click();
     await settle();
     expect(order).toEqual([
-      'save ui-keep-place {"p":"/dashboard/no-shows/2026-09","t":412,"at":1000}',
+      'save ui-keep-place {"p":"/dashboard/no-shows/2026-09","r":"17","t":412,"at":1000}',
       'submit',
     ]);
   });
@@ -156,7 +164,12 @@ describe('KIT_SCRIPT: copy', () => {
     const h = harness({
       thenSubmit: true,
       clipboard: { writeText },
-      card: { getBoundingClientRect: () => ({ top: 10 }) },
+      card: {
+        getBoundingClientRect: () => ({ top: 10 }),
+        getAttribute(name: string) {
+          return name === 'data-keep-place' ? '17' : null;
+        },
+      },
       window: {
         addEventListener: () => undefined,
         location: { pathname: '/dashboard/no-shows/2026-09', hash: '' },

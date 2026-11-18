@@ -155,7 +155,12 @@ async function setup(options: Options = {}) {
   /** `text` is flattened (see flat); `raw` is the body as sent. */
   const get = async (path: string) => {
     const res = await req.get(path).set('Cookie', cookie);
-    return { status: res.status, text: flat(res.text), raw: res.text };
+    return {
+      status: res.status,
+      text: flat(res.text),
+      raw: res.text,
+      location: res.headers.location,
+    };
   };
   const advance = (ms: number) => {
     clock += ms;
@@ -206,7 +211,7 @@ const cards = (body: string) =>
   body
     // data-keep-place: a form sent from the card saves its place, and the
     // landing on #acted puts the card back there (KIT_SCRIPT).
-    .split('<div class="card ws-card" data-keep-place>')
+    .split(/<div class="card ws-card" data-keep-place="[0-9]+">/)
     .slice(1)
     .map(
       (card) => card.split(/<nav class="pager" aria-label="Pages">|<script/)[0],
@@ -1504,7 +1509,7 @@ describe('month page sections, summary and position (Hai, 2026-11-17)', () => {
     expect(words(summary)).toBe('To do 1 On hold 1 Done 2');
     // Above the cards.
     expect(res.text.indexOf('<dl class="stats ws-summary">')).toBeLessThan(
-      res.text.indexOf('<div class="card ws-card" data-keep-place>'),
+      res.text.search(/<div class="card ws-card" data-keep-place="/),
     );
   });
 
@@ -1519,9 +1524,13 @@ describe('month page sections, summary and position (Hai, 2026-11-17)', () => {
     const { get } = await setup({ seed: seed(rowsInEveryGroup()) });
     const res = await get(`${MONTH}?result=done&row=4`);
     expect(res.text.match(/id="acted"/g)).toHaveLength(1);
-    // Focusable by script only: the landing puts keyboard focus on it.
+    // Focusable by script only: the landing puts keyboard focus on it, and
+    // the result notice is its description (read out with it).
     expect(res.text).toContain(
-      '<h2 id="acted" class="ws-acted" tabindex="-1">',
+      '<h2 id="acted" class="ws-acted" tabindex="-1" aria-describedby="acted-result">',
+    );
+    expect(res.text).toContain(
+      '<div id="acted-result"><p class="note info">Saved.</p></div>',
     );
     const acted = cards(res.text).find((c) => c.includes('id="acted"')) ?? '';
     expect(acted).toContain('/rows/4"');
@@ -1532,6 +1541,75 @@ describe('month page sections, summary and position (Hai, 2026-11-17)', () => {
       ['On hold', true],
       ['Done', true],
     ]);
+  });
+
+  describe('?row= on another page than the one asked for', () => {
+    const LOST = 'The card you just acted on is not on this page.';
+
+    it('a card that is on page 2 sends the reader there, result kept (a POST whose position read was slow)', async () => {
+      const { get, ws } = await setup();
+      ws.rowPosition.mockResolvedValueOnce(51);
+      const res = await get(`${MONTH}?result=done&row=2`);
+      expect(res.status).toBe(303);
+      expect(res.location).toBe(`${MONTH}?result=done&page=2&row=2#acted`);
+    });
+
+    it('a junk result is dropped on the way, never echoed', async () => {
+      const { get, ws } = await setup();
+      ws.rowPosition.mockResolvedValueOnce(51);
+      const res = await get(`${MONTH}?result=%3Cb%3E&row=2`);
+      expect(res.location).toBe(`${MONTH}?page=2&row=2#acted`);
+    });
+
+    it('a card that moved back to page 1 (a Reopen) is followed there from page 2', async () => {
+      const { get } = await setup();
+      const res = await get(`${MONTH}?result=done&page=2&row=2`);
+      expect(res.status).toBe(303);
+      expect(res.location).toBe(`${MONTH}?result=done&row=2#acted`);
+    });
+
+    it('the position read fails and the card is on this page: it is marked, no notice', async () => {
+      const { get, ws } = await setup();
+      ws.rowPosition.mockRejectedValueOnce(new Error('db down'));
+      const res = await get(`${MONTH}?result=done&row=2`);
+      expect(res.status).toBe(200);
+      expect(res.text.match(/id="acted"/g)).toHaveLength(1);
+      expect(words(res.text)).not.toContain(LOST);
+    });
+
+    it('the position read fails and the card is not here: a notice at the top with a link that looks again', async () => {
+      const { get, ws } = await setup();
+      ws.rowPosition.mockRejectedValueOnce(new Error('db down'));
+      const res = await get(`${MONTH}?result=done&page=2&row=2`);
+      expect(res.status).toBe(200);
+      expect(res.text).not.toContain('id="acted"');
+      expect(words(res.text)).toContain(`${LOST} Find it`);
+      expect(res.text).toContain(
+        `href="${MONTH}?result=done&amp;page=2&amp;row=2#acted">Find it</a>`,
+      );
+      // At the top, under the result notice, above the (empty) page.
+      expect(res.text.indexOf(LOST)).toBeGreaterThan(
+        res.text.indexOf('Saved.'),
+      );
+      expect(res.text.indexOf(LOST)).toBeLessThan(
+        res.text.indexOf('No cards on this page.'),
+      );
+    });
+
+    it('placed on this page but missing from its list (it moved in between): the notice, never a redirect loop', async () => {
+      const { get, ws } = await setup();
+      ws.rowPosition.mockResolvedValueOnce(51);
+      const res = await get(`${MONTH}?result=done&page=2&row=2`);
+      expect(res.status).toBe(200);
+      expect(words(res.text)).toContain(LOST);
+    });
+
+    it('an unknown row: no redirect and no notice', async () => {
+      const { get } = await setup();
+      const res = await get(`${MONTH}?result=done&page=2&row=99`);
+      expect(res.status).toBe(200);
+      expect(words(res.text)).not.toContain(LOST);
+    });
   });
 
   it('a junk or unknown ?row= marks nothing and leaves Done closed', async () => {
