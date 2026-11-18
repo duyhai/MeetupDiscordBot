@@ -278,20 +278,23 @@ describe('host calendar past days', () => {
     };
     expect(fetch).toHaveBeenCalledWith({ status: ['ACTIVE'], ...window });
     expect(fetch).toHaveBeenCalledWith({ status: ['PAST'], ...window });
-    const past =
+    const pastCell =
       /<td class="cal past">\s*<div class="cal-head">\s*<span class="cal-day"\s*>2<(?:(?!<\/td>)[^])*<\/td>/.exec(
         res.text,
       )?.[0];
-    expect(past).toBeDefined();
-    expect(past).toContain('<span class="cal-count">1 event</span>');
-    expect(past).toContain('Monday mahjong');
-    expect(past).not.toContain('cal-add');
-    expect(past).not.toContain('Host on this day');
+    expect(pastCell).toBeDefined();
+    expect(pastCell).toContain('<span class="cal-count">1 event</span>');
+    expect(pastCell).toContain('Monday mahjong');
+    expect(pastCell).not.toContain('cal-add');
+    expect(pastCell).not.toContain('Host on this day');
     expect(res.text.match(/Breakfast club/g)).toHaveLength(2);
-    // The day list has it too, marked past and greyed.
-    expect(res.text).toMatch(
-      /<li class="past">\s*<h3>\s*Mon, Nov 2 <span class="badge neutral">Past<\/span>/,
-    );
+    // The day list has it in the Past tab, not in Upcoming (the default).
+    const list = (text: string) => text.slice(text.indexOf('<h2>Day by day'));
+    expect(list(res.text)).not.toContain('Monday mahjong');
+    const past = await req.get('/host/calendar?tab=past').set('Cookie', sid);
+    expect(list(past.text)).toMatch(/<li>\s*<h3>Mon, Nov 2<\/h3>/);
+    expect(list(past.text)).toContain('Monday mahjong');
+    expect(past.text).not.toContain('badge neutral">Past');
     expect(res.text).toContain('<span class="swatch past"></span> Past');
   });
 
@@ -320,7 +323,7 @@ describe('host calendar months', () => {
       /<span class="button ghost disabled"\s*>← Oct<span class="sr-only">/,
     );
     expect(now.text).toMatch(
-      /<a class="button ghost" href="\/host\/calendar\?month=2026-12"\s*>Dec →<\/a/,
+      /<a class="button ghost" href="\/host\/calendar\?month=2026-12&amp;view=tiles"\s*>Dec →<\/a/,
     );
     const dec = await req
       .get('/host/calendar?month=2026-12')
@@ -328,7 +331,9 @@ describe('host calendar months', () => {
     expect(dec.text).toContain('<strong>December 2026</strong>');
     expect(dec.text).toContain('Day by day: December');
     expect(dec.text).toContain('December dinner');
-    expect(dec.text).toMatch(/href="\/host\/calendar\?month=2026-11"\s*>← Nov/);
+    expect(dec.text).toMatch(
+      /href="\/host\/calendar\?month=2026-11&amp;view=tiles"\s*>← Nov/,
+    );
     // Meetup was asked for Mon Nov 30 to Mon Jan 4 (Pacific midnights).
     expect(fetch).toHaveBeenLastCalledWith({
       status: ['ACTIVE'],
@@ -883,7 +888,7 @@ describe('host calendar thumbnails', () => {
       ];
     });
     const sid = await signInWithDiscord(req);
-    const res = await req.get('/host/calendar').set('Cookie', sid);
+    const res = await req.get('/host/calendar?view=list').set('Cookie', sid);
     const img =
       /<img\s+class="ev-thumb"\s+src="([^"]+)"\s+alt=""\s+width="48"\s+height="48"\s+loading="lazy"/;
     expect(res.text.match(img)?.[1]).toBe(photo);
@@ -904,5 +909,216 @@ describe('host calendar thumbnails', () => {
     expect(csp).toContain("default-src 'none'");
     expect(csp).toContain("script-src 'nonce-");
     expect(csp).not.toMatch(/img-src[^;]*\*/);
+  });
+});
+
+describe('host calendar day-by-day tabs', () => {
+  const fetch = async (filter: { status?: string[] }) => {
+    return filter.status?.[0] === 'PAST'
+      ? [
+          ev('p1', '2026-11-01T10:00:00-08:00', 'First of the month'),
+          ev('p2', '2026-11-02T19:00:00-08:00', 'Monday mahjong'),
+        ]
+      : [
+          ev('t1', '2026-11-03T20:00:00-08:00', 'Tonight trivia'),
+          ev('f1', '2026-11-07T19:00:00-08:00', 'Future fondue'),
+        ];
+  };
+  const list = (text: string) => text.slice(text.indexOf('<h2>Day by day'));
+
+  it('Upcoming (the default) lists today on, Past the earlier days newest first', async () => {
+    const req = await pagesApp(fetch);
+    const sid = await signInWithDiscord(req);
+    const up = list((await req.get('/host/calendar').set('Cookie', sid)).text);
+    expect(up).toMatch(
+      // eslint-disable-next-line @stylistic/max-len -- one pattern, read as one
+      /<nav class="pager choices" aria-label="Which days">\s*<strong aria-current="page">Upcoming<\/strong><a href="\/host\/calendar\?month=2026-11&amp;tab=past&amp;view=tiles">Past<\/a>/,
+    );
+    expect(up).toContain('Tonight trivia');
+    expect(up).toContain('Future fondue');
+    expect(up).not.toContain('Monday mahjong');
+    expect(up.indexOf('Tue, Nov 3')).toBeLessThan(up.indexOf('Sat, Nov 7'));
+
+    const past = list(
+      (await req.get('/host/calendar?tab=past').set('Cookie', sid)).text,
+    );
+    expect(past).toMatch(
+      /<a href="\/host\/calendar\?month=2026-11&amp;view=tiles">Upcoming<\/a><strong aria-current="page">Past<\/strong>/,
+    );
+    expect(past).not.toContain('Tonight trivia');
+    expect(past.indexOf('Mon, Nov 2')).toBeLessThan(past.indexOf('Sun, Nov 1'));
+    expect(past).not.toContain('badge neutral');
+    expect(past).not.toContain('Host on this day');
+  });
+
+  it('says so when a tab is empty', async () => {
+    const req = await pagesApp(async () => []);
+    const sid = await signInWithDiscord(req);
+    const get = async (q: string) =>
+      list((await req.get(`/host/calendar${q}`).set('Cookie', sid)).text);
+    expect(await get('')).toContain(
+      'Nothing more is scheduled this month yet.',
+    );
+    expect(await get('?tab=past')).toContain(
+      'Nothing happened earlier this month.',
+    );
+    expect(await get('?month=2026-12')).toContain(
+      'Nothing scheduled this month yet.',
+    );
+    // A future month has no Past tab: plain text, and ?tab=past is Upcoming.
+    const future = await get('?month=2026-12&tab=past');
+    expect(future).toContain('Nothing scheduled this month yet.');
+    expect(future).toMatch(
+      /<strong aria-current="page">Upcoming<\/strong><span\s*>Past<span class="sr-only"> \(no days have passed yet\)<\/span><\/span\s*>/,
+    );
+    expect(future).not.toContain('tab=past');
+  });
+});
+
+describe('host calendar tiles and list', () => {
+  const standard =
+    'https://secure.meetupstatic.com/photos/event/d/2/2/5/600_536933797.jpeg';
+  const thumb =
+    'https://secure.meetupstatic.com/photos/event/d/2/2/5/thumb_536933797.jpeg';
+  const fetch = async (filter: { status?: string[] }) => {
+    return filter.status?.includes('ACTIVE')
+      ? [
+          {
+            ...ev('1', '2026-11-10T19:00:00-08:00', 'Both sizes'),
+            photoUrl: thumb,
+            tilePhotoUrl: standard,
+            hosts: [{ id: '7', name: HOSTILE }],
+          },
+          {
+            ...ev('2', '2026-11-10T20:00:00-08:00', 'Thumb only'),
+            photoUrl: thumb,
+          },
+          ev('3', '2026-11-11T20:00:00-08:00', 'No photo'),
+          {
+            ...ev('4', '2026-11-12T20:00:00-08:00', 'Elsewhere'),
+            tilePhotoUrl: 'https://evil.example/600.jpg',
+          },
+        ]
+      : [];
+  };
+
+  it('shows tiles by default: a fixed 2:1 photo, time, title link and hosts', async () => {
+    const req = await pagesApp(fetch);
+    const sid = await signInWithDiscord(req);
+    const res = await req.get('/host/calendar').set('Cookie', sid);
+    noScript(res.text);
+    const text = res.text.slice(res.text.indexOf('<h2>Day by day'));
+    expect(text).toMatch(
+      // eslint-disable-next-line @stylistic/max-len -- one pattern, read as one
+      /<nav class="pager choices" aria-label="Layout" data-cal-views>\s*<strong aria-current="page">Tiles<\/strong><a href="\/host\/calendar\?month=2026-11&amp;view=list">List<\/a>/,
+    );
+    expect(text).not.toContain('ev-thumb');
+    const imgs = [
+      ...text.matchAll(
+        // eslint-disable-next-line @stylistic/max-len -- one pattern, read as one
+        /<img\s+class="tile-photo"\s+src="([^"]+)"\s+alt=""\s+width="600"\s+height="300"\s+loading="lazy"\s+decoding="async"\s+referrerpolicy="no-referrer"\s*\/>/g,
+      ),
+    ].map((m) => m[1]);
+    // Only the standard rendition fills the box; never another host.
+    expect(imgs).toEqual([standard]);
+    // Without it: the placeholder, with the thumbnail at 80px inside when
+    // there is one (never stretched to 2:1).
+    const boxes = [
+      ...text.matchAll(
+        /<span class="tile-photo tile-photo-none" aria-hidden="true"\s*>((?:(?!<\/span)[^])*)<\/span\s*>/g,
+      ),
+    ].map((m) => m[1].trim());
+    expect(boxes).toHaveLength(3);
+    expect(boxes[0]).toMatch(
+      // eslint-disable-next-line @stylistic/max-len -- one pattern, read as one
+      /^<img\s+class="tile-thumb"\s+src="([^"]+)"\s+alt=""\s+width="80"\s+height="80"\s+loading="lazy"\s+decoding="async"\s+referrerpolicy="no-referrer"\s*\/>$/,
+    );
+    expect(boxes[0]).toContain(thumb);
+    expect(boxes.slice(1)).toEqual(['', '']);
+    expect(text).not.toContain('evil.example');
+    expect(text).toMatch(
+      // eslint-disable-next-line @stylistic/max-len -- one pattern, read as one
+      /<li class="cal-tile">\s*<img[^>]+>\s*<div class="tile-body">\s*<p class="tile-time">7:00 PM<\/p>\s*<p class="tile-title"><a href="https:\/\/www\.meetup\.com\/[^"]*"[^>]*><bdi>Both sizes<\/bdi><\/a><\/p>\s*<span class="muted"\s*>hosted by\s*<bdi>&lt;script&gt;/,
+    );
+  });
+
+  it('List keeps the compact rows; each choice keeps the tab and the month keeps the view', async () => {
+    const req = await pagesApp(fetch);
+    const sid = await signInWithDiscord(req);
+    const res = await req
+      .get('/host/calendar?view=list&tab=past')
+      .set('Cookie', sid);
+    expect(res.text).toMatch(
+      /<a href="\/host\/calendar\?month=2026-11&amp;tab=past&amp;view=tiles">Tiles<\/a><strong aria-current="page">List<\/strong>/,
+    );
+    expect(res.text).toContain(
+      '<a href="/host/calendar?month=2026-11&amp;view=list">Upcoming</a>',
+    );
+    // A new month opens on Upcoming, in the same view.
+    expect(res.text).toMatch(
+      /href="\/host\/calendar\?month=2026-12&amp;view=list"\s*>Dec →/,
+    );
+    const up = await req.get('/host/calendar?view=list').set('Cookie', sid);
+    const main = up.text.slice(up.text.indexOf('<main'));
+    expect(main).toContain('class="ev-thumb"');
+    expect(main).not.toContain('cal-tile');
+    // An unknown view or tab is the default.
+    const odd = await req
+      .get('/host/calendar?view=grid&tab=old')
+      .set('Cookie', sid);
+    expect(odd.text).toContain('<strong aria-current="page">Tiles</strong>');
+    expect(odd.text).toContain('<strong aria-current="page">Upcoming</strong>');
+    // The remember-my-view script ships with the calendar.
+    expect(res.text).toContain('window.__hostCalendarView');
+  });
+});
+
+describe('host calendar odd queries', () => {
+  it('reads only exact, single tab and view values', async () => {
+    const req = await pagesApp(async (filter) => {
+      return filter.status?.[0] === 'PAST'
+        ? [ev('p', '2026-11-02T19:00:00-08:00', 'Monday mahjong')]
+        : [ev('f', '2026-11-07T19:00:00-08:00', 'Future fondue')];
+    });
+    const sid = await signInWithDiscord(req);
+    const current = async (q: string) => {
+      const res = await req.get(`/host/calendar${q}`).set('Cookie', sid);
+      expect(res.status).toBe(200);
+      return [
+        ...res.text.matchAll(/<strong aria-current="page">(\w+)<\/strong>/g),
+      ].map((m) => m[1]);
+    };
+    const odd = [
+      '?view=',
+      '?view=list&view=tiles',
+      '?view=list&view=list',
+      '?view=LIST',
+      '?view[]=list',
+      '?tab=past&tab=past',
+      '?tab[]=past',
+      '?tab=PAST',
+      '?tab=',
+    ];
+    const seen = await Promise.all(odd.map((q) => current(q)));
+    seen.forEach((choices, i) => {
+      expect(choices, odd[i]).toEqual(['Upcoming', 'Tiles']);
+    });
+    expect(await current('?tab=past&view=list')).toEqual(['Past', 'List']);
+  });
+
+  it('tiles in the Past tab offer no Host on this day', async () => {
+    const req = await pagesApp(async (filter) => {
+      return filter.status?.[0] === 'PAST'
+        ? [ev('p', '2026-11-02T19:00:00-08:00', 'Monday mahjong')]
+        : [];
+    });
+    const sid = await signInWithDiscord(req);
+    const res = await req
+      .get('/host/calendar?tab=past&view=tiles')
+      .set('Cookie', sid);
+    const list = res.text.slice(res.text.indexOf('<h2>Day by day'));
+    expect(list).toContain('<li class="cal-tile">');
+    expect(list).toContain('Monday mahjong');
+    expect(list).not.toContain('Host on this day');
   });
 });

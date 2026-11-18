@@ -166,8 +166,13 @@ export const getEventRsvps = gql`
  * A page of the group's events. featuredEventPhoto.thumbUrl (an 80x80
  * secure.meetupstatic.com URL; seen live on gql2 on 2026-11-17, and the
  * field validated on gql-ext, which this query runs on, on 2026-11-18) is
- * the calendar's thumbnail: it rides on this read, never a request per
- * event.
+ * the calendar's list thumbnail; featuredEventPhoto.standardUrl is its
+ * tile photo (validated on gql-ext on 2026-11-18: PhotoInfo.standardUrl
+ * and highResUrl are defined there, source and type are not; the
+ * standard rendition, .../600_<id>.jpeg on secure.meetupstatic.com, is up
+ * to 600px wide in the photo's own aspect ratio, 30 to 60 kB; highResUrl
+ * is up to the full upload, so it is not used). Both ride on this read,
+ * never a request per event.
  */
 export const getGroupEvents = gql`
   query (
@@ -201,6 +206,7 @@ export const getGroupEvents = gql`
             status
             featuredEventPhoto {
               thumbUrl
+              standardUrl
             }
           }
         }

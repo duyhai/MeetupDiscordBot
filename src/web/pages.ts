@@ -548,8 +548,6 @@ td.cal.past,.swatch.past{background:repeating-linear-gradient(135deg,var(--bg) 0
 .swatch.past{border-style:dashed}
 td.cal.past .cal-day,td.cal.past .cal-count{color:var(--muted)}
 td.cal.past .cal-panel{color:var(--fg)}
-ol.cal-list>li.past{color:var(--muted)}
-ol.cal-list>li.past a{color:inherit}
 td.cal.out{background:var(--bg)}
 td.busy0,.swatch.busy0{background:var(--ok-soft)}
 td.busy1,.swatch.busy1{background:var(--surface)}
@@ -567,7 +565,34 @@ ul.cal-items>li{display:flex;align-items:flex-start;gap:var(--s3);margin:0 0 var
 .ev-thumb{flex:none;display:block;width:48px;height:48px;border-radius:8px;object-fit:cover;background:var(--raised);
   border:1px solid var(--line)}
 .cal-item-text{min-width:0;flex:1 1 auto;align-self:center}
-ol.cal-list>li.past .ev-thumb{opacity:.7}
+/* Day by day's bar: the Upcoming/Past tabs, then the Tiles/List switch, wrapping on a phone. */
+.cal-bar{display:flex;flex-wrap:wrap;justify-content:space-between;gap:0 var(--s4);margin:0 0 var(--s3)}
+.cal-bar nav.pager{margin:0 0 var(--s2)}
+/* Tiles: a 2:1 photo box (sized by aspect-ratio and the img's width/height, so nothing shifts), then the text.
+   One column at phone width. The title link covers the tile, so the whole tile opens the event. */
+ul.cal-tiles{list-style:none;padding:0;margin:var(--s2) 0 var(--s3);display:grid;
+  grid-template-columns:repeat(auto-fill,minmax(min(100%,232px),1fr));gap:var(--s3)}
+li.cal-tile{position:relative;display:flex;flex-direction:column;min-width:0;margin:0;background:var(--surface);
+  border:1px solid var(--line);border-radius:var(--radius-ctl);overflow:hidden}
+li.cal-tile:hover{border-color:var(--field)}
+/* The placeholder pattern is every photo box's background: a photo that fails to load leaves the pattern, not a blank box. */
+.tile-photo{display:block;width:100%;height:auto;aspect-ratio:2/1;object-fit:cover;object-position:50% 35%;
+  background:repeating-linear-gradient(135deg,var(--raised) 0 10px,var(--bg) 10px 12px);border-bottom:1px solid var(--line)}
+/* A broken image renders ::after (a loaded one never does): it covers the browser's broken-image icon with the pattern. */
+img.tile-photo{position:relative}
+img.tile-photo::after{content:"";position:absolute;inset:0;background:inherit}
+/* No large photo: the thumbnail at its own 80px (contained, never stretched) in the middle of the pattern. */
+.tile-photo-none{display:flex;align-items:center;justify-content:center}
+.tile-thumb{display:block;width:80px;height:80px;object-fit:contain;border-radius:var(--radius-ctl)}
+li.cal-tile:focus-within{border-color:var(--accent);outline:2px solid var(--accent);outline-offset:2px}
+.tile-body{padding:var(--s2) var(--s3) var(--s3);overflow-wrap:anywhere}
+.tile-body p{margin:0 0 var(--s1)}
+.tile-time{color:var(--muted);font-size:var(--t-sm);font-weight:600}
+.tile-title{font-weight:600}
+.tile-title a{text-decoration:none}
+.tile-title a:hover{text-decoration:underline}
+.tile-title a::after{content:"";position:absolute;inset:0}
+.tile-body .muted{font-size:var(--t-sm)}
 nav.type-filter,nav.status-filter{display:flex;flex-wrap:wrap;gap:0 var(--s4);margin:0 0 var(--s3)}
 nav.type-filter a,nav.status-filter a{display:inline-flex;align-items:center;min-height:var(--tap)}
 /* ---- Per-palette rules. The default (Night market) ones are scoped to :root:not([data-palette]) so no other

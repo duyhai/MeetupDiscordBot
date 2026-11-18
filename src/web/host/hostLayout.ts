@@ -1,6 +1,7 @@
 import { SafeHtml, SafeUrl, html, localUrl, memberText } from '../html.js';
 import { STYLE } from '../pages.js';
 import { THEME_SCRIPT, themeToggle as themeToggleMarkup } from '../theme.js';
+import { CALENDAR_VIEW_SCRIPT } from './hostScripts.js';
 import { HOST_BASE, HostRole } from './hostSession.js';
 
 /** The host site's pages, in order. Links and labels are fixed. */
@@ -74,8 +75,10 @@ export function hostLayout({
     : '';
   const nav = user ? hostNav(current, user.role ?? 'host') : '';
   const themeToggle = themeToggleMarkup();
-  const scripts: readonly SafeHtml[] =
+  const pageScripts: readonly SafeHtml[] =
     script === undefined ? [] : Array.isArray(script) ? script : [script];
+  // Signed in: links to the calendar carry its remembered view.
+  const scripts = user ? [...pageScripts, CALENDAR_VIEW_SCRIPT] : pageScripts;
   // prettier-ignore
   const scriptTag = scripts.map((s) => html`<script nonce="${nonce}">${s}</script>`);
   const sheetTags = (assets?.stylesheets ?? []).map(
