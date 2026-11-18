@@ -14,7 +14,7 @@ import { gzipSync } from 'node:zlib';
 import express, { RequestHandler } from 'express';
 import { Logger } from 'tslog';
 
-import { EventPlaces } from '../../lib/leaderboard/places.js';
+import { EventPlaces, PlaceRule } from '../../lib/leaderboard/places.js';
 import {
   SafeHtml,
   SafeUrl,
@@ -55,10 +55,29 @@ export const MAP_ASSETS: { stylesheets: SafeUrl[]; scripts: SafeUrl[] } = {
 /**
  * A profile map draws only areas where that host has hosted at least this
  * many events, so no single area of one person's hosting (a home, say) is
- * drawn beside their name; the rest are counted in the text. The hall of
- * fame map draws every area. Hai may change it.
+ * drawn beside their name, and names cities from drawn areas only; the rest
+ * is one line of text with no city. Hai may change it.
  */
 export const PROFILE_MAP_MIN_EVENTS = 3;
+/**
+ * The hall of fame map draws (and its list names) an area or a city only
+ * with at least this many events from at least HALL_OF_FAME_MIN_HOSTS
+ * hosts, so it can never single out one host's area that their profile
+ * leaves undrawn.
+ */
+export const HALL_OF_FAME_MIN_EVENTS = 3;
+export const HALL_OF_FAME_MIN_HOSTS = 2;
+
+export const PROFILE_PLACE_RULE: PlaceRule = {
+  minEvents: PROFILE_MAP_MIN_EVENTS,
+  minHosts: 1,
+  citiesFromDrawnCells: true,
+};
+export const HALL_OF_FAME_PLACE_RULE: PlaceRule = {
+  minEvents: HALL_OF_FAME_MIN_EVENTS,
+  minHosts: HALL_OF_FAME_MIN_HOSTS,
+  citiesFromDrawnCells: false,
+};
 
 /** How many cities the list names; the rest are summed. */
 export const MAP_CITIES_SHOWN = 8;
@@ -120,15 +139,11 @@ function are(n: number): string {
  * is in exactly one of those lines. `subject` finishes "Where … hosted";
  * `minEventsPerCell` is the threshold the places were built with.
  */
-export function hostMap(
-  places: EventPlaces,
-  subject: string,
-  minEventsPerCell = 1,
-): SafeHtml {
-  const { cells, cities, unknownCity, inSmallCells, unplaced, pending } =
+export function hostMap(places: EventPlaces, subject: string): SafeHtml {
+  const { rule, cells, cities, otherArea, notDrawn, unplaced, pending } =
     places;
-  const placed = cities.reduce((sum, c) => sum + c.events, 0) + unknownCity;
-  if (placed === 0 && unplaced === 0 && pending > 0) {
+  const named = cities.reduce((sum, c) => sum + c.events, 0);
+  if (named + otherArea + notDrawn === 0 && unplaced === 0 && pending > 0) {
     return html`<p class="muted">
       Venue data is still being collected; the map fills in with the next daily
       update from Meetup.
@@ -139,7 +154,7 @@ export function hostMap(
   const shown = cities.slice(0, MAP_CITIES_SHOWN);
   const elsewhere =
     cities.slice(MAP_CITIES_SHOWN).reduce((sum, c) => sum + c.events, 0) +
-    unknownCity;
+    otherArea;
   const items = shown.map(
     (c) => html`<li>${memberText(c.city)}: ${plural(c.events, 'event')}</li>`,
   );
@@ -159,26 +174,24 @@ export function hostMap(
               'darker where more events were held. Exact venues are never stored.'
             }
           </figcaption>`;
+  const threshold =
+    rule.minHosts > 1
+      ? `fewer than ${rule.minEvents} events or ${rule.minHosts} hosts`
+      : `fewer than ${rule.minEvents} events`;
+  const notDrawnLine = rule.citiesFromDrawnCells
+    ? `${plural(notDrawn, 'event')} in other areas (${threshold} each) ${are(notDrawn)} not shown on the map or by city.`
+    : `${plural(notDrawn, 'event')} in areas with ${threshold} ${are(notDrawn)} counted above but not drawn.`;
   return html`<figure class="host-map">
     ${map}
     ${
-      placed > 0
+      named + otherArea > 0
         ? html`<ul class="map-cities">
             ${items}
             ${elsewhere > 0 ? html`<li>Elsewhere or unknown area: ${plural(elsewhere, 'event')}</li>` : ''}
           </ul>`
         : ''
     }
-    ${
-      inSmallCells > 0
-        ? html`<p class="muted">
-            ${
-              `${plural(inSmallCells, 'event')} in other areas ` +
-              `(fewer than ${minEventsPerCell} events each) ${are(inSmallCells)} counted above but not drawn.`
-            }
-          </p>`
-        : ''
-    }
+    ${notDrawn > 0 ? html`<p class="muted">${notDrawnLine}</p>` : ''}
     ${
       unplaced > 0
         ? html`<p class="muted">

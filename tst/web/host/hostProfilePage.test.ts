@@ -331,4 +331,16 @@ describe('host profile', () => {
       'tile.openstreetmap.org',
     );
   });
+
+  it('Smallville: a host’s area under the threshold is not drawn and its city is not named', async () => {
+    const { req, sid } = await app();
+    // Host 2 (Bo) hosted one event, in the shared Seattle cell: below 3.
+    const res = await req.get('/host/hosts/2').set('Cookie', sid);
+    expect(res.status).toBe(200);
+    expect(res.text).not.toContain('data-map-cells="');
+    expect(res.text).not.toContain('<bdi>Seattle</bdi>');
+    expect(res.text).toContain(
+      '1 event in other areas (fewer than 3 events each) is not shown on the map or by city.',
+    );
+  });
 });
