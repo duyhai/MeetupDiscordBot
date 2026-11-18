@@ -13,6 +13,7 @@ declare module 'jsdom' {
       options?: {
         runScripts?: 'outside-only';
         url?: string;
+        pretendToBeVisual?: boolean;
         virtualConsole?: VirtualConsole;
       },
     );

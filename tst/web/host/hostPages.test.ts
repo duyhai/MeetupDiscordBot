@@ -753,6 +753,20 @@ describe('host history timeline edges', () => {
     expect(gap.text).toContain('Newer events');
   });
 
+  it('a type with no events at all says so, not "no older"', async () => {
+    const req = await pagesApp(async () => [
+      ev('1', '2026-10-01T19:00:00-07:00', 'Dinner', 'food'),
+    ]);
+    const sid = await signInWithDiscord(req);
+    const [none, past] = await Promise.all([
+      req.get('/host/history?type=games').set('Cookie', sid),
+      req.get('/host/history?type=games&before=2026').set('Cookie', sid),
+    ]);
+    expect(none.text).toContain('No events.');
+    expect(none.text).not.toContain('No older events.');
+    expect(past.text).toContain('No events.');
+  });
+
   it('the Older label names the next year that has events, across a gap', async () => {
     const many = Array.from({ length: 31 }, (_, i) =>
       ev(`n${i}`, `2026-0${1 + (i % 9)}-1${i % 9}T19:00:00-07:00`, `N${i}`),

@@ -1089,7 +1089,13 @@ function historyBody(
   const list =
     chunk.events.length === 0
       ? html`<p class="muted">
-            ${day ? `No events on ${dayLabel(day)}.` : 'No older events.'}
+            ${
+              day
+                ? `No events on ${dayLabel(day)}.`
+                : from === undefined
+                  ? 'No events.'
+                  : 'No older events.'
+            }
           </p>
           ${newer}`
       : html`<div class="timeline-wrap">

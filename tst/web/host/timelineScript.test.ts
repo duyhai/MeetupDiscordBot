@@ -36,7 +36,7 @@ interface El {
 }
 interface Win {
   document: El & { activeElement: El | null };
-  location: { search: string; href: string };
+  location: { search: string; href: string; hash: string };
   Event: new (type: string) => object;
   eval(code: string): unknown;
   MouseEvent: new (type: string, init: object) => object;
@@ -82,7 +82,11 @@ async function pages(): Promise<{ first: string; older: string }> {
 
 const HISTORY_URL = 'http://localhost/host/history';
 
-function load(page: string, fetchImpl: (url: string) => Promise<unknown>) {
+function load(
+  page: string,
+  fetchImpl: (url: string) => Promise<unknown>,
+  url: string = HISTORY_URL,
+) {
   // jsdom does not navigate; a navigation shows up as its "not implemented" error.
   const navigations: string[] = [];
   const virtualConsole = new VirtualConsole().on('jsdomError', (error) => {
@@ -92,8 +96,10 @@ function load(page: string, fetchImpl: (url: string) => Promise<unknown>) {
   });
   const dom = new JSDOM(page, {
     runScripts: 'outside-only',
-    url: HISTORY_URL,
+    url,
     virtualConsole,
+    // requestAnimationFrame, which the scroll handler uses.
+    pretendToBeVisual: true,
   });
   const window = dom.window as Win;
   const scrolled: string[] = [];
@@ -112,12 +118,17 @@ function load(page: string, fetchImpl: (url: string) => Promise<unknown>) {
       }),
     );
   const settle = () => new Promise((r) => setTimeout(r, 20));
+  const scroll = async () => {
+    (window as unknown as El).dispatchEvent(new window.Event('scroll'));
+    await new Promise((r) => setTimeout(r, 60));
+  };
   return {
     window,
     document: window.document,
     run,
     click,
     settle,
+    scroll,
     fetch,
     scrolled,
     navigations,
@@ -164,13 +175,32 @@ describe('TIMELINE_SCRIPT', () => {
       'Loaded 2024, 2023.',
     );
     // jsdom has no layout, so every section reads as scrolled past: the
-    // last one is current, and the address reopens the list there.
+    // last one is current. The address follows only once the reader
+    // scrolls; then it reopens the list there.
     expect(
       t.document
         .querySelector('a[data-year="2023"]')
         .getAttribute('aria-current'),
     ).toBe('location');
+    expect(t.window.location.search).toBe('');
+    await t.scroll();
     expect(t.window.location.search).toBe('?before=2024');
+  });
+
+  it('a page opened at a year keeps its fragment until the reader scrolls', async () => {
+    const { older } = await pages();
+    const t = load(
+      older,
+      async () => ({ ok: true, text: async () => older }),
+      `${HISTORY_URL}?year=2026&before=2025#y2023`,
+    );
+    t.run();
+    await t.settle();
+    expect(t.window.location.hash).toBe('#y2023');
+    expect(t.window.location.search).toBe('?year=2026&before=2025');
+    await t.scroll();
+    expect(t.window.location.hash).toBe('');
+    expect(t.window.location.search).toBe('?year=2026&before=2024');
   });
 
   it('a sign-in page (expired session) or a page without the timeline is followed natively', async () => {
