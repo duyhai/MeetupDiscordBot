@@ -312,7 +312,9 @@ describe('host profile', () => {
     const { req, sid } = await app();
     const res = await req.get('/host/hosts/1').set('Cookie', sid);
     expect(res.text).toContain("Where they've hosted");
-    expect(res.text).toContain('data-map-cells="[[47.61,-122.33,6]]"');
+    expect(res.text).toContain(
+      'data-map-cells="[[47.61,-122.33,6,&quot;6 events&quot;]]"',
+    );
     expect(res.text).toContain('Where Bea has hosted');
     expect(String(res.headers['content-security-policy'])).toContain(
       'https://tile.openstreetmap.org',

@@ -159,26 +159,36 @@ message, so coordinates or names never reach the process log.
 - **What is drawn and named is decided on the server** (places.ts), before
   anything is embedded in the page or merged for low zoom:
   - Hall of fame: an area is drawn only with at least
-    `HALL_OF_FAME_MIN_EVENTS` (3) events from at least
-    `HALL_OF_FAME_MIN_HOSTS` (2) distinct hosts (a co-hosted event counts
-    each host). Its city list may cover every event, but a city is named only
-    under the same rule; the rest fold into "Elsewhere or unknown area".
-    Blacklisted hosts are included (areas, not people).
+    `HALL_OF_FAME_MIN_EVENTS` (3) events, and only if no single host
+    dominates it: removing all events of any one host must leave at least
+    `HALL_OF_FAME_MIN_EVENTS_WITHOUT_ANY_HOST` (2). A host alone, a regular
+    co-host pair, or one host plus one other event never makes an area
+    appear (an earlier "2+ distinct hosts" rule let all three through). A
+    city is named only if it contains a drawn area (its count then includes
+    its undrawn events); other cities fold into "Elsewhere or unknown area",
+    even when their undrawn areas together would pass the rule. Areas show
+    count bands (up to 5, 6–10, 11–25, 26+), computed on the server, so an
+    exact count never reaches the page and a count ticking up after a known
+    event cannot place it in an area. Blacklisted hosts' events are included
+    (areas, not people).
   - Profile: an area is drawn only with at least `PROFILE_MAP_MIN_EVENTS` (3)
     of that host's events, and cities are named from drawn areas only. Every
     other event is in one line ("N events in other areas … not shown on the
     map or by city"), with no city.
-  - Why both: without them, a host's 2 home events in "Smallville" were
-    unnamed on the map but named in their profile's city list, and the Hall
-    of fame map drew a lone Smallville square with count 2; together, that
-    pointed at their home area. Subtraction across profiles worked the same
-    way.
+  - Why: without these, a host's 2 home events in "Smallville" were unnamed
+    on their map but named in their profile's city list, and the Hall of
+    fame map drew a lone Smallville square with count 2; together, that
+    pointed at their home area.
   - No profile map for an id on the Guest Host blacklist until Hai decides.
     The thresholds and an opt-out are with Hai; these are the conservative
     defaults.
-  - **Residual risk:** a host with 3 or more events in one ~1 km area (a
-    frequent home venue) still shows that square, and its city, on their own
-    profile. Only an opt-out or dropping home venues would remove it.
+  - **Residual risks:** (1) a host with 3 or more events in one ~1 km area
+    (a frequent home venue) still shows that square, and its city, on their
+    own profile; only an opt-out or dropping home venues would remove it.
+    (2) Comparing several profiles' city lists with the Hall of fame's can
+    narrow down which hosts held events in a city, but names no area: a
+    city is listed only with a drawn area, and areas are drawn only when no
+    one host dominates them.
 - Under each map, text that accounts for every event exactly once: named
   cities (top 8, then "Elsewhere or unknown area"), areas not drawn, events
   online or without a venue, events not collected yet. The map container is
@@ -188,8 +198,9 @@ message, so coordinates or names never reach the process log.
   `/host/assets/leaflet.{js,css}?v=1.9.4` (signed-in only, cached for a year,
   gzipped once in memory since the app has no compression middleware: the
   script is 147 KB raw, about 42 KB gzipped). Map pages send the host CSP
-  with `img-src 'self' https://tile.openstreetmap.org` and nothing else
-  changed; other pages keep `img-src 'self'`.
+  (`HOST_CSP_OPTIONS`) with `tile.openstreetmap.org` added to `img-src` and
+  nothing else changed; other pages keep the host CSP without the tile
+  host.
 
 **Rendering, compared:**
 

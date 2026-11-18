@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
-import { eventPlaces, total } from '../../../src/lib/leaderboard/places.js';
+import {
+  countBand,
+  eventPlaces,
+  total,
+} from '../../../src/lib/leaderboard/places.js';
 import { LeaderboardEvent } from '../../../src/lib/leaderboard/standings.js';
 import {
   HALL_OF_FAME_PLACE_RULE,
@@ -57,10 +61,10 @@ describe('eventPlaces', () => {
     expect(total(places)).toBe(EVENTS.length);
   });
 
-  it('hall of fame: an area or city needs 3+ events from 2+ hosts', () => {
+  it('hall of fame: an area needs 3+ events and no single host dominating it', () => {
     const places = eventPlaces(EVENTS, HALL_OF_FAME_PLACE_RULE);
-    // Seattle: 4 events from 3 hosts. Bellevue: 3 events, one host.
-    // Smallville: 2 events, one host.
+    // Seattle: 4 events from 3 hosts (2 remain without any one). Bellevue:
+    // 3 events, one host. Smallville: 2 events, one host.
     expect(places.cells).toEqual([{ lat: 47.61, lon: -122.33, events: 4 }]);
     expect(places.notDrawn).toBe(5);
     expect(places.cities).toEqual([{ city: 'Seattle', events: 3 }]);
@@ -85,17 +89,77 @@ describe('eventPlaces', () => {
     expect(total(one)).toBe(host1.length);
   });
 
-  it('a co-hosted event counts each host toward an area’s distinct hosts', () => {
-    const places = eventPlaces(
+  it('dominance: one host, a regular co-host pair, or one host plus one other event never makes an area appear', () => {
+    const rule = HALL_OF_FAME_PLACE_RULE;
+    // Three events co-hosted by the same pair at one home.
+    const pair = eventPlaces(
       [
         ev(['1', '2'], SMALLVILLE),
-        ev(['1'], SMALLVILLE),
-        ev(['1'], SMALLVILLE),
+        ev(['1', '2'], SMALLVILLE),
+        ev(['1', '2'], SMALLVILLE),
+      ],
+      rule,
+    );
+    expect(pair.cells).toEqual([]);
+    expect(pair.cities).toEqual([]);
+    // X's 2 home events plus 1 by Y.
+    const plusOne = eventPlaces(
+      [ev(['9'], SMALLVILLE), ev(['9'], SMALLVILLE), ev(['8'], SMALLVILLE)],
+      rule,
+    );
+    expect(plusOne.cells).toEqual([]);
+    expect(plusOne.cities).toEqual([]);
+    expect(total(plusOne)).toBe(3);
+    // Without any one host, 2 events remain: drawn.
+    const shared = eventPlaces(
+      [ev(['9'], SMALLVILLE), ev(['8'], SMALLVILLE), ev(['7'], SMALLVILLE)],
+      rule,
+    );
+    expect(shared.cells).toHaveLength(1);
+    expect(shared.cities).toEqual([{ city: 'Smallville', events: 3 }]);
+  });
+
+  it('a city is named only if it contains a drawn area, even when its undrawn areas together pass the rule', () => {
+    const other = { ...SMALLVILLE, latE2: 4795 };
+    const places = eventPlaces(
+      [
+        ev(['9'], SMALLVILLE),
+        ev(['9'], SMALLVILLE),
+        ev(['8'], other),
+        ev(['7'], other),
       ],
       HALL_OF_FAME_PLACE_RULE,
     );
+    expect(places.cells).toEqual([]);
+    expect(places.cities).toEqual([]);
+    expect(places.otherArea).toBe(4);
+    expect(total(places)).toBe(4);
+  });
+
+  it('a named city counts its undrawn events too', () => {
+    const other = { ...SEATTLE, latE2: 4770 };
+    const places = eventPlaces(
+      [...EVENTS.slice(0, 3), ev(['9'], other)],
+      HALL_OF_FAME_PLACE_RULE,
+    );
     expect(places.cells).toHaveLength(1);
-    expect(places.cities).toEqual([{ city: 'Smallville', events: 3 }]);
+    expect(places.cities).toEqual([{ city: 'Seattle', events: 4 }]);
+    expect(places.notDrawn).toBe(1);
+  });
+
+  it('count bands start where drawing does and never show an exact count', () => {
+    expect(
+      [3, 5, 6, 10, 11, 25, 26, 400].map((n) => countBand(n).label),
+    ).toEqual([
+      'up to 5 events',
+      'up to 5 events',
+      '6–10 events',
+      '6–10 events',
+      '11–25 events',
+      '11–25 events',
+      '26+ events',
+      '26+ events',
+    ]);
   });
 
   it('is empty with no events', () => {
