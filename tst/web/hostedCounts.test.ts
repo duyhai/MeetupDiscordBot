@@ -154,19 +154,76 @@ describe('cachedHostedCounts', () => {
     expect((await two).size).toBe(4);
   });
 
-  it('a 429 stops the rest of that round', async () => {
+  it('a 429 cools that host, drops the queued reads (their waiters answer at once) and pauses the cache', async () => {
     const rateLimited = Object.assign(new Error('Too Many Requests'), {
       status: 429,
     });
     const read = vi.fn(async (id: string) => {
-      if (id === '1') {
+      if (id === '1' && read.mock.calls.length === 1) {
         throw rateLimited;
       }
-      return 1;
+      return Number(id);
+    });
+    const counts = cachedHostedCounts(read, {
+      concurrency: 1,
+      cooldownMs: 1_000,
+      budgetMs: 100_000,
+    });
+    // Answers without waiting for the 100 s budget: the dropped hosts' waiters resolved.
+    let done = false;
+    const page = counts(['1', '2', '3']).then((m) => {
+      done = true;
+      return m;
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(done).toBe(true);
+    expect(await page).toEqual(new Map());
+    expect(read).toHaveBeenCalledTimes(1);
+    // Paused: another page, other hosts, still no Meetup call.
+    await vi.advanceTimersByTimeAsync(999);
+    expect(await counts(['4', '5'])).toEqual(new Map());
+    expect(read).toHaveBeenCalledTimes(1);
+    // The pause and host 1's cooldown are over: everyone is read.
+    await vi.advanceTimersByTimeAsync(1);
+    const after = counts(['1', '4']);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(await after).toEqual(
+      new Map([
+        ['1', 1],
+        ['4', 4],
+      ]),
+    );
+  });
+
+  it('a host that failed is read again after its cooldown, and that count is kept', async () => {
+    let fail = true;
+    const read = vi.fn(async () => {
+      if (fail) {
+        throw new Error('meetup 500');
+      }
+      return 6;
+    });
+    const counts = cachedHostedCounts(read, { cooldownMs: 1_000 });
+    expect(await counts(['1'])).toEqual(new Map());
+    fail = false;
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(await counts(['1'])).toEqual(new Map([['1', 6]]));
+    expect(await counts(['1'])).toEqual(new Map([['1', 6]]));
+    expect(read).toHaveBeenCalledTimes(2);
+  });
+
+  it('cached counts still show while the cache is paused', async () => {
+    const read = vi.fn(async (id: string) => {
+      if (id === 'limited') {
+        throw Object.assign(new Error('x'), { status: 429 });
+      }
+      return 3;
     });
     const counts = cachedHostedCounts(read, { concurrency: 1 });
-    expect(await counts(['1', '2', '3'])).toEqual(new Map());
-    expect(read).toHaveBeenCalledTimes(1);
+    expect(await counts(['known'])).toEqual(new Map([['known', 3]]));
+    await counts(['limited']);
+    expect(await counts(['known', 'other'])).toEqual(new Map([['known', 3]]));
+    expect(read).toHaveBeenCalledTimes(2);
   });
 
   it('asks about at most maxHosts hosts per page', async () => {
@@ -181,7 +238,21 @@ describe('cachedHostedCounts', () => {
     expect(looksRateLimited({ status: 429 })).toBe(true);
     expect(looksRateLimited({ response: { status: 429 } })).toBe(true);
     expect(looksRateLimited(new Error('HTTP 429'))).toBe(true);
+    expect(looksRateLimited(new Error('Too Many Requests'))).toBe(true);
     expect(looksRateLimited(new Error('server error 500'))).toBe(false);
+    // A numeric status decides; the message (Meetup's body) is not read.
+    expect(
+      looksRateLimited(
+        Object.assign(new Error('upstream said 429 rate limit'), {
+          status: 500,
+        }),
+      ),
+    ).toBe(false);
+    expect(
+      looksRateLimited(
+        Object.assign(new Error('rate limit'), { response: { status: 502 } }),
+      ),
+    ).toBe(false);
     expect(looksRateLimited(undefined)).toBe(false);
   });
 });

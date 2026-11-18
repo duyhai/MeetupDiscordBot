@@ -31,25 +31,37 @@ export interface HostedCountOptions {
   readTimeoutMs?: number;
   maxHosts?: number;
   concurrency?: number;
-  /** True for an error meaning Meetup is rate limiting: the rest of that round is not attempted. */
+  /** True for an error meaning Meetup is rate limiting: the whole cache pauses for `cooldownMs`. */
   isRateLimit?: (error: unknown) => boolean;
 }
 
-/** A 429 from the Meetup client, by status or message. */
+/**
+ * A 429 from the Meetup client. A numeric status (the error's, or its
+ * response's) decides; the message is read only when there is none, since a
+ * client error's message embeds Meetup's response body and a 500 may quote
+ * "429" or "rate limit".
+ */
 export function looksRateLimited(error: unknown): boolean {
   const e = error as
     { status?: unknown; response?: { status?: unknown } } | undefined;
-  if (e?.status === 429 || e?.response?.status === 429) {
-    return true;
+  const status =
+    typeof e?.status === 'number'
+      ? e.status
+      : typeof e?.response?.status === 'number'
+        ? e.response.status
+        : undefined;
+  if (status !== undefined) {
+    return status === 429;
   }
-  return error instanceof Error && /\b429\b|rate.?limit/i.test(error.message);
+  return (
+    error instanceof Error &&
+    /\b429\b|rate.?limit|too many requests/i.test(error.message)
+  );
 }
 
 type Entry =
   | { kind: 'count'; at: number; count: number }
   | { kind: 'cooling'; at: number };
-
-type Round = { stopped: boolean };
 
 /**
  * The queue cards' "hosted before" counts (the number the Discord request
@@ -65,7 +77,9 @@ type Round = { stopped: boolean };
  *   host is read once at a time and stays in flight until its read settles;
  *   a read past `readTimeoutMs` frees its slot and its late result is
  *   dropped.
- * - A rate-limit error stops the rest of that round's queued reads.
+ * - A rate-limit error cools that host and pauses the whole cache for
+ *   `cooldownMs`: queued reads are dropped and no new ones start, so a
+ *   sustained rate limit costs no Meetup calls per reload.
  *
  * The returned function never rejects, whatever `read` does.
  */
@@ -87,14 +101,19 @@ export function cachedHostedCounts(
   const inFlight = new Set<string>();
   /** In-flight hosts past their timeout: nobody waits on them again. */
   const overdue = new Set<string>();
-  /** Hosts waiting for a slot, in order, each with its round. */
-  const queue: { id: string; round: Round }[] = [];
+  /** Hosts waiting for a slot, in order. */
+  const queue: string[] = [];
   const queued = new Set<string>();
   /** Reads holding a slot. */
   let running = 0;
+  /** No read starts before this (a rate limit was hit). */
+  let pausedUntil = 0;
+  const paused = () => now() < pausedUntil;
   /** Callers waiting on a host: answered when its read settles, times out or is skipped. */
   const waiters = new Map<string, (() => void)[]>();
 
+  // Eviction is lazy (on lookup): the map holds at most the hosts the queue
+  // has shown, a few hundred entries, so no sweep is needed.
   const entryOf = (id: string): Entry | undefined => {
     const entry = entries.get(id);
     if (entry === undefined) {
@@ -124,20 +143,22 @@ export function cachedHostedCounts(
 
   function pump(): void {
     while (running < concurrency && queue.length > 0) {
-      const job = queue.shift();
-      if (job === undefined) {
+      const id = queue.shift();
+      if (id === undefined) {
         return;
       }
-      queued.delete(job.id);
-      if (job.round.stopped) {
-        wake(job.id);
+      queued.delete(id);
+      if (paused()) {
+        wake(id);
       } else {
-        start(job.id, job.round);
+        start(id);
       }
     }
   }
 
-  function start(id: string, round: Round): void {
+  // A read that never settles keeps its host in flight (and unread) for
+  // good; it gives up its slot at the timeout, so only that host is affected.
+  function start(id: string): void {
     running++;
     inFlight.add(id);
     let holdsSlot = true;
@@ -176,7 +197,8 @@ export function cachedHostedCounts(
             cool(id);
           }
           if (isRateLimit(error)) {
-            round.stopped = true;
+            cool(id);
+            pausedUntil = now() + cooldownMs;
           }
           logger.warn(
             `Hosted count read failed: ${error instanceof Error ? error.name : 'Error'}`,
@@ -196,9 +218,11 @@ export function cachedHostedCounts(
   return async (meetupMemberIds) => {
     try {
       const ids = [...new Set(meetupMemberIds)].slice(0, maxHosts);
-      const round: Round = { stopped: false };
       const waits: Promise<void>[] = [];
       for (const id of ids) {
+        if (paused()) {
+          break;
+        }
         if (entryOf(id) !== undefined) {
           continue;
         }
@@ -207,7 +231,7 @@ export function cachedHostedCounts(
         }
         if (!inFlight.has(id) && !queued.has(id)) {
           queued.add(id);
-          queue.push({ id, round });
+          queue.push(id);
         }
         waits.push(waitFor(id));
       }
