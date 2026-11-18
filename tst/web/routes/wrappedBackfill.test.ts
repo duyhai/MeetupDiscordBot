@@ -177,7 +177,6 @@ describe('Settings Wrapped backfill card', () => {
     );
     expect(out).toContain('Unavailable right now.');
     expect(out).not.toContain('secret');
-    expect(out).toContain('<h2>Wrapped announcement</h2>');
   });
 
   it("offers Refresh a member's Wrapped in a confirm pop-up, never inline", async () => {

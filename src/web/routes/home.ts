@@ -20,12 +20,6 @@ import {
   PARKED_STATUSES,
   WorkspaceStatus,
 } from '../../lib/workspace/types.js';
-import {
-  announceDueAt,
-  announceSchedule,
-  announceYear,
-  isPastYear,
-} from '../../lib/wrapped/announce.js';
 import type { HomeReportsView } from '../dashboardRouter.js';
 import type { EventRequest } from '../../lib/repositories/postgresEventRequestRepository.js';
 import { SafeHtml, html, localUrl, memberText } from '../html.js';
@@ -34,7 +28,6 @@ import type { DashboardPageDeps } from './dashboardPages.js';
 import { collapsible } from '../ui/index.js';
 import { whenLabel } from './hostRequests.js';
 import { identityChangesTable, isListRow } from './identity.js';
-import { WRAPPED_ANNOUNCE_PATH, wrappedNotice } from './wrappedAnnounce.js';
 import { wrappedBackfillCard } from './wrappedBackfill.js';
 
 const logger = new Logger({ name: 'dashboard' });
@@ -284,65 +277,6 @@ async function identityCard(
   </div>`;
 }
 
-/**
- * The Wrapped announcement: what is configured (date and hour Pacific, the
- * channel), whether this year's post went out (when, where), and Post now
- * for Leadership while it has not. The form needs the session's CSRF token;
- * a render without one (a bare card) shows the state only. Ids are digits,
- * so they are shown as text, never as links.
- */
-async function wrappedCard(
-  deps: Pick<DashboardPageDeps, 'now' | 'wrappedAnnounce'>,
-  view: Partial<HomeReportsView>,
-): Promise<SafeHtml> {
-  const config = deps.wrappedAnnounce.config();
-  const schedule = announceSchedule(config, deps.now());
-  const status = await deps.wrappedAnnounce.status();
-  const posted = status?.postedAt !== undefined;
-  const state = posted
-    ? html`<p>
-        Posted ${pacificDateTime(status.postedAt)} Pacific in channel
-        ${status.channelId ?? 'unknown'}${
-          status.messageId ? html` (message ${status.messageId})` : ''
-        }.
-      </p>`
-    : config.date !== undefined
-      ? html`<p>Not posted yet for ${announceYear({ date: config.date })}.</p>`
-      : '';
-  let where: SafeHtml;
-  if (config.date === undefined) {
-    where = html`<p class="muted">
-      WRAPPED_ANNOUNCE_DATE is not a real date: nothing will be posted.
-    </p>`;
-  } else if (isPastYear({ date: config.date }, deps.now())) {
-    where = html`<p class="muted">
-      WRAPPED_ANNOUNCE_DATE is in a past year: nothing will be posted. Set it to
-      a date this year.
-    </p>`;
-  } else if (schedule === undefined) {
-    where = html`<p class="muted">
-      WRAPPED_ANNOUNCE_CHANNEL_ID is not set: nothing will be posted.
-    </p>`;
-  } else {
-    where = html`<p class="muted">
-      Scheduled for ${pacificDateTime(announceDueAt(schedule))} Pacific in
-      channel ${schedule.channelId}.
-    </p>`;
-  }
-  const form =
-    !posted && schedule !== undefined && view.csrfToken !== undefined
-      ? html`<form method="post" action="${localUrl(WRAPPED_ANNOUNCE_PATH)}">
-          <input type="hidden" name="_csrf" value="${view.csrfToken}" />
-          <button type="submit" class="ghost">Post now</button>
-          <span class="muted">1.5 Leadership Team only.</span>
-        </form>`
-      : '';
-  return html`<div class="card">
-    <h2>Wrapped announcement</h2>
-    ${wrappedNotice(view.notice)} ${where} ${state} ${form}
-  </div>`;
-}
-
 /** Runs one part of a card; a failure or the deadline gives undefined. Logs the class name only. */
 async function part<T>(
   name: string,
@@ -493,22 +427,19 @@ export async function renderHomeReports(
 }
 
 /**
- * The Settings page's job cards: the Wrapped announcement and the Wrapped
- * backfill. `view` carries the CSRF token for the cards' own forms and the
- * `?wrapped=` / `?backfill=` notice codes their POSTs redirect back with.
- * Never rejects: each card degrades on its own.
+ * The Settings page's job card: the Wrapped backfill. `view` carries the
+ * CSRF token for the card's own forms and the `?backfill=` notice code its
+ * POSTs redirect back with. Never rejects: the card degrades on its own.
  */
 export async function renderSettingsCards(
-  deps: Pick<DashboardPageDeps, 'now' | 'wrappedAnnounce' | 'wrappedBackfill'>,
+  deps: Pick<DashboardPageDeps, 'wrappedBackfill'>,
   view: Partial<HomeReportsView> = {},
 ): Promise<SafeHtml> {
   const { deadline, stop } = startDeadline();
   try {
-    const [wrapped, backfill] = await Promise.all([
-      card('wrapped', deadline, () => wrappedCard(deps, view)),
-      card('wrapped backfill', deadline, () => wrappedBackfillCard(deps, view)),
-    ]);
-    return html`${wrapped}${backfill}`;
+    return await card('wrapped backfill', deadline, () =>
+      wrappedBackfillCard(deps, view),
+    );
   } finally {
     stop();
   }

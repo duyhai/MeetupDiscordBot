@@ -410,7 +410,6 @@ function within<T>(promise: Promise<T>, ms: number): Promise<T> {
             'meetup_host_names',
             'meetup_snapshot_runs',
             'report_snapshots',
-            'wrapped_announcements',
             'wrapped_backfill_deferred',
             'wrapped_backfill_runs',
             'wrapped_entries',

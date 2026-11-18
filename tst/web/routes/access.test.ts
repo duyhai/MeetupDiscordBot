@@ -110,8 +110,6 @@ const EXPECTED_UNSAFE_ALLOWED: Record<string, number> = {
   // A fake Leadership check says no: refused, back to the member's page.
   'POST /hosts/promotion/:memberId': 303,
   // A fake Leadership check says no: refused, back to the home page.
-  'POST /wrapped/announce': 303,
-  // A fake Leadership check says no: refused, back to the home page.
   'POST /wrapped/backfill/run': 303,
   // A fake Leadership check says no: refused, back to the home page.
   'POST /wrapped/snapshot/run': 303,
@@ -189,7 +187,6 @@ describe('access matrix', () => {
     expect(labels).toContain('GET /no-shows/:period/rows/:rowId/suspend');
     expect(labels).toContain('POST /no-shows/:period/rows/:rowId');
     expect(labels).toContain('POST /no-shows/:period/sync');
-    expect(labels).toContain('POST /wrapped/announce');
     expect(UNSAFE.length).toBeGreaterThan(0);
   });
 
