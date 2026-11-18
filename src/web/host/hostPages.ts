@@ -64,6 +64,7 @@ import {
 } from './hostPageKit.js';
 import {
   CALENDAR_SCRIPT,
+  CALENDAR_VIEW_SCRIPT,
   HISTORY_SCRIPT,
   TIMELINE_SCRIPT,
 } from './hostScripts.js';
@@ -419,19 +420,28 @@ function memberBody(
   </div>`;
 }
 
+/** The title link and any holiday badges the title names. */
+function eventTitle(e: HostEvent): SafeHtml {
+  return html`${eventLink(e)}${matchHolidays(e.title).map(
+    (name) => html` <span class="badge info">${name}</span>`,
+  )}`;
+}
+
+/** "hosted by A, B", or nothing when Meetup lists no host. */
+function hostedBy(e: HostEvent): SafeHtml | '' {
+  return e.hosts.length
+    ? html`<span class="muted"
+        >hosted by
+        ${e.hosts.map((h, i) => html`${i ? ', ' : ''}${memberText(h.name)}`)}</span
+      >`
+    : '';
+}
+
 /** One event as a line: time, title link, holiday badges, hosts. */
 function eventLine(e: HostEvent): SafeHtml {
+  const hosts = hostedBy(e);
   return html`${timeLabel(e.dateTime)}:
-  ${eventLink(e)}${matchHolidays(e.title).map(
-    (name) => html` <span class="badge info">${name}</span>`,
-  )}${
-    e.hosts.length
-      ? html` <span class="muted"
-          >hosted by
-          ${e.hosts.map((h, i) => html`${i ? ', ' : ''}${memberText(h.name)}`)}</span
-        >`
-      : ''
-  }`;
+  ${eventTitle(e)}${hosts ? html` ${hosts}` : ''}`;
 }
 
 /**
@@ -454,6 +464,38 @@ function eventThumb(e: HostEvent): SafeHtml {
         referrerpolicy="no-referrer"
       />`
     : html`<span class="ev-thumb ev-thumb-none" aria-hidden="true"></span>`;
+}
+
+/**
+ * One event as a tile: its photo in a fixed 2:1 box on top (the standard
+ * rendition, else the thumbnail, else a neutral placeholder of the same
+ * box), then time, title link and hosts. The width and height attributes
+ * give the box its ratio before the photo loads, so nothing shifts; CSS
+ * crops it (object-fit: cover, a little above centre, where faces and
+ * signs usually are). The title link's text is the same as in the list.
+ */
+function eventTile(e: HostEvent): SafeHtml {
+  const src = meetupPhotoSrc(e.tilePhotoUrl) ?? meetupPhotoSrc(e.photoUrl);
+  const photo = src
+    ? html`<img
+        class="tile-photo"
+        src="${src}"
+        alt=""
+        width="600"
+        height="300"
+        loading="lazy"
+        decoding="async"
+        referrerpolicy="no-referrer"
+      />`
+    : html`<span class="tile-photo tile-photo-none" aria-hidden="true"></span>`;
+  return html`<li class="cal-tile">
+    ${photo}
+    <div class="tile-body">
+      <p class="tile-time">${timeLabel(e.dateTime)}</p>
+      <p class="tile-title">${eventTitle(e)}</p>
+      ${hostedBy(e)}
+    </div>
+  </li>`;
 }
 
 /**
@@ -559,8 +601,159 @@ export function calendarMonth(query: unknown, today: string): string {
   return query >= current && query <= last ? query : current;
 }
 
+/** Day by day's tabs: the days still to come (today on), or those gone. */
+export type CalendarTab = 'upcoming' | 'past';
+/** Day by day's layout: photo tiles, or compact rows with thumbnails. */
+export type CalendarView = 'tiles' | 'list';
+
+/** `?tab=past`, else Upcoming. */
+export function calendarTab(query: unknown): CalendarTab {
+  return query === 'past' ? 'past' : 'upcoming';
+}
+
+/** `?view=list`, else Tiles. */
+export function calendarView(query: unknown): CalendarView {
+  return query === 'list' ? 'list' : 'tiles';
+}
+
+/**
+ * A calendar link. The view is always spelled out, so the page it opens
+ * says which one it shows (CALENDAR_VIEW_SCRIPT remembers it from there);
+ * Upcoming, the default tab, is left out.
+ */
+function calendarLink(to: {
+  month: string;
+  tab: CalendarTab;
+  view: CalendarView;
+}): ReturnType<typeof pageLink> {
+  return pageLink(HOST_PATHS.calendar, {
+    month: to.month,
+    tab: to.tab === 'past' ? 'past' : undefined,
+    view: to.view,
+  });
+}
+
+/**
+ * The pager choices: the current one is aria-current text, the others
+ * links. Labels and keys are literals from the callers.
+ */
+function choices<K extends string>(
+  label: string,
+  options: readonly { key: K; label: string }[],
+  current: K,
+  href: (key: K) => ReturnType<typeof pageLink>,
+  viewSwitch = false,
+): SafeHtml {
+  const items = options.map((o) => {
+    if (o.key === current) {
+      return html`<strong aria-current="page">${o.label}</strong>`;
+    }
+    return html`<a href="${href(o.key)}">${o.label}</a>`;
+  });
+  // Two literals: html never interpolates inside a tag.
+  return viewSwitch
+    ? html`<nav class="pager choices" aria-label="${label}" data-cal-views>
+        ${items}
+      </nav>`
+    : html`<nav class="pager choices" aria-label="${label}">${items}</nav>`;
+}
+
+const CALENDAR_TABS = [
+  { key: 'upcoming', label: 'Upcoming' },
+  { key: 'past', label: 'Past' },
+] as const;
+const CALENDAR_VIEWS = [
+  { key: 'tiles', label: 'Tiles' },
+  { key: 'list', label: 'List' },
+] as const;
+
+/**
+ * One day of the day-by-day list, as rows or tiles. The tabs split past
+ * from upcoming, so a day needs no Past badge.
+ */
+function dayEntry(d: CalendarDay, today: string, view: CalendarView): SafeHtml {
+  const events =
+    view === 'tiles'
+      ? html`<ul class="cal-tiles">
+          ${d.events.map((e) => eventTile(e))}
+        </ul>`
+      : html`<ul class="cal-items">
+          ${d.events.map(
+            (e) =>
+              html`<li>
+                ${eventThumb(e)}<span class="cal-item-text"
+                  >${eventLine(e)}</span
+                >
+              </li>`,
+          )}
+        </ul>`;
+  return html`<li>
+    <h3>${dayLabel(d.day)}</h3>
+    ${
+      d.day > today
+        ? html`<p>
+            <a href="${createDayLink(d.day)}">Host on this day</a>
+          </p>`
+        : ''
+    }
+    ${events}
+  </li>`;
+}
+
+/**
+ * Day by day: Upcoming (today on, in order) or Past (the month's earlier
+ * days, most recent first), as tiles or a list. Both are links with the
+ * month and the other choice kept, so they work without script.
+ */
+function dayByDay(
+  days: CalendarDay[],
+  today: string,
+  month: string,
+  tab: CalendarTab,
+  view: CalendarView,
+): SafeHtml {
+  const listed = days.filter(
+    (d) => d.day.startsWith(month) && d.events.length > 0,
+  );
+  const shown =
+    tab === 'past'
+      ? listed.filter((d) => d.day < today).reverse()
+      : listed.filter((d) => d.day >= today);
+  const current = today.slice(0, 7);
+  const empty =
+    tab === 'past'
+      ? month > current
+        ? 'None of this month’s days have passed yet.'
+        : 'Nothing happened earlier this month.'
+      : month === current
+        ? 'Nothing more is scheduled this month yet.'
+        : 'Nothing scheduled this month yet.';
+  return html`<div class="card">
+    <h2>Day by day: ${dayjs(`${month}-01`).format('MMMM')}</h2>
+    <div class="cal-bar">
+      ${choices('Which days', CALENDAR_TABS, tab, (key) =>
+        calendarLink({ month, tab: key, view }),
+      )}
+      ${choices(
+        'Layout',
+        CALENDAR_VIEWS,
+        view,
+        (key) => calendarLink({ month, tab, view: key }),
+        true,
+      )}
+    </div>
+    ${
+      shown.length === 0
+        ? html`<p class="muted">${empty}</p>`
+        : html`<ol class="cal-list">
+            ${shown.map((d) => dayEntry(d, today, view))}
+          </ol>`
+    }
+  </div>`;
+}
+
 /** Previous and next month; each is disabled text at the ends. */
-function monthNav(month: string, today: string): SafeHtml {
+function monthNav(month: string, today: string, view: CalendarView): SafeHtml {
   const first = dayjs(`${month}-01`);
   const prev = first.subtract(1, 'month');
   const next = first.add(1, 'month');
@@ -569,7 +762,7 @@ function monthNav(month: string, today: string): SafeHtml {
     .add(CALENDAR_MONTHS_AHEAD, 'month')
     .format('YYYY-MM');
   const link = (m: dayjs.Dayjs) =>
-    pageLink(HOST_PATHS.calendar, { month: m.format('YYYY-MM') });
+    calendarLink({ month: m.format('YYYY-MM'), tab: 'upcoming', view });
   const prevPart =
     month > current
       ? html`<a class="button ghost" href="${link(prev)}"
@@ -599,6 +792,8 @@ function calendarBody(
   days: CalendarDay[],
   today: string,
   month: string,
+  tab: CalendarTab,
+  view: CalendarView,
 ): SafeHtml {
   const weeks: CalendarDay[][] = [];
   for (let i = 0; i < days.length; i += 7) {
@@ -618,31 +813,6 @@ function calendarBody(
         ${week.map((d) => monthCell(d))}
       </tr>`,
   );
-  const listed = days.filter((d) => inMonth(d) && d.events.length > 0);
-  const list = listed.map((d) => {
-    const inner = html`<h3>
-        ${dayLabel(d.day)}${d.day < today ? html` <span class="badge neutral">Past</span>` : ''}
-      </h3>
-      ${
-        d.day > today
-          ? html`<p>
-              <a href="${createDayLink(d.day)}">Host on this day</a>
-            </p>`
-          : ''
-      }
-      <ul class="cal-items">
-        ${d.events.map(
-          (e) =>
-            html`<li>
-              ${eventThumb(e)}<span class="cal-item-text">${eventLine(e)}</span>
-            </li>`,
-        )}
-      </ul>`;
-    // The class is one of two literals: a past day is greyed out.
-    return d.day < today
-      ? html`<li class="past">${inner}</li>`
-      : html`<li>${inner}</li>`;
-  });
   return html`<div class="card">
       <h1>Calendar</h1>
       <p>
@@ -651,7 +821,7 @@ function calendarBody(
         host on that day. Days that have passed are greyed out, with what
         happened on them.
       </p>
-      ${monthNav(month, today)}
+      ${monthNav(month, today, view)}
       <p class="cal-legend">
         <span class="swatch busy0"></span> Free
         <span class="swatch busy1"></span> 1 event
@@ -678,16 +848,7 @@ function calendarBody(
         </table>
       </div>
     </div>
-    <div class="card">
-      <h2>Day by day: ${dayjs(`${month}-01`).format('MMMM')}</h2>
-      ${
-        listed.length === 0
-          ? html`<p class="muted">Nothing scheduled this month yet.</p>`
-          : html`<ol class="cal-list">
-              ${list}
-            </ol>`
-      }
-    </div>`;
+    ${dayByDay(days, today, month, tab, view)}`;
 }
 
 /** The history page's query: what it filters on and which year it maps. */
@@ -1265,8 +1426,14 @@ export function registerHostPages(
     hostPage(res, {
       title: 'Calendar',
       current: 'calendar',
-      body: calendarBody(days, today(), month),
-      script: CALENDAR_SCRIPT,
+      body: calendarBody(
+        days,
+        today(),
+        month,
+        calendarTab(req.query.tab),
+        calendarView(req.query.view),
+      ),
+      script: [CALENDAR_SCRIPT, CALENDAR_VIEW_SCRIPT],
     });
   }) as RequestHandler);
 

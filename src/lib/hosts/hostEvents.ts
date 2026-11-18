@@ -29,6 +29,11 @@ export interface HostEvent {
    * Meetup's photo host (meetupPhotoUrl); else absent.
    */
   photoUrl?: string;
+  /**
+   * The same photo's standard rendition (up to 600px wide, its own aspect
+   * ratio) for the calendar's tiles, on the same terms as photoUrl.
+   */
+  tilePhotoUrl?: string;
 }
 
 /** The events that count as hosted, in the order given. */
@@ -182,14 +187,16 @@ interface RawEventNode {
   eventUrl: string;
   status?: EventStatus | null;
   eventHosts?: { member?: { id?: unknown; name?: unknown } | null }[] | null;
-  featuredEventPhoto?: { thumbUrl?: unknown } | null;
+  featuredEventPhoto?: { thumbUrl?: unknown; standardUrl?: unknown } | null;
 }
 
 export function toHostEvent(node: RawEventNode): HostEvent {
   const title = String(node.title ?? '');
   const photoUrl = meetupPhotoUrl(node.featuredEventPhoto?.thumbUrl);
+  const tilePhotoUrl = meetupPhotoUrl(node.featuredEventPhoto?.standardUrl);
   return {
     ...(photoUrl === undefined ? {} : { photoUrl }),
+    ...(tilePhotoUrl === undefined ? {} : { tilePhotoUrl }),
     id: String(node.id),
     title,
     dateTime: String(node.dateTime),

@@ -17,6 +17,23 @@ import { staticRaw } from '../html.js';
 export const CALENDAR_SCRIPT = staticRaw`(function(){var grid=document.querySelector('table.cal-grid');if(!grid){return;}grid.classList.add('cal-js');var box=grid.closest('.table-scroll')||grid;var pops=Array.prototype.slice.call(grid.querySelectorAll('details.cal-pop'));function place(d){var s=d.querySelector('summary'),p=d.querySelector('.cal-panel');if(!s||!p){return;}var r=s.getBoundingClientRect(),b=box.getBoundingClientRect(),vw=document.documentElement.clientWidth,vh=window.innerHeight;if(r.bottom<Math.max(0,b.top)||r.top>Math.min(vh,b.bottom)||r.right<Math.max(0,b.left)||r.left>Math.min(vw,b.right)){d.open=false;return;}var w=p.offsetWidth,h=p.offsetHeight;var left=Math.max(16,Math.min(r.left,vw-w-16));var top=r.bottom+4;if(top+h>vh-8&&r.top-h-4>8){top=r.top-h-4;}p.style.left=left+'px';p.style.top=Math.max(8,top)+'px';}function closeAll(except){pops.forEach(function(d){if(d!==except&&d.open){d.open=false;}});}pops.forEach(function(d){var s=d.querySelector('summary');var hovered=false,timer=null;d.addEventListener('toggle',function(){if(d.open){closeAll(d);place(d);}else{hovered=false;}});d.addEventListener('pointerenter',function(e){if(e.pointerType!=='mouse'){return;}clearTimeout(timer);if(!d.open){hovered=true;closeAll(d);d.open=true;place(d);}});d.addEventListener('pointerleave',function(e){if(e.pointerType!=='mouse'||!hovered){return;}clearTimeout(timer);timer=setTimeout(function(){if(hovered){d.open=false;}},250);});d.addEventListener('focusout',function(e){if(d.open&&e.relatedTarget&&!d.contains(e.relatedTarget)){d.open=false;}});});document.addEventListener('keydown',function(e){if(e.key!=='Escape'){return;}pops.forEach(function(d){if(d.open){var inside=d.contains(document.activeElement);d.open=false;var s=d.querySelector('summary');if(inside&&s){s.focus();}}});});document.addEventListener('pointerdown',function(e){var inside=pops.some(function(d){return d.open&&d.contains(e.target);});if(!inside){closeAll(null);}});var frame=0;function replace(){if(frame){return;}frame=requestAnimationFrame(function(){frame=0;pops.forEach(function(d){if(d.open){place(d);}});});}window.addEventListener('resize',replace);window.addEventListener('scroll',replace,true);})();`;
 
 /**
+ * The calendar's Tiles/List choice, remembered on this device. The view is
+ * a query parameter (?view=), so every calendar link works without script
+ * and keeps it; this only carries it across visits:
+ *   - a calendar page whose address says ?view=tiles or ?view=list stores
+ *     that choice (localStorage, key host-calendar-view);
+ *   - one opened without it (the nav bar, the home page) shows Tiles, the
+ *     default; when List is stored it reopens with ?view=list instead
+ *     (location.replace, so Back skips the default);
+ *   - storage that is missing or throws (private windows, blocked site
+ *     data) changes nothing: the page stays as served;
+ *   - it only runs on a page with the layout switch, once (re-entry guard,
+ *     window.__hostCalendarView).
+ */
+// eslint-disable-next-line @stylistic/max-len -- one line, so the script text is exactly what runs
+export const CALENDAR_VIEW_SCRIPT = staticRaw`(function(){if(window.__hostCalendarView){return;}window.__hostCalendarView=1;if(!document.querySelector('[data-cal-views]')){return;}var KEY='host-calendar-view';var u=new URL(location.href);var v=u.searchParams.get('view');if(v==='tiles'||v==='list'){try{localStorage.setItem(KEY,v);}catch(e){}return;}var saved=null;try{saved=localStorage.getItem(KEY);}catch(e){}if(saved==='list'){u.searchParams.set('view','list');location.replace(u.href);}})();`;
+
+/**
  * The history heat map's tooltips. Each day with events is already a link
  * to the day filter, labelled with its events; this shows the same lines
  * in a tooltip, and removes the native SVG titles so only one shows:

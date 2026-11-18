@@ -170,6 +170,37 @@ describe('toHostEvent', () => {
   });
 });
 
+describe('toHostEvent tile photo', () => {
+  it('keeps the standard rendition on the same terms as the thumbnail', () => {
+    const base = {
+      id: '9',
+      title: 'Hike',
+      dateTime: '2026-11-01T10:00:00-07:00',
+      eventUrl: 'https://www.meetup.com/g/events/9/',
+    };
+    const standard =
+      'https://secure.meetupstatic.com/photos/event/d/2/2/5/600_536933797.jpeg';
+    expect(
+      toHostEvent({ ...base, featuredEventPhoto: { standardUrl: standard } }),
+    ).toMatchObject({ tilePhotoUrl: standard });
+    for (const standardUrl of [
+      null,
+      42,
+      'http://secure.meetupstatic.com/x.jpg',
+      'https://evil.example/x.jpg',
+      'https://secure.meetupstatic.com.evil.example/x.jpg',
+      'https://u:p@secure.meetupstatic.com/x.jpg',
+      'https://secure.meetupstatic.com:444/x.jpg',
+    ]) {
+      const event = toHostEvent({
+        ...base,
+        featuredEventPhoto: { standardUrl },
+      });
+      expect('tilePhotoUrl' in event).toBe(false);
+    }
+  });
+});
+
 describe('groupCalendar across DST', () => {
   it('asks Meetup for Pacific midnight at both ends of a fall-back window', async () => {
     const fetchGroupEvents = vi.fn().mockResolvedValue([]);
