@@ -207,6 +207,23 @@ describe('host request queue', () => {
     expect(res.text).toContain('Host Tip: <bdi>Bring snacks</bdi>');
   });
 
+  it('the Approve pop-up names the title tag the host’s tier publishes with', async () => {
+    const { get } = await setup({
+      rows: [
+        eventRequestRow({ id: '1', title: 'Regular one' }),
+        eventRequestRow({ id: '2', title: 'Promoted one', tier: 'promoted' }),
+      ],
+    });
+    const res = await get(QUEUE);
+    const tipOf = (title: string) => {
+      const at = res.text.indexOf(`Publishes <strong><bdi>${title}</bdi>`);
+      return res.text.slice(at, res.text.indexOf('</p>', at));
+    };
+    expect(tipOf('Regular one')).toContain('"[Guest Host] …"');
+    expect(tipOf('Promoted one')).toContain('"[Community Host] …"');
+    expect(res.text).toContain('Discord post if it has one');
+  });
+
   it('a host whose count did not come back says so; decided cards ask for none', async () => {
     const { get, hostedCounts } = await setup({
       rows: [

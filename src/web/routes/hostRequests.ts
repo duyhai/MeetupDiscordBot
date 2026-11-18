@@ -2,6 +2,8 @@ import dayjs from 'dayjs';
 import express, { RequestHandler, Response } from 'express';
 import { Logger } from 'tslog';
 
+import { prefixFor } from '../../lib/hosts/eventRequest.js';
+import { TIP_LINE } from '../../lib/hosts/requestPost.js';
 import {
   ExistingEvent,
   PublishOutcome,
@@ -226,8 +228,8 @@ function cardActions(
   const denyForm = confirmModal({
     trigger: { label: 'Deny', tone: 'danger' },
     title: 'Deny this request',
-    tip: html`The host sees the reason on their dashboard, and the Discord post
-    shows it. Nothing is created on Meetup.`,
+    tip: html`The host sees the reason on their dashboard, and so does the
+    request's Discord post if it has one. Nothing is created on Meetup.`,
     action: localUrl(actionPath(r.id, 'deny')),
     fields: html`${csrfField}
       <label class="field"
@@ -246,8 +248,9 @@ function cardActions(
     trigger: { label: 'Approve', tone: 'primary' },
     title: 'Approve and publish',
     tip: html`Publishes <strong>${memberText(r.title)}</strong> on Meetup now,
-      with the organizer login, titled "[Guest Host] …". The host announces it
-      themself from the host dashboard.`,
+      with the organizer login, titled "${prefixFor(r.tier).trim()} …" (the tag
+      follows the host's tier when it publishes). The host announces it themself
+      from the host dashboard.`,
     action: localUrl(actionPath(r.id, 'approve')),
     fields: csrfField,
     confirmLabel: 'Approve and publish',
@@ -307,7 +310,6 @@ function cardActions(
 
 const DEFAULT_LIMITS = createEventTemplate.rsvpSettings;
 const TEMPLATE_PHOTO = createEventTemplate.featuredPhotoId ?? null;
-const TIP_LINE = /^💡 Host Tip: .* 💡\n\n/u;
 
 /** Which description a request carries, for the card's label. */
 function descriptionKind(r: EventRequest): 'standard' | 'custom' | 'copied' {
@@ -392,8 +394,6 @@ function copyDetails(r: EventRequest): SafeHtml {
   </ul>`;
 }
 
-const HOST_TIP = /^💡 Host Tip: (.*) 💡\n\n/u;
-
 /**
  * " · 8 events hosted before", or why there is no number; nothing for a
  * card the page did not ask about (a decided one).
@@ -447,7 +447,7 @@ function requestCard(
   context: CardContext,
 ): SafeHtml {
   const meetup = safeHref(r.eventUrl ?? '');
-  const tip = HOST_TIP.exec(r.description)?.[1];
+  const tip = TIP_LINE.exec(r.description)?.[1];
   return html`<div class="card">
     <h3>${memberText(r.title)}</h3>
     <p>${statusBadge(r)} ${tierBadge(r)}</p>
