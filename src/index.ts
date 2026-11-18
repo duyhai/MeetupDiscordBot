@@ -17,10 +17,6 @@ import {
 import { startAnnounceScheduler } from './lib/hosts/announceTick.js';
 import { startReportBuildScheduler } from './lib/reports/buildJob.js';
 import {
-  productionWrappedAnnounceDeps,
-  startWrappedAnnounceScheduler,
-} from './lib/wrapped/announce.js';
-import {
   productionBackfillDeps,
   startWrappedBackfillScheduler,
 } from './lib/wrapped/backfill.js';
@@ -74,9 +70,6 @@ client.once('clientReady', async () => {
   startEventAuditScheduler(client);
   startAnnounceScheduler(client, () =>
     productionAnnounceTickDeps(() => client),
-  );
-  startWrappedAnnounceScheduler(client, () =>
-    productionWrappedAnnounceDeps(() => client),
   );
   startWrappedBackfillScheduler(client, () =>
     productionBackfillDeps(() => client),

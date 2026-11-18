@@ -23,11 +23,6 @@ import {
   WorkspaceSyncCode,
 } from '../../lib/workspace/service.js';
 import { UpcomingEntry } from '../../lib/workspace/upcoming.js';
-import { PostgresWrappedAnnouncementRepository } from '../../lib/repositories/postgresWrappedAnnouncementRepository.js';
-import {
-  WrappedAnnounceConfig,
-  WrappedAnnounceOutcome,
-} from '../../lib/wrapped/announce.js';
 import { AccessCheck } from '../roleGate.js';
 import type { StaffNameLookup } from '../staffNames.js';
 import { SessionStore } from '../session.js';
@@ -51,7 +46,6 @@ import { registerSuspensionRoutes } from './suspensions.js';
 import { registerTrendsRoutes } from './trends.js';
 import { registerWorkspaceRoutes } from './workspace.js';
 import { registerWorkspaceActionRoutes } from './workspaceActions.js';
-import { registerWrappedAnnounceRoute } from './wrappedAnnounce.js';
 import {
   WrappedBackfillControl,
   registerWrappedBackfillRoute,
@@ -160,21 +154,6 @@ export interface BanActions {
   ): Promise<{ code: BanResultCode }>;
 }
 
-/**
- * The "your Wrapped is ready" notice's dashboard control: what is configured,
- * whether this year's post went out, and Post now (runWrappedAnnounce with
- * force: the same claim as the job, so the two can never both post).
- */
-export interface WrappedAnnounceControl {
-  config(): WrappedAnnounceConfig;
-  /** This year's row (announceYear of the config), if any. May reject. */
-  status(): Promise<
-    Awaited<ReturnType<PostgresWrappedAnnouncementRepository['get']>>
-  >;
-  /** Posts now unless already posted. May reject (store down). */
-  postNow(): Promise<WrappedAnnounceOutcome>;
-}
-
 /** requestRebuild's answer, or 'unavailable' when the bot is not ready to build. */
 export type PageRebuildResult =
   RebuildResult | { status: 'unavailable'; message: string };
@@ -211,8 +190,6 @@ export interface DashboardPageDeps
   workspaceActions: WorkspaceActions;
   /** Live upcoming RSVPs for the workspace's suspension cards (createUpcomingLoader). Never rejects. */
   upcoming: (memberIds: string[]) => Promise<Map<string, UpcomingEntry>>;
-  /** The Wrapped announcement card and its Post now action. */
-  wrappedAnnounce: WrappedAnnounceControl;
   /** The Wrapped backfill card and its Run now action. */
   wrappedBackfill: WrappedBackfillControl;
   /**
@@ -243,7 +220,6 @@ export function registerDashboardPages(
   registerTrendsRoutes(router, deps);
   registerHostRequestRoutes(router, deps);
   registerHostPromotionRoutes(router, deps);
-  registerWrappedAnnounceRoute(router, deps);
   registerWrappedBackfillRoute(router, deps);
   registerEventChangeRoutes(router, deps);
 }

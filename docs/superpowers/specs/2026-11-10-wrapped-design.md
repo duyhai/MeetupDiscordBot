@@ -723,7 +723,7 @@ claimed_at NULL, attempts)`: at most one queued year per member.
 
 ### Staff dashboard
 
-A **Wrapped backfill** card beside the Wrapped announcement card: last run
+A **Wrapped backfill** card on the Settings page: last run
 (when, built/skipped/failed), members done/total of the open run, queue
 length, next run. **Run now** (leadership only, same guards as the other
 staff POSTs: CSRF, Origin, rate limit, live role check, audit) sets a

@@ -1178,16 +1178,6 @@ export function fakePageDeps(
     ]),
     revokeHostSessions: vi.fn(async () => undefined),
     hostAlert: vi.fn().mockResolvedValue(true),
-    // The access matrix's fake Leadership check says no, so postNow is never reached there.
-    wrappedAnnounce: {
-      config: () => ({
-        date: '2026-12-01',
-        hour: 17,
-        channelId: '123456789012345678',
-      }),
-      status: vi.fn(async () => undefined),
-      postNow: vi.fn(async () => 'posted' as const),
-    },
     // The same fake Leadership check says no, so runNow is never reached there.
     wrappedBackfill: {
       status: vi.fn(async () => ({

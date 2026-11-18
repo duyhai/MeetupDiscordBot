@@ -53,7 +53,6 @@ import { ApplicationCache } from '../util/cache.js';
 import { resolveDisplayNames } from '../lib/wrapped/displayNames.js';
 import { cachedDisplayNames, displayNames } from './host/serverJoin.js';
 import { STAFF_NAMES_BUDGET_MS } from './staffNames.js';
-import { PostgresWrappedAnnouncementRepository } from '../lib/repositories/postgresWrappedAnnouncementRepository.js';
 import { PostgresSnapshotRepository } from '../lib/repositories/postgresSnapshotRepository.js';
 import {
   LastSnapshotTick,
@@ -73,12 +72,6 @@ import {
 } from '../lib/wrapped/backfill.js';
 import { recordedNextTick } from '../lib/wrapped/queue.js';
 import { PostgresWrappedEntryRepository } from '../lib/repositories/postgresWrappedEntryRepository.js';
-import {
-  announceYear,
-  loadWrappedAnnounceConfig,
-  productionWrappedAnnounceDeps,
-  runWrappedAnnounce,
-} from '../lib/wrapped/announce.js';
 import {
   baseSecurityHeaders,
   createDashboardRouter,
@@ -545,25 +538,6 @@ export function dashboardPageDeps(): DashboardPageDeps {
         );
         return outcome.kind === 'queued' ? 'queued' : 'already-queued';
       },
-    },
-    wrappedAnnounce: {
-      config: () => loadWrappedAnnounceConfig(),
-      status: async () => {
-        const { date } = loadWrappedAnnounceConfig();
-        return date === undefined
-          ? undefined
-          : (await PostgresWrappedAnnouncementRepository.instance()).get(
-              announceYear({ date }),
-            );
-      },
-      // The job's own deps and claim: Post now can never post twice.
-      postNow: () =>
-        runWrappedAnnounce(
-          productionWrappedAnnounceDeps(() => discordClient),
-          {
-            force: true,
-          },
-        ),
     },
   };
 }

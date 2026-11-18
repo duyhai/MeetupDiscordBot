@@ -120,9 +120,9 @@ export interface DashboardDeps {
    */
   homeReports?: () => Promise<SafeHtml>;
   /**
-   * The Settings page's job cards (Wrapped announcement, Wrapped backfill),
-   * given the session's CSRF token (for the cards' own forms) and the
-   * `?wrapped=` / `?backfill=` notice codes. Must not throw.
+   * The Settings page's job card (Wrapped backfill), given the session's
+   * CSRF token (for the card's own forms) and the `?backfill=` notice code.
+   * Must not throw.
    */
   settingsCards?: (view: HomeReportsView) => Promise<SafeHtml>;
 }
@@ -130,9 +130,7 @@ export interface DashboardDeps {
 /** What the Settings page hands its cards (their forms and their POSTs' notices). */
 export interface HomeReportsView {
   csrfToken: string;
-  /** req.query.wrapped (the Wrapped announcement card's notice), unparsed: fixed text for a known code only. */
-  notice: unknown;
-  /** req.query.backfill, likewise. */
+  /** req.query.backfill, unparsed: fixed text for a known code only. */
   backfillNotice: unknown;
 }
 
@@ -770,7 +768,6 @@ export function createDashboardRouter(deps: DashboardDeps): express.Router {
       cards = deps.settingsCards
         ? await deps.settingsCards({
             csrfToken: session.csrfToken,
-            notice: (req.query as Record<string, unknown>).wrapped,
             backfillNotice: (req.query as Record<string, unknown>).backfill,
           })
         : undefined;
