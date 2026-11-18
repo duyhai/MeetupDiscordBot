@@ -965,9 +965,13 @@ describe('host calendar day-by-day tabs', () => {
     expect(await get('?month=2026-12')).toContain(
       'Nothing scheduled this month yet.',
     );
-    expect(await get('?month=2026-12&tab=past')).toContain(
-      'None of this month’s days have passed yet.',
+    // A future month has no Past tab: plain text, and ?tab=past is Upcoming.
+    const future = await get('?month=2026-12&tab=past');
+    expect(future).toContain('Nothing scheduled this month yet.');
+    expect(future).toMatch(
+      /<strong aria-current="page">Upcoming<\/strong><span\s*>Past<span class="sr-only"> \(no days have passed yet\)<\/span><\/span\s*>/,
     );
+    expect(future).not.toContain('tab=past');
   });
 });
 
@@ -1015,13 +1019,22 @@ describe('host calendar tiles and list', () => {
         /<img\s+class="tile-photo"\s+src="([^"]+)"\s+alt=""\s+width="600"\s+height="300"\s+loading="lazy"\s+decoding="async"\s+referrerpolicy="no-referrer"\s*\/>/g,
       ),
     ].map((m) => m[1]);
-    // The standard rendition, else the thumbnail; never another host.
-    expect(imgs).toEqual([standard, thumb]);
-    expect(
-      text.match(
-        /<span class="tile-photo tile-photo-none" aria-hidden="true"><\/span>/g,
+    // Only the standard rendition fills the box; never another host.
+    expect(imgs).toEqual([standard]);
+    // Without it: the placeholder, with the thumbnail at 80px inside when
+    // there is one (never stretched to 2:1).
+    const boxes = [
+      ...text.matchAll(
+        /<span class="tile-photo tile-photo-none" aria-hidden="true"\s*>((?:(?!<\/span)[^])*)<\/span\s*>/g,
       ),
-    ).toHaveLength(2);
+    ].map((m) => m[1].trim());
+    expect(boxes).toHaveLength(3);
+    expect(boxes[0]).toMatch(
+      // eslint-disable-next-line @stylistic/max-len -- one pattern, read as one
+      /^<img\s+class="tile-thumb"\s+src="([^"]+)"\s+alt=""\s+width="80"\s+height="80"\s+loading="lazy"\s+decoding="async"\s+referrerpolicy="no-referrer"\s*\/>$/,
+    );
+    expect(boxes[0]).toContain(thumb);
+    expect(boxes.slice(1)).toEqual(['', '']);
     expect(text).not.toContain('evil.example');
     expect(text).toMatch(
       // eslint-disable-next-line @stylistic/max-len -- one pattern, read as one
@@ -1057,5 +1070,55 @@ describe('host calendar tiles and list', () => {
     expect(odd.text).toContain('<strong aria-current="page">Upcoming</strong>');
     // The remember-my-view script ships with the calendar.
     expect(res.text).toContain('window.__hostCalendarView');
+  });
+});
+
+describe('host calendar odd queries', () => {
+  it('reads only exact, single tab and view values', async () => {
+    const req = await pagesApp(async (filter) => {
+      return filter.status?.[0] === 'PAST'
+        ? [ev('p', '2026-11-02T19:00:00-08:00', 'Monday mahjong')]
+        : [ev('f', '2026-11-07T19:00:00-08:00', 'Future fondue')];
+    });
+    const sid = await signInWithDiscord(req);
+    const current = async (q: string) => {
+      const res = await req.get(`/host/calendar${q}`).set('Cookie', sid);
+      expect(res.status).toBe(200);
+      return [
+        ...res.text.matchAll(/<strong aria-current="page">(\w+)<\/strong>/g),
+      ].map((m) => m[1]);
+    };
+    const odd = [
+      '?view=',
+      '?view=list&view=tiles',
+      '?view=list&view=list',
+      '?view=LIST',
+      '?view[]=list',
+      '?tab=past&tab=past',
+      '?tab[]=past',
+      '?tab=PAST',
+      '?tab=',
+    ];
+    const seen = await Promise.all(odd.map((q) => current(q)));
+    seen.forEach((choices, i) => {
+      expect(choices, odd[i]).toEqual(['Upcoming', 'Tiles']);
+    });
+    expect(await current('?tab=past&view=list')).toEqual(['Past', 'List']);
+  });
+
+  it('tiles in the Past tab offer no Host on this day', async () => {
+    const req = await pagesApp(async (filter) => {
+      return filter.status?.[0] === 'PAST'
+        ? [ev('p', '2026-11-02T19:00:00-08:00', 'Monday mahjong')]
+        : [];
+    });
+    const sid = await signInWithDiscord(req);
+    const res = await req
+      .get('/host/calendar?tab=past&view=tiles')
+      .set('Cookie', sid);
+    const list = res.text.slice(res.text.indexOf('<h2>Day by day'));
+    expect(list).toContain('<li class="cal-tile">');
+    expect(list).toContain('Monday mahjong');
+    expect(list).not.toContain('Host on this day');
   });
 });

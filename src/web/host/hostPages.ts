@@ -64,7 +64,6 @@ import {
 } from './hostPageKit.js';
 import {
   CALENDAR_SCRIPT,
-  CALENDAR_VIEW_SCRIPT,
   HISTORY_SCRIPT,
   TIMELINE_SCRIPT,
 } from './hostScripts.js';
@@ -467,15 +466,31 @@ function eventThumb(e: HostEvent): SafeHtml {
 }
 
 /**
- * One event as a tile: its photo in a fixed 2:1 box on top (the standard
- * rendition, else the thumbnail, else a neutral placeholder of the same
- * box), then time, title link and hosts. The width and height attributes
- * give the box its ratio before the photo loads, so nothing shifts; CSS
- * crops it (object-fit: cover, a little above centre, where faces and
- * signs usually are). The title link's text is the same as in the list.
+ * One event as a tile: its photo in a fixed 2:1 box on top, then time,
+ * title link and hosts. The width and height attributes give the box its
+ * ratio before the photo loads, so nothing shifts; CSS crops it
+ * (object-fit: cover, a little above centre, where faces and signs
+ * usually are) over the placeholder pattern, which shows through if the
+ * photo fails to load. With no standard rendition the box is the
+ * placeholder, with the 80px thumbnail at its own size in the middle
+ * (never stretched) when there is one. The title link's text is the same
+ * as in the list. Only Meetup's photo host is used (meetupPhotoSrc).
  */
 function eventTile(e: HostEvent): SafeHtml {
-  const src = meetupPhotoSrc(e.tilePhotoUrl) ?? meetupPhotoSrc(e.photoUrl);
+  const src = meetupPhotoSrc(e.tilePhotoUrl);
+  const thumb = meetupPhotoSrc(e.photoUrl);
+  const small = thumb
+    ? html`<img
+        class="tile-thumb"
+        src="${thumb}"
+        alt=""
+        width="80"
+        height="80"
+        loading="lazy"
+        decoding="async"
+        referrerpolicy="no-referrer"
+      />`
+    : '';
   const photo = src
     ? html`<img
         class="tile-photo"
@@ -487,7 +502,9 @@ function eventTile(e: HostEvent): SafeHtml {
         decoding="async"
         referrerpolicy="no-referrer"
       />`
-    : html`<span class="tile-photo tile-photo-none" aria-hidden="true"></span>`;
+    : html`<span class="tile-photo tile-photo-none" aria-hidden="true"
+        >${small}</span
+      >`;
   return html`<li class="cal-tile">
     ${photo}
     <div class="tile-body">
@@ -617,9 +634,9 @@ export function calendarView(query: unknown): CalendarView {
 }
 
 /**
- * A calendar link. The view is always spelled out, so the page it opens
- * says which one it shows (CALENDAR_VIEW_SCRIPT remembers it from there);
- * Upcoming, the default tab, is left out.
+ * A calendar link. The view is always spelled out, so the calendar's own
+ * links keep it (CALENDAR_VIEW_SCRIPT only rewrites links to the bare
+ * calendar); Upcoming, the default tab, is left out.
  */
 function calendarLink(to: {
   month: string;
@@ -643,10 +660,16 @@ function choices<K extends string>(
   current: K,
   href: (key: K) => ReturnType<typeof pageLink>,
   viewSwitch = false,
+  unavailable?: { key: K; why: string },
 ): SafeHtml {
   const items = options.map((o) => {
     if (o.key === current) {
       return html`<strong aria-current="page">${o.label}</strong>`;
+    }
+    if (o.key === unavailable?.key) {
+      return html`<span
+        >${o.label}<span class="sr-only"> (${unavailable.why})</span></span
+      >`;
     }
     return html`<a href="${href(o.key)}">${o.label}</a>`;
   });
@@ -709,9 +732,13 @@ function dayByDay(
   days: CalendarDay[],
   today: string,
   month: string,
-  tab: CalendarTab,
+  asked: CalendarTab,
   view: CalendarView,
 ): SafeHtml {
+  // A month none of whose days have passed (a future one) has no Past
+  // tab: it is plain text, and ?tab=past shows Upcoming.
+  const hasPast = `${month}-01` < today;
+  const tab = hasPast ? asked : 'upcoming';
   const listed = days.filter(
     (d) => d.day.startsWith(month) && d.events.length > 0,
   );
@@ -722,17 +749,20 @@ function dayByDay(
   const current = today.slice(0, 7);
   const empty =
     tab === 'past'
-      ? month > current
-        ? 'None of this month’s days have passed yet.'
-        : 'Nothing happened earlier this month.'
+      ? 'Nothing happened earlier this month.'
       : month === current
         ? 'Nothing more is scheduled this month yet.'
         : 'Nothing scheduled this month yet.';
   return html`<div class="card">
     <h2>Day by day: ${dayjs(`${month}-01`).format('MMMM')}</h2>
     <div class="cal-bar">
-      ${choices('Which days', CALENDAR_TABS, tab, (key) =>
-        calendarLink({ month, tab: key, view }),
+      ${choices(
+        'Which days',
+        CALENDAR_TABS,
+        tab,
+        (key) => calendarLink({ month, tab: key, view }),
+        false,
+        hasPast ? undefined : { key: 'past', why: 'no days have passed yet' },
       )}
       ${choices(
         'Layout',
@@ -1433,7 +1463,7 @@ export function registerHostPages(
         calendarTab(req.query.tab),
         calendarView(req.query.view),
       ),
-      script: [CALENDAR_SCRIPT, CALENDAR_VIEW_SCRIPT],
+      script: CALENDAR_SCRIPT,
     });
   }) as RequestHandler);
 

@@ -575,9 +575,16 @@ ul.cal-tiles{list-style:none;padding:0;margin:var(--s2) 0 var(--s3);display:grid
 li.cal-tile{position:relative;display:flex;flex-direction:column;min-width:0;margin:0;background:var(--surface);
   border:1px solid var(--line);border-radius:var(--radius-ctl);overflow:hidden}
 li.cal-tile:hover{border-color:var(--field)}
+/* The placeholder pattern is every photo box's background: a photo that fails to load leaves the pattern, not a blank box. */
 .tile-photo{display:block;width:100%;height:auto;aspect-ratio:2/1;object-fit:cover;object-position:50% 35%;
-  background:var(--raised);border-bottom:1px solid var(--line)}
-.tile-photo-none{background:repeating-linear-gradient(135deg,var(--raised) 0 10px,var(--bg) 10px 12px)}
+  background:repeating-linear-gradient(135deg,var(--raised) 0 10px,var(--bg) 10px 12px);border-bottom:1px solid var(--line)}
+/* A broken image renders ::after (a loaded one never does): it covers the browser's broken-image icon with the pattern. */
+img.tile-photo{position:relative}
+img.tile-photo::after{content:"";position:absolute;inset:0;background:inherit}
+/* No large photo: the thumbnail at its own 80px (contained, never stretched) in the middle of the pattern. */
+.tile-photo-none{display:flex;align-items:center;justify-content:center}
+.tile-thumb{display:block;width:80px;height:80px;object-fit:contain;border-radius:var(--radius-ctl)}
+li.cal-tile:focus-within{border-color:var(--accent);outline:2px solid var(--accent);outline-offset:2px}
 .tile-body{padding:var(--s2) var(--s3) var(--s3);overflow-wrap:anywhere}
 .tile-body p{margin:0 0 var(--s1)}
 .tile-time{color:var(--muted);font-size:var(--t-sm);font-weight:600}
