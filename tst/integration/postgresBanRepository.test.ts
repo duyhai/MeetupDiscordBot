@@ -153,7 +153,10 @@ async function pollUntil(
         await holder.query('ROLLBACK');
         holder.release();
       }
-      await ensureBanSchema(pool, { lockTimeoutMs: 200 });
+      // Released: ensure goes through. The advisory lock is database-wide,
+      // so other files' schema boots may hold or queue for it right now;
+      // this call waits its turn at the production lock_timeout, not 200 ms.
+      await ensureBanSchema(pool);
     });
 
     it(
