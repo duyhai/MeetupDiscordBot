@@ -115,7 +115,9 @@ function nameCell(data: Ready, memberId: string, selfId: string): SafeHtml {
   const text = name
     ? memberText(name)
     : html`<span class="muted">Unnamed host</span>`;
-  const href = profileUrl(memberId);
+  // Only a host with counted events has a profile page; a medalist whose
+  // events were all cancelled since would link to a 404.
+  const href = data.byHost.has(memberId) ? profileUrl(memberId) : undefined;
   const shown = href ? html`<a href="${href}">${text}</a>` : text;
   return memberId === selfId
     ? html`<strong>${shown}</strong> <span class="badge info">You</span>`
@@ -232,10 +234,14 @@ export interface ShortListGap {
   to: number;
 }
 
-/** Rows tied past the row cap and after the last kept row ("and N more"). */
+/**
+ * What follows one width's last shown row: rows tied past its row cap
+ * ("and N more tied at Xth"), then every other host ("and N more hosts").
+ */
 export interface ShortListMore {
-  count: number;
-  place: number;
+  tied?: { count: number; place: number };
+  /** Hosts after the list that are not tied into it. */
+  rest: number;
 }
 
 /**
@@ -254,8 +260,10 @@ export type ShortListItem =
   | { kind: 'gap'; desktop?: ShortListGap; phone?: ShortListGap }
   | { kind: 'more'; desktop?: ShortListMore; phone?: ShortListMore };
 
-/** At most this many rows of a top-places list (as the award boards). */
+/** At most this many rows of a top-places list (as the award boards)… */
 export const SHORT_LIST_MAX_ROWS = AWARD_MAX_ROWS;
+/** …and on a phone, where 25 is far too long. */
+export const PHONE_SHORT_LIST_MAX_ROWS = 10;
 
 /**
  * The row indices one width keeps, and where its top-places list ends
@@ -266,17 +274,18 @@ function keptRows(
   youAt: number,
   topPlaces: number,
   neighbours: number,
+  maxRows: number,
 ): { keep: Set<number>; end: number } {
   const keep = new Set<number>();
   if (youAt < 0 || standings[youAt].place <= topPlaces) {
-    // Every row placed `topPlaces` or better, at most SHORT_LIST_MAX_ROWS of
-    // them (rows past the cap are all tied with the last kept one), and
-    // always the viewer's own row.
+    // Every row placed `topPlaces` or better, at most `maxRows` of them
+    // (rows past the cap are all tied with the last kept one), and always
+    // the viewer's own row.
     let end = -1;
     standings.forEach((s, i) => {
       if (s.place <= topPlaces) {
         end = i;
-        if (i < SHORT_LIST_MAX_ROWS) {
+        if (i < maxRows) {
           keep.add(i);
         }
       }
@@ -305,9 +314,10 @@ function keptRows(
  * row placed 10th or better (at most 25, then "and N more tied", the viewer
  * always shown); anyone else rows 1 to 5 and 3 either side of them. Phone
  * (Hai: "just show one before and after, and only show top five if you are
- * in the top five"): the same with 5th and 1 either side. Windows go by row
- * order in the ranked list; places stay the true competition places; runs
- * that touch merge, and each skipped run is one gap per width. `full`
+ * in the top five"): the same with 5th, at most 10 rows, and 1 either side.
+ * Windows go by row order in the ranked list; places stay the true
+ * competition places; runs that touch merge, and each skipped run is one
+ * gap per width. Hosts after a width's last row get a closing line. `full`
  * shows every row on both widths.
  */
 export function shortList(
@@ -322,7 +332,13 @@ export function shortList(
   };
   const desktop = full
     ? all
-    : keptRows(standings, youAt, SHORT_LIST_TOP_PLACES, SHORT_LIST_NEIGHBOURS);
+    : keptRows(
+        standings,
+        youAt,
+        SHORT_LIST_TOP_PLACES,
+        SHORT_LIST_NEIGHBOURS,
+        SHORT_LIST_MAX_ROWS,
+      );
   const phone = full
     ? all
     : keptRows(
@@ -330,6 +346,7 @@ export function shortList(
         youAt,
         PHONE_SHORT_LIST_TOP_PLACES,
         PHONE_SHORT_LIST_NEIGHBOURS,
+        PHONE_SHORT_LIST_MAX_ROWS,
       );
   function gapBefore(
     keep: Set<number>,
@@ -358,9 +375,19 @@ export function shortList(
     width: { keep: Set<number>; end: number },
     last: number,
   ): ShortListMore | undefined {
-    return width.end > last
-      ? { count: width.end - last, place: standings[width.end].place }
-      : undefined;
+    // `end` is never before the last kept row: the viewer, when kept past
+    // the cap, is placed within the list.
+    const end = Math.max(width.end, last);
+    const rest = standings.length - 1 - end;
+    if (end === last && rest === 0) {
+      return undefined;
+    }
+    return {
+      ...(end > last
+        ? { tied: { count: end - last, place: standings[end].place } }
+        : {}),
+      rest,
+    };
   }
   const items: ShortListItem[] = [];
   let lastDesktop = -1;
@@ -414,7 +441,12 @@ function gapText(gap: ShortListGap): string {
 }
 
 function moreText(more: ShortListMore): string {
-  return `and ${more.count} more tied at ${ordinal(more.place)}`;
+  const others = `${plural(more.rest, 'more host')}`;
+  if (!more.tied) {
+    return `and ${others}`;
+  }
+  const tied = `and ${more.tied.count} more tied at ${ordinal(more.tied.place)}`;
+  return more.rest > 0 ? `${tied}, then ${others}` : tied;
 }
 
 /** Which widths show a row: a class only when one width hides it. */
@@ -512,18 +544,20 @@ export function lifetimeTable(
   const shortRows = shortItems.filter(
     (i): i is Extract<ShortListItem, { kind: 'row' }> => i.kind === 'row',
   );
-  const shortHidesRows =
-    shortRows.filter((i) => i.desktop).length < standings.length ||
-    shortRows.filter((i) => i.phone).length < standings.length;
+  const desktopHides =
+    shortRows.filter((i) => i.desktop).length < standings.length;
+  const phoneHides = shortRows.filter((i) => i.phone).length < standings.length;
   let toggle: SafeHtml | '' = '';
-  if (shortHidesRows) {
+  if (desktopHides || phoneHides) {
+    // Only on the widths whose short list leaves someone out.
+    const cls = `table-toggle ${widthClass(desktopHides, phoneHides)}`.trim();
     toggle = full
-      ? html`<p>
+      ? html`<p class="${cls}">
           <a href="${pageLink(LEADERBOARD_PATH, { view: 'all' })}"
             >Show the short list</a
           >
         </p>`
-      : html`<p>
+      : html`<p class="${cls}">
           <a href="${pageLink(LEADERBOARD_PATH, { view: 'all', hosts: 'all' })}"
             >${`Show all ${plural(standings.length, 'host')}`}</a
           >

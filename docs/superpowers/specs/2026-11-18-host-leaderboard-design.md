@@ -256,10 +256,13 @@ and the 3 after (none after if they are last). Windows go by row order in
 the ranked list and places stay the true competition places; runs that
 touch merge, with no gap. "Show all N hosts" (`?view=all&hosts=all`,
 server-rendered, no JavaScript) shows every row, with a link back; both
-links are left out when the short list already shows everyone. A
-top-places list (top 10, or top 5 on a phone) stops at 25 rows, as the award
-boards do, then "and N more tied at Xth", always keeping the viewer's own
-row. A gap never repeats a place already shown above it: when the first
+links are left out when the short list already shows everyone, and each
+is shown only on the widths whose short list leaves someone out (6 to 10
+hosts: phone only). A top-places list stops at 25 rows on desktop, as the
+award boards do, and 10 on a phone, then "and N more tied at Xth", always
+keeping the viewer's own row. Hosts after a width's last shown row get a
+closing line, "and N more hosts" (count only); "Show all N hosts" is the
+way to see them. A gap never repeats a place already shown above it: when the first
 skipped row is tied with the last shown one, the range starts at the next
 place, or the gap gives only a count if every skipped row is tied.
 
@@ -276,6 +279,10 @@ renders each variant where its width needs it, the other hidden with
 `display:none` (not read out). A gap can be phone-only: a viewer placed
 9th sees the top 10 on desktop but 1 to 5, "places 6 to 7", 8th, themselves
 and 10th on a phone.
+
+A host's name links to their profile only when they have one (counted
+events): a medalist whose events were all cancelled since is named on the
+boards, the archive and the month page as plain text, not a link to a 404.
 
 | Board                    | Per host (or event)                                              | Source                                                                                                 |
 | ------------------------ | ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |

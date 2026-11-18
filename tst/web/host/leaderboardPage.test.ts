@@ -635,10 +635,21 @@ describe('host leaderboard', () => {
       '13',
       '14',
       '15',
+      '',
+      '',
     ]);
     expect(table).toMatch(
       /<tr class="gap-row desktop-only">[\s\S]*?3 hosts not shown \(places 6 to 8\)/,
     );
+    // Each width closes with the hosts after its last row.
+    expect(table).toMatch(
+      /<tr class="gap-row desktop-only">[\s\S]*?and 5 more hosts\s*<\/td>/,
+    );
+    expect(table).toMatch(
+      /<tr class="gap-row phone-only">[\s\S]*?and 7 more hosts\s*<\/td>/,
+    );
+    // Both widths leave hosts out: the link shows on both.
+    expect(table).toContain('<p class="table-toggle">');
     expect(table).toMatch(
       /<tr class="gap-row phone-only">[\s\S]*?5 hosts not shown \(places 6 to 10\)/,
     );
@@ -659,6 +670,75 @@ describe('host leaderboard', () => {
     expect(rowsOf(fullTable)).toHaveLength(20);
     expect(fullTable).not.toContain('not shown');
     expect(fullTable).toContain('Show the short list');
+  });
+
+  it('a viewer 10th: rows only the phone shows are marked phone-only', async () => {
+    // 20 hosts with 20 down to 1 events; the viewer (4242) is 10th.
+    const many = Array.from({ length: 20 }, (_, h) =>
+      Array.from({ length: 20 - h }, () =>
+        ev('2026-10-02', [h === 9 ? '4242' : String(100 + h)]),
+      ),
+    ).flat();
+    const { req, sid } = await app(fakeStore(many, NAMES));
+    const res = await req.get('/host/leaderboard?view=all').set('Cookie', sid);
+    const table = res.text.slice(
+      res.text.indexOf('Every host, by events hosted'),
+      res.text.indexOf('<h2>All-time awards</h2>'),
+    );
+    // Desktop: the top 10. Phone: 1 to 5, a gap, 9th, you, 11th.
+    const phoneOnly = [
+      ...table.matchAll(/<tr class="phone-only">([\s\S]*?)<\/tr>/g),
+    ];
+    expect(phoneOnly).toHaveLength(1);
+    expect(phoneOnly[0][1]).toMatch(/data-label="Place">11</);
+    expect(table.match(/<tr class="desktop-only">/g)).toHaveLength(3);
+    expect(table).toMatch(/<tr class="you-row">/);
+  });
+
+  it('6 to 10 hosts: only the phone hides anyone, so the link is phone-only', async () => {
+    const eight = Array.from({ length: 8 }, (_, h) =>
+      Array.from({ length: 8 - h }, () => ev('2026-10-02', [String(100 + h)])),
+    ).flat();
+    const { req, sid } = await app(fakeStore(eight, NAMES));
+    const res = await req.get('/host/leaderboard?view=all').set('Cookie', sid);
+    expect(res.text).toMatch(
+      /<p class="table-toggle phone-only">\s*<a href="\/host\/leaderboard\?view=all&amp;hosts=all"\s*>Show all 8 hosts<\/a/,
+    );
+    expect(res.text).toMatch(
+      /<tr class="gap-row phone-only">[\s\S]*?and 3 more hosts/,
+    );
+    expect(res.text.match(/<tr class="phone-only">/g)).toBeNull();
+    const full = await req
+      .get('/host/leaderboard?view=all&hosts=all')
+      .set('Cookie', sid);
+    expect(full.text).toContain('<p class="table-toggle phone-only">');
+    expect(full.text).toContain('Show the short list');
+  });
+
+  it('a medalist with no counted events is named without a dead profile link', async () => {
+    const store = fakeStore(EVENTS, { ...NAMES, '9': 'Dee' });
+    // Host 9 won October off an earlier listing; those events were since
+    // cancelled, so 9 has no counted events and no profile.
+    store.months.add('2026-10');
+    store.stored.push({ month: '2026-10', memberId: '9', place: 1, events: 9 });
+    const { req, sid } = await app(store);
+    const all = await req.get('/host/leaderboard?view=all').set('Cookie', sid);
+    const boards = all.text.slice(
+      all.text.indexOf('<h2>All-time awards</h2>'),
+      all.text.indexOf("<h2>Where we've hosted</h2>"),
+    );
+    const archive = all.text.slice(all.text.indexOf('<h2>Archive</h2>'));
+    for (const part of [boards, archive]) {
+      expect(part).toContain('<bdi>Dee</bdi>');
+      expect(part).not.toContain('href="/host/hosts/9"');
+    }
+    // Hosts with events still link.
+    expect(boards).toContain('href="/host/hosts/1"');
+    const month = await req
+      .get('/host/leaderboard?month=2026-10')
+      .set('Cookie', sid);
+    expect(month.text).toContain('<bdi>Dee</bdi>');
+    expect(month.text).not.toContain('href="/host/hosts/9"');
   });
 
   it('?hosts=: only "all" with view=all shows every host; anything else is the short list', async () => {
@@ -770,7 +850,15 @@ describe('shortList (Hai: first 5, a gap, 3 either side of you; top 10 if you ar
       }
       if (i.kind === 'more') {
         const more = i[width];
-        return more ? [`more ${more.count} at ${more.place}`] : [];
+        if (!more) {
+          return [];
+        }
+        return [
+          ...(more.tied
+            ? [`more ${more.tied.count} at ${more.tied.place}`]
+            : []),
+          ...(more.rest > 0 ? [`rest ${more.rest}`] : []),
+        ];
       }
       return i[width] ? [`${i.standing.place}${i.you ? '*' : ''}`] : [];
     });
@@ -783,15 +871,17 @@ describe('shortList (Hai: first 5, a gap, 3 either side of you; top 10 if you ar
     expect(shape(shortList(board(50), 'h0'))).toEqual([
       '1*',
       ...top10.slice(1),
+      'rest 40',
     ]);
     expect(shape(shortList(board(50), 'h9'))).toEqual([
       ...top10.slice(0, 9),
       '10*',
+      'rest 40',
     ]);
   });
 
   it('viewer not on the board: the top 10', () => {
-    expect(shape(shortList(board(50), 'staff'))).toEqual(top10);
+    expect(shape(shortList(board(50), 'staff'))).toEqual([...top10, 'rest 40']);
   });
 
   it('viewer 11th and 12th: the first 5, a gap, then 3 either side', () => {
@@ -809,6 +899,7 @@ describe('shortList (Hai: first 5, a gap, 3 either side of you; top 10 if you ar
       '12',
       '13',
       '14',
+      'rest 36',
     ]);
     expect(shape(shortList(board(50), 'h11'))).toEqual([
       '1',
@@ -824,6 +915,7 @@ describe('shortList (Hai: first 5, a gap, 3 either side of you; top 10 if you ar
       '13',
       '14',
       '15',
+      'rest 35',
     ]);
   });
 
@@ -842,6 +934,7 @@ describe('shortList (Hai: first 5, a gap, 3 either side of you; top 10 if you ar
       '31',
       '32',
       '33',
+      'rest 17',
     ]);
     expect(shape(shortList(board(50), 'h49'))).toEqual([
       '1',
@@ -875,6 +968,7 @@ describe('shortList (Hai: first 5, a gap, 3 either side of you; top 10 if you ar
       '17',
       '18',
       '19',
+      'rest 1',
     ]);
   });
 
@@ -884,6 +978,7 @@ describe('shortList (Hai: first 5, a gap, 3 either side of you; top 10 if you ar
       ...top10,
       '10',
       '10*',
+      'rest 1',
     ]);
   });
 
@@ -913,6 +1008,7 @@ describe('shortList (Hai: first 5, a gap, 3 either side of you; top 10 if you ar
       '14',
       '15',
       '16',
+      'rest 34',
     ]);
     expect(shape(shortList(board(50), 'h48'))).toEqual([
       '1',
@@ -956,6 +1052,7 @@ describe('shortList (Hai: first 5, a gap, 3 either side of you; top 10 if you ar
         '3',
         '4',
         '5',
+        'rest 45',
       ]);
       expect(phone(shortList(board(50), 'h4'))).toEqual([
         '1',
@@ -963,23 +1060,40 @@ describe('shortList (Hai: first 5, a gap, 3 either side of you; top 10 if you ar
         '3',
         '4',
         '5*',
+        'rest 45',
       ]);
-      expect(phone(shortList(board(50), 'staff'))).toEqual(top5);
+      expect(phone(shortList(board(50), 'staff'))).toEqual([
+        ...top5,
+        'rest 45',
+      ]);
     });
 
     it('viewer 6th or 7th: one continuous run', () => {
-      expect(phone(shortList(board(50), 'h5'))).toEqual([...top5, '6*', '7']);
+      expect(phone(shortList(board(50), 'h5'))).toEqual([
+        ...top5,
+        '6*',
+        '7',
+        'rest 43',
+      ]);
       expect(phone(shortList(board(50), 'h6'))).toEqual([
         ...top5,
         '6',
         '7*',
         '8',
+        'rest 42',
       ]);
     });
 
     it('viewer 9th or 10th: a phone-only gap where desktop shows the top 10', () => {
       const ninth = shortList(board(50), 'h8');
-      expect(phone(ninth)).toEqual([...top5, 'gap 2 (6-7)', '8', '9*', '10']);
+      expect(phone(ninth)).toEqual([
+        ...top5,
+        'gap 2 (6-7)',
+        '8',
+        '9*',
+        '10',
+        'rest 40',
+      ]);
       expect(shape(ninth)).toEqual([
         '1',
         '2',
@@ -991,9 +1105,17 @@ describe('shortList (Hai: first 5, a gap, 3 either side of you; top 10 if you ar
         '8',
         '9*',
         '10',
+        'rest 40',
       ]);
       const tenth = shortList(board(50), 'h9');
-      expect(phone(tenth)).toEqual([...top5, 'gap 3 (6-8)', '9', '10*', '11']);
+      expect(phone(tenth)).toEqual([
+        ...top5,
+        'gap 3 (6-8)',
+        '9',
+        '10*',
+        '11',
+        'rest 39',
+      ]);
       // 11th is phone-only here: desktop shows the top 10.
       expect(
         tenth.find((i) => i.kind === 'row' && i.standing.place === 11),
@@ -1007,6 +1129,7 @@ describe('shortList (Hai: first 5, a gap, 3 either side of you; top 10 if you ar
         '10',
         '11*',
         '12',
+        'rest 38',
       ]);
       expect(phone(shortList(board(50), 'h29'))).toEqual([
         ...top5,
@@ -1014,6 +1137,7 @@ describe('shortList (Hai: first 5, a gap, 3 either side of you; top 10 if you ar
         '29',
         '30*',
         '31',
+        'rest 19',
       ]);
       expect(phone(shortList(board(50), 'h49'))).toEqual([
         ...top5,
@@ -1033,6 +1157,7 @@ describe('shortList (Hai: first 5, a gap, 3 either side of you; top 10 if you ar
         '4',
         '5',
         '5*',
+        'rest 6',
       ]);
       // 7th, just after the tie: rows 1-5, then the tied 5th, you, 8th.
       expect(phone(shortList(board(12, places), 'h6'))).toEqual([
@@ -1044,6 +1169,7 @@ describe('shortList (Hai: first 5, a gap, 3 either side of you; top 10 if you ar
         '5',
         '7*',
         '8',
+        'rest 4',
       ]);
       // Far below: the hidden tied 5th is not a new place; the range starts at 7th.
       expect(phone(shortList(board(12, places), 'h10'))).toEqual([
@@ -1057,6 +1183,41 @@ describe('shortList (Hai: first 5, a gap, 3 either side of you; top 10 if you ar
         '11*',
         '12',
       ]);
+    });
+
+    it('a mass tie for 1st stops at 10 rows, keeps the viewer, and says how many more', () => {
+      const tiedAll = board(
+        30,
+        Array.from({ length: 30 }, () => 1),
+      );
+      expect(phone(shortList(tiedAll, 'nobody'))).toEqual([
+        ...Array.from({ length: 10 }, () => '1'),
+        'more 20 at 1',
+      ]);
+      expect(phone(shortList(tiedAll, 'h28'))).toEqual([
+        ...Array.from({ length: 10 }, () => '1'),
+        'gap 18 (--1)',
+        '1*',
+        'more 1 at 1',
+      ]);
+      // Desktop keeps its own cap of 25.
+      expect(shape(shortList(tiedAll, 'nobody'))).toHaveLength(26);
+    });
+
+    it('a tie capped at 10 rows, then the hosts below it', () => {
+      // 12 tied for 1st, then 3 more hosts.
+      const places = [...Array.from({ length: 12 }, () => 1), 13, 14, 15];
+      expect(phone(shortList(board(15, places), 'nobody'))).toEqual([
+        ...Array.from({ length: 10 }, () => '1'),
+        'more 2 at 1',
+        'rest 3',
+      ]);
+    });
+
+    it('6 to 10 hosts: only the phone leaves anyone out', () => {
+      const eight = shortList(board(8), 'nobody');
+      expect(shape(eight)).toEqual(['1', '2', '3', '4', '5', '6', '7', '8']);
+      expect(phone(eight)).toEqual([...top5, 'rest 3']);
     });
 
     it('the full view shows every row on both widths', () => {
