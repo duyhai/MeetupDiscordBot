@@ -9,6 +9,11 @@ const HOST_NAV_ITEMS = [
   { key: 'calendar', path: `${HOST_BASE}/calendar`, label: 'Calendar' },
   { key: 'history', path: `${HOST_BASE}/history`, label: 'My history' },
   {
+    key: 'leaderboard',
+    path: `${HOST_BASE}/leaderboard`,
+    label: 'Leaderboard',
+  },
+  {
     key: 'wrapped',
     path: `${HOST_BASE}/wrapped`,
     label: 'Wrapped',

@@ -402,9 +402,12 @@ function within<T>(promise: Promise<T>, ms: number): Promise<T> {
           );
           expect(tables.rows.map((t) => t.table_name)).toEqual([
             'dashboard_notices',
+            'host_medal_months',
+            'host_medals',
             'link_progress_daily',
             'meetup_event_rsvps',
             'meetup_events',
+            'meetup_host_names',
             'meetup_snapshot_runs',
             'report_snapshots',
             'wrapped_announcements',

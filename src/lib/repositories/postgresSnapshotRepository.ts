@@ -311,6 +311,31 @@ export class PostgresSnapshotRepository
         listedAt,
       ],
     );
+    await this.upsertHostNames(events, listedAt);
+  }
+
+  /** The listing's host names; the latest listing wins. */
+  private async upsertHostNames(
+    events: SnapshotEvent[],
+    seenAt: Date,
+  ): Promise<void> {
+    const names = new Map<string, string>();
+    events.forEach((e) => {
+      Object.entries(e.hostNames ?? {}).forEach(([id, name]) => {
+        names.set(id, name);
+      });
+    });
+    if (names.size === 0) {
+      return;
+    }
+    await this.pool.query(
+      `INSERT INTO meetup_host_names (member_id, name, seen_at)
+       SELECT h.id, h.name, $3 FROM unnest($1::text[], $2::text[]) AS h(id, name)
+       ON CONFLICT (member_id) DO UPDATE SET
+         name = EXCLUDED.name, seen_at = EXCLUDED.seen_at
+       WHERE meetup_host_names.seen_at <= EXCLUDED.seen_at`,
+      [[...names.keys()], [...names.values()], seenAt],
+    );
   }
 
   async markDelisted(before: Date, at: Date): Promise<number> {

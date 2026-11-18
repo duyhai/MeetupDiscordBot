@@ -246,6 +246,30 @@ CREATE TABLE IF NOT EXISTS meetup_snapshot_runs (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS meetup_snapshot_runs_open_idx
   ON meetup_snapshot_runs ((true)) WHERE finished_at IS NULL;
+-- Each host's latest Meetup name, from the snapshot listing (every public
+-- event page shows it), for the host leaderboard. Hosts only; kept apart
+-- from the event and RSVP tables, which hold ids only.
+CREATE TABLE IF NOT EXISTS meetup_host_names (
+  member_id TEXT PRIMARY KEY CHECK (member_id ~ '^[0-9]{1,20}$'),
+  name      TEXT NOT NULL,
+  seen_at   TIMESTAMPTZ NOT NULL
+);
+-- Host leaderboard medals (src/lib/leaderboard): a Pacific month is awarded
+-- once, after it ends, and its medals are kept whatever later corrections
+-- the snapshot makes. host_medal_months marks a month as awarded, medals or
+-- none.
+CREATE TABLE IF NOT EXISTS host_medal_months (
+  month      TEXT PRIMARY KEY CHECK (month ~ '^[0-9]{4}-(0[1-9]|1[0-2])$'),
+  awarded_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS host_medals (
+  month     TEXT NOT NULL REFERENCES host_medal_months(month),
+  member_id TEXT NOT NULL CHECK (member_id ~ '^[0-9]{1,20}$'),
+  place     SMALLINT NOT NULL CHECK (place BETWEEN 1 AND 3),
+  events    INTEGER NOT NULL CHECK (events > 0),
+  PRIMARY KEY (month, member_id)
+);
+CREATE INDEX IF NOT EXISTS host_medals_member_idx ON host_medals (member_id);
 `;
 
 /** pg_advisory_xact_lock(int, int) namespace for dashboard locks. */
