@@ -70,7 +70,12 @@ export function registerBanRoutes(
   router: express.Router,
   deps: Pick<
     DashboardPageDeps,
-    'now' | 'bans' | 'suspensions' | 'banActions' | 'isLeadership'
+    | 'now'
+    | 'bans'
+    | 'suspensions'
+    | 'banActions'
+    | 'isLeadership'
+    | 'staffNames'
   >,
 ): void {
   const back = (res: Response, code: BanResultCode) =>

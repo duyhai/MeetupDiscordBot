@@ -29,6 +29,7 @@ import {
   WrappedAnnounceOutcome,
 } from '../../lib/wrapped/announce.js';
 import { AccessCheck } from '../roleGate.js';
+import type { StaffNameLookup } from '../staffNames.js';
 import { SessionStore } from '../session.js';
 import {
   OrganizerLoginDeps,
@@ -208,6 +209,11 @@ export interface DashboardPageDeps
   wrappedAnnounce: WrappedAnnounceControl;
   /** The Wrapped backfill card and its Run now action. */
   wrappedBackfill: WrappedBackfillControl;
+  /**
+   * Staff display names for the moderation pages (loadStaffNames bounds
+   * the wait). Left out, every staff link says "staff member".
+   */
+  staffNames?: StaffNameLookup;
 }
 
 /**

@@ -195,7 +195,24 @@ describe('suspension records page', () => {
     const text = words(res.text);
     // 7pm PDT on Sept 2.
     expect(text).toContain('Sep 2, 2026 7:00 PM');
-    expect(text).toContain('moderator');
+    expect(text).toContain('staff member');
+  });
+
+  it('names who voided, from the staff name lookup (Hai, 2026-11-17)', async () => {
+    const { get } = await setup(
+      {
+        voided: [
+          suspensionRow({
+            voidedAt: new Date('2026-09-03T02:00:00Z'),
+            voidedBy: '123456789012345678',
+          }),
+        ],
+      },
+      { staffNames: async () => ({ '123456789012345678': 'Hai' }) },
+    );
+    const res = await get(`${PAGE}?state=voided`);
+    expect(res.text).toContain('<bdi>Hai</bdi>');
+    expect(res.text).not.toContain('>staff member<');
   });
 
   it('escapes names and notes', async () => {

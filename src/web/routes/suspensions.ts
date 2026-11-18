@@ -13,6 +13,7 @@ import {
 import { dashboardLocals } from '../dashboardRouter.js';
 import { SafeHtml, html, memberText, pageLink } from '../html.js';
 import { discordUserLink, memberHistoryLink, memberLink } from '../links.js';
+import { loadStaffNames, staffLink } from '../staffNames.js';
 import {
   dashboardPage,
   load,
@@ -23,6 +24,7 @@ import {
 import { PAGE_SIZE, pageNav, parsePage } from '../paging.js';
 import {
   banResultNotice,
+  banStaffIds,
   bannedTabBody,
   isBanRow,
   parseBanShow,
@@ -113,7 +115,11 @@ function memberCell(row: SuspensionPageRow): SafeHtml {
   }${history ? html` · <a href="${history}">No-show history</a>` : ''}`;
 }
 
-function recordRow(row: SuspensionPageRow, voided: boolean): SafeHtml {
+function recordRow(
+  row: SuspensionPageRow,
+  voided: boolean,
+  names: Readonly<Record<string, string>>,
+): SafeHtml {
   return html`<tr>
     <td data-label="Record">#${row.id}</td>
     <td data-label="Member">${memberCell(row)}</td>
@@ -127,9 +133,7 @@ function recordRow(row: SuspensionPageRow, voided: boolean): SafeHtml {
         ? html`<td data-label="Voided">
               ${pacificDateTime(row.voidedAt ?? '')} Pacific
             </td>
-            <td data-label="Voided by">
-              ${discordUserLink(row.voidedBy, 'moderator')}
-            </td>
+            <td data-label="Voided by">${staffLink(row.voidedBy, names)}</td>
             <td data-label="Reason">
               ${row.voidReason ? memberText(row.voidReason) : ''}
             </td>`
@@ -173,6 +177,7 @@ function recordsTable(
   state: SuspensionState,
   rows: SuspensionPageRow[],
   page: number,
+  names: Readonly<Record<string, string>>,
 ): SafeHtml {
   const pager = pageNav(
     dashboardPath(DASHBOARD_PATHS.suspensions),
@@ -205,7 +210,7 @@ function recordsTable(
         </tr>
       </thead>
       <tbody>
-        ${rows.map((row) => recordRow(row, voided))}
+        ${rows.map((row) => recordRow(row, voided, names))}
       </tbody>
     </table>
     ${pager}`;
@@ -213,7 +218,7 @@ function recordsTable(
 
 type SuspensionRouteDeps = Pick<
   DashboardPageDeps,
-  'now' | 'suspensions' | 'bans' | 'isLeadership'
+  'now' | 'suspensions' | 'bans' | 'isLeadership' | 'staffNames'
 >;
 
 /** What one render of the Banned tab shows besides the rows it reads. */
@@ -234,7 +239,7 @@ export interface BannedTabRender {
  */
 export async function renderBannedTab(
   res: Response,
-  deps: Pick<DashboardPageDeps, 'now' | 'suspensions' | 'bans'>,
+  deps: Pick<DashboardPageDeps, 'now' | 'suspensions' | 'bans' | 'staffNames'>,
   view: BannedTabRender,
 ): Promise<void> {
   const { show, page } = view;
@@ -266,6 +271,7 @@ export async function renderBannedTab(
     unavailable(res, 'Bans');
     return;
   }
+  const staffNames = await loadStaffNames(deps.staffNames, banStaffIds(rows));
   dashboardPage(res, {
     title: 'Suspension records',
     ...(view.status !== undefined && { status: view.status }),
@@ -283,6 +289,7 @@ export async function renderBannedTab(
         leader,
         csrf: dashboardLocals(res).session.csrfToken,
         today,
+        staffNames,
       })}
     </div>`,
   });
@@ -345,6 +352,13 @@ export function registerSuspensionRoutes(
       unavailable(res, WHAT);
       return;
     }
+    const staffNames =
+      state === 'voided'
+        ? await loadStaffNames(
+            deps.staffNames,
+            rows.map((r) => r.voidedBy),
+          )
+        : {};
     dashboardPage(res, {
       title: 'Suspension records',
       body: html`<div class="card">
@@ -366,7 +380,7 @@ export function registerSuspensionRoutes(
               </p>`
             : ''
         }
-        ${recordsTable(state, rows, page)}
+        ${recordsTable(state, rows, page, staffNames)}
       </div>`,
     });
   }) as RequestHandler);

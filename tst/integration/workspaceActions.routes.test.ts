@@ -50,6 +50,11 @@ if (!POSTGRES_AVAILABLE) {
 const SEPTEMBER: Period = { year: 2026, month: 9 };
 const MEMBER = '222';
 const MONTH = '/dashboard/no-shows/2026-09';
+/** A row action's redirect: back to its card (`row` opens its section, #acted lands on it). */
+const backTo = (code: string): unknown =>
+  expect.stringMatching(
+    new RegExp(`^${MONTH}\\?result=${code}&row=[1-9][0-9]*#acted$`),
+  );
 
 /**
  * The real route, service and repository on an isolated schema; only
@@ -190,7 +195,7 @@ const MONTH = '/dashboard/no-shows/2026-09';
       const { id, post, isLeadership, moderationLog } = await setup(yes);
       const res = await post('record_suspension', record);
       expect(res.status).toBe(303);
-      expect(res.headers.location).toBe(`${MONTH}?result=done`);
+      expect(res.headers.location).toEqual(backTo('done'));
       expect(isLeadership).toHaveBeenCalledWith(USER.id);
       // The route asked; the service trusts its flag: one Discord call.
       expect(isLeadership).toHaveBeenCalledTimes(1);
@@ -213,7 +218,7 @@ const MONTH = '/dashboard/no-shows/2026-09';
       const { id, post, moderationLog } = await setup(no);
       const res = await post('record_suspension', record);
       expect(res.status).toBe(303);
-      expect(res.headers.location).toBe(`${MONTH}?result=not-leadership`);
+      expect(res.headers.location).toEqual(backTo('not-leadership'));
       expect(await count('suspension_records')).toBe(0);
       expect(await rowState(id)).toMatchObject({ status: 'new', version: 1 });
       expect(await count('noshow_workspace_events')).toBe(1);
@@ -243,7 +248,7 @@ const MONTH = '/dashboard/no-shows/2026-09';
         version: '1',
         recordId: String(existing),
       });
-      expect(res.headers.location).toBe(`${MONTH}?result=not-leadership`);
+      expect(res.headers.location).toEqual(backTo('not-leadership'));
       expect(await rowState(id)).toMatchObject({
         status: 'new',
         version: 1,
@@ -267,13 +272,13 @@ const MONTH = '/dashboard/no-shows/2026-09';
       const { id, post, isLeadership, moderationLog } = await setup(
         async () => leader,
       );
-      expect((await post('record_suspension', record)).headers.location).toBe(
-        `${MONTH}?result=done`,
-      );
+      expect(
+        (await post('record_suspension', record)).headers.location,
+      ).toEqual(backTo('done'));
       // The role removed between the page load and this POST.
       leader = false;
       const res = await post('void', { version: '2', note: 'recorded twice' });
-      expect(res.headers.location).toBe(`${MONTH}?result=not-leadership`);
+      expect(res.headers.location).toEqual(backTo('not-leadership'));
       expect(isLeadership).toHaveBeenCalledTimes(2);
       expect(await liveSuspensions()).toBe(1);
       expect(await rowState(id)).toMatchObject({
@@ -298,9 +303,7 @@ const MONTH = '/dashboard/no-shows/2026-09';
         throw new Error('gateway down');
       });
       const res = await post('record_suspension', record);
-      expect(res.headers.location).toBe(
-        `${MONTH}?result=leadership-unavailable`,
-      );
+      expect(res.headers.location).toEqual(backTo('leadership-unavailable'));
       expect(await count('suspension_records')).toBe(0);
       expect(await rowState(id)).toMatchObject({ status: 'new', version: 1 });
       expect(await count('noshow_workspace_events')).toBe(1);
@@ -319,7 +322,7 @@ const MONTH = '/dashboard/no-shows/2026-09';
     it('a Moderator can still hold a card, without a Discord role check', async () => {
       const { id, post, isLeadership } = await setup(no);
       const res = await post('hold', { version: '1', note: 'travelling' });
-      expect(res.headers.location).toBe(`${MONTH}?result=done`);
+      expect(res.headers.location).toEqual(backTo('done'));
       expect(await rowState(id)).toMatchObject({
         status: 'on_hold',
         version: 2,
@@ -345,7 +348,7 @@ const MONTH = '/dashboard/no-shows/2026-09';
       );
       const { post } = await setup(yes);
       const res = await post('record_suspension', record);
-      expect(res.headers.location).toBe(`${MONTH}?result=suspension-overlap`);
+      expect(res.headers.location).toEqual(backTo('suspension-overlap'));
       expect(await count('suspension_records')).toBe(1);
     });
 
@@ -357,7 +360,7 @@ const MONTH = '/dashboard/no-shows/2026-09';
       );
       const { post } = await setup(yes);
       const res = await post('record_suspension', record);
-      expect(res.headers.location).toBe(`${MONTH}?result=already-suspended`);
+      expect(res.headers.location).toEqual(backTo('already-suspended'));
       expect(await count('suspension_records')).toBe(1);
     });
   },

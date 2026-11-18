@@ -17,6 +17,8 @@ import {
   Classification,
   MEMBER_NAME_MAX,
   NOTES_MAX,
+  OPEN_STATUSES,
+  PARKED_STATUSES,
   SyncCase,
   SyncOutcome,
   WorkspaceEvent,
@@ -166,6 +168,12 @@ const EVENT_COLUMNS = `id::text AS id, row_id, actor, action, old_status, new_st
 const MONTH_COLUMNS = `to_char(period, 'YYYY-MM') AS period_key, snapshot_id, snapshot_built_at, synced_at`;
 
 const MAX_PAGE_ROWS = 50;
+/** listRows' first sort key: 0 to do, 1 on hold, 2 done. Built from fixed status constants only. */
+const sqlList = (statuses: readonly string[]) =>
+  statuses.map((st) => `'${st}'`).join(',');
+const STATUS_GROUP_ORDER =
+  `CASE WHEN status IN (${sqlList(OPEN_STATUSES)}) THEN 0 ` +
+  `WHEN status IN (${sqlList(PARKED_STATUSES)}) THEN 1 ELSE 2 END`;
 const MAX_MONTHS = 240;
 const MAX_EVENTS_PER_ROW = 10;
 const MAX_EVENT_ROWS = 50;
@@ -818,7 +826,11 @@ export class PostgresNoShowWorkspaceRepository {
     return result.rows.map(toMonth);
   }
 
-  /** One page (at most 50): in-report rows first, suspension candidates first, then by name. */
+  /**
+   * One page (at most 50): to do first (OPEN_STATUSES), then on hold
+   * (PARKED_STATUSES), then done, so undone cards lead every page; within
+   * each, in-report rows first, suspension candidates first, then by name.
+   */
   async listRows(
     period: Period,
     page: { offset: number; limit: number },
@@ -827,7 +839,7 @@ export class PostgresNoShowWorkspaceRepository {
     const offset = clampInt(page.offset, 0, Number.MAX_SAFE_INTEGER, 0);
     const result = await this.pool.query<RowRecord>(
       `SELECT ${ROW_COLUMNS} FROM noshow_workspace_rows WHERE period = $1::date
-        ORDER BY in_latest_snapshot DESC, (classification = 'suspension') DESC, lower(member_name), id
+        ORDER BY ${STATUS_GROUP_ORDER}, in_latest_snapshot DESC, (classification = 'suspension') DESC, lower(member_name), id
         LIMIT $2 OFFSET $3`,
       [periodDate(period), limit, offset],
     );

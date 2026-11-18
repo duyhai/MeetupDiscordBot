@@ -628,6 +628,35 @@ const suspension = (
         });
       });
 
+      it('listRows puts to do first, then on hold, then done (Hai, 2026-11-17)', async () => {
+        await sync([
+          suspension('1', 'Ann'),
+          warning('2', 'Bea'),
+          warning('3', 'Cy'),
+          warning('4', 'Dee'),
+          warning('5', 'Eve'),
+        ]);
+        // Status set directly: only the order is under test here.
+        const setStatus = (memberId: string, status: string) =>
+          pool.query(
+            `UPDATE noshow_workspace_rows SET status = $2 WHERE meetup_member_id = $1`,
+            [memberId, status],
+          );
+        await setStatus('1', 'skipped');
+        await setStatus('2', 'on_hold');
+        await setStatus('3', 'warning_sent');
+        await setStatus('5', 'warning_copied');
+        const rows = await repo.listRows(SEPTEMBER, { offset: 0, limit: 50 });
+        expect(rows.map((r) => [r.memberName, r.status])).toEqual([
+          ['Dee', 'new'],
+          ['Eve', 'warning_copied'],
+          ['Bea', 'on_hold'],
+          // Done: the suspension candidate first, as within every group.
+          ['Ann', 'skipped'],
+          ['Cy', 'warning_sent'],
+        ]);
+      });
+
       it('getRow reads one row of the month and refuses junk ids', async () => {
         await sync([warning('111', 'Ann')]);
         const id = (await rowOf(SEPTEMBER, '111')).id;
