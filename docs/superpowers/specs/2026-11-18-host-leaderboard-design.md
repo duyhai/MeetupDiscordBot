@@ -229,6 +229,55 @@ message, so coordinates or names never reach the process log.
 
 Recommended: 1, with 2's city list underneath for no-JS and screen readers.
 
+## All-time awards and the monthly archive (PR 4)
+
+Decided by Hai, 2026-11-18: "Go with Layout 2 and Ties A." From his
+request: "next to the Hall of Fame, we could also have an all-time high
+leaderboard. Or maybe in the Hall of Fame, we could have 10 different
+all-time awards (eg: highest weekly streak top 10, highest daily streak top
+10, etc), and then below that, we could have an archive where people can
+look at the historic monthly hall of fame rankings."
+
+**Layout 2.** The Hall of fame view keeps today's lifetime table of every
+host on top, unchanged (it is the "most events hosted" board). Below it, an
+**All-time awards** section of nine boards, each collapsible (UI kit) and
+stacked on a phone; below that, the map; then the **archive**.
+
+| Board                    | Per host (or event)                                              | Source                                                                                                 |
+| ------------------------ | ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| Most attendees hosted    | sum of Meetup's YES + ATTENDED per counted event                 | attendance added to the Leaderboard's event read; events with no attendance data left out, with a note |
+| Longest weekly streak 💎 | best run of hosting weeks                                        | `streaks` (best)                                                                                       |
+| Longest daily streak 🔥  | best run of hosting days                                         | `streaks` (best)                                                                                       |
+| Most gold medals         | stored golds                                                     | `host_medals`                                                                                          |
+| Most medals              | stored medals, any place                                         | `host_medals`                                                                                          |
+| Most events in one month | the host's best month, named                                     | `byMonth`                                                                                              |
+| Biggest single event     | per counted event: attendance, title linked to Meetup, its hosts | the same attendance; unknown left out                                                                  |
+| Widest variety           | distinct event types hosted                                      | `classifyEventType`, once per event at load                                                            |
+| Most months active       | distinct months with a counted event                             | `byMonth`                                                                                              |
+
+**Ties A.** Competition ranking: tied entries share a place and the next
+place is skipped. A board shows every entry placed 10th or better, so a tie
+for 10th runs it past 10 rows. A hard cap of **25 rows** stops a mass tie
+(say, 40 hosts with one medal): the rest are summed as "and N more tied at
+Xth". Rows past the cap are always tied with the 25th, since any later
+place would be past 10th. Zero values never place.
+
+**Archive.** Every closed month, newest first, grouped by year (each year
+collapsible, the latest open). An awarded month lists its medalists exactly
+as its `?month=` page does (the same `monthRows`: stored place and count),
+with a link to that page for the full standings. A month that is closed but
+not yet awarded says so; an awarded month with no hosted events says that.
+
+**Cost and constraints.** Snapshot only, no Meetup call. The boards are
+computed once per load in the cached loader (one pass over events, hosts and
+medals already loaded) and reused until the next snapshot run; the archive
+reuses the month rows. Names link to profiles. Nothing about what anyone
+attended: attendance appears only as event totals, which Meetup shows
+publicly, and "biggest single event" lists only counted hosted events. No
+location-based board (the home-venue concern). Blacklisted hosts are
+treated like any other host (Hai: keep as is). Emoji keep their text
+alternatives.
+
 ## PR split
 
 1. **Leaderboard tab:** host names table, medal tables and awarding, monthly
@@ -236,3 +285,5 @@ Recommended: 1, with 2's city list underneath for no-JS and screen readers.
 2. **Host profiles:** profile page and lifetime stats; leaderboard names link
    to it.
 3. **Maps:** snapshot venue fields, profile map and Hall of fame map.
+4. **All-time awards and archive:** nine award boards under the Hall of
+   fame table, and the monthly archive.

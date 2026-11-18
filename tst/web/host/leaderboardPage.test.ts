@@ -478,4 +478,107 @@ describe('host leaderboard', () => {
     const anonymous = await req.get('/host/assets/leaflet.js');
     expect(anonymous.status).toBe(302);
   });
+
+  it('Layout 2: the lifetime table, then nine award boards, then the map, then the archive', async () => {
+    const withAttendance = EVENTS.map((e, n) => ({ ...e, attendance: 5 + n }));
+    const store = fakeStore(withAttendance, NAMES);
+    const { req, sid } = await app(store);
+    const res = await req.get('/host/leaderboard?view=all').set('Cookie', sid);
+    expect(res.status).toBe(200);
+    const at = (text: string) => res.text.indexOf(text);
+    expect(at('Every host, by events hosted')).toBeGreaterThan(0);
+    expect(at('<h2>All-time awards</h2>')).toBeGreaterThan(
+      at('Every host, by events hosted'),
+    );
+    expect(at("<h2>Where we've hosted</h2>")).toBeGreaterThan(
+      at('<h2>All-time awards</h2>'),
+    );
+    expect(at('<h2>Archive</h2>')).toBeGreaterThan(
+      at("<h2>Where we've hosted</h2>"),
+    );
+    const boards = res.text.slice(
+      at('<h2>All-time awards</h2>'),
+      at("<h2>Where we've hosted</h2>"),
+    );
+    expect(boards.match(/<details class="ui-collapsible"/g)).toHaveLength(9);
+    for (const title of [
+      'Most attendees hosted',
+      'Longest weekly streak',
+      'Longest daily streak',
+      'Most gold medals',
+      'Most medals',
+      'Most events in one month',
+      'Biggest single event',
+      'Widest variety',
+      'Most months active',
+    ]) {
+      expect(boards).toContain(title);
+    }
+    // Emoji with words; names link to profiles; titles escaped.
+    expect(boards).toContain('aria-label="Weekly streak"');
+    expect(boards).toContain('aria-label="Daily streak"');
+    expect(boards).toContain('href="/host/hosts/1"');
+    expect(boards).not.toContain('<script>alert');
+  });
+
+  it('attendance boards leave out events without attendance data and say so', async () => {
+    const events = [
+      { ...ev('2026-10-02', ['1']), attendance: 12 },
+      { ...ev('2026-10-03', ['2']), attendance: undefined },
+    ];
+    const store = fakeStore(events, NAMES);
+    const { req, sid } = await app(store);
+    const res = await req.get('/host/leaderboard?view=all').set('Cookie', sid);
+    expect(res.text).toContain('1 event without attendance data is left out.');
+    expect(res.text).toContain('12 attendees');
+  });
+
+  it('a mass tie stops at 25 rows: "and N more tied at 1st"', async () => {
+    const events = Array.from({ length: 30 }, (_, n) => ({
+      ...ev('2026-10-02', [String(1000 + n)]),
+      attendance: 5,
+    }));
+    const store = fakeStore(events, NAMES);
+    const { req, sid } = await app(store);
+    const res = await req.get('/host/leaderboard?view=all').set('Cookie', sid);
+    expect(res.text).toContain('and 5 more tied at 1st');
+    expect(res.text).toContain('30 tied at 5 attendees');
+  });
+
+  it('the archive lists each closed month’s medalists exactly as its month page does', async () => {
+    const store = fakeStore(EVENTS, NAMES);
+    // Awarded off an earlier listing: Cy won with 9 (as the month page shows).
+    store.months.add('2026-10');
+    store.stored.push({ month: '2026-10', memberId: '3', place: 1, events: 9 });
+    const { req, sid } = await app(store);
+    const all = await req.get('/host/leaderboard?view=all').set('Cookie', sid);
+    const archive = all.text.slice(all.text.indexOf('<h2>Archive</h2>'));
+    const start = archive.indexOf('href="/host/leaderboard?month=2026-10"');
+    const october = archive.slice(start, archive.indexOf('</li>', start));
+    expect(october).toContain('href="/host/leaderboard?month=2026-10"');
+    expect(october).toContain('Gold medal, October 2026');
+    expect(october).toContain('<bdi>Cy</bdi>');
+    expect(october).toContain('(9 events)');
+    expect(october).not.toContain('Bea');
+    const month = await req
+      .get('/host/leaderboard?month=2026-10')
+      .set('Cookie', sid);
+    expect(month.text.match(/Gold medal, October 2026/g)).toHaveLength(2);
+    expect(month.text).toContain('<bdi>Cy</bdi>');
+  });
+
+  it('the archive says when a closed month is not awarded yet', async () => {
+    const store = fakeStore(EVENTS, NAMES);
+    const { req, sid } = await app(store, {
+      snapshot: async () => ({
+        hasFinishedFull: async () => true,
+        lastFinishedRun: async () => RUN,
+        lastCompleteListing: async () => undefined,
+      }),
+    });
+    const res = await req.get('/host/leaderboard?view=all').set('Cookie', sid);
+    const archive = res.text.slice(res.text.indexOf('<h2>Archive</h2>'));
+    expect(archive).toContain('October 2026');
+    expect(archive).toContain('medals not awarded yet');
+  });
 });

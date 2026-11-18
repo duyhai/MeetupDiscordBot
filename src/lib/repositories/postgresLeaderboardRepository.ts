@@ -5,6 +5,8 @@
  */
 import pg from 'pg';
 
+import Configuration from '../../configuration.js';
+
 import { EventStatus } from '../client/meetup/types.js';
 import {
   LeaderboardEvent,
@@ -66,12 +68,24 @@ export class PostgresLeaderboardRepository implements LeaderboardStore {
       place_lon_e2: number | null;
       place_city: string | null;
       place_listed: boolean;
+      event_url: string | null;
+      yes_count: number | null;
+      read: boolean;
+      stored: number | null;
     }>(
-      `SELECT event_id, title, status, host_ids, place_lat_e2, place_lon_e2, place_city, place_listed,
-              to_char(date_time AT TIME ZONE 'America/Los_Angeles', 'YYYY-MM-DD') AS day
-         FROM meetup_events
-        WHERE status = 'PAST' AND deleted_at IS NULL AND cardinality(host_ids) > 0
-        ORDER BY date_time, event_id`,
+      // Attendance as on profiles (PostgresSnapshotRepository.profileEvents):
+      // the listing's count, else the stored RSVPs only where they were read.
+      `SELECT e.event_id, e.title, e.status, e.host_ids, e.place_lat_e2, e.place_lon_e2,
+              e.place_city, e.place_listed, e.event_url, e.yes_count,
+              e.rsvps_fetched_at IS NOT NULL AS read,
+              CASE WHEN e.yes_count IS NULL AND e.rsvps_fetched_at IS NOT NULL THEN
+                (SELECT count(*)::int FROM meetup_event_rsvps r
+                  WHERE r.event_id = e.event_id AND r.status IN ('YES', 'ATTENDED'))
+              END AS stored,
+              to_char(e.date_time AT TIME ZONE 'America/Los_Angeles', 'YYYY-MM-DD') AS day
+         FROM meetup_events e
+        WHERE e.status = 'PAST' AND e.deleted_at IS NULL AND cardinality(e.host_ids) > 0
+        ORDER BY e.date_time, e.event_id`,
     );
     return result.rows.map((row) => ({
       id: row.event_id,
@@ -79,6 +93,10 @@ export class PostgresLeaderboardRepository implements LeaderboardStore {
       status: row.status as EventStatus,
       hostIds: row.host_ids,
       day: row.day,
+      eventUrl:
+        row.event_url ??
+        `https://www.meetup.com/${Configuration.meetup.groupUrlName}/events/${row.event_id}/`,
+      attendance: row.yes_count ?? (row.read ? (row.stored ?? 0) : undefined),
       // undefined: not collected yet; null: no venue (online, or none).
       place: !row.place_listed
         ? undefined

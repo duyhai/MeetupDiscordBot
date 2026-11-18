@@ -274,6 +274,14 @@ border-radius:var(--radius-pill);color:var(--muted);background:var(--raised);ver
 .host-map{margin:0}
 .host-map .map{height:22rem;margin:0 0 var(--s2);border:1px solid var(--line);border-radius:var(--radius-ctl);z-index:0}
 .host-map figcaption{font-size:var(--t-sm);margin:0 0 var(--s3)}
+.award-boards{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(22rem,100%),1fr));gap:var(--s3);align-items:start}
+.award-boards>.ui-collapsible{margin:0}
+.award-detail{display:block;font-size:var(--t-sm)}
+@media (min-width:640px){table.award-board th:first-child,table.award-board td:first-child{width:3.5rem;white-space:nowrap}
+table.award-board th:last-child,table.award-board td:last-child{white-space:nowrap;text-align:right}}
+.archive-months{list-style:none;padding:0;margin:0}
+.archive-months li{padding:var(--s1) 0;border-bottom:1px solid var(--line)}
+.archive-medalist{display:inline-block;margin-right:var(--s3);white-space:nowrap}
 .note{color:var(--fg);background:var(--raised);border:1px solid var(--line);border-left:4px solid var(--field);
 border-radius:var(--radius-ctl);padding:var(--s3) var(--s4);margin:0 0 var(--s3);animation:note-in 200ms ease-out both}
 .note.attn{color:var(--attn-ink);background:var(--attn-soft);border-color:var(--attn-soft);

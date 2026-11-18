@@ -33,6 +33,14 @@ export interface LeaderboardEvent {
    * venue; undefined when the snapshot has not collected it yet.
    */
   place?: EventPlace | null;
+  /** The event on Meetup, when the store has its URL. */
+  eventUrl?: string;
+  /**
+   * Meetup's YES + ATTENDED total (the number Wrapped and profiles use), or
+   * the stored RSVPs when the listing had none and they were read;
+   * undefined when there is no attendance data.
+   */
+  attendance?: number;
 }
 
 /** A month's medals: gold, silver, bronze. */

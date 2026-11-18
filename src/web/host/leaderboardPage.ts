@@ -26,6 +26,7 @@ import {
   registerMapAssets,
 } from './hostMap.js';
 import { eventPlaces } from '../../lib/leaderboard/places.js';
+import { archiveSection, awardsSection } from './hallOfFameAwards.js';
 import {
   LEADERBOARD_PATH,
   bestStreaks,
@@ -253,6 +254,7 @@ function medalCell(awarded: boolean, content: SafeHtml | ''): SafeHtml | '' {
 
 function hallOfFameBody(data: Ready, selfId: string): SafeHtml {
   const nameOf = (id: string) => data.names.get(id) ?? '';
+  const nameOfHost = (id: string) => nameCell(data, id, selfId);
   const counts = new Map(
     [...data.byHost].map(([id, events]) => [id, events.length]),
   );
@@ -301,13 +303,15 @@ function hallOfFameBody(data: Ready, selfId: string): SafeHtml {
       </table>
       ${streakNote()} ${updatedLine(data)}
     </div>
+    ${awardsSection(data, nameOfHost)}
     <div class="card">
       <h2>Where we've hosted</h2>
       ${hostMap(
         eventPlaces(data.events, HALL_OF_FAME_PLACE_RULE),
         'the group has',
       )}
-    </div>`;
+    </div>
+    ${archiveSection(data, (month) => monthRows(data, month), nameOfHost)}`;
 }
 
 const notReadyBody = html`<div class="card">
