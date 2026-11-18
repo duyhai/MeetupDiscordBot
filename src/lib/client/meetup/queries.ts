@@ -530,7 +530,8 @@ export const getEventForAudit = gql`
  * The group snapshot's listing (src/lib/snapshot): the filter exactly as
  * given, never cached. Member ids only, except each host's name, which
  * every public event page shows: kept apart in meetup_host_names for the
- * host leaderboard, never beside RSVPs.
+ * host leaderboard, never beside RSVPs. The venue's coordinates are rounded
+ * to a ~1 km grid at ingest (snapshot/meetup.ts) and never stored exactly.
  */
 export const getGroupEventsForSnapshot = gql`
   query (
@@ -567,6 +568,12 @@ export const getGroupEventsForSnapshot = gql`
             }
             waitlist: rsvps(filter: { rsvpStatus: [WAITLIST] }) {
               totalCount
+            }
+            eventType
+            venue {
+              lat
+              lon
+              city
             }
           }
         }

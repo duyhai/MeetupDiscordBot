@@ -219,6 +219,22 @@ function errorName(error: unknown): string {
   return error instanceof Error ? error.name : 'unknown error';
 }
 
+/**
+ * For the process log: the error class, and for a Meetup ClientError its
+ * HTTP status and first GraphQL message, never its message (JSON of the
+ * whole response, which can hold listing data).
+ */
+export function describeError(error: unknown): string {
+  if (error instanceof ClientError) {
+    const first = error.response.errors?.[0]?.message;
+    const said = typeof first === 'string' ? `: ${first.slice(0, 200)}` : '';
+    return `ClientError (HTTP ${String(error.response.status)})${said}`;
+  }
+  return error instanceof Error
+    ? `${error.name}: ${error.message}`
+    : 'unknown error';
+}
+
 const seconds = (ms: number) => (ms / 1000).toFixed(0);
 
 /** "Group snapshot is failing", once per UTC day, by error class only. */
@@ -522,7 +538,7 @@ export async function runSnapshotTick(
     });
   } catch (error) {
     const name = isRateLimited(error) ? RATE_LIMITED : errorName(error);
-    log.error(`Group snapshot tick failed: ${String(error)}`);
+    log.error(`Group snapshot tick failed: ${describeError(error)}`);
     await store.recordError(run.id, name).catch(() => undefined);
     await settle();
     await releaseBuildLease(cache, lease);

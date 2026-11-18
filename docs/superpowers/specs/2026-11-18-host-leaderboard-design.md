@@ -120,22 +120,103 @@ hosting weeks are Monday-first Pacific weeks (as the calendar).
 
 ## Map (PR 3)
 
-**Fields, verified 2026-11-18** against Meetup's schema (`/gql2` from Hai's
-signed-in tab, read-only): `Venue { lat: Float, lon: Float, city, venueType,
-name, address }` (note `lon`, not `lng`), `Event { isOnline: Boolean,
-eventType: EventType }`. Neither is in the snapshot; PR 3 adds `isOnline`,
-`eventType` and `venue { lat lon }` to the listing query (no extra request).
+**Fields, verified 2026-11-18 on gql-ext** (`https://api.meetup.com/gql-ext`,
+the endpoint the organizer client uses; introspection, unauthenticated,
+schema-only, and the final listing query validated there): `Event.eventType`
+(HYBRID, ONLINE, PHYSICAL) and `Venue { lat lon city }` (note `lon`, not
+`lng`). **`Event.isOnline` does not exist on gql-ext** (the website's `/gql2`
+has it, which is where the first check was made, wrongly), so ONLINE is the
+only online signal. The fields are pinned in a test against a checked-in list
+(`tst/fixtures/gqlExtFields.ts`). Project rule from here on: a Meetup field
+counts as verified only once checked on gql-ext. A read-only sample of 200
+past group events (via `/gql2`): all PHYSICAL, 3 with no venue, 2 with the
+0,0 placeholder, all within the Seattle area.
 
-**Privacy:** online events (`isOnline` or `eventType = ONLINE`) and venues
-without coordinates (or Meetup's 0,0 placeholder) are left out. Coordinates
-are **rounded to a 0.01° grid (about 1 km) at ingest**; exact venue
-coordinates are never stored, so no residential pin can be plotted. The map
-shows grid cells sized by event count, with no venue names or addresses.
+**Privacy:** online events (`eventType = ONLINE`) and venues without
+coordinates (or Meetup's 0,0 placeholder) are left out. Coordinates are
+**rounded to a 0.01° grid (about 1 km) at ingest**; exact venue coordinates
+are never stored, so no residential pin can be plotted. City names are
+cleaned of control and format characters (bidi overrides, zero-width) at
+ingest and shown with `memberText`. No venue names or addresses anywhere. A
+failed listing's error is rethrown without the response data, and the
+snapshot job logs only the error class, HTTP status and first GraphQL
+message, so coordinates or names never reach the process log.
+
+**As built (PR 3).**
+
+- `toPlace` (snapshot/meetup.ts) turns a listing node into grid indices
+  (degrees × 100, rounded) and a cleaned city, or null. Columns
+  `place_lat_e2`, `place_lon_e2`, `place_city` and `place_listed` on
+  `meetup_events` (guarded ALTERs) are refreshed by every listing.
+  `place_listed = false` means "not collected yet" (rows from before the
+  venue fields), which the page says as "Venue data … is still being
+  collected", not "no venue". **Deploy note:** trigger one snapshot run after
+  deploy so the maps fill in without waiting a day.
+- The Leaderboard's event read carries the cell, so the maps cost no extra
+  query.
+- Each cell is drawn as the ~1 km square it is (not a pin), darker with more
+  events; zoom stops at 13 (fitted at 12 at most).
+- **What is drawn and named is decided on the server** (places.ts), before
+  anything is embedded in the page or merged for low zoom:
+  - Hall of fame: an area is drawn only with at least
+    `HALL_OF_FAME_MIN_EVENTS` (3) events, and only if no single host
+    dominates it: removing all events of any one host must leave at least
+    `HALL_OF_FAME_MIN_EVENTS_WITHOUT_ANY_HOST` (2). A host alone, a regular
+    co-host pair, or one host plus one other event never makes an area
+    appear (an earlier "2+ distinct hosts" rule let all three through). A
+    city is named only if it contains a drawn area (its count then includes
+    its undrawn events); other cities fold into "Elsewhere or unknown area",
+    even when their undrawn areas together would pass the rule. The Hall of
+    fame shows **no exact count** in its map or map text: areas and cities
+    show bands (up to 5, 6–10, 11–25, 26+) computed on the server; areas are
+    listed by position and cities by band then name, so order gives nothing
+    away; areas not drawn get a sentence with no number. "Elsewhere",
+    "online or without a venue" and "still being collected" are banded too:
+    the Hall of fame header gives the exact total of events, and exact
+    no-place lines would let the named cities' exact total be worked out.
+    Blacklisted hosts' events are included (areas, not people).
+  - Profile: an area is drawn only with at least `PROFILE_MAP_MIN_EVENTS` (3)
+    of that host's events, and cities are named from drawn areas only. Every
+    other event is in one line ("N events in other areas … not shown on the
+    map or by city"), with no city.
+  - Why: without these, a host's 2 home events in "Smallville" were unnamed
+    on their map but named in their profile's city list, and the Hall of
+    fame map drew a lone Smallville square with count 2; together, that
+    pointed at their home area.
+  - No profile map for an id on the Guest Host blacklist until Hai decides.
+    The thresholds and an opt-out are with Hai; these are the conservative
+    defaults.
+  - **Accepted residual risks** (the lead's review, 2026-11-18):
+    1. A host's own profile shows an area with 3 or more of their events (a
+       frequent home venue), with its city. Only an opt-out or dropping home
+       venues would remove it.
+    2. An area appears on the Hall of fame the day it first meets the rule:
+       someone diffing daily can place that day's known event in a 1 km area
+       that already held other hosts' events.
+    3. A band boundary crossing (5 to 6, 10 to 11, 25 to 26) the day after a
+       known event says that event was in that area or city.
+    4. An area with host X's 3 events and one event each from two other
+       hosts is drawn, since removing X's events still leaves 2; most of
+       what it shows is X's.
+    5. Comparing several profiles' city lists with the Hall of fame's can
+       narrow down which hosts held events in a city, but names no area.
+- Under each map, text that accounts for every event exactly once: named
+  cities (top 8, then "Elsewhere or unknown area"), areas not drawn, events
+  online or without a venue, events not collected yet. The map container is
+  a labelled region pointing at that list, and stays hidden without
+  JavaScript.
+- Leaflet 1.9.4 is a pinned dependency served at
+  `/host/assets/leaflet.{js,css}?v=1.9.4` (signed-in only, cached for a year,
+  gzipped once in memory since the app has no compression middleware: the
+  script is 147 KB raw, about 42 KB gzipped). Map pages send the host CSP
+  (`HOST_CSP_OPTIONS`) with `tile.openstreetmap.org` added to `img-src` and
+  nothing else changed; other pages keep the host CSP without the tile
+  host.
 
 **Rendering, compared:**
 
 1. _Self-hosted Leaflet 1.9 + OpenStreetMap tiles (recommended)._ Leaflet
-   (about 40 KB) is served from our own origin under the page nonce; the CSP
+   (147 KB raw, about 42 KB gzipped) is served from our own origin under the page nonce; the CSP
    gains only `img-src https://tile.openstreetmap.org`. OSM's tile policy
    asks for the "© OpenStreetMap contributors" attribution (Leaflet shows it),
    a valid Referer (our `same-origin` Referrer-Policy sends none, so the tile

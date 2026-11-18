@@ -130,8 +130,14 @@ async function app(
 
 const EVENTS = [
   // October: 1 hosts 3 (one co-hosted with 2), 2 hosts 3, 3 hosts 1.
-  ev('2026-10-02', ['1', '2']),
-  ev('2026-10-03', ['1']),
+  {
+    ...ev('2026-10-02', ['1', '2']),
+    place: { latE2: 4761, lonE2: -12233, city: 'Seattle' },
+  },
+  {
+    ...ev('2026-10-03', ['1']),
+    place: { latE2: 4761, lonE2: -12233, city: HOSTILE },
+  },
   ev('2026-10-04', ['1']),
   ev('2026-10-09', ['2']),
   ev('2026-10-16', ['2']),
@@ -369,5 +375,107 @@ describe('host leaderboard', () => {
     const res = await req.get('/host/leaderboard').set('Cookie', sid);
     expect(res.status).toBe(403);
     expect(store.mocks.hostedEvents).not.toHaveBeenCalled();
+  });
+
+  it('the Hall of fame draws a map from our own Leaflet, with OSM tiles allowed on that page only', async () => {
+    const seattle = { latE2: 4761, lonE2: -12233, city: HOSTILE };
+    const events = [
+      // 3 events from 3 hosts: drawn and named (escaped).
+      { ...ev('2026-10-02', ['1']), place: seattle },
+      { ...ev('2026-10-03', ['3']), place: seattle },
+      { ...ev('2026-10-04', ['2']), place: seattle },
+      // Before the venue fields: not collected yet.
+      ev('2026-10-05', ['2']),
+    ];
+    const store = fakeStore(events, NAMES);
+    const { req, sid } = await app(store);
+    const all = await req.get('/host/leaderboard?view=all').set('Cookie', sid);
+    expect(all.text).toContain(
+      'data-map-cells="[[47.61,-122.33,1,&quot;up to 5 events&quot;]]"',
+    );
+    expect(all.text).toMatch(
+      /<script nonce="[^"]+" src="\/host\/assets\/leaflet\.js\?v=1\.9\.4"><\/script>/,
+    );
+    expect(all.text).toMatch(
+      /<link rel="stylesheet" href="\/host\/assets\/leaflet\.css\?v=1\.9\.4" nonce="[^"]+" \/>/,
+    );
+    // The city list says the same for no-JS and screen readers; escaped.
+    expect(all.text).toContain(
+      '<li><bdi>&lt;script&gt;alert(1)&lt;/script&gt;&quot;&gt;&lt;img src=x&gt;</bdi>: up to 5 events</li>',
+    );
+    expect(all.text).toContain(
+      'Venue data for up to 5 events is still being collected.',
+    );
+    expect(all.text).toContain('role="region"');
+    const csp = String(all.headers['content-security-policy']);
+    // The host CSP (Meetup photos, same-origin fetch) plus the tile host.
+    expect(csp).toContain(
+      "img-src 'self' https://secure.meetupstatic.com https://tile.openstreetmap.org;",
+    );
+    expect(csp).toContain("connect-src 'self';");
+    expect(csp).toMatch(/script-src 'nonce-[^']+';/);
+
+    const month = await req.get('/host/leaderboard').set('Cookie', sid);
+    expect(String(month.headers['content-security-policy'])).not.toContain(
+      'tile.openstreetmap.org',
+    );
+    expect(month.text).not.toContain('leaflet.js');
+  });
+
+  it('Smallville: one host’s small home area is neither drawn nor named on the Hall of fame', async () => {
+    const seattle = { latE2: 4761, lonE2: -12233, city: 'Seattle' };
+    const smallville = { latE2: 4790, lonE2: -12250, city: 'Smallville' };
+    const events = [
+      { ...ev('2026-10-02', ['1']), place: seattle },
+      { ...ev('2026-10-03', ['2']), place: seattle },
+      { ...ev('2026-10-04', ['3']), place: seattle },
+      // Host 9 hosts twice at home.
+      { ...ev('2026-10-05', ['9']), place: smallville },
+      { ...ev('2026-10-06', ['9']), place: smallville },
+    ];
+    const store = fakeStore(events, NAMES);
+    const { req, sid } = await app(store);
+    const all = await req.get('/host/leaderboard?view=all').set('Cookie', sid);
+    expect(all.text).toContain(
+      'data-map-cells="[[47.61,-122.33,1,&quot;up to 5 events&quot;]]"',
+    );
+    expect(all.text).not.toContain('47.9');
+    expect(all.text).not.toContain('Smallville');
+    expect(all.text).toContain(
+      '<li>Elsewhere or unknown area: up to 5 events</li>',
+    );
+    expect(all.text).toContain(
+      'Areas with fewer than 3 events, or mostly one host’s, are not drawn; their events are counted above.',
+    );
+  });
+
+  it('serves Leaflet’s two files with their types, and nothing else under assets', async () => {
+    const store = fakeStore(EVENTS, NAMES);
+    const { req, sid } = await app(store);
+    const js = await req
+      .get('/host/assets/leaflet.js?v=1.9.4')
+      .set('Cookie', sid)
+      .set('Accept-Encoding', 'gzip');
+    expect(js.status).toBe(200);
+    expect(String(js.headers['content-type'])).toContain('text/javascript');
+    expect(js.headers['content-encoding']).toBe('gzip');
+    expect(String(js.headers['cache-control'])).toContain('immutable');
+    expect(String(js.headers.vary)).toContain('Accept-Encoding');
+    const plain = await req
+      .get('/host/assets/leaflet.js')
+      .set('Cookie', sid)
+      .set('Accept-Encoding', 'identity');
+    expect(plain.headers['content-encoding']).toBeUndefined();
+    expect(plain.text).toContain('Leaflet');
+    const css = await req.get('/host/assets/leaflet.css').set('Cookie', sid);
+    expect(css.status).toBe(200);
+    expect(String(css.headers['content-type'])).toContain('text/css');
+    for (const name of ['leaflet.js.map', '..%2Fpackage.json', 'x.css']) {
+      // eslint-disable-next-line no-await-in-loop
+      const res = await req.get(`/host/assets/${name}`).set('Cookie', sid);
+      expect(res.status).toBe(404);
+    }
+    const anonymous = await req.get('/host/assets/leaflet.js');
+    expect(anonymous.status).toBe(302);
   });
 });
