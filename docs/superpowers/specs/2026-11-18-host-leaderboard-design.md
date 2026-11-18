@@ -257,6 +257,20 @@ the ranked list and places stay the true competition places; runs that
 touch merge, with no gap. "Show all N hosts" (`?view=all&hosts=all`,
 server-rendered, no JavaScript) shows every row, with a link back.
 
+On a phone (Hai: "just show one before and after, and only show top five if
+you are in the top five. Ten is too many for mobile."): a viewer placed 5th
+or better, or not on the board, sees rows placed 5th or better; anyone else
+(6th to 10th included) rows 1 to 5, a gap where rows are skipped, then 1 row
+before them, their row and 1 after, with touching runs merged. The page
+has no device detection: it renders the union of both widths' rows, marks
+rows one width hides (`desktop-only`, `phone-only`), and the stylesheet's
+phone block (the same 640 px breakpoint as the stacked tables) swaps them.
+A gap's text differs per width, so `shortList` computes both and the page
+renders each variant where its width needs it, the other hidden with
+`display:none` (not read out). A gap can be phone-only: a viewer placed
+9th sees the top 10 on desktop but 1 to 5, "places 6 to 7", 8th, themselves
+and 10th on a phone.
+
 | Board                    | Per host (or event)                                              | Source                                                                                                 |
 | ------------------------ | ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
 | Most attendees hosted    | sum of Meetup's YES + ATTENDED per counted event                 | attendance added to the Leaderboard's event read; events with no attendance data left out, with a note |

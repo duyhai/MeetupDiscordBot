@@ -618,6 +618,8 @@ describe('host leaderboard', () => {
       res.text.indexOf('Every host, by events hosted'),
       res.text.indexOf('<h2>All-time awards</h2>'),
     );
+    // Desktop and phone variants are both in the markup, each where its
+    // width needs it; CSS shows one.
     expect(rowsOf(table).map((r) => r[0])).toEqual([
       '1',
       '2',
@@ -627,13 +629,21 @@ describe('host leaderboard', () => {
       '',
       '9',
       '10',
+      '',
       '11',
       '12',
       '13',
       '14',
       '15',
     ]);
-    expect(table).toContain('3 hosts not shown (places 6 to 8)');
+    expect(table).toMatch(
+      /<tr class="gap-row desktop-only">[\s\S]*?3 hosts not shown \(places 6 to 8\)/,
+    );
+    expect(table).toMatch(
+      /<tr class="gap-row phone-only">[\s\S]*?5 hosts not shown \(places 6 to 10\)/,
+    );
+    // 9th, 10th, 14th and 15th are desktop-only; 11th to 13th show on both.
+    expect(table.match(/<tr class="desktop-only">/g)).toHaveLength(4);
     expect(table).toMatch(/<tr class="you-row">[\s\S]*?<bdi>Ann<\/bdi>/);
     expect(table).toContain('href="/host/leaderboard?view=all&amp;hosts=all"');
     expect(table).toContain('Show all 20 hosts');
@@ -660,14 +670,21 @@ describe('shortList (Hai: first 5, a gap, 3 either side of you; top 10 if you ar
       events: n - i,
       place: places?.[i] ?? i + 1,
     }));
-  function shape(items: ReturnType<typeof shortList>): string[] {
-    return items.map((i) => {
+  /** What one width shows: its rows, and its gap text where it has one. */
+  function view(
+    items: ReturnType<typeof shortList>,
+    width: 'desktop' | 'phone',
+  ): string[] {
+    return items.flatMap((i) => {
       if (i.kind === 'gap') {
-        return `gap ${i.count} (${i.from}-${i.to})`;
+        const gap = i[width];
+        return gap ? [`gap ${gap.count} (${gap.from}-${gap.to})`] : [];
       }
-      return `${i.standing.place}${i.you ? '*' : ''}`;
+      return i[width] ? [`${i.standing.place}${i.you ? '*' : ''}`] : [];
     });
   }
+  const shape = (items: ReturnType<typeof shortList>) => view(items, 'desktop');
+  const phone = (items: ReturnType<typeof shortList>) => view(items, 'phone');
   const top10 = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10'];
 
   it('viewer 1st or 10th: just the top 10', () => {
@@ -780,5 +797,124 @@ describe('shortList (Hai: first 5, a gap, 3 either side of you; top 10 if you ar
 
   it('the full view shows every row', () => {
     expect(shortList(board(50), 'h29', true)).toHaveLength(50);
+  });
+
+  describe('on a phone (Hai: top 5 if you are in it, else 1 either side)', () => {
+    const top5 = ['1', '2', '3', '4', '5'];
+    it('viewer 1st or 5th, or not on the board: the top 5', () => {
+      expect(phone(shortList(board(50), 'h0'))).toEqual([
+        '1*',
+        '2',
+        '3',
+        '4',
+        '5',
+      ]);
+      expect(phone(shortList(board(50), 'h4'))).toEqual([
+        '1',
+        '2',
+        '3',
+        '4',
+        '5*',
+      ]);
+      expect(phone(shortList(board(50), 'staff'))).toEqual(top5);
+    });
+
+    it('viewer 6th or 7th: one continuous run', () => {
+      expect(phone(shortList(board(50), 'h5'))).toEqual([...top5, '6*', '7']);
+      expect(phone(shortList(board(50), 'h6'))).toEqual([
+        ...top5,
+        '6',
+        '7*',
+        '8',
+      ]);
+    });
+
+    it('viewer 9th or 10th: a phone-only gap where desktop shows the top 10', () => {
+      const ninth = shortList(board(50), 'h8');
+      expect(phone(ninth)).toEqual([...top5, 'gap 2 (6-7)', '8', '9*', '10']);
+      expect(shape(ninth)).toEqual([
+        '1',
+        '2',
+        '3',
+        '4',
+        '5',
+        '6',
+        '7',
+        '8',
+        '9*',
+        '10',
+      ]);
+      const tenth = shortList(board(50), 'h9');
+      expect(phone(tenth)).toEqual([...top5, 'gap 3 (6-8)', '9', '10*', '11']);
+      // 11th is phone-only here: desktop shows the top 10.
+      expect(
+        tenth.find((i) => i.kind === 'row' && i.standing.place === 11),
+      ).toMatchObject({ phone: true, desktop: false });
+    });
+
+    it('viewer 11th, mid-table and last', () => {
+      expect(phone(shortList(board(50), 'h10'))).toEqual([
+        ...top5,
+        'gap 4 (6-9)',
+        '10',
+        '11*',
+        '12',
+      ]);
+      expect(phone(shortList(board(50), 'h29'))).toEqual([
+        ...top5,
+        'gap 23 (6-28)',
+        '29',
+        '30*',
+        '31',
+      ]);
+      expect(phone(shortList(board(50), 'h49'))).toEqual([
+        ...top5,
+        'gap 43 (6-48)',
+        '49',
+        '50*',
+      ]);
+    });
+
+    it('ties at the 5th/6th boundary', () => {
+      const places = [1, 2, 3, 4, 5, 5, 7, 8, 9, 10, 11, 12];
+      // Tied for 5th at row 6: placed 5th, so every row placed 5th or better.
+      expect(phone(shortList(board(12, places), 'h5'))).toEqual([
+        '1',
+        '2',
+        '3',
+        '4',
+        '5',
+        '5*',
+      ]);
+      // 7th, just after the tie: rows 1-5, then the tied 5th, you, 8th.
+      expect(phone(shortList(board(12, places), 'h6'))).toEqual([
+        '1',
+        '2',
+        '3',
+        '4',
+        '5',
+        '5',
+        '7*',
+        '8',
+      ]);
+      // Far below: the gap starts at the hidden tied 5th.
+      expect(phone(shortList(board(12, places), 'h10'))).toEqual([
+        '1',
+        '2',
+        '3',
+        '4',
+        '5',
+        'gap 4 (5-9)',
+        '10',
+        '11*',
+        '12',
+      ]);
+    });
+
+    it('the full view shows every row on both widths', () => {
+      const all = shortList(board(50), 'h29', true);
+      expect(phone(all)).toHaveLength(50);
+      expect(shape(all)).toHaveLength(50);
+    });
   });
 });

@@ -282,7 +282,8 @@ table.award-board th:last-child,table.award-board td:last-child{white-space:nowr
 .archive-months{list-style:none;padding:0;margin:0}
 .archive-months li{padding:var(--s1) 0;border-bottom:1px solid var(--line)}
 .archive-medalist{display:inline-block;margin-right:var(--s3);white-space:nowrap}
-table.leaderboard tr.you-row td{background:var(--accent-soft)}
+table.leaderboard tr.phone-only{display:none}
+table.leaderboard tr.you-row,table.leaderboard tr.you-row td{background:var(--accent-soft)}
 table.stack td.gap-cell{padding:var(--s2) var(--s3);text-align:center;color:var(--muted);font-size:var(--t-sm)}
 table.stack td.gap-cell::before{content:none}
 .note{color:var(--fg);background:var(--raised);border:1px solid var(--line);border-left:4px solid var(--field);
@@ -406,7 +407,9 @@ table.stack.tl-table td::before{content:attr(data-label);float:left;width:calc(6
 padding-right:var(--s3);box-sizing:content-box;font-size:var(--t-sm);font-weight:600;color:var(--muted)}}
 @media (min-width:640px) and (max-width:1023.98px){table.stack.tl-table td{padding-left:12rem}
 table.stack.tl-table td::before{width:calc(12rem - var(--s3));margin-left:-12rem}}
-@media (max-width:639.98px){h1{font-size:var(--t-xl)}
+@media (max-width:639.98px){table.leaderboard tr.phone-only{display:block}
+table.leaderboard tr.desktop-only{display:none}
+h1{font-size:var(--t-xl)}
 h2{font-size:var(--t-lg)}
 h3{font-size:var(--t-base)}
 table.stack,table.stack tbody{display:block;width:100%}

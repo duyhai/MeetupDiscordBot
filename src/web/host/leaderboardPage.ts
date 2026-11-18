@@ -264,26 +264,70 @@ export const SHORT_LIST_TOP_PLACES = 10;
 /** …otherwise the first 5 rows, a gap, and 3 rows either side of the viewer. */
 export const SHORT_LIST_HEAD_ROWS = 5;
 export const SHORT_LIST_NEIGHBOURS = 3;
+/** On a phone (Hai): the top 5 for a viewer placed there, else 1 either side. */
+export const PHONE_SHORT_LIST_TOP_PLACES = 5;
+export const PHONE_SHORT_LIST_NEIGHBOURS = 1;
 
-export type ShortListItem =
-  | { kind: 'row'; standing: Standing; you: boolean }
-  | {
-      kind: 'gap';
-      /** Rows skipped, and the first and last place among them. */
-      count: number;
-      from: number;
-      to: number;
-    };
+export interface ShortListGap {
+  /** Rows skipped, and the first and last place among them. */
+  count: number;
+  from: number;
+  to: number;
+}
 
 /**
- * Which lifetime rows to show (Hai: "the first 5, and then three dots …,
- * and then the 3 people before you and 3 people after you with your
+ * One rendered row of the lifetime table. A row carries which widths show
+ * it; a gap carries its text for each width it appears on (a gap can be
+ * phone-only, or differ between the widths).
+ */
+export type ShortListItem =
+  | {
+      kind: 'row';
+      standing: Standing;
+      you: boolean;
+      desktop: boolean;
+      phone: boolean;
+    }
+  | { kind: 'gap'; desktop?: ShortListGap; phone?: ShortListGap };
+
+/** The row indices one width keeps. */
+function keptRows(
+  standings: Standing[],
+  youAt: number,
+  topPlaces: number,
+  neighbours: number,
+): Set<number> {
+  const keep = new Set<number>();
+  if (youAt < 0 || standings[youAt].place <= topPlaces) {
+    standings.forEach((s, i) => {
+      if (s.place <= topPlaces) {
+        keep.add(i);
+      }
+    });
+    return keep;
+  }
+  const head = Math.min(SHORT_LIST_HEAD_ROWS, standings.length);
+  for (let i = 0; i < head; i += 1) {
+    keep.add(i);
+  }
+  const last = Math.min(standings.length - 1, youAt + neighbours);
+  for (let i = Math.max(0, youAt - neighbours); i <= last; i += 1) {
+    keep.add(i);
+  }
+  return keep;
+}
+
+/**
+ * Which lifetime rows to show. Desktop (Hai: "the first 5, and then three
+ * dots …, and then the 3 people before you and 3 people after you with your
  * current rank. If you're in the top 10, then just simply show the top
- * 10."). Windows go by row order in the ranked list; places stay the true
- * competition places. A viewer placed 10th or better, or not on the board,
- * sees every row placed 10th or better. Otherwise: rows 1 to 5, then the
- * viewer's row with 3 either side; where the two runs touch or overlap they
- * merge, and each skipped run becomes one gap. `full` shows every row.
+ * 10."): a viewer placed 10th or better, or not on the board, sees every
+ * row placed 10th or better; anyone else rows 1 to 5 and 3 either side of
+ * them. Phone (Hai: "just show one before and after, and only show top five
+ * if you are in the top five"): the same with 5th and 1 either side.
+ * Windows go by row order in the ranked list; places stay the true
+ * competition places; runs that touch merge, and each skipped run is one
+ * gap per width. `full` shows every row on both widths.
  */
 export function shortList(
   standings: Standing[],
@@ -291,57 +335,86 @@ export function shortList(
   full = false,
 ): ShortListItem[] {
   const youAt = standings.findIndex((s) => s.memberId === selfId);
-  const keep = new Set<number>();
-  if (full) {
-    standings.forEach((_s, i) => keep.add(i));
-  } else if (youAt < 0 || standings[youAt].place <= SHORT_LIST_TOP_PLACES) {
-    standings.forEach((s, i) => {
-      if (s.place <= SHORT_LIST_TOP_PLACES) {
-        keep.add(i);
-      }
-    });
-  } else {
-    for (
-      let i = 0;
-      i < Math.min(SHORT_LIST_HEAD_ROWS, standings.length);
-      i += 1
-    ) {
-      keep.add(i);
+  const all = new Set(standings.map((_s, i) => i));
+  const desktop = full
+    ? all
+    : keptRows(standings, youAt, SHORT_LIST_TOP_PLACES, SHORT_LIST_NEIGHBOURS);
+  const phone = full
+    ? all
+    : keptRows(
+        standings,
+        youAt,
+        PHONE_SHORT_LIST_TOP_PLACES,
+        PHONE_SHORT_LIST_NEIGHBOURS,
+      );
+  function gapBefore(
+    keep: Set<number>,
+    i: number,
+    previous: number,
+  ): ShortListGap | undefined {
+    if (!keep.has(i) || previous < 0 || i <= previous + 1) {
+      return undefined;
     }
-    const last = Math.min(standings.length - 1, youAt + SHORT_LIST_NEIGHBOURS);
-    for (
-      let i = Math.max(0, youAt - SHORT_LIST_NEIGHBOURS);
-      i <= last;
-      i += 1
-    ) {
-      keep.add(i);
-    }
+    return {
+      count: i - previous - 1,
+      from: standings[previous + 1].place,
+      to: standings[i - 1].place,
+    };
   }
   const items: ShortListItem[] = [];
-  let previous = -1;
-  [...keep]
+  let lastDesktop = -1;
+  let lastPhone = -1;
+  [...new Set([...desktop, ...phone])]
     .sort((a, b) => a - b)
     .forEach((i) => {
-      if (i > previous + 1 && previous >= 0) {
+      const desktopGap = gapBefore(desktop, i, lastDesktop);
+      const phoneGap = gapBefore(phone, i, lastPhone);
+      if (desktopGap || phoneGap) {
         items.push({
           kind: 'gap',
-          count: i - previous - 1,
-          from: standings[previous + 1].place,
-          to: standings[i - 1].place,
+          ...(desktopGap ? { desktop: desktopGap } : {}),
+          ...(phoneGap ? { phone: phoneGap } : {}),
         });
       }
-      items.push({ kind: 'row', standing: standings[i], you: i === youAt });
-      previous = i;
+      items.push({
+        kind: 'row',
+        standing: standings[i],
+        you: i === youAt,
+        desktop: desktop.has(i),
+        phone: phone.has(i),
+      });
+      if (desktop.has(i)) {
+        lastDesktop = i;
+      }
+      if (phone.has(i)) {
+        lastPhone = i;
+      }
     });
   return items;
 }
 
-function gapText(gap: { count: number; from: number; to: number }): string {
+function gapText(gap: ShortListGap): string {
   const places =
     gap.from === gap.to
       ? `place ${gap.from}`
       : `places ${gap.from} to ${gap.to}`;
   return `${plural(gap.count, 'host')} not shown (${places})`;
+}
+
+/** Which widths show a row: a class only when one width hides it. */
+function widthClass(desktop: boolean, phone: boolean): string {
+  if (desktop && !phone) {
+    return 'desktop-only';
+  }
+  return phone && !desktop ? 'phone-only' : '';
+}
+
+function gapRow(gap: ShortListGap, cls: string): SafeHtml {
+  return html`<tr class="${`gap-row ${cls}`.trim()}">
+    <td colspan="5" class="gap-cell">
+      <span aria-hidden="true">⋯</span> ${gapText(gap)}
+    </td>
+  </tr>`;
 }
 
 /**
@@ -365,11 +438,15 @@ export function lifetimeTable(
   });
   const rows = items.map((item) => {
     if (item.kind === 'gap') {
-      return html`<tr class="gap-row">
-        <td colspan="5" class="gap-cell">
-          <span aria-hidden="true">⋯</span> ${gapText(item)}
-        </td>
-      </tr>`;
+      const { desktop, phone } = item;
+      // One row when both widths skip the same rows; otherwise one per
+      // width, the other hidden (display:none, so it is not read out).
+      if (desktop && phone && gapText(desktop) === gapText(phone)) {
+        return gapRow(desktop, '');
+      }
+      return html`${desktop ? gapRow(desktop, 'desktop-only') : ''}${
+        phone ? gapRow(phone, 'phone-only') : ''
+      }`;
     }
     const s = item.standing;
     const hostStreaks = streaksFor(data, s.memberId);
@@ -385,23 +462,33 @@ export function lifetimeTable(
         ${streakBadges(hostStreaks)}
         <span class="muted streak-best">${bestStreaks(hostStreaks)}</span>
       </td>`;
-    // The class is a literal: two templates.
-    return item.you
-      ? html`<tr class="you-row">
+    const cls = [
+      item.you ? 'you-row' : '',
+      widthClass(item.desktop, item.phone),
+    ]
+      .filter(Boolean)
+      .join(' ');
+    return cls === ''
+      ? html`<tr>
           ${cells}
         </tr>`
-      : html`<tr>
+      : html`<tr class="${cls}">
           ${cells}
         </tr>`;
   });
-  const shownRows = items.filter((i) => i.kind === 'row').length;
+  const rowItems = items.filter(
+    (i): i is Extract<ShortListItem, { kind: 'row' }> => i.kind === 'row',
+  );
+  const fewerThanAll =
+    rowItems.filter((i) => i.desktop).length < standings.length ||
+    rowItems.filter((i) => i.phone).length < standings.length;
   const toggle = full
     ? html`<p>
         <a href="${pageLink(LEADERBOARD_PATH, { view: 'all' })}"
           >Show the short list</a
         >
       </p>`
-    : shownRows < standings.length
+    : fewerThanAll
       ? html`<p>
           <a href="${pageLink(LEADERBOARD_PATH, { view: 'all', hosts: 'all' })}"
             >${`Show all ${plural(standings.length, 'host')}`}</a
