@@ -14,86 +14,25 @@ import {
   createLeaderboardLoader,
   streaksFor,
 } from '../../lib/leaderboard/leaderboard.js';
-import {
-  HostStreaks,
-  Medal,
-  MedalPlace,
-  rank,
-} from '../../lib/leaderboard/standings.js';
-import { tz } from '../../util/timezone.js';
+import { Medal, MedalPlace, rank } from '../../lib/leaderboard/standings.js';
 import { SafeHtml, html, memberText, pageLink } from '../html.js';
 import { hostPage } from './hostPageKit.js';
 import { hostLocals } from './hostRouter.js';
-import { HOST_BASE } from './hostSession.js';
+import { HostProfileDeps, registerHostProfile } from './hostProfilePage.js';
+import {
+  LEADERBOARD_PATH,
+  bestStreaks,
+  medalBadge,
+  medalTally,
+  monthName,
+  plural,
+  profileUrl,
+  streakBadges,
+  streakNote,
+  updatedLine,
+} from './leaderboardKit.js';
 
 const logger = new Logger({ name: 'hostDashboard' });
-
-export const LEADERBOARD_PATH = `${HOST_BASE}/leaderboard`;
-
-const MEDAL_ICON: Record<MedalPlace, string> = { 1: '🥇', 2: '🥈', 3: '🥉' };
-const MEDAL_NAME: Record<MedalPlace, string> = {
-  1: 'Gold',
-  2: 'Silver',
-  3: 'Bronze',
-};
-
-const plural = (n: number, one: string, many = `${one}s`) =>
-  `${n} ${n === 1 ? one : many}`;
-
-const monthName = (month: string) => dayjs(`${month}-01`).format('MMMM YYYY');
-
-/** An emoji with its words for screen readers and on hover. */
-function emoji(icon: string, label: string): SafeHtml {
-  return html`<span role="img" aria-label="${label}" title="${label}"
-    >${icon}</span
-  >`;
-}
-
-export function medalBadge(place: MedalPlace, month?: string): SafeHtml {
-  const label = month
-    ? `${MEDAL_NAME[place]} medal, ${monthName(month)}`
-    : `${MEDAL_NAME[place]} medal`;
-  return emoji(MEDAL_ICON[place], label);
-}
-
-/** Icons per Hai: weekly is the prestige streak (💎), daily is being on fire (🔥). */
-export const WEEKLY_STREAK_ICON = '💎';
-export const DAILY_STREAK_ICON = '🔥';
-
-/**
- * Current streaks with their counts, weekly first (the more prestigious);
- * a broken streak is left out.
- */
-export function streakBadges(streaks: HostStreaks): SafeHtml {
-  const { daily, weekly } = streaks;
-  const parts: SafeHtml[] = [];
-  if (weekly.current > 0) {
-    const label = `Weekly hosting streak: ${plural(weekly.current, 'week')}`;
-    parts.push(
-      html`<span class="streak"
-        >${emoji(WEEKLY_STREAK_ICON, label)} ${weekly.current}</span
-      >`,
-    );
-  }
-  if (daily.current > 0) {
-    const label = `Daily hosting streak: ${plural(daily.current, 'day')}`;
-    parts.push(
-      html`<span class="streak"
-        >${emoji(DAILY_STREAK_ICON, label)} ${daily.current}</span
-      >`,
-    );
-  }
-  return parts.length === 0
-    ? html`<span class="muted">None</span>`
-    : html`${parts}`;
-}
-
-function bestStreaks(streaks: HostStreaks): string {
-  return `Best: ${plural(streaks.weekly.best, 'week')} in a row, ${plural(
-    streaks.daily.best,
-    'day',
-  )} in a row`;
-}
 
 type Ready = LeaderboardView;
 
@@ -160,21 +99,13 @@ function medalsNote(data: Ready): SafeHtml | '' {
     : '';
 }
 
-function updatedLine(data: Ready): SafeHtml {
-  return data.updatedAt
-    ? html`<p class="muted">
-        From Meetup as of ${tz(dayjs(data.updatedAt)).format('MMM D, h:mm A')}
-        (updated about once a day). Cancelled events and Open Houses do not
-        count, and every co-host of an event gets the event.
-      </p>`
-    : html``;
-}
-
 function nameCell(data: Ready, memberId: string, selfId: string): SafeHtml {
   const name = data.names.get(memberId);
-  const shown = name
+  const text = name
     ? memberText(name)
     : html`<span class="muted">Unnamed host</span>`;
+  const href = profileUrl(memberId);
+  const shown = href ? html`<a href="${href}">${text}</a>` : text;
   return memberId === selfId
     ? html`<strong>${shown}</strong> <span class="badge info">You</span>`
     : shown;
@@ -313,33 +244,6 @@ function medalCell(awarded: boolean, content: SafeHtml | ''): SafeHtml | '' {
   return awarded ? html`<td data-label="Medal">${content}</td>` : '';
 }
 
-function streakNote(): SafeHtml {
-  return html`<p class="muted">
-    ${emoji(WEEKLY_STREAK_ICON, 'Weekly streak')} counts weeks in a row (Monday
-    to Sunday) with a hosted event; ${emoji(DAILY_STREAK_ICON, 'Daily streak')}
-    counts days in a row. A streak keeps going until a whole week or day passes
-    without one.
-  </p>`;
-}
-
-function medalTally(medals: Medal[]): SafeHtml {
-  if (medals.length === 0) {
-    return html`<span class="muted">None yet</span>`;
-  }
-  const parts = ([1, 2, 3] as const).flatMap((place) => {
-    const n = medals.filter((m) => m.place === place).length;
-    return n === 0
-      ? []
-      : [
-          html`<span class="streak"
-            >${emoji(MEDAL_ICON[place], `${plural(n, `${MEDAL_NAME[place].toLowerCase()} medal`)}`)}
-            ×${n}</span
-          >`,
-        ];
-  });
-  return html`${parts}`;
-}
-
 function hallOfFameBody(data: Ready, selfId: string): SafeHtml {
   const nameOf = (id: string) => data.names.get(id) ?? '';
   const counts = new Map(
@@ -409,10 +313,14 @@ const unavailableBody = html`<div class="card">
 
 export function registerLeaderboardPage(
   router: express.Router,
-  deps: LeaderboardDeps,
+  deps: LeaderboardDeps & { profiles?: HostProfileDeps },
 ): void {
-  // One loader: its cache and award back-off are shared by every request.
+  // One loader: its cache and award back-off are shared by every request,
+  // the profiles' included.
   const loader = createLeaderboardLoader(deps);
+  if (deps.profiles) {
+    registerHostProfile(router, () => loader.load(), deps.profiles);
+  }
   router.get('/leaderboard', (async (req, res) => {
     const { session } = hostLocals(res);
     // Members never reach here: the router keeps them to MEMBER_PATHS.

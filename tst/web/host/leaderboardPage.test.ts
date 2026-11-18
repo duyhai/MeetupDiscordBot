@@ -153,7 +153,10 @@ describe('host leaderboard', () => {
     expect(res.text).toContain('href="/host/leaderboard" aria-current="page"');
     expect(res.text).toContain('November 2026');
     expect(res.text).toContain('Standings so far');
-    expect(res.text).toContain('<strong><bdi>Ann</bdi></strong>');
+    expect(res.text).toContain(
+      '<strong><a href="/host/hosts/4242"><bdi>Ann</bdi></a></strong>',
+    );
+    expect(res.text).toContain('<a href="/host/hosts/1"><bdi>Bea</bdi></a>');
     // 💎 weekly first (the prestige streak), then 🔥 daily.
     const weekly = res.text.search(
       /aria-label="Weekly hosting streak: 2 weeks"[^>]*>\s*💎/,

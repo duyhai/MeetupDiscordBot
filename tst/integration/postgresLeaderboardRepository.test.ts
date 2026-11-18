@@ -126,6 +126,7 @@ const event = (
           month: '2026-10',
           medals: [{ month: '2026-10', memberId: '444', place: 1, events: 1 }],
         },
+        // A month with no hosted events: recorded as awarded, no medals.
         { month: '2026-09', medals: [] },
       ]);
       expect(await repo.medals()).toEqual(stored);
@@ -192,6 +193,24 @@ const event = (
       await snapshot.markListed(next.id, nextAt, 5);
       await snapshot.finishRun(next.id);
       expect(await snapshot.lastCompleteListing()).toEqual(nextAt);
+
+      // An open run whose listing came back short holds awards back too.
+      const open = await snapshot.startRun('job', 'incremental');
+      await snapshot.markListed(
+        open.id,
+        new Date('2026-11-14T08:00:00Z'),
+        2,
+        true,
+      );
+      expect(await snapshot.lastCompleteListing()).toBeUndefined();
+      await snapshot.finishRun(open.id);
+      const last = await snapshot.startRun('job', 'incremental');
+      await snapshot.markListed(last.id, new Date('2026-11-15T08:00:00Z'), 5);
+      expect(await snapshot.lastCompleteListing()).toBeUndefined();
+      await snapshot.finishRun(last.id);
+      expect(await snapshot.lastCompleteListing()).toEqual(
+        new Date('2026-11-15T08:00:00Z'),
+      );
     });
   },
 );

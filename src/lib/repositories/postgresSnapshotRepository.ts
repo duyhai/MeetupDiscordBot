@@ -391,8 +391,9 @@ export class PostgresSnapshotRepository
   /**
    * When the latest finished run's listing ended, if that listing was
    * complete: not short, and the run carries no error. Undefined otherwise
-   * (and before any run), so nothing permanent is decided off a partial
-   * listing. Per-event RSVP failures (`failed`) do not count against it:
+   * (and before any run, or while the open run's listing came back short:
+   * the stored events already reflect it), so nothing permanent is decided
+   * off a partial listing. Per-event RSVP failures (`failed`) do not count against it:
    * they never change an event's hosts.
    */
   async lastCompleteListing(): Promise<Date | undefined> {
@@ -400,12 +401,19 @@ export class PostgresSnapshotRepository
       listed_at: Date | null;
       listing_short: boolean;
       last_error: string | null;
+      open_short: boolean;
     }>(
-      `SELECT listed_at, listing_short, last_error FROM meetup_snapshot_runs
+      `SELECT listed_at, listing_short, last_error,
+              EXISTS (SELECT 1 FROM meetup_snapshot_runs o
+                       WHERE o.finished_at IS NULL AND o.listing_short) AS open_short
+         FROM meetup_snapshot_runs
         WHERE finished_at IS NOT NULL ORDER BY finished_at DESC, id DESC LIMIT 1`,
     );
     const row = result.rows[0];
-    return row && !row.listing_short && row.last_error === null
+    return row &&
+      !row.listing_short &&
+      row.last_error === null &&
+      !row.open_short
       ? (row.listed_at ?? undefined)
       : undefined;
   }

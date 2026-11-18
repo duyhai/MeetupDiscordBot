@@ -266,7 +266,8 @@ border-radius:var(--radius-pill);color:var(--muted);background:var(--raised);ver
 .badge.info{color:var(--accent-ink);background:var(--accent-soft)}
 .badge.ok{color:var(--ok-ink);background:var(--ok-soft)}
 .streak{white-space:nowrap;margin-right:var(--s2)}
-.streak-best{display:block;font-size:var(--t-sm)}
+.streak-best{display:block;font-size:var(--t-sm);font-weight:400}
+@media (max-width:480px){dl.stats.profile{grid-template-columns:repeat(2,minmax(0,1fr))}}
 .note{color:var(--fg);background:var(--raised);border:1px solid var(--line);border-left:4px solid var(--field);
 border-radius:var(--radius-ctl);padding:var(--s3) var(--s4);margin:0 0 var(--s3);animation:note-in 200ms ease-out both}
 .note.attn{color:var(--attn-ink);background:var(--attn-soft);border-color:var(--attn-soft);
