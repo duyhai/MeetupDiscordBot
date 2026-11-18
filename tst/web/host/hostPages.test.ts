@@ -912,6 +912,26 @@ describe('host calendar thumbnails', () => {
   });
 });
 
+/** The Layout switch's markup, up to its closing </nav>. */
+const viewSwitchOf = (text: string) =>
+  /<nav\s+class="pager choices view-switch"\s+aria-label="Layout"\s+data-cal-views\s*>(?:(?!<\/nav>)[^])*<\/nav>/.exec(
+    text,
+  )?.[0] ?? '';
+/** The current view's name: its title (the switch is icons). */
+const currentView = (text: string) =>
+  /<strong\s+class="button ghost icon-only"\s+aria-current="page"\s+title="(\w+)"/.exec(
+    viewSwitchOf(text),
+  )?.[1];
+/** The other view's link, by its accessible name. */
+const viewLinks = (text: string) =>
+  Object.fromEntries(
+    [
+      ...viewSwitchOf(text).matchAll(
+        /<a\s+class="button ghost icon-only"\s+href="([^"]+)"\s+aria-label="(\w+)"\s+title="\2"/g,
+      ),
+    ].map((m) => [m[2], m[1]]),
+  );
+
 describe('host calendar day-by-day tabs', () => {
   const fetch = async (filter: { status?: string[] }) => {
     return filter.status?.[0] === 'PAST'
@@ -1008,10 +1028,10 @@ describe('host calendar tiles and list', () => {
     const res = await req.get('/host/calendar').set('Cookie', sid);
     noScript(res.text);
     const text = res.text.slice(res.text.indexOf('<h2>Day by day'));
-    expect(text).toMatch(
-      // eslint-disable-next-line @stylistic/max-len -- one pattern, read as one
-      /<nav class="pager choices" aria-label="Layout" data-cal-views>\s*<strong aria-current="page">Tiles<\/strong><a href="\/host\/calendar\?month=2026-11&amp;view=list">List<\/a>/,
-    );
+    expect(currentView(text)).toBe('Tiles');
+    expect(viewLinks(text)).toEqual({
+      List: '/host/calendar?month=2026-11&amp;view=list',
+    });
     expect(text).not.toContain('ev-thumb');
     const imgs = [
       ...text.matchAll(
@@ -1048,9 +1068,10 @@ describe('host calendar tiles and list', () => {
     const res = await req
       .get('/host/calendar?view=list&tab=past')
       .set('Cookie', sid);
-    expect(res.text).toMatch(
-      /<a href="\/host\/calendar\?month=2026-11&amp;tab=past&amp;view=tiles">Tiles<\/a><strong aria-current="page">List<\/strong>/,
-    );
+    expect(currentView(res.text)).toBe('List');
+    expect(viewLinks(res.text)).toEqual({
+      Tiles: '/host/calendar?month=2026-11&amp;tab=past&amp;view=tiles',
+    });
     expect(res.text).toContain(
       '<a href="/host/calendar?month=2026-11&amp;view=list">Upcoming</a>',
     );
@@ -1066,7 +1087,7 @@ describe('host calendar tiles and list', () => {
     const odd = await req
       .get('/host/calendar?view=grid&tab=old')
       .set('Cookie', sid);
-    expect(odd.text).toContain('<strong aria-current="page">Tiles</strong>');
+    expect(currentView(odd.text)).toBe('Tiles');
     expect(odd.text).toContain('<strong aria-current="page">Upcoming</strong>');
     // The remember-my-view script ships with the calendar.
     expect(res.text).toContain('window.__hostCalendarView');
@@ -1085,8 +1106,11 @@ describe('host calendar odd queries', () => {
       const res = await req.get(`/host/calendar${q}`).set('Cookie', sid);
       expect(res.status).toBe(200);
       return [
-        ...res.text.matchAll(/<strong aria-current="page">(\w+)<\/strong>/g),
-      ].map((m) => m[1]);
+        ...[
+          ...res.text.matchAll(/<strong aria-current="page">(\w+)<\/strong>/g),
+        ].map((m) => m[1]),
+        currentView(res.text),
+      ];
     };
     const odd = [
       '?view=',
@@ -1120,5 +1144,31 @@ describe('host calendar odd queries', () => {
     expect(list).toContain('<li class="cal-tile">');
     expect(list).toContain('Monday mahjong');
     expect(list).not.toContain('Host on this day');
+  });
+});
+
+describe('host calendar layout icons', () => {
+  it('shows Tiles and List as named icon buttons, the current one marked', async () => {
+    const req = await pagesApp(async () => []);
+    const sid = await signInWithDiscord(req);
+    const res = await req.get('/host/calendar').set('Cookie', sid);
+    const nav = viewSwitchOf(res.text);
+    expect(nav).not.toBe('');
+    // Tiles is current: aria-current text, named by hidden text, with a tooltip.
+    expect(nav).toMatch(
+      // eslint-disable-next-line @stylistic/max-len -- one pattern, read as one
+      /<strong\s+class="button ghost icon-only"\s+aria-current="page"\s+title="Tiles"\s*><svg[^>]*aria-hidden="true"[^>]*focusable="false"[^]*?<\/svg><span class="sr-only">Tiles \(current\)<\/span><\/strong/,
+    );
+    // List is a link with the same href as before, named by aria-label.
+    expect(nav).toMatch(
+      // eslint-disable-next-line @stylistic/max-len -- one pattern, read as one
+      /<a\s+class="button ghost icon-only"\s+href="\/host\/calendar\?month=2026-11&amp;view=list"\s+aria-label="List"\s+title="List"\s*><svg[^>]*aria-hidden="true"[^>]*focusable="false"/,
+    );
+    // Icons only: no visible words in the switch.
+    expect(nav.replace(/<span class="sr-only">[^<]*<\/span>/g, '')).not.toMatch(
+      />\s*(Tiles|List)\s*</,
+    );
+    // The Upcoming/Past tabs stay as text.
+    expect(res.text).toContain('<strong aria-current="page">Upcoming</strong>');
   });
 });

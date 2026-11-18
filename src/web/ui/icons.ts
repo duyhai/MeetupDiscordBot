@@ -43,3 +43,43 @@ export const COPY_ICON = html`<svg
   <rect x="9" y="9" width="11" height="11" rx="2" />
   <path d="M15 9V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h3" />
 </svg>`;
+
+/** Four rounded squares: the calendar's Tiles layout. Drawn in the text colour. */
+export const TILES_ICON = html`<svg
+  class="icon"
+  viewBox="0 0 24 24"
+  width="20"
+  height="20"
+  aria-hidden="true"
+  focusable="false"
+  fill="none"
+  stroke="currentColor"
+  stroke-width="2"
+  stroke-linecap="round"
+  stroke-linejoin="round"
+>
+  <rect x="3.5" y="3.5" width="7" height="7" rx="1.5" />
+  <rect x="13.5" y="3.5" width="7" height="7" rx="1.5" />
+  <rect x="3.5" y="13.5" width="7" height="7" rx="1.5" />
+  <rect x="13.5" y="13.5" width="7" height="7" rx="1.5" />
+</svg>`;
+
+/** Three rows, each a small square and a line: the calendar's List layout. */
+export const LIST_ICON = html`<svg
+  class="icon"
+  viewBox="0 0 24 24"
+  width="20"
+  height="20"
+  aria-hidden="true"
+  focusable="false"
+  fill="none"
+  stroke="currentColor"
+  stroke-width="2"
+  stroke-linecap="round"
+  stroke-linejoin="round"
+>
+  <rect x="3" y="4" width="4" height="4" rx="1" />
+  <rect x="3" y="10" width="4" height="4" rx="1" />
+  <rect x="3" y="16" width="4" height="4" rx="1" />
+  <path d="M10.5 6h10.5M10.5 12h10.5M10.5 18h10.5" />
+</svg>`;
