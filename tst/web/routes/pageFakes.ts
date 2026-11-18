@@ -34,6 +34,7 @@ import {
 } from '../../../src/lib/repositories/postgresIdentityRepository.js';
 import { LinkProgressDay } from '../../../src/lib/repositories/postgresLinkProgressRepository.js';
 import {
+  SuspensionDateEdit,
   SuspensionPageRow,
   SuspensionRecordState,
   SuspensionState,
@@ -397,9 +398,19 @@ export function fakeSuspensions(
   rows: Partial<Record<SuspensionState, SuspensionPageRow[]>> = {},
   byMonth: { month: string; count: number }[] = [],
   records: SuspensionRecordState[] = [],
+  dateEdits: SuspensionDateEdit[] = [],
 ) {
   const tab = (state: SuspensionState) => rows[state] ?? [];
   return {
+    listDateEdits: vi.fn(
+      async (ids: number[]): Promise<Map<number, SuspensionDateEdit[]>> => {
+        const out = new Map<number, SuspensionDateEdit[]>();
+        for (const e of dateEdits.filter((d) => ids.includes(d.recordId))) {
+          out.set(e.recordId, [...(out.get(e.recordId) ?? []), e]);
+        }
+        return out;
+      },
+    ),
     listByMemberIds: vi.fn(
       async (memberIds: string[], before?: Date): Promise<SuspensionRecord[]> =>
         records
@@ -1158,6 +1169,9 @@ export function fakePageDeps(
     workspace: async () => fakeWorkspace(),
     workspaceActions: fakeWorkspaceActions(),
     banActions: fakeBanActions(),
+    suspensionActions: {
+      editDate: vi.fn(async () => ({ code: 'date-changed' as const })),
+    },
     upcoming: vi.fn(
       async (_memberIds: string[]): Promise<Map<string, UpcomingEntry>> =>
         new Map(),

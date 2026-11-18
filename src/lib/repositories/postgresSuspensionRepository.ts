@@ -1,6 +1,7 @@
 import pg from 'pg';
 import { Logger } from 'tslog';
 
+import { recommendedSuspensionDays } from '../helpers/noShowReport.js';
 import {
   DASHBOARD_LOCK_CLASS,
   DASHBOARD_LOCK_TIMEOUT_MS,
@@ -66,6 +67,22 @@ BEGIN
     CREATE UNIQUE INDEX IF NOT EXISTS suspension_records_live_member_suspended_at_idx
       ON suspension_records (member_id, suspended_at)
       WHERE voided_at IS NULL;
+  END IF;
+  IF to_regclass(quote_ident(current_schema()) || '.suspension_date_edits') IS NULL THEN
+    CREATE TABLE IF NOT EXISTS suspension_date_edits (
+      id                SERIAL PRIMARY KEY,
+      record_id         INTEGER NOT NULL REFERENCES suspension_records (id),
+      old_suspended_at  TIMESTAMPTZ NOT NULL,
+      new_suspended_at  TIMESTAMPTZ NOT NULL,
+      old_duration_days INTEGER NOT NULL,
+      new_duration_days INTEGER NOT NULL,
+      edited_by         TEXT NOT NULL,
+      edited_at         TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  END IF;
+  IF to_regclass(quote_ident(current_schema()) || '.suspension_date_edits_record_id_idx') IS NULL THEN
+    CREATE INDEX IF NOT EXISTS suspension_date_edits_record_id_idx
+      ON suspension_date_edits (record_id);
   END IF;
 END
 $do$;
@@ -153,6 +170,28 @@ export function suspensionPoolSize(
     ? requested
     : DEFAULT_SUSPENSION_POOL_SIZE;
 }
+
+/** One date fix on a record (editDate): what it was, what it became, who and when. */
+export interface SuspensionDateEdit {
+  recordId: number;
+  /** YYYY-MM-DD, the stored dates' UTC day. */
+  oldDay: string;
+  newDay: string;
+  oldDurationDays: number;
+  newDurationDays: number;
+  /** Discord user id. */
+  editedBy: string;
+  editedAt: Date;
+}
+
+/** editDate's answer. */
+export type EditDateOutcome =
+  | { ok: true; before: SuspensionRecord; after: SuspensionRecord }
+  | {
+      ok: false;
+      /** Unknown or voided; the same day; another live record has that day. */
+      reason: 'not-live' | 'unchanged' | 'date-taken';
+    };
 
 /** The dashboard's three tabs: the command's active/past split of live rows, plus voided rows. */
 export type SuspensionState = 'active' | 'past' | 'voided';
@@ -538,6 +577,145 @@ export class PostgresSuspensionRepository implements SuspensionRepository {
     }));
   }
 
+  /**
+   * Moves a live record to `suspendedAt` (a UTC midnight) and recalculates
+   * its length the way recording does: recommendedSuspensionDays of the
+   * member's live records before the new date (itself excluded). Other
+   * records keep their lengths. Under the member lock the workspace and
+   * bans take, in one dashboard transaction; the edit is kept in
+   * suspension_date_edits.
+   */
+  async editDate(input: {
+    id: number;
+    suspendedAt: Date;
+    editedBy: string;
+  }): Promise<EditDateOutcome> {
+    const { id, suspendedAt, editedBy } = input;
+    if (!Number.isSafeInteger(id) || id < 1 || id > MAX_RECORD_ID) {
+      return { ok: false, reason: 'not-live' };
+    }
+    return inDashboardTransaction(
+      this.pool,
+      'suspension date edit',
+      async (client) => {
+        const found = await client.query<{ member_id: string }>(
+          'SELECT member_id FROM suspension_records WHERE id = $1 AND voided_at IS NULL',
+          [id],
+        );
+        const memberId = found.rows[0]?.member_id;
+        if (memberId === undefined) {
+          return { ok: false, reason: 'not-live' } as const;
+        }
+        await client.query(
+          `SELECT pg_advisory_xact_lock($1, hashtext('suspension:' || $2::text))`,
+          [MEMBER_LOCK_CLASS, memberId],
+        );
+        // Read again under the lock: voided or moved meanwhile.
+        const locked = await client.query<SuspensionRow>(
+          'SELECT * FROM suspension_records WHERE id = $1 AND voided_at IS NULL FOR UPDATE',
+          [id],
+        );
+        const row = locked.rows[0];
+        if (!row) {
+          return { ok: false, reason: 'not-live' } as const;
+        }
+        if (row.suspended_at.getTime() === suspendedAt.getTime()) {
+          return { ok: false, reason: 'unchanged' } as const;
+        }
+        const taken = await client.query(
+          `SELECT 1 FROM suspension_records
+            WHERE member_id = $1 AND suspended_at = $2 AND voided_at IS NULL AND id <> $3`,
+          [memberId, suspendedAt, id],
+        );
+        if (taken.rowCount) {
+          return { ok: false, reason: 'date-taken' } as const;
+        }
+        const prior = await client.query<{ count: string }>(
+          `SELECT COUNT(*) AS count FROM suspension_records
+            WHERE member_id = $1 AND suspended_at < $2 AND voided_at IS NULL AND id <> $3`,
+          [memberId, suspendedAt, id],
+        );
+        const durationDays = recommendedSuspensionDays(
+          Number(prior.rows[0].count),
+        );
+        const updated = await client.query<SuspensionRow>(
+          `UPDATE suspension_records SET suspended_at = $2, duration_days = $3
+            WHERE id = $1 RETURNING *`,
+          [id, suspendedAt, durationDays],
+        );
+        await client.query(
+          `INSERT INTO suspension_date_edits
+             (record_id, old_suspended_at, new_suspended_at, old_duration_days, new_duration_days, edited_by)
+           VALUES ($1, $2, $3, $4, $5, $6)`,
+          [
+            id,
+            row.suspended_at,
+            suspendedAt,
+            row.duration_days,
+            durationDays,
+            editedBy,
+          ],
+        );
+        return {
+          ok: true,
+          before: toRecord(row),
+          after: toRecord(updated.rows[0]),
+        } as const;
+      },
+    );
+  }
+
+  /**
+   * The date fixes on these records, newest first, keyed by record id.
+   * Ids outside 1..2^31-1 are dropped; at most 50.
+   */
+  async listDateEdits(
+    ids: number[],
+  ): Promise<Map<number, SuspensionDateEdit[]>> {
+    const usable = [...new Set(ids)].filter(
+      (id) => Number.isSafeInteger(id) && id >= 1 && id <= MAX_RECORD_ID,
+    );
+    if (usable.length > MAX_IDS) {
+      throw new RangeError(`listDateEdits takes at most ${MAX_IDS} ids`);
+    }
+    const out = new Map<number, SuspensionDateEdit[]>();
+    if (usable.length === 0) {
+      return out;
+    }
+    const result = await this.pool.query<{
+      record_id: number;
+      old_day: string;
+      new_day: string;
+      old_duration_days: number;
+      new_duration_days: number;
+      edited_by: string;
+      edited_at: Date;
+    }>(
+      `SELECT record_id,
+              to_char(old_suspended_at AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS old_day,
+              to_char(new_suspended_at AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS new_day,
+              old_duration_days, new_duration_days, edited_by, edited_at
+         FROM suspension_date_edits
+        WHERE record_id = ANY($1::int[])
+        ORDER BY edited_at DESC, id DESC`,
+      [usable],
+    );
+    for (const r of result.rows) {
+      const list = out.get(r.record_id) ?? [];
+      list.push({
+        recordId: r.record_id,
+        oldDay: r.old_day,
+        newDay: r.new_day,
+        oldDurationDays: r.old_duration_days,
+        newDurationDays: r.new_duration_days,
+        editedBy: r.edited_by,
+        editedAt: r.edited_at,
+      });
+      out.set(r.record_id, list);
+    }
+    return out;
+  }
+
   /** Rows per dashboard tab, with listPage's split for the same `today`. */
   async countByState(today: string): Promise<Record<SuspensionState, number>> {
     if (typeof today !== 'string' || !DAY.test(today)) {
@@ -615,6 +793,7 @@ export class PostgresSuspensionRepository implements SuspensionRepository {
 
   /** Test-only cleanup, mirroring the member repository's test hooks. */
   async deleteAllForTest(): Promise<void> {
+    await this.pool.query('DELETE FROM suspension_date_edits');
     await this.pool.query('DELETE FROM suspension_records');
   }
 }

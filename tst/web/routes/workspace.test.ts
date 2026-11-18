@@ -2167,6 +2167,7 @@ describe('workspace GETs', () => {
       'countByState',
       'listByIds',
       'listByMemberIds',
+      'listDateEdits',
       'listPage',
     ]);
   });

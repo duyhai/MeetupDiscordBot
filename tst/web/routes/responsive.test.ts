@@ -143,11 +143,10 @@ const TABLE_PAGES = [
   '/dashboard/suspensions',
   '/dashboard/suspensions?state=past',
   '/dashboard/suspensions?state=voided',
-  '/dashboard/suspensions?state=banned',
+  '/dashboard/bans',
   '/dashboard/identity',
   '/dashboard/events',
   '/dashboard/events/311000001',
-  '/dashboard/link-progress',
   '/dashboard/trends',
 ];
 
@@ -229,22 +228,22 @@ describe('tables on narrow screens', () => {
           expect(t.attrs).not.toContain('stack');
           continue;
         }
-        // The Banned tab's table adds its own class for column widths.
-        expect(t.attrs).toMatch(/^ class="stack( bans)?"$/);
+        // The Banned and Suspensions tables add their own class for column widths.
+        expect(t.attrs).toMatch(/^ class="stack( bans| records)?"$/);
         expect(t.markup).toMatch(/<td/);
         expect(labelProblems(t.markup)).toEqual([]);
       }
     },
   );
 
-  it.each([
-    ['/dashboard/link-progress', 2],
-    ['/dashboard/trends', 5],
-  ])('%s keeps its wide data tables in scroll boxes', async (path, count) => {
-    const { get } = await setup();
-    const scrolling = tables((await get(path)).text).filter((t) => t.scroll);
-    expect(scrolling).toHaveLength(count);
-  });
+  it.each([['/dashboard/trends', 5]])(
+    '%s keeps its wide data tables in scroll boxes',
+    async (path, count) => {
+      const { get } = await setup();
+      const scrolling = tables((await get(path)).text).filter((t) => t.scroll);
+      expect(scrolling).toHaveLength(count);
+    },
+  );
 
   it.each([
     [`/dashboard/no-show-history/members/${CASE_MEMBER}`, 2],
@@ -473,7 +472,6 @@ describe('per-page polish', () => {
 
   it.each([
     '/dashboard/trends',
-    '/dashboard/link-progress',
     '/dashboard/suspensions',
     '/dashboard/no-shows/2026-09',
   ])('%s: range choices are a segmented control', async (path) => {
@@ -488,7 +486,9 @@ describe('per-page polish', () => {
 
   it('paging keeps the plain pager', async () => {
     const { get } = await setup();
-    const text = collapse((await get('/dashboard/link-progress')).text);
+    const text = collapse(
+      (await get('/dashboard/suspensions?state=past')).text,
+    );
     expect(text).toContain(
       '<nav class="pager" aria-label="Pages"><span>Page 1</span></nav>',
     );

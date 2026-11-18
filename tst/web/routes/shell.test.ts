@@ -165,19 +165,19 @@ describe('page shell', () => {
       ['/dashboard/no-shows', 'Workspace'],
       ['/dashboard/no-show-history', 'History'],
       ['/dashboard/suspensions', 'Suspensions'],
+      ['/dashboard/bans', 'Banned'],
+      ['/dashboard/identity', 'Identity changes'],
       ['/dashboard/hosts/requests', 'Requests'],
       ['/dashboard/hosts/promotion', 'Promotion'],
       ['/dashboard/hall-of-fame', 'Hall of Fame'],
       ['/dashboard/events', 'Event changes'],
-      ['/dashboard/identity', 'Identity changes'],
-      ['/dashboard/link-progress', 'Link progress'],
       ['/dashboard/trends', 'Trends'],
       ['/dashboard/settings', 'General'],
       ['/dashboard/sessions', 'Sessions'],
     ]);
   });
 
-  it('the grouped nav reaches exactly the twelve pages it had before, plus Settings', async () => {
+  it('the grouped nav reaches the twelve pages it had before, plus Settings and Banned, minus Link progress', async () => {
     const { get } = await setup();
     const nav = siteNav((await get('/dashboard/sessions')).text);
     const paths = [...nav.matchAll(/<a href="([^"]+)"/g)].map((m) => m[1]);
@@ -196,8 +196,13 @@ describe('page shell', () => {
       '/dashboard/sessions',
     ];
     expect(paths).toHaveLength(13);
+    // Link progress was removed (Hai, 2026-11-17); Banned is its own page.
     expect([...paths].sort()).toEqual(
-      [...before, '/dashboard/settings'].sort(),
+      [
+        ...before.filter((p) => p !== '/dashboard/link-progress'),
+        '/dashboard/settings',
+        '/dashboard/bans',
+      ].sort(),
     );
     // Each one answers.
     for (const path of paths) {
@@ -219,12 +224,15 @@ describe('page shell', () => {
       [...m[2].matchAll(/<a href="[^"]+"[^>]*>([^<]+)<\/a>/g)].map((a) => a[1]),
     ]);
     expect(groups).toEqual([
-      ['No-shows', ['Workspace', 'History', 'Suspensions']],
+      [
+        'Member moderation',
+        ['Workspace', 'History', 'Suspensions', 'Banned', 'Identity changes'],
+      ],
       [
         'Hosts &amp; events',
         ['Requests', 'Promotion', 'Hall of Fame', 'Event changes'],
       ],
-      ['Members', ['Identity changes', 'Link progress', 'Trends']],
+      ['Analytics', ['Trends']],
       ['Settings', ['General', 'Sessions']],
     ]);
     // Home is a plain link before the first group.
@@ -247,7 +255,8 @@ describe('page shell', () => {
     ['/dashboard/identity', 'Identity changes'],
     ['/dashboard/events', 'Event changes'],
     ['/dashboard/events/311000001', 'Event changes'],
-    ['/dashboard/link-progress', 'Link progress'],
+    ['/dashboard/bans', 'Banned'],
+    ['/dashboard/bans?show=lifted', 'Banned'],
     ['/dashboard/trends', 'Trends'],
     ['/dashboard/sessions', 'Sessions'],
     ['/dashboard/sessions?done=done', 'Sessions'],

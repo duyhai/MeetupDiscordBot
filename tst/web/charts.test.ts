@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
-import { CHART_COLORS, ChartInput, chart } from '../../src/web/charts.js';
+import {
+  CHART_COLORS,
+  ChartInput,
+  chart,
+  niceStep,
+} from '../../src/web/charts.js';
 import { html } from '../../src/web/html.js';
 
 const base: ChartInput = {
@@ -221,5 +226,66 @@ describe('chart', () => {
     // The chart's own title and the data table remain.
     expect(at61).toContain('<title>No-shows per month</title>');
     expect(at61).toContain('<td>m60</td>');
+  });
+});
+
+describe('gridlines and line hover (Hai, 2026-11-17)', () => {
+  it.each([
+    [1, 1],
+    [4, 1],
+    [5, 2],
+    [9, 5],
+    [14, 5],
+    [40, 10],
+    [114, 50],
+    [1000, 500],
+  ])('niceStep(%i) is %i', (max, step) => {
+    expect(niceStep(max)).toBe(step);
+  });
+
+  it('draws a dashed horizontal gridline per labelled value above zero', () => {
+    const out = render({ series: [{ label: 'No-shows', values: [3, 14] }] });
+    // 14 → steps of 5 up to 15: lines at 5, 10 and 15; labels 0, 5, 10, 15.
+    const grid = out.match(/<line\s+class="grid"[^>]*\/>/g) ?? [];
+    expect(grid).toHaveLength(3);
+    for (const line of grid) {
+      expect(line).toContain('stroke-dasharray="3 3"');
+    }
+    const labels = [...out.matchAll(/text-anchor="end"\s*>(\d+)</g)].map(
+      (m) => m[1],
+    );
+    expect(labels).toEqual(['0', '5', '10', '15']);
+    // Gridlines sit behind the marks.
+    expect(out.indexOf('class="grid"')).toBeLessThan(out.indexOf('<rect'));
+  });
+
+  it('a line chart gets a dot per point with its value as a hover title', () => {
+    const out = render({
+      kind: 'line',
+      series: [
+        { label: 'Linked', values: [3, 5] },
+        { label: 'Unlinked', values: [7, 2] },
+      ],
+    });
+    const titles = [
+      ...out.matchAll(/<circle[\s\S]*?<title>([^<]+)<\/title>/g),
+    ].map((m) => m[1]);
+    expect(titles).toEqual([
+      '2026-08 · Linked: 3',
+      '2026-09 · Linked: 5',
+      '2026-08 · Unlinked: 7',
+      '2026-09 · Unlinked: 2',
+    ]);
+  });
+
+  it('no line dots above 60 categories; the data table holds the values', () => {
+    const categories = Array.from({ length: 61 }, (_, i) => `m${i}`);
+    const out = render({
+      kind: 'line',
+      categories,
+      series: [{ label: 'Linked', values: categories.map(() => 1) }],
+    });
+    expect(out).not.toContain('<circle');
+    expect(out).toContain('<summary>Data</summary>');
   });
 });

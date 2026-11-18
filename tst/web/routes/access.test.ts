@@ -102,6 +102,8 @@ const EXPECTED_UNSAFE_ALLOWED: Record<string, number> = {
   'POST /bans': 303,
   'POST /bans/import': 303,
   'POST /bans/:id/lift': 303,
+  // A fake Leadership check says no: refused, back to the records.
+  'POST /suspensions/:id/date': 303,
   'POST /bans/:id/photo': 303,
   // A fake Leadership check says no: refused, back to the queue.
   'POST /hosts/requests/:id/:action': 303,
@@ -176,7 +178,9 @@ describe('access matrix', () => {
     expect(labels).toContain('GET /identity');
     expect(labels).toContain('GET /identity/changes/:id/thumb/:side');
     expect(labels).toContain('GET /bans/:id/photo');
-    expect(labels).toContain('GET /link-progress');
+    expect(labels).not.toContain('GET /link-progress');
+    expect(labels).toContain('GET /bans');
+    expect(labels).toContain('POST /suspensions/:id/date');
     expect(labels).toContain('GET /trends');
     expect(labels).toContain('GET /no-shows');
     expect(labels).toContain('GET /no-shows/:period');

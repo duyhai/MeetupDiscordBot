@@ -226,6 +226,14 @@ form[data-ban-photo] input[type="file"]{width:100%;min-width:0}
 table.bans th{overflow-wrap:normal}
 table.bans td.ban-date{white-space:nowrap;overflow-wrap:normal}
 table.bans td.ban-fixed{overflow-wrap:normal}
+/* Suspension records: short columns never break mid-word; text columns get room to wrap by words. */
+table.records th,table.records td.rec-short,table.records td.rec-when,table.records td.rec-who{overflow-wrap:normal}
+table.records td.rec-text,table.records td.rec-member,table.records td.rec-dates{overflow-wrap:break-word}
+@media (min-width:640px){table.records .rec-short{white-space:nowrap;width:1%}
+table.records th.rec-text{min-width:7rem}table.records th.rec-member{min-width:6rem}}
+table.records .rec-actions{margin-top:var(--s2)}
+.nowrap{white-space:nowrap}
+ul.rec-edits{margin:var(--s1) 0;font-size:var(--t-sm)}
 /* Host event tables (Date / Event / Type / ...). With columns (640px up), Date and Type break only
 between words, never mid-word. On desktop (1024px up, the page at its full width) the Type label keeps
 to one line and the date and time stack on two. In the upcoming-events table Status is a fixed 9rem
@@ -269,6 +277,7 @@ textarea.copy{min-height:240px;font-family:var(--mono);font-size:var(--t-sm);lin
 svg.chart{max-width:100%;height:auto}
 svg.chart text{fill:var(--muted)}
 svg.chart line{stroke:var(--field)}
+svg.chart line.grid{stroke:var(--line)}
 svg.chart g.s1 rect,svg.chart g.s1 circle,svg.chart tspan.s1{fill:var(--chart-1)}
 svg.chart g.s1 polyline{stroke:var(--chart-1)}
 svg.chart g.s2 rect,svg.chart g.s2 circle,svg.chart tspan.s2{fill:var(--chart-2)}
@@ -585,12 +594,12 @@ export type NavKey =
   | 'workspace'
   | 'noShowHistory'
   | 'suspensions'
+  | 'bans'
   | 'hostRequests'
   | 'hostPromotion'
   | 'hallOfFame'
   | 'eventChanges'
   | 'identity'
-  | 'linkProgress'
   | 'trends'
   | 'settings'
   | 'sessions';
@@ -609,14 +618,14 @@ const page = (key: NavKey, path: string, label: string): NavPage => ({
 
 /**
  * The site nav, in order: Home, then four groups by what staff are doing
- * (no-show follow-up; hosts and their events; members; the dashboard's own
- * settings). Links and labels are fixed.
+ * (member moderation; hosts and their events; analytics; the dashboard's
+ * own settings). Links and labels are fixed.
  */
 const NAV: readonly (NavPage | { group: string; pages: readonly NavPage[] })[] =
   [
     { key: 'home', path: DASHBOARD_BASE, label: 'Home' },
     {
-      group: 'No-shows',
+      group: 'Member moderation',
       pages: [
         page(
           'workspace',
@@ -632,6 +641,12 @@ const NAV: readonly (NavPage | { group: string; pages: readonly NavPage[] })[] =
           'suspensions',
           dashboardPath(DASHBOARD_PATHS.suspensions),
           'Suspensions',
+        ),
+        page('bans', dashboardPath(DASHBOARD_PATHS.bans), 'Banned'),
+        page(
+          'identity',
+          dashboardPath(DASHBOARD_PATHS.identity),
+          'Identity changes',
         ),
       ],
     },
@@ -661,20 +676,8 @@ const NAV: readonly (NavPage | { group: string; pages: readonly NavPage[] })[] =
       ],
     },
     {
-      group: 'Members',
-      pages: [
-        page(
-          'identity',
-          dashboardPath(DASHBOARD_PATHS.identity),
-          'Identity changes',
-        ),
-        page(
-          'linkProgress',
-          dashboardPath(DASHBOARD_PATHS.linkProgress),
-          'Link progress',
-        ),
-        page('trends', dashboardPath(DASHBOARD_PATHS.trends), 'Trends'),
-      ],
+      group: 'Analytics',
+      pages: [page('trends', dashboardPath(DASHBOARD_PATHS.trends), 'Trends')],
     },
     {
       group: 'Settings',

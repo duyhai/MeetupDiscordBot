@@ -251,6 +251,147 @@ if (!POSTGRES_AVAILABLE) {
       }
     });
 
+    describe('editDate (Hai, 2026-11-17)', () => {
+      const LEAD = '223456789012345678';
+      const day = (d: string) => new Date(`${d}T00:00:00Z`);
+      const insertOn = async (
+        d: string,
+        durationDays = 30,
+        memberId = 'm1',
+      ) => {
+        const inserted = await repo.insert({
+          ...record,
+          memberId,
+          suspendedAt: day(d),
+          durationDays,
+        });
+        if (!inserted) {
+          throw new Error('insert refused');
+        }
+        return inserted;
+      };
+
+      it('moves the date, recalculates the length and keeps the edit', async () => {
+        await insertOn('2026-03-01');
+        const later = await insertOn('2026-11-08', 60);
+        const out = await repo.editDate({
+          id: later.id,
+          suspendedAt: day('2026-02-01'),
+          editedBy: LEAD,
+        });
+        // Now before the March record: no earlier live ones, so 30 days.
+        expect(out).toMatchObject({
+          ok: true,
+          before: { suspendedAt: day('2026-11-08'), durationDays: 60 },
+          after: { suspendedAt: day('2026-02-01'), durationDays: 30 },
+        });
+        const [stored] = await repo.listByIds([later.id]);
+        expect(stored).toMatchObject({
+          suspendedAt: day('2026-02-01'),
+          durationDays: 30,
+        });
+        const edits = await repo.listDateEdits([later.id, 999]);
+        expect(edits.get(later.id)).toEqual([
+          expect.objectContaining({
+            recordId: later.id,
+            oldDay: '2026-11-08',
+            newDay: '2026-02-01',
+            oldDurationDays: 60,
+            newDurationDays: 30,
+            editedBy: LEAD,
+            editedAt: expect.any(Date) as unknown,
+          }),
+        ]);
+        expect(edits.has(999)).toBe(false);
+        // The other record keeps its length.
+        const [march] = (await repo.listByMemberId('m1')).filter(
+          (r) => r.id !== later.id,
+        );
+        expect(march.durationDays).toBe(30);
+      });
+
+      it('counts only live records before the new date, itself excluded', async () => {
+        await insertOn('2026-01-01');
+        const voided = await insertOn('2026-02-01');
+        await repo.void(voided.id, LEAD, 'typo');
+        await insertOn('2026-01-15', 30, 'm2');
+        const target = await insertOn('2026-03-01');
+        const out = await repo.editDate({
+          id: target.id,
+          suspendedAt: day('2026-04-01'),
+          editedBy: LEAD,
+        });
+        expect(out).toMatchObject({ ok: true, after: { durationDays: 60 } });
+      });
+
+      it('refuses a voided or unknown record, the same date and a taken date', async () => {
+        const a = await insertOn('2026-03-01');
+        const b = await insertOn('2026-04-01');
+        expect(
+          await repo.editDate({
+            id: a.id,
+            suspendedAt: day('2026-03-01'),
+            editedBy: LEAD,
+          }),
+        ).toEqual({ ok: false, reason: 'unchanged' });
+        expect(
+          await repo.editDate({
+            id: a.id,
+            suspendedAt: day('2026-04-01'),
+            editedBy: LEAD,
+          }),
+        ).toEqual({ ok: false, reason: 'date-taken' });
+        await repo.void(b.id, LEAD, 'typo');
+        expect(
+          await repo.editDate({
+            id: b.id,
+            suspendedAt: day('2026-05-01'),
+            editedBy: LEAD,
+          }),
+        ).toEqual({ ok: false, reason: 'not-live' });
+        for (const id of [0, 999999, 2 ** 31]) {
+          expect(
+            // eslint-disable-next-line no-await-in-loop -- one id at a time
+            await repo.editDate({
+              id,
+              suspendedAt: day('2026-05-01'),
+              editedBy: LEAD,
+            }),
+          ).toEqual({ ok: false, reason: 'not-live' });
+        }
+        // Nothing was kept for the refusals.
+        expect((await repo.listDateEdits([a.id, b.id])).size).toBe(0);
+        // A date freed by a void can be taken.
+        expect(
+          await repo.editDate({
+            id: a.id,
+            suspendedAt: day('2026-04-01'),
+            editedBy: LEAD,
+          }),
+        ).toMatchObject({ ok: true });
+      });
+
+      it('lists edits newest first and refuses more than 50 ids', async () => {
+        const a = await insertOn('2026-03-01');
+        await repo.editDate({
+          id: a.id,
+          suspendedAt: day('2026-03-02'),
+          editedBy: LEAD,
+        });
+        await repo.editDate({
+          id: a.id,
+          suspendedAt: day('2026-03-03'),
+          editedBy: LEAD,
+        });
+        expect(
+          (await repo.listDateEdits([a.id])).get(a.id)?.map((e) => e.newDay),
+        ).toEqual(['2026-03-03', '2026-03-02']);
+        await expect(
+          repo.listDateEdits(Array.from({ length: 51 }, (_, i) => i + 1)),
+        ).rejects.toThrow(RangeError);
+      });
+    });
+
     describe('void', () => {
       it('returns the voided record with who voided it and why', async () => {
         const inserted = await repo.insert(record);

@@ -8,6 +8,7 @@ import type {
   BanResultCode,
 } from '../../lib/bans/service.js';
 import { LogEntry } from '../../lib/helpers/discordLogger.js';
+import type { editSuspensionDate } from '../../lib/suspensions/dateEdit.js';
 import { RebuildResult } from '../../lib/reports/buildJob.js';
 import { Period } from '../../lib/reports/period.js';
 import { PostgresBanRepository } from '../../lib/repositories/postgresBanRepository.js';
@@ -44,7 +45,6 @@ import {
 } from './hostPromotion.js';
 import { HostRequestDeps, registerHostRequestRoutes } from './hostRequests.js';
 import { registerIdentityRoutes } from './identity.js';
-import { registerLinkProgressRoutes } from './linkProgress.js';
 import { registerNoShowHistoryRoutes } from './noShowHistory.js';
 import { registerRefreshRoute } from './refresh.js';
 import { registerSessionRoutes } from './sessions.js';
@@ -75,8 +75,20 @@ export type SnapshotPageReader = Pick<
  */
 export type SuspensionPageReader = Pick<
   PostgresSuspensionRepository,
-  'listPage' | 'countByState' | 'countByMonth' | 'listByMemberIds' | 'listByIds'
+  | 'listPage'
+  | 'countByState'
+  | 'countByMonth'
+  | 'listByMemberIds'
+  | 'listByIds'
+  | 'listDateEdits'
 >;
+
+/** Leadership's date fix on a suspension record (editSuspensionDate). May reject; the route answers 'error'. */
+export interface SuspensionActions {
+  editDate(
+    input: Parameters<typeof editSuspensionDate>[1],
+  ): ReturnType<typeof editSuspensionDate>;
+}
 
 /**
  * The ban reads the Banned tab, its photo route and the workspace use:
@@ -87,7 +99,7 @@ export type BanPageReader = Pick<
   'listPage' | 'countByState' | 'getPhoto' | 'activeMemberIds'
 >;
 
-/** The link progress read (newest first, at most 1000 days): never upsert. */
+/** The link progress read (newest first, at most 1000 days) Trends charts: never upsert. */
 export type LinkProgressPageReader = Pick<
   PostgresLinkProgressRepository,
   'listDays'
@@ -189,13 +201,15 @@ export interface DashboardPageDeps
   rebuild: (period: Period, requestedBy: string) => Promise<PageRebuildResult>;
   /** The suspension records store. */
   suspensions: () => Promise<SuspensionPageReader>;
+  /** Edit date (the route runs the live Leadership check first). */
+  suspensionActions: SuspensionActions;
   /** The member ban store (dashboard pool). */
   bans: () => Promise<BanPageReader>;
   /** Record, import, lift and photo upload (the ban service). */
   banActions: BanActions;
   /** The identity change store (pool of 2, shared with the sweeps). */
   identity: () => Promise<IdentityPageReader>;
-  /** The daily link progress counts. */
+  /** The daily link progress counts (the Trends chart). */
   linkProgress: () => Promise<LinkProgressPageReader>;
   /** Meetup id -> Discord id links, for the Hall of Fame mention text. */
   memberLinks: () => Promise<MemberLinkPageReader>;
@@ -234,7 +248,6 @@ export function registerDashboardPages(
   registerSuspensionRoutes(router, deps);
   registerBanRoutes(router, deps);
   registerIdentityRoutes(router, deps);
-  registerLinkProgressRoutes(router, deps);
   registerTrendsRoutes(router, deps);
   registerHostRequestRoutes(router, deps);
   registerHostPromotionRoutes(router, deps);
