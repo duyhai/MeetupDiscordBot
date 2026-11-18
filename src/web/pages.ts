@@ -282,6 +282,9 @@ table.award-board th:last-child,table.award-board td:last-child{white-space:nowr
 .archive-months{list-style:none;padding:0;margin:0}
 .archive-months li{padding:var(--s1) 0;border-bottom:1px solid var(--line)}
 .archive-medalist{display:inline-block;margin-right:var(--s3);white-space:nowrap}
+table.leaderboard tr.you-row td{background:var(--accent-soft)}
+table.stack td.gap-cell{padding:var(--s2) var(--s3);text-align:center;color:var(--muted);font-size:var(--t-sm)}
+table.stack td.gap-cell::before{content:none}
 .note{color:var(--fg);background:var(--raised);border:1px solid var(--line);border-left:4px solid var(--field);
 border-radius:var(--radius-ctl);padding:var(--s3) var(--s4);margin:0 0 var(--s3);animation:note-in 200ms ease-out both}
 .note.attn{color:var(--attn-ink);background:var(--attn-soft);border-color:var(--attn-soft);

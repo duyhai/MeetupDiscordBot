@@ -14,7 +14,12 @@ import {
   createLeaderboardLoader,
   streaksFor,
 } from '../../lib/leaderboard/leaderboard.js';
-import { Medal, MedalPlace, rank } from '../../lib/leaderboard/standings.js';
+import {
+  Medal,
+  MedalPlace,
+  Standing,
+  rank,
+} from '../../lib/leaderboard/standings.js';
 import { SafeHtml, html, memberText, pageLink } from '../html.js';
 import { hostPage } from './hostPageKit.js';
 import { hostLocals } from './hostRouter.js';
@@ -254,33 +259,121 @@ function medalCell(awarded: boolean, content: SafeHtml | ''): SafeHtml | '' {
   return awarded ? html`<td data-label="Medal">${content}</td>` : '';
 }
 
-/**
- * How many rows the Hall of fame's lifetime table shows; undefined shows
- * every host (today's behaviour). Hai is deciding how to shorten it; set
- * this to cap it (the table then says how many hosts are not shown).
- */
-export const LIFETIME_TABLE_ROWS: number | undefined = undefined;
+/** Hai's short list (2026-11-18): the top 10 for a viewer placed there… */
+export const SHORT_LIST_TOP_PLACES = 10;
+/** …otherwise the first 5 rows, a gap, and 3 rows either side of the viewer. */
+export const SHORT_LIST_HEAD_ROWS = 5;
+export const SHORT_LIST_NEIGHBOURS = 3;
 
-/** The lifetime table: every host by events hosted, at most `limit` rows. */
+export type ShortListItem =
+  | { kind: 'row'; standing: Standing; you: boolean }
+  | {
+      kind: 'gap';
+      /** Rows skipped, and the first and last place among them. */
+      count: number;
+      from: number;
+      to: number;
+    };
+
+/**
+ * Which lifetime rows to show (Hai: "the first 5, and then three dots …,
+ * and then the 3 people before you and 3 people after you with your
+ * current rank. If you're in the top 10, then just simply show the top
+ * 10."). Windows go by row order in the ranked list; places stay the true
+ * competition places. A viewer placed 10th or better, or not on the board,
+ * sees every row placed 10th or better. Otherwise: rows 1 to 5, then the
+ * viewer's row with 3 either side; where the two runs touch or overlap they
+ * merge, and each skipped run becomes one gap. `full` shows every row.
+ */
+export function shortList(
+  standings: Standing[],
+  selfId: string,
+  full = false,
+): ShortListItem[] {
+  const youAt = standings.findIndex((s) => s.memberId === selfId);
+  const keep = new Set<number>();
+  if (full) {
+    standings.forEach((_s, i) => keep.add(i));
+  } else if (youAt < 0 || standings[youAt].place <= SHORT_LIST_TOP_PLACES) {
+    standings.forEach((s, i) => {
+      if (s.place <= SHORT_LIST_TOP_PLACES) {
+        keep.add(i);
+      }
+    });
+  } else {
+    for (
+      let i = 0;
+      i < Math.min(SHORT_LIST_HEAD_ROWS, standings.length);
+      i += 1
+    ) {
+      keep.add(i);
+    }
+    const last = Math.min(standings.length - 1, youAt + SHORT_LIST_NEIGHBOURS);
+    for (
+      let i = Math.max(0, youAt - SHORT_LIST_NEIGHBOURS);
+      i <= last;
+      i += 1
+    ) {
+      keep.add(i);
+    }
+  }
+  const items: ShortListItem[] = [];
+  let previous = -1;
+  [...keep]
+    .sort((a, b) => a - b)
+    .forEach((i) => {
+      if (i > previous + 1 && previous >= 0) {
+        items.push({
+          kind: 'gap',
+          count: i - previous - 1,
+          from: standings[previous + 1].place,
+          to: standings[i - 1].place,
+        });
+      }
+      items.push({ kind: 'row', standing: standings[i], you: i === youAt });
+      previous = i;
+    });
+  return items;
+}
+
+function gapText(gap: { count: number; from: number; to: number }): string {
+  const places =
+    gap.from === gap.to
+      ? `place ${gap.from}`
+      : `places ${gap.from} to ${gap.to}`;
+  return `${plural(gap.count, 'host')} not shown (${places})`;
+}
+
+/**
+ * The lifetime table: the short list, or every host with `full`, with a
+ * link to switch between them.
+ */
 export function lifetimeTable(
   data: Ready,
   selfId: string,
-  limit: number | undefined = LIFETIME_TABLE_ROWS,
+  full = false,
 ): SafeHtml {
   const nameOf = (id: string) => data.names.get(id) ?? '';
   const counts = new Map(
     [...data.byHost].map(([id, events]) => [id, events.length]),
   );
   const standings = rank(counts, nameOf);
-  const shown = limit === undefined ? standings : standings.slice(0, limit);
+  const items = shortList(standings, selfId, full);
   const medalsByHost = new Map<string, Medal[]>();
   data.medals.forEach((m) => {
     medalsByHost.set(m.memberId, [...(medalsByHost.get(m.memberId) ?? []), m]);
   });
-  const rows = shown.map((s) => {
+  const rows = items.map((item) => {
+    if (item.kind === 'gap') {
+      return html`<tr class="gap-row">
+        <td colspan="5" class="gap-cell">
+          <span aria-hidden="true">⋯</span> ${gapText(item)}
+        </td>
+      </tr>`;
+    }
+    const s = item.standing;
     const hostStreaks = streaksFor(data, s.memberId);
-    return html`<tr>
-      <td data-label="Place">${s.place}</td>
+    const cells = html`<td data-label="Place">${s.place}</td>
       <td class="event" data-label="Host">
         ${nameCell(data, s.memberId, selfId)}
       </td>
@@ -291,10 +384,30 @@ export function lifetimeTable(
       <td data-label="Streaks">
         ${streakBadges(hostStreaks)}
         <span class="muted streak-best">${bestStreaks(hostStreaks)}</span>
-      </td>
-    </tr>`;
+      </td>`;
+    // The class is a literal: two templates.
+    return item.you
+      ? html`<tr class="you-row">
+          ${cells}
+        </tr>`
+      : html`<tr>
+          ${cells}
+        </tr>`;
   });
-  const hidden = standings.length - shown.length;
+  const shownRows = items.filter((i) => i.kind === 'row').length;
+  const toggle = full
+    ? html`<p>
+        <a href="${pageLink(LEADERBOARD_PATH, { view: 'all' })}"
+          >Show the short list</a
+        >
+      </p>`
+    : shownRows < standings.length
+      ? html`<p>
+          <a href="${pageLink(LEADERBOARD_PATH, { view: 'all', hosts: 'all' })}"
+            >${`Show all ${plural(standings.length, 'host')}`}</a
+          >
+        </p>`
+      : '';
   return html`<p>
       Every host, by events hosted since the group began.
       ${`${plural(standings.length, 'host')}, ${plural(data.events.length, 'event')}.`}
@@ -313,22 +426,20 @@ export function lifetimeTable(
         ${rows}
       </tbody>
     </table>
-    ${
-      hidden > 0
-        ? html`<p class="muted">
-            ${`${plural(hidden, 'more host')} not shown.`}
-          </p>`
-        : ''
-    }`;
+    ${toggle}`;
 }
 
-function hallOfFameBody(data: Ready, selfId: string): SafeHtml {
+function hallOfFameBody(
+  data: Ready,
+  selfId: string,
+  allHosts: boolean,
+): SafeHtml {
   const nameOfHost = (id: string) => nameCell(data, id, selfId);
   return html`<div class="card">
       <h1>Leaderboard</h1>
       ${viewNav('all', data.today.slice(0, 7))} ${namesNote(data.names)}
-      ${medalsNote(data)} ${lifetimeTable(data, selfId)} ${streakNote()}
-      ${updatedLine(data)}
+      ${medalsNote(data)} ${lifetimeTable(data, selfId, allHosts)}
+      ${streakNote()} ${updatedLine(data)}
     </div>
     ${awardsSection(data, nameOfHost)}
     <div class="card">
@@ -399,7 +510,7 @@ export function registerLeaderboardPage(
       hostPage(res, {
         title: 'Hall of fame',
         current: 'leaderboard',
-        body: hallOfFameBody(data, session.userId),
+        body: hallOfFameBody(data, session.userId, req.query.hosts === 'all'),
         ...MAP_PAGE,
       });
       return;

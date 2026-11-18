@@ -243,13 +243,19 @@ all-time awards (eg: highest weekly streak top 10, highest daily streak top
 10, etc), and then below that, we could have an archive where people can
 look at the historic monthly hall of fame rankings."
 
-**Layout 2.** The Hall of fame view keeps today's lifetime table of every
-host on top, unchanged (it is the "most events hosted" board). Hai called it
-"a long … list" at 452 hosts; how to shorten it is his call, so the table
-takes a row limit (`LIFETIME_TABLE_ROWS`, unset: every host) and says how
-many hosts it leaves out when set. Below it, an
-**All-time awards** section of nine boards, each collapsible (UI kit) and
-stacked on a phone; below that, the map; then the **archive**.
+**Layout 2.** The Hall of fame view keeps the lifetime table on top (it is
+the "most events hosted" board), shortened as Hai decided after calling it
+"a long … list" at 452 hosts: "let's do the first 5, and then three dots or
+some kind of styling to indicate skipping rows, and then the 3 people before
+you and 3 people after you with your current rank. If you're in the top 10,
+then just simply show the top 10." So: a viewer placed 10th or better (ties
+included), or not on the board, sees every row placed 10th or better.
+Anyone else sees rows 1 to 5, a gap row ("N hosts not shown (places A to
+B)"), then the 3 rows before them, their own row (true place, "You", tinted),
+and the 3 after (none after if they are last). Windows go by row order in
+the ranked list and places stay the true competition places; runs that
+touch merge, with no gap. "Show all N hosts" (`?view=all&hosts=all`,
+server-rendered, no JavaScript) shows every row, with a link back.
 
 | Board                    | Per host (or event)                                              | Source                                                                                                 |
 | ------------------------ | ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
