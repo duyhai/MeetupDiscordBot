@@ -64,11 +64,44 @@ describe('hostMap', () => {
       'the group has',
     ).value;
     expect(out).not.toContain('data-map-cells');
+    // A sentence with no number, and every count a band.
     expect(out).toContain(
-      '2 events in areas with fewer than 3 events, or mostly one host’s, are counted above but not drawn.',
+      'Areas with fewer than 3 events, or mostly one host’s, are not drawn; their events are counted above.',
     );
-    expect(out).toContain('<li>Elsewhere or unknown area: 2 events</li>');
+    expect(out).toContain('<li>Elsewhere or unknown area: up to 5 events</li>');
     expect(out).not.toContain('Shoreline');
+    expect(out).not.toMatch(/\b2 events\b/);
+  });
+
+  it('the hall of fame lists same-band cells by position and cities by band then name, never exact counts', () => {
+    const at = (latE2: number, city: string, n: number) =>
+      Array.from({ length: n }, (_, i) => ({
+        ...ev({ latE2, lonE2: -12233, city }),
+        hostIds: [String(i)],
+      }));
+    // 10, 8 and 6 events: all "6–10", listed north to south by latitude.
+    const events = [
+      ...at(4770, 'Kirkland', 10),
+      ...at(4750, 'Burien', 6),
+      ...at(4761, 'Seattle', 8),
+      ...at(4780, 'Bothell', 30),
+    ];
+    const places = eventPlaces(events, HALL_OF_FAME_PLACE_RULE);
+    expect(places.cells.map((c) => c.lat)).toEqual([47.5, 47.61, 47.7, 47.8]);
+    const out = hostMap(places, 'the group has').value;
+    expect(out).toContain(
+      'data-map-cells="[[47.5,-122.33,2,&quot;6–10 events&quot;],[47.61,-122.33,2,&quot;6–10 events&quot;],' +
+        '[47.7,-122.33,2,&quot;6–10 events&quot;],[47.8,-122.33,4,&quot;26+ events&quot;]]"',
+    );
+    const list = out.slice(out.indexOf('<ul class="map-cities">'));
+    const order = ['Bothell', 'Burien', 'Kirkland', 'Seattle'].map((c) =>
+      list.indexOf(c),
+    );
+    expect(order).toEqual([...order].sort((a, b) => a - b));
+    expect(list).toContain('<li><bdi>Kirkland</bdi>: 6–10 events</li>');
+    expect(list).not.toMatch(/: (10|8|6|30) events/);
+    // The buckets themselves stay exact and add up.
+    expect(total(places)).toBe(events.length);
   });
 
   it('says venue data is still being collected when none has been yet', () => {

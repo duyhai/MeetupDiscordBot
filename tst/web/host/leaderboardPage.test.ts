@@ -401,10 +401,10 @@ describe('host leaderboard', () => {
     );
     // The city list says the same for no-JS and screen readers; escaped.
     expect(all.text).toContain(
-      '<li><bdi>&lt;script&gt;alert(1)&lt;/script&gt;&quot;&gt;&lt;img src=x&gt;</bdi>: 3 events</li>',
+      '<li><bdi>&lt;script&gt;alert(1)&lt;/script&gt;&quot;&gt;&lt;img src=x&gt;</bdi>: up to 5 events</li>',
     );
     expect(all.text).toContain(
-      'Venue data for 1 event is still being collected.',
+      'Venue data for up to 5 events is still being collected.',
     );
     expect(all.text).toContain('role="region"');
     const csp = String(all.headers['content-security-policy']);
@@ -441,9 +441,11 @@ describe('host leaderboard', () => {
     );
     expect(all.text).not.toContain('47.9');
     expect(all.text).not.toContain('Smallville');
-    expect(all.text).toContain('<li>Elsewhere or unknown area: 2 events</li>');
     expect(all.text).toContain(
-      '2 events in areas with fewer than 3 events, or mostly one host’s, are counted above but not drawn.',
+      '<li>Elsewhere or unknown area: up to 5 events</li>',
+    );
+    expect(all.text).toContain(
+      'Areas with fewer than 3 events, or mostly one host’s, are not drawn; their events are counted above.',
     );
   });
 

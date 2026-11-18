@@ -152,7 +152,14 @@ export function eventPlaces(
       });
     }
   });
-  cells.sort((a, b) => b.events - a.events || a.lat - b.lat || a.lon - b.lon);
+  // A profile lists its own cells by count; the hall of fame by position,
+  // so the order of same-band cells never gives their exact counts away.
+  const byPosition = (a: MapCell, b: MapCell) => a.lat - b.lat || a.lon - b.lon;
+  if (rule.citiesFromDrawnCells) {
+    cells.sort((a, b) => b.events - a.events || byPosition(a, b));
+  } else {
+    cells.sort(byPosition);
+  }
   const drawn = placed.filter((e) => drawnKeys.has(cellKey(e) ?? ''));
   const notDrawn = placed.length - drawn.length;
 
