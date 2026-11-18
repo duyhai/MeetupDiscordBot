@@ -257,6 +257,8 @@ async function setup(options: Parameters<typeof announceApp>[0] = {}) {
   const sid = await signInWithDiscord(req);
   const home = async (query = '') =>
     (await req.get(`/host${query}`).set('Cookie', sid)).text;
+  const page = async (path: string) =>
+    (await req.get(path).set('Cookie', sid)).text;
   const csrf = /name="_csrf" value="([^"]+)"/.exec(await home())?.[1] ?? '';
   const postTo = (
     path: string,
@@ -276,7 +278,7 @@ async function setup(options: Parameters<typeof announceApp>[0] = {}) {
   const recreatePost = (id: string, body?: Record<string, string>) =>
     postTo(`/host/events/${id}/recreate`, csrf, body);
   const get = async (path: string) => req.get(path).set('Cookie', sid);
-  return { ...a, req, sid, home, get, announce, cancel, recreatePost };
+  return { ...a, req, sid, home, page, get, announce, cancel, recreatePost };
 }
 
 const noticeOf = (location: string | undefined) =>
@@ -470,13 +472,16 @@ describe('the hold', () => {
     expect(deps.announce).toHaveBeenCalledWith(SOON);
   });
 
-  it('more than 3 weeks out: a warning by the button, which still works', async () => {
-    const { home, announce } = await setup({
+  it('more than 3 weeks out: warned on the Announce page, not the home row, and it still works', async () => {
+    const { home, announce, page } = await setup({
       now: new Date('2026-10-10T03:00:00Z'),
     });
     const text = await home();
-    expect(text).toContain('More than 3 weeks away');
+    expect(text).not.toContain('More than 3 weeks away');
     expect(text).toContain(`href="/host/events/${MINE}/announce"`);
+    expect(await page(`/host/events/${MINE}/announce`)).toContain(
+      'More than 3 weeks away',
+    );
     expect(noticeOf((await announce(MINE)).headers.location)).toBe('sent');
   });
 });

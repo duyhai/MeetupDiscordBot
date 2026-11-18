@@ -168,8 +168,9 @@ describe('buildWrapped', () => {
     expect(result.wrapped.stats).toMatchObject({
       year: 2026,
       firstEvent: hike,
-      attendedThisYear: 2,
-      attendedAllTime: 3,
+      // Hot pot was hosted: not attended.
+      attendedThisYear: 1,
+      attendedAllTime: 2,
       hosting: {
         thisYear: 1,
         allTime: 1,

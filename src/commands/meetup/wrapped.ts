@@ -41,13 +41,6 @@ export class WrappedCommands {
       minValue: FIRST_WRAPPED_YEAR,
     })
     year: number | undefined,
-    @SlashOption({
-      name: 'refresh',
-      description: 'Rebuild from Meetup instead of showing the saved one.',
-      type: ApplicationCommandOptionType.Boolean,
-      required: false,
-    })
-    refresh: boolean | undefined,
     interaction: CommandInteraction,
   ) {
     await discordCommandWrapper(interaction, async () => {
@@ -61,10 +54,7 @@ export class WrappedCommands {
         keepReplyVisible(interaction);
         return;
       }
-      await runWrapped(interaction, {
-        year: chosen,
-        refresh: refresh ?? false,
-      });
+      await runWrapped(interaction, { year: chosen });
     });
   }
 

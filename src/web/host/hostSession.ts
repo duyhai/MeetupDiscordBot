@@ -1,4 +1,4 @@
-import type { HostTier } from '../../lib/hosts/eligibility.js';
+import type { HostTier, StaffRole } from '../../lib/hosts/eligibility.js';
 import { DashboardSession, SessionStoreOptions } from '../session.js';
 
 export const HOST_BASE = '/host';
@@ -23,11 +23,21 @@ export interface HostSession extends DashboardSession {
    */
   role: HostRole;
   via: 'discord' | 'meetup';
+  /**
+   * Leadership and Organizer, from Discord at sign-in and each re-check:
+   * the header badge names them. Absent when none (and on older sessions).
+   */
+  staffRoles?: StaffRole[];
 }
 
 export type HostRole = 'host' | 'member';
 
 const DISCORD_ID = /^[0-9]{17,20}$/;
+
+const isStaffRoles = (v: unknown): boolean =>
+  v === undefined ||
+  (Array.isArray(v) &&
+    v.every((role) => role === 'leadership' || role === 'organizer'));
 
 export const HOST_SESSION_OPTIONS: SessionStoreOptions<HostSession> =
   Object.freeze({
@@ -43,5 +53,6 @@ export const HOST_SESSION_OPTIONS: SessionStoreOptions<HostSession> =
           DISCORD_ID.test(v.discordUserId))) &&
       (v.tier === 'regular' || v.tier === 'promoted') &&
       (v.role === undefined || v.role === 'host' || v.role === 'member') &&
+      isStaffRoles(v.staffRoles) &&
       (v.via === 'discord' || v.via === 'meetup'),
   });

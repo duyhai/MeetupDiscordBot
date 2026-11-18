@@ -5,6 +5,9 @@ import {
 
 export type HostTier = 'regular' | 'promoted';
 
+/** Staff roles the host dashboard names on its badge (a label, never a gate). */
+export type StaffRole = 'leadership' | 'organizer';
+
 /**
  * Everything resolveHost reads. Each lookup throws when its source cannot be
  * reached; resolveHost lets that propagate, so the caller can answer "try
@@ -18,6 +21,12 @@ export interface HostResolveDeps {
   /** Counted PAST events hosted by this member (countedEvents.ts; organizer credential). */
   pastHostedCount: (meetupId: string) => Promise<number>;
   isPromoted: (meetupId: string) => Promise<boolean>;
+  /**
+   * The member's staff roles, asked of Discord live; only for the badge, so
+   * a failure here reads as none instead of refusing the sign-in. Left out,
+   * none.
+   */
+  staffRoles?: (discordId: string) => Promise<StaffRole[]>;
 }
 
 export type HostResolution =
@@ -28,12 +37,18 @@ export type HostResolution =
       tier: HostTier;
       /** Undefined when the Guest Host role decided and the count was not read. */
       hostedCount?: number;
+      staffRoles?: StaffRole[];
     }
   /**
    * Linked (both ids), on neither blacklist, but not a host: admitted to the
    * member area (home and Wrapped) only.
    */
-  | { kind: 'member'; meetupMemberId: string; discordUserId: string }
+  | {
+      kind: 'member';
+      meetupMemberId: string;
+      discordUserId: string;
+      staffRoles?: StaffRole[];
+    }
   | { kind: 'refused'; reason: 'not-linked' | 'blacklisted' | 'not-a-host' };
 
 export type HostIdentity =
@@ -84,19 +99,43 @@ export async function resolveHost(
       if (discordUserId === undefined) {
         return { kind: 'refused', reason: 'not-linked' };
       }
-      return { kind: 'member', meetupMemberId, discordUserId };
+      const staff = await staffRolesOf(deps, discordUserId);
+      return {
+        kind: 'member',
+        meetupMemberId,
+        discordUserId,
+        ...(staff.length > 0 ? { staffRoles: staff } : {}),
+      };
     }
   }
   const tier: HostTier = (await deps.isPromoted(meetupMemberId))
     ? 'promoted'
     : 'regular';
+  const staff =
+    discordUserId === undefined ? [] : await staffRolesOf(deps, discordUserId);
   return {
     kind: 'host',
     meetupMemberId,
     ...(discordUserId !== undefined ? { discordUserId } : {}),
     tier,
     ...(hostedCount !== undefined ? { hostedCount } : {}),
+    ...(staff.length > 0 ? { staffRoles: staff } : {}),
   };
+}
+
+/** The badge's roles: none when the lookup is missing or fails. */
+async function staffRolesOf(
+  deps: HostResolveDeps,
+  discordUserId: string,
+): Promise<StaffRole[]> {
+  if (!deps.staffRoles) {
+    return [];
+  }
+  try {
+    return await deps.staffRoles(discordUserId);
+  } catch {
+    return [];
+  }
 }
 
 /**

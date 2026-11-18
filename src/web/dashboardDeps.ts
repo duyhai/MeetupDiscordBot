@@ -69,6 +69,7 @@ import {
   LAST_ERROR_KEY,
   RUN_NOW_KEY,
   RUN_NOW_TTL_SEC,
+  requestWrappedRebuild,
 } from '../lib/wrapped/backfill.js';
 import { recordedNextTick } from '../lib/wrapped/queue.js';
 import { PostgresWrappedEntryRepository } from '../lib/repositories/postgresWrappedEntryRepository.js';
@@ -523,6 +524,26 @@ export function dashboardPageDeps(): DashboardPageDeps {
         ))
           ? 'requested'
           : 'already-requested';
+      },
+      // Marked forced and queued (backfill.ts requestWrappedRebuild): the next tick
+      // builds it, through the member's token or the organizer credential,
+      // without spending the member's hourly slot.
+      rebuildMember: async (target, year) => {
+        const members = await PostgresMemberRepository.instance();
+        const record =
+          'discordUserId' in target
+            ? await members.findByDiscordId(target.discordUserId)
+            : await members.findByMeetupId(target.meetupMemberId);
+        if (!record?.discordUserId || !record.meetupId) {
+          return 'not-linked';
+        }
+        const outcome = await requestWrappedRebuild(
+          await PostgresWrappedBackfillRepository.instance(),
+          await ApplicationCache(),
+          { discordUserId: record.discordUserId, meetupId: record.meetupId },
+          year,
+        );
+        return outcome.kind === 'queued' ? 'queued' : 'already-queued';
       },
     },
     wrappedAnnounce: {

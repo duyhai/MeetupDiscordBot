@@ -209,6 +209,9 @@ const UI_PAIRS: [string, string][] = [
   // busiest calendar day's coral marker from its shading.
   ['heat4', 'surface'],
   ['heat3', 'surface'],
+  // Wrapped's hosted days: green on the card, and the dot on the green.
+  ['heat-host', 'surface'],
+  ['heat-mark', 'heat-host'],
   ['attn', 'attn-soft'],
 ];
 

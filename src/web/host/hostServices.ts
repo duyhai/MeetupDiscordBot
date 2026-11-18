@@ -10,6 +10,7 @@ import {
 } from '../../lib/hosts/eventRequest.js';
 import {
   HostResolveDeps,
+  StaffRole,
   publishTier,
   resolveHost,
 } from '../../lib/hosts/eligibility.js';
@@ -68,7 +69,7 @@ import { ApplicationCache } from '../../util/cache.js';
 import { getRandomTip } from '../../util/tips.js';
 import { dashboardOrigin } from '../dashboardDeps.js';
 import { FixedWindowLimiter } from '../rateLimit.js';
-import { discordRoleCheck } from '../roleGate.js';
+import { discordRoleCheck, discordRoleIds } from '../roleGate.js';
 import { SessionStore } from '../session.js';
 import { timedCacheFactory } from '../timedCache.js';
 import { HOST_SESSION_OPTIONS, HostSession } from './hostSession.js';
@@ -143,11 +144,39 @@ export function productionRequestPostDeps(
   };
 }
 
+/** How long one live role read answers the same member again. */
+const ROLE_READ_REUSE_MS = 5_000;
+
+/** The badge's staff roles, highest first. */
+const STAFF_BADGE_ROLES: [StaffRole, string][] = [
+  ['leadership', SERVER_ROLES.leadership],
+  ['organizer', SERVER_ROLES.organizer],
+];
+
 /** Production lookups for resolveHost. Each throws when its source is down. */
 export function hostResolveDeps(
   getClient: () => Client | undefined,
 ): HostResolveDeps {
-  const guestHost = discordRoleCheck(getClient, SERVER_ROLES.guest_host);
+  // One live role read serves the Guest Host check and the badge's staff
+  // roles of the same resolve (both are asked within a second of each other).
+  const recent = new Map<string, { at: number; roles: Promise<string[]> }>();
+  const fetchRoles = discordRoleIds(getClient);
+  const rolesOf = (discordId: string): Promise<string[]> => {
+    const now = Date.now();
+    for (const [id, hit] of recent) {
+      if (now - hit.at >= ROLE_READ_REUSE_MS) {
+        recent.delete(id);
+      }
+    }
+    const hit = recent.get(discordId);
+    if (hit) {
+      return hit.roles;
+    }
+    const roles = fetchRoles(discordId);
+    recent.set(discordId, { at: now, roles });
+    roles.catch(() => recent.delete(discordId));
+    return roles;
+  };
   return {
     discordIdForMeetup: async (meetupId) =>
       (
@@ -161,7 +190,14 @@ export function hostResolveDeps(
           await PostgresMemberRepository.instance()
         ).findByDiscordId(discordId)
       )?.meetupId ?? undefined,
-    hasGuestHostRole: guestHost,
+    hasGuestHostRole: async (discordId) =>
+      (await rolesOf(discordId)).includes(SERVER_ROLES.guest_host),
+    staffRoles: async (discordId) => {
+      const roles = await rolesOf(discordId);
+      return STAFF_BADGE_ROLES.filter(([, id]) => roles.includes(id)).map(
+        ([role]) => role,
+      );
+    },
     // Listed and filtered, not Meetup's totalCount: the shared rule leaves
     // out cancelled events and Open Houses (countedEvents.ts).
     pastHostedCount: (meetupId) =>

@@ -10,7 +10,9 @@ import {
   BACKFILL_NOTICES,
   SNAPSHOT_REFRESH_PATH,
   WRAPPED_BACKFILL_PATH,
+  WRAPPED_REBUILD_PATH,
   WrappedBackfillControl,
+  parseRebuild,
 } from '../../../src/web/routes/wrappedBackfill.js';
 import {
   Client,
@@ -65,6 +67,7 @@ function control(
     })),
     runNow: vi.fn(async () => 'requested' as const),
     refreshSnapshot: vi.fn(async () => 'requested' as const),
+    rebuildMember: vi.fn(async () => 'queued' as const),
     snapshot: vi.fn(async () => ({
       lastRun: undefined,
       openRun: undefined,
@@ -177,8 +180,22 @@ describe('Settings Wrapped backfill card', () => {
     expect(out).toContain('<h2>Wrapped announcement</h2>');
   });
 
+  it("offers Rebuild a member's Wrapped in a confirm pop-up, never inline", async () => {
+    const out = await render(control());
+    expect(out).toContain('<details class="ui-modal" data-modal>');
+    expect(out).toContain(
+      '<summary class="button ghost" title="1.5 Leadership Team only">' +
+        'Rebuild a member&#39;s Wrapped…</summary>',
+    );
+    expect(out).toContain(`action="${WRAPPED_REBUILD_PATH}"`);
+    expect(out).toContain('name="member"');
+    expect(out).toContain('name="year"');
+    expect(out).toContain('<button type="submit">Queue the rebuild</button>');
+  });
+
   it('without a CSRF token (a bare render) there is no form', async () => {
     const out = await render(control(), {});
+    expect(out).not.toContain(`action="${WRAPPED_REBUILD_PATH}"`);
     expect(out).not.toContain(`action="${WRAPPED_BACKFILL_PATH}"`);
     expect(out).toContain('No run yet.');
   });
@@ -528,5 +545,144 @@ describe('Settings Wrapped backfill card: the last failed tick', () => {
     expect(out).toContain(
       'Last tick failed (TypeError) at Dec 10, 2026 11:55 AM Pacific; the backfill retries every 5 minutes.',
     );
+  });
+});
+
+describe('parseRebuild', () => {
+  const now = new Date('2026-12-10T20:00:00Z');
+  it('reads a Discord user id or a Meetup member id, and a year 2015..this year', () => {
+    expect(
+      parseRebuild({ member: ' 200000000000000001 ', year: '2025' }, now),
+    ).toEqual({ target: { discordUserId: '200000000000000001' }, year: 2025 });
+    expect(parseRebuild({ member: '182787593', year: '2026' }, now)).toEqual({
+      target: { meetupMemberId: '182787593' },
+      year: 2026,
+    });
+  });
+
+  it('refuses anything else', () => {
+    for (const body of [
+      {},
+      { member: '182787593' },
+      { member: '<@200000000000000001>', year: '2026' },
+      { member: '0', year: '2026' },
+      { member: '182787593', year: '2014' },
+      { member: '182787593', year: '2027' },
+      { member: '182787593', year: '2026.5' },
+      { member: ['1'], year: '2026' },
+    ]) {
+      expect(parseRebuild(body, now)).toBeUndefined();
+    }
+  });
+});
+
+describe('POST /dashboard/wrapped/rebuild', () => {
+  async function rebuildSetup() {
+    const rebuildMember = vi.fn<WrappedBackfillControl['rebuildMember']>(
+      async () => 'queued',
+    );
+    const s = await setup({ rebuildMember });
+    return { ...s, rebuildMember };
+  }
+  const press = async (
+    req: Client,
+    cookie: string,
+    body: Record<string, string>,
+  ) =>
+    req
+      .post(WRAPPED_REBUILD_PATH)
+      .set('Cookie', cookie)
+      .set('Origin', ORIGIN)
+      .type('form')
+      .send({ _csrf: await tokenOf(req, cookie), ...body });
+
+  it('needs the 1.5 Leadership Team role, checked live', async () => {
+    const { req, isLeadership, rebuildMember } = await rebuildSetup();
+    isLeadership.mockResolvedValue(false);
+    const res = await press(req, await signIn(req), {
+      member: '182787593',
+      year: '2026',
+    });
+    expect(res.headers.location).toBe(
+      '/dashboard/settings?backfill=rebuild-not-leadership',
+    );
+    expect(rebuildMember).not.toHaveBeenCalled();
+  });
+
+  it('a Discord outage asks to try again, nothing queued', async () => {
+    const { req, isLeadership, rebuildMember } = await rebuildSetup();
+    isLeadership.mockRejectedValue(new Error('down'));
+    const res = await press(req, await signIn(req), {
+      member: '182787593',
+      year: '2026',
+    });
+    expect(res.headers.location).toBe(
+      '/dashboard/settings?backfill=rebuild-unavailable',
+    );
+    expect(rebuildMember).not.toHaveBeenCalled();
+  });
+
+  it('Leadership queues it: audited by ids, the notice comes back', async () => {
+    const { req, isLeadership, rebuildMember, audit } = await rebuildSetup();
+    isLeadership.mockResolvedValue(true);
+    const cookie = await signIn(req);
+    const res = await press(req, cookie, {
+      member: '200000000000000001',
+      year: '2025',
+    });
+    expect(res.headers.location).toBe(
+      '/dashboard/settings?backfill=rebuild-queued',
+    );
+    expect(rebuildMember).toHaveBeenCalledWith(
+      { discordUserId: '200000000000000001' },
+      2025,
+    );
+    expect(audit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: 'Wrapped rebuild requested',
+        description: expect.stringContaining(
+          "<@200000000000000001>'s 2025 Wrapped",
+        ),
+      }),
+    );
+    const page = await req
+      .get('/dashboard/settings?backfill=rebuild-queued')
+      .set('Cookie', cookie);
+    expect(page.text).toContain(
+      BACKFILL_NOTICES['rebuild-queued'].replace("'", '&#39;'),
+    );
+  });
+
+  it('a bad member or year is refused before anything is asked', async () => {
+    const { req, isLeadership, rebuildMember } = await rebuildSetup();
+    isLeadership.mockResolvedValue(true);
+    const res = await press(req, await signIn(req), {
+      member: 'hai',
+      year: '2026',
+    });
+    expect(res.headers.location).toBe(
+      '/dashboard/settings?backfill=rebuild-invalid',
+    );
+    expect(rebuildMember).not.toHaveBeenCalled();
+  });
+
+  it('not linked, or another year queued: said so, not audited', async () => {
+    for (const outcome of ['not-linked', 'already-queued'] as const) {
+      // eslint-disable-next-line no-await-in-loop -- one app per outcome
+      const { req, isLeadership, rebuildMember, audit } = await rebuildSetup();
+      rebuildMember.mockResolvedValue(outcome);
+      isLeadership.mockResolvedValue(true);
+      // eslint-disable-next-line no-await-in-loop -- one app per outcome
+      const res = await press(req, await signIn(req), {
+        member: '182787593',
+        year: '2026',
+      });
+      expect(res.headers.location).toBe(
+        `/dashboard/settings?backfill=rebuild-${outcome}`,
+      );
+      expect(audit).not.toHaveBeenCalledWith(
+        expect.objectContaining({ title: 'Wrapped rebuild requested' }),
+      );
+    }
   });
 });

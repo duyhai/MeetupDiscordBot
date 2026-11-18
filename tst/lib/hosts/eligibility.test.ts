@@ -21,6 +21,50 @@ function deps(over: Partial<HostResolveDeps> = {}): HostResolveDeps {
   };
 }
 
+describe('resolveHost staff roles (the badge)', () => {
+  it('carries Leadership and Organizer for a host and for a member', async () => {
+    const staffRoles = vi
+      .fn()
+      .mockResolvedValue(['leadership', 'organizer'] as const);
+    await expect(
+      resolveHost(
+        deps({ hasGuestHostRole: vi.fn().mockResolvedValue(true), staffRoles }),
+        { discordUserId: DISCORD },
+      ),
+    ).resolves.toMatchObject({
+      kind: 'host',
+      staffRoles: ['leadership', 'organizer'],
+    });
+    await expect(
+      resolveHost(deps({ staffRoles }), { discordUserId: DISCORD }),
+    ).resolves.toMatchObject({
+      kind: 'member',
+      staffRoles: ['leadership', 'organizer'],
+    });
+  });
+
+  it('a failing lookup is no badge, never a refused sign-in', async () => {
+    const result = await resolveHost(
+      deps({
+        hasGuestHostRole: vi.fn().mockResolvedValue(true),
+        staffRoles: vi.fn().mockRejectedValue(new Error('discord down')),
+      }),
+      { discordUserId: DISCORD },
+    );
+    expect(result.kind).toBe('host');
+    expect(result).not.toHaveProperty('staffRoles');
+  });
+
+  it('is not asked without a Discord link', async () => {
+    const staffRoles = vi.fn();
+    await resolveHost(
+      deps({ pastHostedCount: vi.fn().mockResolvedValue(3), staffRoles }),
+      { meetupMemberId: MEETUP },
+    );
+    expect(staffRoles).not.toHaveBeenCalled();
+  });
+});
+
 describe('resolveHost', () => {
   it('discord path, linked, Guest Host role: a regular host, count not read', async () => {
     const d = deps({ hasGuestHostRole: vi.fn().mockResolvedValue(true) });

@@ -61,6 +61,13 @@ async function freshRoleIds(
   }
 }
 
+/** Every role id the member holds, checked live (see freshRoleIds). */
+export function discordRoleIds(
+  getClient: () => Client | undefined,
+): (discordUserId: string) => Promise<string[]> {
+  return (discordUserId) => freshRoleIds(getClient, discordUserId);
+}
+
 /** Holds a dashboard role, checked live (see freshRoleIds). */
 export function discordAccessCheck(
   getClient: () => Client | undefined,

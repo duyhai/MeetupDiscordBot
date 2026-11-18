@@ -453,7 +453,9 @@ describe('GET /host/wrapped', () => {
     expect(text).toContain('40');
     expect(text).toContain('Food &amp; drink');
     expect(text).toContain('July');
-    expect(text).toMatch(/Longest streak \(months\)<\/dt> <dd> ?5 ?<\/dd>/);
+    expect(text).toMatch(
+      /Longest attending streak \(months\)<\/dt> <dd> ?5 ?<\/dd>/,
+    );
     expect(text).toContain('hosted 1 event');
     expect(text).toContain('Saturday Hike &lt;b&gt;');
     expect(text).toContain('href="https://www.meetup.com/e/1/"');
@@ -462,9 +464,6 @@ describe('GET /host/wrapped', () => {
     expect(text).toContain('href="/host/wrapped?year=2025"');
     expect(text).toContain('href="/host/wrapped?year=2024"');
     expect(text).toContain('aria-current="page">2026');
-    expect(text).toContain(
-      'A past year is built on the same once-an-hour limit',
-    );
     expect(h.deps.memberToken).not.toHaveBeenCalled();
     expect(h.meetup.getSelfPastRsvpEvents).not.toHaveBeenCalled();
     expect(res.headers['content-security-policy']).toContain(
@@ -513,7 +512,7 @@ describe('GET /host/wrapped', () => {
     expect(h.deps.meetupClient).toHaveBeenCalledWith('member-token');
     const text = strip(res.text);
     expect(text).toContain('1.5 Gen Wrapped 2026');
-    expect(text).toContain('Events in 2026</dt> <dd>2</dd>');
+    expect(text).toContain('Attended in 2026</dt> <dd>2</dd>');
     // The Discord command's key, so /wrapped serves this copy next.
     const stored = await readWrapped(h.wrappedCache, USER, 2026, ME);
     expect(stored?.stats.attendedThisYear).toBe(2);
@@ -688,8 +687,8 @@ describe('GET /host/wrapped deeper sections', () => {
 
   it("lists the busiest month's events with dates and links", async () => {
     const { text } = await deepPage();
-    expect(text).toContain('June (3 events)');
-    expect(text).toContain('<summary>Events that month (3)</summary>');
+    expect(text).toContain('June (3 events attended)');
+    expect(text).toContain('<summary>Events attended that month (3)</summary>');
     expect(text).toContain('<time>Jun 3, 2026</time>');
     expect(text).toContain('href="https://www.meetup.com/e/j1/"');
   });
@@ -706,7 +705,8 @@ describe('GET /host/wrapped deeper sections', () => {
     expect(text).toContain('Most attended this year');
     expect(text).toMatch(/Big Hike<\/bdi><\/a>\s*\(31 RSVPs\)/);
     expect(text).not.toContain('going');
-    expect(text).not.toContain('attended)');
+    // The hosted list shows RSVPs, never an "attended" count.
+    expect(text).not.toMatch(/Big Hike<\/bdi><\/a>\s*\([0-9]+ attended\)/);
     expect(text.indexOf('Big Hike')).toBeLessThan(text.indexOf('Picnic'));
     expect(text).toContain('Legendary Potluck');
     expect(text).toContain('(58 RSVPs)');
@@ -821,7 +821,7 @@ describe('after a rebuild that did not build', () => {
       .get('/host/wrapped?year=2026&notice=failed')
       .set('Cookie', sid);
     expect(again.status).toBe(200);
-    expect(strip(again.text)).toContain('Events in 2026</dt> <dd>2</dd>');
+    expect(strip(again.text)).toContain('Attended in 2026</dt> <dd>2</dd>');
     expect(await readWrapped(h.wrappedCache, USER, 2026, ME)).toBeDefined();
   });
 
@@ -869,69 +869,6 @@ describe('after a rebuild that did not build', () => {
 });
 
 describe('the queue for throttled requests', () => {
-  const rebuild = (h: Harness, sid: string, year = '2026') =>
-    h.req
-      .post('/host/wrapped/rebuild')
-      .set('Cookie', sid)
-      .set('Origin', ORIGIN)
-      .type('form')
-      .send({ _csrf: h.csrf(), year });
-
-  it('a throttled rebuild with nothing cached is queued and the page says when', async () => {
-    const h = await harness({ queue: true });
-    await h.wrappedCache.set(NEXT_TICK_KEY, '2026-12-10T20:05:00.000Z');
-    h.deps.limiter.take(USER);
-    const sid = await signInWithDiscord(h.req);
-
-    const res = await rebuild(h, sid);
-
-    expect(res.status).toBe(303);
-    expect(res.headers.location).toBe('/host/wrapped?year=2026&notice=queued');
-    expect((await h.store.position(USER))?.row).toMatchObject({
-      meetupId: ME,
-      year: 2026,
-    });
-    const shown = strip(
-      (await h.req.get(res.headers.location).set('Cookie', sid)).text,
-    );
-    expect(shown).toContain('Queued — it&#39;ll be ready by about 12:05 pm.');
-    expect(shown).toContain('less than an hour ago');
-    expect(h.meetup.getSelfPastRsvpEvents).toHaveBeenCalledTimes(1);
-  });
-
-  it('says which year is already queued', async () => {
-    const h = await harness({ queue: true });
-    await h.store.enqueue({ discordUserId: USER, meetupId: ME, year: 2024 });
-    h.deps.limiter.take(USER);
-    const sid = await signInWithDiscord(h.req);
-
-    const res = await rebuild(h, sid);
-
-    expect(res.headers.location).toBe(
-      '/host/wrapped?year=2026&notice=already-queued',
-    );
-    const shown = strip(
-      (await h.req.get(res.headers.location).set('Cookie', sid)).text,
-    );
-    expect(shown).toContain(
-      'You already have 2024 queued; it&#39;ll be ready by about',
-    );
-  });
-
-  it('a throttled rebuild with a cached copy is not queued', async () => {
-    const h = await harness({ queue: true });
-    await writeWrapped(h.wrappedCache, USER, 2026, cached, NOW);
-    h.deps.limiter.take(USER);
-    const sid = await signInWithDiscord(h.req);
-
-    const res = await rebuild(h, sid);
-
-    expect(res.headers.location).toBe(
-      '/host/wrapped?year=2026&notice=rate-limited',
-    );
-    expect(await h.store.queueLength()).toBe(0);
-  });
-
   it('a reload while queued and limited shows the notice without building', async () => {
     const h = await harness({ queue: true });
     await h.store.enqueue({ discordUserId: USER, meetupId: ME, year: 2026 });
@@ -953,7 +890,7 @@ describe('the queue for throttled requests', () => {
     const res = await h.req.get('/host/wrapped?year=2026').set('Cookie', sid);
 
     expect(res.status).toBe(200);
-    expect(strip(res.text)).toContain('Events in 2026</dt> <dd>2</dd>');
+    expect(strip(res.text)).toContain('Attended in 2026</dt> <dd>2</dd>');
     expect(await h.store.queueLength()).toBe(0);
   });
 
@@ -1068,7 +1005,7 @@ describe('the queue for throttled requests', () => {
     const res = await h.req.get('/host/wrapped?year=2026').set('Cookie', sid);
 
     expect(res.status).toBe(200);
-    expect(strip(res.text)).toContain('Events in 2026</dt> <dd>2</dd>');
+    expect(strip(res.text)).toContain('Attended in 2026</dt> <dd>2</dd>');
     expect((await h.store.position(USER))?.row.year).toBe(2023);
   });
 
@@ -1097,72 +1034,24 @@ describe('the queue for throttled requests', () => {
       24 * 60 * 60,
     );
   });
-
-  it('without a queue the hourly limit reads as before', async () => {
-    const h = await harness();
-    h.deps.limiter.take(USER);
-    const sid = await signInWithDiscord(h.req);
-
-    const res = await rebuild(h, sid);
-
-    expect(res.headers.location).toBe(
-      '/host/wrapped?year=2026&notice=rate-limited',
-    );
-  });
 });
 
 describe('POST /host/wrapped/rebuild', () => {
-  it('rebuilds past the cached copy and comes back to the page', async () => {
+  it("is gone: rebuilding is Leadership's, from the staff dashboard", async () => {
     const h = await harness();
     await writeWrapped(h.wrappedCache, USER, 2026, cached, NOW);
     const sid = await signInWithDiscord(h.req);
+    const page = await h.req.get('/host/wrapped?year=2026').set('Cookie', sid);
+    expect(page.text).not.toContain('Rebuild from Meetup');
+    expect(page.text).not.toContain('/host/wrapped/rebuild');
+    expect(page.text).not.toContain('once-an-hour limit');
     const res = await h.req
       .post('/host/wrapped/rebuild')
       .set('Cookie', sid)
       .set('Origin', ORIGIN)
       .type('form')
       .send({ _csrf: h.csrf(), year: '2026' });
-    expect(res.status).toBe(303);
-    expect(res.headers.location).toBe('/host/wrapped?year=2026');
-    const stored = await readWrapped(h.wrappedCache, USER, 2026, ME);
-    expect(stored?.stats.attendedThisYear).toBe(2);
-    expect(h.deps.limiter.take(USER)).toBe(false);
-  });
-
-  it('carries a non-render outcome back as a notice', async () => {
-    const h = await harness();
-    h.deps.limiter.take(USER);
-    await writeWrapped(h.wrappedCache, USER, 2026, cached, NOW);
-    const sid = await signInWithDiscord(h.req);
-    const res = await h.req
-      .post('/host/wrapped/rebuild')
-      .set('Cookie', sid)
-      .set('Origin', ORIGIN)
-      .type('form')
-      .send({ _csrf: h.csrf(), year: '2026' });
-    expect(res.status).toBe(303);
-    expect(res.headers.location).toBe(
-      '/host/wrapped?year=2026&notice=rate-limited',
-    );
-    const shown = await h.req
-      .get('/host/wrapped?year=2026&notice=rate-limited')
-      .set('Cookie', sid);
-    expect(shown.text).toContain('less than an hour ago');
-    expect(shown.text).toContain('60 minutes');
-    // The cached copy still shows under the notice.
-    expect(shown.text).toContain('1.5 Gen Wrapped 2026');
-  });
-
-  it('a rebuild without the CSRF token is refused by the guard', async () => {
-    const h = await harness();
-    const sid = await signInWithDiscord(h.req);
-    const res = await h.req
-      .post('/host/wrapped/rebuild')
-      .set('Cookie', sid)
-      .set('Origin', ORIGIN)
-      .type('form')
-      .send({ year: '2026' });
-    expect(res.status).toBe(403);
+    expect(res.status).toBe(404);
     expect(h.meetup.getSelfPastRsvpEvents).not.toHaveBeenCalled();
   });
 });
@@ -1198,31 +1087,12 @@ describe('/host/wrapped from the group snapshot', () => {
     expect(h.meetup.getSelfPastRsvpEvents).not.toHaveBeenCalled();
     expect(h.meetup.getEventRsvps).not.toHaveBeenCalled();
     const stored = await readWrapped(h.wrappedCache, USER, 2026, ME);
-    expect(stored?.stats.attendedThisYear).toBe(2);
+    // g2 was hosted: not attended.
+    expect(stored?.stats.attendedThisYear).toBe(1);
     expect(stored?.stats.hosting?.thisYear).toBe(1);
     expect(JSON.stringify(stored)).not.toContain('unlinked-77');
     expect(res.text).not.toContain('unlinked-77');
     expect(h.deps.limiter.take(USER)).toBe(false);
-  });
-
-  it('Rebuild uses the snapshot too', async () => {
-    const h = await harness({ hasToken: false });
-    h.deps.snapshot = async () => snapshotWrapped(reader());
-    await writeWrapped(h.wrappedCache, USER, 2026, cached, NOW);
-    const sid = await signInWithDiscord(h.req);
-    const res = await h.req
-      .post('/host/wrapped/rebuild')
-      .set('Cookie', sid)
-      .set('Origin', ORIGIN)
-      .type('form')
-      .send({ _csrf: h.csrf(), year: '2026' });
-    expect(res.status).toBe(303);
-    expect(res.headers.location).toBe('/host/wrapped?year=2026');
-    expect(
-      (await readWrapped(h.wrappedCache, USER, 2026, ME))?.stats
-        .attendedThisYear,
-    ).toBe(2);
-    expect(h.meetup.getSelfPastRsvpEvents).not.toHaveBeenCalled();
   });
 
   it('a stored Wrapped shows the year as a heat map, with no Meetup call', async () => {
@@ -1235,9 +1105,20 @@ describe('/host/wrapped from the group snapshot', () => {
     const res = await h.req.get('/host/wrapped?year=2026').set('Cookie', sid);
     expect(res.status).toBe(200);
     expect(res.text).toContain('class="heat"');
+    // Two colours: attended days on the scale, hosted days green with a
+    // dot, and every label says which (never the colour alone).
     expect(res.text).toContain(
-      'aria-label="Events attended per day in 2026: 2 in total"',
+      'aria-label="Events attended and hosted per day in 2026: 1 attended, 1 hosted"',
     );
+    expect(res.text).toMatch(
+      /aria-label="Mon, Mar 9, 2026: Attended: [^"]*Board game night"/,
+    );
+    expect(res.text).toMatch(
+      /aria-label="Thu, Apr 9, 2026: Hosted: [^"]*Hot pot dinner"/,
+    );
+    expect(res.text).toContain('<rect\n        class="hh"');
+    expect(res.text).toContain('class="heat-legend"');
+    expect(strip(res.text)).toContain('1 event attended and 1 hosted in 2026.');
     // Each day with events links to its own listing.
     expect(res.text).toContain(
       'href="/host/wrapped?year=2026&amp;day=2026-03-09"',
@@ -1262,7 +1143,10 @@ describe('/host/wrapped from the group snapshot', () => {
       ).text,
     );
     expect(day).toContain('<h3>Thu, Apr 9</h3>');
-    expect(day).toContain('Hot pot dinner');
+    expect(day).toMatch(
+      /<p>Hosted:<\/p>\s*<ul class="event-list">[^]*Hot pot dinner/,
+    );
+    expect(day).not.toContain('<p>Attended:</p>');
     expect(day).toContain('Clear the day');
     const elsewhere = (
       await h.req

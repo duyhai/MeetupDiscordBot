@@ -46,7 +46,7 @@ import {
   NamedCohort,
   TopType,
   WrappedEvent,
-  attendedInYear,
+  eventsInYear,
 } from '../../lib/wrapped/stats.js';
 import {
   nextTickAt,
@@ -79,7 +79,6 @@ import { HOST_BASE, HostSession } from './hostSession.js';
 const logger = new Logger({ name: 'hostDashboard' });
 
 export const WRAPPED_PATH = `${HOST_BASE}/wrapped`;
-const REBUILD_PATH = `${WRAPPED_PATH}/rebuild`;
 const LINK_DISCORD_PATH = `${HOST_BASE}/link/discord`;
 const MEETUP_SIGN_IN = `${HOST_BASE}/auth/meetup/start`;
 /** How long the page waits for Meetup; the build goes on after that. */
@@ -447,41 +446,64 @@ function topTypeItem(
   </li>`;
 }
 
-/** The heat map's data: the year's attended events and the picked day. */
+/** The heat map's data: the year's attended and hosted events, and the picked day. */
 export interface WrappedHeat {
-  events: WrappedEvent[];
+  /** Attended (not hosted) and hosted, as eventsInYear splits them. */
+  events: { attended: WrappedEvent[]; hosted: WrappedEvent[] };
   /** Pacific today: the current year's map stops here. */
   today: string;
   day?: string;
 }
 
-/**
- * The year's attended events as My history's heat map: a day with events
- * links to `?day=`, which lists them under it.
- */
-function heatCard(year: number, heat: WrappedHeat): SafeHtml {
+function byPacificDay(events: WrappedEvent[]): Map<string, WrappedEvent[]> {
   const byDay = new Map<string, WrappedEvent[]>();
-  heat.events.forEach((event) => {
+  events.forEach((event) => {
     const day = pacificDay(event.dateTime);
     byDay.set(day, [...(byDay.get(day) ?? []), event]);
   });
-  const picked = heat.day ? (byDay.get(heat.day) ?? []) : undefined;
+  return byDay;
+}
+
+/**
+ * The year as My history's heat map, in two colours: days attended and days
+ * hosted. A day with events links to `?day=`, which lists them under it,
+ * hosted and attended apart.
+ */
+function heatCard(year: number, heat: WrappedHeat): SafeHtml {
+  const attended = byPacificDay(heat.events.attended);
+  const hosted = byPacificDay(heat.events.hosted);
+  const pickedHosted = heat.day ? (hosted.get(heat.day) ?? []) : [];
+  const pickedAttended = heat.day ? (attended.get(heat.day) ?? []) : [];
+  const both = pickedHosted.length > 0 && pickedAttended.length > 0;
   return html`<div class="card">
     <h2>Your year, day by day</h2>
     ${heatMapYear({
-      byDay,
+      byDay: attended,
+      hostedByDay: hosted,
       year,
       today: heat.today,
       verb: 'attended',
       dayLink: (day) => pageLink(WRAPPED_PATH, { year: String(year), day }),
     })}
     ${
-      heat.day && picked
+      heat.day
         ? html`<h3>${dayLabel(heat.day)}</h3>
             ${
-              picked.length > 0
-                ? eventList(picked, 'time')
-                : html`<p class="muted">No events that day.</p>`
+              pickedHosted.length > 0
+                ? html`${both ? html`<h4>Hosted</h4>` : html`<p>Hosted:</p>`}
+                  ${eventList(pickedHosted, 'time')}`
+                : ''
+            }
+            ${
+              pickedAttended.length > 0
+                ? html`${both ? html`<h4>Attended</h4>` : html`<p>Attended:</p>`}
+                  ${eventList(pickedAttended, 'time')}`
+                : ''
+            }
+            ${
+              pickedHosted.length + pickedAttended.length === 0
+                ? html`<p class="muted">No events that day.</p>`
+                : ''
             }
             <p>
               <a href="${pageLink(WRAPPED_PATH, { year: String(year) })}"
@@ -535,37 +557,36 @@ export function wrappedBody({
       <h1>
         🎁 ${memberText(session.username)}'s 1.5 Gen Wrapped ${String(year)}
       </h1>
-      ${yearNav(years, year)}
-      <p class="muted">
-        A past year is built on the same once-an-hour limit as this one, here or
-        in Discord.
-      </p>
-      ${noticeHtml}
+      ${yearNav(years, year)} ${noticeHtml}
       ${
-        thisYear === 0
+        thisYear === 0 && !(stats.hosting && stats.hosting.thisYear > 0)
           ? html`<p>
               A quiet year: no events in ${String(year)}, but
-              ${plural(stats.attendedAllTime, 'event')} with us all-time. See
-              you at the next one!
+              ${plural(stats.attendedAllTime, 'event')} attended with us
+              all-time. See you at the next one!
             </p>`
           : ''
       }
       <dl class="stats">
         <div class="stat">
-          <dt>Events in ${String(year)}</dt>
+          <dt>Attended in ${String(year)}</dt>
           <dd>${String(thisYear)}</dd>
         </div>
         <div class="stat">
-          <dt>All-time</dt>
+          <dt>Attended all-time</dt>
           <dd>${String(stats.attendedAllTime)}</dd>
         </div>
         <div class="stat">
-          <dt>Longest streak (months)</dt>
+          <dt>Longest attending streak (months)</dt>
           <dd>
             ${stats.longestStreakMonths > 0 ? String(stats.longestStreakMonths) : '—'}
           </dd>
         </div>
       </dl>
+      <p class="muted">
+        Attended counts the events you went to and did not host; the events you
+        hosted have their own card below.
+      </p>
     </div>
     ${heat ? heatCard(year, heat) : ''}
     <div class="card">
@@ -574,6 +595,7 @@ export function wrappedBody({
     </div>
     <div class="card">
       <h2>Top activities</h2>
+      <p class="muted">From the events you attended or hosted this year.</p>
       ${
         stats.topTypes.length > 0
           ? html`<ul class="top-types">
@@ -596,7 +618,7 @@ export function wrappedBody({
         ${
           stats.busiestMonth
             ? html`${MONTHS[stats.busiestMonth.month]}
-              (${plural(stats.busiestMonth.count, 'event')})`
+              (${plural(stats.busiestMonth.count, 'event')} attended)`
             : html`None this year`
         }
       </p>
@@ -604,7 +626,8 @@ export function wrappedBody({
         stats.busiestMonth && stats.busiestMonth.events.length > 0
           ? html`<details>
               <summary>
-                Events that month (${String(stats.busiestMonth.events.length)})
+                Events attended that month
+                (${String(stats.busiestMonth.events.length)})
               </summary>
               ${eventList(stats.busiestMonth.events)}
             </details>`
@@ -616,17 +639,8 @@ export function wrappedBody({
       ${companionsSection(wrapped, displayNames)}
       <p class="muted">
         Counted from Meetup RSVPs, so an event you signed up for but missed
-        still counts. Only members who have linked their Meetup account are
-        named.
-      </p>
-      <form method="post" action="${localUrl(REBUILD_PATH)}">
-        <input type="hidden" name="_csrf" value="${session.csrfToken}" />
-        <input type="hidden" name="year" value="${String(year)}" />
-        <button type="submit" class="secondary">Rebuild from Meetup</button>
-      </form>
-      <p class="muted">
-        Rebuilding reads Meetup again, once an hour at most (here or in
-        Discord).
+        still counts. Counts the events you attended or hosted. Only members who
+        have linked their Meetup account are named.
       </p>
     </div>`;
 }
@@ -1002,7 +1016,7 @@ export function registerWrappedPage(
   }
 
   /**
-   * The year's attended events for the heat map, from the snapshot's
+   * The year's attended and hosted events for the heat map, from the snapshot's
    * sources (no cross-check: no Meetup call). Undefined when there is no
    * snapshot or it cannot serve the member (not held, or flagged as
    * undercounted): the page goes without the map. Never throws.
@@ -1010,14 +1024,14 @@ export function registerWrappedPage(
   async function heatEvents(
     meetupId: string,
     year: number,
-  ): Promise<WrappedEvent[] | undefined> {
+  ): Promise<WrappedHeat['events'] | undefined> {
     if (!deps.snapshot) {
       return undefined;
     }
     try {
       const sources = await (await deps.snapshot()).sources(meetupId);
       return sources
-        ? attendedInYear(sources.events, sources.hosted, year)
+        ? eventsInYear(sources.events, sources.hosted, year)
         : undefined;
     } catch (error: unknown) {
       logger.warn(
@@ -1285,74 +1299,5 @@ export function registerWrappedPage(
       return;
     }
     await buildAndShow(res, session, discordUserId, year, tiers);
-  }) as RequestHandler);
-
-  // The web counterpart of `/wrapped refresh:true`: the same hourly slot.
-  router.post('/wrapped/rebuild', (async (req, res) => {
-    const { session } = hostLocals(res);
-    const body = req.body as Record<string, unknown> | undefined;
-    const year = wrappedYear(body?.year, now());
-    const back = (query: Record<string, string | undefined> = {}) =>
-      res.redirect(
-        303,
-        pageLink(WRAPPED_PATH, { year: String(year), ...query }).href,
-      );
-    if (session.discordUserId === null) {
-      back();
-      return;
-    }
-    const discordUserId = session.discordUserId;
-    const tiers = await tiersFor();
-    const fromSnapshot = await snapshotSources(discordUserId, session.userId);
-    const token = fromSnapshot
-      ? undefined
-      : await deps.memberToken(discordUserId);
-    if (!fromSnapshot && token === undefined) {
-      back({ notice: 'no-token' });
-      return;
-    }
-    const outcome = await build(
-      session,
-      discordUserId,
-      year,
-      token,
-      tiers,
-      fromSnapshot,
-    );
-    switch (outcome.kind) {
-      case 'built':
-        back();
-        return;
-      case 'rate-limited': {
-        let code: NoticeCode = 'rate-limited';
-        if (deps.queue) {
-          try {
-            const outcome = await queueForLater(
-              await deps.queue(),
-              tiers,
-              { discordUserId, meetupId: session.userId },
-              year,
-              now(),
-            );
-            if (outcome.kind === 'queued') {
-              code = 'queued';
-            } else if (outcome.kind === 'already') {
-              code = 'already-queued';
-            }
-          } catch (error) {
-            logger.warn(
-              `Could not queue the Wrapped: ${error instanceof Error ? error.name : 'Error'}`,
-            );
-          }
-        }
-        back({ notice: code });
-        return;
-      }
-      case 'account-mismatch':
-        back({ notice: 'mismatch' });
-        return;
-      default:
-        back({ notice: outcome.kind });
-    }
   }) as RequestHandler);
 }

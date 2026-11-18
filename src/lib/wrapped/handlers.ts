@@ -155,7 +155,6 @@ export const defaultWrappedDeps: WrappedHandlerDeps = {
 
 export interface WrappedOptions {
   year: number;
-  refresh: boolean;
 }
 
 function displayNameOf(
@@ -191,7 +190,7 @@ function wrappedPayload(
 
 export async function runWrapped(
   interaction: CommandInteraction,
-  { year, refresh }: WrappedOptions,
+  { year }: WrappedOptions,
   deps: WrappedHandlerDeps = defaultWrappedDeps,
 ): Promise<void> {
   const userId = interaction.user.id;
@@ -213,7 +212,9 @@ export async function runWrapped(
     linkedMeetupId,
     deps.now(),
   );
-  if (cached && !refresh) {
+  // A stored copy is the answer: rebuilding one is Leadership's, from the
+  // staff dashboard (the backfill keeps the rest current).
+  if (cached) {
     await interaction.followUp({
       ...wrappedPayload(interaction, cached),
       ephemeral: true,
@@ -235,7 +236,7 @@ export async function runWrapped(
     return;
   }
   try {
-    const context = { members, tiers, cached, linkedMeetupId, year };
+    const context = { members, tiers, linkedMeetupId, year };
     const fromSnapshot = await snapshotSources(deps, userId, linkedMeetupId);
     if (fromSnapshot) {
       await buildAndReply(interaction, deps, {
@@ -291,7 +292,6 @@ interface BuildContext {
   build: (shared: SharedBuildDeps) => Promise<BuildResult>;
   members: MemberRepository;
   tiers: WrappedTiers;
-  cached: CachedWrapped | undefined;
   linkedMeetupId: string;
   year: number;
 }
@@ -299,7 +299,7 @@ interface BuildContext {
 async function buildAndReply(
   interaction: CommandInteraction,
   deps: WrappedHandlerDeps,
-  { build, members, tiers, cached, linkedMeetupId, year }: BuildContext,
+  { build, members, tiers, linkedMeetupId, year }: BuildContext,
 ): Promise<void> {
   const userId = interaction.user.id;
   {
@@ -357,7 +357,7 @@ async function buildAndReply(
       if (result.kind === 'rate-limited') {
         const minutes = Math.ceil(deps.limiter.retryAfterSec(userId) / 60);
         let content = replies.rateLimited(minutes);
-        if (!cached && deps.queue) {
+        if (deps.queue) {
           // Nothing to show: queue it for the backfill tick instead of only
           // "try again". A copy that appeared meanwhile is not queued.
           try {
@@ -377,12 +377,7 @@ async function buildAndReply(
             );
           }
         }
-        await answerInPlace(interaction, {
-          content,
-          embeds: cached
-            ? [wrappedEmbed(displayNameOf(interaction), cached)]
-            : [],
-        });
+        await answerInPlace(interaction, { content, embeds: [] });
         return;
       }
 

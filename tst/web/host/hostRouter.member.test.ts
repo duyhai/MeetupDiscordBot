@@ -44,24 +44,12 @@ const echoPages = (router: import('express').Router) => {
       res.type('text').send(`POST ${path}`);
     });
   };
-  [
-    '/',
-    '/wrapped',
-    '/wrapped/rebuild',
-    '/calendar',
-    '/history',
-    '/create',
-  ].forEach(echo);
+  ['/', '/wrapped', '/calendar', '/history', '/create'].forEach(echo);
   echo('/events/1/announce');
 };
 
 const GETS = ['/', '/wrapped', '/calendar', '/history', '/create'];
-const POSTS = [
-  '/wrapped/rebuild',
-  '/link/discord',
-  '/verify/finish',
-  '/events/1/announce',
-];
+const POSTS = ['/link/discord', '/verify/finish', '/events/1/announce'];
 
 async function csrfOf(cache: { values: Map<string, string> }) {
   for (const [key, raw] of cache.values) {
@@ -122,7 +110,6 @@ describe('a linked member who is not a host', () => {
       'GET /calendar': 403,
       'GET /history': 403,
       'GET /create': 403,
-      'POST /wrapped/rebuild': 200,
       // The refresh flow is a member's too (the home page offers it): past
       // the gate, these answer as they do for a host of this harness (no
       // members store: 404; no verify runner: 303 home).
@@ -133,7 +120,6 @@ describe('a linked member who is not a host', () => {
     expect(MEMBER_PATHS).toEqual([
       '/',
       '/wrapped',
-      '/wrapped/rebuild',
       '/link/discord',
       '/verify/finish',
       '/logout',
@@ -279,7 +265,6 @@ describe('the member gate against the real route table', () => {
         'POST /link/discord',
         'POST /logout',
         'POST /verify/finish',
-        'POST /wrapped/rebuild',
       ].sort(),
     );
     const sid = await signInWithDiscord(req);

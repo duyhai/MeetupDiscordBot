@@ -194,7 +194,7 @@ function commandInteraction() {
       const discordMeetup = fakeMeetup();
       const deps = discordDeps(discordMeetup, limiter);
       const interaction = commandInteraction();
-      await runWrapped(interaction, { year, refresh: false }, deps);
+      await runWrapped(interaction, { year }, deps);
       expect(deps.withMeetupClient).not.toHaveBeenCalled();
       expect(interaction.followUp).toHaveBeenCalledTimes(1);
       const payload = interaction.followUp.mock.calls[0][0] as {
@@ -202,12 +202,12 @@ function commandInteraction() {
       };
       expect(payload.embeds[0].data.title).toContain(`Wrapped ${year}`);
 
-      // A refresh from Discord now meets the slot the website spent.
-      const refreshing = commandInteraction();
-      await runWrapped(refreshing, { year, refresh: true }, deps);
+      // Another year from Discord now meets the slot the website spent.
+      const another = commandInteraction();
+      await runWrapped(another, { year: year - 1 }, deps);
       expect(discordMeetup.getEventRsvps).not.toHaveBeenCalled();
       expect(
-        (refreshing.editReply.mock.calls.at(-1)?.[0] as { content: string })
+        (another.editReply.mock.calls.at(-1)?.[0] as { content: string })
           .content,
       ).toContain('less than an hour ago');
     });
@@ -217,7 +217,7 @@ function commandInteraction() {
       const limiter = createBuildLimiter(() => NOW.getTime());
       const discordMeetup = fakeMeetup();
       const deps = discordDeps(discordMeetup, limiter);
-      await runWrapped(commandInteraction(), { year, refresh: false }, deps);
+      await runWrapped(commandInteraction(), { year }, deps);
       expect(await readWrapped(redis, USER, year, ME)).toBeDefined();
 
       const { req, meetup, deps: webDeps } = await webApp(limiter);

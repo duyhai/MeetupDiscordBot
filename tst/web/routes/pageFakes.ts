@@ -1199,6 +1199,7 @@ export function fakePageDeps(
       })),
       runNow: vi.fn(async () => 'requested' as const),
       refreshSnapshot: vi.fn(async () => 'requested' as const),
+      rebuildMember: vi.fn(async () => 'queued' as const),
       snapshot: vi.fn(async () => ({
         lastRun: undefined,
         openRun: undefined,

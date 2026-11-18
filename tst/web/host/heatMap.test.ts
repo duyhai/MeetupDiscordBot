@@ -32,6 +32,57 @@ const map = (
   }).value;
 
 describe('heatMapYear', () => {
+  it('with hostedByDay: attended on the scale, hosted green with a dot, a day with both split, every label saying which', () => {
+    const attended = new Map([
+      ['2026-03-07', [ev('1', '2026-03-08T03:00:00Z', 'Board games')]],
+      ['2026-04-04', [ev('2', '2026-04-05T02:00:00Z', 'Trivia')]],
+    ]);
+    const hosted = new Map([
+      ['2026-03-14', [ev('3', '2026-03-15T02:00:00Z', 'Hot pot')]],
+      ['2026-04-04', [ev('4', '2026-04-04T19:00:00Z', 'Picnic')]],
+    ]);
+    const out = heatMapYear({
+      byDay: attended,
+      hostedByDay: hosted,
+      year: 2026,
+      today: '2026-11-03',
+      verb: 'attended',
+      dayLink: (day) => localUrl(`/host/wrapped?year=2026&day=${day}`),
+    }).value;
+    expect(out).toContain(
+      'aria-label="Events attended and hosted per day in 2026: 2 attended, 2 hosted"',
+    );
+    expect(out).toContain(
+      'aria-label="Sat, Mar 7, 2026: Attended: 7:00 PM · Board games"',
+    );
+    expect(out).toContain(
+      'aria-label="Sat, Mar 14, 2026: Hosted: 7:00 PM · Hot pot"',
+    );
+    // Both: hosted first, then attended; the cell is split.
+    expect(out).toContain(
+      'aria-label="Sat, Apr 4, 2026: Hosted: 12:00 PM · Picnic; Attended: 7:00 PM · Trivia"',
+    );
+    expect(out.match(/<rect\s+class="hh"/g)).toHaveLength(2); // a hosted day, and the legend
+    expect(out.match(/<path class="hh"/g)).toHaveLength(2); // the day with both, and the legend
+    expect(out.match(/class="hm-dot"/g)).toHaveLength(4);
+    // The key names each, in words.
+    expect(out).toContain('class="heat-legend"');
+    expect(out).toMatch(/Attended\s*<\/li>/);
+    expect(out).toContain('Hosted (with a dot)');
+    expect(out).toMatch(/Both that day\s*<\/li>/);
+    expect(out).toContain('2 events attended and 2 hosted in 2026.');
+  });
+
+  it('without hostedByDay: one colour and no key, as My history draws it', () => {
+    const out = map(
+      new Map([['2026-03-07', [ev('1', '2026-03-08T03:00:00Z', 'Hike')]]]),
+      2026,
+    );
+    expect(out).not.toContain('heat-legend');
+    expect(out).not.toContain('class="hh"');
+    expect(out).toContain('aria-label="Sat, Mar 7, 2026: 7:00 PM · Hike"');
+  });
+
   it('draws a whole past year, Jan 1 to Dec 31, and nothing outside it', () => {
     const out = map(new Map(), 2025);
     expect(out.match(/<rect\b/g)).toHaveLength(365);

@@ -83,10 +83,13 @@ export interface HostedRanked {
 
 export interface WrappedStats {
   year: number;
+  /** The first event they were at, attended or hosted. */
   firstEvent: WrappedEvent | null;
+  /** Counted events attended this year that they did not host. */
   attendedThisYear: number;
-  /** As of 31 December of the Wrapped year. */
+  /** As attendedThisYear, as of 31 December of the Wrapped year. */
   attendedAllTime: number;
+  /** By the events they were at this year, attended or hosted. */
   topTypes: TopType[];
   hosting: {
     thisYear: number;
@@ -96,11 +99,12 @@ export interface WrappedStats {
     /** The best-attended hosted event ever, as of the year's end. */
     allTimeBest: HostedRanked | null;
   } | null;
-  /** 0 = January. `events`: that month's counted attended events, date asc. */
+  /** 0 = January. `events`: that month's attended (not hosted) events, date asc. */
   busiestMonth: { month: number; count: number; events: WrappedEvent[] } | null;
+  /** Months in a row with an attended (not hosted) event. */
   longestStreakMonths: number;
   /**
-   * Every Pacific year with at least one counted attended event, ascending,
+   * Every Pacific year with at least one counted event attended or hosted, ascending,
    * NOT cut off at the Wrapped year: the website's year picker reads it
    * from whichever year's Wrapped is shown.
    */
@@ -242,31 +246,49 @@ function rankCompanions(
     );
 }
 
+/** Ids of every event the member hosted, counted or not (an Open House too). */
+function hostedIds(hosted: HostedEvent[]): Set<string> {
+  return new Set(hosted.map((event) => event.id));
+}
+
+const stripAttendance = ({
+  attendance: _attendance,
+  ...event
+}: HostedEvent): WrappedEvent => event;
+
+const plainEvent = ({ id, title, dateTime, eventUrl }: WrappedEvent) => ({
+  id,
+  title,
+  dateTime,
+  eventUrl,
+});
+
 /**
- * Every counted event attended (or hosted) in `year`, date ascending: the
- * events behind attendedThisYear, by the same rule. The website's Wrapped
- * heat map reads it from the snapshot's sources at render time.
+ * The year's events for the heat map, by the rules behind the stats:
+ * `attended` is every counted event attended in `year` that the member did
+ * not host (attendedThisYear's events), `hosted` every counted hosted event
+ * in `year` (the Hosting section's). Both date ascending. The website's
+ * Wrapped heat map reads it from the snapshot's sources at render time.
  */
-export function attendedInYear(
+export function eventsInYear(
   attended: WrappedEvent[],
   hosted: HostedEvent[],
   year: number,
-): WrappedEvent[] {
-  return cleanEvents(
-    [
-      ...attended,
-      ...hosted.map(({ attendance: _attendance, ...event }) => event),
-    ],
-    countsAsAttended,
-  )
-    .filter((event) => isInYear(event.dateTime, year))
-    .sort(byDate)
-    .map(({ id, title, dateTime, eventUrl }) => ({
-      id,
-      title,
-      dateTime,
-      eventUrl,
-    }));
+): { attended: WrappedEvent[]; hosted: WrappedEvent[] } {
+  const hostedIdSet = hostedIds(hosted);
+  const inYear = <T extends WrappedEvent>(events: T[]) =>
+    events
+      .filter((event) => isInYear(event.dateTime, year))
+      .sort(byDate)
+      .map(plainEvent);
+  return {
+    attended: inYear(
+      cleanEvents(attended, countsAsAttended).filter(
+        (event) => !hostedIdSet.has(event.id),
+      ),
+    ),
+    hosted: inYear(cleanEvents(hosted, countsAsHosted)),
+  };
 }
 
 export function computeWrapped(input: WrappedInput): {
@@ -278,20 +300,25 @@ export function computeWrapped(input: WrappedInput): {
   const cutoff = (event: WrappedEvent) =>
     dayjs(event.dateTime).valueOf() < end.valueOf();
 
-  // A hosted event counts as attended, even without an RSVP (its attendance
-  // count stays with the hosting stats).
-  const attendedEver = cleanEvents(
-    [
-      ...input.attended,
-      ...input.hosted.map(({ attendance: _attendance, ...event }) => event),
-    ],
+  // Hai, 2026-11-17: an event counts as attended only if the member was not
+  // one of its hosts (any hosted event, an Open House too: hosting one is not
+  // attending it). Hosting has its own stats. `wereAt` is every event they
+  // were at either way: their first event with us, the top activities, the
+  // companions and the year picker read it.
+  const hostedIdSet = hostedIds(input.hosted);
+  const wereAtEver = cleanEvents(
+    [...input.attended, ...input.hosted.map(stripAttendance)],
     countsAsAttended,
   );
-  const attended = attendedEver.filter(cutoff).sort(byDate);
+  const wereAt = wereAtEver.filter(cutoff).sort(byDate);
+  const attended = wereAt.filter((event) => !hostedIdSet.has(event.id));
   const hosted = cleanEvents(input.hosted, countsAsHosted)
     .filter(cutoff)
     .sort(byDate);
   const thisYear = attended.filter((event) => isInYear(event.dateTime, year));
+  const wereAtThisYear = wereAt.filter((event) =>
+    isInYear(event.dateTime, year),
+  );
   const hostedThisYear = hosted.filter((event) =>
     isInYear(event.dateTime, year),
   );
@@ -300,10 +327,10 @@ export function computeWrapped(input: WrappedInput): {
   return {
     stats: {
       year,
-      firstEvent: attended[0] ?? null,
+      firstEvent: wereAt[0] ?? null,
       attendedThisYear: thisYear.length,
       attendedAllTime: attended.length,
-      topTypes: topTypes(thisYear, attended),
+      topTypes: topTypes(wereAtThisYear, wereAt),
       hosting:
         hosted.length > 0
           ? {
@@ -316,11 +343,9 @@ export function computeWrapped(input: WrappedInput): {
       busiestMonth: busiestMonth(months, thisYear),
       longestStreakMonths: longestStreak(months),
       activeYears: [
-        ...new Set(
-          attendedEver.map((event) => tz(dayjs(event.dateTime)).year()),
-        ),
+        ...new Set(wereAtEver.map((event) => tz(dayjs(event.dateTime)).year())),
       ].sort((a, b) => a - b),
     },
-    companions: rankCompanions(thisYear, attendeesByEvent, selfMeetupId),
+    companions: rankCompanions(wereAtThisYear, attendeesByEvent, selfMeetupId),
   };
 }

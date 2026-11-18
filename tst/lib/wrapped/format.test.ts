@@ -86,7 +86,7 @@ describe('wrappedEmbed', () => {
     expect(fieldNames(wrappedEmbed('Jane', full))).toEqual([
       'First event with us',
       'This year',
-      'Top activities',
+      'Top activities (attended or hosted)',
       'Hosting',
       'Busiest month',
       'Longest streak',
@@ -122,7 +122,10 @@ describe('wrappedEmbed', () => {
     const embed = wrappedEmbed('Jane', full);
 
     expect(field(embed, 'This year')).toContain('12');
-    expect(field(embed, 'Top activities')).toContain('Food & drink');
+    expect(field(embed, 'This year')).toContain('attended');
+    expect(field(embed, 'Top activities (attended or hosted)')).toContain(
+      'Food & drink',
+    );
     expect(field(embed, 'Hosting')).toContain('3');
     expect(field(embed, 'Busiest month')).toContain('July');
     expect(field(embed, 'Longest streak')).toContain('5 months');

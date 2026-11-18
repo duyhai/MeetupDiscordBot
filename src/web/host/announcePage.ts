@@ -324,12 +324,17 @@ export function tickedIn(body: unknown): Ticked {
   );
 }
 
+/**
+ * `early`: the event is more than 3 weeks out (isFarOut). Warned here, where
+ * the host is announcing, not on the home page's row.
+ */
 export function confirmBody(
   event: HostEvent,
   kind: 'announce' | 'recreate',
   csrf: string,
   refused = false,
   ticked: Ticked = {},
+  early = false,
 ): SafeHtml {
   const meetup = safeHref(event.eventUrl);
   const action = kind === 'announce' ? announcePath : recreatePath;
@@ -347,6 +352,14 @@ export function confirmBody(
             A copy (same title, description, photo, venue and hosts) is created
             and announced, and this event is cancelled. The copy may be
             scheduled under the usual rules.
+          </p>`
+        : ''
+    }
+    ${
+      early
+        ? html`<p class="note attn announce-early">
+            More than 3 weeks away: the guidelines say 2–3 weeks ahead. You can
+            still announce it now.
           </p>`
         : ''
     }
@@ -458,8 +471,7 @@ export function announceBadge(
 /**
  * The event's Announce button: a disabled one once it is announced or on
  * its way, Cancel for a held one, else a link to the confirm page ("Try
- * announcing again" after a refused or unconfirmed send). More than 3
- * weeks out: a warning line, and the button still works. The server
+ * announcing again" after a refused or unconfirmed send). The server
  * decides either way.
  */
 export function announceButton(
@@ -491,14 +503,8 @@ export function announceButton(
       <button type="submit" class="secondary">Cancel the announcement</button>
     </form>`;
   }
-  const early = isFarOut(now, new Date(event.dateTime))
-    ? html`<p class="note attn announce-early">
-        More than 3 weeks away: the guidelines say 2–3 weeks ahead. You can
-        still announce it now.
-      </p>`
-    : '';
+  // The early warning is the Announce page's (confirmBody), not the row's.
   return html`<div>
-    ${early}
     <a class="button" href="${pageLink(announcePath(event.id))}">
       ${
         state === undefined || state === 'cancelled'
@@ -670,6 +676,7 @@ export function registerAnnounceRoute(
         hostLocals(res).session.csrfToken,
         refused,
         refused ? tickedIn(req.body) : {},
+        isFarOut(events.now(), new Date(event.dateTime)),
       ),
     });
   };

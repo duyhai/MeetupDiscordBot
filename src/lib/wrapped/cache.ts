@@ -18,6 +18,12 @@ const logger = new Logger({ name: 'wrappedCache' });
 export const FIRST_WRAPPED_YEAR = 2015;
 /** Bump whenever CachedWrapped's shape changes. */
 export const WRAPPED_CACHE_VERSION = 'v4';
+/**
+ * Bump whenever the stats' rules change (what counts, not the shape): the
+ * backfill treats a stored copy with an older stamp as stale and rebuilds
+ * it. 2: an event the member hosted no longer counts as attended.
+ */
+export const WRAPPED_STATS_VERSION = 2;
 export const BUILD_WINDOW_MS = 60 * 60 * 1000;
 export const SHARE_GUARD_TTL_SEC = 24 * 60 * 60;
 /**
@@ -41,6 +47,8 @@ export interface CachedWrapped {
    * do not know it ignore it, so no cache version bump.
    */
   builtFrom?: 'snapshot';
+  /** WRAPPED_STATS_VERSION at build time; absent on every copy built before 2. */
+  statsVersion?: number;
 }
 
 export function wrappedCacheKey(discordUserId: string, year: number): string {

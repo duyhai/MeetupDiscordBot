@@ -75,6 +75,7 @@ import {
   BUILDING_LEASE_TTL_SEC,
   CachedWrapped,
   FIRST_WRAPPED_YEAR,
+  WRAPPED_STATS_VERSION,
   buildingKey,
 } from './cache.js';
 import { BACKFILL_TICK_MS, MEMBERS_PER_TICK, NEXT_TICK_KEY } from './queue.js';
@@ -99,6 +100,55 @@ export const QUEUE_CLAIM_STALE_MS = 15 * 60_000;
 /** Set (to the requester's Discord id) by Run now; the tick that honours it removes it. */
 export const RUN_NOW_KEY = 'wrapped-backfill-run-now';
 export const RUN_NOW_TTL_SEC = 2 * 60 * 60;
+/**
+ * `<prefix><discordUserId>:<year>`: Leadership asked for this member's year
+ * to be rebuilt from Meetup (the staff dashboard), so the next build of it
+ * ignores freshness. Cleared once that build is written; expires otherwise.
+ */
+export const FORCE_KEY_PREFIX = 'wrapped-force:';
+export const FORCE_TTL_SEC = 24 * 60 * 60;
+
+export function forceKey(discordUserId: string, year: number): string {
+  return `${FORCE_KEY_PREFIX}${discordUserId}:${year}`;
+}
+
+async function isForced(
+  cache: KeyValueCache,
+  discordUserId: string,
+  year: number,
+): Promise<boolean> {
+  try {
+    return (await cache.get(forceKey(discordUserId, year))) !== undefined;
+  } catch {
+    return false;
+  }
+}
+
+export type RebuildRequest =
+  { kind: 'queued' } | { kind: 'already'; year: number };
+
+/**
+ * Leadership's rebuild of one member's year: marked forced and queued, so
+ * the next tick (within BACKFILL_TICK_MS) rebuilds it even when the stored
+ * copy is fresh. The queue holds one row per member: with another year of
+ * theirs queued, nothing is marked ('already').
+ */
+export async function requestWrappedRebuild(
+  store: Pick<WrappedBackfillStore, 'enqueue'>,
+  cache: KeyValueCache,
+  member: { discordUserId: string; meetupId: string },
+  year: number,
+): Promise<RebuildRequest> {
+  const key = forceKey(member.discordUserId, year);
+  await cache.set(key, '1', FORCE_TTL_SEC);
+  const result = await store.enqueue({ ...member, year });
+  if (result !== 'queued' && result.already !== year) {
+    await cache.remove(key).catch(() => undefined);
+    return { kind: 'already', year: result.already };
+  }
+  return { kind: 'queued' };
+}
+
 /** `<prefix><discordUserId>`: the member a process is sweeping right now. */
 export const MEMBER_LEASE_KEY_PREFIX = 'wrapped-backfill-member:';
 const MEMBER_LEASE_TTL_SEC = 15 * 60;
@@ -196,6 +246,7 @@ export function yearsFor(events: { dateTime: string }[], now: Date): number[] {
  * - on the token path (no `snapshotAt`): a current-year copy keeps for a
  *   week, and a copy built from the snapshot is never fresh (the member was
  *   flagged as undercounted since, so every year is rebuilt from Meetup).
+ * A copy built under older stats rules (WRAPPED_STATS_VERSION) is never fresh.
  */
 export function isFresh(
   copy: CachedWrapped | undefined,
@@ -204,7 +255,11 @@ export function isFresh(
   now: Date,
   snapshotAt?: Date,
 ): boolean {
-  if (!copy || copy.meetupId !== meetupId) {
+  if (
+    !copy ||
+    copy.meetupId !== meetupId ||
+    copy.statsVersion !== WRAPPED_STATS_VERSION
+  ) {
     return false;
   }
   const builtAt = Date.parse(copy.builtAt);
@@ -464,7 +519,8 @@ async function buildYear(
     now,
   );
   const snapshotAt = 'attendees' in reads ? ctx.snapshotAt : undefined;
-  if (isFresh(copy, member.meetupId, year, now, snapshotAt)) {
+  const forced = await isForced(tiers.cache, member.discordUserId, year);
+  if (!forced && isFresh(copy, member.meetupId, year, now, snapshotAt)) {
     return 'skipped';
   }
   const lease = buildingKey(member.discordUserId, year);
@@ -494,6 +550,11 @@ async function buildYear(
       { earlyFirstPageOnly: 'meetup' in reads },
     );
     await writeEntry(tiers, member.discordUserId, year, wrapped, deps.now());
+    if (forced) {
+      await tiers.cache
+        .remove(forceKey(member.discordUserId, year))
+        .catch(() => undefined);
+    }
     return 'built';
   } finally {
     await tiers.cache.remove(lease).catch(() => undefined);
@@ -888,6 +949,8 @@ export async function runBackfillTick(
           return await fatal(error);
         }
         if (
+          // eslint-disable-next-line no-await-in-loop -- one build in flight, by design
+          !(await isForced(cache, member.discordUserId, row.year)) &&
           isFresh(
             copy,
             member.meetupId,

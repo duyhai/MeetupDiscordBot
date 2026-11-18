@@ -63,14 +63,15 @@ function eventDay(event: WrappedEvent): string {
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
 
 function thisYearText(wrapped: CachedWrapped): string {
-  const { attendedThisYear, attendedAllTime, year } = wrapped.stats;
-  if (attendedThisYear === 0) {
+  const { attendedThisYear, attendedAllTime, year, hosting } = wrapped.stats;
+  if (attendedThisYear === 0 && !(hosting && hosting.thisYear > 0)) {
     return (
       `A quiet year: no events in ${year}, but ${plural(attendedAllTime, 'event')} ` +
-      'with us all-time. See you at the next one!'
+      'attended with us all-time. See you at the next one!'
     );
   }
-  return `${plural(attendedThisYear, 'event')} in ${year} (${attendedAllTime} all-time).`;
+  // Attended counts the events the member did not host; hosting has its own field.
+  return `${plural(attendedThisYear, 'event')} attended in ${year} (${attendedAllTime} all-time).`;
 }
 
 /**
@@ -158,7 +159,7 @@ export function wrappedEmbed(
   });
   embed.addFields({ name: 'This year', value: thisYearText(wrapped) });
   embed.addFields({
-    name: 'Top activities',
+    name: 'Top activities (attended or hosted)',
     value:
       stats.topTypes.length > 0
         ? stats.topTypes
@@ -178,14 +179,14 @@ export function wrappedEmbed(
   embed.addFields({
     name: 'Busiest month',
     value: stats.busiestMonth
-      ? `${MONTHS[stats.busiestMonth.month]} (${plural(stats.busiestMonth.count, 'event')})`
+      ? `${MONTHS[stats.busiestMonth.month]} (${plural(stats.busiestMonth.count, 'event')} attended)`
       : 'None this year',
   });
   embed.addFields({
     name: 'Longest streak',
     value:
       stats.longestStreakMonths > 0
-        ? `${plural(stats.longestStreakMonths, 'month')} in a row with at least one event`
+        ? `${plural(stats.longestStreakMonths, 'month')} in a row attending at least one event`
         : 'None this year',
   });
   embed.addFields({
