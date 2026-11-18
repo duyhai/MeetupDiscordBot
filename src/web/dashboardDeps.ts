@@ -16,7 +16,6 @@ import {
 } from '../lib/reports/buildJob.js';
 import { PostgresReportSnapshotRepository } from '../lib/repositories/postgresReportSnapshotRepository.js';
 import { PostgresIdentityRepository } from '../lib/repositories/postgresIdentityRepository.js';
-import { PostgresLinkProgressRepository } from '../lib/repositories/postgresLinkProgressRepository.js';
 import { PostgresMemberRepository } from '../lib/repositories/postgresMemberRepository.js';
 import { PostgresNoShowWorkspaceRepository } from '../lib/repositories/postgresNoShowWorkspaceRepository.js';
 import { PostgresBanRepository } from '../lib/repositories/postgresBanRepository.js';
@@ -358,7 +357,6 @@ export function dashboardPageDeps(): DashboardPageDeps {
     },
     bans: () => PostgresBanRepository.instance(),
     identity: () => PostgresIdentityRepository.instance(),
-    linkProgress: () => PostgresLinkProgressRepository.instance(),
     memberLinks: () => PostgresMemberRepository.instance(),
     workspace: () => PostgresNoShowWorkspaceRepository.instance(),
     workspaceActions: {

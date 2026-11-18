@@ -1151,6 +1151,41 @@ const suspension = (
         return (await rowOf(SEPTEMBER, memberId)).id;
       };
 
+      it('Edit date keeps a linked record inside its card month (lead review of #164)', async () => {
+        const id = await seedSuspension();
+        const recorded = okOf(
+          await act(id, 'record_suspension', {
+            suspendedOn: day('2026-10-03'),
+          }),
+        );
+        const recordId = (await stateOf(id)).suspension_record_id;
+        expect(recorded.ok).toBe(true);
+        const suspensions = await PostgresSuspensionRepository.instance();
+        // Out of September's window (it opens on Sep 1): refused, untouched.
+        expect(
+          await suspensions.editDate({
+            id: recordId,
+            suspendedAt: day('2026-08-20'),
+            editedBy: MOD,
+          }),
+        ).toEqual({ ok: false, reason: 'linked-month' });
+        // Inside it: moved; the card still names the record, and voids it.
+        expect(
+          await suspensions.editDate({
+            id: recordId,
+            suspendedAt: day('2026-09-25'),
+            editedBy: MOD,
+          }),
+        ).toMatchObject({ ok: true });
+        expect((await stateOf(id)).suspension_record_id).toBe(recordId);
+        const [moved] = await suspensions.listByIds([recordId]);
+        expect(moved.suspendedAt).toEqual(day('2026-09-25'));
+        okOf(await act(id, 'void', { note: 'wrong date after all' }));
+        const [voided] = await suspensions.listByIds([recordId]);
+        expect(voided.voidedAt).toBeInstanceOf(Date);
+        expect((await stateOf(id)).status).toBe('voided');
+      });
+
       it('refuses a stale version and writes nothing', async () => {
         const id = await seedWarning();
         const first = await act(id, 'hold', {

@@ -236,7 +236,7 @@ describe('tables on narrow screens', () => {
     },
   );
 
-  it.each([['/dashboard/trends', 5]])(
+  it.each([['/dashboard/trends', 4]])(
     '%s keeps its wide data tables in scroll boxes',
     async (path, count) => {
       const { get } = await setup();

@@ -15,7 +15,6 @@ import {
   eventRequestRow,
   fakeEventRequests,
   fakeIdentity,
-  fakeLinkProgress,
   fakePageDeps,
   fakeSnapshots,
   fakeWorkspace,
@@ -129,11 +128,8 @@ describe('Home report cards', () => {
   });
 
   it('has no Link progress card (Hai, 2026-11-16)', async () => {
-    const links = fakeLinkProgress();
-    const out = await render({ linkProgress: async () => links });
+    const out = await render();
     expect(out).not.toContain('Link progress');
-    expect(out).not.toContain('Linked 200');
-    expect(links.listDays).not.toHaveBeenCalled();
   });
 
   it('has no Wrapped or organizer login cards: they are on Settings', async () => {

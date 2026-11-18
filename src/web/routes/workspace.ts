@@ -701,7 +701,7 @@ function historyBody(
 // one that needs nothing (it counts as done). The hint shows on hover only,
 // so each tip repeats the difference for touch devices.
 const HOLD_HINT =
-  'Not decided yet: the card stays open as On hold until someone reopens it.';
+  'Not decided yet: the card stays open as On hold until someone reopens or skips it.';
 const HOLD_TIP =
   "Use this when the card can't be finished yet, for example while you wait " +
   'on the member, a host or Leadership. It stays visible as On hold, not ' +

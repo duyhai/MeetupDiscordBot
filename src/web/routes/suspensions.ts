@@ -69,6 +69,14 @@ export const DATE_EDIT_MESSAGES = {
   'not-live': 'That suspension is voided or no longer exists. Nothing changed.',
   'date-taken':
     'This member already has another suspension on that date. Nothing changed.',
+  overlaps:
+    'On that date this suspension would overlap another of this member’s suspensions. Nothing changed.',
+  reorders:
+    'Another suspension sits between the old and new dates; void and re-record instead.',
+  'linked-month':
+    'This suspension is linked to a no-show workspace card, and that date is ' +
+    'outside the card’s month. Void it on the card and record it again to ' +
+    'move it to another month.',
   'bad-date': `The date must be a real date from ${FIRST_SUSPENSION_DAY} through today.`,
   invalid:
     'That request could not be understood. Reload the page and try again.',
@@ -286,7 +294,8 @@ const EDIT_DATE_TIP =
   'worked out again from the member’s other live suspensions before the new ' +
   'date, as when recording. The old date, the new one, you and the time are ' +
   'kept on the record and posted to the moderation log. Other suspensions ' +
-  'keep their lengths. Nothing changes on Meetup.';
+  'are not changed: a date that passes another suspension, or overlaps ' +
+  'one, is refused. Nothing changes on Meetup.';
 
 /** The Edit date pop-up for one live record: Leadership only (display; the POST asks Discord live). */
 function editDateForm(
@@ -338,8 +347,17 @@ export function registerSuspensionRoutes(
     // The Banned tab moved to its own page (Member moderation → Banned):
     // old links and bookmarks land there, with only the known parameters.
     if (req.query.state === 'banned') {
+      // 302: a moved page, but not promised forever. Only the known
+      // parameters go along (show=lifted, a valid page).
       const show = req.query.show === 'lifted' ? 'lifted' : undefined;
-      res.redirect(301, bannedTabPath(show ? { show } : {}));
+      const page = parsePage(req.query.page);
+      const target = bannedTabPath(show ? { show } : {});
+      res.redirect(
+        302,
+        page > 1
+          ? `${target}${target.includes('?') ? '&' : '?'}page=${page}`
+          : target,
+      );
       return;
     }
     const state = parseState(req.query.state);

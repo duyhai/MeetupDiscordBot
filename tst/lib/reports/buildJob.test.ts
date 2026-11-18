@@ -34,7 +34,6 @@ import {
   planDueWork,
   snapshotKey,
 } from '../../../src/lib/reports/buildSchedule.js';
-import { collectLinkProgress } from '../../../src/lib/reports/linkProgress.js';
 import { buildMonthReports } from '../../../src/lib/reports/monthReports.js';
 import {
   defaultOrganizerMeetupDeps,
@@ -44,7 +43,6 @@ import {
 import { Period, periodOf } from '../../../src/lib/reports/period.js';
 import { REPORT_TYPES } from '../../../src/lib/reports/types.js';
 import { PostgresDashboardNoticeRepository } from '../../../src/lib/repositories/postgresDashboardNoticeRepository.js';
-import { PostgresLinkProgressRepository } from '../../../src/lib/repositories/postgresLinkProgressRepository.js';
 import { PostgresNoShowWorkspaceRepository } from '../../../src/lib/repositories/postgresNoShowWorkspaceRepository.js';
 import { PostgresReportSnapshotRepository } from '../../../src/lib/repositories/postgresReportSnapshotRepository.js';
 import { PostgresSuspensionRepository } from '../../../src/lib/repositories/postgresSuspensionRepository.js';
@@ -53,7 +51,6 @@ import { FakeCache } from '../../web/fakeCache.js';
 import {
   Clock,
   ExpiringCache,
-  FakeLinkProgressStore,
   FakeNoticeStore,
   FakeSnapshotStore,
   Harness,
@@ -75,9 +72,6 @@ vi.mock(
 vi.mock('../../../src/lib/reports/monthReports.js', () => ({
   buildMonthReports: vi.fn(),
 }));
-vi.mock('../../../src/lib/reports/linkProgress.js', () => ({
-  collectLinkProgress: vi.fn(),
-}));
 vi.mock('../../../src/lib/helpers/discordLogger.js', () => ({
   logAlert: vi.fn(),
   recentEmbedTitles: vi.fn(),
@@ -94,10 +88,6 @@ vi.mock(
     >()),
     PostgresDashboardNoticeRepository: { instance: vi.fn() },
   }),
-);
-vi.mock(
-  '../../../src/lib/repositories/postgresLinkProgressRepository.js',
-  () => ({ PostgresLinkProgressRepository: { instance: vi.fn() } }),
 );
 vi.mock(
   '../../../src/lib/repositories/postgresSuspensionRepository.js',
@@ -164,7 +154,6 @@ describe('runBuildTick guards', () => {
     });
     await runBuildTick(h2.deps);
     expect(fetchedPeriods(h2)).toEqual(['2026-9']);
-    expect(h2.linkProgress.days.size).toBe(0);
     expect(h2.cache.values.has(LEASE_KEY)).toBe(false);
   });
 
@@ -176,7 +165,6 @@ describe('runBuildTick guards', () => {
     });
     await runBuildTick(h.deps);
     expect(fetchedPeriods(h)).toEqual(['2026-9']);
-    expect(h.collectLinkProgress).not.toHaveBeenCalled();
     expect(h.cache.values.has(LEASE_KEY)).toBe(false);
   });
 
@@ -191,55 +179,27 @@ describe('runBuildTick guards', () => {
     expect(h.cache.values.has(LEASE_KEY)).toBe(false);
   });
 
-  it('a month that ends at 17:01 still starts link progress', async () => {
-    const h = makeDeps({ clock: new Clock('2026-10-05T16:59:00Z') });
-    h.snapshots.seedBoth(SEPT, '2026-10-05T16:05:00Z');
-    h.fetchMonthReports.mockImplementationOnce((period) => {
-      h.clock.set('2026-10-05T17:01:00Z');
-      return Promise.resolve(monthReports(period));
-    });
-    await runBuildTick(h.deps);
-    expect(fetchedPeriods(h)).toEqual(['2026-10']);
-    expect(h.collectLinkProgress).toHaveBeenCalledTimes(1);
-    expect([...h.linkProgress.days.keys()]).toEqual(['2026-10-05']);
-  });
-
-  it('a month that ends at 17:45 does not start link progress', async () => {
-    const h = makeDeps({ clock: new Clock('2026-10-05T17:30:00Z') });
-    h.snapshots.seedBoth(SEPT, '2026-10-05T16:05:00Z');
-    h.fetchMonthReports.mockImplementationOnce((period) => {
-      h.clock.set('2026-10-05T17:45:00Z');
-      return Promise.resolve(monthReports(period));
-    });
-    await runBuildTick(h.deps);
-    expect(fetchedPeriods(h)).toEqual(['2026-10']);
-    expect(h.collectLinkProgress).not.toHaveBeenCalled();
-  });
-
   it('plans with a fresh clock once the lease is held', async () => {
     // A tick that hung on Redis across midnight must plan for the new day.
+    // Both months were built on the 5th: nothing is due at 23:58 that day,
+    // both are due on the 6th.
     const h = makeDeps({ clock: new Clock('2026-10-05T23:58:00Z') });
+    h.snapshots.seedBoth(SEPT, '2026-10-05T16:05:00Z');
+    h.snapshots.seedBoth(OCT, '2026-10-05T16:05:00Z');
     h.cacheSpy.mockImplementationOnce(() => {
       h.clock.set('2026-10-06T16:05:00Z');
       return Promise.resolve(h.cache);
     });
     await runBuildTick(h.deps);
-    expect([...h.linkProgress.days.keys()]).toEqual(['2026-10-06']);
+    expect(fetchedPeriods(h)).toEqual(['2026-9', '2026-10']);
   });
 
   it('a missing Redis done-key does not rebuild a month Postgres shows as built', async () => {
     const h = makeDeps();
     h.snapshots.seedBoth(SEPT, '2026-10-05T16:05:00Z');
     h.snapshots.seedBoth(OCT, '2026-10-05T16:05:00Z');
-    h.linkProgress.days.set('2026-10-05', {
-      linked: 1,
-      unlinked: 1,
-      reverifyTagged: 0,
-      onboarding: 0,
-    });
     await runBuildTick(h.deps);
     expect(h.fetchMonthReports).not.toHaveBeenCalled();
-    expect(h.collectLinkProgress).not.toHaveBeenCalled();
   });
 
   it('a held lease skips the tick', async () => {
@@ -247,7 +207,6 @@ describe('runBuildTick guards', () => {
     h.cache.values.set(LEASE_KEY, 'someone-else');
     await runBuildTick(h.deps);
     expect(h.fetchMonthReports).not.toHaveBeenCalled();
-    expect(h.collectLinkProgress).not.toHaveBeenCalled();
     expect(h.cache.values.get(LEASE_KEY)).toBe('someone-else');
   });
 
@@ -397,7 +356,6 @@ describe('runBuildTick builds', () => {
       planDueWork({
         now: new Date('2026-10-08T16:15:00Z'),
         builtAt,
-        linkProgressWrittenToday: true,
       }),
     ).toEqual([{ kind: 'month', period: SEPT, reason: 'previous-catch-up' }]);
   });
@@ -405,12 +363,6 @@ describe('runBuildTick builds', () => {
   it("the open month's daily build posts nothing on success", async () => {
     const h = makeDeps({ reportReadyEnabled: false });
     h.snapshots.seedBoth(SEPT, '2026-10-05T16:05:00Z');
-    h.linkProgress.days.set('2026-10-05', {
-      linked: 1,
-      unlinked: 1,
-      reverifyTagged: 0,
-      onboarding: 0,
-    });
     await runBuildTick(h.deps);
     expect(fetchedPeriods(h)).toEqual(['2026-10']);
     expect(h.alert).not.toHaveBeenCalled();
@@ -478,12 +430,10 @@ describe('failure alerts', () => {
     expect(clientError.message).toContain(SENTINEL); // why it must never be shown
     const h = makeDeps();
     h.fetchMonthReports.mockRejectedValue(clientError);
-    h.collectLinkProgress.mockRejectedValue(clientError);
     await runBuildTick(h.deps);
     expect(titles(h.alert)).toEqual([
       'Report build failed: September 2026',
       'Report build failed: October 2026',
-      'Link progress not recorded',
     ]);
     descriptions(h.alert).forEach((d) => {
       expect(d).toContain('Meetup API error (HTTP 502)');
@@ -640,7 +590,6 @@ describe('failure backoff', () => {
     h.cache.values.set(BACKOFF, '2026-10-05T16:00:00.000Z');
     await runBuildTick(h.deps);
     expect(fetchedPeriods(h)).toEqual(['2026-10']);
-    expect(h.linkProgress.days.has('2026-10-05')).toBe(true);
   });
 
   it('skips the month when the backoff key cannot be read (fail closed)', async () => {
@@ -660,7 +609,6 @@ describe('failure backoff', () => {
     });
     await runBuildTick(h.deps);
     expect(h.fetchMonthReports).not.toHaveBeenCalled();
-    expect(h.linkProgress.days.has('2026-10-05')).toBe(true);
     expect(h.cache.values.has(LEASE_KEY)).toBe(false);
   });
 
@@ -1043,14 +991,6 @@ describe('report-ready', () => {
       h.snapshots.seedBoth(SEPT, '2026-10-03T16:10:00Z');
       h.snapshots.seedBoth(OCT, '2026-10-10T16:05:00Z');
     }
-    if (!options.linkProgress) {
-      h.linkProgress.days.set('2026-10-10', {
-        linked: 1,
-        unlinked: 1,
-        reverifyTagged: 0,
-        onboarding: 0,
-      });
-    }
     return h;
   }
 
@@ -1261,48 +1201,6 @@ describe('report-ready', () => {
     const h = settled();
     h.notices.claim.mockRejectedValueOnce(new Error('pg down'));
     expect(await maybePostReportReady(h.deps)).toBe('failed');
-  });
-});
-
-describe('link progress', () => {
-  it('writes link progress once per day', async () => {
-    const h = makeDeps();
-    await runBuildTick(h.deps);
-    expect(h.linkProgress.days.get('2026-10-05')).toEqual({
-      linked: 10,
-      unlinked: 5,
-      reverifyTagged: 2,
-      onboarding: 1,
-    });
-    h.clock.set('2026-10-05T16:30:00Z');
-    await runBuildTick(h.deps);
-    expect(h.collectLinkProgress).toHaveBeenCalledTimes(1);
-    h.clock.set('2026-10-06T16:15:00Z');
-    await runBuildTick(h.deps);
-    expect(h.collectLinkProgress).toHaveBeenCalledTimes(2);
-    expect(h.linkProgress.days.has('2026-10-06')).toBe(true);
-  });
-
-  it('a link-progress failure alerts once per day and does not stop the month builds', async () => {
-    const h = makeDeps({ reportReadyEnabled: false });
-    h.collectLinkProgress.mockRejectedValue(new Error('discord down'));
-    await runBuildTick(h.deps);
-    expect(h.snapshots.rows).toHaveLength(4);
-    expect(titles(h.alert)).toEqual([
-      'Reports built: September 2026',
-      'Link progress not recorded',
-    ]);
-    expect(descriptions(h.alert)[1]).toContain(
-      'Error (details in the process log)',
-    );
-
-    h.clock.set('2026-10-05T16:30:00Z');
-    await runBuildTick(h.deps);
-    expect(h.collectLinkProgress).toHaveBeenCalledTimes(2);
-    expect(
-      titles(h.alert).filter((t) => t === 'Link progress not recorded'),
-    ).toHaveLength(1);
-    expect(h.cache.values.has(LEASE_KEY)).toBe(false);
   });
 });
 
@@ -1685,16 +1583,12 @@ describe('defaultBuildJobDeps', () => {
   it('defaultBuildJobDeps reads Meetup only through the organizer wrapper', async () => {
     const snapshots = { save: vi.fn(), getCurrentMeta: vi.fn() };
     const notices = { claim: vi.fn(), release: vi.fn() };
-    const linkProgress = { hasDay: vi.fn(), upsertDay: vi.fn() };
     const suspensions = { listByMemberIds: vi.fn() };
     vi.mocked(PostgresReportSnapshotRepository.instance).mockResolvedValue(
       snapshots as never,
     );
     vi.mocked(PostgresDashboardNoticeRepository.instance).mockResolvedValue(
       notices as never,
-    );
-    vi.mocked(PostgresLinkProgressRepository.instance).mockResolvedValue(
-      linkProgress as never,
     );
     vi.mocked(PostgresSuspensionRepository.instance).mockResolvedValue(
       suspensions as never,
@@ -1714,7 +1608,6 @@ describe('defaultBuildJobDeps', () => {
     expect(deps.cache).toBe(ApplicationCache);
     expect(deps.snapshots).toBe(snapshots);
     expect(deps.notices).toBe(notices);
-    expect(deps.linkProgress).toBe(linkProgress);
     expect(deps.reportReadyEnabled()).toBe(true);
 
     const asOf = new Date('2026-10-01T07:00:00Z');
@@ -1743,8 +1636,6 @@ describe('defaultBuildJobDeps', () => {
       client,
       BOT_ALERTS_CHANNEL_ID,
     );
-    await deps.collectLinkProgress();
-    expect(collectLinkProgress).toHaveBeenCalledWith(client);
     expect(deps.newLeaseValue()).not.toBe(deps.newLeaseValue());
     expect(deps.newLeaseValue()).toMatch(/^[0-9a-f-]{36}$/);
   });
@@ -1781,9 +1672,7 @@ describe('fake store sanity', () => {
     expect(await b.claim('report_ready', SEPT)).toBe('retry');
   });
 
-  it('FakeLinkProgressStore and FakeSnapshotStore behave like the repositories', async () => {
-    const store = new FakeLinkProgressStore();
-    expect(await store.hasDay('2026-10-05')).toBe(false);
+  it('FakeSnapshotStore behaves like the repository', async () => {
     const snaps = new FakeSnapshotStore();
     snaps.seed('no_show', SEPT, '2026-10-02T16:00:00Z');
     snaps.seed('no_show', SEPT, '2026-10-03T16:00:00Z');
@@ -2065,14 +1954,12 @@ describe('workspace sync hooks', () => {
     h.syncWorkspace.mock.calls.map(([p]) => `${p.year}-${p.month}`);
   const workspaceAlerts = (h: Harness) =>
     titles(h.alert).filter((t) => t.startsWith('No-show workspace'));
-  const LINK = { linked: 1, unlinked: 1, reverifyTagged: 0, onboarding: 0 };
 
   /** Oct 10: nothing is due; September is finished and built. */
   function idle() {
     const h = makeDeps({ clock: new Clock('2026-10-10T16:15:00Z') });
     h.snapshots.seedBoth(SEPT, '2026-10-03T16:10:00Z');
     h.snapshots.seedBoth(OCT, '2026-10-10T16:05:00Z');
-    h.linkProgress.days.set('2026-10-10', LINK);
     return h;
   }
 
@@ -2115,21 +2002,16 @@ describe('workspace sync hooks', () => {
     const h = makeDeps({ clock: new Clock('2026-09-10T16:15:00Z') });
     h.snapshots.seedBoth(AUG, '2026-09-03T16:10:00Z');
     h.snapshots.seedBoth(SEPT, '2026-09-10T16:05:00Z');
-    h.linkProgress.days.set('2026-09-10', LINK);
     await runBuildTick(h.deps);
     expect(synced(h)).toEqual(['2026-9']);
   });
 
-  it('syncs the months it built before report-ready, the rest after; link progress keeps its place', async () => {
+  it('syncs the months it built before report-ready, the rest after', async () => {
     const h = makeDeps({ clock: new Clock('2026-10-05T16:15:00Z') });
     const order: string[] = [];
     h.alert.mockImplementation(async (entry) => {
       order.push(entry.title);
       return true;
-    });
-    h.collectLinkProgress.mockImplementation(async () => {
-      order.push('link progress');
-      return { ...LINK };
     });
     h.syncWorkspace.mockImplementation(async (period) => {
       order.push(`sync ${period.month}`);
@@ -2138,7 +2020,6 @@ describe('workspace sync hooks', () => {
     await runBuildTick(h.deps);
     expect(order).toEqual([
       'Reports built: September 2026',
-      'link progress',
       'sync 9',
       'sync 10',
       'Reports ready: September 2026',
@@ -2151,7 +2032,6 @@ describe('workspace sync hooks', () => {
     h.snapshots.seedBoth(SEPT, '2026-10-02T03:00:00Z', {
       builtBy: 'backfill',
     });
-    h.linkProgress.days.set('2026-10-17', LINK);
     return h;
   }
 
@@ -2227,7 +2107,6 @@ describe('workspace sync hooks', () => {
     const h = makeDeps({ clock: new Clock('2026-10-10T16:15:00Z') });
     h.snapshots.seedBoth(SEPT, '2026-10-03T16:10:00Z');
     h.snapshots.seedBoth(OCT, '2026-10-09T16:05:00Z');
-    h.linkProgress.days.set('2026-10-10', LINK);
     const order: string[] = [];
     h.alert.mockImplementation(async (entry) => {
       order.push(entry.title);
@@ -2279,9 +2158,8 @@ describe('workspace sync hooks', () => {
       new TypeError('relation "noshow_workspace_rows" does not exist: secret'),
     );
     await expect(runBuildTick(h.deps)).resolves.toBeUndefined();
-    // The builds were saved, link progress written, report-ready posted.
+    // The builds were saved and report-ready posted.
     expect(h.snapshots.rows).toHaveLength(4);
-    expect(h.linkProgress.days.has('2026-10-05')).toBe(true);
     expect(ready(h)).toHaveLength(1);
     expect(workspaceAlerts(h)).toEqual([
       'No-show workspace not updated: September 2026',
@@ -2380,7 +2258,6 @@ describe('workspace sync hooks', () => {
     // Only Hall of Fame stored for September; October is current.
     h.snapshots.seed('hall_of_fame', SEPT, '2026-10-03T16:10:00Z');
     h.snapshots.seedBoth(OCT, '2026-10-10T16:05:00Z');
-    h.linkProgress.days.set('2026-10-10', LINK);
     h.fetchMonthReports.mockRejectedValue(new Error('not now'));
     h.syncWorkspace.mockImplementation(async (period) => {
       return isSept(period) ? 'malformed' : 'current';
@@ -2546,9 +2423,6 @@ describe('workspace sync hooks', () => {
     vi.mocked(PostgresDashboardNoticeRepository.instance).mockResolvedValue(
       {} as never,
     );
-    vi.mocked(PostgresLinkProgressRepository.instance).mockResolvedValue(
-      {} as never,
-    );
     vi.mocked(PostgresSuspensionRepository.instance).mockResolvedValue(
       {} as never,
     );
@@ -2602,9 +2476,6 @@ describe('workspace sync hooks', () => {
       })),
     } as never);
     vi.mocked(PostgresDashboardNoticeRepository.instance).mockResolvedValue(
-      {} as never,
-    );
-    vi.mocked(PostgresLinkProgressRepository.instance).mockResolvedValue(
       {} as never,
     );
     vi.mocked(PostgresSuspensionRepository.instance).mockResolvedValue(

@@ -288,4 +288,11 @@ describe('gridlines and line hover (Hai, 2026-11-17)', () => {
     expect(out).not.toContain('<circle');
     expect(out).toContain('<summary>Data</summary>');
   });
+
+  it('a huge value still draws a bounded number of gridlines', () => {
+    const out = render({
+      series: [{ label: 'No-shows', values: [3, Number.MAX_VALUE] }],
+    });
+    expect((out.match(/class="grid"/g) ?? []).length).toBeLessThanOrEqual(11);
+  });
 });

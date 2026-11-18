@@ -120,6 +120,9 @@ describe('editSuspensionDate', () => {
     ['not-live', 'not-live'],
     ['unchanged', 'date-unchanged'],
     ['date-taken', 'date-taken'],
+    ['overlaps', 'overlaps'],
+    ['reorders', 'reorders'],
+    ['linked-month', 'linked-month'],
   ] as const)('maps %s to %s and posts nothing', async (reason, code) => {
     const { deps } = setup({ ok: false, reason });
     expect(await editSuspensionDate(deps, input())).toEqual({ code });

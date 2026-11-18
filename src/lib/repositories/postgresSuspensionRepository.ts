@@ -2,6 +2,7 @@ import pg from 'pg';
 import { Logger } from 'tslog';
 
 import { recommendedSuspensionDays } from '../helpers/noShowReport.js';
+import { linkWindow } from '../workspace/months.js';
 import {
   DASHBOARD_LOCK_CLASS,
   DASHBOARD_LOCK_TIMEOUT_MS,
@@ -189,8 +190,19 @@ export type EditDateOutcome =
   | { ok: true; before: SuspensionRecord; after: SuspensionRecord }
   | {
       ok: false;
-      /** Unknown or voided; the same day; another live record has that day. */
-      reason: 'not-live' | 'unchanged' | 'date-taken';
+      /**
+       * Unknown or voided; the same day; another live record has that day;
+       * the new days overlap another live record; the move would pass
+       * another live record (changing the order the lengths count by); the
+       * record backs a workspace card and the date leaves that card's month.
+       */
+      reason:
+        | 'not-live'
+        | 'unchanged'
+        | 'date-taken'
+        | 'overlaps'
+        | 'reorders'
+        | 'linked-month';
     };
 
 /** The dashboard's three tabs: the command's active/past split of live rows, plus voided rows. */
@@ -630,6 +642,22 @@ export class PostgresSuspensionRepository implements SuspensionRepository {
         if (taken.rowCount) {
           return { ok: false, reason: 'date-taken' } as const;
         }
+        // No other live record may start between the old and new dates:
+        // a move past one would change which records count as earlier, and
+        // so other records' lengths. Void and re-record for that.
+        const [low, high] =
+          row.suspended_at < suspendedAt
+            ? [row.suspended_at, suspendedAt]
+            : [suspendedAt, row.suspended_at];
+        const crossing = await client.query(
+          `SELECT 1 FROM suspension_records
+            WHERE member_id = $1 AND voided_at IS NULL AND id <> $2
+              AND suspended_at > $3 AND suspended_at < $4 LIMIT 1`,
+          [memberId, id, low, high],
+        );
+        if (crossing.rowCount) {
+          return { ok: false, reason: 'reorders' } as const;
+        }
         const prior = await client.query<{ count: string }>(
           `SELECT COUNT(*) AS count FROM suspension_records
             WHERE member_id = $1 AND suspended_at < $2 AND voided_at IS NULL AND id <> $3`,
@@ -638,6 +666,40 @@ export class PostgresSuspensionRepository implements SuspensionRepository {
         const durationDays = recommendedSuspensionDays(
           Number(prior.rows[0].count),
         );
+        // As recording: never two live suspensions over the same day.
+        const overlapping = await client.query(
+          `SELECT 1 FROM suspension_records s
+            WHERE s.member_id = $1 AND s.voided_at IS NULL AND s.id <> $4
+              AND (s.suspended_at AT TIME ZONE 'UTC')::date
+                  <= ($2::timestamptz AT TIME ZONE 'UTC')::date + $3::int - 1
+              AND (s.suspended_at AT TIME ZONE 'UTC')::date + s.duration_days - 1
+                  >= ($2::timestamptz AT TIME ZONE 'UTC')::date
+            LIMIT 1`,
+          [memberId, suspendedAt, durationDays, id],
+        );
+        if (overlapping.rowCount) {
+          return { ok: false, reason: 'overlaps' } as const;
+        }
+        // A record a workspace card links stays inside that card's link
+        // window, as recording and linking require.
+        const workspace = await client.query<{ present: boolean }>(
+          `SELECT to_regclass('noshow_workspace_rows') IS NOT NULL AS present`,
+        );
+        if (workspace.rows[0]?.present === true) {
+          const card = await client.query<{ period_key: string }>(
+            `SELECT to_char(period, 'YYYY-MM') AS period_key
+               FROM noshow_workspace_rows WHERE suspension_record_id = $1 LIMIT 1`,
+            [id],
+          );
+          const key = card.rows[0]?.period_key;
+          if (key !== undefined) {
+            const [year, month] = key.split('-').map(Number);
+            const window = linkWindow({ year, month });
+            if (suspendedAt < window.from || suspendedAt >= window.until) {
+              return { ok: false, reason: 'linked-month' } as const;
+            }
+          }
+        }
         const updated = await client.query<SuspensionRow>(
           `UPDATE suspension_records SET suspended_at = $2, duration_days = $3
             WHERE id = $1 RETURNING *`,

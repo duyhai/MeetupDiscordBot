@@ -93,12 +93,16 @@ describe('Banned tab', () => {
     expect(page.status).toBe(200);
     expect(page.text).toContain('<h1>Banned members</h1>');
     const old = await get('/dashboard/suspensions?state=banned');
-    expect(old.status).toBe(301);
+    expect(old.status).toBe(302);
     expect(old.headers.location).toBe('/dashboard/bans');
     const lifted = await get(
       '/dashboard/suspensions?state=banned&show=lifted&result=%3Cb%3E',
     );
     expect(lifted.headers.location).toBe('/dashboard/bans?show=lifted');
+    const paged = await get('/dashboard/suspensions?state=banned&page=3');
+    expect(paged.headers.location).toBe('/dashboard/bans?page=3');
+    const junkPage = await get('/dashboard/suspensions?state=banned&page=x');
+    expect(junkPage.headers.location).toBe('/dashboard/bans');
     const records = await get('/dashboard/suspensions');
     expect(words(records.text)).not.toContain('Banned (');
   });
@@ -492,7 +496,7 @@ describe('ban forms on the Banned tab', () => {
       res.text.indexOf('<table'),
     );
     expect(words(add)).toContain(
-      'Name (optional: left blank, it is taken from Meetup)',
+      'Name (optional: left blank, it is taken from Meetup, and stays blank if Meetup no longer lists them)',
     );
     expect(add).not.toMatch(/name="memberName"[^>]*required/);
     // PAGE_NOW is Oct 5, 2026 Pacific.

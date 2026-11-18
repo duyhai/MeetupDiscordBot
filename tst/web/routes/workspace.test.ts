@@ -818,25 +818,32 @@ describe('GET /dashboard/no-shows/:period (month cards)', () => {
         'hold',
         'Put on hold',
         'Put this card on hold',
-        'Not decided yet: the card stays open as On hold until someone reopens it.',
-        'stays visible as On hold, not done,',
+        'Not decided yet: the card stays open as On hold until someone reopens or skips it.',
+        [
+          'stays visible as On hold, not done,',
+          '(for a suspension, Leadership only) records the suspension',
+        ],
       ],
       [
         'skip',
         'Skip',
         'Skip this card',
         'Decided: no action needed. The card counts as done.',
-        'the card counts as done.',
+        ['the card counts as done.', 'waiting for the third no-show'],
       ],
-    ])('%s asks why in a modal', async (action, label, confirm, hint, tip) => {
+    ])('%s asks why in a modal', async (action, label, confirm, hint, tips) => {
       const { get } = await setup({ seed: seed([warningRow()]) });
       const [card] = cards((await get(MONTH)).text);
       expect(closed(card)).toContain(
         `<summary class="button ghost" title="${hint}">${label}</summary>`,
       );
-      expect(
-        dialogWith(card, `value="${action}"`).replace(/\s+/g, ' '),
-      ).toContain(tip);
+      const dialogText = dialogWith(card, `value="${action}"`).replace(
+        /\s+/g,
+        ' ',
+      );
+      for (const tip of tips) {
+        expect(dialogText).toContain(tip);
+      }
       const d = dialogWith(card, `value="${action}"`);
       expect(d).toContain(
         '<textarea name="note" rows="3" maxlength="2000" required></textarea>',

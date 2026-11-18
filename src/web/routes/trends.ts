@@ -12,7 +12,6 @@ import {
   previousPeriod,
   suspensionCutoff,
 } from '../../lib/reports/period.js';
-import { LinkProgressDay } from '../../lib/repositories/postgresLinkProgressRepository.js';
 import {
   SERIES_MAX_MONTHS,
   SnapshotMeta,
@@ -38,8 +37,6 @@ const RANGE_LABELS: Record<RangeChoice, string> = {
   '60': '5 years',
   all: 'All',
 };
-const MAX_LINK_DAYS = 1000;
-const DAY = /^(\d{4}-\d{2})-\d{2}$/;
 
 /** `?months=` when it is exactly one of the fixed choices (a plain string), else 24. */
 function parseRange(value: unknown): RangeChoice {
@@ -87,22 +84,10 @@ function summariesByMonth(
   return out;
 }
 
-/** A stored count (summary field or link progress column): `Number(x) || 0`, never negative. */
+/** A stored summary count: `Number(x) || 0`, never negative. */
 function count(source: object | undefined, field: string): number {
   const value = (source as Record<string, unknown> | undefined)?.[field];
   return Math.max(0, Number(value) || 0);
-}
-
-/** The last recorded day of each month (listDays is newest first). */
-function lastDayByMonth(days: LinkProgressDay[]): Map<string, LinkProgressDay> {
-  const out = new Map<string, LinkProgressDay>();
-  (Array.isArray(days) ? days : []).forEach((d) => {
-    const month = typeof d?.day === 'string' ? DAY.exec(d.day)?.[1] : undefined;
-    if (month !== undefined && !out.has(month)) {
-      out.set(month, d);
-    }
-  });
-  return out;
 }
 
 /** The categories: the fixed window, or for `all` from the earliest stored month (else the last 24). */
@@ -138,37 +123,32 @@ function rangeNav(current: RangeChoice): SafeHtml {
 
 export function registerTrendsRoutes(
   router: express.Router,
-  deps: Pick<
-    DashboardPageDeps,
-    'now' | 'snapshots' | 'suspensions' | 'linkProgress'
-  >,
+  deps: Pick<DashboardPageDeps, 'now' | 'snapshots' | 'suspensions'>,
 ): void {
   router.get(DASHBOARD_PATHS.trends, (async (req, res) => {
     const range = parseRange(req.query.months);
     const months = RANGES[range];
     const window = monthsEndingAt(periodOf(deps.now()), months);
-    // Summaries only (no payloads), suspension counts per month (at most one
-    // row each) and at most 1000 small link progress rows.
+    // Summaries only (no payloads) and suspension counts per month (at
+    // most one row each).
     const loaded = await load(res, WHAT, async () => {
-      const [snapshots, suspensions, linkProgress] = await Promise.all([
+      const [snapshots, suspensions] = await Promise.all([
         deps.snapshots(),
         deps.suspensions(),
-        deps.linkProgress(),
       ]);
-      const [hallOfFame, noShows, suspended, days] = await Promise.all([
+      const [hallOfFame, noShows, suspended] = await Promise.all([
         snapshots.listSummarySeries('hall_of_fame', { months }),
         snapshots.listSummarySeries('no_show', { months }),
         // UTC midnight of the first month's first day: suspended_at's own
         // convention, from the one helper that defines that boundary.
         suspensions.countByMonth(suspensionCutoff(previousPeriod(window[0]))),
-        linkProgress.listDays(Math.min(MAX_LINK_DAYS, months * 31)),
       ]);
-      return { hallOfFame, noShows, suspended, days };
+      return { hallOfFame, noShows, suspended };
     });
     if (!loaded.ok) {
       return;
     }
-    const { hallOfFame, noShows, suspended, days } = loaded.value;
+    const { hallOfFame, noShows, suspended } = loaded.value;
 
     const stored = [...asList(hallOfFame), ...asList(noShows)]
       .map((m) => m?.period)
@@ -182,7 +162,6 @@ export function registerTrendsRoutes(
         Math.max(0, Number(r?.count) || 0),
       ]),
     );
-    const links = lastDayByMonth(days);
     const series = (label: string, value: (month: string) => number) => ({
       label,
       values: categories.map(value),
@@ -222,15 +201,6 @@ export function registerTrendsRoutes(
         categories,
         series: [series('New hosts', (m) => count(hof.get(m), 'newHosts'))],
       }),
-      chart({
-        title: 'Link progress (last recorded day of each month)',
-        kind: 'line',
-        categories,
-        series: [
-          series('Linked', (m) => count(links.get(m), 'linked')),
-          series('Unlinked', (m) => count(links.get(m), 'unlinked')),
-        ],
-      }),
     ];
 
     dashboardPage(res, {
@@ -240,8 +210,7 @@ export function registerTrendsRoutes(
         ${rangeNav(range)}
         <p class="muted">
           Month by month from the stored reports. Months with no report show as
-          0. Link progress is recorded once a day since the dashboard's build
-          job started.
+          0.
         </p>
         ${charts.map((c) => html`<section>${c}</section>`)}
       </div>`,

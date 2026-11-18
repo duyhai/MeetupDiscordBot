@@ -62,7 +62,7 @@ describe('runBuildTickSafely', () => {
   it('an infra error message reaches the process log', async () => {
     const log = fakeLog();
     const harness = makeDeps();
-    harness.deps.linkProgress.hasDay = () =>
+    harness.deps.snapshots.getCurrentMeta = () =>
       Promise.reject(new Error('connect ECONNREFUSED 127.0.0.1:5432'));
 
     await runBuildTickSafely(() => Promise.resolve(harness.deps), log);

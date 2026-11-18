@@ -40,6 +40,8 @@ export interface ChartInput {
 const DEFAULT_WIDTH = 720;
 const DEFAULT_HEIGHT = 260;
 const HEX = /^#[0-9a-f]{6}$/i;
+/** At most this many y-axis labels and gridlines. */
+const MAX_TICKS = 12;
 /** Per-bar <title> tooltips only up to this many categories. */
 export const MAX_TOOLTIP_CATEGORIES = 60;
 
@@ -293,8 +295,10 @@ export function chart(input: ChartInput): SafeHtml {
       >${c}</text
     >`;
   });
+  // niceStep keeps this near five lines; the cap is a backstop so no value
+  // (a huge or non-finite one) can make the loop run on.
   const ticks: number[] = [];
-  for (let v = 0; v <= yMax; v += yStep) {
+  for (let v = 0; v <= yMax && ticks.length < MAX_TICKS; v += yStep) {
     ticks.push(v);
   }
   // Horizontal gridlines behind the marks, one per labelled value above 0

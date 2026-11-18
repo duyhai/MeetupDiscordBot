@@ -13,7 +13,6 @@ import { RebuildResult } from '../../lib/reports/buildJob.js';
 import { Period } from '../../lib/reports/period.js';
 import { PostgresBanRepository } from '../../lib/repositories/postgresBanRepository.js';
 import { PostgresIdentityRepository } from '../../lib/repositories/postgresIdentityRepository.js';
-import { PostgresLinkProgressRepository } from '../../lib/repositories/postgresLinkProgressRepository.js';
 import { PostgresMemberRepository } from '../../lib/repositories/postgresMemberRepository.js';
 import { PostgresNoShowWorkspaceRepository } from '../../lib/repositories/postgresNoShowWorkspaceRepository.js';
 import { PostgresReportSnapshotRepository } from '../../lib/repositories/postgresReportSnapshotRepository.js';
@@ -97,12 +96,6 @@ export interface SuspensionActions {
 export type BanPageReader = Pick<
   PostgresBanRepository,
   'listPage' | 'countByState' | 'getPhoto' | 'activeMemberIds'
->;
-
-/** The link progress read (newest first, at most 1000 days) Trends charts: never upsert. */
-export type LinkProgressPageReader = Pick<
-  PostgresLinkProgressRepository,
-  'listDays'
 >;
 
 /** The Discord link lookup the Hall of Fame mention text uses: never upsert or remove. */
@@ -210,8 +203,6 @@ export interface DashboardPageDeps
   banActions: BanActions;
   /** The identity change store (pool of 2, shared with the sweeps). */
   identity: () => Promise<IdentityPageReader>;
-  /** The daily link progress counts (the Trends chart). */
-  linkProgress: () => Promise<LinkProgressPageReader>;
   /** Meetup id -> Discord id links, for the Hall of Fame mention text. */
   memberLinks: () => Promise<MemberLinkPageReader>;
   /** The no-show workspace store (dashboard pool). */

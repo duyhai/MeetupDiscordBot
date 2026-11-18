@@ -15,7 +15,6 @@ import {
 } from '../helpers/discordLogger.js';
 import { safeErrorSummary } from '../helpers/identity/digest.js';
 import { PostgresDashboardNoticeRepository } from '../repositories/postgresDashboardNoticeRepository.js';
-import { PostgresLinkProgressRepository } from '../repositories/postgresLinkProgressRepository.js';
 import { PostgresNoShowWorkspaceRepository } from '../repositories/postgresNoShowWorkspaceRepository.js';
 import { PostgresReportSnapshotRepository } from '../repositories/postgresReportSnapshotRepository.js';
 import { PostgresSuspensionRepository } from '../repositories/postgresSuspensionRepository.js';
@@ -30,14 +29,12 @@ import {
 } from './buildLease.js';
 import {
   BUILD_UTC_HOUR,
-  canStartLinkProgress,
   canStartMonthBuild,
   isQuietHour,
   planDueWork,
   snapshotKey,
 } from './buildSchedule.js';
 import { MonthBeforeGroupError, monthPageUrls } from './dashboardPaths.js';
-import { collectLinkProgress, LinkProgressCounts } from './linkProgress.js';
 import { noShowsMissing } from './meetupMonth.js';
 import { buildMonthReports, MonthReports } from './monthReports.js';
 import { SuspensionHistorySource } from './noShowReport.js';
@@ -86,7 +83,6 @@ const budgetKey = (now: Date, slot: number) =>
 /** A Discord user id: what a manual rebuild records as builtBy. */
 const DISCORD_ID = /^[0-9]{1,20}$/;
 const isManual = (builtBy: string) => DISCORD_ID.test(builtBy);
-const linkProgressAlertedKey = (day: string) => `link-progress-alerted-${day}`;
 /** After a failed build, the job retries that month at most once an hour. */
 const BACKOFF_TTL_SEC = 60 * 60;
 const backoffKey = (p: Period) => `report-build-backoff-${periodKey(p)}`;
@@ -232,7 +228,6 @@ export interface BuildJobDeps {
     PostgresDashboardNoticeRepository,
     'claim' | 'release' | 'markPosted'
   >;
-  linkProgress: Pick<PostgresLinkProgressRepository, 'hasDay' | 'upsertDay'>;
   /**
    * Reads Meetup with the organizer credential and builds both payloads.
    * Read-only: it may be re-run from the start on a 401.
@@ -242,7 +237,6 @@ export interface BuildJobDeps {
     asOf: Date,
     suspensionCutoff: Date | undefined,
   ): Promise<MonthReports>;
-  collectLinkProgress(): Promise<LinkProgressCounts>;
   alert(entry: LogEntry): Promise<boolean>;
   /** This bot's embed titles among the last 50 alerts; undefined when unreadable. Only read on a retry. */
   recentAlertTitles(): Promise<string[] | undefined>;
@@ -564,32 +558,6 @@ async function buildAndRecord(
   return true;
 }
 
-async function writeLinkProgress(
-  deps: BuildJobDeps,
-  cache: KeyValueCache,
-  day: string,
-): Promise<void> {
-  try {
-    await deps.linkProgress.upsertDay(day, await deps.collectLinkProgress());
-  } catch (error: unknown) {
-    logger.error(`Link progress for ${day} failed: ${String(error)}`);
-    try {
-      const key = linkProgressAlertedKey(day);
-      if (await cache.exclusive_set(key, '1', ALERTED_TTL_SEC)) {
-        const posted = await deps.alert({
-          title: 'Link progress not recorded',
-          description: `Today's Meetup link counts could not be recorded: ${describeBuildError(error)}. It retries every 15 minutes.`,
-        });
-        if (!posted) {
-          await cache.remove(key);
-        }
-      }
-    } catch (alertError) {
-      logger.error(`Link progress alert failed: ${String(alertError)}`);
-    }
-  }
-}
-
 /** The fixed reason shown when the stored no-show report is not one the workspace can read. */
 const MALFORMED_REPORT_REASON =
   'the stored no-show report is not in the expected shape';
@@ -722,8 +690,8 @@ async function monthBackedOff(
 }
 
 /**
- * One tick: guards, lease, due plan from Postgres, each due month and link
- * progress in order, then report-ready. Never starts work in the quiet hour
+ * One tick: guards, lease, due plan from Postgres, each due month in order,
+ * then report-ready. Never starts work in the quiet hour
  * or while the identity digest runs, checked again before each item.
  */
 export async function runBuildTick(deps: BuildJobDeps): Promise<void> {
@@ -741,49 +709,39 @@ export async function runBuildTick(deps: BuildJobDeps): Promise<void> {
     return;
   }
   try {
-    // Re-read the clock: a tick stuck on a Redis outage must not plan (or
-    // pick today's link-progress day) with the time it started at.
+    // Re-read the clock: a tick stuck on a Redis outage must not plan with
+    // the time it started at.
     const planNow = deps.now();
     const plan = planDueWork({
       now: planNow,
       builtAt: await loadBuiltAt(deps, planNow),
-      linkProgressWrittenToday: await deps.linkProgress.hasDay(utcDay(planNow)),
     });
     // Months this tick built: synced before report-ready.
     const builtMonths: Period[] = [];
     for (const item of plan) {
       const startAt = deps.now();
-      const mayStart =
-        item.kind === 'month'
-          ? canStartMonthBuild(startAt)
-          : canStartLinkProgress(startAt);
       if (
-        !mayStart ||
+        !canStartMonthBuild(startAt) ||
         // eslint-disable-next-line no-await-in-loop -- sequential on purpose: one month at a time
         (await identityDigestInProgress(cache, startAt))
       ) {
-        // Items come months first, then link progress, and neither window
-        // reopens before 19:00 UTC, so nothing later in the plan could start.
+        // The window does not reopen before 19:00 UTC, so nothing later in
+        // the plan could start.
         logger.info(
           'Report build stopped early: too close to the identity sweep or it is running',
         );
         break;
       }
       // eslint-disable-next-line no-await-in-loop -- sequential on purpose: one month at a time
-      if (item.kind === 'month' && (await monthBackedOff(cache, item.period))) {
+      if (await monthBackedOff(cache, item.period)) {
         logger.info(
           `Report build ${periodKey(item.period)} skipped: it failed within the last hour`,
         );
         continue; // skip, not stop: later items still run
       }
-      if (item.kind === 'month') {
-        // eslint-disable-next-line no-await-in-loop -- sequential on purpose: one month at a time
-        if (await buildAndRecord(deps, cache, item.period, 'job')) {
-          builtMonths.push(item.period);
-        }
-      } else {
-        // eslint-disable-next-line no-await-in-loop -- sequential on purpose: one month at a time
-        await writeLinkProgress(deps, cache, item.day);
+      // eslint-disable-next-line no-await-in-loop -- sequential on purpose: one month at a time
+      if (await buildAndRecord(deps, cache, item.period, 'job')) {
+        builtMonths.push(item.period);
       }
     }
     // Before report-ready: the months just built, and the previous month
@@ -1108,10 +1066,9 @@ export function organizerMonthReports(
 export async function defaultBuildJobDeps(
   client: Client,
 ): Promise<BuildJobDeps> {
-  const [snapshots, notices, linkProgress, suspensions] = await Promise.all([
+  const [snapshots, notices, suspensions] = await Promise.all([
     PostgresReportSnapshotRepository.instance(),
     PostgresDashboardNoticeRepository.instance(),
-    PostgresLinkProgressRepository.instance(),
     PostgresSuspensionRepository.instance(),
   ]);
   return {
@@ -1119,9 +1076,7 @@ export async function defaultBuildJobDeps(
     cache: ApplicationCache,
     snapshots,
     notices, // one instance for claim, markPosted and release
-    linkProgress,
     fetchMonthReports: organizerMonthReports(client, suspensions),
-    collectLinkProgress: () => collectLinkProgress(client),
     alert: (entry) => logAlert(client, entry),
     recentAlertTitles: () => recentEmbedTitles(client, BOT_ALERTS_CHANNEL_ID),
     reportReadyEnabled: () => REPORT_READY_ENABLED,

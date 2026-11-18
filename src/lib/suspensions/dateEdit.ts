@@ -18,6 +18,9 @@ export type DateEditCode =
   | 'date-unchanged'
   | 'not-live'
   | 'date-taken'
+  | 'overlaps'
+  | 'reorders'
+  | 'linked-month'
   | 'bad-date'
   | 'invalid'
   | 'error';

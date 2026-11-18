@@ -393,7 +393,8 @@ function leaderForms(view: BannedTabView): SafeHtml {
           required
       /></label>
       <label class="field"
-        >Name (optional: left blank, it is taken from Meetup)
+        >Name (optional: left blank, it is taken from Meetup, and stays blank if
+        Meetup no longer lists them)
         <input name="memberName" maxlength="${BAN_NAME_MAX}" autocomplete="off"
       /></label>
       <label class="field"

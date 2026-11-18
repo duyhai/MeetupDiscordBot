@@ -271,43 +271,85 @@ if (!POSTGRES_AVAILABLE) {
         return inserted;
       };
 
-      it('moves the date, recalculates the length and keeps the edit', async () => {
+      it('moves the date within the gap, keeps its length and keeps the edit', async () => {
         await insertOn('2026-03-01');
         const later = await insertOn('2026-11-08', 60);
         const out = await repo.editDate({
           id: later.id,
-          suspendedAt: day('2026-02-01'),
+          suspendedAt: day('2026-10-01'),
           editedBy: LEAD,
         });
-        // Now before the March record: no earlier live ones, so 30 days.
+        // Still after the March record: one earlier live one, so 60 days.
         expect(out).toMatchObject({
           ok: true,
           before: { suspendedAt: day('2026-11-08'), durationDays: 60 },
-          after: { suspendedAt: day('2026-02-01'), durationDays: 30 },
+          after: { suspendedAt: day('2026-10-01'), durationDays: 60 },
         });
         const [stored] = await repo.listByIds([later.id]);
         expect(stored).toMatchObject({
-          suspendedAt: day('2026-02-01'),
-          durationDays: 30,
+          suspendedAt: day('2026-10-01'),
+          durationDays: 60,
         });
         const edits = await repo.listDateEdits([later.id, 999]);
         expect(edits.get(later.id)).toEqual([
           expect.objectContaining({
             recordId: later.id,
             oldDay: '2026-11-08',
-            newDay: '2026-02-01',
+            newDay: '2026-10-01',
             oldDurationDays: 60,
-            newDurationDays: 30,
+            newDurationDays: 60,
             editedBy: LEAD,
             editedAt: expect.any(Date) as unknown,
           }),
         ]);
         expect(edits.has(999)).toBe(false);
-        // The other record keeps its length.
-        const [march] = (await repo.listByMemberId('m1')).filter(
-          (r) => r.id !== later.id,
-        );
-        expect(march.durationDays).toBe(30);
+      });
+
+      it('refuses a move past another live record: void and re-record instead', async () => {
+        const march = await insertOn('2026-03-01');
+        const later = await insertOn('2026-11-08', 60);
+        for (const [id, to] of [
+          [later.id, '2026-02-01'],
+          [march.id, '2026-12-01'],
+        ] as const) {
+          expect(
+            // eslint-disable-next-line no-await-in-loop -- one case at a time
+            await repo.editDate({ id, suspendedAt: day(to), editedBy: LEAD }),
+          ).toEqual({ ok: false, reason: 'reorders' });
+        }
+        expect((await repo.listDateEdits([march.id, later.id])).size).toBe(0);
+      });
+
+      it('refuses a move that overlaps an earlier or a later record', async () => {
+        // March 1-30, then a 60-day one from June 1.
+        await insertOn('2026-03-01');
+        const june = await insertOn('2026-06-01', 60);
+        // Back into March's days.
+        expect(
+          await repo.editDate({
+            id: june.id,
+            suspendedAt: day('2026-03-15'),
+            editedBy: LEAD,
+          }),
+        ).toEqual({ ok: false, reason: 'overlaps' });
+        // A 30-day one that would run into a later record's first days.
+        const early = await insertOn('2026-01-01', 30, 'm3');
+        await insertOn('2026-04-10', 60, 'm3');
+        expect(
+          await repo.editDate({
+            id: early.id,
+            suspendedAt: day('2026-04-05'),
+            editedBy: LEAD,
+          }),
+        ).toEqual({ ok: false, reason: 'overlaps' });
+        // The day after the earlier one ends is fine.
+        expect(
+          await repo.editDate({
+            id: june.id,
+            suspendedAt: day('2026-03-31'),
+            editedBy: LEAD,
+          }),
+        ).toMatchObject({ ok: true, after: { durationDays: 60 } });
       });
 
       it('counts only live records before the new date, itself excluded', async () => {

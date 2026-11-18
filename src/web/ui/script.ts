@@ -21,16 +21,16 @@ import { staticRaw } from '../html.js';
  * Modal (modal, confirmModal): each details[data-modal] is the no-JavaScript
  * form (the summary opens the panel in place). With <dialog> support, the
  * summary becomes a real button (same class, text and hover title,
- * aria-haspopup) and the dialog moves out to sit beside it; the details is removed. The button
- * opens the dialog with showModal (top layer: the page never reflows). Esc
- * or a [data-modal-close] button closes it; so does a click on the backdrop,
- * but only when the press began there and was released there too (a text
- * selection dragged out of the dialog, or a press on the backdrop let go
- * inside the box, does not count) and never for a dialog holding a textarea
- * (typed text is never lost to a stray click). Closing puts focus back on
- * the button. The dialog is labelled by its [data-modal-title] heading
- * through a numbered id this script assigns (ui-modal-N-title), as ids are
- * never taken from data.
+ * aria-haspopup) and the dialog moves out to sit beside it; the details is
+ * removed. The button opens the dialog with showModal (top layer: the page
+ * never reflows). Esc or a [data-modal-close] button closes it; so does a
+ * click on the backdrop, but only when the press began there and was
+ * released there too (a text selection dragged out of the dialog, or a press
+ * on the backdrop let go inside the box, does not count) and never for a
+ * dialog holding a textarea (typed text is never lost to a stray click).
+ * Closing puts focus back on the button. The dialog is labelled by its
+ * [data-modal-title] heading through a numbered id this script assigns
+ * (ui-modal-N-title), as ids are never taken from data.
  *
  * Nav accordion (accordionNav): in each [data-accordion], opening one
  * details[data-nav-group] closes the others, and Esc inside an open group
