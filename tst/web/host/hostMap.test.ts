@@ -41,7 +41,7 @@ describe('hostMap', () => {
     const places = eventPlaces(events, PROFILE_PLACE_RULE);
     const out = hostMap(places, 'Bea has').value;
     expect(out).toContain(
-      `data-map-cells="[[47.61,-122.33,${PROFILE_MAP_MIN_EVENTS + 1}]]"`,
+      `data-map-cells="[[47.61,-122.33,4,&quot;4 events&quot;]]"`,
     );
     expect(out).not.toContain('47.7');
     expect(out).toContain('<li><bdi>Seattle</bdi>: 3 events</li>');
@@ -65,7 +65,7 @@ describe('hostMap', () => {
     ).value;
     expect(out).not.toContain('data-map-cells');
     expect(out).toContain(
-      '2 events in areas with fewer than 3 events or 2 hosts are counted above but not drawn.',
+      '2 events in areas with fewer than 3 events, or mostly one host’s, are counted above but not drawn.',
     );
     expect(out).toContain('<li>Elsewhere or unknown area: 2 events</li>');
     expect(out).not.toContain('Shoreline');
@@ -99,5 +99,20 @@ describe('hostMap', () => {
     const require = createRequire(import.meta.url);
     const pkg = require('leaflet/package.json') as { version: string };
     expect(LEAFLET_VERSION).toBe(pkg.version);
+  });
+
+  it('the hall of fame embeds count bands, never exact counts', () => {
+    const many = Array.from({ length: 7 }, (_, n) => ({
+      ...ev(seattle),
+      hostIds: [String(n)],
+    }));
+    const out = hostMap(
+      eventPlaces(many, HALL_OF_FAME_PLACE_RULE),
+      'the group has',
+    ).value;
+    expect(out).toContain(
+      'data-map-cells="[[47.61,-122.33,2,&quot;6–10 events&quot;]]"',
+    );
+    expect(out).not.toMatch(/data-map-cells="[^"]*\b7\b/);
   });
 });

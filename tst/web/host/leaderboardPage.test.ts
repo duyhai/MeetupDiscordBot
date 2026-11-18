@@ -380,9 +380,9 @@ describe('host leaderboard', () => {
   it('the Hall of fame draws a map from our own Leaflet, with OSM tiles allowed on that page only', async () => {
     const seattle = { latE2: 4761, lonE2: -12233, city: HOSTILE };
     const events = [
-      // 3 events from 2 hosts: drawn and named (escaped).
+      // 3 events from 3 hosts: drawn and named (escaped).
       { ...ev('2026-10-02', ['1']), place: seattle },
-      { ...ev('2026-10-03', ['1']), place: seattle },
+      { ...ev('2026-10-03', ['3']), place: seattle },
       { ...ev('2026-10-04', ['2']), place: seattle },
       // Before the venue fields: not collected yet.
       ev('2026-10-05', ['2']),
@@ -390,7 +390,9 @@ describe('host leaderboard', () => {
     const store = fakeStore(events, NAMES);
     const { req, sid } = await app(store);
     const all = await req.get('/host/leaderboard?view=all').set('Cookie', sid);
-    expect(all.text).toContain('data-map-cells="[[47.61,-122.33,3]]"');
+    expect(all.text).toContain(
+      'data-map-cells="[[47.61,-122.33,1,&quot;up to 5 events&quot;]]"',
+    );
     expect(all.text).toMatch(
       /<script nonce="[^"]+" src="\/host\/assets\/leaflet\.js\?v=1\.9\.4"><\/script>/,
     );
@@ -427,19 +429,21 @@ describe('host leaderboard', () => {
       { ...ev('2026-10-02', ['1']), place: seattle },
       { ...ev('2026-10-03', ['2']), place: seattle },
       { ...ev('2026-10-04', ['3']), place: seattle },
-      // Host 9 hosts twice at home, and also three times alone elsewhere.
+      // Host 9 hosts twice at home.
       { ...ev('2026-10-05', ['9']), place: smallville },
       { ...ev('2026-10-06', ['9']), place: smallville },
     ];
     const store = fakeStore(events, NAMES);
     const { req, sid } = await app(store);
     const all = await req.get('/host/leaderboard?view=all').set('Cookie', sid);
-    expect(all.text).toContain('data-map-cells="[[47.61,-122.33,3]]"');
+    expect(all.text).toContain(
+      'data-map-cells="[[47.61,-122.33,1,&quot;up to 5 events&quot;]]"',
+    );
     expect(all.text).not.toContain('47.9');
     expect(all.text).not.toContain('Smallville');
     expect(all.text).toContain('<li>Elsewhere or unknown area: 2 events</li>');
     expect(all.text).toContain(
-      '2 events in areas with fewer than 3 events or 2 hosts are counted above but not drawn.',
+      '2 events in areas with fewer than 3 events, or mostly one host’s, are counted above but not drawn.',
     );
   });
 
