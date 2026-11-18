@@ -818,7 +818,7 @@ describe('GET /dashboard/no-shows/:period (month cards)', () => {
         'hold',
         'Put on hold',
         'Put this card on hold',
-        'Not decided yet: the card stays open as On hold until someone reopens or finishes it.',
+        'Not decided yet: the card stays open as On hold until someone reopens it.',
         'stays visible as On hold, not done,',
       ],
       [

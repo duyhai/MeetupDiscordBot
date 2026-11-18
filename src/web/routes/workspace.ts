@@ -674,17 +674,18 @@ function historyBody(events: WorkspaceEvent[]): SafeHtml {
 // one that needs nothing (it counts as done). The hint shows on hover only,
 // so each tip repeats the difference for touch devices.
 const HOLD_HINT =
-  'Not decided yet: the card stays open as On hold until someone reopens or finishes it.';
+  'Not decided yet: the card stays open as On hold until someone reopens it.';
 const HOLD_TIP =
   "Use this when the card can't be finished yet, for example while you wait " +
   'on the member, a host or Leadership. It stays visible as On hold, not ' +
-  'done, until someone reopens it, skips it or records the suspension. Say ' +
-  'why, so the next person knows.';
+  'done, until someone reopens it, skips it or (for a suspension, Leadership ' +
+  'only) records the suspension. Say why, so the next person knows.';
 const SKIP_HINT = 'Decided: no action needed. The card counts as done.';
 const SKIP_TIP =
   "Use this when you've decided nothing is needed, for example a host's " +
-  'mistake or a valid excuse. Nothing more is sent and the card counts as ' +
-  'done. Reopen puts it back where it was. Say why, so the next person knows.';
+  'mistake, a valid excuse, or waiting for the third no-show before ' +
+  'suspending. Nothing more is sent and the card counts as done. Reopen ' +
+  'puts it back as it was before. Say why, so the next person knows.';
 const NOTES_TIP =
   'For staff only: shown on this card. Each save is kept in the card ' +
   'history and posted to the moderation log.';
