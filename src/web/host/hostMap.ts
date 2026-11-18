@@ -166,12 +166,27 @@ export function hostMap(places: EventPlaces, subject: string): SafeHtml {
       return [c.lat, c.lon, band.weight, band.label];
     }),
   );
-  const shown = cities.slice(0, MAP_CITIES_SHOWN);
+  // The hall of fame shows no exact count anywhere in this text: cities,
+  // Elsewhere and the other lines are bands, cities ordered by band then
+  // name, so a count ticking up after a known event places it nowhere. A
+  // profile shows the host's own exact counts.
+  const banded = !rule.citiesFromDrawnCells;
+  function count(n: number): string {
+    return banded ? countBand(n).label : plural(n, 'event');
+  }
+  const ordered = banded
+    ? [...cities].sort(
+        (a, b) =>
+          countBand(b.events).weight - countBand(a.events).weight ||
+          a.city.localeCompare(b.city),
+      )
+    : cities;
+  const shown = ordered.slice(0, MAP_CITIES_SHOWN);
   const elsewhere =
-    cities.slice(MAP_CITIES_SHOWN).reduce((sum, c) => sum + c.events, 0) +
+    ordered.slice(MAP_CITIES_SHOWN).reduce((sum, c) => sum + c.events, 0) +
     otherArea;
   const items = shown.map(
-    (c) => html`<li>${memberText(c.city)}: ${plural(c.events, 'event')}</li>`,
+    (c) => html`<li>${memberText(c.city)}: ${count(c.events)}</li>`,
   );
   const map =
     cells.length === 0
@@ -193,31 +208,28 @@ export function hostMap(places: EventPlaces, subject: string): SafeHtml {
     rule.minEventsWithoutAnyHost > 0
       ? `fewer than ${rule.minEvents} events, or mostly one host’s,`
       : `fewer than ${rule.minEvents} events`;
-  const notDrawnLine = rule.citiesFromDrawnCells
-    ? `${plural(notDrawn, 'event')} in other areas (${threshold} each) ${are(notDrawn)} not shown on the map or by city.`
-    : `${plural(notDrawn, 'event')} in areas with ${threshold} ${are(notDrawn)} counted above but not drawn.`;
+  const unplacedLine = banded
+    ? `${count(unplaced)} online or without a venue are not on the map.`
+    : `${plural(unplaced, 'event')} online or without a venue ${are(unplaced)} not on the map.`;
+  const notDrawnLine = banded
+    ? `Areas with ${threshold} are not drawn; their events are counted above.`
+    : `${plural(notDrawn, 'event')} in other areas (${threshold} each) ${are(notDrawn)} not shown on the map or by city.`;
   return html`<figure class="host-map">
     ${map}
     ${
       named + otherArea > 0
         ? html`<ul class="map-cities">
             ${items}
-            ${elsewhere > 0 ? html`<li>Elsewhere or unknown area: ${plural(elsewhere, 'event')}</li>` : ''}
+            ${elsewhere > 0 ? html`<li>Elsewhere or unknown area: ${count(elsewhere)}</li>` : ''}
           </ul>`
         : ''
     }
     ${notDrawn > 0 ? html`<p class="muted">${notDrawnLine}</p>` : ''}
-    ${
-      unplaced > 0
-        ? html`<p class="muted">
-            ${`${plural(unplaced, 'event')} online or without a venue ${are(unplaced)} not on the map.`}
-          </p>`
-        : ''
-    }
+    ${unplaced > 0 ? html`<p class="muted">${unplacedLine}</p>` : ''}
     ${
       pending > 0
         ? html`<p class="muted">
-            ${`Venue data for ${plural(pending, 'event')} is still being collected.`}
+            ${`Venue data for ${count(pending)} is still being collected.`}
           </p>`
         : ''
     }

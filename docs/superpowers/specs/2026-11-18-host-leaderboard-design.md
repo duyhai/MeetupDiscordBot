@@ -166,11 +166,15 @@ message, so coordinates or names never reach the process log.
     appear (an earlier "2+ distinct hosts" rule let all three through). A
     city is named only if it contains a drawn area (its count then includes
     its undrawn events); other cities fold into "Elsewhere or unknown area",
-    even when their undrawn areas together would pass the rule. Areas show
-    count bands (up to 5, 6–10, 11–25, 26+), computed on the server, so an
-    exact count never reaches the page and a count ticking up after a known
-    event cannot place it in an area. Blacklisted hosts' events are included
-    (areas, not people).
+    even when their undrawn areas together would pass the rule. The Hall of
+    fame shows **no exact count** in its map or map text: areas and cities
+    show bands (up to 5, 6–10, 11–25, 26+) computed on the server; areas are
+    listed by position and cities by band then name, so order gives nothing
+    away; areas not drawn get a sentence with no number. "Elsewhere",
+    "online or without a venue" and "still being collected" are banded too:
+    the Hall of fame header gives the exact total of events, and exact
+    no-place lines would let the named cities' exact total be worked out.
+    Blacklisted hosts' events are included (areas, not people).
   - Profile: an area is drawn only with at least `PROFILE_MAP_MIN_EVENTS` (3)
     of that host's events, and cities are named from drawn areas only. Every
     other event is in one line ("N events in other areas … not shown on the
@@ -182,13 +186,20 @@ message, so coordinates or names never reach the process log.
   - No profile map for an id on the Guest Host blacklist until Hai decides.
     The thresholds and an opt-out are with Hai; these are the conservative
     defaults.
-  - **Residual risks:** (1) a host with 3 or more events in one ~1 km area
-    (a frequent home venue) still shows that square, and its city, on their
-    own profile; only an opt-out or dropping home venues would remove it.
-    (2) Comparing several profiles' city lists with the Hall of fame's can
-    narrow down which hosts held events in a city, but names no area: a
-    city is listed only with a drawn area, and areas are drawn only when no
-    one host dominates them.
+  - **Accepted residual risks** (the lead's review, 2026-11-18):
+    1. A host's own profile shows an area with 3 or more of their events (a
+       frequent home venue), with its city. Only an opt-out or dropping home
+       venues would remove it.
+    2. An area appears on the Hall of fame the day it first meets the rule:
+       someone diffing daily can place that day's known event in a 1 km area
+       that already held other hosts' events.
+    3. A band boundary crossing (5 to 6, 10 to 11, 25 to 26) the day after a
+       known event says that event was in that area or city.
+    4. An area with host X's 3 events and one event each from two other
+       hosts is drawn, since removing X's events still leaves 2; most of
+       what it shows is X's.
+    5. Comparing several profiles' city lists with the Hall of fame's can
+       narrow down which hosts held events in a city, but names no area.
 - Under each map, text that accounts for every event exactly once: named
   cities (top 8, then "Elsewhere or unknown area"), areas not drawn, events
   online or without a venue, events not collected yet. The map container is
