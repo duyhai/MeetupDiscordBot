@@ -1,7 +1,10 @@
 /**
  * The staff dashboard's "Wrapped backfill" card (last run, the open run's
- * progress, the queue, the next tick) and its leadership-only Run now, which
- * asks the next tick to start a run. Reads only summaries; nothing from the
+ * progress, the queue, the next tick) and its leadership-only actions: Run
+ * now, which asks the next tick to start a run, and Refresh a member's
+ * Wrapped, which queues one member's year to be rebuilt from the latest
+ * group data (the snapshot, or Meetup for a member it does not hold) even
+ * when the stored copy is fresh. Reads only summaries; nothing from the
  * store, the request or Discord is echoed.
  */
 import dayjs from 'dayjs';
@@ -21,9 +24,11 @@ import {
   RUN_INTERVAL_MS,
 } from '../../lib/wrapped/backfill.js';
 import { tz } from '../../util/timezone.js';
+import { FIRST_WRAPPED_YEAR } from '../../lib/wrapped/cache.js';
 import { dashboardLocals } from '../dashboardRouter.js';
 import { SafeHtml, html, localUrl } from '../html.js';
 import { pacificDateTime } from '../pageKit.js';
+import { confirmModal } from '../ui/index.js';
 import type { DashboardPageDeps } from './dashboardPages.js';
 
 const logger = new Logger({ name: 'dashboard' });
@@ -33,6 +38,9 @@ export const WRAPPED_BACKFILL_PATH = dashboardPath(
 );
 export const SNAPSHOT_REFRESH_PATH = dashboardPath(
   DASHBOARD_PATHS.snapshotRefresh,
+);
+export const WRAPPED_REBUILD_PATH = dashboardPath(
+  DASHBOARD_PATHS.wrappedRebuild,
 );
 
 export interface BackfillStatus {
@@ -70,6 +78,17 @@ export interface SnapshotStatus {
 export type RunNowOutcome =
   'requested' | 'already-running' | 'already-requested';
 
+/** Who to rebuild: a Discord user id, or a Meetup member id. */
+export type RebuildTarget =
+  { discordUserId: string } | { meetupMemberId: string };
+
+/**
+ * queued: the next tick rebuilds it. already-queued: another year of the
+ * member's is queued (one row per member). not-linked: no linked member by
+ * that id.
+ */
+export type RebuildOutcome = 'queued' | 'already-queued' | 'not-linked';
+
 /** What the card reads and Run now does; production wires the repository and the cache. */
 export interface WrappedBackfillControl {
   status(): Promise<BackfillStatus>;
@@ -77,12 +96,17 @@ export interface WrappedBackfillControl {
   snapshot(): Promise<SnapshotStatus>;
   /** Asks the next snapshot tick to start a run (the snapshot's Run now). */
   refreshSnapshot(requestedBy: string): Promise<RunNowOutcome>;
+  /** Queues one member's year to be rebuilt from the latest group data, freshness aside. */
+  rebuildMember(target: RebuildTarget, year: number): Promise<RebuildOutcome>;
 }
 
 type Refusal = 'not-leadership' | 'unavailable' | 'error';
 
 export type BackfillNoticeCode =
-  RunNowOutcome | Refusal | `snapshot-${RunNowOutcome | Refusal}`;
+  | RunNowOutcome
+  | Refusal
+  | `snapshot-${RunNowOutcome | Refusal}`
+  | `rebuild-${RebuildOutcome | Refusal | 'invalid'}`;
 
 /** Fixed text per code. Nothing from the request, the store or Discord is ever shown. */
 export const BACKFILL_NOTICES = {
@@ -106,6 +130,19 @@ export const BACKFILL_NOTICES = {
   unavailable:
     'Discord could not be reached to check your role. Nothing was requested; try again in a minute.',
   error: 'The backfill could not be requested. Please try again later.',
+  'rebuild-queued':
+    "Queued: the member's Wrapped is rebuilt from the latest group data on the next tick (within 5 minutes).",
+  'rebuild-already-queued':
+    'That member already has another year queued; rebuild this one once it is built.',
+  'rebuild-not-linked':
+    'No linked member has that Discord user ID or Meetup member ID. Nothing was queued.',
+  'rebuild-invalid':
+    'Enter a Discord user ID or a Meetup member ID (digits only) and a year from 2015 to this year.',
+  'rebuild-not-leadership':
+    "Only the 1.5 Leadership Team can rebuild a member's Wrapped.",
+  'rebuild-unavailable':
+    'Discord could not be reached to check your role. Nothing was queued; try again in a minute.',
+  'rebuild-error': 'The rebuild could not be queued. Please try again later.',
 } as const satisfies Record<BackfillNoticeCode, string>;
 
 const isNoticeCode = (code: unknown): code is BackfillNoticeCode =>
@@ -116,7 +153,9 @@ export function backfillNotice(code: unknown): SafeHtml | '' {
   if (!isNoticeCode(code)) {
     return '';
   }
-  return code === 'requested' || code === 'snapshot-requested'
+  return code === 'requested' ||
+    code === 'snapshot-requested' ||
+    code === 'rebuild-queued'
     ? html`<p class="note info">${BACKFILL_NOTICES[code]}</p>`
     : html`<p class="note attn">${BACKFILL_NOTICES[code]}</p>`;
 }
@@ -263,8 +302,88 @@ export async function wrappedBackfillCard(
           </p>`
         : ''
     }
-    ${queue} ${form} ${await snapshotLine(deps, view.csrfToken)}
+    ${queue} ${form} ${rebuildModal(view.csrfToken)}
+    ${await snapshotLine(deps, view.csrfToken)}
   </div>`;
+}
+
+/**
+ * Refresh a member's Wrapped: a pop-up (the UI kit's confirmModal) asking
+ * for the member and the year. Queued for the backfill, so it never spends
+ * the member's hourly slot and is paced like every other build.
+ */
+function rebuildModal(csrfToken: string | undefined): SafeHtml | '' {
+  if (csrfToken === undefined) {
+    return '';
+  }
+  const thisYear = String(tz(dayjs()).year());
+  return html`<div class="actions rebuild-member">
+    ${confirmModal({
+      trigger: {
+        label: "Refresh a member's Wrapped…",
+        hint: '1.5 Leadership Team only',
+      },
+      title: "Refresh a member's Wrapped",
+      tip: html`Rebuilds the member's year from the latest group data (the daily
+      group snapshot, or Meetup directly for a member the snapshot does not
+      hold) on the next backfill tick (within 5 minutes), even when the stored
+      copy is fresh, and replaces it. Members can no longer rebuild their own.
+      1.5 Leadership Team only.`,
+      action: localUrl(WRAPPED_REBUILD_PATH),
+      fields: html`<input type="hidden" name="_csrf" value="${csrfToken}" />
+        <label class="field"
+          >Discord user ID or Meetup member ID
+          <input
+            name="member"
+            required
+            inputmode="numeric"
+            pattern="[0-9]{1,20}"
+            autocomplete="off"
+        /></label>
+        <label class="field"
+          >Year
+          <input
+            name="year"
+            type="number"
+            required
+            min="${String(FIRST_WRAPPED_YEAR)}"
+            max="${thisYear}"
+            value="${thisYear}"
+        /></label>`,
+      confirmLabel: 'Queue the refresh',
+      tone: 'primary',
+    })}
+    <span class="muted">1.5 Leadership Team only.</span>
+  </div>`;
+}
+
+const DISCORD_ID = /^[0-9]{17,20}$/;
+const MEETUP_ID = /^[1-9][0-9]{0,15}$/;
+
+/** The form's member and year, or undefined when either is not one. */
+export function parseRebuild(
+  body: unknown,
+  now: Date,
+): { target: RebuildTarget; year: number } | undefined {
+  const fields = (body ?? {}) as Record<string, unknown>;
+  const member =
+    typeof fields.member === 'string' ? fields.member.trim() : undefined;
+  const yearText =
+    typeof fields.year === 'string' ? fields.year.trim() : undefined;
+  if (member === undefined || yearText === undefined) {
+    return undefined;
+  }
+  const year = /^[0-9]{4}$/.test(yearText) ? Number(yearText) : Number.NaN;
+  if (!(year >= FIRST_WRAPPED_YEAR && year <= tz(dayjs(now)).year())) {
+    return undefined;
+  }
+  if (DISCORD_ID.test(member)) {
+    return { target: { discordUserId: member }, year };
+  }
+  if (MEETUP_ID.test(member)) {
+    return { target: { meetupMemberId: member }, year };
+  }
+  return undefined;
 }
 
 const back = (code: BackfillNoticeCode) =>
@@ -272,14 +391,18 @@ const back = (code: BackfillNoticeCode) =>
 
 /**
  * POST /dashboard/wrapped/backfill/run: asks the next tick to start a run;
- * POST /dashboard/wrapped/snapshot/run: the same for the group snapshot.
+ * POST /dashboard/wrapped/snapshot/run: the same for the group snapshot;
+ * POST /dashboard/wrapped/rebuild: queues one member's year to be rebuilt.
  * 1.5 Leadership Team only, asked of Discord live. CSRF, Origin,
  * Sec-Fetch-Site and the per-user action rate limit are the router's
  * unsafe-method guard, which runs before this handler.
  */
 export function registerWrappedBackfillRoute(
   router: express.Router,
-  deps: Pick<DashboardPageDeps, 'isLeadership' | 'audit' | 'wrappedBackfill'>,
+  deps: Pick<
+    DashboardPageDeps,
+    'isLeadership' | 'audit' | 'wrappedBackfill' | 'now'
+  >,
 ): void {
   const audit = (entry: LogEntry) => {
     Promise.resolve()
@@ -291,6 +414,29 @@ export function registerWrappedBackfillRoute(
       );
   };
 
+  /** The live Leadership check every action here starts with; false once answered. */
+  const leaderOrBack = async (
+    res: express.Response,
+    code: (refusal: Refusal) => BackfillNoticeCode,
+  ): Promise<boolean> => {
+    const { session } = dashboardLocals(res);
+    let leader: boolean;
+    try {
+      leader = await deps.isLeadership(session.userId);
+    } catch (error: unknown) {
+      logger.warn(
+        `Dashboard Leadership check failed: ${error instanceof Error ? error.name : 'Error'}`,
+      );
+      res.redirect(303, back(code('unavailable')));
+      return false;
+    }
+    if (leader !== true) {
+      res.redirect(303, back(code('not-leadership')));
+      return false;
+    }
+    return true;
+  };
+
   const leadershipPost = (
     path: string,
     act: (requestedBy: string) => Promise<RunNowOutcome>,
@@ -300,18 +446,7 @@ export function registerWrappedBackfillRoute(
   ) => {
     router.post(path, (async (_req, res) => {
       const { session } = dashboardLocals(res);
-      let leader: boolean;
-      try {
-        leader = await deps.isLeadership(session.userId);
-      } catch (error: unknown) {
-        logger.warn(
-          `Dashboard Leadership check failed: ${error instanceof Error ? error.name : 'Error'}`,
-        );
-        res.redirect(303, back(code('unavailable')));
-        return;
-      }
-      if (leader !== true) {
-        res.redirect(303, back(code('not-leadership')));
+      if (!(await leaderOrBack(res, code))) {
         return;
       }
       let outcome: RunNowOutcome;
@@ -330,6 +465,44 @@ export function registerWrappedBackfillRoute(
       res.redirect(303, back(code(outcome)));
     }) as RequestHandler);
   };
+
+  router.post(DASHBOARD_PATHS.wrappedRebuild, (async (req, res) => {
+    const { session } = dashboardLocals(res);
+    if (!(await leaderOrBack(res, (refusal) => `rebuild-${refusal}`))) {
+      return;
+    }
+    const parsed = parseRebuild(req.body, deps.now());
+    if (!parsed) {
+      res.redirect(303, back('rebuild-invalid'));
+      return;
+    }
+    let outcome: RebuildOutcome;
+    try {
+      outcome = await deps.wrappedBackfill.rebuildMember(
+        parsed.target,
+        parsed.year,
+      );
+    } catch (error: unknown) {
+      logger.warn(
+        `Wrapped rebuild failed: ${error instanceof Error ? error.name : 'Error'}`,
+      );
+      res.redirect(303, back('rebuild-error'));
+      return;
+    }
+    if (outcome === 'queued') {
+      const who =
+        'discordUserId' in parsed.target
+          ? `<@${parsed.target.discordUserId}>`
+          : `Meetup member ${parsed.target.meetupMemberId}`;
+      audit({
+        title: 'Wrapped rebuild requested',
+        description:
+          `<@${session.userId}> asked for ${who}'s ${parsed.year} Wrapped ` +
+          'to be rebuilt from the latest group data from the staff dashboard.',
+      });
+    }
+    res.redirect(303, back(`rebuild-${outcome}`));
+  }) as RequestHandler);
 
   leadershipPost(
     DASHBOARD_PATHS.wrappedBackfill,

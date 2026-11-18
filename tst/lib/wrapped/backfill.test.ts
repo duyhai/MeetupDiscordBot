@@ -21,7 +21,9 @@ import {
   RUN_NOW_KEY,
   SNAPSHOT_MEMBERS_PER_TICK,
   TICK_CALL_BUDGET,
+  forceKey,
   isFresh,
+  requestWrappedRebuild,
   runBackfillTick,
   startWrappedBackfillScheduler,
   yearsFor,
@@ -29,6 +31,7 @@ import {
 import { WrappedMeetup } from '../../../src/lib/wrapped/build.js';
 import {
   CachedWrapped,
+  WRAPPED_STATS_VERSION,
   buildingKey,
   readWrapped,
   wrappedCacheKey,
@@ -319,6 +322,21 @@ describe('isFresh', () => {
     },
     companions: { named: [], otherCount: 0 },
     builtAt: builtAt.toISOString(),
+    statsVersion: WRAPPED_STATS_VERSION,
+  });
+
+  it('a copy built under older stats rules is never fresh', () => {
+    const old = copy(2025, new Date('2026-01-01T08:00:00Z'));
+    delete old.statsVersion;
+    expect(isFresh(old, 'm1', 2025, NOW)).toBe(false);
+    expect(
+      isFresh(
+        { ...old, statsVersion: WRAPPED_STATS_VERSION - 1 },
+        'm1',
+        2025,
+        NOW,
+      ),
+    ).toBe(false);
   });
 
   it('a past year is fresh only when it was built after that year ended (Pacific)', () => {
@@ -437,6 +455,62 @@ describe('runBackfillTick', () => {
     expect(await h.store.queueLength()).toBe(0);
   });
 
+  it("Leadership's rebuild (requestWrappedRebuild) rebuilds a fresh copy, then clears its mark", async () => {
+    const h = await harness();
+    const m = members[0];
+    await recentRun(h);
+    const copy = await (async () => {
+      const g = await harness();
+      await g.store.enqueue({
+        discordUserId: m.discordUserId,
+        meetupId: 'm1',
+        year: 2026,
+      });
+      await runBackfillTick(g.deps);
+      return readWrapped(g.cache, m.discordUserId, 2026, 'm1');
+    })();
+    await h.entries.put(m.discordUserId, 2026, copy, NOW);
+    h.clock.now += 60_000;
+
+    await expect(
+      requestWrappedRebuild(
+        h.store,
+        h.cache,
+        { discordUserId: m.discordUserId, meetupId: 'm1' },
+        2026,
+      ),
+    ).resolves.toEqual({ kind: 'queued' });
+    expect(h.cache.values.has(forceKey(m.discordUserId, 2026))).toBe(true);
+
+    const outcome = await runBackfillTick(h.deps);
+
+    expect(outcome).toMatchObject({ queued: 1, built: 1 });
+    expect((await h.entries.get(m.discordUserId, 2026))?.builtAt).not.toBe(
+      copy?.builtAt,
+    );
+    expect(h.cache.values.has(forceKey(m.discordUserId, 2026))).toBe(false);
+    expect(await h.store.queueLength()).toBe(0);
+  });
+
+  it('a rebuild with another year of the member queued marks nothing', async () => {
+    const h = await harness();
+    const m = members[0];
+    await h.store.enqueue({
+      discordUserId: m.discordUserId,
+      meetupId: 'm1',
+      year: 2024,
+    });
+    await expect(
+      requestWrappedRebuild(
+        h.store,
+        h.cache,
+        { discordUserId: m.discordUserId, meetupId: 'm1' },
+        2026,
+      ),
+    ).resolves.toEqual({ kind: 'already', year: 2024 });
+    expect(h.cache.values.has(forceKey(m.discordUserId, 2026))).toBe(false);
+  });
+
   it('drops a queued member who is no longer linked', async () => {
     const h = await harness({ linked: [members[0]] });
     await recentRun(h);
@@ -445,11 +519,16 @@ describe('runBackfillTick', () => {
       meetupId: 'gone',
       year: 2026,
     });
+    await h.cache.set(forceKey('100000000000000009', 2026), '1', 60);
 
     const outcome = await runBackfillTick(h.deps);
 
     expect(outcome).toMatchObject({ queued: 1, built: 0 });
     expect(await h.store.queueLength()).toBe(0);
+    // A Leadership refresh of the dropped row goes with it.
+    expect(h.cache.values.has(forceKey('100000000000000009', 2026))).toBe(
+      false,
+    );
     expect(h.calls.n + h.organizerCalls.n).toBe(0);
     const logged = JSON.stringify([
       ...h.log.info.mock.calls,
@@ -473,6 +552,8 @@ describe('runBackfillTick', () => {
       year: 2026,
     });
     expect(QUEUE_MAX_ATTEMPTS).toBe(3);
+    // A Leadership refresh of the failing row: its mark goes with the row.
+    await h.cache.set(forceKey(m.discordUserId, 2026), '1', 60);
     await h.store.enqueue({
       discordUserId: members[1].discordUserId,
       meetupId: 'm2',
@@ -487,9 +568,11 @@ describe('runBackfillTick', () => {
     });
     expect((await h.store.position(m.discordUserId))?.row.attempts).toBe(1);
     expect(await h.store.position(members[1].discordUserId)).toBeUndefined();
+    expect(h.cache.values.has(forceKey(m.discordUserId, 2026))).toBe(true);
     await runBackfillTick(h.deps);
     await runBackfillTick(h.deps);
     expect(await h.store.queueLength()).toBe(0);
+    expect(h.cache.values.has(forceKey(m.discordUserId, 2026))).toBe(false);
     const warned = JSON.stringify(h.log.warn.mock.calls);
     expect(warned).toContain('Error');
     expect(warned).not.toContain('rsvps down');
@@ -1382,6 +1465,7 @@ describe('the backfill over the group snapshot', () => {
     const copy = (builtAt: string) => ({
       meetupId: 'm',
       builtAt,
+      statsVersion: WRAPPED_STATS_VERSION,
       stats: {} as never,
       companions: { named: [], otherCount: 0 },
     });
@@ -1426,6 +1510,7 @@ describe('the backfill over the snapshot: per-member path (#156 review)', () => 
         {
           meetupId: 'm2',
           builtAt: new Date(NOW.getTime() - 24 * 60 * 60_000).toISOString(),
+          statsVersion: WRAPPED_STATS_VERSION,
           stats: { activeYears: [2025] } as never,
           companions: { named: [], otherCount: 0 },
         },

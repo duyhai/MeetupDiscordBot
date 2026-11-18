@@ -45,6 +45,7 @@ export const DASHBOARD_PATHS = {
   wrappedAnnounce: '/wrapped/announce',
   wrappedBackfill: '/wrapped/backfill/run',
   snapshotRefresh: '/wrapped/snapshot/run',
+  wrappedRebuild: '/wrapped/rebuild',
   eventChanges: '/events',
   eventHistory: '/events/:eventId',
   eventSnapshot: '/events/snapshot',

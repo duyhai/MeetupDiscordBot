@@ -120,6 +120,28 @@ describe('host home', () => {
     expect(res.text).toContain('You have no upcoming events');
   });
 
+  it('names an Organizer and Leadership, never "Guest Host" for them', async () => {
+    const req = await pagesApp(async () => [], {
+      resolve: vi.fn().mockResolvedValue({
+        ...HOST,
+        staffRoles: ['leadership', 'organizer'],
+      }),
+    });
+    const sid = await signInWithDiscord(req);
+    const res = await req.get('/host').set('Cookie', sid);
+    expect(res.text).toContain('<span class="badge ok">Leadership</span>');
+    expect(res.text).toContain('<span class="badge ok">Organizer</span>');
+    expect(res.text).not.toContain('Guest Host</span>');
+  });
+
+  it('a regular host without a staff role reads as Guest Host', async () => {
+    const req = await pagesApp(async () => []);
+    const sid = await signInWithDiscord(req);
+    const res = await req.get('/host').set('Cookie', sid);
+    expect(res.text).toContain('<span class="badge neutral">Guest Host</span>');
+    expect(res.text).not.toContain('>Organizer</span>');
+  });
+
   it('offers a host their Wrapped', async () => {
     const req = await pagesApp(async () => []);
     const sid = await signInWithDiscord(req);
@@ -416,9 +438,9 @@ describe('host history', () => {
     expect(res.text).toContain('2 events in 2026.');
     expect(res.text).toMatch(/<strong>2026<\/strong>/);
     // Every row can be copied, opened on Meetup and taken attendance for,
-    // on one line: two named icons and one worded button.
+    // on one line: the copy icon and two worded buttons by the Meetup mark.
     expect(res.text.match(/aria-label="Copy this event"/g)).toHaveLength(3);
-    expect(res.text.match(/aria-label="View on Meetup"/g)).toHaveLength(3);
+    expect(res.text.match(/<span>View on Meetup<\/span>/g)).toHaveLength(3);
     expect(res.text).toMatch(
       /<span>Take attendance<\/span\s*><span class="sr-only"> on Meetup<\/span><\/a/,
     );

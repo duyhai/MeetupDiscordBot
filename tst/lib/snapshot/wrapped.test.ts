@@ -230,7 +230,8 @@ describe('buildWrappedFromSnapshot', () => {
     expect(builtFrom).toBe('snapshot');
     expect(fromToken.wrapped.builtFrom).toBeUndefined();
     expect(sameShape).toEqual(fromToken.wrapped);
-    expect(fromSnapshot.wrapped.stats.attendedThisYear).toBe(3);
+    // Three events this year, one of them hosted: not attended.
+    expect(fromSnapshot.wrapped.stats.attendedThisYear).toBe(2);
     expect(fromSnapshot.wrapped.stats.hosting?.thisYear).toBe(1);
     const json = JSON.stringify(fromSnapshot.wrapped);
     // Other people only as linked Discord ids; no other Meetup id, no names.

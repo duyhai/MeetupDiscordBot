@@ -154,8 +154,9 @@ const THIS_YEAR = new Date().getUTCFullYear();
       const now = new Date();
       const tiers = { cache: redis, entries };
       const mine = await readEntry(tiers, USER, THIS_YEAR, ME, now);
+      // Two events this year, one of them hosted: that one is not attended.
       expect(mine?.stats).toMatchObject({
-        attendedThisYear: 2,
+        attendedThisYear: 1,
         hosting: expect.objectContaining({ thisYear: 1, allTime: 2 }),
       });
       expect(mine?.companions.named).toEqual([
@@ -163,7 +164,9 @@ const THIS_YEAR = new Date().getUTCFullYear();
       ]);
       expect(mine?.companions.otherCount).toBe(1);
       const lastYear = await readEntry(tiers, USER, THIS_YEAR - 1, ME, now);
-      expect(lastYear?.stats.attendedThisYear).toBe(1);
+      // Last year's one event was hosted: not attended, hosted.
+      expect(lastYear?.stats.attendedThisYear).toBe(0);
+      expect(lastYear?.stats.hosting?.thisYear).toBe(1);
       for (const entry of [mine, lastYear]) {
         expect(JSON.stringify(entry)).not.toContain(GHOST);
         expect(JSON.stringify(entry)).not.toContain(`"${PAL}"`);
@@ -399,9 +402,10 @@ const THIS_YEAR = new Date().getUTCFullYear();
       if (now.kind !== 'built') {
         throw new Error('built');
       }
-      // Open House counts as attended, not hosted; the cancelled-status
-      // event and the WAITLIST RSVP count nowhere.
-      expect(now.wrapped.stats.attendedThisYear).toBe(2);
+      // Both events this year were the member's own: a hosted Open House
+      // counts as neither attended nor hosted, the other as hosted only; the
+      // cancelled-status event and the WAITLIST RSVP count nowhere.
+      expect(now.wrapped.stats.attendedThisYear).toBe(0);
       expect(now.wrapped.stats.hosting).toMatchObject({
         thisYear: 1,
         allTime: 2,

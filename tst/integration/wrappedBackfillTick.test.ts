@@ -228,11 +228,7 @@ function fakeMeetup(events: EventSummary[], meetupId: string) {
       } as unknown as CommandInteraction & {
         followUp: ReturnType<typeof vi.fn>;
       };
-      await runWrapped(
-        interaction,
-        { year: THIS_YEAR, refresh: false },
-        handlerDeps,
-      );
+      await runWrapped(interaction, { year: THIS_YEAR }, handlerDeps);
       expect(withMeetupClient).not.toHaveBeenCalled();
       expect(interaction.followUp).toHaveBeenCalledTimes(1);
       expect(handlerDeps.limiter.take(ORG_USER)).toBe(true);

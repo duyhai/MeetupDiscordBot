@@ -68,7 +68,8 @@ import { ApplicationCache } from '../../util/cache.js';
 import { getRandomTip } from '../../util/tips.js';
 import { dashboardOrigin } from '../dashboardDeps.js';
 import { FixedWindowLimiter } from '../rateLimit.js';
-import { discordRoleCheck } from '../roleGate.js';
+import { discordRoleCheck, discordRoleIds } from '../roleGate.js';
+import { hostRoleChecks, sharedRoleReads } from './hostRoles.js';
 import { SessionStore } from '../session.js';
 import { timedCacheFactory } from '../timedCache.js';
 import { HOST_SESSION_OPTIONS, HostSession } from './hostSession.js';
@@ -147,7 +148,9 @@ export function productionRequestPostDeps(
 export function hostResolveDeps(
   getClient: () => Client | undefined,
 ): HostResolveDeps {
-  const guestHost = discordRoleCheck(getClient, SERVER_ROLES.guest_host);
+  // One live role read serves the Guest Host check and the badge's staff
+  // roles of the same resolve.
+  const roleChecks = hostRoleChecks(sharedRoleReads(discordRoleIds(getClient)));
   return {
     discordIdForMeetup: async (meetupId) =>
       (
@@ -161,7 +164,7 @@ export function hostResolveDeps(
           await PostgresMemberRepository.instance()
         ).findByDiscordId(discordId)
       )?.meetupId ?? undefined,
-    hasGuestHostRole: guestHost,
+    ...roleChecks,
     // Listed and filtered, not Meetup's totalCount: the shared rule leaves
     // out cancelled events and Open Houses (countedEvents.ts).
     pastHostedCount: (meetupId) =>

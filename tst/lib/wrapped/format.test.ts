@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
 import { GET_VERIFIED_CHANNEL_ID } from '../../../src/constants.js';
-import { CachedWrapped } from '../../../src/lib/wrapped/cache.js';
+import {
+  CachedWrapped,
+  WRAPPED_STATS_VERSION,
+} from '../../../src/lib/wrapped/cache.js';
 import {
   EMBED_NAMED_COMPANIONS,
   parseShareCustomId,
@@ -51,6 +54,7 @@ const full: CachedWrapped = {
     otherCount: 5,
   },
   builtAt: '2026-12-10T20:00:00.000Z',
+  statsVersion: WRAPPED_STATS_VERSION,
 };
 
 const quiet: CachedWrapped = {
@@ -65,6 +69,7 @@ const quiet: CachedWrapped = {
   },
   companions: { named: [], otherCount: 0 },
   builtAt: full.builtAt,
+  statsVersion: WRAPPED_STATS_VERSION,
 };
 
 const fieldNames = (embed: ReturnType<typeof wrappedEmbed>) =>
@@ -86,7 +91,7 @@ describe('wrappedEmbed', () => {
     expect(fieldNames(wrappedEmbed('Jane', full))).toEqual([
       'First event with us',
       'This year',
-      'Top activities',
+      'Top activities (attended or hosted)',
       'Hosting',
       'Busiest month',
       'Longest streak',
@@ -118,11 +123,25 @@ describe('wrappedEmbed', () => {
     expect(value).toContain('40');
   });
 
+  it('a copy built under the old rules shows the combined count and says it is being refreshed', () => {
+    const { statsVersion: _v, ...old } = full;
+    const embed = wrappedEmbed('Jane', old);
+    expect(field(embed, 'This year')).toContain(
+      '12 events attended or hosted in 2026',
+    );
+    expect(field(embed, 'This year')).toContain('being refreshed');
+    expect(field(embed, 'Busiest month')).not.toContain('attended');
+    expect(field(embed, 'Longest streak')).toContain('in a row with at least');
+  });
+
   it('spells out the fun stats', () => {
     const embed = wrappedEmbed('Jane', full);
 
     expect(field(embed, 'This year')).toContain('12');
-    expect(field(embed, 'Top activities')).toContain('Food & drink');
+    expect(field(embed, 'This year')).toContain('attended');
+    expect(field(embed, 'Top activities (attended or hosted)')).toContain(
+      'Food & drink',
+    );
     expect(field(embed, 'Hosting')).toContain('3');
     expect(field(embed, 'Busiest month')).toContain('July');
     expect(field(embed, 'Longest streak')).toContain('5 months');

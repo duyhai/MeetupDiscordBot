@@ -267,7 +267,7 @@ describe('runWrapped', () => {
   it('nudges an unlinked member and never touches Meetup', async () => {
     const interaction = commandInteraction();
 
-    await runWrapped(interaction, { year: 2026, refresh: false }, h.deps);
+    await runWrapped(interaction, { year: 2026 }, h.deps);
 
     expect(contents(interaction.editReply)).toContain(replies.notLinked);
     expect(h.withMeetupClient).not.toHaveBeenCalled();
@@ -278,7 +278,7 @@ describe('runWrapped', () => {
     await link(h.repo);
     const interaction = commandInteraction();
 
-    await runWrapped(interaction, { year: 2026, refresh: false }, h.deps);
+    await runWrapped(interaction, { year: 2026 }, h.deps);
 
     expect(embedTitles(interaction.followUp)).toEqual([
       "🎁 Jane's 1.5 Gen Wrapped 2026",
@@ -299,37 +299,20 @@ describe('runWrapped', () => {
     await writeWrapped(h.cache, 'u1', 2026, cached);
     const interaction = commandInteraction();
 
-    await runWrapped(interaction, { year: 2026, refresh: false }, h.deps);
+    await runWrapped(interaction, { year: 2026 }, h.deps);
 
     expect(embedTitles(interaction.followUp)).toHaveLength(1);
     expect(h.withMeetupClient).not.toHaveBeenCalled();
     expect(h.deps.limiter.take('u1')).toBe(true);
   });
 
-  it('rebuilds on refresh and overwrites the cache', async () => {
+  it('refuses a second build within the hour (another year, nothing stored)', async () => {
     await link(h.repo);
-    await writeWrapped(h.cache, 'u1', 2026, cached);
-    const interaction = commandInteraction();
-
-    await runWrapped(interaction, { year: 2026, refresh: true }, h.deps);
-
-    expect(h.withMeetupClient).toHaveBeenCalledTimes(1);
-    expect((await readWrapped(h.cache, 'u1', 2026, 'me'))?.builtAt).toBe(
-      '2026-12-10T20:00:00.000Z',
-    );
-  });
-
-  it('refuses a second build within the hour and shows the cached copy', async () => {
-    await link(h.repo);
-    await runWrapped(
-      commandInteraction(),
-      { year: 2026, refresh: false },
-      h.deps,
-    );
+    await runWrapped(commandInteraction(), { year: 2026 }, h.deps);
     h.clock.now += 10 * 60 * 1000;
     const interaction = commandInteraction();
 
-    await runWrapped(interaction, { year: 2026, refresh: true }, h.deps);
+    await runWrapped(interaction, { year: 2025 }, h.deps);
 
     expect(h.withMeetupClient).toHaveBeenCalledTimes(2);
     // The cheap history read runs (it decides whether the slot is spent at
@@ -338,7 +321,7 @@ describe('runWrapped', () => {
     expect(h.meetup.getHostedEvents).toHaveBeenCalledTimes(1);
     const last = payloads(interaction.editReply).at(-1);
     expect(last?.content).toBe(replies.rateLimited(50));
-    expect(last?.embeds).toHaveLength(1);
+    expect(last?.embeds).toHaveLength(0);
   });
 
   it('reports an account mismatch and caches nothing', async () => {
@@ -346,7 +329,7 @@ describe('runWrapped', () => {
     await link(h.repo);
     const interaction = commandInteraction();
 
-    await runWrapped(interaction, { year: 2026, refresh: false }, h.deps);
+    await runWrapped(interaction, { year: 2026 }, h.deps);
 
     expect(contents(interaction.editReply)).toContain(replies.accountMismatch);
     expect(await readWrapped(h.cache, 'u1', 2026, 'me')).toBeUndefined();
@@ -359,7 +342,7 @@ describe('runWrapped', () => {
     await link(h.repo);
     const interaction = commandInteraction();
 
-    await runWrapped(interaction, { year: 2026, refresh: false }, h.deps);
+    await runWrapped(interaction, { year: 2026 }, h.deps);
 
     expect(contents(interaction.editReply)).toContain(replies.stillBuilding);
     const [dm] = payloads(interaction.user.send);
@@ -377,7 +360,7 @@ describe('runWrapped', () => {
       new Error('Cannot send messages to this user'),
     );
 
-    await runWrapped(interaction, { year: 2026, refresh: false }, h.deps);
+    await runWrapped(interaction, { year: 2026 }, h.deps);
 
     expect(embedTitles(interaction.followUp)).toHaveLength(1);
   });
@@ -403,7 +386,7 @@ describe('runWrapped', () => {
 
     // Handled in place: no "reach out to a moderator" framing for a
     // transient failure whose slot is refunded.
-    await runWrapped(interaction, { year: 2026, refresh: false }, h.deps);
+    await runWrapped(interaction, { year: 2026 }, h.deps);
 
     const everything = JSON.stringify([
       interaction.editReply.mock.calls,
@@ -428,7 +411,7 @@ describe('runWrapped', () => {
     const interaction = commandInteraction();
 
     await expect(
-      runWrapped(interaction, { year: 2026, refresh: false }, h.deps),
+      runWrapped(interaction, { year: 2026 }, h.deps),
     ).resolves.toBeUndefined();
 
     expect(contents(interaction.editReply).at(-1)).toBe(replies.buildFailed);
@@ -440,11 +423,7 @@ describe('runWrapped', () => {
     await link(h.repo);
     const release = vi.spyOn(h.deps.limiter, 'release');
 
-    await runWrapped(
-      commandInteraction(),
-      { year: 2026, refresh: false },
-      h.deps,
-    );
+    await runWrapped(commandInteraction(), { year: 2026 }, h.deps);
 
     expect(release).not.toHaveBeenCalled();
     expect(h.deps.limiter.take('u1')).toBe(false);
@@ -458,7 +437,7 @@ describe('runWrapped', () => {
       new Error('Unknown interaction'),
     );
 
-    await runWrapped(interaction, { year: 2026, refresh: false }, h.deps);
+    await runWrapped(interaction, { year: 2026 }, h.deps);
 
     expect(release).toHaveBeenCalledTimes(1);
     expect(h.alert).toHaveBeenCalledTimes(1);
@@ -470,7 +449,7 @@ describe('runWrapped', () => {
     await writeWrapped(h.cache, 'u1', 2026, { ...cached, meetupId: 'old' });
     const interaction = commandInteraction();
 
-    await runWrapped(interaction, { year: 2026, refresh: false }, h.deps);
+    await runWrapped(interaction, { year: 2026 }, h.deps);
 
     expect(h.withMeetupClient).toHaveBeenCalledTimes(1);
     expect((await readWrapped(h.cache, 'u1', 2026, 'me'))?.meetupId).toBe('me');
@@ -484,8 +463,8 @@ describe('runWrapped', () => {
     const second = commandInteraction();
 
     await Promise.all([
-      runWrapped(first, { year: 2026, refresh: false }, h.deps),
-      runWrapped(second, { year: 2026, refresh: false }, h.deps),
+      runWrapped(first, { year: 2026 }, h.deps),
+      runWrapped(second, { year: 2026 }, h.deps),
     ]);
 
     expect(h.meetup.getSelfPastRsvpEvents).toHaveBeenCalledTimes(1);
@@ -520,7 +499,7 @@ describe('runWrapped', () => {
     });
     const interaction = commandInteraction();
 
-    await runWrapped(interaction, { year: 2026, refresh: false }, h.deps);
+    await runWrapped(interaction, { year: 2026 }, h.deps);
 
     const embedJson = JSON.stringify(payloads(interaction.followUp));
     expect(embedJson).toContain('<@pal>');
@@ -555,7 +534,7 @@ describe('runWrapped', () => {
     await link(h.repo);
     const interaction = commandInteraction({ inGuild: false });
 
-    await runWrapped(interaction, { year: 2026, refresh: false }, h.deps);
+    await runWrapped(interaction, { year: 2026 }, h.deps);
 
     const [payload] = payloads(interaction.followUp);
     expect(payload.components ?? []).toHaveLength(0);
@@ -660,7 +639,7 @@ describe('runWrapped with a queue', () => {
   it('queues a throttled request with nothing cached and says when it will be ready', async () => {
     const interaction = commandInteraction();
 
-    await runWrapped(interaction, { year: 2026, refresh: false }, h.deps);
+    await runWrapped(interaction, { year: 2026 }, h.deps);
 
     const last = payloads(interaction.editReply).at(-1);
     expect(last?.content).toContain(replies.rateLimited(60));
@@ -673,32 +652,11 @@ describe('runWrapped with a queue', () => {
     });
   });
 
-  it('does not queue when a copy is cached', async () => {
-    const interaction = commandInteraction();
-    await runWrapped(interaction, { year: 2026, refresh: false }, h.deps);
-    await store.complete('u1');
-    // A new hour: the slot is free again.
-    h.clock.now += 61 * 60 * 1000;
-    await runWrapped(
-      commandInteraction(),
-      { year: 2026, refresh: false },
-      h.deps,
-    );
-    const again = commandInteraction();
-
-    await runWrapped(again, { year: 2026, refresh: true }, h.deps);
-
-    const last = payloads(again.editReply).at(-1);
-    expect(last?.content).toBe(replies.rateLimited(60));
-    expect(last?.embeds).toHaveLength(1);
-    expect(await store.queueLength()).toBe(0);
-  });
-
   it('says which year is already queued', async () => {
     await store.enqueue({ discordUserId: 'u1', meetupId: 'me', year: 2024 });
     const interaction = commandInteraction();
 
-    await runWrapped(interaction, { year: 2026, refresh: false }, h.deps);
+    await runWrapped(interaction, { year: 2026 }, h.deps);
 
     expect(payloads(interaction.editReply).at(-1)?.content).toContain(
       "You already have 2024 queued; it'll be ready by about <t:",
@@ -710,11 +668,7 @@ describe('runWrapped with a queue', () => {
     await store.enqueue({ discordUserId: 'u1', meetupId: 'me', year: 2023 });
     h.clock.now += 61 * 60 * 1000;
 
-    await runWrapped(
-      commandInteraction(),
-      { year: 2026, refresh: false },
-      h.deps,
-    );
+    await runWrapped(commandInteraction(), { year: 2026 }, h.deps);
 
     expect(await readWrapped(h.cache, 'u1', 2026, 'me')).toBeDefined();
     expect((await store.position('u1'))?.row.year).toBe(2023);
@@ -726,14 +680,14 @@ describe('runWrapped with a queue', () => {
     h.clock.now += 61 * 60 * 1000;
     const interaction = commandInteraction();
 
-    await runWrapped(interaction, { year: 2026, refresh: false }, h.deps);
+    await runWrapped(interaction, { year: 2026 }, h.deps);
 
     expect(entries.puts).toEqual([{ discordUserId: 'u1', year: 2026 }]);
     expect(await readWrapped(h.cache, 'u1', 2026, 'me')).toBeDefined();
     // Redis emptied (a flush): the next view comes from Postgres, no build.
     h.cache.data.clear();
     const again = commandInteraction();
-    await runWrapped(again, { year: 2026, refresh: false }, h.deps);
+    await runWrapped(again, { year: 2026 }, h.deps);
     expect(h.withMeetupClient).toHaveBeenCalledTimes(1);
     expect(again.followUp).toHaveBeenCalledTimes(1);
   });
@@ -742,7 +696,7 @@ describe('runWrapped with a queue', () => {
     h.deps.queue = () => Promise.reject(new Error('no DATABASE_URL'));
     const interaction = commandInteraction();
 
-    await runWrapped(interaction, { year: 2026, refresh: false }, h.deps);
+    await runWrapped(interaction, { year: 2026 }, h.deps);
 
     expect(payloads(interaction.editReply).at(-1)?.content).toBe(
       replies.rateLimited(60),
@@ -912,7 +866,7 @@ describe('runWrapped from the group snapshot', () => {
     h.deps.snapshot = async () => snapshotWrapped(r);
     const interaction = commandInteraction();
 
-    await runWrapped(interaction, { year: 2026, refresh: false }, h.deps);
+    await runWrapped(interaction, { year: 2026 }, h.deps);
 
     expect(h.withMeetupClient).not.toHaveBeenCalled();
     expect(h.meetup.getEventRsvps).not.toHaveBeenCalled();
@@ -921,9 +875,9 @@ describe('runWrapped from the group snapshot', () => {
     ).toBe(2);
     expect(h.deps.limiter.take('u1')).toBe(false);
 
-    // refresh: rebuilt from the snapshot, but the slot is spent.
+    // Another year, built from the snapshot too, but the slot is spent.
     const again = commandInteraction();
-    await runWrapped(again, { year: 2026, refresh: true }, h.deps);
+    await runWrapped(again, { year: 2025 }, h.deps);
     expect(h.withMeetupClient).not.toHaveBeenCalled();
     expect(contents(again.editReply).join(' ')).toMatch(/less than an hour/);
   });
@@ -933,11 +887,7 @@ describe('runWrapped from the group snapshot', () => {
     await link(h.repo, 'me');
     h.deps.snapshot = async () =>
       snapshotWrapped(new FakeSnapshotReader(snapshotEvents, {}));
-    await runWrapped(
-      commandInteraction(),
-      { year: 2026, refresh: false },
-      h.deps,
-    );
+    await runWrapped(commandInteraction(), { year: 2026 }, h.deps);
     expect(h.withMeetupClient).toHaveBeenCalledOnce();
 
     const h2 = harness();
@@ -945,11 +895,7 @@ describe('runWrapped from the group snapshot', () => {
     h2.deps.snapshot = async () => {
       throw new Error('pg down');
     };
-    await runWrapped(
-      commandInteraction(),
-      { year: 2026, refresh: false },
-      h2.deps,
-    );
+    await runWrapped(commandInteraction(), { year: 2026 }, h2.deps);
     expect(h2.withMeetupClient).toHaveBeenCalledOnce();
   });
 
@@ -960,11 +906,7 @@ describe('runWrapped from the group snapshot', () => {
     const selfPastCount = vi.fn(async () => 1);
     h.deps.selfPastCount = selfPastCount;
     h.deps.limiter.take('u1');
-    await runWrapped(
-      commandInteraction(),
-      { year: 2026, refresh: true },
-      h.deps,
-    );
+    await runWrapped(commandInteraction(), { year: 2026 }, h.deps);
     expect(selfPastCount).not.toHaveBeenCalled();
   });
 
@@ -973,11 +915,7 @@ describe('runWrapped from the group snapshot', () => {
     await link(h.repo);
     h.deps.snapshot = async () => snapshotWrapped(reader());
     h.deps.selfPastCount = async () => 20;
-    await runWrapped(
-      commandInteraction(),
-      { year: 2026, refresh: false },
-      h.deps,
-    );
+    await runWrapped(commandInteraction(), { year: 2026 }, h.deps);
     expect(h.withMeetupClient).toHaveBeenCalledOnce();
   });
 });

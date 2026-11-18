@@ -35,30 +35,26 @@ describe('/wrapped', () => {
     vi.mocked(runShare).mockClear();
   });
 
-  it('defaults to the current year with refresh off', async () => {
-    await handler.wrappedHandler(undefined, undefined, interaction);
+  it('defaults to the current year', async () => {
+    await handler.wrappedHandler(undefined, interaction);
 
     expect(runWrapped).toHaveBeenCalledWith(interaction, {
       year: currentWrappedYear(),
-      refresh: false,
     });
   });
 
-  it('passes an explicit year and refresh', async () => {
-    await handler.wrappedHandler(2025, true, interaction);
+  it("passes an explicit year (no refresh option: rebuilds are Leadership's)", async () => {
+    await handler.wrappedHandler(2025, interaction);
 
-    expect(runWrapped).toHaveBeenCalledWith(interaction, {
-      year: 2025,
-      refresh: true,
-    });
+    expect(runWrapped).toHaveBeenCalledWith(interaction, { year: 2025 });
   });
 
   it('turns down a year before 2015 or after this one without alerting staff', async () => {
     const editReply = vi.fn().mockResolvedValue(undefined);
     const bad = { editReply } as unknown as CommandInteraction;
 
-    await handler.wrappedHandler(2014, undefined, bad);
-    await handler.wrappedHandler(currentWrappedYear() + 1, undefined, bad);
+    await handler.wrappedHandler(2014, bad);
+    await handler.wrappedHandler(currentWrappedYear() + 1, bad);
 
     expect(editReply).toHaveBeenCalledTimes(2);
     expect((editReply.mock.calls[0][0] as { content: string }).content).toMatch(

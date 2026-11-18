@@ -18,7 +18,7 @@ import {
   RsvpFilter,
   hostedAttendance,
 } from '../client/meetup/types.js';
-import { CachedWrapped } from './cache.js';
+import { CachedWrapped, WRAPPED_STATS_VERSION } from './cache.js';
 import { earlyEventIdsToFetch, rankCohort } from './cohort.js';
 import { CompanionDeps, nameCohort, nameCompanions } from './companions.js';
 import {
@@ -300,6 +300,7 @@ export async function buildWrappedYear(
     stats: { ...stats, topTypes },
     companions: named,
     builtAt: now().toISOString(),
+    statsVersion: WRAPPED_STATS_VERSION,
     ...(deps.attendees ? { builtFrom: 'snapshot' as const } : {}),
   };
 }

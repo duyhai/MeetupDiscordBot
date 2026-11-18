@@ -75,12 +75,80 @@ function rect(x: number, y: number, count: number, label: string): SafeHtml {
   >`;
 }
 
+/**
+ * A hosted day's mark: the whole cell green (`half` false) or its lower
+ * right half (a day also attended, over the attended colour), split by a
+ * contrasting diagonal. A dot sits in the green either way, so hosting reads
+ * without the colour too (the green is close in lightness to some attended
+ * levels).
+ */
+function hostedMark(x: number, y: number, half: boolean): SafeHtml {
+  if (!half) {
+    return html`<rect
+        class="hh"
+        x="${String(x)}"
+        y="${String(y)}"
+        width="12"
+        height="12"
+        rx="2"
+      /><circle
+        class="hm-dot"
+        cx="${String(x + 6)}"
+        cy="${String(y + 6)}"
+        r="2.5"
+      />`;
+  }
+  const d = `M${x + 12} ${y} V${y + 10} Q${x + 12} ${y + 12} ${x + 10} ${y + 12} H${x} Z`;
+  const diagonal = `M${x} ${y + 12} L${x + 12} ${y}`;
+  return html`<path class="hh" d="${d}" /><path
+      class="hm-split"
+      d="${diagonal}"
+    /><circle
+      class="hm-dot"
+      cx="${String(x + 8.5)}"
+      cy="${String(y + 8.5)}"
+      r="2"
+    />`;
+}
+
+const DAY_FORMAT = 'ddd, MMM D, YYYY';
+const eventLine = (e: HeatEvent) => `${timeLabel(e.dateTime)} · ${e.title}`;
+
 /** "Sat, Mar 7, 2026", then one "7:00 PM · Title" line per event. */
 function tipLines(day: string, events: HeatEvent[]): string[] {
+  return [dayjs(day).format(DAY_FORMAT), ...events.map(eventLine)];
+}
+
+/** As tipLines, each event marked hosted or attended, hosted first. */
+function splitTipLines(
+  day: string,
+  attended: HeatEvent[],
+  hosted: HeatEvent[],
+): string[] {
   return [
-    dayjs(day).format('ddd, MMM D, YYYY'),
-    ...events.map((e) => `${timeLabel(e.dateTime)} · ${e.title}`),
+    dayjs(day).format(DAY_FORMAT),
+    ...hosted.map((e) => `Hosted: ${eventLine(e)}`),
+    ...attended.map((e) => `Attended: ${eventLine(e)}`),
   ];
+}
+
+/** The two-colour map's key: the swatches are decoration, the words say it. */
+function legend(): SafeHtml {
+  const swatch = (inner: SafeHtml) =>
+    html`<svg viewBox="0 0 12 12" width="12" height="12" aria-hidden="true">
+      ${inner}
+    </svg>`;
+  return html`<ul class="heat-legend">
+    <li>
+      ${swatch(html`<rect class="hm3" x="0" y="0" width="12" height="12" rx="2" />`)}
+      Attended
+    </li>
+    <li>${swatch(hostedMark(0, 0, false))} Hosted (with a dot)</li>
+    <li>
+      ${swatch(html`<rect class="hm3" x="0" y="0" width="12" height="12" rx="2" />${hostedMark(0, 0, true)}`)}
+      Both that day
+    </li>
+  </ul>`;
 }
 
 /** What a cell needs of an event: when, and a title for its tooltip. */
@@ -99,6 +167,12 @@ export interface HeatYear {
   dayLink: (day: string) => SafeUrl;
   /** What the events are to the member, for the map's label. */
   verb?: 'hosted' | 'attended';
+  /**
+   * The days hosted, by Pacific day, when `byDay` is the days attended: the
+   * map is drawn in two colours (attended as the scale, hosted green, a day
+   * with both split) with a key, and each day's label says which is which.
+   */
+  hostedByDay?: Map<string, HeatEvent[]>;
 }
 
 /**
@@ -115,6 +189,7 @@ export function heatMapYear({
   today,
   dayLink,
   verb = 'hosted',
+  hostedByDay,
 }: HeatYear): SafeHtml {
   const first = dayjs(`${year}-01-01`);
   const yearEnd = dayjs(`${year}-12-31`);
@@ -124,6 +199,7 @@ export function heatMapYear({
   const cells: SafeHtml[] = [];
   const months: SafeHtml[] = [];
   let total = 0;
+  let hostedTotal = 0;
   let lastMonth = -1;
   for (let week = 0; week < weeks; week += 1) {
     const weekStart = firstSunday.add(week * 7, 'day');
@@ -153,22 +229,34 @@ export function heatMapYear({
       }
       const day = date.format('YYYY-MM-DD');
       const events = byDay.get(day) ?? [];
+      const hosted = hostedByDay?.get(day) ?? [];
       total += events.length;
+      hostedTotal += hosted.length;
       const x = LEFT + week * (CELL + GAP);
       const y = TOP + weekday * (CELL + GAP);
-      if (events.length === 0) {
+      if (events.length === 0 && hosted.length === 0) {
         cells.push(rect(x, y, 0, ''));
         continue;
       }
-      const lines = tipLines(day, events);
+      const lines = hostedByDay
+        ? splitTipLines(day, events, hosted)
+        : tipLines(day, events);
       const label = `${lines[0]}: ${lines.slice(1).join('; ')}`;
+      let cell: SafeHtml;
+      if (hosted.length === 0) {
+        cell = rect(x, y, events.length, label);
+      } else if (events.length === 0) {
+        cell = html`<title>${label}</title>${hostedMark(x, y, false)}`;
+      } else {
+        cell = html`${rect(x, y, events.length, label)}${hostedMark(x, y, true)}`;
+      }
       cells.push(
         html`<a
           class="hm-link"
           href="${dayLink(day)}"
           aria-label="${label}"
           data-tip="${lines.join('\n')}"
-          >${rect(x, y, events.length, label)}</a
+          >${cell}</a
         >`,
       );
     }
@@ -185,11 +273,17 @@ export function heatMapYear({
   // At least two columns wide, so the first month's label always fits.
   const width = LEFT + Math.max(weeks, 2) * (CELL + GAP);
   const height = TOP + 7 * (CELL + GAP);
+  const mapLabel = hostedByDay
+    ? `Events attended and hosted per day in ${year}: ${total} attended, ${hostedTotal} hosted`
+    : `Events ${verb} per day in ${year}: ${total} in total`;
+  const totals = hostedByDay
+    ? `${total} ${total === 1 ? 'event' : 'events'} attended and ${hostedTotal} hosted in ${year}.`
+    : `${total} ${total === 1 ? 'event' : 'events'} in ${year}.`;
   return html`<div class="table-scroll heat-wrap">
       <svg
         class="heat"
         role="group"
-        aria-label="Events ${verb} per day in ${String(year)}: ${total} in total"
+        aria-label="${mapLabel}"
         viewBox="0 0 ${String(width)} ${String(height)}"
         width="${String(width)}"
         height="${String(height)}"
@@ -197,8 +291,9 @@ export function heatMapYear({
         ${months}${labels}${cells}
       </svg>
     </div>
+    ${hostedByDay ? legend() : ''}
     <p class="muted">
-      ${total} ${total === 1 ? 'event' : 'events'} in ${String(year)}. Point at
-      or tap a coloured day to see its events; open it to list them below.
+      ${totals} Point at or tap a coloured day to see its events; open it to
+      list them below.
     </p>`;
 }

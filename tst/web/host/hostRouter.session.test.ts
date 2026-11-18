@@ -29,6 +29,14 @@ const echoTier = (router: import('express').Router) => {
   });
 };
 
+/** The session's staff roles, as the badge reads them. */
+const echoStaff = (router: import('express').Router) => {
+  router.get('/staff', (_req, res) => {
+    const { session } = res.locals as { session: { staffRoles?: string[] } };
+    res.type('text').send(`staff=${session.staffRoles?.join(',') ?? 'none'}`);
+  });
+};
+
 const MEMBER: HostResolution = {
   kind: 'member',
   meetupMemberId: '4242',
@@ -48,6 +56,40 @@ describe('host role', () => {
     }
     expect((await req.get('/host/wrapped').set('Cookie', sid)).text).toBe(
       'role=host',
+    );
+  });
+
+  it('a session saved before staff roles existed still reads, and the re-check adds them', async () => {
+    let now = 0;
+    const resolve = vi.fn().mockResolvedValue(HOST);
+    const { req, cache } = await makeHostApp({
+      now: () => now,
+      pages: echoStaff,
+      resolve,
+    });
+    const sid = await signInWithDiscord(req);
+    for (const [key, raw] of cache.values) {
+      if (key.startsWith('host-session-')) {
+        const { staffRoles, ...rest } = JSON.parse(raw) as {
+          staffRoles?: string[];
+        };
+        expect(staffRoles).toEqual([]);
+        cache.values.set(key, JSON.stringify(rest));
+      }
+    }
+    const before = await req.get('/host/staff').set('Cookie', sid);
+    expect(before.status).toBe(200);
+    expect(before.text).toBe('staff=none');
+    resolve.mockResolvedValue({ ...HOST, staffRoles: ['organizer'] });
+    now = TEN_MIN;
+    expect((await req.get('/host/staff').set('Cookie', sid)).text).toBe(
+      'staff=organizer',
+    );
+    // A role removed since is cleared at the next re-check.
+    resolve.mockResolvedValue(HOST);
+    now = 2 * TEN_MIN;
+    expect((await req.get('/host/staff').set('Cookie', sid)).text).toBe(
+      'staff=',
     );
   });
 

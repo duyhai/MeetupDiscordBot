@@ -117,7 +117,6 @@ export type HostLinkResult = (typeof HOST_LINK_RESULTS)[number];
 export const MEMBER_PATHS: readonly string[] = [
   '/',
   '/wrapped',
-  '/wrapped/rebuild',
   '/link/discord',
   '/verify/finish',
   '/logout',
@@ -244,10 +243,12 @@ function fail(res: Response, status: HostErrorStatus, message?: string) {
 /** The session fields an admitted resolution decides: a member is a regular-tier non-host. */
 function roleOf(
   resolution: Exclude<HostResolution, { kind: 'refused' }>,
-): Pick<HostSession, 'tier' | 'role'> {
+): Pick<HostSession, 'tier' | 'role' | 'staffRoles'> {
+  // Always set, so a re-check that finds no staff role clears an old badge.
+  const staffRoles = resolution.staffRoles ?? [];
   return resolution.kind === 'host'
-    ? { tier: resolution.tier, role: 'host' }
-    : { tier: 'regular', role: 'member' };
+    ? { tier: resolution.tier, role: 'host', staffRoles }
+    : { tier: 'regular', role: 'member', staffRoles };
 }
 
 /** Who a refused sign-in was, for the audit line: ids only, never a name. */

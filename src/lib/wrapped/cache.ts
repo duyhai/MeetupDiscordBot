@@ -18,6 +18,12 @@ const logger = new Logger({ name: 'wrappedCache' });
 export const FIRST_WRAPPED_YEAR = 2015;
 /** Bump whenever CachedWrapped's shape changes. */
 export const WRAPPED_CACHE_VERSION = 'v4';
+/**
+ * Bump whenever the stats' rules change (what counts, not the shape): the
+ * backfill treats a stored copy with an older stamp as stale and rebuilds
+ * it. 2: an event the member hosted no longer counts as attended.
+ */
+export const WRAPPED_STATS_VERSION = 2;
 export const BUILD_WINDOW_MS = 60 * 60 * 1000;
 export const SHARE_GUARD_TTL_SEC = 24 * 60 * 60;
 /**
@@ -41,7 +47,23 @@ export interface CachedWrapped {
    * do not know it ignore it, so no cache version bump.
    */
   builtFrom?: 'snapshot';
+  /** WRAPPED_STATS_VERSION at build time; absent on every copy built before 2. */
+  statsVersion?: number;
 }
+
+/**
+ * False for a copy built under older stats rules: until the backfill
+ * rebuilds it, its attended numbers still include hosted events, so the page
+ * and the embed show them under the old combined labels with a notice.
+ */
+export function hasCurrentStats(wrapped: CachedWrapped): boolean {
+  return wrapped.statsVersion === WRAPPED_STATS_VERSION;
+}
+
+/** The notice both surfaces show over a copy built under older rules. */
+export const STALE_STATS_NOTICE =
+  'Your Wrapped is being refreshed: events you hosted no longer count as attended. ' +
+  'Until it is, the numbers here are the old count of events you attended or hosted.';
 
 export function wrappedCacheKey(discordUserId: string, year: number): string {
   return `wrapped:${WRAPPED_CACHE_VERSION}:${discordUserId}:${year}`;

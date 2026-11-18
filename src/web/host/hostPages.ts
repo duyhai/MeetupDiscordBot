@@ -94,25 +94,39 @@ const HOME_REQUESTS_SHOWN = 10;
 const QUIET_DAYS_SHOWN = 5;
 const QUIET_WINDOW_DAYS = 14;
 
-/** The tier as a pill: green for Community Host, grey for a regular host. */
+/**
+ * Who they are here, as pills: Leadership and Organizer when they hold
+ * those Discord roles, Community Host when promoted; otherwise Guest Host.
+ */
 function tierBadge(session: HostSession): SafeHtml {
-  return session.tier === 'promoted'
-    ? html`<span class="badge ok">Community Host</span>`
-    : html`<span class="badge neutral">Guest Host</span>`;
+  const staff = session.staffRoles ?? [];
+  const badges: SafeHtml[] = [];
+  if (staff.includes('leadership')) {
+    badges.push(html`<span class="badge ok">Leadership</span>`);
+  }
+  if (staff.includes('organizer')) {
+    badges.push(html`<span class="badge ok">Organizer</span>`);
+  }
+  if (session.tier === 'promoted') {
+    badges.push(html`<span class="badge ok">Community Host</span>`);
+  }
+  if (badges.length === 0) {
+    badges.push(html`<span class="badge neutral">Guest Host</span>`);
+  }
+  const [first, ...rest] = badges;
+  return html`${first}${rest.map((badge) => html` ${badge}`)}`;
 }
 
-/** The event on Meetup: the Meetup mark alone, named for screen readers and on hover. */
+/** The event on Meetup: the Meetup mark and the words. */
 function meetupButton(event: HostEvent): SafeHtml {
   const href = safeHref(event.eventUrl);
   return href
     ? html`<a
-        class="button ghost icon-only"
+        class="button ghost"
         href="${href}"
         rel="noopener noreferrer"
         target="_blank"
-        aria-label="View on Meetup"
-        title="View on Meetup"
-        >${MEETUP_MARK}</a
+        >${MEETUP_MARK}<span>View on Meetup</span></a
       >`
     : html``;
 }
@@ -1133,8 +1147,8 @@ function historyBody(
       ${dayFilter}
       <p class="muted">
         "Take attendance" opens the event's attendee list on Meetup, where hosts
-        mark who came and who did not show. The Meetup mark opens the event, and
-        the copy icon starts a new request with its details.
+        mark who came and who did not show. "View on Meetup" opens the event,
+        and the copy icon starts a new request with its details.
       </p>
       ${list}
     </div>`;

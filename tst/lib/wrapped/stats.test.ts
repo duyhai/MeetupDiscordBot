@@ -6,8 +6,8 @@ import {
   TOP_HOSTED,
   WrappedEvent,
   WrappedInput,
-  attendedInYear,
   computeWrapped,
+  eventsInYear,
   isInYear,
 } from '../../../src/lib/wrapped/stats.js';
 
@@ -103,21 +103,25 @@ describe('computeWrapped', () => {
     expect(computeWrapped(input()).stats.activeYears).toEqual([]);
   });
 
-  it('counts a hosted event as attended, once', () => {
+  it('does not count a hosted event as attended (Hai, 2026-11-17)', () => {
     const games = ev('7', '2026-02-01T19:00:00-08:00', 'Board Game Night');
     const { stats } = computeWrapped(
-      input({ attended: [games], hosted: [hosted(games, 8)] }),
+      input({ attended: [games, trivia], hosted: [hosted(games, 8)] }),
     );
 
     expect(stats.attendedThisYear).toBe(1);
     expect(stats.attendedAllTime).toBe(1);
+    expect(stats.busiestMonth).toMatchObject({ month: 4, count: 1 });
+    expect(stats.longestStreakMonths).toBe(1);
     expect(stats.hosting).toEqual({
       thisYear: 1,
       allTime: 1,
       topThisYear: [{ event: games, attendance: 8 }],
       allTimeBest: { event: games, attendance: 8 },
     });
-    expect(stats.topTypes).toEqual([topType('games', 1, [games])]);
+    // Top activities and the first event read every event they were at.
+    expect(stats.topTypes).toEqual([topType('games', 2, [games, trivia])]);
+    expect(stats.firstEvent).toEqual(games);
   });
 
   it('builds the year from hosted events alone', () => {
@@ -127,9 +131,12 @@ describe('computeWrapped', () => {
       input({ hosted: [hosted(games), hosted(old)] }),
     );
 
-    expect(stats.attendedThisYear).toBe(1);
-    expect(stats.attendedAllTime).toBe(2);
+    expect(stats.attendedThisYear).toBe(0);
+    expect(stats.attendedAllTime).toBe(0);
+    expect(stats.busiestMonth).toBeNull();
+    expect(stats.longestStreakMonths).toBe(0);
     expect(stats.firstEvent).toEqual(old);
+    expect(stats.activeYears).toEqual([2025, 2026]);
     expect(stats.hosting).toMatchObject({ thisYear: 1, allTime: 2 });
   });
 
@@ -320,7 +327,7 @@ describe('computeWrapped', () => {
     expect(companions).toEqual([]);
   });
 
-  it('an Open House hosted counts as attended but not as hosted (the shared rule)', () => {
+  it('an Open House hosted counts as neither attended nor hosted', () => {
     const openHouse = ev(
       '8',
       '2026-05-01T19:00:00-07:00',
@@ -333,7 +340,7 @@ describe('computeWrapped', () => {
         attendeesByEvent: {},
       }),
     );
-    expect(stats.attendedThisYear).toBe(2);
+    expect(stats.attendedThisYear).toBe(0);
     expect(stats.hosting).toMatchObject({ thisYear: 1, allTime: 1 });
   });
 
@@ -381,7 +388,7 @@ describe('computeWrapped', () => {
   });
 });
 
-describe('attendedInYear', () => {
+describe('eventsInYear', () => {
   const e = (id: string, dateTime: string, title = `Event ${id}`) => ({
     id,
     title,
@@ -389,21 +396,28 @@ describe('attendedInYear', () => {
     eventUrl: `https://www.meetup.com/e/${id}/`,
   });
 
-  it('is the events behind attendedThisYear: hosted included, deduped, cancelled out, date order', () => {
+  it('splits the year as the stats do: attended without the hosted, hosted counted, date order', () => {
     const attended = [
       e('2', '2026-05-01T02:00:00Z'),
       e('1', '2026-01-10T02:00:00Z'),
       e('3', '2026-06-01T02:00:00Z', 'CANCELLED: Picnic'),
       // 31 Dec 2025, 6 PM Pacific: last year's.
       e('4', '2026-01-01T02:00:00Z'),
+      // Hosted, an Open House: neither attended nor hosted.
+      e('6', '2026-09-01T02:00:00Z', '[Open House] Climb'),
     ];
     const hosted = [
       { ...e('2', '2026-05-01T02:00:00Z'), attendance: 9 },
       { ...e('5', '2026-08-01T02:00:00Z'), attendance: 4 },
+      {
+        ...e('6', '2026-09-01T02:00:00Z', '[Open House] Climb'),
+        attendance: 3,
+      },
     ];
-    const events = attendedInYear(attended, hosted, 2026);
-    expect(events.map((x) => x.id)).toEqual(['1', '2', '5']);
-    expect(events[2]).toEqual(e('5', '2026-08-01T02:00:00Z'));
+    const events = eventsInYear(attended, hosted, 2026);
+    expect(events.attended.map((x) => x.id)).toEqual(['1']);
+    expect(events.hosted.map((x) => x.id)).toEqual(['2', '5']);
+    expect(events.hosted[1]).toEqual(e('5', '2026-08-01T02:00:00Z'));
     const stats = computeWrapped({
       year: 2026,
       selfMeetupId: 'me',
@@ -411,6 +425,7 @@ describe('attendedInYear', () => {
       hosted,
       attendeesByEvent: {},
     }).stats;
-    expect(stats.attendedThisYear).toBe(events.length);
+    expect(stats.attendedThisYear).toBe(events.attended.length);
+    expect(stats.hosting?.thisYear).toBe(events.hosted.length);
   });
 });

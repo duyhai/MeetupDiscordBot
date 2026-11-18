@@ -316,6 +316,9 @@ const event = (
       );
       expect((await repo.hostedEvents('55'))[0].attendance).toBe(2);
       expect(hosted[1].eventUrl).toMatch(/\/events\/702\/$/);
+      // A co-host (second of 702's hosts) has it as hosted too, so Wrapped
+      // never counts a co-hosted event as attended.
+      expect((await repo.hostedEvents('66')).map((h) => h.id)).toEqual(['702']);
       expect(await repo.attendeesOf(['701', '702', '799'])).toEqual({
         '701': ['55', '77'],
         '702': ['77'],
