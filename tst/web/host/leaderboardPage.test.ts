@@ -29,20 +29,31 @@ const NOW = new Date('2026-11-17T18:00:00Z');
 const HOSTILE = '<script>alert(1)</script>"><img src=x>';
 
 let seq = 0;
-/** An evening event on a Pacific day. */
+/** An event on a Pacific day. */
 const ev = (
   day: string,
   hostIds: string[],
   title = 'Games',
 ): LeaderboardEvent => {
   seq += 1;
-  return {
-    id: String(seq),
-    title,
-    dateTime: new Date(`${day}T19:00:00-08:00`),
-    status: 'PAST',
-    hostIds,
-  };
+  return { id: String(seq), title, status: 'PAST', hostIds, day };
+};
+
+/** The table's rows as [place, host, events], tags stripped. */
+const rowsOf = (text: string): string[][] => {
+  const body = /<tbody>([\s\S]*?)<\/tbody>/.exec(text)?.[1] ?? '';
+  return [...body.matchAll(/<tr>([\s\S]*?)<\/tr>/g)].map((row) =>
+    ['Place', 'Host', 'Events'].map((label) =>
+      (
+        new RegExp(`data-label="${label}">([\\s\\S]*?)</td>`).exec(
+          row[1],
+        )?.[1] ?? ''
+      )
+        .replace(/<[^>]*>/g, '')
+        .replace(/\s+/g, ' ')
+        .trim(),
+    ),
+  );
 };
 
 const RUN: SnapshotRun = {
@@ -106,6 +117,7 @@ async function app(
         snapshot: async () => ({
           hasFinishedFull: async () => true,
           lastFinishedRun: async () => RUN,
+          lastCompleteListing: async () => RUN.listedAt,
         }),
         now: () => NOW,
         ...overrides,
@@ -152,6 +164,8 @@ describe('host leaderboard', () => {
     expect(weekly).toBeGreaterThan(0);
     expect(daily).toBeGreaterThan(weekly);
     expect(res.text).not.toContain('Gold medal, November');
+    // The best streak shows in the month view too, not only on hover.
+    expect(res.text).toContain('Best: 1 week in a row, 3 days in a row');
     // Every closed month was awarded on the way, October's medals stored.
     expect(store.months).toEqual(new Set(['2026-10']));
   });
@@ -176,8 +190,9 @@ describe('host leaderboard', () => {
     ]);
   });
 
-  it('keeps medals once awarded, whatever later corrections do', async () => {
+  it('an awarded month shows the stored medalists as awarded, then the rest live', async () => {
     const store = fakeStore(EVENTS, NAMES);
+    // Awarded off an earlier listing: Cy won with 9; corrections since.
     store.months.add('2026-10');
     store.stored.push({ month: '2026-10', memberId: '3', place: 1, events: 9 });
     const { req, sid } = await app(store);
@@ -185,7 +200,62 @@ describe('host leaderboard', () => {
       .get('/host/leaderboard?month=2026-10')
       .set('Cookie', sid);
     expect(store.mocks.award).not.toHaveBeenCalled();
+    expect(rowsOf(res.text)).toEqual([
+      ['1', 'Cy', '9'],
+      // Tied live on 3: listed by name ("<" sorts before "B").
+      [
+        '2',
+        '&lt;script&gt;alert(1)&lt;/script&gt;&quot;&gt;&lt;img src=x&gt;',
+        '3',
+      ],
+      ['2', 'Bea', '3'],
+    ]);
     expect(res.text.match(/Gold medal, October 2026/g)).toHaveLength(2);
+    expect(res.text).toContain('are kept');
+  });
+
+  it('a closed month not yet awarded says why, accurately', async () => {
+    const store = fakeStore(EVENTS, NAMES);
+    const { req, sid } = await app(store, {
+      snapshot: async () => ({
+        hasFinishedFull: async () => true,
+        lastFinishedRun: async () => RUN,
+        // The latest listing was short: nothing is awarded off it.
+        lastCompleteListing: async () => undefined,
+      }),
+    });
+    const res = await req
+      .get('/host/leaderboard?month=2026-10')
+      .set('Cookie', sid);
+    expect(store.mocks.award).not.toHaveBeenCalled();
+    expect(res.text).toContain('complete update from');
+    expect(res.text).not.toContain('<th>Medal</th>');
+
+    const failing = fakeStore(EVENTS, NAMES);
+    failing.award = vi.fn().mockRejectedValue(new Error('lock timeout'));
+    const two = await app(failing);
+    const again = await two.req
+      .get('/host/leaderboard?month=2026-10')
+      .set('Cookie', two.sid);
+    expect(again.text).toContain('could not be awarded just now');
+  });
+
+  it('ignores a garbage or repeated ?month= and needs a signed-in host', async () => {
+    const store = fakeStore(EVENTS, NAMES);
+    const { req, sid } = await app(store);
+    for (const q of [
+      'month=2026-10&month=2026-09',
+      'month=%3Cx%3E',
+      'month[a]=1',
+    ]) {
+      // eslint-disable-next-line no-await-in-loop
+      const res = await req.get(`/host/leaderboard?${q}`).set('Cookie', sid);
+      expect(res.status).toBe(200);
+      expect(res.text).toContain('November 2026');
+    }
+    const anonymous = await req.get('/host/leaderboard');
+    expect(anonymous.status).toBe(302);
+    expect(anonymous.headers.location).toContain('/host/login');
   });
 
   it('the Hall of fame ranks lifetime events with medal tallies and best streaks', async () => {
@@ -199,6 +269,13 @@ describe('host leaderboard', () => {
     expect(res.text).toContain('4 hosts, 9 events.');
     expect(res.text).toContain('1 gold medal');
     expect(res.text).toContain('Best: 2 weeks in a row, 3 days in a row');
+    // The hostile name (2) and Ann tie on 3 lifetime events: one place.
+    expect(rowsOf(res.text).map((r) => [r[0], r[2]])).toEqual([
+      ['1', '4'],
+      ['2', '3'],
+      ['2', '3'],
+      ['4', '1'],
+    ]);
   });
 
   it('an out-of-range month falls back to this month', () => {
@@ -214,6 +291,7 @@ describe('host leaderboard', () => {
       snapshot: async () => ({
         hasFinishedFull: async () => false,
         lastFinishedRun: async () => undefined,
+        lastCompleteListing: async () => undefined,
       }),
     });
     const res = await req.get('/host/leaderboard').set('Cookie', sid);

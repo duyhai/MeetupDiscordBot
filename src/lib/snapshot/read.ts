@@ -1,6 +1,7 @@
 /**
  * The snapshot's Meetup reads, every call counted against the tick's budget.
- * Organizer client only; ids and statuses only.
+ * Organizer client only; ids and statuses only, plus each host's name in
+ * the listing (public on every event page; kept in meetup_host_names).
  */
 import { GqlMeetupClient } from '../client/meetup/gqlClient.js';
 import { getPaginatedData } from '../client/meetup/paginationHelper.js';

@@ -207,6 +207,9 @@ END
 $$;
 CREATE INDEX IF NOT EXISTS meetup_events_date_idx ON meetup_events (date_time);
 CREATE INDEX IF NOT EXISTS meetup_events_hosts_idx ON meetup_events USING GIN (host_ids);
+-- The host leaderboard reads every live past event.
+CREATE INDEX IF NOT EXISTS meetup_events_past_live_idx ON meetup_events (date_time)
+  WHERE status = 'PAST' AND deleted_at IS NULL;
 -- One row per event and member: the RSVP as of the event's rsvps_fetched_at.
 -- Meetup member ids only, never names.
 CREATE TABLE IF NOT EXISTS meetup_event_rsvps (
@@ -246,6 +249,21 @@ CREATE TABLE IF NOT EXISTS meetup_snapshot_runs (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS meetup_snapshot_runs_open_idx
   ON meetup_snapshot_runs ((true)) WHERE finished_at IS NULL;
+-- A run whose listing was short (an outage: fewer past events than stored)
+-- keeps that fact, since a later good tick clears last_error. The host
+-- leaderboard never awards medals off such a run.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+     WHERE table_schema = current_schema()
+       AND table_name = 'meetup_snapshot_runs'
+       AND column_name = 'listing_short'
+  ) THEN
+    ALTER TABLE meetup_snapshot_runs ADD COLUMN listing_short BOOLEAN NOT NULL DEFAULT false;
+  END IF;
+END
+$$;
 -- Each host's latest Meetup name, from the snapshot listing (every public
 -- event page shows it), for the host leaderboard. Hosts only; kept apart
 -- from the event and RSVP tables, which hold ids only.

@@ -304,7 +304,7 @@ async function listPhase(
     short = true;
   }
   const deleted = await store.markAuditDeletions();
-  await store.markListed(run.id, deps.now(), events.length);
+  await store.markListed(run.id, deps.now(), events.length, short);
   log.info(
     `Group snapshot run ${run.id}: listed ${events.length} events (${dropped} unusable nodes dropped, ` +
       `${deleted} audit deletions applied)`,

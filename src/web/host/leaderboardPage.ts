@@ -10,19 +10,15 @@ import { Logger } from 'tslog';
 import {
   LeaderboardData,
   LeaderboardDeps,
-  loadLeaderboard,
+  LeaderboardView,
+  createLeaderboardLoader,
+  streaksFor,
 } from '../../lib/leaderboard/leaderboard.js';
 import {
   HostStreaks,
-  LeaderboardEvent,
   Medal,
   MedalPlace,
-  Standing,
-  eventsByHost,
-  monthCounts,
-  pacificMonthOf,
   rank,
-  streaksOf,
 } from '../../lib/leaderboard/standings.js';
 import { tz } from '../../util/timezone.js';
 import { SafeHtml, html, memberText, pageLink } from '../html.js';
@@ -99,7 +95,7 @@ function bestStreaks(streaks: HostStreaks): string {
   )} in a row`;
 }
 
-type Ready = Extract<LeaderboardData, { ready: true }>;
+type Ready = LeaderboardView;
 
 /** `?month=YYYY-MM` within the first hosted month and this month; else this month. */
 export function leaderboardMonth(
@@ -184,54 +180,112 @@ function nameCell(data: Ready, memberId: string, selfId: string): SafeHtml {
     : shown;
 }
 
+interface MonthRow {
+  memberId: string;
+  events: number;
+  place: number;
+  medal?: MedalPlace;
+}
+
+/**
+ * The month's rows. For an awarded month the stored medalists come first,
+ * with the place and count they were awarded on (medals are kept whatever
+ * later corrections do); everyone else follows, ranked live from the place
+ * after them. Otherwise, the live standings.
+ */
+export function monthRows(data: Ready, month: string): MonthRow[] {
+  const nameOf = (id: string) => data.names.get(id) ?? '';
+  const live = rank(
+    data.byMonth.get(month) ?? new Map<string, number>(),
+    nameOf,
+  );
+  if (!data.awarded.has(month)) {
+    return live;
+  }
+  const stored = data.medals
+    .filter((m) => m.month === month)
+    .sort(
+      (a, b) =>
+        a.place - b.place ||
+        nameOf(a.memberId).localeCompare(nameOf(b.memberId)) ||
+        a.memberId.localeCompare(b.memberId),
+    );
+  const medalists = new Set(stored.map((m) => m.memberId));
+  const rest = rank(
+    new Map(
+      live
+        .filter((s) => !medalists.has(s.memberId))
+        .map((s) => [s.memberId, s.events]),
+    ),
+    nameOf,
+  );
+  return [
+    ...stored.map((m) => ({
+      memberId: m.memberId,
+      events: m.events,
+      place: m.place,
+      medal: m.place,
+    })),
+    ...rest.map((s) => ({ ...s, place: s.place + stored.length })),
+  ];
+}
+
+function monthStatus(data: Ready, month: string, current: string): SafeHtml {
+  if (data.awarded.has(month)) {
+    return html`<p>
+      Final standings. Medals went to the top three places when the month
+      closed, and are kept.
+    </p>`;
+  }
+  if (data.medalsUnavailable) {
+    return html`<p>Standings for ${monthName(month)}.</p>`;
+  }
+  if (month === current) {
+    return html`<p>
+      Standings so far. Medals go to the top three places once the month is
+      over.
+    </p>`;
+  }
+  return data.awardFailed
+    ? html`<p>
+        The month is over, but its medals could not be awarded just now. The
+        leaderboard tries again in a few minutes.
+      </p>`
+    : html`<p>
+        The month is over. Its medals are awarded once a complete update from
+        Meetup at least two days after the month ended is in.
+      </p>`;
+}
+
 function monthBody(
   data: Ready,
   month: string,
   first: string,
   selfId: string,
-  streaks: (memberId: string) => HostStreaks,
 ): SafeHtml {
   const current = data.today.slice(0, 7);
-  const nameOf = (id: string) => data.names.get(id) ?? '';
-  const standings: Standing[] = rank(monthCounts(data.events, month), nameOf);
   const awarded = data.awarded.has(month);
-  const medalOf = new Map(
-    data.medals.filter((m) => m.month === month).map((m) => [m.memberId, m]),
-  );
-  const status = awarded
-    ? html`<p>Final standings. Medals went to the top three places.</p>`
-    : data.medalsUnavailable
-      ? html`<p>Standings for ${monthName(month)}.</p>`
-      : month === current
-        ? html`<p>
-            Standings so far. Medals go to the top three places once the month
-            is over.
-          </p>`
-        : html`<p>
-            The month is over; medals are awarded a couple of days after it
-            ends, once late changes on Meetup are in.
-          </p>`;
-  const rows = standings.map((s) => {
-    const medal = medalOf.get(s.memberId);
-    const hostStreaks = streaks(s.memberId);
+  const rows = monthRows(data, month).map((row) => {
+    const hostStreaks = streaksFor(data, row.memberId);
     return html`<tr>
-      <td data-label="Place">${s.place}</td>
-      ${medalCell(awarded, medal ? medalBadge(medal.place, month) : '')}
+      <td data-label="Place">${row.place}</td>
+      ${medalCell(awarded, row.medal ? medalBadge(row.medal, month) : '')}
       <td class="event" data-label="Host">
-        ${nameCell(data, s.memberId, selfId)}
+        ${nameCell(data, row.memberId, selfId)}
       </td>
-      <td data-label="Events">${s.events}</td>
-      <td data-label="Streaks" title="${bestStreaks(hostStreaks)}">
+      <td data-label="Events">${row.events}</td>
+      <td data-label="Streaks">
         ${streakBadges(hostStreaks)}
+        <span class="muted streak-best">${bestStreaks(hostStreaks)}</span>
       </td>
     </tr>`;
   });
   return html`<div class="card">
     <h1>Leaderboard</h1>
     ${viewNav('month', month)} ${monthNav(month, first, current)}
-    ${medalsNote(data)} ${status}
+    ${medalsNote(data)} ${monthStatus(data, month, current)}
     ${
-      standings.length === 0
+      rows.length === 0
         ? html`<p class="muted">
             No hosted events in ${monthName(month)} yet.
           </p>`
@@ -242,7 +296,7 @@ function monthBody(
                 ${awarded ? html`<th>Medal</th>` : ''}
                 <th>Host</th>
                 <th>Events</th>
-                <th>Current streaks</th>
+                <th>Streaks</th>
               </tr>
             </thead>
             <tbody>
@@ -286,27 +340,27 @@ function medalTally(medals: Medal[]): SafeHtml {
   return html`${parts}`;
 }
 
-function hallOfFameBody(
-  data: Ready,
-  selfId: string,
-  byHost: Map<string, LeaderboardEvent[]>,
-  streaks: (memberId: string) => HostStreaks,
-): SafeHtml {
+function hallOfFameBody(data: Ready, selfId: string): SafeHtml {
   const nameOf = (id: string) => data.names.get(id) ?? '';
   const counts = new Map(
-    [...byHost].map(([id, events]) => [id, events.length]),
+    [...data.byHost].map(([id, events]) => [id, events.length]),
   );
   const standings = rank(counts, nameOf);
-  const medalsOf = (id: string) => data.medals.filter((m) => m.memberId === id);
+  const medalsByHost = new Map<string, Medal[]>();
+  data.medals.forEach((m) => {
+    medalsByHost.set(m.memberId, [...(medalsByHost.get(m.memberId) ?? []), m]);
+  });
   const rows = standings.map((s) => {
-    const hostStreaks = streaks(s.memberId);
+    const hostStreaks = streaksFor(data, s.memberId);
     return html`<tr>
       <td data-label="Place">${s.place}</td>
       <td class="event" data-label="Host">
         ${nameCell(data, s.memberId, selfId)}
       </td>
       <td data-label="Events">${s.events}</td>
-      <td data-label="Medals">${medalTally(medalsOf(s.memberId))}</td>
+      <td data-label="Medals">
+        ${medalTally(medalsByHost.get(s.memberId) ?? [])}
+      </td>
       <td data-label="Streaks">
         ${streakBadges(hostStreaks)}
         <span class="muted streak-best">${bestStreaks(hostStreaks)}</span>
@@ -357,12 +411,14 @@ export function registerLeaderboardPage(
   router: express.Router,
   deps: LeaderboardDeps,
 ): void {
+  // One loader: its cache and award back-off are shared by every request.
+  const loader = createLeaderboardLoader(deps);
   router.get('/leaderboard', (async (req, res) => {
     const { session } = hostLocals(res);
     // Members never reach here: the router keeps them to MEMBER_PATHS.
     let data: LeaderboardData;
     try {
-      data = await loadLeaderboard(deps);
+      data = await loader.load();
     } catch (error: unknown) {
       logger.warn(
         `Leaderboard read failed: ${error instanceof Error ? error.name : 'Error'}`,
@@ -383,32 +439,16 @@ export function registerLeaderboardPage(
       });
       return;
     }
-    const ready = data;
-    const byHost = eventsByHost(ready.events);
-    const memo = new Map<string, HostStreaks>();
-    const streaks = (id: string) => {
-      const known = memo.get(id);
-      if (known) {
-        return known;
-      }
-      const computed = streaksOf(byHost.get(id) ?? [], ready.today);
-      memo.set(id, computed);
-      return computed;
-    };
-    const current = ready.today.slice(0, 7);
-    const first =
-      ready.events.length === 0
-        ? current
-        : pacificMonthOf(ready.events[0].dateTime);
+    const current = data.today.slice(0, 7);
+    const first = data.firstMonth ?? current;
     const body =
       req.query.view === 'all'
-        ? hallOfFameBody(ready, session.userId, byHost, streaks)
+        ? hallOfFameBody(data, session.userId)
         : monthBody(
-            ready,
+            data,
             leaderboardMonth(req.query.month, first, current),
             first,
             session.userId,
-            streaks,
           );
     hostPage(res, { title: 'Leaderboard', current: 'leaderboard', body });
   }) as RequestHandler);

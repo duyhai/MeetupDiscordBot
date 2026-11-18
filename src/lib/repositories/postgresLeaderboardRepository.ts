@@ -54,23 +54,27 @@ export class PostgresLeaderboardRepository implements LeaderboardStore {
   }
 
   async hostedEvents(): Promise<LeaderboardEvent[]> {
+    // The Pacific day is computed here, once per event, so the page never
+    // formats a time zone per event.
     const result = await this.pool.query<{
       event_id: string;
       title: string;
-      date_time: Date;
       status: string;
       host_ids: string[];
+      day: string;
     }>(
-      `SELECT event_id, title, date_time, status, host_ids FROM meetup_events
+      `SELECT event_id, title, status, host_ids,
+              to_char(date_time AT TIME ZONE 'America/Los_Angeles', 'YYYY-MM-DD') AS day
+         FROM meetup_events
         WHERE status = 'PAST' AND deleted_at IS NULL AND cardinality(host_ids) > 0
         ORDER BY date_time, event_id`,
     );
     return result.rows.map((row) => ({
       id: row.event_id,
       title: row.title,
-      dateTime: row.date_time,
       status: row.status as EventStatus,
       hostIds: row.host_ids,
+      day: row.day,
     }));
   }
 

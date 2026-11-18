@@ -22,6 +22,8 @@ on every public Meetup event page, so this stores nothing that is not already
 public. The event and RSVP tables stay name-free. Names are shown with
 `memberText`. _My call:_ the Meetup name, not the Discord name: every host has
 one, it matches My history's co-host names, and it needs no Discord lookup.
+Control characters are stripped at ingest. Names of hosts who have left are
+not purged (noted for later; they stay as long as their events do).
 
 ## Counting (PR 1)
 
@@ -37,17 +39,31 @@ one, it matches My history's co-host names, and it needs no Discord lookup.
   hosts with at least one event place.
 - **Medals are stored.** "A host keeps every medal they have earned": once
   awarded, a later snapshot correction or rule change never takes a medal
-  away. A month is awarded when it has ended and a snapshot listing finished
-  at least 2 days after its end (late edits and deletions are in). Awarding
-  runs lazily on a Leaderboard read, for every unawarded closed month (the
-  first read backfills history), in one transaction under an advisory lock:
-  `host_medal_months (month PK, awarded_at)` and
+  away. Tables `host_medal_months (month PK, awarded_at)` and
   `host_medals (month, member_id, place 1..3, events, PRIMARY KEY (month, member_id))`,
-  guarded `CREATE TABLE IF NOT EXISTS` in `SCHEMA_SQL`. The page waits at
-  most 2 s for awarding (it carries on in the background past that), and an
-  award or medal read failure renders the page without medals, never an
-  error. The current month
+  guarded `CREATE TABLE IF NOT EXISTS` in `SCHEMA_SQL`.
+- **When a month is awarded.** Once it has ended and the latest finished
+  snapshot run's listing, completed at least 48 h after the month's end, was
+  complete: not short (a new `listing_short` flag on the run, since a later
+  good tick clears `last_error`) and with no error on the run. A short or
+  failed listing awards nothing, so an outage can never award wrong medals
+  for good.
+- **How awarding runs.** Lazily on a Leaderboard read, in one transaction
+  under an advisory lock, at most 12 months a read (oldest first): the first
+  reads after deploy work through the history 12 months at a time. A read
+  waits at most 2 s for the award's writes; a failed award is retried after
+  10 minutes, and meanwhile the month says its medals "could not be awarded
+  just now". A medal read failure renders the standings without medals and a
+  note, never an error.
+- **An awarded month shows the stored medalists** with the place and count
+  they were awarded on, then everyone else ranked live from the next place,
+  so the page and the Hall of fame tally always agree. The current month
   shows "standings so far", no medals.
+- **Cost.** The page runs in the bot's process, so nothing formats a time
+  zone per event: the Pacific day comes from SQL
+  (`date_time AT TIME ZONE 'America/Los_Angeles'`), events are bucketed by
+  month and by host in one pass, and the result is cached per snapshot run
+  for a minute.
 
 ## Streaks (PR 1)
 
@@ -60,6 +76,9 @@ hosting weeks are Monday-first Pacific weeks (as the calendar).
   days ending today or yesterday. Today is not over and today's events are
   not PAST yet, so a streak breaks only once a whole day passes with no
   hosting.
+- "Today" for streaks is the snapshot's day (the latest listing, or now if
+  sooner), not the wall clock: a snapshot a few days stale never shows every
+  streak as broken. The page prints when the data was updated.
 - Shown as icon plus count whenever the current streak is 1 or more, with the
   host's best (longest ever) beside it. No threshold. Every emoji badge has a
   text alternative (`<span role="img" aria-label="Weekly hosting streak: 3 weeks">`).

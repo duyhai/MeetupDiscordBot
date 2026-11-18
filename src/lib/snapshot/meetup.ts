@@ -76,12 +76,15 @@ function field(value: unknown, key: string): unknown {
     : undefined;
 }
 
-/** A trimmed, bounded name; undefined when there is none. */
+/** A trimmed, bounded name without control characters; undefined when there is none. */
 function hostName(value: unknown): string | undefined {
   if (typeof value !== 'string') {
     return undefined;
   }
-  const name = Array.from(value.trim()).slice(0, HOST_NAME_MAX).join('');
+  // Control characters out first: Postgres refuses U+0000 in text, which
+  // would fail the whole listing's write.
+  const clean = value.replace(/[\u0000-\u001f\u007f]/g, '').trim();
+  const name = Array.from(clean).slice(0, HOST_NAME_MAX).join('');
   return name === '' ? undefined : name;
 }
 

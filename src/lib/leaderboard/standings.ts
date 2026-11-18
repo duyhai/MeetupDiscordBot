@@ -8,6 +8,9 @@
  * - Months and days are Pacific; weeks are Monday-first Pacific weeks.
  * - Places are standard competition ranking: tied hosts share a place and the
  *   next place is skipped (1, 1, 3).
+ *
+ * Every event carries its Pacific day, computed once (in SQL), so nothing
+ * here formats a time zone per event: the page runs in the bot's process.
  */
 import dayjs from 'dayjs';
 
@@ -18,11 +21,12 @@ import { tz } from '../../util/timezone.js';
 export interface LeaderboardEvent {
   id: string;
   title: string;
-  dateTime: Date;
   /** Always PAST from the store; kept so the counting rule sees it. */
   status: EventStatus;
   /** Meetup member ids, possibly repeated. */
   hostIds: string[];
+  /** YYYY-MM-DD: the Pacific calendar day the event started. */
+  day: string;
 }
 
 /** A month's medals: gold, silver, bronze. */
@@ -57,6 +61,8 @@ export interface HostStreaks {
 /** Days after a month ends before its medals are awarded. */
 export const AWARD_SETTLE_DAYS = 2;
 const AWARD_SETTLE_MS = AWARD_SETTLE_DAYS * 24 * 60 * 60_000;
+/** The most months one read awards (the oldest due first); later reads take the rest. */
+export const MAX_AWARD_MONTHS = 12;
 
 /** The events that count as hosted. */
 export const countedEvents = (events: LeaderboardEvent[]): LeaderboardEvent[] =>
@@ -66,25 +72,50 @@ export const countedEvents = (events: LeaderboardEvent[]): LeaderboardEvent[] =>
 export const pacificDayOf = (at: Date): string =>
   tz(dayjs(at)).format('YYYY-MM-DD');
 
-/** YYYY-MM, Pacific. */
-export const pacificMonthOf = (at: Date): string =>
-  tz(dayjs(at)).format('YYYY-MM');
+/** YYYY-MM of an event, Pacific. */
+export const monthOf = (event: LeaderboardEvent): string =>
+  event.day.slice(0, 7);
 
 const uniqueHosts = (event: LeaderboardEvent): string[] => [
   ...new Set(event.hostIds),
 ];
 
-/** Each host's counted events, newest last as given. */
+/** Each host's counted events, in the order given. */
 export function eventsByHost(
   events: LeaderboardEvent[],
 ): Map<string, LeaderboardEvent[]> {
   const byHost = new Map<string, LeaderboardEvent[]>();
   countedEvents(events).forEach((event) => {
     uniqueHosts(event).forEach((id) => {
-      byHost.set(id, [...(byHost.get(id) ?? []), event]);
+      const list = byHost.get(id);
+      if (list) {
+        list.push(event);
+      } else {
+        byHost.set(id, [event]);
+      }
     });
   });
   return byHost;
+}
+
+/** Events hosted per host, per Pacific month: one pass. */
+export function countsByMonth(
+  events: LeaderboardEvent[],
+): Map<string, Map<string, number>> {
+  const byMonth = new Map<string, Map<string, number>>();
+  countedEvents(events).forEach((event) => {
+    const month = monthOf(event);
+    let counts = byMonth.get(month);
+    if (!counts) {
+      counts = new Map();
+      byMonth.set(month, counts);
+    }
+    const into = counts;
+    uniqueHosts(event).forEach((id) => {
+      into.set(id, (into.get(id) ?? 0) + 1);
+    });
+  });
+  return byMonth;
 }
 
 /**
@@ -113,22 +144,6 @@ export function rank(
   });
 }
 
-/** Events hosted per host in one Pacific month. */
-export function monthCounts(
-  events: LeaderboardEvent[],
-  month: string,
-): Map<string, number> {
-  const counts = new Map<string, number>();
-  countedEvents(events)
-    .filter((e) => pacificMonthOf(e.dateTime) === month)
-    .forEach((event) => {
-      uniqueHosts(event).forEach((id) => {
-        counts.set(id, (counts.get(id) ?? 0) + 1);
-      });
-    });
-  return counts;
-}
-
 /** The medals a month's standings earn: every host placed 1st to 3rd. */
 export function medalsFor(month: string, standings: Standing[]): Medal[] {
   return standings
@@ -145,23 +160,27 @@ const nextMonth = (month: string): string =>
   dayjs(`${month}-01`).add(1, 'month').format('YYYY-MM');
 
 /**
- * The months ready to award and not yet awarded, oldest first: from the
- * first month with a counted event, every month whose end (Pacific midnight
- * after its last day) is at least AWARD_SETTLE_DAYS × 24 h before `listedAt`, the
- * end of the latest finished snapshot listing.
+ * The months ready to award and not yet awarded, oldest first and at most
+ * `limit`: from `firstMonth`, every month whose end (Pacific midnight after
+ * its last day) is at least AWARD_SETTLE_DAYS × 24 h before `listedAt`, the
+ * end of the latest complete snapshot listing. Work is per month, never per
+ * event.
  */
 export function monthsToAward(
-  events: LeaderboardEvent[],
+  firstMonth: string | undefined,
   awarded: ReadonlySet<string>,
   listedAt: Date,
+  limit = MAX_AWARD_MONTHS,
 ): string[] {
-  const counted = countedEvents(events);
-  if (counted.length === 0) {
-    return [];
-  }
-  const first = counted.map((e) => pacificMonthOf(e.dateTime)).sort()[0];
   const months: string[] = [];
-  for (let month = first; ; month = nextMonth(month)) {
+  if (firstMonth === undefined) {
+    return months;
+  }
+  for (
+    let month = firstMonth;
+    months.length < limit;
+    month = nextMonth(month)
+  ) {
     const end = dayjs.tz(`${nextMonth(month)}-01`, 'America/Los_Angeles');
     // Plain milliseconds: a tz'd dayjs's add() moves across a DST change.
     if (end.valueOf() + AWARD_SETTLE_MS > listedAt.getTime()) {
@@ -174,24 +193,39 @@ export function monthsToAward(
   return months;
 }
 
+/** The earliest month with a counted event. */
+export function firstMonthOf(events: LeaderboardEvent[]): string | undefined {
+  let first: string | undefined;
+  events.forEach((e) => {
+    const month = monthOf(e);
+    if (first === undefined || month < first) {
+      first = month;
+    }
+  });
+  return first;
+}
+
 /** The Monday (YYYY-MM-DD) of a YYYY-MM-DD day's week. */
 export const mondayOf = (day: string): string => {
   const d = dayjs(day);
   return d.subtract((d.day() + 6) % 7, 'day').format('YYYY-MM-DD');
 };
 
+const addDays = (day: string, n: number): string =>
+  dayjs(day).add(n, 'day').format('YYYY-MM-DD');
+
 /**
- * Runs of consecutive units in sorted unique keys, where `step` gives the
- * key after one. Current is the run ending at `latest` or the unit before
- * it (`previous`), else 0.
+ * Runs of consecutive units in unique keys, where `step` gives the key
+ * after one. Current is the run ending at `latest` or the unit before it
+ * (`previous`), else 0.
  */
 function streakOf(
-  keys: string[],
+  keys: Set<string>,
   step: (key: string) => string,
   latest: string,
   previous: string,
 ): Streak {
-  const sorted = [...new Set(keys)].sort();
+  const sorted = [...keys].sort();
   let best = 0;
   let run = 0;
   sorted.forEach((key, i) => {
@@ -204,21 +238,18 @@ function streakOf(
   return { current, best };
 }
 
-const addDays = (day: string, n: number): string =>
-  dayjs(day).add(n, 'day').format('YYYY-MM-DD');
-
 /**
  * Daily: consecutive Pacific days with a counted hosted event; weekly:
  * consecutive Monday-first weeks. A current streak survives until a whole
  * day (week) has passed without hosting: today's (this week's) events may
- * not be over yet.
+ * not be over yet. `today` is the snapshot's day, not the wall clock's.
  */
 export function streaksOf(
   events: LeaderboardEvent[],
   today: string,
 ): HostStreaks {
-  const days = events.map((e) => pacificDayOf(e.dateTime));
-  const weeks = days.map(mondayOf);
+  const days = new Set(events.map((e) => e.day));
+  const weeks = new Set([...days].map(mondayOf));
   const thisWeek = mondayOf(today);
   return {
     daily: streakOf(days, (d) => addDays(d, 1), today, addDays(today, -1)),

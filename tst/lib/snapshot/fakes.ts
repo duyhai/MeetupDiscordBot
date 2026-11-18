@@ -147,9 +147,14 @@ export class FakeSnapshotStore implements SnapshotStore {
     runId: number,
     listedAt: Date,
     eventsListed: number,
+    short = false,
   ): Promise<void> {
     Object.assign(this.run(runId), { listedAt, eventsListed });
+    this.shortListings.set(runId, short);
   }
+
+  /** markListed's `short` per run id. */
+  shortListings = new Map<number, boolean>();
 
   private needs(q: RsvpWorkQuery): StoredEvent[] {
     return [...this.events.values()]

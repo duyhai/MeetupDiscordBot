@@ -77,11 +77,15 @@ describe('toSnapshotEvent', () => {
           { member: { id: '222', name: '   ' } },
           { member: { id: 'x', name: 'Eve' } },
           { member: { id: '333' } },
+          { member: { id: '444', name: 'Ze\u0000ro\u0007 ' } },
         ],
       }),
     );
-    expect(event?.hostIds).toEqual(['111', '222', '333']);
-    expect(event?.hostNames).toEqual({ '111': 'n'.repeat(HOST_NAME_MAX) });
+    expect(event?.hostIds).toEqual(['111', '222', '333', '444']);
+    expect(event?.hostNames).toEqual({
+      '111': 'n'.repeat(HOST_NAME_MAX),
+      '444': 'Zero',
+    });
   });
 
   it('tolerates missing hosts and counts', () => {

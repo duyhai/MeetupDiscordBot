@@ -49,7 +49,8 @@ const event = (
 
     beforeEach(async () => {
       await pool.query(
-        'DROP TABLE IF EXISTS host_medals, host_medal_months, meetup_host_names, meetup_event_rsvps, meetup_events CASCADE',
+        `DROP TABLE IF EXISTS host_medals, host_medal_months, meetup_host_names,
+           meetup_event_rsvps, meetup_events, meetup_snapshot_runs CASCADE`,
       );
       await ensureDashboardSchema(pool);
       snapshot = new PostgresSnapshotRepository(pool);
@@ -115,7 +116,10 @@ const event = (
         ]),
       ]);
       const stored = await repo.medals();
-      expect(stored).toHaveLength(stored[0].memberId === '333' ? 1 : 2);
+      // Exactly one writer's set, never a mix.
+      expect([[['333']], [['111', '222']]]).toContainEqual([
+        stored.map((m) => m.memberId),
+      ]);
       // A later award with different numbers keeps what is stored.
       await repo.award([
         {
@@ -128,6 +132,66 @@ const event = (
       expect(await repo.awardedMonths()).toEqual(
         new Set(['2026-09', '2026-10']),
       );
+    });
+
+    it('gives each event its Pacific day: late on a month’s last day and across both DST changes', async () => {
+      await snapshot.upsertEvents(
+        [
+          // Oct 31, 23:30 PDT is Nov 1 06:30 UTC.
+          event('1', { dateTime: new Date('2026-11-01T06:30:00Z') }),
+          // Mar 8 2026, 01:30 PST (before the 2:00 spring-forward).
+          event('2', { dateTime: new Date('2026-03-08T09:30:00Z') }),
+          // Mar 8 2026, 23:30 PDT.
+          event('3', { dateTime: new Date('2026-03-09T06:30:00Z') }),
+          // Nov 1 2026, 01:30 PST, the repeated hour after fall-back.
+          event('4', { dateTime: new Date('2026-11-01T09:30:00Z') }),
+        ],
+        new Date('2026-11-17T00:00:00Z'),
+      );
+      const days = Object.fromEntries(
+        (await repo.hostedEvents()).map((e) => [e.id, e.day]),
+      );
+      expect(days).toEqual({
+        '1': '2026-10-31',
+        '2': '2026-03-08',
+        '3': '2026-03-08',
+        '4': '2026-11-01',
+      });
+    });
+
+    it('lastCompleteListing: only the latest finished run, only if its listing was complete', async () => {
+      expect(await snapshot.lastCompleteListing()).toBeUndefined();
+      const good = await snapshot.startRun('job', 'full');
+      const goodAt = new Date('2026-11-10T08:00:00Z');
+      await snapshot.markListed(good.id, goodAt, 5);
+      await snapshot.finishRun(good.id);
+      expect(await snapshot.lastCompleteListing()).toEqual(goodAt);
+
+      // A short listing, whose error a later good tick cleared.
+      const short = await snapshot.startRun('job', 'incremental');
+      await snapshot.markListed(
+        short.id,
+        new Date('2026-11-11T08:00:00Z'),
+        2,
+        true,
+      );
+      await snapshot.recordError(short.id, 'ShortListing');
+      await snapshot.recordError(short.id, undefined);
+      await snapshot.finishRun(short.id);
+      expect(await snapshot.lastCompleteListing()).toBeUndefined();
+
+      // A complete listing that still carries an error.
+      const failed = await snapshot.startRun('job', 'incremental');
+      await snapshot.markListed(failed.id, new Date('2026-11-12T08:00:00Z'), 5);
+      await snapshot.recordError(failed.id, 'ClientError');
+      await snapshot.finishRun(failed.id);
+      expect(await snapshot.lastCompleteListing()).toBeUndefined();
+
+      const next = await snapshot.startRun('job', 'incremental');
+      const nextAt = new Date('2026-11-13T08:00:00Z');
+      await snapshot.markListed(next.id, nextAt, 5);
+      await snapshot.finishRun(next.id);
+      expect(await snapshot.lastCompleteListing()).toEqual(nextAt);
     });
   },
 );
