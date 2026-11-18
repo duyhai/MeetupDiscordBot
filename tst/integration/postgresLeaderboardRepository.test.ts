@@ -251,5 +251,47 @@ const event = (
         wrapped.map(({ attendance: _a, ...rest }) => rest),
       );
     });
+
+    it('stores only the ~1 km cell and city of a venue, and a later listing can clear it', async () => {
+      await snapshot.upsertEvents(
+        [
+          event('1', {
+            place: { latE2: 4761, lonE2: -12233, city: 'Seattle' },
+          }),
+          event('2', { place: null }),
+          event('3'),
+        ],
+        new Date('2026-11-01T00:00:00Z'),
+      );
+      const columns = await pool.query<{ column_name: string }>(
+        `SELECT column_name FROM information_schema.columns
+          WHERE table_schema = current_schema() AND table_name = 'meetup_events'
+            AND column_name LIKE 'place%' ORDER BY column_name`,
+      );
+      expect(columns.rows.map((r) => r.column_name)).toEqual([
+        'place_city',
+        'place_lat_e2',
+        'place_listed',
+        'place_lon_e2',
+      ]);
+      const places = Object.fromEntries(
+        (await repo.hostedEvents()).map((e) => [e.id, e.place]),
+      );
+      expect(places).toEqual({
+        '1': { latE2: 4761, lonE2: -12233, city: 'Seattle' },
+        '2': null,
+        // Written without a place (as before the venue fields): not yet
+        // collected, which is not the same as no venue.
+        '3': undefined,
+      });
+      // The event moved online: the next listing clears its place.
+      await snapshot.upsertEvents(
+        [event('1', { place: null })],
+        new Date('2026-11-02T00:00:00Z'),
+      );
+      expect(
+        (await repo.hostedEvents()).find((e) => e.id === '1')?.place,
+      ).toBeNull();
+    });
   },
 );

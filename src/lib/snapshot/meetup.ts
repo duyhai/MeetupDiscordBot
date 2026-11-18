@@ -25,7 +25,24 @@ export interface SnapshotEvent {
   /** Meetup's YES + ATTENDED total at listing time. */
   yesCount: number | null;
   waitlistCount: number | null;
+  /**
+   * Where it happened, coarsely: the venue rounded to a 0.01° grid (about
+   * 1 km) and its city. Null for an online event or a venue without real
+   * coordinates. Optional: older callers and tests build events without it.
+   */
+  place?: EventPlace | null;
 }
+
+/** A venue as the snapshot keeps it: grid indices (degrees × 100) and city. */
+export interface EventPlace {
+  latE2: number;
+  lonE2: number;
+  city: string | null;
+}
+
+/** Degrees per grid step: 0.01° is about 1.1 km north-south. */
+export const PLACE_GRID = 0.01;
+const CITY_MAX = 80;
 
 export const SNAPSHOT_RSVP_STATUSES = ['YES', 'WAITLIST', 'ATTENDED'] as const;
 export type SnapshotRsvpStatus = (typeof SNAPSHOT_RSVP_STATUSES)[number];
@@ -88,6 +105,49 @@ function hostName(value: unknown): string | undefined {
   return name === '' ? undefined : name;
 }
 
+function finite(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value)
+    ? value
+    : undefined;
+}
+
+/**
+ * The venue as a grid cell, or null: online events (the ONLINE type), no
+ * venue, coordinates out of range, and Meetup's 0,0 placeholder
+ * are left out. Exact coordinates never leave this function.
+ */
+export function toPlace(node: unknown): EventPlace | null {
+  // gql-ext has no Event.isOnline: the ONLINE type is the signal.
+  if (field(node, 'eventType') === 'ONLINE') {
+    return null;
+  }
+  const venue = field(node, 'venue');
+  const lat = finite(field(venue, 'lat'));
+  const lon = finite(field(venue, 'lon'));
+  if (
+    lat === undefined ||
+    lon === undefined ||
+    Math.abs(lat) > 90 ||
+    Math.abs(lon) > 180 ||
+    (Math.abs(lat) < 0.5 && Math.abs(lon) < 0.5)
+  ) {
+    return null;
+  }
+  const rawCity = field(venue, 'city');
+  // Control and format characters out (C0, C1, bidi overrides, zero-width).
+  const city =
+    typeof rawCity === 'string'
+      ? Array.from(rawCity.replace(/[\p{Cc}\p{Cf}]/gu, '').trim())
+          .slice(0, CITY_MAX)
+          .join('')
+      : '';
+  return {
+    latE2: Math.round(lat / PLACE_GRID),
+    lonE2: Math.round(lon / PLACE_GRID),
+    city: city === '' ? null : city,
+  };
+}
+
 /** A listing node as a snapshot event, or undefined without a usable id or start. */
 export function toSnapshotEvent(node: unknown): SnapshotEvent | undefined {
   const n = node;
@@ -130,6 +190,7 @@ export function toSnapshotEvent(node: unknown): SnapshotEvent | undefined {
     hostNames,
     yesCount: count(field(field(n, 'attendance'), 'totalCount')),
     waitlistCount: count(field(field(n, 'waitlist'), 'totalCount')),
+    place: toPlace(n),
   };
 }
 

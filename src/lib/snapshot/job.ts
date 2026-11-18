@@ -21,6 +21,7 @@ import {
   SNAPSHOT_TICK_MS,
   SnapshotDeps,
   SnapshotTickOutcome,
+  describeError,
   runSnapshotTick,
   snapshotTuning,
 } from './ingest.js';
@@ -76,7 +77,7 @@ export function startGroupSnapshotScheduler(
         }
       })
       .catch((error: unknown) => {
-        log.error(`Group snapshot tick failed: ${String(error)}`);
+        log.error(`Group snapshot tick failed: ${describeError(error)}`);
       })
       .finally(() => {
         running = false;

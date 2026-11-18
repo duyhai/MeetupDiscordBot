@@ -1,4 +1,4 @@
-import { SafeHtml, html, localUrl, memberText } from '../html.js';
+import { SafeHtml, SafeUrl, html, localUrl, memberText } from '../html.js';
 import { STYLE } from '../pages.js';
 import { THEME_SCRIPT, themeToggle as themeToggleMarkup } from '../theme.js';
 import { HOST_BASE, HostRole } from './hostSession.js';
@@ -50,6 +50,7 @@ export function hostLayout({
   current,
   body,
   script,
+  assets,
 }: {
   title: string;
   nonce: string;
@@ -59,6 +60,8 @@ export function hostLayout({
   body: SafeHtml;
   /** staticRaw constants, each its own script: the page's progressive enhancement. */
   script?: SafeHtml | readonly SafeHtml[];
+  /** Our own stylesheet and script files (the map library), before `script`. */
+  assets?: { stylesheets: SafeUrl[]; scripts: SafeUrl[] };
 }): string {
   const account = user
     ? html`<div class="account">
@@ -75,6 +78,11 @@ export function hostLayout({
     script === undefined ? [] : Array.isArray(script) ? script : [script];
   // prettier-ignore
   const scriptTag = scripts.map((s) => html`<script nonce="${nonce}">${s}</script>`);
+  const sheetTags = (assets?.stylesheets ?? []).map(
+    (href) => html`<link rel="stylesheet" href="${href}" nonce="${nonce}" />`,
+  );
+  // prettier-ignore
+  const assetScripts = (assets?.scripts ?? []).map((src) => html`<script nonce="${nonce}" src="${src}"></script>`);
   // prettier-ignore
   return html`<!doctype html>
 <html lang="en">
@@ -85,13 +93,14 @@ export function hostLayout({
 <title>${title} · 1.5 Gen Asians hosts</title>
 <style nonce="${nonce}">${STYLE}</style>
 <script nonce="${nonce}">${THEME_SCRIPT}</script>
+${sheetTags}
 </head>
 <body>
 <a class="skip" href="#main">Skip to main content</a>
 <header class="site"><div class="bar"><strong class="brand">1.5 Gen Asians host dashboard</strong>${themeToggle}${account}</div></header>
 ${nav}
 <main id="main" tabindex="-1">${body}</main>
-${scriptTag}
+${assetScripts}${scriptTag}
 </body>
 </html>`.value;
 }
