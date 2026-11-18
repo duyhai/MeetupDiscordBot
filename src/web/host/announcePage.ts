@@ -12,6 +12,7 @@ import {
   isFarOut,
 } from '../../lib/hosts/announceSchedule.js';
 import { HostEvent } from '../../lib/hosts/hostEvents.js';
+import { REVIEW_CHECKLIST } from '../../lib/hosts/reviewChecklist.js';
 import {
   RecreateCode,
   RecreateOutcome,
@@ -93,6 +94,32 @@ export const ANNOUNCE_CHECKS = {
 const CHECK_NAMES = Object.keys(
   ANNOUNCE_CHECKS,
 ) as (keyof typeof ANNOUNCE_CHECKS)[];
+
+/**
+ * The announcement checklist (reviewChecklist.ts) less what the required
+ * checks above already ask: a memory aid, not a gate. Its photo, location
+ * and RSVP items share their keys with ANNOUNCE_CHECKS and are left out
+ * here (the location one is worded for the old Approve step and would
+ * contradict "NOT in the title"). The boxes have no name, so nothing about
+ * them is sent or recorded: the announcement row keeps only the required
+ * confirmation.
+ */
+export const ANNOUNCE_MEMORY_AID = REVIEW_CHECKLIST.filter(
+  (item) => !Object.hasOwn(ANNOUNCE_CHECKS, item.key),
+);
+
+function memoryAid(): SafeHtml {
+  return html`<fieldset class="review-checklist memory-aid">
+    <legend>Also worth a look (optional, a reminder only):</legend>
+    ${ANNOUNCE_MEMORY_AID.map(
+      (item) =>
+        html`<label class="check">
+          <input type="checkbox" />
+          ${item.label}
+        </label>`,
+    )}
+  </fieldset>`;
+}
 
 export const CONFIRM_ALL_MESSAGE =
   'Tick all three to confirm before announcing. Nothing was sent.';
@@ -277,7 +304,8 @@ export const recreatePath = (eventId: string) =>
   `${HOST_BASE}/events/${eventId}/recreate`;
 
 /**
- * The confirm page: the event, the three required checks, Confirm and
+ * The confirm page: the event, the three required checks, the optional
+ * announcement checklist (ANNOUNCE_MEMORY_AID), Confirm and
  * announce. The same page for Announce and for Recreate and announce; the
  * latter says what it does. `refused` shows the message after a POST with
  * a box unticked.
@@ -352,6 +380,7 @@ export function confirmBody(
           ${ANNOUNCE_CHECKS.rsvps}
         </label>
       </fieldset>
+      ${memoryAid()}
       <div class="actions">
         <button type="submit">Confirm and announce</button>
         <a class="button ghost" href="${pageLink(HOST_BASE)}">Back</a>

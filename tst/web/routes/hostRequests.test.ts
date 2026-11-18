@@ -61,6 +61,8 @@ async function setup(
     existing?: ExistingEvent | Error | 'never';
     /** How far the page clock jumps once Meetup has answered the check. */
     clockJumpAfterCheckMs?: number;
+    /** The hosted-count reader's answer; absent: no reader. */
+    hosted?: Map<string, number> | Error;
   } = {},
 ) {
   let clock = PAGE_NOW.getTime();
@@ -93,6 +95,12 @@ async function setup(
       return options.existing;
     },
   );
+  const hostedCounts = vi.fn(async (_ids: string[]) => {
+    if (options.hosted instanceof Error) {
+      throw options.hosted;
+    }
+    return options.hosted ?? new Map<string, number>();
+  });
   const { req } = await makeApp({
     now: () => PAGE_NOW.getTime(),
     protectedRoutes: (r) =>
@@ -106,6 +114,7 @@ async function setup(
           findExistingEvent,
           denyCheckDeadlineMs: 30,
           now,
+          ...(options.hosted === undefined ? {} : { hostedCounts }),
         }),
       }),
   });
@@ -125,6 +134,7 @@ async function setup(
     publishRequest,
     findExistingEvent,
     audit,
+    hostedCounts,
     get,
     post,
   };
@@ -146,18 +156,78 @@ describe('host request queue', () => {
     expect(res.text).toContain('aria-current="page">Requests');
   });
 
-  it('the Approve form carries the five reviewer boxes, none required', async () => {
+  it('Approve and Deny each open a pop-up; no checklist, nothing inline', async () => {
     const { get } = await setup();
     const res = await get(QUEUE);
-    const form = res.text.slice(
+    const approve = res.text.slice(
       res.text.indexOf(`action="${QUEUE}/1/approve"`),
-      res.text.indexOf('Approve and publish'),
+      res.text.indexOf(`action="${QUEUE}/1/deny"`),
     );
-    expect(form.match(/type="checkbox"/g)).toHaveLength(5);
-    expect(form).not.toContain('required');
-    expect(form).toContain('value="lead-time"');
-    expect(form).toContain('Starts 7 or more days out');
-    expect(form).toContain('Exact location in the title');
+    expect(approve).toContain('Approve and publish</button>');
+    expect(approve).not.toContain('type="checkbox"');
+    expect(res.text).not.toContain('Starts 7 or more days out');
+    // Each form is inside a kit modal: a details[data-modal] with a dialog.
+    const modals = res.text.match(/<details class="ui-modal" data-modal>/g);
+    expect(modals).toHaveLength(2);
+    expect(res.text).toMatch(
+      /<summary class="button">Approve<\/summary>\s*<dialog/,
+    );
+    expect(res.text).toMatch(
+      /<summary class="button danger">Deny<\/summary>\s*<dialog/,
+    );
+    const deny = res.text.slice(res.text.indexOf(`action="${QUEUE}/1/deny"`));
+    expect(deny.indexOf('Reason (the host sees it)')).toBeGreaterThan(-1);
+    expect(deny.indexOf('Reason (the host sees it)')).toBeLessThan(
+      deny.indexOf('</dialog>'),
+    );
+  });
+
+  it('the card shows what the Discord post does: host links, Meetup id, Discord, hosted count, tip', async () => {
+    const { get, hostedCounts } = await setup({
+      rows: [
+        eventRequestRow({
+          meetupMemberId: '424242',
+          discordUserId: '123456789012345678',
+          description: `💡 Host Tip: Bring snacks 💡\n\n${GUEST_HOST_EVENT_DESCRIPTION}`,
+        }),
+      ],
+      hosted: new Map([['424242', 7]]),
+    });
+    const res = await get(QUEUE);
+    expect(hostedCounts).toHaveBeenCalledWith(['424242']);
+    expect(res.text).toContain('href="https://www.meetup.com/members/424242/"');
+    expect(res.text).toContain('Meetup ID\n    424242');
+    expect(res.text).toContain(
+      'href="https://discord.com/users/123456789012345678"',
+    );
+    expect(res.text).toContain('7 events hosted before');
+    expect(res.text).toMatch(
+      /href="\/dashboard\/[^"]*424242[^"]*">No-show history/,
+    );
+    expect(res.text).toContain('Host Tip: <bdi>Bring snacks</bdi>');
+  });
+
+  it('a host whose count did not come back says so; decided cards ask for none', async () => {
+    const { get, hostedCounts } = await setup({
+      rows: [
+        eventRequestRow({ id: '1', meetupMemberId: '11' }),
+        eventRequestRow({ id: '2', meetupMemberId: '22', status: 'published' }),
+      ],
+      hosted: new Map(),
+    });
+    const res = await get(QUEUE);
+    expect(hostedCounts).toHaveBeenCalledWith(['11']);
+    expect(res.text).toContain('hosted count unavailable');
+    expect(res.text.match(/hosted count unavailable/g)).toHaveLength(1);
+    // A decided card asks for no count, and leaves no empty separator.
+    expect(res.text).not.toMatch(/·\s*·/);
+  });
+
+  it('a hosted-count reader that throws still renders the queue', async () => {
+    const { get } = await setup({ hosted: new Error('meetup down') });
+    const res = await get(QUEUE);
+    expect(res.status).toBe(200);
+    expect(res.text).toContain('hosted count unavailable');
   });
 
   it('a decided card shows what the reviewer confirmed, or that nothing was ticked', async () => {
@@ -573,24 +643,32 @@ describe('queue actions', () => {
     const res = await post(`${QUEUE}/1/approve`, { version: '1' });
     expect(res.status).toBe(303);
     expect(res.headers.location).toBe(`${QUEUE}?result=published`);
-    expect(publishRequest).toHaveBeenCalledWith('1', 1, USER.id, ['pending'], {
-      detail: '{"checklist":[]}',
-    });
+    expect(publishRequest).toHaveBeenCalledWith(
+      '1',
+      1,
+      USER.id,
+      ['pending'],
+      {},
+    );
     const entry = JSON.stringify(audit.mock.calls.at(-1)?.[0]);
     expect(entry).toContain('Host request approved');
     expect(entry).not.toMatch(/<@&|@everyone|@here/);
   });
 
-  it('the ticked boxes travel with the approval, junk dropped', async () => {
+  it('boxes from an old page are ignored: approval records no checklist', async () => {
     const { post, publishRequest } = await setup();
     const res = await post(`${QUEUE}/1/approve`, {
       version: '1',
-      check: ['content', 'photo', 'bogus'],
+      check: ['content', 'photo'],
     });
     expect(res.status).toBe(303);
-    expect(publishRequest).toHaveBeenCalledWith('1', 1, USER.id, ['pending'], {
-      detail: '{"checklist":["photo","content"]}',
-    });
+    expect(publishRequest).toHaveBeenCalledWith(
+      '1',
+      1,
+      USER.id,
+      ['pending'],
+      {},
+    );
   });
 
   it('a second approval of the same version is a 409', async () => {

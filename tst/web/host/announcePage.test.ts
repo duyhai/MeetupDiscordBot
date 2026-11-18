@@ -630,6 +630,26 @@ describe('the pre-flight confirmation', () => {
     expect(res.text).not.toContain('Tick all three');
   });
 
+  it('the announcement checklist sits before the action as an optional reminder, sending nothing', async () => {
+    const { get } = await setup();
+    const res = await get(`/host/events/${MINE}/announce`);
+    const aid = res.text.slice(
+      res.text.indexOf('memory-aid'),
+      res.text.indexOf('Confirm and announce'),
+    );
+    expect(aid).toContain('Starts 7 or more days out');
+    expect(aid).toContain('Title and description reasonable');
+    // What the required checks already ask is not repeated (and the old
+    // "Exact location in the title" would contradict them).
+    expect(aid).not.toContain('Exact location in the title');
+    expect(aid).not.toContain('Non-default photo');
+    expect(aid.match(/type="checkbox"/g)).toHaveLength(2);
+    expect(aid).not.toContain('name=');
+    expect(aid).not.toContain('required');
+    const recreate = await get(`/host/events/${MINE}/recreate`);
+    expect(recreate.text).toContain('Starts 7 or more days out');
+  });
+
   it('a stranger’s event or a bad id has no confirm page', async () => {
     const { get } = await setup();
     expect((await get(`/host/events/${THEIRS}/announce`)).status).toBe(404);

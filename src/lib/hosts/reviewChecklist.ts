@@ -1,9 +1,16 @@
 /**
- * The reviewer checklist on each leadership queue card (leadership,
- * 2026-11-10): what a leader confirms by eye before approving. A memory
- * aid, not a gate: Approve works with any boxes ticked. The ticked set is
- * recorded with the decision (event_request_events detail) and shown on
- * the card afterwards. Nothing here checks the event itself.
+ * The announcement checklist (leadership, 2026-11-10; moved 2026-11-17):
+ * what to confirm by eye on Meetup before an event is announced. A memory
+ * aid, not a gate. It sits on the host dashboard's announce page
+ * (announcePage.ts), beside the three required checks; it is no longer on
+ * the leadership queue's Approve step, which is about the request, not the
+ * announcement. Nothing here checks the event itself.
+ *
+ * History: from 2026-11-10 to 2026-11-17 the queue's Approve form asked for
+ * these boxes and recorded the ticked set with the decision
+ * (event_request_events detail, checklistDetail's format). Those records
+ * are still read (parseChecklistDetail) and shown on the decided cards, so
+ * the keys and labels below must not change meaning.
  */
 export const REVIEW_CHECKLIST = [
   { key: 'location', label: 'Exact location in the title' },
@@ -33,7 +40,7 @@ export function parseChecklist(value: unknown): ChecklistKey[] {
   );
 }
 
-/** The history row's detail for a decision made with the checklist. */
+/** The history row's detail format approvals used to write (see History above). */
 export function checklistDetail(ticked: readonly ChecklistKey[]): string {
   return JSON.stringify({ checklist: ticked });
 }

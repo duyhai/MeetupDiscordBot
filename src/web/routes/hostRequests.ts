@@ -21,9 +21,7 @@ import {
 } from '../../lib/hosts/requestDecision.js';
 import {
   ChecklistKey,
-  REVIEW_CHECKLIST,
   checklistLabel,
-  parseChecklist,
 } from '../../lib/hosts/reviewChecklist.js';
 import {
   DASHBOARD_PATHS,
@@ -42,8 +40,10 @@ import {
 } from '../../templates/createEventTemplate.js';
 import { dashboardLocals } from '../dashboardRouter.js';
 import { SafeHtml, html, localUrl, memberText, safeHref } from '../html.js';
+import { discordUserLink, memberHistoryLink, memberLink } from '../links.js';
 import { dashboardPage, load, notFound } from '../pageKit.js';
 import { FixedWindowLimiter } from '../rateLimit.js';
+import { confirmModal } from '../ui/index.js';
 import type { DashboardPageDeps } from './dashboardPages.js';
 import { LeadershipAnswer, leadershipOf } from './workspaceActions.js';
 
@@ -84,6 +84,12 @@ export interface HostRequestDeps {
    * and forget; absent in tests that have no Discord.
    */
   mirrorRequest?: (request: EventRequest) => Promise<unknown>;
+  /**
+   * How many past events each host has hosted (the Discord post's "Number
+   * of hosted events"), bounded and cached (hostedCounts.ts): hosts missing
+   * from the map show no count. Never rejects. Absent in tests without it.
+   */
+  hostedCounts?: (meetupMemberIds: string[]) => Promise<Map<string, number>>;
 }
 
 type QueueAction = DecisionAction;
@@ -124,30 +130,12 @@ function field(body: unknown, name: string): string | undefined {
   return typeof value === 'string' ? value : undefined;
 }
 
-/** A field that may repeat (checkboxes): as the body parser gives it. */
-function fieldValues(body: unknown, name: string): unknown {
-  return (body as Record<string, unknown> | undefined)?.[name];
-}
-
 /**
- * The reviewer's checklist (reviewChecklist.ts) inside the Approve form:
- * what to confirm by eye before approving. A memory aid: nothing is
- * required, and Approve works however many are ticked.
+ * What the reviewer ticked when they approved, from the history: approvals
+ * made 2026-11-10 to 2026-11-17 carried the checklist, which now lives on
+ * the host's announce page (reviewChecklist.ts). Later approvals record
+ * none, so their cards show nothing here.
  */
-function checklistFields(): SafeHtml {
-  return html`<fieldset class="review-checklist">
-    <legend>Before approving, check on Meetup and in the request:</legend>
-    ${REVIEW_CHECKLIST.map(
-      (item) =>
-        html`<label class="check">
-          <input type="checkbox" name="check" value="${item.key}" />
-          ${item.label}
-        </label>`,
-    )}
-  </fieldset>`;
-}
-
-/** What the reviewer confirmed when they approved, from the history. */
 function checklistRecord(ticked: ChecklistKey[] | undefined): SafeHtml | '' {
   if (ticked === undefined) {
     return '';
@@ -233,22 +221,38 @@ function cardActions(
   }
   const csrfField = html`<input type="hidden" name="_csrf" value="${csrf}" />
     <input type="hidden" name="version" value="${r.version}" />`;
-  const denyForm = html`<form
-    method="post"
-    action="${localUrl(actionPath(r.id, 'deny'))}"
-  >
-    ${csrfField}
-    <label class="field"
-      >Reason (the host sees it)
-      <textarea
-        name="reason"
-        rows="2"
-        maxlength="${DENY_REASON_MAX}"
-        required
-      ></textarea>
-    </label>
-    <button type="submit" class="danger">Deny</button>
-  </form>`;
+  // Both decisions open a pop-up (ui/modal.ts), so nothing opens inline and
+  // the card never shifts; the same POST forms, fields and CSRF as before.
+  const denyForm = confirmModal({
+    trigger: { label: 'Deny', tone: 'danger' },
+    title: 'Deny this request',
+    tip: html`The host sees the reason on their dashboard, and the Discord post
+    shows it. Nothing is created on Meetup.`,
+    action: localUrl(actionPath(r.id, 'deny')),
+    fields: html`${csrfField}
+      <label class="field"
+        >Reason (the host sees it)
+        <textarea
+          name="reason"
+          rows="3"
+          maxlength="${DENY_REASON_MAX}"
+          required
+        ></textarea>
+      </label>`,
+    confirmLabel: 'Deny',
+    tone: 'danger',
+  });
+  const approveForm = confirmModal({
+    trigger: { label: 'Approve', tone: 'primary' },
+    title: 'Approve and publish',
+    tip: html`Publishes <strong>${memberText(r.title)}</strong> on Meetup now,
+      with the organizer login, titled "[Guest Host] …". The host announces it
+      themself from the host dashboard.`,
+    action: localUrl(actionPath(r.id, 'approve')),
+    fields: csrfField,
+    confirmLabel: 'Approve and publish',
+    tone: 'primary',
+  });
   // Publishing refuses a start in the past; offer only Deny for one.
   const started = startHasPassed(r.startLocal, now);
   if (r.status === 'pending') {
@@ -258,13 +262,7 @@ function cardActions(
           ? html`<p class="note attn">
               The start time has passed, so this can no longer be published.
             </p>`
-          : html`<form
-              method="post"
-              action="${localUrl(actionPath(r.id, 'approve'))}"
-            >
-              ${csrfField} ${checklistFields()}
-              <button type="submit">Approve and publish</button>
-            </form>`
+          : approveForm
       }
       ${denyForm}
     </div>`;
@@ -394,28 +392,78 @@ function copyDetails(r: EventRequest): SafeHtml {
   </ul>`;
 }
 
+const HOST_TIP = /^💡 Host Tip: (.*) 💡\n\n/u;
+
+/**
+ * " · 8 events hosted before", or why there is no number; nothing for a
+ * card the page did not ask about (a decided one).
+ */
+function hostedLine(count: number | undefined, asked: boolean): SafeHtml | '' {
+  if (count !== undefined) {
+    return html` ·
+      <strong>${count} event${count === 1 ? '' : 's'} hosted before</strong>`;
+  }
+  return asked
+    ? html` ·
+        <span class="muted">hosted count unavailable (Meetup was slow)</span>`
+    : '';
+}
+
+/**
+ * Who asked, as the Discord post shows it: the host (linked to their Meetup
+ * profile, where their past events are), their Meetup id, their Discord
+ * account when known, how many events they have hosted, and their no-show
+ * history on this dashboard.
+ */
+function hostDetails(
+  r: EventRequest,
+  hosted: number | undefined,
+  asked: boolean,
+): SafeHtml {
+  const history = memberHistoryLink(r.meetupMemberId);
+  const discord =
+    r.discordUserId === null
+      ? ''
+      : html` · Discord: ${discordUserLink(r.discordUserId, 'profile')}`;
+  return html`<p class="request-host">
+    Host: ${memberLink({ id: r.meetupMemberId, name: r.hostName })} · Meetup ID
+    ${r.meetupMemberId}${discord}${hostedLine(hosted, asked)}
+    ${history ? html` · <a href="${history}">No-show history</a>` : ''}
+  </p>`;
+}
+
+interface CardContext {
+  checklist: ChecklistKey[] | undefined;
+  hosted: number | undefined;
+  /** Whether the page asked for this host's count (actionable cards only). */
+  asked: boolean;
+}
+
 function requestCard(
   r: EventRequest,
   leader: boolean,
   csrf: string,
   now: Date,
-  checklist: ChecklistKey[] | undefined,
+  context: CardContext,
 ): SafeHtml {
   const meetup = safeHref(r.eventUrl ?? '');
+  const tip = HOST_TIP.exec(r.description)?.[1];
   return html`<div class="card">
     <h3>${memberText(r.title)}</h3>
     <p>${statusBadge(r)} ${tierBadge(r)}</p>
+    ${hostDetails(r, context.hosted, context.asked)}
     <p>
-      ${memberText(r.hostName)} · ${whenLabel(r.startLocal)} ·
+      ${whenLabel(r.startLocal)} ·
       ${r.duration.replace(/^PT/, '').toLowerCase()} ·
       ${r.kind === 'copy' ? `copy of Meetup event ${r.sourceEventId ?? ''}` : 'new event'}
     </p>
     ${requestSettings(r)}
+    ${tip === undefined ? '' : html`<p>💡 Host Tip: ${memberText(tip)}</p>`}
     <p class="muted">
       Request #${r.id}, sent ${dayjs(r.createdAt).format('MMM D, h:mm A')}
     </p>
     ${r.denyReason ? html`<p>Reason: ${memberText(r.denyReason)}</p>` : ''}
-    ${checklistRecord(checklist)}
+    ${checklistRecord(context.checklist)}
     ${r.failure ? html`<p class="note attn wrap-anywhere">${r.failure}</p>` : ''}
     ${
       meetup
@@ -448,6 +496,10 @@ function filteredHeading(view: {
 /** The default view (waiting, needing attention, recently decided) or one status's list. */
 type QueueView = {
   checklists: Map<string, ChecklistKey[]>;
+  /** Hosted counts by Meetup id, for the hosts in `asked`. */
+  hosted: Map<string, number>;
+  /** The requests whose host count was asked for (the actionable ones). */
+  asked: Set<string>;
   counts: Map<EventRequestStatus, number> | undefined;
 } & (
   | {
@@ -468,7 +520,11 @@ function queueBody(
 ): SafeHtml {
   const leader = leadership === 'leader';
   const card = (r: EventRequest) =>
-    requestCard(r, leader, csrf, now, view.checklists.get(r.id));
+    requestCard(r, leader, csrf, now, {
+      checklist: view.checklists.get(r.id),
+      hosted: view.hosted.get(r.meetupMemberId),
+      asked: view.asked.has(r.id),
+    });
   const lists =
     view.kind === 'default'
       ? html`<h2>Waiting (${view.pending.length})</h2>
@@ -548,6 +604,7 @@ export function registerHostRequestRoutes(
     | 'findExistingEvent'
     | 'denyCheckDeadlineMs'
     | 'mirrorRequest'
+    | 'hostedCounts'
   >,
 ): void {
   const refusalPosts = new FixedWindowLimiter(1, REFUSAL_AUDIT_WINDOW_MS, () =>
@@ -583,6 +640,30 @@ export function registerHostRequestRoutes(
           }
         };
         const counting = countsOf();
+        // The hosted counts, for the cards a leader acts on (waiting, failed,
+        // publishing): bounded and cached in hostedCounts.ts, never rejecting.
+        const hostedOf = async (rows: EventRequest[]) => {
+          const open = rows.filter(
+            (r) => r.status !== 'published' && r.status !== 'denied',
+          );
+          const asked = new Set(open.map((r) => r.id));
+          if (!deps.hostedCounts || open.length === 0) {
+            return {
+              hosted: new Map<string, number>(),
+              asked: new Set<string>(),
+            };
+          }
+          try {
+            return {
+              hosted: await deps.hostedCounts(
+                open.map((r) => r.meetupMemberId),
+              ),
+              asked,
+            };
+          } catch {
+            return { hosted: new Map<string, number>(), asked };
+          }
+        };
         // The checklists are a note on the cards: a failure hides them only.
         const checklistsOf = async (rows: EventRequest[]) => {
           if (!store.reviewChecklists) {
@@ -604,14 +685,16 @@ export function registerHostRequestRoutes(
             FILTERED_LIMIT,
             status === 'published' || status === 'denied' ? 'newest' : 'oldest',
           );
-          const checklists = await checklistsOf(
-            listed.filter((r) => r.status !== 'pending'),
-          );
+          const [checklists, hosts] = await Promise.all([
+            checklistsOf(listed.filter((r) => r.status !== 'pending')),
+            hostedOf(listed),
+          ]);
           return {
             kind: 'one',
             status,
             listed,
             checklists,
+            ...hosts,
             counts: await counting,
           };
         }
@@ -620,13 +703,17 @@ export function registerHostRequestRoutes(
           store.listByStatus(['failed', 'publishing']),
           store.listDecided(RECENT_DECIDED),
         ]);
-        const checklists = await checklistsOf([...attention, ...decided]);
+        const [checklists, hosts] = await Promise.all([
+          checklistsOf([...attention, ...decided]),
+          hostedOf([...pending, ...attention]),
+        ]);
         return {
           kind: 'default',
           pending,
           attention,
           decided,
           checklists,
+          ...hosts,
           counts: await counting,
         };
       },
@@ -684,9 +771,6 @@ export function registerHostRequestRoutes(
         actor: session.userId,
         action: action as QueueAction,
         reason: field(body, 'reason'),
-        ...(action === 'approve'
-          ? { checklist: parseChecklist(fieldValues(body, 'check')) }
-          : {}),
       },
     );
     if (outcome.code === 'stale') {
