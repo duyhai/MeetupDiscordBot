@@ -136,6 +136,18 @@ export function countsByMonth(
  * Places by events hosted, competition-ranked. Ties are listed by
  * `nameOf` (then id), which never changes a place.
  */
+/**
+ * The tie order everywhere on the leaderboard: by name, then by id. Never
+ * one joined string: ICU collation ignores control characters, so "Ann"
+ * plus an id could sort after "Ann Lee".
+ */
+export function byNameThenId(
+  a: { name: string; id: string },
+  b: { name: string; id: string },
+): number {
+  return a.name.localeCompare(b.name) || a.id.localeCompare(b.id);
+}
+
 export function rank(
   counts: Map<string, number>,
   nameOf: (memberId: string) => string = (id) => id,
@@ -146,8 +158,10 @@ export function rank(
     .sort(
       (a, b) =>
         b.events - a.events ||
-        nameOf(a.memberId).localeCompare(nameOf(b.memberId)) ||
-        a.memberId.localeCompare(b.memberId),
+        byNameThenId(
+          { name: nameOf(a.memberId), id: a.memberId },
+          { name: nameOf(b.memberId), id: b.memberId },
+        ),
     );
   let place = 0;
   return rows.map((row, i) => {

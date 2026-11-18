@@ -354,7 +354,7 @@ describe('host profile', () => {
     const res = await req.get('/host/hosts/1').set('Cookie', sid);
     expect(res.text).toContain('<h1>Unnamed host');
     expect(res.text).toContain(
-      'Host names appear after the next daily update from Meetup.',
+      'Missing host names appear after the next daily update from Meetup.',
     );
   });
 });

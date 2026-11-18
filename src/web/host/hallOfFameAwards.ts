@@ -198,6 +198,13 @@ export function awardsSection(
     const text = BOARDS[board.key];
     const icon = text.icon ? html`${emoji(text.icon[0], text.icon[1])} ` : '';
     const notes: SafeHtml[] = [];
+    if (board.key === 'attendees') {
+      notes.push(
+        html`<p class="muted">
+          A co-hosted event counts in full for each of its hosts.
+        </p>`,
+      );
+    }
     if (board.unknownAttendance) {
       notes.push(
         html`<p class="muted">
@@ -241,12 +248,12 @@ export interface ArchiveRow {
 
 /**
  * Every closed month, newest first, grouped by year (the latest year
- * open). An awarded month lists its medalists exactly as its ?month= page
- * does (`rowsOf` is that page's monthRows).
+ * open; older years are sent collapsed). An awarded month lists its
+ * medalists exactly as its ?month= page does (the loader's precomputed
+ * `archive`, built with the same monthRows).
  */
 export function archiveSection(
   data: LeaderboardView,
-  rowsOf: (month: string) => ArchiveRow[],
   nameHtml: NameHtml,
 ): SafeHtml {
   const current = data.today.slice(0, 7);
@@ -271,13 +278,17 @@ export function archiveSection(
       const link = html`<a href="${pageLink(LEADERBOARD_PATH, { month })}"
         >${monthName(month)}</a
       >`;
+      if (data.medalsUnavailable) {
+        // The card's note says medals cannot be loaded: no per-month claim.
+        return html`<li>${link}</li>`;
+      }
       if (!data.awarded.has(month)) {
         return html`<li>
           ${link}
           <span class="muted">· medals not awarded yet</span>
         </li>`;
       }
-      const medalists = rowsOf(month).filter(
+      const medalists = (data.archive.get(month) ?? []).filter(
         (r): r is ArchiveRow & { medal: MedalPlace } => r.medal !== undefined,
       );
       if (medalists.length === 0) {

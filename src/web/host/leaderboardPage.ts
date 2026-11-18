@@ -14,12 +14,7 @@ import {
   createLeaderboardLoader,
   streaksFor,
 } from '../../lib/leaderboard/leaderboard.js';
-import {
-  Medal,
-  MedalPlace,
-  Standing,
-  rank,
-} from '../../lib/leaderboard/standings.js';
+import { Medal, Standing, rank } from '../../lib/leaderboard/standings.js';
 import { SafeHtml, html, memberText, pageLink } from '../html.js';
 import { hostPage } from './hostPageKit.js';
 import { hostLocals } from './hostRouter.js';
@@ -31,7 +26,9 @@ import {
   registerMapAssets,
 } from './hostMap.js';
 import { eventPlaces } from '../../lib/leaderboard/places.js';
-import { archiveSection, awardsSection } from './hallOfFameAwards.js';
+import { archiveSection, awardsSection, ordinal } from './hallOfFameAwards.js';
+import { monthRows } from '../../lib/leaderboard/monthRows.js';
+import { AWARD_MAX_ROWS } from '../../lib/leaderboard/awards.js';
 import {
   LEADERBOARD_PATH,
   bestStreaks,
@@ -125,55 +122,7 @@ function nameCell(data: Ready, memberId: string, selfId: string): SafeHtml {
     : shown;
 }
 
-interface MonthRow {
-  memberId: string;
-  events: number;
-  place: number;
-  medal?: MedalPlace;
-}
-
-/**
- * The month's rows. For an awarded month the stored medalists come first,
- * with the place and count they were awarded on (medals are kept whatever
- * later corrections do); everyone else follows, ranked live from the place
- * after them. Otherwise, the live standings.
- */
-export function monthRows(data: Ready, month: string): MonthRow[] {
-  const nameOf = (id: string) => data.names.get(id) ?? '';
-  const live = rank(
-    data.byMonth.get(month) ?? new Map<string, number>(),
-    nameOf,
-  );
-  if (!data.awarded.has(month)) {
-    return live;
-  }
-  const stored = data.medals
-    .filter((m) => m.month === month)
-    .sort(
-      (a, b) =>
-        a.place - b.place ||
-        nameOf(a.memberId).localeCompare(nameOf(b.memberId)) ||
-        a.memberId.localeCompare(b.memberId),
-    );
-  const medalists = new Set(stored.map((m) => m.memberId));
-  const rest = rank(
-    new Map(
-      live
-        .filter((s) => !medalists.has(s.memberId))
-        .map((s) => [s.memberId, s.events]),
-    ),
-    nameOf,
-  );
-  return [
-    ...stored.map((m) => ({
-      memberId: m.memberId,
-      events: m.events,
-      place: m.place,
-      medal: m.place,
-    })),
-    ...rest.map((s) => ({ ...s, place: s.place + stored.length })),
-  ];
-}
+export { monthRows } from '../../lib/leaderboard/monthRows.js';
 
 function monthStatus(data: Ready, month: string, current: string): SafeHtml {
   if (data.awarded.has(month)) {
@@ -228,8 +177,11 @@ function monthBody(
   return html`<div class="card">
     <h1>Leaderboard</h1>
     ${viewNav('month', month)} ${monthNav(month, first, current)}
-    ${namesNote(data.names)} ${medalsNote(data)}
-    ${monthStatus(data, month, current)}
+    ${namesNote(
+      data.names,
+      monthRows(data, month).map((r) => r.memberId),
+    )}
+    ${medalsNote(data)} ${monthStatus(data, month, current)}
     ${
       rows.length === 0
         ? html`<p class="muted">
@@ -269,16 +221,27 @@ export const PHONE_SHORT_LIST_TOP_PLACES = 5;
 export const PHONE_SHORT_LIST_NEIGHBOURS = 1;
 
 export interface ShortListGap {
-  /** Rows skipped, and the first and last place among them. */
+  /** Rows skipped. */
   count: number;
-  from: number;
+  /**
+   * The first place among them that no shown row above already has;
+   * undefined when every skipped row is tied with the row above.
+   */
+  from?: number;
+  /** The last skipped row's place. */
   to: number;
+}
+
+/** Rows tied past the row cap and after the last kept row ("and N more"). */
+export interface ShortListMore {
+  count: number;
+  place: number;
 }
 
 /**
  * One rendered row of the lifetime table. A row carries which widths show
- * it; a gap carries its text for each width it appears on (a gap can be
- * phone-only, or differ between the widths).
+ * it; a gap or a "more tied" line carries its text for each width it
+ * appears on (a gap can be phone-only, or differ between the widths).
  */
 export type ShortListItem =
   | {
@@ -288,23 +251,40 @@ export type ShortListItem =
       desktop: boolean;
       phone: boolean;
     }
-  | { kind: 'gap'; desktop?: ShortListGap; phone?: ShortListGap };
+  | { kind: 'gap'; desktop?: ShortListGap; phone?: ShortListGap }
+  | { kind: 'more'; desktop?: ShortListMore; phone?: ShortListMore };
 
-/** The row indices one width keeps. */
+/** At most this many rows of a top-places list (as the award boards). */
+export const SHORT_LIST_MAX_ROWS = AWARD_MAX_ROWS;
+
+/**
+ * The row indices one width keeps, and where its top-places list ends
+ * (for "and N more tied" when the cap cut it).
+ */
 function keptRows(
   standings: Standing[],
   youAt: number,
   topPlaces: number,
   neighbours: number,
-): Set<number> {
+): { keep: Set<number>; end: number } {
   const keep = new Set<number>();
   if (youAt < 0 || standings[youAt].place <= topPlaces) {
+    // Every row placed `topPlaces` or better, at most SHORT_LIST_MAX_ROWS of
+    // them (rows past the cap are all tied with the last kept one), and
+    // always the viewer's own row.
+    let end = -1;
     standings.forEach((s, i) => {
       if (s.place <= topPlaces) {
-        keep.add(i);
+        end = i;
+        if (i < SHORT_LIST_MAX_ROWS) {
+          keep.add(i);
+        }
       }
     });
-    return keep;
+    if (youAt >= 0) {
+      keep.add(youAt);
+    }
+    return { keep, end };
   }
   const head = Math.min(SHORT_LIST_HEAD_ROWS, standings.length);
   for (let i = 0; i < head; i += 1) {
@@ -314,7 +294,7 @@ function keptRows(
   for (let i = Math.max(0, youAt - neighbours); i <= last; i += 1) {
     keep.add(i);
   }
-  return keep;
+  return { keep, end: last };
 }
 
 /**
@@ -322,12 +302,13 @@ function keptRows(
  * dots …, and then the 3 people before you and 3 people after you with your
  * current rank. If you're in the top 10, then just simply show the top
  * 10."): a viewer placed 10th or better, or not on the board, sees every
- * row placed 10th or better; anyone else rows 1 to 5 and 3 either side of
- * them. Phone (Hai: "just show one before and after, and only show top five
- * if you are in the top five"): the same with 5th and 1 either side.
- * Windows go by row order in the ranked list; places stay the true
- * competition places; runs that touch merge, and each skipped run is one
- * gap per width. `full` shows every row on both widths.
+ * row placed 10th or better (at most 25, then "and N more tied", the viewer
+ * always shown); anyone else rows 1 to 5 and 3 either side of them. Phone
+ * (Hai: "just show one before and after, and only show top five if you are
+ * in the top five"): the same with 5th and 1 either side. Windows go by row
+ * order in the ranked list; places stay the true competition places; runs
+ * that touch merge, and each skipped run is one gap per width. `full`
+ * shows every row on both widths.
  */
 export function shortList(
   standings: Standing[],
@@ -335,7 +316,10 @@ export function shortList(
   full = false,
 ): ShortListItem[] {
   const youAt = standings.findIndex((s) => s.memberId === selfId);
-  const all = new Set(standings.map((_s, i) => i));
+  const all = {
+    keep: new Set(standings.map((_s, i) => i)),
+    end: standings.length - 1,
+  };
   const desktop = full
     ? all
     : keptRows(standings, youAt, SHORT_LIST_TOP_PLACES, SHORT_LIST_NEIGHBOURS);
@@ -355,20 +339,37 @@ export function shortList(
     if (!keep.has(i) || previous < 0 || i <= previous + 1) {
       return undefined;
     }
+    // A skipped row tied with the row above is not a new place: the range
+    // starts at the first skipped place the rows above do not show.
+    const shownPlace = standings[previous].place;
+    let from: number | undefined;
+    for (let k = previous + 1; k < i && from === undefined; k += 1) {
+      if (standings[k].place > shownPlace) {
+        from = standings[k].place;
+      }
+    }
     return {
       count: i - previous - 1,
-      from: standings[previous + 1].place,
+      ...(from === undefined ? {} : { from }),
       to: standings[i - 1].place,
     };
+  }
+  function moreAfter(
+    width: { keep: Set<number>; end: number },
+    last: number,
+  ): ShortListMore | undefined {
+    return width.end > last
+      ? { count: width.end - last, place: standings[width.end].place }
+      : undefined;
   }
   const items: ShortListItem[] = [];
   let lastDesktop = -1;
   let lastPhone = -1;
-  [...new Set([...desktop, ...phone])]
+  [...new Set([...desktop.keep, ...phone.keep])]
     .sort((a, b) => a - b)
     .forEach((i) => {
-      const desktopGap = gapBefore(desktop, i, lastDesktop);
-      const phoneGap = gapBefore(phone, i, lastPhone);
+      const desktopGap = gapBefore(desktop.keep, i, lastDesktop);
+      const phoneGap = gapBefore(phone.keep, i, lastPhone);
       if (desktopGap || phoneGap) {
         items.push({
           kind: 'gap',
@@ -380,25 +381,40 @@ export function shortList(
         kind: 'row',
         standing: standings[i],
         you: i === youAt,
-        desktop: desktop.has(i),
-        phone: phone.has(i),
+        desktop: desktop.keep.has(i),
+        phone: phone.keep.has(i),
       });
-      if (desktop.has(i)) {
+      if (desktop.keep.has(i)) {
         lastDesktop = i;
       }
-      if (phone.has(i)) {
+      if (phone.keep.has(i)) {
         lastPhone = i;
       }
     });
+  const desktopMore = moreAfter(desktop, lastDesktop);
+  const phoneMore = moreAfter(phone, lastPhone);
+  if (desktopMore || phoneMore) {
+    items.push({
+      kind: 'more',
+      ...(desktopMore ? { desktop: desktopMore } : {}),
+      ...(phoneMore ? { phone: phoneMore } : {}),
+    });
+  }
   return items;
 }
 
 function gapText(gap: ShortListGap): string {
-  const places =
-    gap.from === gap.to
-      ? `place ${gap.from}`
-      : `places ${gap.from} to ${gap.to}`;
-  return `${plural(gap.count, 'host')} not shown (${places})`;
+  const hosts = `${plural(gap.count, 'host')} not shown`;
+  if (gap.from === undefined) {
+    return hosts;
+  }
+  return gap.from === gap.to
+    ? `${hosts} (place ${gap.from})`
+    : `${hosts} (places ${gap.from} to ${gap.to})`;
+}
+
+function moreText(more: ShortListMore): string {
+  return `and ${more.count} more tied at ${ordinal(more.place)}`;
 }
 
 /** Which widths show a row: a class only when one width hides it. */
@@ -409,12 +425,25 @@ function widthClass(desktop: boolean, phone: boolean): string {
   return phone && !desktop ? 'phone-only' : '';
 }
 
-function gapRow(gap: ShortListGap, cls: string): SafeHtml {
+function gapRow(text: string, cls: string): SafeHtml {
   return html`<tr class="${`gap-row ${cls}`.trim()}">
     <td colspan="5" class="gap-cell">
-      <span aria-hidden="true">⋯</span> ${gapText(gap)}
+      <span aria-hidden="true">⋯</span> ${text}
     </td>
   </tr>`;
+}
+
+/**
+ * A gap or "more" line: one row when both widths read the same, otherwise
+ * one per width, the other hidden (display:none, so it is not read out).
+ */
+function widthRows(desktop?: string, phone?: string): SafeHtml {
+  if (desktop !== undefined && desktop === phone) {
+    return gapRow(desktop, '');
+  }
+  return html`${desktop === undefined ? '' : gapRow(desktop, 'desktop-only')}${
+    phone === undefined ? '' : gapRow(phone, 'phone-only')
+  }`;
 }
 
 /**
@@ -438,15 +467,16 @@ export function lifetimeTable(
   });
   const rows = items.map((item) => {
     if (item.kind === 'gap') {
-      const { desktop, phone } = item;
-      // One row when both widths skip the same rows; otherwise one per
-      // width, the other hidden (display:none, so it is not read out).
-      if (desktop && phone && gapText(desktop) === gapText(phone)) {
-        return gapRow(desktop, '');
-      }
-      return html`${desktop ? gapRow(desktop, 'desktop-only') : ''}${
-        phone ? gapRow(phone, 'phone-only') : ''
-      }`;
+      return widthRows(
+        item.desktop && gapText(item.desktop),
+        item.phone && gapText(item.phone),
+      );
+    }
+    if (item.kind === 'more') {
+      return widthRows(
+        item.desktop && moreText(item.desktop),
+        item.phone && moreText(item.phone),
+      );
     }
     const s = item.standing;
     const hostStreaks = streaksFor(data, s.memberId);
@@ -476,25 +506,29 @@ export function lifetimeTable(
           ${cells}
         </tr>`;
   });
-  const rowItems = items.filter(
+  // Whether the short list leaves anyone out on either width: only then are
+  // the links between the two views worth showing.
+  const shortItems = full ? shortList(standings, selfId) : items;
+  const shortRows = shortItems.filter(
     (i): i is Extract<ShortListItem, { kind: 'row' }> => i.kind === 'row',
   );
-  const fewerThanAll =
-    rowItems.filter((i) => i.desktop).length < standings.length ||
-    rowItems.filter((i) => i.phone).length < standings.length;
-  const toggle = full
-    ? html`<p>
-        <a href="${pageLink(LEADERBOARD_PATH, { view: 'all' })}"
-          >Show the short list</a
-        >
-      </p>`
-    : fewerThanAll
+  const shortHidesRows =
+    shortRows.filter((i) => i.desktop).length < standings.length ||
+    shortRows.filter((i) => i.phone).length < standings.length;
+  let toggle: SafeHtml | '' = '';
+  if (shortHidesRows) {
+    toggle = full
       ? html`<p>
+          <a href="${pageLink(LEADERBOARD_PATH, { view: 'all' })}"
+            >Show the short list</a
+          >
+        </p>`
+      : html`<p>
           <a href="${pageLink(LEADERBOARD_PATH, { view: 'all', hosts: 'all' })}"
             >${`Show all ${plural(standings.length, 'host')}`}</a
           >
-        </p>`
-      : '';
+        </p>`;
+  }
   return html`<p>
       Every host, by events hosted since the group began.
       ${`${plural(standings.length, 'host')}, ${plural(data.events.length, 'event')}.`}
@@ -524,7 +558,11 @@ function hallOfFameBody(
   const nameOfHost = (id: string) => nameCell(data, id, selfId);
   return html`<div class="card">
       <h1>Leaderboard</h1>
-      ${viewNav('all', data.today.slice(0, 7))} ${namesNote(data.names)}
+      ${viewNav('all', data.today.slice(0, 7))}
+      ${namesNote(data.names, [
+        ...data.byHost.keys(),
+        ...data.medals.map((m) => m.memberId),
+      ])}
       ${medalsNote(data)} ${lifetimeTable(data, selfId, allHosts)}
       ${streakNote()} ${updatedLine(data)}
     </div>
@@ -536,7 +574,7 @@ function hallOfFameBody(
         'the group has',
       )}
     </div>
-    ${archiveSection(data, (month) => monthRows(data, month), nameOfHost)}`;
+    ${archiveSection(data, nameOfHost)}`;
 }
 
 const notReadyBody = html`<div class="card">

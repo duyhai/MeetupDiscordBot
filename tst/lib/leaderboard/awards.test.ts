@@ -15,7 +15,7 @@ import {
 
 const entry = (id: string, value: number) => ({
   value,
-  order: id,
+  order: { name: id, id },
   row: { memberIds: [id] },
 });
 
@@ -190,5 +190,54 @@ describe('awardBoards', () => {
       ['1', 3, 'Food & drink, Games, Outdoors'],
       ['2', 3, 'Games, Nightlife, Outdoors'],
     ]);
+  });
+
+  it('a medalist with no counted events stays on the medal boards', () => {
+    // Host 9 won gold in 2025-03; their events were later cancelled.
+    const withLapsed = awardBoards({
+      events,
+      byHost: eventsByHost(events),
+      streaks: new Map(),
+      medals: [
+        ...medals,
+        { month: '2025-03', memberId: '9', place: 1, events: 4 },
+        { month: '2025-04', memberId: '9', place: 1, events: 3 },
+        { month: '2025-05', memberId: '9', place: 1, events: 2 },
+      ],
+      names: new Map([['9', 'Cy']]),
+    });
+    const golds = withLapsed.find((b) => b.key === 'golds');
+    expect(golds.rows[0]).toMatchObject({
+      memberIds: ['9'],
+      value: 3,
+      place: 1,
+    });
+    const all = withLapsed.find((b) => b.key === 'medals');
+    expect(all.rows.map((r) => r.memberIds[0])).toContain('9');
+    // Not on boards that need counted events.
+    const months = withLapsed.find((b) => b.key === 'monthsActive');
+    expect(months.rows.map((r) => r.memberIds[0])).not.toContain('9');
+  });
+
+  it('ties go by name, then id, as rank() does ("Ann" before "Ann Lee")', () => {
+    const tied = [
+      ev('2026-09-01', ['10'], 'Games', 5),
+      ev('2026-09-02', ['2'], 'Games', 5),
+    ];
+    const boardsByName = awardBoards({
+      events: tied,
+      byHost: eventsByHost(tied),
+      streaks: new Map(),
+      medals: [],
+      names: new Map([
+        ['10', 'Ann'],
+        ['2', 'Ann Lee'],
+      ]),
+    });
+    expect(
+      boardsByName
+        .find((b) => b.key === 'attendees')
+        .rows.map((r) => r.memberIds[0]),
+    ).toEqual(['10', '2']);
   });
 });

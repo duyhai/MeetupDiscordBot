@@ -591,7 +591,7 @@ describe('host leaderboard', () => {
       // eslint-disable-next-line no-await-in-loop
       const res = await req.get(path).set('Cookie', sid);
       expect(res.text).toContain(
-        'Host names appear after the next daily update from Meetup.',
+        'Missing host names appear after the next daily update from Meetup.',
       );
       expect(res.text).toContain('Unnamed host');
     }
@@ -599,7 +599,7 @@ describe('host leaderboard', () => {
     const res = await named.req
       .get('/host/leaderboard?view=all')
       .set('Cookie', named.sid);
-    expect(res.text).not.toContain('Host names appear after');
+    expect(res.text).not.toContain('host names appear after');
   });
 
   it('the Hall of fame table: the short list, a gap row, the viewer marked, and Show all / back', async () => {
@@ -660,6 +660,94 @@ describe('host leaderboard', () => {
     expect(fullTable).not.toContain('not shown');
     expect(fullTable).toContain('Show the short list');
   });
+
+  it('?hosts=: only "all" with view=all shows every host; anything else is the short list', async () => {
+    // 20 hosts with 20 down to 1 events: distinct places.
+    const many = Array.from({ length: 20 }, (_, h) =>
+      Array.from({ length: 20 - h }, () => ev('2026-10-02', [String(100 + h)])),
+    ).flat();
+    const store = fakeStore(many, NAMES);
+    const { req, sid } = await app(store);
+    const rowsIn = (text: string) =>
+      rowsOf(
+        text.slice(
+          text.indexOf('Every host, by events hosted'),
+          text.indexOf('<h2>All-time awards</h2>'),
+        ),
+      ).length;
+    for (const q of ['hosts=everyone', 'hosts=all&hosts=all', 'hosts[x]=all']) {
+      // eslint-disable-next-line no-await-in-loop
+      const res = await req
+        .get(`/host/leaderboard?view=all&${q}`)
+        .set('Cookie', sid);
+      expect(res.status).toBe(200);
+      expect(rowsIn(res.text)).toBeLessThan(20);
+    }
+    const all = await req
+      .get('/host/leaderboard?view=all&hosts=all')
+      .set('Cookie', sid);
+    expect(rowsIn(all.text)).toBe(20);
+    // Without view=all it is the month page, unaffected.
+    const month = await req
+      .get('/host/leaderboard?hosts=all')
+      .set('Cookie', sid);
+    expect(month.text).toContain('Standings so far');
+    expect(month.text).not.toContain('Every host, by events hosted');
+  });
+
+  it('no Show all / Show the short list links when the short list already shows everyone', async () => {
+    const store = fakeStore(EVENTS, NAMES);
+    const { req, sid } = await app(store);
+    const short = await req
+      .get('/host/leaderboard?view=all')
+      .set('Cookie', sid);
+    expect(short.text).not.toContain('Show all');
+    const full = await req
+      .get('/host/leaderboard?view=all&hosts=all')
+      .set('Cookie', sid);
+    expect(full.text).not.toContain('Show the short list');
+  });
+
+  it('hostile event titles and host names on the boards are escaped', async () => {
+    const events = [
+      { ...ev('2026-10-02', ['2']), title: HOSTILE, attendance: 40 },
+      { ...ev('2026-10-03', ['1']), attendance: 3 },
+    ];
+    const store = fakeStore(events, NAMES);
+    const { req, sid } = await app(store);
+    const res = await req.get('/host/leaderboard?view=all').set('Cookie', sid);
+    const boards = res.text.slice(
+      res.text.indexOf('<h2>All-time awards</h2>'),
+      res.text.indexOf("<h2>Where we've hosted</h2>"),
+    );
+    expect(boards).not.toContain('<script>alert');
+    expect(boards).not.toContain('<img src=x>');
+    expect(boards).toContain('&lt;script&gt;alert(1)&lt;/script&gt;');
+    // The attendees board says how co-hosting counts.
+    expect(boards).toContain(
+      'A co-hosted event counts in full for each of its hosts.',
+    );
+  });
+
+  it('when medals cannot be loaded, archive months make no per-month claim', async () => {
+    const store = fakeStore(EVENTS, NAMES);
+    store.awardedMonths = vi.fn().mockRejectedValue(new Error('db down'));
+    const { req, sid } = await app(store);
+    const res = await req.get('/host/leaderboard?view=all').set('Cookie', sid);
+    const archive = res.text.slice(res.text.indexOf('<h2>Archive</h2>'));
+    expect(archive).toContain('Medals cannot be loaded right now.');
+    expect(archive).toContain('October 2026');
+    expect(archive).not.toContain('medals not awarded yet');
+  });
+
+  it('the names note shows when only some hosts are unnamed', async () => {
+    const store = fakeStore(EVENTS, { '1': 'Bea', '4242': 'Ann' });
+    const { req, sid } = await app(store);
+    const res = await req.get('/host/leaderboard?view=all').set('Cookie', sid);
+    expect(res.text).toContain(
+      'Missing host names appear after the next daily update from Meetup.',
+    );
+  });
 });
 
 describe('shortList (Hai: first 5, a gap, 3 either side of you; top 10 if you are in it)', () => {
@@ -678,7 +766,11 @@ describe('shortList (Hai: first 5, a gap, 3 either side of you; top 10 if you ar
     return items.flatMap((i) => {
       if (i.kind === 'gap') {
         const gap = i[width];
-        return gap ? [`gap ${gap.count} (${gap.from}-${gap.to})`] : [];
+        return gap ? [`gap ${gap.count} (${gap.from ?? '-'}-${gap.to})`] : [];
+      }
+      if (i.kind === 'more') {
+        const more = i[width];
+        return more ? [`more ${more.count} at ${more.place}`] : [];
       }
       return i[width] ? [`${i.standing.place}${i.you ? '*' : ''}`] : [];
     });
@@ -765,7 +857,7 @@ describe('shortList (Hai: first 5, a gap, 3 either side of you; top 10 if you ar
     ]);
   });
 
-  it('a tie at the 5th/6th boundary: rows go by list order, places stay true', () => {
+  it('a tie at the 5th/6th boundary: rows go by list order, places stay true, and the gap never repeats a shown place', () => {
     const places = [
       1, 2, 3, 4, 5, 5, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
     ];
@@ -775,7 +867,7 @@ describe('shortList (Hai: first 5, a gap, 3 either side of you; top 10 if you ar
       '3',
       '4',
       '5',
-      'gap 7 (5-12)',
+      'gap 7 (7-12)',
       '13',
       '14',
       '15',
@@ -797,6 +889,62 @@ describe('shortList (Hai: first 5, a gap, 3 either side of you; top 10 if you ar
 
   it('the full view shows every row', () => {
     expect(shortList(board(50), 'h29', true)).toHaveLength(50);
+  });
+
+  it('small boards: empty, one host, fewer than 5', () => {
+    expect(shortList([], 'h0')).toEqual([]);
+    expect(shape(shortList(board(1), 'h0'))).toEqual(['1*']);
+    expect(phone(shortList(board(3), 'nobody'))).toEqual(['1', '2', '3']);
+    expect(shape(shortList(board(4), 'h3'))).toEqual(['1', '2', '3', '4*']);
+  });
+
+  it('viewer 13th and second to last', () => {
+    expect(shape(shortList(board(50), 'h12'))).toEqual([
+      '1',
+      '2',
+      '3',
+      '4',
+      '5',
+      'gap 4 (6-9)',
+      '10',
+      '11',
+      '12',
+      '13*',
+      '14',
+      '15',
+      '16',
+    ]);
+    expect(shape(shortList(board(50), 'h48'))).toEqual([
+      '1',
+      '2',
+      '3',
+      '4',
+      '5',
+      'gap 40 (6-45)',
+      '46',
+      '47',
+      '48',
+      '49*',
+      '50',
+    ]);
+  });
+
+  it('a mass tie in the top places stops at 25 rows, keeps the viewer, and says how many more', () => {
+    const tiedAll = board(
+      30,
+      Array.from({ length: 30 }, () => 1),
+    );
+    expect(shape(shortList(tiedAll, 'nobody'))).toEqual([
+      ...Array.from({ length: 25 }, () => '1'),
+      'more 5 at 1',
+    ]);
+    // The viewer, 29th in list order but tied for 1st, stays visible.
+    expect(shape(shortList(tiedAll, 'h28'))).toEqual([
+      ...Array.from({ length: 25 }, () => '1'),
+      'gap 3 (--1)',
+      '1*',
+      'more 1 at 1',
+    ]);
   });
 
   describe('on a phone (Hai: top 5 if you are in it, else 1 either side)', () => {
@@ -897,14 +1045,14 @@ describe('shortList (Hai: first 5, a gap, 3 either side of you; top 10 if you ar
         '7*',
         '8',
       ]);
-      // Far below: the gap starts at the hidden tied 5th.
+      // Far below: the hidden tied 5th is not a new place; the range starts at 7th.
       expect(phone(shortList(board(12, places), 'h10'))).toEqual([
         '1',
         '2',
         '3',
         '4',
         '5',
-        'gap 4 (5-9)',
+        'gap 4 (7-9)',
         '10',
         '11*',
         '12',

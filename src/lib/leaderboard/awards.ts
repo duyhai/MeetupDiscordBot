@@ -5,7 +5,13 @@
  * leaderboard load from what the loader already holds.
  */
 import { EVENT_TYPE_LABELS, classifyEventType } from '../hosts/eventTypes.js';
-import { HostStreaks, LeaderboardEvent, Medal, monthOf } from './standings.js';
+import {
+  HostStreaks,
+  LeaderboardEvent,
+  Medal,
+  byNameThenId,
+  monthOf,
+} from './standings.js';
 
 /** A board shows every entry placed this or better… */
 export const AWARD_TOP_PLACES = 10;
@@ -54,8 +60,8 @@ export interface AwardBoard {
 
 interface Entry {
   value: number;
-  /** Tie order within a place: never changes the place. */
-  order: string;
+  /** Tie order within a place (name then id): never changes the place. */
+  order: { name: string; id: string };
   row: Omit<AwardRow, 'place' | 'value'>;
 }
 
@@ -71,7 +77,7 @@ export function topPlaces(
 ): Pick<AwardBoard, 'rows' | 'moreTied' | 'morePlace'> {
   const sorted = entries
     .filter((e) => e.value > 0)
-    .sort((a, b) => b.value - a.value || a.order.localeCompare(b.order));
+    .sort((a, b) => b.value - a.value || byNameThenId(a.order, b.order));
   const placed: AwardRow[] = [];
   let place = 0;
   sorted.forEach((e, i) => {
@@ -109,19 +115,27 @@ export function awardBoards(input: AwardInputs): AwardBoard[] {
     key: AwardKey,
     valueOf: (id: string, hostEvents: LeaderboardEvent[]) => number,
     detailOf?: (id: string, hostEvents: LeaderboardEvent[]) => string,
+    hostIds: Iterable<string> = byHost.keys(),
   ): AwardBoard => ({
     key,
     ...topPlaces(
-      [...byHost].map(([id, hostEvents]) => ({
-        value: valueOf(id, hostEvents),
-        order: `${nameOf(id)}\u0000${id}`,
-        row: {
-          memberIds: [id],
-          ...(detailOf ? { detail: detailOf(id, hostEvents) } : {}),
-        },
-      })),
+      [...hostIds].map((id) => {
+        const hostEvents = byHost.get(id) ?? [];
+        return {
+          value: valueOf(id, hostEvents),
+          order: { name: nameOf(id), id },
+          row: {
+            memberIds: [id],
+            ...(detailOf ? { detail: detailOf(id, hostEvents) } : {}),
+          },
+        };
+      }),
     ),
   });
+  // Medals are permanent: a medalist whose events were later deleted or
+  // renamed "cancelled" has no counted events but keeps the medals, so the
+  // medal boards take every stored medalist, not only today's hosts.
+  const medalists = new Set(medals.map((m) => m.memberId));
 
   const unknownAttendance = events.filter(
     (e) => e.attendance === undefined,
@@ -177,8 +191,11 @@ export function awardBoards(input: AwardInputs): AwardBoard[] {
         .filter((e) => e.attendance !== undefined)
         .map((e) => ({
           value: e.attendance ?? 0,
-          // Ties: the more recent event first.
-          order: `${9999_99_99 - Number(e.day.replaceAll('-', ''))}\u0000${e.id}`,
+          // Ties: the more recent event first (an inverted day sorts so).
+          order: {
+            name: String(99999999 - Number(e.day.replaceAll('-', ''))),
+            id: e.id,
+          },
           row: {
             memberIds: uniqueHosts(e),
             event: {
@@ -197,8 +214,8 @@ export function awardBoards(input: AwardInputs): AwardBoard[] {
     attendees,
     hostBoard('weeklyStreak', (id) => streaks.get(id)?.weekly.best ?? 0),
     hostBoard('dailyStreak', (id) => streaks.get(id)?.daily.best ?? 0),
-    hostBoard('golds', (id) => golds.get(id) ?? 0),
-    hostBoard('medals', (id) => all.get(id) ?? 0),
+    hostBoard('golds', (id) => golds.get(id) ?? 0, undefined, medalists),
+    hostBoard('medals', (id) => all.get(id) ?? 0, undefined, medalists),
     hostBoard(
       'bestMonth',
       (_id, hostEvents) => bestMonth(hostEvents)[1],
