@@ -28,7 +28,10 @@ export interface LeaderboardEvent {
   hostIds: string[];
   /** YYYY-MM-DD: the Pacific calendar day the event started. */
   day: string;
-  /** The venue's ~1 km grid cell and city; null or absent when unknown or online. */
+  /**
+   * The venue's ~1 km grid cell and city; null for an online event or no
+   * venue; undefined when the snapshot has not collected it yet.
+   */
   place?: EventPlace | null;
 }
 

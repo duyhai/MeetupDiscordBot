@@ -383,15 +383,19 @@ describe('host leaderboard', () => {
     const all = await req.get('/host/leaderboard?view=all').set('Cookie', sid);
     expect(all.text).toContain('data-map-cells="[[47.61,-122.33,2]]"');
     expect(all.text).toMatch(
-      /<script nonce="[^"]+" src="\/host\/assets\/leaflet\.js"><\/script>/,
+      /<script nonce="[^"]+" src="\/host\/assets\/leaflet\.js\?v=1\.9\.4"><\/script>/,
     );
     expect(all.text).toMatch(
-      /<link rel="stylesheet" href="\/host\/assets\/leaflet\.css" nonce="[^"]+" \/>/,
+      /<link rel="stylesheet" href="\/host\/assets\/leaflet\.css\?v=1\.9\.4" nonce="[^"]+" \/>/,
     );
     // The city list says the same for no-JS and screen readers; escaped.
-    expect(all.text).toContain('Seattle: 1 event');
-    expect(all.text).toContain('&lt;script&gt;alert(1)&lt;/script&gt;');
-    expect(all.text).toContain('7 events online or without a venue');
+    expect(all.text).toContain('<li><bdi>Seattle</bdi>: 1 event</li>');
+    expect(all.text).toContain('<bdi>&lt;script&gt;alert(1)&lt;/script&gt;');
+    // The other counted events predate the venue fields.
+    expect(all.text).toContain(
+      'Venue data for 7 events is still being collected.',
+    );
+    expect(all.text).toContain('role="region"');
     const csp = String(all.headers['content-security-policy']);
     // The host CSP (Meetup photos, same-origin fetch) plus the tile host.
     expect(csp).toContain(
@@ -410,10 +414,21 @@ describe('host leaderboard', () => {
   it('serves Leaflet’s two files with their types, and nothing else under assets', async () => {
     const store = fakeStore(EVENTS, NAMES);
     const { req, sid } = await app(store);
-    const js = await req.get('/host/assets/leaflet.js').set('Cookie', sid);
+    const js = await req
+      .get('/host/assets/leaflet.js?v=1.9.4')
+      .set('Cookie', sid)
+      .set('Accept-Encoding', 'gzip');
     expect(js.status).toBe(200);
     expect(String(js.headers['content-type'])).toContain('text/javascript');
-    expect(js.text).toContain('Leaflet');
+    expect(js.headers['content-encoding']).toBe('gzip');
+    expect(String(js.headers['cache-control'])).toContain('immutable');
+    expect(String(js.headers.vary)).toContain('Accept-Encoding');
+    const plain = await req
+      .get('/host/assets/leaflet.js')
+      .set('Cookie', sid)
+      .set('Accept-Encoding', 'identity');
+    expect(plain.headers['content-encoding']).toBeUndefined();
+    expect(plain.text).toContain('Leaflet');
     const css = await req.get('/host/assets/leaflet.css').set('Cookie', sid);
     expect(css.status).toBe(200);
     expect(String(css.headers['content-type'])).toContain('text/css');

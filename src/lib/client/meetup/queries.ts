@@ -569,7 +569,6 @@ export const getGroupEventsForSnapshot = gql`
             waitlist: rsvps(filter: { rsvpStatus: [WAITLIST] }) {
               totalCount
             }
-            isOnline
             eventType
             venue {
               lat

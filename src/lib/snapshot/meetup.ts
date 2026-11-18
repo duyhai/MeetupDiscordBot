@@ -112,15 +112,13 @@ function finite(value: unknown): number | undefined {
 }
 
 /**
- * The venue as a grid cell, or null: online events (isOnline, or the ONLINE
- * type), no venue, coordinates out of range, and Meetup's 0,0 placeholder
+ * The venue as a grid cell, or null: online events (the ONLINE type), no
+ * venue, coordinates out of range, and Meetup's 0,0 placeholder
  * are left out. Exact coordinates never leave this function.
  */
 export function toPlace(node: unknown): EventPlace | null {
-  if (
-    field(node, 'isOnline') === true ||
-    field(node, 'eventType') === 'ONLINE'
-  ) {
+  // gql-ext has no Event.isOnline: the ONLINE type is the signal.
+  if (field(node, 'eventType') === 'ONLINE') {
     return null;
   }
   const venue = field(node, 'venue');
@@ -136,9 +134,10 @@ export function toPlace(node: unknown): EventPlace | null {
     return null;
   }
   const rawCity = field(venue, 'city');
+  // Control and format characters out (C0, C1, bidi overrides, zero-width).
   const city =
     typeof rawCity === 'string'
-      ? Array.from(rawCity.replace(/[\u0000-\u001f\u007f]/g, '').trim())
+      ? Array.from(rawCity.replace(/[\p{Cc}\p{Cf}]/gu, '').trim())
           .slice(0, CITY_MAX)
           .join('')
       : '';

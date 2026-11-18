@@ -271,6 +271,7 @@ const event = (
       expect(columns.rows.map((r) => r.column_name)).toEqual([
         'place_city',
         'place_lat_e2',
+        'place_listed',
         'place_lon_e2',
       ]);
       const places = Object.fromEntries(
@@ -279,7 +280,9 @@ const event = (
       expect(places).toEqual({
         '1': { latE2: 4761, lonE2: -12233, city: 'Seattle' },
         '2': null,
-        '3': null,
+        // Written without a place (as before the venue fields): not yet
+        // collected, which is not the same as no venue.
+        '3': undefined,
       });
       // The event moved online: the next listing clears its place.
       await snapshot.upsertEvents(

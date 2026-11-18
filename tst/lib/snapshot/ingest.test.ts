@@ -493,6 +493,37 @@ describe('runSnapshotTick', () => {
     expect(await tickUntilFinished(env)).toMatchObject({ finished: true });
   });
 
+  it('a rejected listing leaves the snapshot intact, alerts, and logs no listing data', async () => {
+    const env = setup();
+    env.group.events = past(3);
+    expect(await tickUntilFinished(env)).toMatchObject({ finished: true });
+    const before = await env.store.pastEventCount();
+    const logged: string[] = [];
+    const record = (...args: unknown[]) => {
+      logged.push(args.map(String).join(' '));
+      return undefined as never;
+    };
+    env.deps.log = { info: record, warn: record, error: record };
+    env.group.listingError = new ClientError(
+      {
+        status: 200,
+        headers: new Headers(),
+        errors: [{ message: 'Partial failure' }],
+        data: { venue: { lat: 47.612345 }, name: 'Secret Host' },
+      } as unknown as ClientError['response'],
+      { query: 'q' },
+    );
+    env.advance(SNAPSHOT_RUN_INTERVAL_MS);
+    expect(await runSnapshotTick(env.deps)).toMatchObject({ kind: 'failed' });
+    expect(await env.store.pastEventCount()).toBe(before);
+    expect(env.alerts.at(-1)?.title).toBe('Group snapshot is failing');
+    expect(logged.join('\n')).toContain(
+      'ClientError (HTTP 200): Partial failure',
+    );
+    expect(logged.join('\n')).not.toContain('47.61');
+    expect(logged.join('\n')).not.toContain('Secret Host');
+  });
+
   it('another process holding the open run: this one starts nothing', async () => {
     const env = setup();
     env.group.events = past(1);
