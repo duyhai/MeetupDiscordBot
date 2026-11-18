@@ -130,8 +130,14 @@ async function app(
 
 const EVENTS = [
   // October: 1 hosts 3 (one co-hosted with 2), 2 hosts 3, 3 hosts 1.
-  ev('2026-10-02', ['1', '2']),
-  ev('2026-10-03', ['1']),
+  {
+    ...ev('2026-10-02', ['1', '2']),
+    place: { latE2: 4761, lonE2: -12233, city: 'Seattle' },
+  },
+  {
+    ...ev('2026-10-03', ['1']),
+    place: { latE2: 4761, lonE2: -12233, city: HOSTILE },
+  },
   ev('2026-10-04', ['1']),
   ev('2026-10-09', ['2']),
   ev('2026-10-16', ['2']),
@@ -369,5 +375,54 @@ describe('host leaderboard', () => {
     const res = await req.get('/host/leaderboard').set('Cookie', sid);
     expect(res.status).toBe(403);
     expect(store.mocks.hostedEvents).not.toHaveBeenCalled();
+  });
+
+  it('the Hall of fame draws a map from our own Leaflet, with OSM tiles allowed on that page only', async () => {
+    const store = fakeStore(EVENTS, NAMES);
+    const { req, sid } = await app(store);
+    const all = await req.get('/host/leaderboard?view=all').set('Cookie', sid);
+    expect(all.text).toContain('data-map-cells="[[47.61,-122.33,2]]"');
+    expect(all.text).toMatch(
+      /<script nonce="[^"]+" src="\/host\/assets\/leaflet\.js"><\/script>/,
+    );
+    expect(all.text).toMatch(
+      /<link rel="stylesheet" href="\/host\/assets\/leaflet\.css" nonce="[^"]+" \/>/,
+    );
+    // The city list says the same for no-JS and screen readers; escaped.
+    expect(all.text).toContain('Seattle: 1 event');
+    expect(all.text).toContain('&lt;script&gt;alert(1)&lt;/script&gt;');
+    expect(all.text).toContain('7 events online or without a venue');
+    const csp = String(all.headers['content-security-policy']);
+    // The host CSP (Meetup photos, same-origin fetch) plus the tile host.
+    expect(csp).toContain(
+      "img-src 'self' https://secure.meetupstatic.com https://tile.openstreetmap.org;",
+    );
+    expect(csp).toContain("connect-src 'self';");
+    expect(csp).toMatch(/script-src 'nonce-[^']+';/);
+
+    const month = await req.get('/host/leaderboard').set('Cookie', sid);
+    expect(String(month.headers['content-security-policy'])).not.toContain(
+      'tile.openstreetmap.org',
+    );
+    expect(month.text).not.toContain('leaflet.js');
+  });
+
+  it('serves Leaflet’s two files with their types, and nothing else under assets', async () => {
+    const store = fakeStore(EVENTS, NAMES);
+    const { req, sid } = await app(store);
+    const js = await req.get('/host/assets/leaflet.js').set('Cookie', sid);
+    expect(js.status).toBe(200);
+    expect(String(js.headers['content-type'])).toContain('text/javascript');
+    expect(js.text).toContain('Leaflet');
+    const css = await req.get('/host/assets/leaflet.css').set('Cookie', sid);
+    expect(css.status).toBe(200);
+    expect(String(css.headers['content-type'])).toContain('text/css');
+    for (const name of ['leaflet.js.map', '..%2Fpackage.json', 'x.css']) {
+      // eslint-disable-next-line no-await-in-loop
+      const res = await req.get(`/host/assets/${name}`).set('Cookie', sid);
+      expect(res.status).toBe(404);
+    }
+    const anonymous = await req.get('/host/assets/leaflet.js');
+    expect(anonymous.status).toBe(302);
   });
 });

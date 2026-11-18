@@ -62,8 +62,11 @@ export class PostgresLeaderboardRepository implements LeaderboardStore {
       status: string;
       host_ids: string[];
       day: string;
+      place_lat_e2: number | null;
+      place_lon_e2: number | null;
+      place_city: string | null;
     }>(
-      `SELECT event_id, title, status, host_ids,
+      `SELECT event_id, title, status, host_ids, place_lat_e2, place_lon_e2, place_city,
               to_char(date_time AT TIME ZONE 'America/Los_Angeles', 'YYYY-MM-DD') AS day
          FROM meetup_events
         WHERE status = 'PAST' AND deleted_at IS NULL AND cardinality(host_ids) > 0
@@ -75,6 +78,14 @@ export class PostgresLeaderboardRepository implements LeaderboardStore {
       status: row.status as EventStatus,
       hostIds: row.host_ids,
       day: row.day,
+      place:
+        row.place_lat_e2 === null || row.place_lon_e2 === null
+          ? null
+          : {
+              latE2: row.place_lat_e2,
+              lonE2: row.place_lon_e2,
+              city: row.place_city,
+            },
     }));
   }
 

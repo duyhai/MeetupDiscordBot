@@ -60,6 +60,7 @@
     "express": "^5.2.1",
     "graphql": "^16.6.0",
     "graphql-request": "^7.4.0",
+    "leaflet": "1.9.4",
     "memory-cache-node": "^1.4.0",
     "pg": "^8.23.0",
     "redis": "^4.6.13",

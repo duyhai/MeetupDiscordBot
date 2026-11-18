@@ -7,6 +7,7 @@ import {
 import { TITLE_MAX } from '../../../src/lib/eventAudit/meetup.js';
 import {
   HOST_NAME_MAX,
+  toPlace,
   toSnapshotEvent,
   toSnapshotRsvp,
 } from '../../../src/lib/snapshot/meetup.js';
@@ -40,6 +41,7 @@ describe('toSnapshotEvent', () => {
       hostNames: { '111': 'Ana', '222': 'Bo' },
       yesCount: 14,
       waitlistCount: 2,
+      place: null,
     });
   });
 
@@ -119,6 +121,54 @@ describe('toSnapshotRsvp', () => {
   });
 });
 
+describe('toPlace', () => {
+  const venue = (over: Record<string, unknown> = {}) => ({
+    isOnline: false,
+    eventType: 'PHYSICAL',
+    venue: { lat: 47.61234, lon: -122.33567, city: ' Seattle ' },
+    ...over,
+  });
+
+  it('keeps only a ~1 km grid cell and the city, never the exact coordinates', () => {
+    expect(toPlace(venue())).toEqual({
+      latE2: 4761,
+      lonE2: -12234,
+      city: 'Seattle',
+    });
+    expect(toPlace(venue({ eventType: 'HYBRID' }))?.latE2).toBe(4761);
+  });
+
+  it('leaves out online events, missing venues, the 0,0 placeholder and bad coordinates', () => {
+    expect(toPlace(venue({ isOnline: true }))).toBeNull();
+    expect(toPlace(venue({ eventType: 'ONLINE' }))).toBeNull();
+    expect(toPlace(venue({ venue: null }))).toBeNull();
+    expect(toPlace(venue({ venue: { lat: 0, lon: 0, city: 'X' } }))).toBeNull();
+    expect(toPlace(venue({ venue: { lat: 0.2, lon: -0.1 } }))).toBeNull();
+    expect(toPlace(venue({ venue: { lat: 91, lon: 10 } }))).toBeNull();
+    expect(toPlace(venue({ venue: { lat: '47.6', lon: -122.3 } }))).toBeNull();
+    expect(
+      toPlace(venue({ venue: { lat: Number.NaN, lon: -122.3 } })),
+    ).toBeNull();
+    expect(toPlace(null)).toBeNull();
+  });
+
+  it('cleans the city: no control characters, bounded, null when blank', () => {
+    expect(
+      toPlace(
+        venue({ venue: { lat: 47.6, lon: -122.3, city: 'Sea\u0000ttle' } }),
+      )?.city,
+    ).toBe('Seattle');
+    expect(
+      toPlace(
+        venue({ venue: { lat: 47.6, lon: -122.3, city: 'x'.repeat(200) } }),
+      )?.city,
+    ).toHaveLength(80);
+    expect(
+      toPlace(venue({ venue: { lat: 47.6, lon: -122.3, city: '  ' } }))?.city,
+    ).toBeNull();
+  });
+});
+
 describe('snapshot queries', () => {
   const text = (doc: unknown) => String(doc);
 
@@ -132,6 +182,11 @@ describe('snapshot queries', () => {
     );
     expect(q).toMatch(/eventHosts \{\s*member \{\s*id\s*name\s*\}\s*\}/);
     expect(q.match(/\bname\b/g)).toHaveLength(1);
+    // The venue: coordinates and city only (rounded at ingest), no address.
+    expect(q).toMatch(
+      /isOnline\s*eventType\s*venue \{\s*lat\s*lon\s*city\s*\}/,
+    );
+    expect(q).not.toMatch(/address|postalCode|googleMapsUrl/);
   });
 
   it('the RSVP read asks for member ids only', () => {

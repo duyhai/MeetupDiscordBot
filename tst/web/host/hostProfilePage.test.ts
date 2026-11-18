@@ -53,10 +53,13 @@ const both = (
   hostIds: string[],
   title: string,
   attendance: number | undefined,
-  { inProfile = true }: { inProfile?: boolean } = {},
+  {
+    inProfile = true,
+    place = { latE2: 4761, lonE2: -12233, city: 'Seattle' },
+  }: { inProfile?: boolean; place?: LeaderboardEvent['place'] } = {},
 ) => ({
   inProfile,
-  board: { id, title, status: 'PAST' as const, hostIds, day },
+  board: { id, title, status: 'PAST' as const, hostIds, day, place },
   hosted: {
     id,
     title,
@@ -77,6 +80,14 @@ const EVENTS = [
   both('106', '2026-11-10', ['1'], 'Karaoke night', undefined),
   // Counted by the leaderboard, missing from the attendance read.
   both('107', '2026-11-12', ['1'], 'Boba walk', 99, { inProfile: false }),
+  // Hosted by an id on the Guest Host blacklist.
+  both(
+    '108',
+    '2026-11-13',
+    [GUEST_HOST_MEETUP_BLACKLIST[0]],
+    'Trivia night',
+    9,
+  ),
 ];
 
 function store(): LeaderboardStore {
@@ -284,5 +295,40 @@ describe('host profile', () => {
     expect(hostedEvents).not.toHaveBeenCalled();
     const anonymous = await req.get('/host/hosts/1');
     expect(anonymous.status).toBe(302);
+  });
+
+  it('says how many events Attendees hosted leaves out, counting the ones missing from the attendance read', async () => {
+    const { req, sid } = await app();
+    const res = await req.get('/host/hosts/1').set('Cookie', sid);
+    // 106 (unknown attendance) and 107 (missing from the read).
+    expect(res.text).toContain(
+      'Attendees hosted excludes 2 events without attendance data.',
+    );
+    const own = await req.get('/host/hosts/4242').set('Cookie', sid);
+    expect(own.text).not.toContain('without attendance data.');
+  });
+
+  it('a profile has a map of where they hosted, with OSM tiles allowed', async () => {
+    const { req, sid } = await app();
+    const res = await req.get('/host/hosts/1').set('Cookie', sid);
+    expect(res.text).toContain("Where they've hosted");
+    expect(res.text).toContain('data-map-cells="[[47.61,-122.33,6]]"');
+    expect(res.text).toContain('Where Bea has hosted');
+    expect(String(res.headers['content-security-policy'])).toContain(
+      'https://tile.openstreetmap.org',
+    );
+  });
+
+  it('no profile map for an id on the Guest Host blacklist, and no tile CSP', async () => {
+    const { req, sid } = await app();
+    const res = await req
+      .get(`/host/hosts/${GUEST_HOST_MEETUP_BLACKLIST[0]}`)
+      .set('Cookie', sid);
+    expect(res.status).toBe(200);
+    expect(res.text).not.toContain('data-map-cells');
+    expect(res.text).not.toContain('leaflet.js');
+    expect(String(res.headers['content-security-policy'])).not.toContain(
+      'tile.openstreetmap.org',
+    );
   });
 });

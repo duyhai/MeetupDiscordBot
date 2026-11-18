@@ -3,11 +3,27 @@ import { Response } from 'express';
 import { Logger } from 'tslog';
 
 import { tz } from '../../util/timezone.js';
-import { SafeHtml, html } from '../html.js';
+import { baseSecurityHeaders } from '../dashboardRouter.js';
+import { SafeHtml, SafeUrl, html } from '../html.js';
 import { HostNavKey, hostLayout } from './hostLayout.js';
-import { hostLocals } from './hostRouter.js';
+import { HOST_CSP_OPTIONS, hostLocals } from './hostRouter.js';
 
 const logger = new Logger({ name: 'hostDashboard' });
+
+/** OpenStreetMap's tile server (tile usage policy: attribution, a Referer, light use). */
+export const MAP_TILE_HOST = 'tile.openstreetmap.org';
+
+/**
+ * The host site's CSP (HOST_CSP_OPTIONS) with one addition, for map pages
+ * only: tile images from MAP_TILE_HOST. Scripts and styles stay nonce-only
+ * (the map library is served from our own origin under the nonce).
+ */
+export function mapContentSecurityPolicy(nonce: string): string {
+  return baseSecurityHeaders(nonce, {
+    ...HOST_CSP_OPTIONS,
+    imgHosts: [...(HOST_CSP_OPTIONS.imgHosts ?? []), MAP_TILE_HOST],
+  })['Content-Security-Policy'];
+}
 
 export function hostPage(
   res: Response,
@@ -18,9 +34,16 @@ export function hostPage(
     status?: number;
     /** staticRaw constants run after the page loads, each its own script. */
     script?: SafeHtml | readonly SafeHtml[];
+    /** Our own files (the map library), loaded before `script`. */
+    assets?: { stylesheets: SafeUrl[]; scripts: SafeUrl[] };
+    /** Lets the page load OpenStreetMap tiles (MAP_TILE_HOST) as images. */
+    mapTiles?: boolean;
   },
 ) {
   const { session, nonce } = hostLocals(res);
+  if (page.mapTiles) {
+    res.set('Content-Security-Policy', mapContentSecurityPolicy(nonce));
+  }
   res
     .status(page.status ?? 200)
     .type('html')
@@ -32,6 +55,7 @@ export function hostPage(
         current: page.current,
         body: page.body,
         script: page.script,
+        assets: page.assets,
       }),
     );
 }

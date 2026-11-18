@@ -123,14 +123,34 @@ hosting weeks are Monday-first Pacific weeks (as the calendar).
 **Fields, verified 2026-11-18** against Meetup's schema (`/gql2` from Hai's
 signed-in tab, read-only): `Venue { lat: Float, lon: Float, city, venueType,
 name, address }` (note `lon`, not `lng`), `Event { isOnline: Boolean,
-eventType: EventType }`. Neither is in the snapshot; PR 3 adds `isOnline`,
-`eventType` and `venue { lat lon }` to the listing query (no extra request).
+eventType: EventType }` with `EventType` = HYBRID, ONLINE, PHYSICAL. Neither
+is in the snapshot; PR 3 adds `isOnline`, `eventType` and
+`venue { lat lon city }` to the listing query (no extra request). A sample of
+200 past group events: all PHYSICAL, 3 with no venue, 2 with the 0,0
+placeholder, all within the Seattle area.
 
 **Privacy:** online events (`isOnline` or `eventType = ONLINE`) and venues
 without coordinates (or Meetup's 0,0 placeholder) are left out. Coordinates
 are **rounded to a 0.01° grid (about 1 km) at ingest**; exact venue
 coordinates are never stored, so no residential pin can be plotted. The map
 shows grid cells sized by event count, with no venue names or addresses.
+
+**As built (PR 3).** `toPlace` (snapshot/meetup.ts) turns a listing node into
+grid indices (degrees × 100, rounded) and a cleaned city, or null; the
+columns `place_lat_e2`, `place_lon_e2`, `place_city` on `meetup_events` (a
+guarded ALTER) are refreshed by every listing, so existing events fill in on
+the next run. The Leaderboard's event read carries the cell, so the maps cost
+no extra query. Leaflet 1.9.4 is a pinned dependency served at
+`/host/assets/leaflet.{js,css}` (signed-in only); map pages (the Hall of fame
+and profiles) send the host CSP with `img-src 'self'
+https://tile.openstreetmap.org` and nothing else changed; other pages keep
+`img-src 'self'`. The map's zoom is capped at 14 (fitted at 12 at most), so a
+cell never reads as a street address. Hall of fame map: every counted
+event, blacklisted hosts included (it shows areas, not people). Profile map:
+that host's counted events, and none for an id on the Guest Host blacklist
+until Hai decides. Under each map, a city list (top 8 and "Elsewhere") and a
+count of events online or without a venue; the map container stays hidden
+without JavaScript.
 
 **Rendering, compared:**
 

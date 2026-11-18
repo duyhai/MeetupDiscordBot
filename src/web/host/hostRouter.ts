@@ -251,6 +251,16 @@ function roleOf(
     : { tier: 'regular', role: 'member', staffRoles };
 }
 
+/**
+ * The host site's CSP options: Meetup's photo host for the calendar's
+ * thumbnails, and same-origin fetch for the history list's Older chunks;
+ * nothing else. Map pages add the tile host (hostPageKit).
+ */
+export const HOST_CSP_OPTIONS: Parameters<typeof baseSecurityHeaders>[1] = {
+  imgHosts: [MEETUP_PHOTO_HOST],
+  connectSelf: true,
+};
+
 /** Who a refused sign-in was, for the audit line: ids only, never a name. */
 function who(identity: HostIdentity): string {
   return 'discordUserId' in identity
@@ -1129,14 +1139,7 @@ export function createHostRouter(deps: HostRouterDeps): express.Router {
   router.use(function hostSecurityHeaders(_req, res, next) {
     const nonce = crypto.randomBytes(16).toString('base64');
     locals(res).nonce = nonce;
-    // Meetup's photo host for the calendar's thumbnails, and same-origin
-    // fetch for the history list's Older chunks; nothing else.
-    res.set(
-      baseSecurityHeaders(nonce, {
-        imgHosts: [MEETUP_PHOTO_HOST],
-        connectSelf: true,
-      }),
-    );
+    res.set(baseSecurityHeaders(nonce, HOST_CSP_OPTIONS));
     next();
   });
   router.use(function hostHttpsRedirect(req, res, next) {

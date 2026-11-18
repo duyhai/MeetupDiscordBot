@@ -522,6 +522,9 @@ export interface SnapshotEventNode {
     ({ member?: { id?: unknown; name?: unknown } | null } | null)[] | null;
   attendance?: { totalCount?: unknown } | null;
   waitlist?: { totalCount?: unknown } | null;
+  isOnline?: unknown;
+  eventType?: unknown;
+  venue?: { lat?: unknown; lon?: unknown; city?: unknown } | null;
 }
 
 export interface SnapshotRsvpNode {
