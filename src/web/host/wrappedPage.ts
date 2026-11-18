@@ -33,7 +33,9 @@ import {
   BUILDING_LEASE_TTL_SEC,
   CachedWrapped,
   FIRST_WRAPPED_YEAR,
+  STALE_STATS_NOTICE,
   buildingKey,
+  hasCurrentStats,
 } from '../../lib/wrapped/cache.js';
 import { CompanionDeps, NamedCompanion } from '../../lib/wrapped/companions.js';
 import {
@@ -553,40 +555,64 @@ export function wrappedBody({
   const { stats } = wrapped;
   const { year } = stats;
   const thisYear = stats.attendedThisYear;
+  // A copy built under older rules still counts hosted events as attended:
+  // its numbers go under the old combined labels, with a notice, until the
+  // backfill rebuilds it.
+  const current = hasCurrentStats(wrapped);
+  const labels = current
+    ? {
+        year: `Attended in ${year}`,
+        allTime: 'Attended all-time',
+        streak: 'Longest attending streak (months)',
+        allTimeWord: 'attended',
+        month: ' attended',
+      }
+    : {
+        year: `Events in ${year}`,
+        allTime: 'All-time',
+        streak: 'Longest streak (months)',
+        allTimeWord: 'attended or hosted',
+        month: '',
+      };
   return html`<div class="card">
       <h1>
         🎁 ${memberText(session.username)}'s 1.5 Gen Wrapped ${String(year)}
       </h1>
       ${yearNav(years, year)} ${noticeHtml}
+      ${current ? '' : html`<p class="note info">${STALE_STATS_NOTICE}</p>`}
       ${
         thisYear === 0 && !(stats.hosting && stats.hosting.thisYear > 0)
           ? html`<p>
               A quiet year: no events in ${String(year)}, but
-              ${plural(stats.attendedAllTime, 'event')} attended with us
-              all-time. See you at the next one!
+              ${plural(stats.attendedAllTime, 'event')} ${labels.allTimeWord}
+              with us all-time. See you at the next one!
             </p>`
           : ''
       }
       <dl class="stats">
         <div class="stat">
-          <dt>Attended in ${String(year)}</dt>
+          <dt>${labels.year}</dt>
           <dd>${String(thisYear)}</dd>
         </div>
         <div class="stat">
-          <dt>Attended all-time</dt>
+          <dt>${labels.allTime}</dt>
           <dd>${String(stats.attendedAllTime)}</dd>
         </div>
         <div class="stat">
-          <dt>Longest attending streak (months)</dt>
+          <dt>${labels.streak}</dt>
           <dd>
             ${stats.longestStreakMonths > 0 ? String(stats.longestStreakMonths) : '—'}
           </dd>
         </div>
       </dl>
-      <p class="muted">
-        Attended counts the events you went to and did not host; the events you
-        hosted have their own card below.
-      </p>
+      ${
+        current
+          ? html`<p class="muted">
+              Attended counts the events you went to and did not host; the
+              events you hosted have their own card below.
+            </p>`
+          : ''
+      }
     </div>
     ${heat ? heatCard(year, heat) : ''}
     <div class="card">
@@ -618,7 +644,7 @@ export function wrappedBody({
         ${
           stats.busiestMonth
             ? html`${MONTHS[stats.busiestMonth.month]}
-              (${plural(stats.busiestMonth.count, 'event')} attended)`
+              (${plural(stats.busiestMonth.count, 'event')}${labels.month})`
             : html`None this year`
         }
       </p>
@@ -626,7 +652,7 @@ export function wrappedBody({
         stats.busiestMonth && stats.busiestMonth.events.length > 0
           ? html`<details>
               <summary>
-                Events attended that month
+                Events${labels.month} that month
                 (${String(stats.busiestMonth.events.length)})
               </summary>
               ${eventList(stats.busiestMonth.events)}

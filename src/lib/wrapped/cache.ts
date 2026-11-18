@@ -51,6 +51,20 @@ export interface CachedWrapped {
   statsVersion?: number;
 }
 
+/**
+ * False for a copy built under older stats rules: until the backfill
+ * rebuilds it, its attended numbers still include hosted events, so the page
+ * and the embed show them under the old combined labels with a notice.
+ */
+export function hasCurrentStats(wrapped: CachedWrapped): boolean {
+  return wrapped.statsVersion === WRAPPED_STATS_VERSION;
+}
+
+/** The notice both surfaces show over a copy built under older rules. */
+export const STALE_STATS_NOTICE =
+  'Your Wrapped is being refreshed: events you hosted no longer count as attended. ' +
+  'Until it is, the numbers here are the old count of events you attended or hosted.';
+
 export function wrappedCacheKey(discordUserId: string, year: number): string {
   return `wrapped:${WRAPPED_CACHE_VERSION}:${discordUserId}:${year}`;
 }

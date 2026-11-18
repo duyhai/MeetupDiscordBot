@@ -65,6 +65,8 @@ describe('heatMapYear', () => {
     expect(out.match(/<rect\s+class="hh"/g)).toHaveLength(2); // a hosted day, and the legend
     expect(out.match(/<path class="hh"/g)).toHaveLength(2); // the day with both, and the legend
     expect(out.match(/class="hm-dot"/g)).toHaveLength(4);
+    // The split cell's non-colour cue: a contrasting diagonal.
+    expect(out.match(/class="hm-split"/g)).toHaveLength(2);
     // The key names each, in words.
     expect(out).toContain('class="heat-legend"');
     expect(out).toMatch(/Attended\s*<\/li>/);

@@ -547,6 +547,8 @@ describe('runBackfillTick', () => {
       year: 2026,
     });
     expect(QUEUE_MAX_ATTEMPTS).toBe(3);
+    // A Leadership refresh of the failing row: its mark goes with the row.
+    await h.cache.set(forceKey(m.discordUserId, 2026), '1', 60);
     await h.store.enqueue({
       discordUserId: members[1].discordUserId,
       meetupId: 'm2',
@@ -561,9 +563,11 @@ describe('runBackfillTick', () => {
     });
     expect((await h.store.position(m.discordUserId))?.row.attempts).toBe(1);
     expect(await h.store.position(members[1].discordUserId)).toBeUndefined();
+    expect(h.cache.values.has(forceKey(m.discordUserId, 2026))).toBe(true);
     await runBackfillTick(h.deps);
     await runBackfillTick(h.deps);
     expect(await h.store.queueLength()).toBe(0);
+    expect(h.cache.values.has(forceKey(m.discordUserId, 2026))).toBe(false);
     const warned = JSON.stringify(h.log.warn.mock.calls);
     expect(warned).toContain('Error');
     expect(warned).not.toContain('rsvps down');

@@ -180,17 +180,17 @@ describe('Settings Wrapped backfill card', () => {
     expect(out).toContain('<h2>Wrapped announcement</h2>');
   });
 
-  it("offers Rebuild a member's Wrapped in a confirm pop-up, never inline", async () => {
+  it("offers Refresh a member's Wrapped in a confirm pop-up, never inline", async () => {
     const out = await render(control());
     expect(out).toContain('<details class="ui-modal" data-modal>');
     expect(out).toContain(
       '<summary class="button ghost" title="1.5 Leadership Team only">' +
-        'Rebuild a member&#39;s Wrapped…</summary>',
+        'Refresh a member&#39;s Wrapped…</summary>',
     );
     expect(out).toContain(`action="${WRAPPED_REBUILD_PATH}"`);
     expect(out).toContain('name="member"');
     expect(out).toContain('name="year"');
-    expect(out).toContain('<button type="submit">Queue the rebuild</button>');
+    expect(out).toContain('<button type="submit">Queue the refresh</button>');
   });
 
   it('without a CSRF token (a bare render) there is no form', async () => {
@@ -641,7 +641,7 @@ describe('POST /dashboard/wrapped/rebuild', () => {
       expect.objectContaining({
         title: 'Wrapped rebuild requested',
         description: expect.stringContaining(
-          "<@200000000000000001>'s 2025 Wrapped",
+          "<@200000000000000001>'s 2025 Wrapped to be rebuilt from the latest group data",
         ),
       }),
     );
@@ -651,6 +651,20 @@ describe('POST /dashboard/wrapped/rebuild', () => {
     expect(page.text).toContain(
       BACKFILL_NOTICES['rebuild-queued'].replace("'", '&#39;'),
     );
+  });
+
+  it('without the CSRF token the guard refuses it, nothing asked', async () => {
+    const { req, isLeadership, rebuildMember } = await rebuildSetup();
+    isLeadership.mockResolvedValue(true);
+    const res = await req
+      .post(WRAPPED_REBUILD_PATH)
+      .set('Cookie', await signIn(req))
+      .set('Origin', ORIGIN)
+      .type('form')
+      .send({ member: '182787593', year: '2026' });
+    expect(res.status).toBe(403);
+    expect(isLeadership).not.toHaveBeenCalled();
+    expect(rebuildMember).not.toHaveBeenCalled();
   });
 
   it('a bad member or year is refused before anything is asked', async () => {

@@ -17,7 +17,7 @@ import { EMBED_COLORS, GET_VERIFIED_CHANNEL_ID } from '../../constants.js';
 import { neutralizeMentions } from '../helpers/neutralizeMentions.js';
 import { EVENT_TYPE_LABELS } from '../hosts/eventTypes.js';
 import { tz } from '../../util/timezone.js';
-import { CachedWrapped } from './cache.js';
+import { CachedWrapped, STALE_STATS_NOTICE, hasCurrentStats } from './cache.js';
 import { WrappedEvent } from './stats.js';
 
 export const SHARE_BUTTON_PREFIX = 'wrapped_share';
@@ -64,6 +64,13 @@ const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
 
 function thisYearText(wrapped: CachedWrapped): string {
   const { attendedThisYear, attendedAllTime, year, hosting } = wrapped.stats;
+  if (!hasCurrentStats(wrapped)) {
+    // Built under older rules: the old combined count, and why.
+    return (
+      `${plural(attendedThisYear, 'event')} attended or hosted in ${year} ` +
+      `(${attendedAllTime} all-time).\n_${STALE_STATS_NOTICE}_`
+    );
+  }
   if (attendedThisYear === 0 && !(hosting && hosting.thisYear > 0)) {
     return (
       `A quiet year: no events in ${year}, but ${plural(attendedAllTime, 'event')} ` +
@@ -144,6 +151,7 @@ export function wrappedEmbed(
   view: EmbedView = { kind: 'private' },
 ): EmbedBuilder {
   const { stats } = wrapped;
+  const attendedWord = hasCurrentStats(wrapped) ? ' attended' : '';
   const embed = new EmbedBuilder()
     .setTitle(`🎁 ${displayName}'s 1.5 Gen Wrapped ${stats.year}`)
     .setColor(EMBED_COLORS.info)
@@ -179,14 +187,14 @@ export function wrappedEmbed(
   embed.addFields({
     name: 'Busiest month',
     value: stats.busiestMonth
-      ? `${MONTHS[stats.busiestMonth.month]} (${plural(stats.busiestMonth.count, 'event')} attended)`
+      ? `${MONTHS[stats.busiestMonth.month]} (${plural(stats.busiestMonth.count, 'event')}${attendedWord})`
       : 'None this year',
   });
   embed.addFields({
     name: 'Longest streak',
     value:
       stats.longestStreakMonths > 0
-        ? `${plural(stats.longestStreakMonths, 'month')} in a row attending at least one event`
+        ? `${plural(stats.longestStreakMonths, 'month')} in a row ${attendedWord ? 'attending' : 'with'} at least one event`
         : 'None this year',
   });
   embed.addFields({

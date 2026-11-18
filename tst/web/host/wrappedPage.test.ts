@@ -11,6 +11,7 @@ import {
   readWrapped,
   wrappedCacheKey,
   writeWrapped,
+  WRAPPED_STATS_VERSION,
 } from '../../../src/lib/wrapped/cache.js';
 import { createHostRouter } from '../../../src/web/host/hostRouter.js';
 import {
@@ -169,6 +170,7 @@ const cached: CachedWrapped = {
     otherCount: 5,
   },
   builtAt: '2026-12-01T20:00:00.000Z',
+  statsVersion: WRAPPED_STATS_VERSION,
 };
 
 const E = (id: string, iso: string, title = `Event ${id}`) => ({
@@ -439,6 +441,23 @@ describe('GET /host/wrapped', () => {
     expect(second.text).toContain('Linked &lt;Pal&gt;');
     // d-gone has no name, so it is asked again (and still counted).
     expect(displayName.mock.calls.map(([id]) => id)).toEqual(['d-gone']);
+  });
+
+  it('a copy built under the old rules says it is being refreshed and keeps the old combined labels', async () => {
+    const h = await harness();
+    const { statsVersion: _v, ...old } = cached;
+    await writeWrapped(h.wrappedCache, USER, 2026, old, NOW);
+    const sid = await signInWithDiscord(h.req);
+    const text = strip(
+      (await h.req.get('/host/wrapped?year=2026').set('Cookie', sid)).text,
+    );
+    expect(text).toContain('Your Wrapped is being refreshed');
+    expect(text).toContain('Events in 2026</dt> <dd>12</dd>');
+    expect(text).toContain('All-time</dt>');
+    expect(text).not.toContain('Attended in 2026');
+    expect(text).not.toContain('Attended all-time');
+    expect(text).not.toContain('events attended)');
+    expect(h.meetup.getSelfPastRsvpEvents).not.toHaveBeenCalled();
   });
 
   it('renders a cached Wrapped without asking for a token or Meetup', async () => {

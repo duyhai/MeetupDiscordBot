@@ -102,8 +102,9 @@ export const RUN_NOW_KEY = 'wrapped-backfill-run-now';
 export const RUN_NOW_TTL_SEC = 2 * 60 * 60;
 /**
  * `<prefix><discordUserId>:<year>`: Leadership asked for this member's year
- * to be rebuilt from Meetup (the staff dashboard), so the next build of it
- * ignores freshness. Cleared once that build is written; expires otherwise.
+ * to be rebuilt (the staff dashboard), so the next build of it ignores
+ * freshness. The build takes the member's usual path: the snapshot when it
+ * holds them, else Meetup. Cleared once that build is written; expires otherwise.
  */
 export const FORCE_KEY_PREFIX = 'wrapped-force:';
 export const FORCE_TTL_SEC = 24 * 60 * 60;
@@ -906,7 +907,7 @@ export async function runBackfillTick(
     // The queue first: one claim at a time, so a row is never taken and then
     // handed back for the cap or the budget. A row that fails stays claimed
     // until the tick ends, so it cannot block the rows behind it.
-    const failedRows: string[] = [];
+    const failedRows: { id: string; year: number }[] = [];
     try {
       while (!capReached()) {
         // eslint-disable-next-line no-await-in-loop -- one build in flight, by design
@@ -991,19 +992,22 @@ export async function runBackfillTick(
         add(outcome);
         count(outcome);
         if (outcome.failed > 0) {
-          failedRows.push(row.discordUserId);
+          failedRows.push({ id: row.discordUserId, year: row.year });
         } else {
           // eslint-disable-next-line no-await-in-loop -- one build in flight, by design
           await store.complete(row.discordUserId);
         }
       }
     } finally {
-      for (const id of failedRows) {
+      for (const { id, year } of failedRows) {
         // eslint-disable-next-line no-await-in-loop -- a few small writes
         if ((await store.release(id, QUEUE_MAX_ATTEMPTS)) === 'dropped') {
           log.warn(
             `Wrapped backfill: queued Wrapped for Discord user ${id} dropped after ${QUEUE_MAX_ATTEMPTS} attempts`,
           );
+          // A Leadership refresh goes with its row, not on to the next sweep.
+          // eslint-disable-next-line no-await-in-loop -- a few small writes
+          await cache.remove(forceKey(id, year)).catch(() => undefined);
         }
       }
     }

@@ -1,8 +1,9 @@
 /**
  * The staff dashboard's "Wrapped backfill" card (last run, the open run's
  * progress, the queue, the next tick) and its leadership-only actions: Run
- * now, which asks the next tick to start a run, and Rebuild a member's
- * Wrapped, which queues one member's year to be rebuilt from Meetup even
+ * now, which asks the next tick to start a run, and Refresh a member's
+ * Wrapped, which queues one member's year to be rebuilt from the latest
+ * group data (the snapshot, or Meetup for a member it does not hold) even
  * when the stored copy is fresh. Reads only summaries; nothing from the
  * store, the request or Discord is echoed.
  */
@@ -95,7 +96,7 @@ export interface WrappedBackfillControl {
   snapshot(): Promise<SnapshotStatus>;
   /** Asks the next snapshot tick to start a run (the snapshot's Run now). */
   refreshSnapshot(requestedBy: string): Promise<RunNowOutcome>;
-  /** Queues one member's year to be rebuilt from Meetup, freshness aside. */
+  /** Queues one member's year to be rebuilt from the latest group data, freshness aside. */
   rebuildMember(target: RebuildTarget, year: number): Promise<RebuildOutcome>;
 }
 
@@ -130,7 +131,7 @@ export const BACKFILL_NOTICES = {
     'Discord could not be reached to check your role. Nothing was requested; try again in a minute.',
   error: 'The backfill could not be requested. Please try again later.',
   'rebuild-queued':
-    "Queued: the member's Wrapped is rebuilt from Meetup on the next tick (within 5 minutes).",
+    "Queued: the member's Wrapped is rebuilt from the latest group data on the next tick (within 5 minutes).",
   'rebuild-already-queued':
     'That member already has another year queued; rebuild this one once it is built.',
   'rebuild-not-linked':
@@ -307,7 +308,7 @@ export async function wrappedBackfillCard(
 }
 
 /**
- * Rebuild a member's Wrapped: a pop-up (the UI kit's confirmModal) asking
+ * Refresh a member's Wrapped: a pop-up (the UI kit's confirmModal) asking
  * for the member and the year. Queued for the backfill, so it never spends
  * the member's hourly slot and is paced like every other build.
  */
@@ -319,13 +320,15 @@ function rebuildModal(csrfToken: string | undefined): SafeHtml | '' {
   return html`<div class="actions rebuild-member">
     ${confirmModal({
       trigger: {
-        label: "Rebuild a member's Wrapped…",
+        label: "Refresh a member's Wrapped…",
         hint: '1.5 Leadership Team only',
       },
-      title: "Rebuild a member's Wrapped",
-      tip: html`Reads the member's year from Meetup again on the next backfill
-      tick (within 5 minutes), even when the stored copy is fresh, and replaces
-      it. Members can no longer rebuild their own. 1.5 Leadership Team only.`,
+      title: "Refresh a member's Wrapped",
+      tip: html`Rebuilds the member's year from the latest group data (the daily
+      group snapshot, or Meetup directly for a member the snapshot does not
+      hold) on the next backfill tick (within 5 minutes), even when the stored
+      copy is fresh, and replaces it. Members can no longer rebuild their own.
+      1.5 Leadership Team only.`,
       action: localUrl(WRAPPED_REBUILD_PATH),
       fields: html`<input type="hidden" name="_csrf" value="${csrfToken}" />
         <label class="field"
@@ -347,7 +350,7 @@ function rebuildModal(csrfToken: string | undefined): SafeHtml | '' {
             max="${thisYear}"
             value="${thisYear}"
         /></label>`,
-      confirmLabel: 'Queue the rebuild',
+      confirmLabel: 'Queue the refresh',
       tone: 'primary',
     })}
     <span class="muted">1.5 Leadership Team only.</span>
@@ -493,7 +496,9 @@ export function registerWrappedBackfillRoute(
           : `Meetup member ${parsed.target.meetupMemberId}`;
       audit({
         title: 'Wrapped rebuild requested',
-        description: `<@${session.userId}> asked for ${who}'s ${parsed.year} Wrapped to be rebuilt from Meetup from the staff dashboard.`,
+        description:
+          `<@${session.userId}> asked for ${who}'s ${parsed.year} Wrapped ` +
+          'to be rebuilt from the latest group data from the staff dashboard.',
       });
     }
     res.redirect(303, back(`rebuild-${outcome}`));

@@ -526,8 +526,8 @@ export function dashboardPageDeps(): DashboardPageDeps {
           : 'already-requested';
       },
       // Marked forced and queued (backfill.ts requestWrappedRebuild): the next tick
-      // builds it, through the member's token or the organizer credential,
-      // without spending the member's hourly slot.
+      // builds it on the member's usual path (the snapshot, else their token
+      // or the organizer credential), without spending the hourly slot.
       rebuildMember: async (target, year) => {
         const members = await PostgresMemberRepository.instance();
         const record =

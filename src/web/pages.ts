@@ -426,6 +426,7 @@ svg.heat rect.hm3{fill:var(--heat3)}
 svg.heat rect.hm4{fill:var(--heat4)}
 svg.heat .hh{fill:var(--heat-host)}
 svg.heat circle.hm-dot,.heat-legend circle.hm-dot{fill:var(--heat-mark)}
+svg.heat path.hm-split,.heat-legend path.hm-split{fill:none;stroke:var(--heat-mark);stroke-width:1.5px}
 .heat-legend{display:flex;flex-wrap:wrap;gap:var(--s2) var(--s4);list-style:none;margin:0 0 var(--s2);padding:0;
 font-size:var(--t-sm);color:var(--muted)}
 .heat-legend li{display:flex;align-items:center;gap:var(--s1)}

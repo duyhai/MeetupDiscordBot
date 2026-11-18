@@ -77,8 +77,10 @@ function rect(x: number, y: number, count: number, label: string): SafeHtml {
 
 /**
  * A hosted day's mark: the whole cell green (`half` false) or its lower
- * right half (a day also attended, over the attended colour), with a dot
- * in the green either way, so hosting reads without the colour too.
+ * right half (a day also attended, over the attended colour), split by a
+ * contrasting diagonal. A dot sits in the green either way, so hosting reads
+ * without the colour too (the green is close in lightness to some attended
+ * levels).
  */
 function hostedMark(x: number, y: number, half: boolean): SafeHtml {
   if (!half) {
@@ -93,15 +95,19 @@ function hostedMark(x: number, y: number, half: boolean): SafeHtml {
         class="hm-dot"
         cx="${String(x + 6)}"
         cy="${String(y + 6)}"
-        r="2"
+        r="2.5"
       />`;
   }
   const d = `M${x + 12} ${y} V${y + 10} Q${x + 12} ${y + 12} ${x + 10} ${y + 12} H${x} Z`;
-  return html`<path class="hh" d="${d}" /><circle
+  const diagonal = `M${x} ${y + 12} L${x + 12} ${y}`;
+  return html`<path class="hh" d="${d}" /><path
+      class="hm-split"
+      d="${diagonal}"
+    /><circle
       class="hm-dot"
       cx="${String(x + 8.5)}"
       cy="${String(y + 8.5)}"
-      r="1.5"
+      r="2"
     />`;
 }
 
