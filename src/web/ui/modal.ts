@@ -14,6 +14,11 @@ export interface ModalTrigger {
   label: string;
   /** Defaults to ghost. */
   tone?: ButtonTone;
+  /**
+   * A one-line hover hint (the title attribute, escaped). Hover only: touch
+   * devices never show it, so the dialog's tip must say the same thing.
+   */
+  hint?: string;
 }
 
 /**
@@ -28,8 +33,14 @@ function shell(
   inner: SafeHtml,
 ): SafeHtml {
   const cls = TRIGGER_CLASS[trigger.tone ?? 'ghost'];
+  // One line each, so the summary's text is exactly the label.
+  // prettier-ignore
+  const summary =
+    trigger.hint === undefined
+      ? html`<summary class="${cls}">${trigger.label}</summary>`
+      : html`<summary class="${cls}" title="${trigger.hint}">${trigger.label}</summary>`;
   return html`<details class="ui-modal" data-modal>
-    <summary class="${cls}">${trigger.label}</summary>
+    ${summary}
     <dialog class="ui-dialog">
       <div class="ui-dialog-box">
         <h2 class="ui-dialog-title" data-modal-title>${title}</h2>

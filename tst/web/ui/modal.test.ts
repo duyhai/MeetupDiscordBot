@@ -31,6 +31,26 @@ describe('modal', () => {
     );
   });
 
+  it('gives the trigger a hover hint when asked, escaped', () => {
+    const out = modal({
+      trigger: { label: 'Open it', hint: HOSTILE },
+      title: 'A title',
+      body: html``,
+    }).value;
+    expect(out).toContain(
+      `<summary class="button ghost" title="${ESCAPED}">Open it</summary>`,
+    );
+  });
+
+  it('leaves the trigger without a title when no hint is given', () => {
+    const out = modal({
+      trigger: { label: 'Open it' },
+      title: 'A title',
+      body: html``,
+    }).value;
+    expect(out).toContain('<summary class="button ghost">Open it</summary>');
+  });
+
   it('never opens on its own: no open attribute, no id', () => {
     const out = modal({
       trigger: { label: 'x' },
