@@ -1157,7 +1157,7 @@ describe('host calendar layout icons', () => {
     // Tiles is current: aria-current text, named by hidden text, with a tooltip.
     expect(nav).toMatch(
       // eslint-disable-next-line @stylistic/max-len -- one pattern, read as one
-      /<strong\s+class="button ghost icon-only"\s+aria-current="page"\s+title="Tiles"\s*><svg[^>]*aria-hidden="true"[^>]*focusable="false"[^]*?<\/svg><span class="sr-only">Tiles<\/span><\/strong/,
+      /<strong\s+class="button ghost icon-only"\s+aria-current="page"\s+title="Tiles"\s*><svg[^>]*aria-hidden="true"[^>]*focusable="false"[^]*?<\/svg><span class="sr-only">Tiles \(current\)<\/span><\/strong/,
     );
     // List is a link with the same href as before, named by aria-label.
     expect(nav).toMatch(
@@ -1165,7 +1165,7 @@ describe('host calendar layout icons', () => {
       /<a\s+class="button ghost icon-only"\s+href="\/host\/calendar\?month=2026-11&amp;view=list"\s+aria-label="List"\s+title="List"\s*><svg[^>]*aria-hidden="true"[^>]*focusable="false"/,
     );
     // Icons only: no visible words in the switch.
-    expect(nav.replace(/<span class="sr-only">\w+<\/span>/g, '')).not.toMatch(
+    expect(nav.replace(/<span class="sr-only">[^<]*<\/span>/g, '')).not.toMatch(
       />\s*(Tiles|List)\s*</,
     );
     // The Upcoming/Past tabs stay as text.

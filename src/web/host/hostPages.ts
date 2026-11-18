@@ -687,7 +687,9 @@ const CALENDAR_VIEWS = [
 /**
  * The Layout switch: an icon button per view, the same links as before
  * (CALENDAR_VIEW_SCRIPT listens on [data-cal-views] a). The current one is
- * aria-current text, named by hidden text; the other is a link named by
+ * aria-current text, named by hidden text that says it is current (not
+ * every screen reader announces aria-current on text); the other is a
+ * link named by
  * aria-label. Both carry a title, the tooltip. The nav's aria-label names
  * the group.
  */
@@ -703,7 +705,7 @@ function viewSwitch(
         class="button ghost icon-only"
         aria-current="page"
         title="${o.label}"
-        >${icon}<span class="sr-only">${o.label}</span></strong
+        >${icon}<span class="sr-only">${o.label} (current)</span></strong
       >`;
     }
     return html`<a
