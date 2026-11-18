@@ -482,6 +482,9 @@ table.tl-table thead{position:absolute;width:1px;height:1px;overflow:hidden;clip
   table.tl-table col.tl-c-date{width:8rem}
   table.tl-table col.tl-c-type{width:9.5rem}
   table.tl-table col.tl-c-actions{width:19.5rem}}
+/* My history's three actions with "View on Meetup" in words need ~27rem on one line; at 19.5rem they wrap whole
+   (the first button, then View on Meetup and copy) so Event keeps its width for long titles. No button breaks inside. */
+@media (min-width:640px){table.tl-table .actions.one-line{flex-wrap:wrap}}
 @media (max-width:1023.98px){table.tl-table{margin-top:var(--s2)}}
 p.tl-more,p.tl-newer{margin:var(--s3) 0}
 :root[data-palette="quiet"] h3.tl-year-head,:root[data-palette="quiet"] h4.tl-month-head{background:var(--bg)}
