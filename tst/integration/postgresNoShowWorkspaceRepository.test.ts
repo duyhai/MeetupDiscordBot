@@ -25,6 +25,7 @@ import {
   SyncCase,
   WorkspaceAction,
 } from '../../src/lib/workspace/types.js';
+import { linkWindow } from '../../src/lib/workspace/months.js';
 import { useIsolatedSchema } from './isolatedSchema.js';
 
 // Requires DATABASE_URL against a throwaway Postgres; skipped otherwise.
@@ -1169,6 +1170,23 @@ const suspension = (
             editedBy: MOD,
           }),
         ).toEqual({ ok: false, reason: 'linked-month' });
+        // The window's end is excluded: September's runs to Nov 1 (UTC
+        // midnight), so Nov 1 is refused and Oct 31 is the last day taken.
+        expect(linkWindow(SEPTEMBER).until).toEqual(day('2026-11-01'));
+        expect(
+          await suspensions.editDate({
+            id: recordId,
+            suspendedAt: day('2026-11-01'),
+            editedBy: MOD,
+          }),
+        ).toEqual({ ok: false, reason: 'linked-month' });
+        expect(
+          await suspensions.editDate({
+            id: recordId,
+            suspendedAt: day('2026-10-31'),
+            editedBy: MOD,
+          }),
+        ).toMatchObject({ ok: true });
         // Inside it: moved; the card still names the record, and voids it.
         expect(
           await suspensions.editDate({

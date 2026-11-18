@@ -8,6 +8,8 @@ import {
   DashboardPageDeps,
   registerAllProtectedRoutes,
 } from '../../../src/web/routes/dashboardPages.js';
+import type { DateEditCode } from '../../../src/lib/suspensions/dateEdit.js';
+import { isDateEditResult } from '../../../src/web/routes/suspensions.js';
 import { ORIGIN, closeServers, makeApp, signIn } from '../dashboardHarness.js';
 import {
   PAGE_NOW,
@@ -507,6 +509,49 @@ describe('Edit date (Hai, 2026-11-17)', () => {
     });
     expect(repeated.headers.location).toContain('result=invalid');
     expect(editDate).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [
+      'overlaps',
+      'On that date this suspension would overlap another of this member’s suspensions. Nothing changed.',
+    ],
+    [
+      'reorders',
+      'Another suspension sits between the old and new dates; void and re-record instead. Nothing changed.',
+    ],
+    [
+      'linked-month',
+      'This suspension is linked to a no-show workspace card, and that date is ' +
+        'outside the card’s month. Void it on the card and record it again to ' +
+        'move it to another month.',
+    ],
+    [
+      'date-taken',
+      'This member already has another suspension on that date. Nothing changed.',
+    ],
+  ])('?result=%s shows its own message', async (code, message) => {
+    const { get } = await editSetup(false);
+    const res = await get(`${PAGE}?result=${code}`);
+    expect(res.text).toContain(`<p class="note attn">${message}</p>`);
+  });
+
+  it('every editSuspensionDate code has a message', () => {
+    const codes: DateEditCode[] = [
+      'date-changed',
+      'date-unchanged',
+      'not-live',
+      'date-taken',
+      'overlaps',
+      'reorders',
+      'linked-month',
+      'bad-date',
+      'invalid',
+      'error',
+    ];
+    for (const code of codes) {
+      expect(isDateEditResult(code), code).toBe(true);
+    }
   });
 
   it('result codes are fixed text; unknown ones render nothing', async () => {

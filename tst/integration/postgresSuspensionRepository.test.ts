@@ -413,6 +413,23 @@ if (!POSTGRES_AVAILABLE) {
         ).toMatchObject({ ok: true });
       });
 
+      it('a database without the workspace table edits without the card check', async () => {
+        // This schema has the suspension tables only (the command's case).
+        const pool = (repo as unknown as { pool: pg.Pool }).pool;
+        const present = await pool.query<{ present: boolean }>(
+          `SELECT to_regclass('noshow_workspace_rows') IS NOT NULL AS present`,
+        );
+        expect(present.rows[0].present).toBe(false);
+        const a = await insertOn('2026-03-01');
+        expect(
+          await repo.editDate({
+            id: a.id,
+            suspendedAt: day('2026-01-10'),
+            editedBy: LEAD,
+          }),
+        ).toMatchObject({ ok: true });
+      });
+
       it('lists edits newest first and refuses more than 50 ids', async () => {
         const a = await insertOn('2026-03-01');
         await repo.editDate({

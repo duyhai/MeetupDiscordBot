@@ -72,7 +72,7 @@ export const DATE_EDIT_MESSAGES = {
   overlaps:
     'On that date this suspension would overlap another of this member’s suspensions. Nothing changed.',
   reorders:
-    'Another suspension sits between the old and new dates; void and re-record instead.',
+    'Another suspension sits between the old and new dates; void and re-record instead. Nothing changed.',
   'linked-month':
     'This suspension is linked to a no-show workspace card, and that date is ' +
     'outside the card’s month. Void it on the card and record it again to ' +
