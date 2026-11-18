@@ -925,6 +925,11 @@ export async function runBackfillTick(
           );
           // eslint-disable-next-line no-await-in-loop -- one build in flight, by design
           await store.complete(row.discordUserId);
+          // A Leadership refresh of it goes with the row.
+          // eslint-disable-next-line no-await-in-loop -- one small write
+          await cache
+            .remove(forceKey(row.discordUserId, row.year))
+            .catch(() => undefined);
           continue;
         }
         // eslint-disable-next-line no-await-in-loop -- one build in flight, by design

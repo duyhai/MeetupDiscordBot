@@ -471,7 +471,12 @@ function byPacificDay(events: WrappedEvent[]): Map<string, WrappedEvent[]> {
  * hosted. A day with events links to `?day=`, which lists them under it,
  * hosted and attended apart.
  */
-function heatCard(year: number, heat: WrappedHeat): SafeHtml {
+function heatCard(
+  year: number,
+  heat: WrappedHeat,
+  /** The stored copy is under older rules: its totals above differ from the map. */
+  staleTotals = false,
+): SafeHtml {
   const attended = byPacificDay(heat.events.attended);
   const hosted = byPacificDay(heat.events.hosted);
   const pickedHosted = heat.day ? (hosted.get(heat.day) ?? []) : [];
@@ -479,6 +484,14 @@ function heatCard(year: number, heat: WrappedHeat): SafeHtml {
   const both = pickedHosted.length > 0 && pickedAttended.length > 0;
   return html`<div class="card">
     <h2>Your year, day by day</h2>
+    ${
+      staleTotals
+        ? html`<p class="muted">
+            This map already uses the new count (hosted events apart from
+            attended ones); the totals above are being refreshed.
+          </p>`
+        : ''
+    }
     ${heatMapYear({
       byDay: attended,
       hostedByDay: hosted,
@@ -614,7 +627,7 @@ export function wrappedBody({
           : ''
       }
     </div>
-    ${heat ? heatCard(year, heat) : ''}
+    ${heat ? heatCard(year, heat, !current) : ''}
     <div class="card">
       <h2>First event with us</h2>
       <p>${firstEventText(wrapped)}</p>

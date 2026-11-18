@@ -1149,6 +1149,35 @@ describe('/host/wrapped from the group snapshot', () => {
     expect(h.meetup.getSelfPastRsvpEvents).not.toHaveBeenCalled();
   });
 
+  it('a copy built under the old rules keeps the map (new count) and says the totals above are being refreshed', async () => {
+    const h = await harness();
+    h.deps.snapshot = async () => snapshotWrapped(reader());
+    const { statsVersion: _v, ...old } = cached;
+    await writeWrapped(h.wrappedCache, USER, 2026, old, NOW);
+    const sid = await signInWithDiscord(h.req);
+    const text = strip(
+      (await h.req.get('/host/wrapped?year=2026').set('Cookie', sid)).text,
+    );
+    expect(text).toContain('Your Wrapped is being refreshed');
+    expect(text).toContain('Events in 2026</dt> <dd>12</dd>');
+    expect(text).toContain('1 event attended and 1 hosted in 2026.');
+    expect(text).toContain(
+      'This map already uses the new count (hosted events apart from attended ones); the totals above are being refreshed.',
+    );
+  });
+
+  it('a current copy has no such line under the map', async () => {
+    const h = await harness();
+    h.deps.snapshot = async () => snapshotWrapped(reader());
+    await writeWrapped(h.wrappedCache, USER, 2026, cached, NOW);
+    const sid = await signInWithDiscord(h.req);
+    const text = strip(
+      (await h.req.get('/host/wrapped?year=2026').set('Cookie', sid)).text,
+    );
+    expect(text).toContain('class="heat"');
+    expect(text).not.toContain('This map already uses the new count');
+  });
+
   it('?day= lists that day under the map; a day outside the year is ignored', async () => {
     const h = await harness();
     h.deps.snapshot = async () => snapshotWrapped(reader());

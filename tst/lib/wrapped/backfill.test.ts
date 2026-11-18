@@ -519,11 +519,16 @@ describe('runBackfillTick', () => {
       meetupId: 'gone',
       year: 2026,
     });
+    await h.cache.set(forceKey('100000000000000009', 2026), '1', 60);
 
     const outcome = await runBackfillTick(h.deps);
 
     expect(outcome).toMatchObject({ queued: 1, built: 0 });
     expect(await h.store.queueLength()).toBe(0);
+    // A Leadership refresh of the dropped row goes with it.
+    expect(h.cache.values.has(forceKey('100000000000000009', 2026))).toBe(
+      false,
+    );
     expect(h.calls.n + h.organizerCalls.n).toBe(0);
     const logged = JSON.stringify([
       ...h.log.info.mock.calls,
