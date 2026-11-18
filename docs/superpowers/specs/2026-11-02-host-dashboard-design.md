@@ -350,12 +350,23 @@ across a DST change moves the window by an hour.
   joined, last hosted date, and issues (flagged comments first, "show all"
   to expand). Decided 2026-11-10 (was: 20+ hosted events all time among
   the past year's hosts).
-- **Reviewer checklist** on each queue card (2026-11-10): five tick-boxes
-  the reviewer confirms before approving: exact location in the title,
-  non-default photo, RSVPs open, starts 7 or more days out, title and
-  description reasonable. A memory aid, not a gate: Approve stays enabled.
-  The ticked set is recorded with the decision (`event_request_events`
-  detail) and shown in the request's history. No automatic detection.
+- **Announcement checklist** (2026-11-10; moved 2026-11-17): five
+  tick-boxes to confirm on Meetup before an event is announced: exact
+  location in the title, non-default photo, RSVPs open, starts 7 or more
+  days out, title and description reasonable. A memory aid, not a gate. It
+  was on the queue's Approve step until Hai moved it (2026-11-17: it is
+  about announcing, not approving). It now sits on the host's announce
+  confirm page under the three required checks, less the items those
+  already ask (photo, RSVPs, location: the required check says the exact
+  location is NOT in the title), and nothing about it is recorded.
+  Approvals made 2026-11-10 to 2026-11-17 recorded their ticked set
+  (`event_request_events` detail); decided cards still show it. No
+  automatic detection.
+- **Queue card** (2026-11-17): shows what the Discord request post shows:
+  the host linked to their Meetup profile, their Meetup id, Discord account,
+  how many events they have hosted before (cached per host, a 3 s page
+  budget), their Host Tip, and a link to their no-show history. Approve
+  and Deny each open a confirm pop-up; the deny reason is typed there.
 - **Promote / demote**: leadership only, with a required reason. Stored with
   who and when (append-only history, like the no-show workspace).
 - Demotion stops direct publishing within the 10-minute tier re-check.

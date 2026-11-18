@@ -110,29 +110,17 @@ describe('decideRequest', () => {
     expect(mirror.mock.calls[0][0].status).toBe('published');
   });
 
-  it('an approval records the reviewer checklist; a retry or a Discord approval records none', async () => {
+  it('an approval records no checklist: it moved to the announce page', async () => {
     const { decide, publishRequest } = setup();
-    await decide({ checklist: ['location', 'rsvps'] });
+    await decide();
     expect(publishRequest).toHaveBeenLastCalledWith(
       '1',
       1,
       LEADER,
       ['pending'],
-      {
-        detail: '{"checklist":["location","rsvps"]}',
-      },
+      {},
     );
-    await decide({ checklist: [] });
-    expect(publishRequest).toHaveBeenLastCalledWith(
-      '1',
-      1,
-      LEADER,
-      ['pending'],
-      {
-        detail: '{"checklist":[]}',
-      },
-    );
-    await decide({ action: 'retry', checklist: ['photo'] });
+    await decide({ action: 'retry' });
     expect(publishRequest).toHaveBeenLastCalledWith(
       '1',
       1,

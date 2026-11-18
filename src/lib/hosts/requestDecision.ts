@@ -10,7 +10,7 @@ import {
 import { LogEntry, alertText } from '../helpers/discordLogger.js';
 import { WorkspaceDeadlineError, withDeadline } from '../../util/deadline.js';
 import { ExistingEvent, PublishOutcome, canDeny } from './publishRequest.js';
-import { ChecklistKey, checklistDetail } from './reviewChecklist.js';
+import { ChecklistKey } from './reviewChecklist.js';
 
 const logger = new Logger({ name: 'requestDecision' });
 
@@ -106,8 +106,9 @@ export interface StaffRequestStore {
    */
   countByStatus?: () => Promise<Map<EventRequestStatus, number>>;
   /**
-   * The reviewer checklist recorded with each request's latest approval;
-   * absent where none was. Optional: a store without it shows no checklists.
+   * The checklist ticked with each request's latest approval, from the
+   * history (approvals made 2026-11-10 to 2026-11-17 asked for one; none
+   * do now); absent where none was. Optional: a store without it shows none.
    */
   reviewChecklists?: (
     requestIds: string[],
@@ -176,11 +177,6 @@ export interface DecisionInput {
   action: DecisionAction;
   /** Deny only: as typed; CRLF and surrounding space are normalised here. */
   reason?: string;
-  /**
-   * Approve only: the reviewer checklist's ticked boxes, recorded with the
-   * decision. Absent for a Discord approval; a memory aid, never a gate.
-   */
-  checklist?: ChecklistKey[];
 }
 
 function auditRefusalOnce(
@@ -375,15 +371,7 @@ export async function decideRequest(
 
   const from: PublishFrom[] =
     action === 'approve' ? ['pending'] : ['failed', 'publishing'];
-  const publishing = deps.publishRequest(
-    id,
-    version,
-    actor,
-    from,
-    action === 'approve' && input.checklist !== undefined
-      ? { detail: checklistDetail(input.checklist) }
-      : {},
-  );
+  const publishing = deps.publishRequest(id, version, actor, from, {});
   let outcome: PublishOutcome;
   try {
     outcome = await withDeadline(DECISION_DEADLINE_MS, () => publishing);

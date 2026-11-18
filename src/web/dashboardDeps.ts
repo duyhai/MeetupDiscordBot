@@ -91,11 +91,13 @@ import { html } from './html.js';
 import { mirrorDecision } from '../lib/hosts/requestPost.js';
 import {
   alertVia,
+  hostResolveDeps,
   productionPublishDeps,
   productionPublisher,
   revokeHostSessions,
 } from './host/hostServices.js';
 import { organizerLoginDeps } from './organizerLoginDeps.js';
+import { cachedHostedCounts } from './hostedCounts.js';
 import { layout } from './pages.js';
 import { discordAccessCheck, discordRoleCheck } from './roleGate.js';
 import {
@@ -249,6 +251,14 @@ function banActions(
   };
 }
 
+/**
+ * The queue cards' hosted counts: the Discord post's organizer read
+ * (hostResolveDeps.pastHostedCount), cached per host for the process.
+ */
+const queueHostedCounts = cachedHostedCounts((meetupId) =>
+  hostResolveDeps(() => discordClient).pastHostedCount(meetupId),
+);
+
 /** The candidates are kept 30 minutes: a cold read is a year of events plus a count per host. */
 const CANDIDATES_TTL_MS = 30 * 60 * 1000;
 /** A hung Meetup read gives up after this, so the next load starts afresh. */
@@ -370,6 +380,7 @@ export function dashboardPageDeps(): DashboardPageDeps {
     eventRequests: () => PostgresEventRequestRepository.instance(),
     publishRequest: productionPublisher(() => discordClient),
     findExistingEvent: productionPublishDeps(() => discordClient).findExisting,
+    hostedCounts: queueHostedCounts,
     promotedHosts: () => PostgresPromotedHostRepository.instance(),
     ...promotionReads(() => discordClient),
     revokeHostSessions,

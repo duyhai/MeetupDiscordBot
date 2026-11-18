@@ -66,7 +66,8 @@ export const hostRequestUrl = (origin: string, id: string) =>
 export const queueUrl = (origin: string) =>
   `${origin}${DASHBOARD_BASE}/hosts/requests`;
 
-const TIP_LINE = /^💡 Host Tip: (.*) 💡\n\n/u;
+/** The Host Tip line a regular host's description starts with; group 1 is the tip. */
+export const TIP_LINE = /^💡 Host Tip: (.*) 💡\n\n/u;
 
 const whenLabel = (startLocal: string) =>
   dayjs(startLocal).format('ddd, MMM D, YYYY [at] h:mm A');
