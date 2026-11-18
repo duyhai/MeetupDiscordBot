@@ -136,6 +136,38 @@ describe('toHostEvent', () => {
       }),
     ).toMatchObject({ type: 'outdoors', hosts: [{ id: '4242', name: 'Ann' }] });
   });
+
+  it('keeps the photo thumbnail only from Meetup’s photo host over https', () => {
+    const base = {
+      id: '9',
+      title: 'Hike',
+      dateTime: '2026-11-01T10:00:00-07:00',
+      eventUrl: 'https://www.meetup.com/g/events/9/',
+    };
+    const thumb =
+      'https://secure.meetupstatic.com/photos/event/d/2/2/5/thumb_536933797.jpeg';
+    expect(
+      toHostEvent({ ...base, featuredEventPhoto: { thumbUrl: thumb } })
+        .photoUrl,
+    ).toBe(thumb);
+    for (const featuredEventPhoto of [
+      null,
+      undefined,
+      { thumbUrl: null },
+      { thumbUrl: 42 },
+      { thumbUrl: 'http://secure.meetupstatic.com/x.jpg' },
+      { thumbUrl: 'https://evil.example/x.jpg' },
+      { thumbUrl: 'javascript:alert(1)' },
+      { thumbUrl: 'https://secure.meetupstatic.com.evil.example/x.jpg' },
+      { thumbUrl: 'https://u:p@secure.meetupstatic.com/x.jpg' },
+      { thumbUrl: 'https://secure.meetupstatic.com:444/x.jpg' },
+      {},
+    ]) {
+      const event = toHostEvent({ ...base, featuredEventPhoto });
+      expect(event.photoUrl).toBeUndefined();
+      expect('photoUrl' in event).toBe(false);
+    }
+  });
 });
 
 describe('groupCalendar across DST', () => {

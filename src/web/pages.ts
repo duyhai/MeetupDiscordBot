@@ -378,6 +378,16 @@ padding-right:var(--s3);box-sizing:content-box;font-size:var(--t-sm);font-weight
 table.stack.bans td.ban-actions{width:auto}}
 @media (min-width:640px) and (max-width:1023.98px){table.stack.bans td{padding-left:12rem}
 table.stack.bans td::before{width:calc(12rem - var(--s3));margin-left:-12rem}}
+/* The history timeline's rows stack the same way below 1024px (beside the year strip, not a rail). */
+@media (max-width:1023.98px){table.stack.tl-table,table.stack.tl-table tbody{display:block;width:100%}
+table.stack.tl-table thead{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+table.stack.tl-table tr{display:block;background:var(--raised);border:1px solid var(--line);border-radius:var(--radius-ctl);
+padding:var(--s2) var(--s3);margin:0 0 var(--s3)}
+table.stack.tl-table td{display:flow-root;border:0;padding:var(--s1) 0 var(--s1) 40%}
+table.stack.tl-table td::before{content:attr(data-label);float:left;width:calc(66.667% - var(--s3));margin-left:-66.667%;
+padding-right:var(--s3);box-sizing:content-box;font-size:var(--t-sm);font-weight:600;color:var(--muted)}}
+@media (min-width:640px) and (max-width:1023.98px){table.stack.tl-table td{padding-left:12rem}
+table.stack.tl-table td::before{width:calc(12rem - var(--s3));margin-left:-12rem}}
 @media (max-width:639.98px){h1{font-size:var(--t-xl)}
 h2{font-size:var(--t-lg)}
 h3{font-size:var(--t-base)}
@@ -423,6 +433,43 @@ nav.year-nav{display:flex;align-items:center;gap:var(--s3);flex-wrap:wrap;margin
 nav.year-nav .disabled{opacity:.45;cursor:default}
 @media (max-width:480px){nav.year-nav{justify-content:space-between}nav.year-nav strong{order:-1;flex-basis:100%}}
 p.day-filter{font-weight:600}
+/* Host history timeline: one list, newest first, sticky year and month headings, and a year rail: a sticky
+column at the right from 1024px, where rows are a table; below that a horizontal strip above the list, where
+rows are cards, so it never covers a row. */
+.timeline-wrap{display:grid;grid-template-columns:minmax(0,1fr);gap:var(--s3)}
+nav.year-rail ol{position:relative;list-style:none;margin:0;padding:0 0 var(--s1);display:flex;gap:var(--s1);
+  overflow-x:auto;scrollbar-width:thin}
+nav.year-rail li{flex:none}
+nav.year-rail a{display:inline-flex;align-items:center;min-height:36px;padding:0 var(--s3);border-radius:999px;
+  color:var(--muted);font-size:var(--t-sm);font-weight:600;text-decoration:none;font-variant-numeric:tabular-nums}
+nav.year-rail a:hover{color:var(--fg);background:var(--raised)}
+nav.year-rail a[aria-current]{color:var(--accent-ink);background:var(--accent-soft)}
+@media (min-width:1024px){.timeline-wrap{grid-template-columns:minmax(0,1fr) 5rem;gap:var(--s4)}
+  .timeline{grid-column:1;grid-row:1}
+  nav.year-rail{grid-column:2;grid-row:1;position:sticky;top:var(--s4);align-self:start;
+    max-height:calc(100vh - 2 * var(--s4));overflow-y:auto}
+  nav.year-rail ol{flex-direction:column;overflow-x:visible;padding:0 0 0 var(--s2);border-left:1px solid var(--line)}}
+:root{--tl-year-h:3rem;--tl-month-h:2.25rem}
+/* Focus moving up (Shift+Tab) or a #y2026 landing never ends under the two sticky headings (WCAG 2.4.11). */
+html:has(div.timeline){scroll-padding-top:calc(var(--tl-year-h) + var(--tl-month-h) + var(--s2))}
+.tl-year{margin:0 0 var(--s4)}
+.tl-target{display:block;scroll-margin-top:0}
+h3.tl-year-head{position:sticky;top:0;z-index:3;display:flex;align-items:center;height:var(--tl-year-h);margin:0;
+  background:var(--surface);font-size:var(--t-xl);font-variant-numeric:tabular-nums}
+h4.tl-month-head{position:sticky;top:var(--tl-year-h);min-height:var(--tl-month-h);box-sizing:border-box;
+  z-index:2;display:flex;align-items:baseline;gap:var(--s2);
+  margin:0;padding:var(--s1) 0;background:var(--surface);border-bottom:1px solid var(--line);font-size:var(--t-base)}
+.tl-count{font-size:var(--t-sm);font-weight:400;color:var(--muted)}
+.tl-month{margin:0 0 var(--s3)}
+table.tl-table{margin:0}
+table.tl-table thead{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+@media (min-width:1024px){table.tl-table{table-layout:fixed}
+  table.tl-table col.tl-c-date{width:8rem}
+  table.tl-table col.tl-c-type{width:9.5rem}
+  table.tl-table col.tl-c-actions{width:19.5rem}}
+@media (max-width:1023.98px){table.tl-table{margin-top:var(--s2)}}
+p.tl-more,p.tl-newer{margin:var(--s3) 0}
+:root[data-palette="quiet"] h3.tl-year-head,:root[data-palette="quiet"] h4.tl-month-head{background:var(--bg)}
 dl.verify-summary{display:grid;grid-template-columns:max-content 1fr;gap:var(--s1) var(--s4);margin:var(--s3) 0}
 dl.verify-summary dt{font-weight:600;color:var(--muted)}
 dl.verify-summary dd{margin:0;overflow-wrap:anywhere}
@@ -492,6 +539,13 @@ vertical-align:middle;margin:0 var(--s1) 0 var(--s3)}
 ol.cal-list{list-style:none;padding:0;margin:0}
 ol.cal-list>li{border-top:1px solid var(--line);padding:var(--s3) 0}
 ol.cal-list>li:first-child{border-top:0;padding-top:0}
+/* Day by day: each event's thumbnail (or a same-size placeholder) beside it, so the list can be skimmed. */
+ul.cal-items{list-style:none;padding:0;margin:0}
+ul.cal-items>li{display:flex;align-items:flex-start;gap:var(--s3);margin:0 0 var(--s2)}
+.ev-thumb{flex:none;display:block;width:48px;height:48px;border-radius:8px;object-fit:cover;background:var(--raised);
+  border:1px solid var(--line)}
+.cal-item-text{min-width:0;flex:1 1 auto;align-self:center}
+ol.cal-list>li.past .ev-thumb{opacity:.7}
 nav.type-filter,nav.status-filter{display:flex;flex-wrap:wrap;gap:0 var(--s4);margin:0 0 var(--s3)}
 nav.type-filter a,nav.status-filter a{display:inline-flex;align-items:center;min-height:var(--tap)}
 /* ---- Per-palette rules. The default (Night market) ones are scoped to :root:not([data-palette]) so no other

@@ -5,6 +5,7 @@ import { getPaginatedData } from '../client/meetup/paginationHelper.js';
 import { EventStatus, GroupEventFilter } from '../client/meetup/types.js';
 import { MEETUP_EVENT_URL } from '../eventAudit/meetup.js';
 import { countsAsHosted } from '../helpers/countedEvents.js';
+import { meetupPhotoUrl } from '../helpers/meetupPhotoUrl.js';
 import { withOrganizerMeetup } from '../reports/organizerMeetup.js';
 import { tz } from '../../util/timezone.js';
 import { EventType, classifyEventType } from './eventTypes.js';
@@ -23,6 +24,11 @@ export interface HostEvent {
    * countedOnly.
    */
   counted: boolean;
+  /**
+   * The event photo's 80x80 thumbnail, only when it is an https URL on
+   * Meetup's photo host (meetupPhotoUrl); else absent.
+   */
+  photoUrl?: string;
 }
 
 /** The events that count as hosted, in the order given. */
@@ -176,11 +182,14 @@ interface RawEventNode {
   eventUrl: string;
   status?: EventStatus | null;
   eventHosts?: { member?: { id?: unknown; name?: unknown } | null }[] | null;
+  featuredEventPhoto?: { thumbUrl?: unknown } | null;
 }
 
 export function toHostEvent(node: RawEventNode): HostEvent {
   const title = String(node.title ?? '');
+  const photoUrl = meetupPhotoUrl(node.featuredEventPhoto?.thumbUrl);
   return {
+    ...(photoUrl === undefined ? {} : { photoUrl }),
     id: String(node.id),
     title,
     dateTime: String(node.dateTime),

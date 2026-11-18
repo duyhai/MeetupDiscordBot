@@ -8,6 +8,9 @@
  * and a module-private WeakSet records every minted value, so a look-alike
  * object is rendered as text at runtime.
  */
+
+import { meetupPhotoUrl } from '../lib/helpers/meetupPhotoUrl.js';
+
 declare const htmlBrand: unique symbol;
 declare const urlBrand: unique symbol;
 
@@ -894,10 +897,34 @@ export function staticRaw(strings: TemplateStringsArray): SafeHtml {
   return mintHtml(text, { raw: true, foreignUnsafe: true });
 }
 
-// The one fragment allowed is the literal #acted (the workspace card a
-// redirect returns to): fixed text, so no data ever reaches a fragment.
+// The fragments allowed are the literal #acted (the workspace card a
+// redirect returns to) and #y plus four digits (a year on the history
+// timeline): fixed shapes, so no text from data ever reaches a fragment.
 const LOCAL_PATH =
-  /^\/(?:dashboard|host)(\/[A-Za-z0-9._~%-]+)*\/?(\?[A-Za-z0-9._~%&=+-]*)?(#acted)?$/;
+  /^\/(?:dashboard|host)(\/[A-Za-z0-9._~%-]+)*\/?(\?[A-Za-z0-9._~%&=+-]*)?(#acted|#y[0-9]{4})?$/;
+
+function fourDigitYear(year: number): string {
+  if (!Number.isInteger(year) || year < 1000 || year > 9999) {
+    throw new RangeError('not a four-digit year');
+  }
+  return String(year);
+}
+
+/** An in-page link to a timeline year (yearTarget): four digits only. */
+export function yearAnchor(year: number): SafeUrl {
+  return mintUrl(`#y${fourDigitYear(year)}`);
+}
+
+/**
+ * The element yearAnchor jumps to: an empty span with id y plus four
+ * digits. html never interpolates an id (see DATA_ATTRS), so this fixed
+ * shape is minted here from a checked integer instead.
+ */
+export function yearTarget(year: number): SafeHtml {
+  return mintHtml(
+    `<span class="tl-target" id="y${fourDigitYear(year)}"></span>`,
+  );
+}
 /** A '.' or '..' segment, literal or percent-encoded (browsers decode %2e). */
 const DOT_SEGMENT = /\/(?:\.|%2e){1,2}(?=\/|\?|$)/i;
 
@@ -955,6 +982,16 @@ const EXACT_LINK_TARGETS = [
   { host: 'secure.meetup.com', pathname: '/oauth2/authorize' },
   { host: 'discord.com', pathname: '/oauth2/authorize' },
 ];
+
+/**
+ * An image src from Meetup data: meetupPhotoUrl's rule (plain https on
+ * Meetup's photo host, no port, no credentials); else undefined, and the
+ * caller shows a placeholder.
+ */
+export function meetupPhotoSrc(url: unknown): SafeUrl | undefined {
+  const href = meetupPhotoUrl(url);
+  return href === undefined ? undefined : mintUrl(href);
+}
 
 /**
  * The only outbound links a dashboard page may render. Event URLs and
