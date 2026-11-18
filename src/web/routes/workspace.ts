@@ -678,11 +678,12 @@ const HOLD_HINT =
 const HOLD_TIP =
   "Use this when the card can't be finished yet, for example while you wait " +
   'on the member, a host or Leadership. It stays visible as On hold, not ' +
-  'done, until someone presses Reopen. Say why, so the next person knows.';
+  'done, until someone reopens it, skips it or records the suspension. Say ' +
+  'why, so the next person knows.';
 const SKIP_HINT = 'Decided: no action needed. The card counts as done.';
 const SKIP_TIP =
   "Use this when you've decided nothing is needed, for example a host's " +
-  'mistake or a valid excuse. No message is sent and the card counts as ' +
+  'mistake or a valid excuse. Nothing more is sent and the card counts as ' +
   'done. Reopen puts it back where it was. Say why, so the next person knows.';
 const NOTES_TIP =
   'For staff only: shown on this card. Each save is kept in the card ' +
