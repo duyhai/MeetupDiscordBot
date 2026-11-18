@@ -22,12 +22,15 @@ export const CALENDAR_SCRIPT = staticRaw`(function(){var grid=document.querySele
  * and keeps it; this only carries it across visits, on every signed-in
  * host page (hostLayout):
  *   - a click on a Layout link ([data-cal-views] a, any mouse button)
- *     stores its view (localStorage, key host-calendar-view). Only a
- *     click: an old ?view=tiles link or Back never overwrites the choice;
+ *     stores its view (localStorage, key host-calendar-view); not the
+ *     right button (a context menu, e.g. to copy the link). Only a click:
+ *     an old ?view=tiles link or Back never overwrites the choice;
  *   - links to the bare calendar (/host/calendar with no query: the nav
  *     tab, Home's "Open the calendar") get ?view=<stored>, so they open
  *     the stored view directly: no reload, no flash. Their hash is kept;
- *     links with any other query are left alone. A bare /host/calendar
+ *     links with any other query, and in-page links (an href that is
+ *     only a #fragment, like the skip link, even on the bare calendar
+ *     page itself), are left alone. A bare /host/calendar
  *     typed by hand shows the default (Tiles);
  *   - a page restored from the back/forward cache rewrites them again
  *     (pageshow), since the choice may have changed meanwhile;
@@ -35,7 +38,7 @@ export const CALENDAR_SCRIPT = staticRaw`(function(){var grid=document.querySele
  *     data) changes nothing; re-entry guard (window.__hostCalendarView).
  */
 // eslint-disable-next-line @stylistic/max-len -- one line, so the script text is exactly what runs
-export const CALENDAR_VIEW_SCRIPT = staticRaw`(function(){if(window.__hostCalendarView){return;}window.__hostCalendarView=1;var KEY='host-calendar-view',PATH='/host/calendar';function ok(v){return v==='list'||v==='tiles';}function read(){try{var v=localStorage.getItem(KEY);return ok(v)?v:null;}catch(e){return null;}}function rewrite(){var v=read();if(!v){return;}Array.prototype.slice.call(document.querySelectorAll('a[href]')).forEach(function(a){var u;try{u=new URL(a.getAttribute('href'),location.href);}catch(e){return;}if(u.origin!==location.origin||u.pathname!==PATH){return;}if(u.search!==''&&!a.hasAttribute('data-cal-bare')){return;}a.setAttribute('data-cal-bare','');u.search='';u.searchParams.set('view',v);a.setAttribute('href',u.pathname+u.search+u.hash);});}function remember(e){var a=e.target&&e.target.closest?e.target.closest('[data-cal-views] a'):null;if(!a){return;}var v;try{v=new URL(a.href,location.href).searchParams.get('view');}catch(err){return;}if(ok(v)){try{localStorage.setItem(KEY,v);}catch(err){}}}document.addEventListener('click',remember);document.addEventListener('auxclick',remember);rewrite();window.addEventListener('pageshow',function(e){if(e.persisted){rewrite();}});})();`;
+export const CALENDAR_VIEW_SCRIPT = staticRaw`(function(){if(window.__hostCalendarView){return;}window.__hostCalendarView=1;var KEY='host-calendar-view',PATH='/host/calendar';function ok(v){return v==='list'||v==='tiles';}function read(){try{var v=localStorage.getItem(KEY);return ok(v)?v:null;}catch(e){return null;}}function rewrite(){var v=read();if(!v){return;}Array.prototype.slice.call(document.querySelectorAll('a[href]')).forEach(function(a){var raw=a.getAttribute('href');if(!raw||raw.charAt(0)==='#'){return;}var u;try{u=new URL(raw,location.href);}catch(e){return;}if(u.origin!==location.origin||u.pathname!==PATH){return;}if(u.search!==''&&!a.hasAttribute('data-cal-bare')){return;}a.setAttribute('data-cal-bare','');u.search='';u.searchParams.set('view',v);a.setAttribute('href',u.pathname+u.search+u.hash);});}function remember(e){if(e.button===2){return;}var a=e.target&&e.target.closest?e.target.closest('[data-cal-views] a'):null;if(!a){return;}var v;try{v=new URL(a.href,location.href).searchParams.get('view');}catch(err){return;}if(ok(v)){try{localStorage.setItem(KEY,v);}catch(err){}}}document.addEventListener('click',remember);document.addEventListener('auxclick',remember);rewrite();window.addEventListener('pageshow',function(e){if(e.persisted){rewrite();}});})();`;
 
 /**
  * The history heat map's tooltips. Each day with events is already a link

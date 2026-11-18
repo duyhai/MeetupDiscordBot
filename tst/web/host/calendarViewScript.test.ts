@@ -170,6 +170,28 @@ describe('CALENDAR_VIEW_SCRIPT', () => {
     ]);
   });
 
+  it('leaves in-page links alone on the bare calendar page', () => {
+    const t = load(pages.calendar, `${ORIGIN}/host/calendar`, (w) =>
+      w.localStorage.setItem(KEY, 'list'),
+    );
+    const skip = t.doc.querySelector('a.skip');
+    expect(skip?.getAttribute('href')).toBe('#main');
+    const empty = t.doc.createElement('a');
+    empty.setAttribute('href', '');
+    t.doc.body.appendChild(empty);
+    t.run();
+    expect(skip?.getAttribute('href')).toBe('#main');
+    expect(empty.getAttribute('href')).toBe('');
+    expect(t.hrefs(navCalendar)).toEqual(['/host/calendar?view=list']);
+  });
+
+  it('a right click on a Layout link stores nothing', () => {
+    const t = load(pages.calendar, `${ORIGIN}/host/calendar?view=tiles`);
+    t.run();
+    t.click(t.doc.querySelector('[data-cal-views] a'), 2);
+    expect(t.window.localStorage.getItem(KEY)).toBeNull();
+  });
+
   it('rewrites again after a back/forward-cache restore, and runs once', () => {
     const t = load(pages.home, `${ORIGIN}/host`, (w) =>
       w.localStorage.setItem(KEY, 'list'),
