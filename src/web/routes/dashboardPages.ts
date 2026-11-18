@@ -136,6 +136,7 @@ export type WorkspacePageReader = Pick<
   | 'linkedRecordIds'
   | 'statusesByMember'
   | 'statusesForMember'
+  | 'rowPosition'
 >;
 
 /** The workspace's state changes (the service). Each may reject; the routes answer 'error'. */

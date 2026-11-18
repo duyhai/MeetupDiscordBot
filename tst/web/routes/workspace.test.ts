@@ -1467,6 +1467,16 @@ describe('month page sections, summary and position (Hai, 2026-11-17)', () => {
     expect(idsIn(res.text, 'On hold')).toEqual(['2']);
   });
 
+  it('over 50 cards, the section counts say "on this page" (lead review of #162)', async () => {
+    const many = Array.from({ length: 52 }, (_, i) =>
+      workspaceRow({ id: 100 + i, memberId: String(3000 + i), status: 'new' }),
+    );
+    const { get } = await setup({ seed: seed(many) });
+    const text = words((await get(MONTH)).text);
+    expect(text).toContain('To do 50 on this page');
+    expect(text).not.toContain('50 cards');
+  });
+
   it('an empty section says so', async () => {
     const { get } = await setup({
       seed: seed([warningRow({ status: 'warning_sent' })]),

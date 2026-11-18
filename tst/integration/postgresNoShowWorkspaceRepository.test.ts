@@ -657,6 +657,35 @@ const suspension = (
         ]);
       });
 
+      it('rowPosition ranks a card as listRows orders it: a skipped card moves to page 2', async () => {
+        const cases: SyncCase[] = [];
+        for (let i = 0; i < 55; i += 1) {
+          cases.push(
+            warning(String(2000 + i), `w${String(i).padStart(2, '0')}`),
+          );
+        }
+        await sync(cases);
+        const first = await repo.listRows(SEPTEMBER, { offset: 0, limit: 50 });
+        const acted = first[0];
+        expect(await repo.rowPosition(SEPTEMBER, acted.id)).toBe(1);
+        // Done now: behind every to-do card, so on page 2.
+        await pool.query(
+          `UPDATE noshow_workspace_rows SET status = 'skipped' WHERE id = $1`,
+          [acted.id],
+        );
+        const pos = await repo.rowPosition(SEPTEMBER, acted.id);
+        expect(pos).toBe(55);
+        const second = await repo.listRows(SEPTEMBER, {
+          offset: 50,
+          limit: 50,
+        });
+        expect(second.map((r) => r.id)).toContain(acted.id);
+        expect(second.findIndex((r) => r.id === acted.id) + 51).toBe(pos);
+        expect(await repo.rowPosition(OCTOBER, acted.id)).toBeUndefined();
+        expect(await repo.rowPosition(SEPTEMBER, 0)).toBeUndefined();
+        expect(await repo.rowPosition(SEPTEMBER, 2 ** 31)).toBeUndefined();
+      });
+
       it('getRow reads one row of the month and refuses junk ids', async () => {
         await sync([warning('111', 'Ann')]);
         const id = (await rowOf(SEPTEMBER, '111')).id;

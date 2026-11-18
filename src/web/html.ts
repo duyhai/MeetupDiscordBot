@@ -894,8 +894,10 @@ export function staticRaw(strings: TemplateStringsArray): SafeHtml {
   return mintHtml(text, { raw: true, foreignUnsafe: true });
 }
 
+// The one fragment allowed is the literal #acted (the workspace card a
+// redirect returns to): fixed text, so no data ever reaches a fragment.
 const LOCAL_PATH =
-  /^\/(?:dashboard|host)(\/[A-Za-z0-9._~%-]+)*\/?(\?[A-Za-z0-9._~%&=+-]*)?$/;
+  /^\/(?:dashboard|host)(\/[A-Za-z0-9._~%-]+)*\/?(\?[A-Za-z0-9._~%&=+-]*)?(#acted)?$/;
 /** A '.' or '..' segment, literal or percent-encoded (browsers decode %2e). */
 const DOT_SEGMENT = /\/(?:\.|%2e){1,2}(?=\/|\?|$)/i;
 
@@ -904,7 +906,7 @@ export function localUrl(pathAndQuery: string): SafeUrl {
   if (
     typeof pathAndQuery !== 'string' ||
     !LOCAL_PATH.test(pathAndQuery) ||
-    DOT_SEGMENT.test(pathAndQuery.split('?')[0])
+    DOT_SEGMENT.test(pathAndQuery.split(/[?#]/)[0])
   ) {
     throw new RangeError('not a dashboard path');
   }

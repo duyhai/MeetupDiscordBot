@@ -2,7 +2,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   STAFF_FALLBACK,
+  STAFF_NAMES_BACKOFF_MS,
   STAFF_NAMES_BUDGET_MS,
+  StaffNameBackoff,
   STAFF_NAMES_MAX,
   loadStaffNames,
   staffLink,
@@ -100,5 +102,53 @@ describe('staffLink', () => {
 
   it('a name never comes from a prototype key', () => {
     expect(staffLink('toString', {}).value).toBe(STAFF_FALLBACK);
+  });
+});
+
+describe('staff name backoff (lead review of #162)', () => {
+  it('after a timeout, pages skip the lookup for the backoff, then try again', async () => {
+    vi.useFakeTimers();
+    let clock = 0;
+    const backoff = new StaffNameBackoff(() => clock);
+    const slow = vi.fn(() => new Promise<Record<string, string>>(() => {}));
+    const pending = loadStaffNames(slow, [A], STAFF_NAMES_BUDGET_MS, backoff);
+    await vi.advanceTimersByTimeAsync(STAFF_NAMES_BUDGET_MS);
+    expect(await pending).toEqual({});
+    expect(backoff.open).toBe(false);
+    // The next page answers at once, without asking.
+    expect(
+      await loadStaffNames(slow, [A], STAFF_NAMES_BUDGET_MS, backoff),
+    ).toEqual({});
+    expect(slow).toHaveBeenCalledTimes(1);
+    clock += STAFF_NAMES_BACKOFF_MS;
+    expect(backoff.open).toBe(true);
+  });
+
+  it('a failing lookup trips it too; a working one does not', async () => {
+    const backoff = new StaffNameBackoff(() => 0);
+    await loadStaffNames(async () => ({ [A]: 'Hai' }), [A], 100, backoff);
+    expect(backoff.open).toBe(true);
+    await loadStaffNames(
+      async () => {
+        throw new Error('discord down');
+      },
+      [A],
+      100,
+      backoff,
+    );
+    expect(backoff.open).toBe(false);
+  });
+
+  it('each lookup function has its own backoff by default', async () => {
+    const failing = vi.fn(async (): Promise<Record<string, string>> => {
+      throw new Error('down');
+    });
+    await loadStaffNames(failing, [A]);
+    // Another lookup is unaffected.
+    const working = vi.fn(async () => ({ [A]: 'Hai' }));
+    expect(await loadStaffNames(working, [A])).toEqual({ [A]: 'Hai' });
+    // The failing one is skipped until its backoff runs out.
+    await loadStaffNames(failing, [A]);
+    expect(failing).toHaveBeenCalledTimes(1);
   });
 });

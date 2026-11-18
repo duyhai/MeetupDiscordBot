@@ -994,13 +994,18 @@ function cardSections(
   rows: WorkspaceRow[],
   actedId: number | undefined,
   cardOf: (row: WorkspaceRow) => SafeHtml,
+  /** The month spans more than one page: the counts say "on this page". */
+  multiPage: boolean,
 ): SafeHtml {
   return html`${GROUPS.map(({ group, title, empty }) => {
     const inGroup = rows.filter((r) => groupOf(r.status) === group);
     const open = group !== 'done' || inGroup.some((r) => r.id === actedId);
     return collapsible({
       summary: title,
-      meta: plural(inGroup.length, 'card', 'cards'),
+      // The summary above counts the whole month; these count this page.
+      meta: multiPage
+        ? `${inGroup.length} on this page`
+        : plural(inGroup.length, 'card', 'cards'),
       open,
       body: inGroup.length
         ? html`${inGroup.map(cardOf)}`
@@ -1398,7 +1403,7 @@ export function registerWorkspaceRoutes(
             ? html`<div class="card"><p>No cards on this page.</p></div>`
             : ''
         }
-        ${rows.length > 0 ? cardSections(rows, actedId, cardOf) : ''}
+        ${rows.length > 0 ? cardSections(rows, actedId, cardOf, counts.total > PAGE_SIZE) : ''}
         ${pageNav(
           monthPath(DASHBOARD_PATHS.workspaceMonth, period),
           page,

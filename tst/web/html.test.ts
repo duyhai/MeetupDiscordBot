@@ -224,6 +224,15 @@ describe('localUrl', () => {
     }
   });
 
+  it('localUrl takes the one fixed fragment, #acted', () => {
+    for (const ok of [
+      '/dashboard/no-shows/2026-09?row=4#acted',
+      '/dashboard/no-shows/2026-09?page=2&row=4#acted',
+    ]) {
+      expect(localUrl(ok).href).toBe(ok);
+    }
+  });
+
   it('localUrl refuses anything but dashboard paths', () => {
     for (const bad of [
       'https://x',
@@ -241,6 +250,10 @@ describe('localUrl', () => {
       '/Dashboard',
       '/dashboard\\x',
       '/dashboard/x#y',
+      '/dashboard/x#actedx',
+      '/dashboard/x#acted#acted',
+      '/dashboard/x?y=1#Acted',
+      '/dashboard/../x#acted',
       ' /dashboard',
       '/hostx',
       '/host/../dashboard',

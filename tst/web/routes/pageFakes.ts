@@ -718,6 +718,15 @@ export function fakeWorkspace(seed: WorkspaceSeed = WORKSPACE_SEED()) {
           .sort((a, b) => statusGroup(a.status) - statusGroup(b.status))
           .slice(page.offset, page.offset + Math.min(50, page.limit)),
     ),
+    rowPosition: vi.fn(
+      async (period: Period, rowId: number): Promise<number | undefined> => {
+        const ordered = [...inMonth(period)].sort(
+          (a, b) => statusGroup(a.status) - statusGroup(b.status),
+        );
+        const index = ordered.findIndex((r) => r.id === rowId);
+        return index === -1 ? undefined : index + 1;
+      },
+    ),
     countRows: vi.fn(
       async (period: Period): Promise<{ total: number; inLatest: number }> => ({
         total: inMonth(period).length,
