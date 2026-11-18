@@ -19,6 +19,8 @@ import { SafeHtml, html, memberText, pageLink } from '../html.js';
 import { hostPage } from './hostPageKit.js';
 import { hostLocals } from './hostRouter.js';
 import { HostProfileDeps, registerHostProfile } from './hostProfilePage.js';
+import { MAP_PAGE, hostMap, registerMapAssets } from './hostMap.js';
+import { eventPlaces } from '../../lib/leaderboard/places.js';
 import {
   LEADERBOARD_PATH,
   bestStreaks,
@@ -272,28 +274,32 @@ function hallOfFameBody(data: Ready, selfId: string): SafeHtml {
     </tr>`;
   });
   return html`<div class="card">
-    <h1>Leaderboard</h1>
-    ${viewNav('all', data.today.slice(0, 7))} ${medalsNote(data)}
-    <p>
-      Every host, by events hosted since the group began.
-      ${`${plural(standings.length, 'host')}, ${plural(data.events.length, 'event')}.`}
-    </p>
-    <table class="stack leaderboard">
-      <thead>
-        <tr>
-          <th>Place</th>
-          <th>Host</th>
-          <th>Events</th>
-          <th>Medals</th>
-          <th>Streaks</th>
-        </tr>
-      </thead>
-      <tbody>
-        ${rows}
-      </tbody>
-    </table>
-    ${streakNote()} ${updatedLine(data)}
-  </div>`;
+      <h1>Leaderboard</h1>
+      ${viewNav('all', data.today.slice(0, 7))} ${medalsNote(data)}
+      <p>
+        Every host, by events hosted since the group began.
+        ${`${plural(standings.length, 'host')}, ${plural(data.events.length, 'event')}.`}
+      </p>
+      <table class="stack leaderboard">
+        <thead>
+          <tr>
+            <th>Place</th>
+            <th>Host</th>
+            <th>Events</th>
+            <th>Medals</th>
+            <th>Streaks</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${rows}
+        </tbody>
+      </table>
+      ${streakNote()} ${updatedLine(data)}
+    </div>
+    <div class="card">
+      <h2>Where we've hosted</h2>
+      ${hostMap(eventPlaces(data.events), 'the group has')}
+    </div>`;
 }
 
 const notReadyBody = html`<div class="card">
@@ -318,6 +324,7 @@ export function registerLeaderboardPage(
   // One loader: its cache and award back-off are shared by every request,
   // the profiles' included.
   const loader = createLeaderboardLoader(deps);
+  registerMapAssets(router);
   if (deps.profiles) {
     registerHostProfile(router, () => loader.load(), deps.profiles);
   }
@@ -349,15 +356,24 @@ export function registerLeaderboardPage(
     }
     const current = data.today.slice(0, 7);
     const first = data.firstMonth ?? current;
-    const body =
-      req.query.view === 'all'
-        ? hallOfFameBody(data, session.userId)
-        : monthBody(
-            data,
-            leaderboardMonth(req.query.month, first, current),
-            first,
-            session.userId,
-          );
-    hostPage(res, { title: 'Leaderboard', current: 'leaderboard', body });
+    if (req.query.view === 'all') {
+      hostPage(res, {
+        title: 'Hall of fame',
+        current: 'leaderboard',
+        body: hallOfFameBody(data, session.userId),
+        ...MAP_PAGE,
+      });
+      return;
+    }
+    hostPage(res, {
+      title: 'Leaderboard',
+      current: 'leaderboard',
+      body: monthBody(
+        data,
+        leaderboardMonth(req.query.month, first, current),
+        first,
+        session.userId,
+      ),
+    });
   }) as RequestHandler);
 }

@@ -25,6 +25,8 @@ import { GUEST_HOST_MEETUP_BLACKLIST } from '../../constants.js';
 import { SafeHtml, html, memberText, pageLink } from '../html.js';
 import { eventLink } from '../links.js';
 import { dateLabel, hostPage } from './hostPageKit.js';
+import { MAP_PAGE, hostMap } from './hostMap.js';
+import { eventPlaces } from '../../lib/leaderboard/places.js';
 import { hostLocals } from './hostRouter.js';
 import {
   DAILY_STREAK_ICON,
@@ -80,6 +82,20 @@ export function tierBadge(
 ): SafeHtml | '' {
   return promoted === true && !GUEST_HOST_MEETUP_BLACKLIST.includes(memberId)
     ? html`<span class="badge ok">Community Host</span>`
+    : '';
+}
+
+/** Whether a profile shows its map: never for an id on the Guest Host blacklist. */
+export function profileHasMap(memberId: string): boolean {
+  return !GUEST_HOST_MEETUP_BLACKLIST.includes(memberId);
+}
+
+/** Attendees hosted leaves out events without attendance data; say so. */
+function unknownNote(n: number): SafeHtml | '' {
+  return n > 0
+    ? html`<p class="muted">
+        ${`Attendees hosted excludes ${plural(n, 'event')} without attendance data.`}
+      </p>`
     : '';
 }
 
@@ -184,6 +200,8 @@ export function profileBody(
   const top = [...known]
     .sort((a, b) => b.attendance - a.attendance || newestFirst(a, b))
     .slice(0, PROFILE_TOP_EVENTS);
+  // No profile map for an id on the Guest Host blacklist until Hai decides.
+  const showMap = profileHasMap(memberId);
   const you =
     memberId === selfId ? html` <span class="badge info">You</span>` : '';
   return html`<div class="card">
@@ -230,7 +248,7 @@ export function profileBody(
         Attendees are the RSVPs Meetup lists as going or attended, the number
         Wrapped uses. Only hosting activity is shown here.
       </p>
-      ${updatedLine(data)}
+      ${unknownNote(countedEvents.length - known.length)} ${updatedLine(data)}
     </div>
     <div class="card">
       <h2>Medals</h2>
@@ -239,6 +257,14 @@ export function profileBody(
       ${typeList(countedEvents)}
       <p class="muted">Types are guessed from event titles.</p>
     </div>
+    ${
+      showMap
+        ? html`<div class="card">
+            <h2>Where they've hosted</h2>
+            ${hostMap(eventPlaces(countedEvents), name ? `${name} has` : 'this host has')}
+          </div>`
+        : ''
+    }
     <div class="card">
       <h2>Top events</h2>
       <p class="muted">
@@ -337,6 +363,7 @@ export function registerHostProfile(
       title: name ? `${name} · Host profile` : 'Host profile',
       current: 'leaderboard',
       body: profileBody(data, memberId, session.userId, hosted, promoted),
+      ...(profileHasMap(memberId) ? MAP_PAGE : {}),
     });
   }) as RequestHandler);
 }

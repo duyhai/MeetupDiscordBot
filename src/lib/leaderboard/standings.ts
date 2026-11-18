@@ -17,6 +17,7 @@ import dayjs from 'dayjs';
 import { countsAsHosted } from '../helpers/countedEvents.js';
 import { EventStatus } from '../client/meetup/types.js';
 import { tz } from '../../util/timezone.js';
+import type { EventPlace } from '../snapshot/meetup.js';
 
 export interface LeaderboardEvent {
   id: string;
@@ -27,6 +28,8 @@ export interface LeaderboardEvent {
   hostIds: string[];
   /** YYYY-MM-DD: the Pacific calendar day the event started. */
   day: string;
+  /** The venue's ~1 km grid cell and city; null or absent when unknown or online. */
+  place?: EventPlace | null;
 }
 
 /** A month's medals: gold, silver, bronze. */

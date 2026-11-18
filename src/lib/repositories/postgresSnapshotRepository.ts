@@ -297,18 +297,22 @@ export class PostgresSnapshotRepository
     await this.pool.query(
       `INSERT INTO meetup_events
          (event_id, title, date_time, event_url, status, host_ids,
-          yes_count, waitlist_count, listed_at)
+          yes_count, waitlist_count, listed_at,
+          place_lat_e2, place_lon_e2, place_city)
        SELECT e.id, e.title, e.at, e.url, e.status,
               CASE WHEN e.hosts = '' THEN '{}'::text[] ELSE string_to_array(e.hosts, ',') END,
-              e.yes, e.waitlist, $9
+              e.yes, e.waitlist, $9, e.plat, e.plon, e.pcity
          FROM unnest($1::text[], $2::text[], $3::timestamptz[], $4::text[],
-                     $5::text[], $6::text[], $7::int[], $8::int[])
-              AS e(id, title, at, url, status, hosts, yes, waitlist)
+                     $5::text[], $6::text[], $7::int[], $8::int[],
+                     $10::int[], $11::int[], $12::text[])
+              AS e(id, title, at, url, status, hosts, yes, waitlist, plat, plon, pcity)
        ON CONFLICT (event_id) DO UPDATE SET
          title = EXCLUDED.title, date_time = EXCLUDED.date_time,
          event_url = EXCLUDED.event_url, status = EXCLUDED.status,
          host_ids = EXCLUDED.host_ids, yes_count = EXCLUDED.yes_count,
          waitlist_count = EXCLUDED.waitlist_count, listed_at = EXCLUDED.listed_at,
+         place_lat_e2 = EXCLUDED.place_lat_e2, place_lon_e2 = EXCLUDED.place_lon_e2,
+         place_city = EXCLUDED.place_city,
          deleted_at = NULL`,
       [
         events.map((e) => e.eventId),
@@ -320,6 +324,9 @@ export class PostgresSnapshotRepository
         events.map((e) => e.yesCount),
         events.map((e) => e.waitlistCount),
         listedAt,
+        events.map((e) => e.place?.latE2 ?? null),
+        events.map((e) => e.place?.lonE2 ?? null),
+        events.map((e) => e.place?.city ?? null),
       ],
     );
     await this.upsertHostNames(events, listedAt);
