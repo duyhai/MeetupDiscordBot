@@ -63,7 +63,14 @@ not purged (noted for later; they stay as long as their events do).
   zone per event: the Pacific day comes from SQL
   (`date_time AT TIME ZONE 'America/Los_Angeles'`), events are bucketed by
   month and by host in one pass, and the result is cached per snapshot run
-  for a minute.
+  for a minute. Concurrent reads share one build, and reads that arrive while
+  an award is still running wait on it instead of queueing their own on the
+  lock.
+- **Known limit.** The snapshot accepts a listing with at least
+  `MIN_LISTING_RATIO` (95%) of the stored past events as complete, so a
+  listing missing up to 5% would still pass the medal gate. That threshold
+  predates the leaderboard. A run whose listing is short, finished or still
+  open, blocks awarding.
 
 ## Streaks (PR 1)
 
@@ -90,14 +97,25 @@ hosting weeks are Monday-first Pacific weeks (as the calendar).
   events, streaks) and **Hall of fame** (all-time: lifetime events, medal
   tally, current and best streaks), as two views of one page.
 - **PR 2, host profiles** (`/host/hosts/<meetupId>`, signed-in hosts only;
-  names on the leaderboard link here): name, role badge (the Organizer badge
-  from the parallel PR once merged), medals by month, streaks, lifetime events
-  hosted and attendees hosted (sum of Meetup's YES + ATTENDED per counted
-  event, the number Wrapped uses), event types (`classifyEventType`), recent
-  events and all-time top events by attendance, linking to Meetup. **Only
-  hosting activity already public on Meetup:** nothing a host attended, no
-  no-show, suspension, ban or request data. A member id with no counted
-  hosted events is a 404.
+  names on the leaderboard link here): name, a Community Host badge for a
+  promoted host (no tier badge otherwise: organizers, moderators and past
+  hosts are not promoted either, and never for an id on the Guest Host
+  blacklist; the Organizer badge from #167 can come later), lifetime events
+  hosted (the Leaderboard's own count) and attendees hosted (sum of Meetup's
+  YES + ATTENDED per counted event, the number Wrapped uses; events with no
+  attendance data show "–" and are left out of the sum and the top list),
+  medals by month (each linked to its month), weekly and daily streaks with
+  bests, event types (`classifyEventType`), the top 5 events by attendees
+  (ties: the more recent first) and the 10 most recent, linking to Meetup.
+  **Only hosting activity already public on Meetup:** nothing a host
+  attended, no no-show, suspension, ban or request data.
+- **Profile reads.** A non-digit id is a 404 with no read at all. Any
+  digit-only id goes through the Leaderboard's loader (its run checks, then
+  its cache or a build); one with no counted hosted events is then a 404
+  without the attendance read. A host's profile adds two reads: their events
+  with attendance (`host_ids @> ARRAY[id]`, which uses the GIN index; the
+  stored RSVP count only where the listing had none) and one
+  `promoted_hosts` lookup, which only drops the badge if it fails.
 - **PR 3, maps** (profile map and Hall of fame map).
 
 ## Map (PR 3)

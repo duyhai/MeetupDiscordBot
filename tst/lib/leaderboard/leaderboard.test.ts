@@ -182,4 +182,87 @@ describe('createLeaderboardLoader', () => {
     expect(await l.load()).toEqual({ ready: false });
     expect(hostedEvents).not.toHaveBeenCalled();
   });
+
+  it('records a month with no hosted events as awarded, with no medals', async () => {
+    const { s, months } = store([
+      ev('2026-08-10', ['1']),
+      ev('2026-10-10', ['1']),
+    ]);
+    const view = await loader(s).load();
+    expect(months).toEqual(new Set(['2026-08', '2026-09', '2026-10']));
+    expect(view.medals.filter((m) => m.month === '2026-09')).toEqual([]);
+    expect(view.awarded.has('2026-09')).toBe(true);
+  });
+
+  it('a failure arriving after the read stopped waiting still backs off', async () => {
+    const { s, award } = store(OCT);
+    let fail: (e: Error) => void = () => {};
+    award.mockImplementationOnce(
+      () =>
+        new Promise<void>((_resolve, reject) => {
+          fail = reject;
+        }),
+    );
+    const l = loader(s, { awardBudgetMs: 5, cacheMs: 0 });
+    const first = await l.load();
+    expect(first.awardFailed).toBe(false);
+    fail(new Error('lock timeout'));
+    await new Promise((r) => {
+      setTimeout(r, 0);
+    });
+    const second = await l.load();
+    expect(second.awardFailed).toBe(true);
+    expect(award).toHaveBeenCalledTimes(1);
+  });
+
+  it('shares one build and one award between concurrent reads', async () => {
+    const { s, award, hostedEvents } = store(OCT);
+    let finish: () => void = () => {};
+    award.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const l = loader(s, { awardBudgetMs: 5, cacheMs: 0 });
+    await Promise.all([l.load(), l.load(), l.load()]);
+    expect(hostedEvents).toHaveBeenCalledTimes(1);
+    // A read after the budget, while the award still runs, waits on it.
+    await l.load();
+    expect(award).toHaveBeenCalledTimes(1);
+    finish();
+  });
+
+  it('a slower build for an older snapshot run never replaces the newer cache', async () => {
+    const events = [ev('2026-11-10', ['1'])];
+    const { s: st, hostedEvents } = store(events);
+    let release: () => void = () => {};
+    hostedEvents.mockImplementationOnce(
+      () =>
+        new Promise<LeaderboardEvent[]>((resolve) => {
+          release = () => resolve(events);
+        }),
+    );
+    let runId = 1;
+    const listedAt = new Date('2026-11-17T08:00:00Z');
+    const l = createLeaderboardLoader({
+      store: async () => st,
+      snapshot: async () => ({
+        hasFinishedFull: async () => true,
+        lastFinishedRun: async () => run(listedAt, runId),
+        lastCompleteListing: async () => listedAt,
+      }),
+      now: () => new Date('2026-11-17T18:00:00Z'),
+    });
+    const older = l.load(); // run 1: its build hangs
+    await new Promise((r) => {
+      setTimeout(r, 0);
+    });
+    runId = 2;
+    await l.load(); // run 2: built and cached
+    release();
+    await older;
+    await l.load(); // still run 2's cache
+    expect(hostedEvents).toHaveBeenCalledTimes(2);
+  });
 });

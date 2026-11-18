@@ -108,28 +108,18 @@ async function awardedOrNone(
 
 type AwardOutcome = 'done' | 'failed' | 'late';
 
-/** Awards, waiting at most `budgetMs` for the writes; never throws. */
-async function awardWithin(
-  store: LeaderboardStore,
-  months: { month: string; medals: Medal[] }[],
+/** `outcome`, or 'late' once `budgetMs` has passed; never throws. */
+async function within(
+  outcome: Promise<AwardOutcome>,
   budgetMs: number,
-  onFailure: () => void,
 ): Promise<AwardOutcome> {
-  const award = store.award(months).then(
-    (): AwardOutcome => 'done',
-    (error: unknown): AwardOutcome => {
-      logger.warn(`Medal award failed: ${errorName(error)}`);
-      onFailure();
-      return 'failed';
-    },
-  );
   let timer: NodeJS.Timeout | undefined;
   const late = new Promise<AwardOutcome>((resolve) => {
     timer = setTimeout(() => resolve('late'), budgetMs);
   });
-  const outcome = await Promise.race([award, late]);
+  const first = await Promise.race([outcome, late]);
   clearTimeout(timer);
-  return outcome;
+  return first;
 }
 
 /**
@@ -144,6 +134,43 @@ export function createLeaderboardLoader(deps: LeaderboardDeps): {
   const retryMs = deps.awardRetryMs ?? AWARD_RETRY_MS;
   let cached: { key: string; at: number; view: LeaderboardView } | undefined;
   let awardFailedAt: number | undefined;
+  /** One award at a time: later reads wait on it instead of queueing on the lock. */
+  let awardInFlight: Promise<AwardOutcome> | undefined;
+  /** One build per snapshot run at a time: concurrent misses share it. */
+  let building:
+    | {
+        key: string;
+        promise: Promise<{ view: LeaderboardView; cacheable: boolean }>;
+      }
+    | undefined;
+
+  /** Starts an award unless one is running; settles to its outcome, never rejects. */
+  function award(
+    store: LeaderboardStore,
+    months: { month: string; medals: Medal[] }[],
+  ): Promise<AwardOutcome> {
+    if (awardInFlight === undefined) {
+      const running = store
+        .award(months)
+        .then(
+          (): AwardOutcome => {
+            awardFailedAt = undefined;
+            return 'done';
+          },
+          (error: unknown): AwardOutcome => {
+            // Also when it settles after the read stopped waiting.
+            logger.warn(`Medal award failed: ${errorName(error)}`);
+            awardFailedAt = deps.now().getTime();
+            return 'failed';
+          },
+        )
+        .finally(() => {
+          awardInFlight = undefined;
+        });
+      awardInFlight = running;
+    }
+    return awardInFlight;
+  }
   const failedRecently = (now: number) =>
     awardFailedAt !== undefined && now - awardFailedAt < retryMs;
 
@@ -201,23 +228,19 @@ export function createLeaderboardLoader(deps: LeaderboardDeps): {
         ? monthsToAward(firstMonth, awarded, complete)
         : [];
     if (due.length > 0) {
-      const outcome = await awardWithin(
-        store,
-        due.map((month) => ({
-          month,
-          medals: medalsFor(
+      await within(
+        award(
+          store,
+          due.map((month) => ({
             month,
-            rank(byMonth.get(month) ?? new Map<string, number>()),
-          ),
-        })),
+            medals: medalsFor(
+              month,
+              rank(byMonth.get(month) ?? new Map<string, number>()),
+            ),
+          })),
+        ),
         deps.awardBudgetMs ?? AWARD_BUDGET_MS,
-        () => {
-          awardFailedAt = deps.now().getTime();
-        },
       );
-      if (outcome === 'done') {
-        awardFailedAt = undefined;
-      }
       // More months may be due (the cap), or the award is still running.
       cacheable = false;
     }
@@ -252,9 +275,29 @@ export function createLeaderboardLoader(deps: LeaderboardDeps): {
       ) {
         return { ...cached.view, today: pacificDayOf(nowDate) };
       }
-      const { view, cacheable } = await build(run, complete, nowDate);
-      cached = cacheable ? { key, at: nowDate.getTime(), view } : undefined;
-      return view;
+      if (building?.key !== key) {
+        const promise = build(run, complete, nowDate);
+        const mine = { key, promise };
+        building = mine;
+        promise
+          .then(({ view, cacheable }) => {
+            // A slower build for an older run never replaces a newer one.
+            if (building !== mine) {
+              return;
+            }
+            cached = cacheable
+              ? { key, at: nowDate.getTime(), view }
+              : undefined;
+          })
+          .catch(() => undefined)
+          .finally(() => {
+            if (building === mine) {
+              building = undefined;
+            }
+          });
+      }
+      const { view } = await building.promise;
+      return { ...view, today: pacificDayOf(nowDate) };
     },
   };
 }

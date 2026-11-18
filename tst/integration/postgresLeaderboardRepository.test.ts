@@ -126,6 +126,7 @@ const event = (
           month: '2026-10',
           medals: [{ month: '2026-10', memberId: '444', place: 1, events: 1 }],
         },
+        // A month with no hosted events: recorded as awarded, no medals.
         { month: '2026-09', medals: [] },
       ]);
       expect(await repo.medals()).toEqual(stored);
@@ -192,6 +193,63 @@ const event = (
       await snapshot.markListed(next.id, nextAt, 5);
       await snapshot.finishRun(next.id);
       expect(await snapshot.lastCompleteListing()).toEqual(nextAt);
+
+      // An open run whose listing came back short holds awards back too.
+      const open = await snapshot.startRun('job', 'incremental');
+      await snapshot.markListed(
+        open.id,
+        new Date('2026-11-14T08:00:00Z'),
+        2,
+        true,
+      );
+      expect(await snapshot.lastCompleteListing()).toBeUndefined();
+      await snapshot.finishRun(open.id);
+      const last = await snapshot.startRun('job', 'incremental');
+      await snapshot.markListed(last.id, new Date('2026-11-15T08:00:00Z'), 5);
+      expect(await snapshot.lastCompleteListing()).toBeUndefined();
+      await snapshot.finishRun(last.id);
+      expect(await snapshot.lastCompleteListing()).toEqual(
+        new Date('2026-11-15T08:00:00Z'),
+      );
+    });
+
+    it('profileEvents matches Wrapped’s hostedEvents, except unknown attendance', async () => {
+      const at = new Date('2026-11-17T00:00:00Z');
+      await snapshot.upsertEvents(
+        [
+          event('1', { hostIds: ['111', '222'], yesCount: 9 }),
+          // No listed count, RSVPs read: the stored rows.
+          event('2', { hostIds: ['111'], yesCount: null }),
+          // No listed count and never read: unknown.
+          event('3', { hostIds: ['111'], yesCount: null }),
+          event('4', { hostIds: ['222'] }),
+        ],
+        at,
+      );
+      await snapshot.replaceRsvps(
+        '2',
+        [
+          { memberId: '501', status: 'YES' },
+          { memberId: '502', status: 'ATTENDED' },
+          { memberId: '503', status: 'WAITLIST' },
+        ],
+        at,
+      );
+      const wrapped = await snapshot.hostedEvents('111');
+      const profile = await snapshot.profileEvents('111');
+      expect(wrapped.map((e) => [e.id, e.attendance])).toEqual([
+        ['1', 9],
+        ['2', 2],
+        ['3', 0],
+      ]);
+      expect(profile.map((e) => [e.id, e.attendance])).toEqual([
+        ['1', 9],
+        ['2', 2],
+        ['3', undefined],
+      ]);
+      expect(profile.map(({ attendance: _a, ...rest }) => rest)).toEqual(
+        wrapped.map(({ attendance: _a, ...rest }) => rest),
+      );
     });
   },
 );

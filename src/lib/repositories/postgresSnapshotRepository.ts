@@ -185,6 +185,15 @@ const NEEDS_RSVPS = `deleted_at IS NULL AND status = 'PAST' AND date_time <= $2
        OR rsvps_fetched_at < date_time
        OR (date_time > $2 - make_interval(days => $3) AND rsvps_fetched_at < $1))`;
 
+/** A hosted event on the host profile; attendance undefined where unknown. */
+export interface ProfileEvent {
+  id: string;
+  title: string;
+  dateTime: string;
+  eventUrl: string;
+  attendance: number | undefined;
+}
+
 interface EventRow {
   event_id: string;
   title: string;
@@ -391,8 +400,9 @@ export class PostgresSnapshotRepository
   /**
    * When the latest finished run's listing ended, if that listing was
    * complete: not short, and the run carries no error. Undefined otherwise
-   * (and before any run), so nothing permanent is decided off a partial
-   * listing. Per-event RSVP failures (`failed`) do not count against it:
+   * (and before any run, or while the open run's listing came back short:
+   * the stored events already reflect it), so nothing permanent is decided
+   * off a partial listing. Per-event RSVP failures (`failed`) do not count against it:
    * they never change an event's hosts.
    */
   async lastCompleteListing(): Promise<Date | undefined> {
@@ -400,12 +410,19 @@ export class PostgresSnapshotRepository
       listed_at: Date | null;
       listing_short: boolean;
       last_error: string | null;
+      open_short: boolean;
     }>(
-      `SELECT listed_at, listing_short, last_error FROM meetup_snapshot_runs
+      `SELECT listed_at, listing_short, last_error,
+              EXISTS (SELECT 1 FROM meetup_snapshot_runs o
+                       WHERE o.finished_at IS NULL AND o.listing_short) AS open_short
+         FROM meetup_snapshot_runs
         WHERE finished_at IS NOT NULL ORDER BY finished_at DESC, id DESC LIMIT 1`,
     );
     const row = result.rows[0];
-    return row && !row.listing_short && row.last_error === null
+    return row &&
+      !row.listing_short &&
+      row.last_error === null &&
+      !row.open_short
       ? (row.listed_at ?? undefined)
       : undefined;
   }
@@ -565,28 +582,64 @@ export class PostgresSnapshotRepository
     // Attendance is Meetup's YES + ATTENDED total from the listing, the same
     // number the token path reads (its totalCount counts the RSVPs the
     // organizer view hides); the stored rows only when the listing had none.
+    return (await this.hostedRows(meetupId)).map(
+      ({ attendance, stored, read: _read, ...event }) => ({
+        ...event,
+        attendance: attendance ?? stored ?? 0,
+      }),
+    );
+  }
+
+  /**
+   * The host profile's view of the same events: attendance is undefined when
+   * there is no data for it (no listing count and the RSVPs never read),
+   * rather than 0.
+   */
+  async profileEvents(meetupId: string): Promise<ProfileEvent[]> {
+    return (await this.hostedRows(meetupId)).map(
+      ({ attendance, stored, read, ...event }) => ({
+        ...event,
+        attendance: attendance ?? (read ? (stored ?? 0) : undefined),
+      }),
+    );
+  }
+
+  /**
+   * One host's live past events. `host_ids @> ARRAY[$1]` can use the GIN
+   * index (`$1 = ANY(...)` cannot); the stored RSVP count is only computed
+   * where the listing had no count.
+   */
+  private async hostedRows(meetupId: string): Promise<
+    (Omit<ProfileEvent, 'attendance'> & {
+      attendance: number | null;
+      stored: number | null;
+      read: boolean;
+    })[]
+  > {
     const result = await this.pool.query<
-      EventRow & { stored: number; yes_count: number | null; read: boolean }
+      EventRow & {
+        stored: number | null;
+        yes_count: number | null;
+        read: boolean;
+      }
     >(
       `SELECT e.event_id, e.title, e.date_time, e.event_url, e.status, e.yes_count,
               e.rsvps_fetched_at IS NOT NULL AS read,
-              (SELECT count(*)::int FROM meetup_event_rsvps r
-                WHERE r.event_id = e.event_id AND r.status IN ('YES', 'ATTENDED')) AS stored
+              CASE WHEN e.yes_count IS NULL THEN
+                (SELECT count(*)::int FROM meetup_event_rsvps r
+                  WHERE r.event_id = e.event_id AND r.status IN ('YES', 'ATTENDED'))
+              END AS stored
          FROM meetup_events e
-        WHERE $1 = ANY(e.host_ids) AND ${LIVE_PAST}
+        WHERE e.host_ids @> ARRAY[$1]::text[] AND ${LIVE_PAST}
         ORDER BY e.date_time, e.event_id`,
       [meetupId],
     );
-    return result.rows.map((row) => {
-      const { id, title, dateTime, eventUrl } = summary(row);
-      return {
-        id,
-        title,
-        dateTime,
-        eventUrl,
-        attendance: row.yes_count ?? row.stored,
-      };
-    });
+    return result.rows.map((row) => ({
+      ...summary(row),
+      attendance: row.yes_count,
+      stored: row.stored,
+      read: row.read,
+    }));
   }
 
   async attendeesOf(eventIds: string[]): Promise<Record<string, string[]>> {
