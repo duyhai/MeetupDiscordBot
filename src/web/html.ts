@@ -8,6 +8,9 @@
  * and a module-private WeakSet records every minted value, so a look-alike
  * object is rendered as text at runtime.
  */
+
+import { meetupPhotoUrl } from '../lib/helpers/meetupPhotoUrl.js';
+
 declare const htmlBrand: unique symbol;
 declare const urlBrand: unique symbol;
 
@@ -980,31 +983,14 @@ const EXACT_LINK_TARGETS = [
   { host: 'discord.com', pathname: '/oauth2/authorize' },
 ];
 
-/** Meetup's event photo host: the one image host the host site's CSP admits. */
-const MEETUP_PHOTO_HOST = 'secure.meetupstatic.com';
-
 /**
- * An image src from Meetup data: plain https on Meetup's photo host and
- * nothing else (no port, no credentials); else undefined, and the caller
- * shows a placeholder.
+ * An image src from Meetup data: meetupPhotoUrl's rule (plain https on
+ * Meetup's photo host, no port, no credentials); else undefined, and the
+ * caller shows a placeholder.
  */
 export function meetupPhotoSrc(url: unknown): SafeUrl | undefined {
-  if (typeof url !== 'string') {
-    return undefined;
-  }
-  let parsed: URL;
-  try {
-    parsed = new URL(url);
-  } catch {
-    return undefined;
-  }
-  return parsed.protocol === 'https:' &&
-    parsed.hostname === MEETUP_PHOTO_HOST &&
-    !parsed.port &&
-    !parsed.username &&
-    !parsed.password
-    ? mintUrl(parsed.href)
-    : undefined;
+  const href = meetupPhotoUrl(url);
+  return href === undefined ? undefined : mintUrl(href);
 }
 
 /**

@@ -629,7 +629,7 @@ describe('host history timeline', () => {
     expect(res.text).not.toContain('E2024-0');
     // The rail: loaded years jump in page, older ones open the list there.
     expect(res.text).toMatch(
-      /<a href="#y2026" data-year="2026" aria-current="true"\s*>2026<\/a/,
+      /<a href="#y2026" data-year="2026" aria-current="location"\s*>2026<\/a/,
     );
     expect(res.text).toContain('<a href="#y2025" data-year="2025">2025</a>');
     expect(res.text).toContain(
@@ -690,6 +690,82 @@ describe('host history timeline', () => {
     const scripts = res.text.match(/<script nonce="[^"]+">/g) ?? [];
     expect(scripts.length).toBeGreaterThanOrEqual(3);
     expect(res.text).toContain('window.__hostTimeline');
+  });
+});
+
+describe('host history timeline edges', () => {
+  it('files events by Pacific day: New Year’s Eve evening is the old year, a month’s last evening its month', async () => {
+    const req = await pagesApp(async () => [
+      // 2026-01-01T03:00Z is 7 PM on Dec 31, 2025 in Seattle.
+      ev('1', '2026-01-01T03:00:00Z', 'NYE party'),
+      // 2025-12-01T06:30Z is 10:30 PM on Nov 30, 2025.
+      ev('2', '2025-12-01T06:30:00Z', 'Late November'),
+      ev('3', '2026-03-01T19:00:00-08:00', 'Spring'),
+    ]);
+    const sid = await signInWithDiscord(req);
+    const res = await req.get('/host/history').set('Cookie', sid);
+    const at2025 = res.text.indexOf(
+      '<section class="tl-year" data-year="2025"',
+    );
+    const y2025 = res.text.slice(at2025);
+    const y2026 = res.text.slice(
+      res.text.indexOf('<section class="tl-year" data-year="2026"'),
+      at2025,
+    );
+    expect(y2025).toContain('NYE party');
+    expect(y2026).not.toContain('NYE party');
+    expect(y2025).toMatch(/December\s*<span class="tl-count"\s*>1 event/);
+    expect(y2025).toMatch(/November\s*<span class="tl-count"\s*>1 event/);
+    expect(y2025).toContain('<span class="when">Wed, Dec 31</span>');
+    expect(y2025).toContain('<span class="when">Sun, Nov 30</span>');
+  });
+
+  it('?before= that leads nowhere still has a way back, and one past the newest year is the whole list', async () => {
+    const req = await pagesApp(async () => [
+      ev('1', '2026-10-01T19:00:00-07:00', 'New one'),
+      ev('2', '2024-10-01T19:00:00-07:00', 'Old one'),
+    ]);
+    const sid = await signInWithDiscord(req);
+    const get = (q: string) =>
+      req.get(`/host/history?before=${q}`).set('Cookie', sid);
+    const [early, zero, future, gap, junk] = await Promise.all([
+      get('2024'),
+      get('0001'),
+      get('2031'),
+      get('2026'),
+      get('20x5'),
+    ]);
+    for (const dead of [early, zero]) {
+      expect(dead.status).toBe(200);
+      expect(dead.text).toContain('No older events.');
+      expect(dead.text).toMatch(
+        /href="\/host\/history\?year=2026"\s*>↑ Newer events/,
+      );
+    }
+    for (const whole of [future, junk]) {
+      expect(whole.text).toContain('New one');
+      expect(whole.text).not.toContain('Newer events');
+    }
+    // A year with no events (2025) starts at the next one that has some.
+    const gapList = gap.text.slice(gap.text.indexOf('data-timeline>'));
+    expect(gapList).toContain('Old one');
+    expect(gapList).not.toContain('New one');
+    expect(gap.text).toContain('Newer events');
+  });
+
+  it('the Older label names the next year that has events, across a gap', async () => {
+    const many = Array.from({ length: 31 }, (_, i) =>
+      ev(`n${i}`, `2026-0${1 + (i % 9)}-1${i % 9}T19:00:00-07:00`, `N${i}`),
+    );
+    const req = await pagesApp(async () => [
+      ...many,
+      ev('o', '2021-05-01T19:00:00-07:00', 'Long ago'),
+    ]);
+    const sid = await signInWithDiscord(req);
+    const res = await req.get('/host/history').set('Cookie', sid);
+    expect(res.text).toMatch(
+      /href="\/host\/history\?year=2026&amp;before=2026"\s*>Older events \(2021 and before\)/,
+    );
   });
 });
 
@@ -756,6 +832,18 @@ describe('host calendar thumbnails', () => {
           ...ev('4', '2026-11-12T20:00:00-08:00', 'Plain http'),
           photoUrl: 'http://secure.meetupstatic.com/x.jpg',
         },
+        {
+          ...ev('5', '2026-11-13T20:00:00-08:00', 'Look-alike'),
+          photoUrl: 'https://secure.meetupstatic.com.evil.example/x.jpg',
+        },
+        {
+          ...ev('6', '2026-11-14T20:00:00-08:00', 'Userinfo'),
+          photoUrl: 'https://me@secure.meetupstatic.com/x.jpg',
+        },
+        {
+          ...ev('7', '2026-11-15T20:00:00-08:00', 'Port'),
+          photoUrl: 'https://secure.meetupstatic.com:444/x.jpg',
+        },
       ];
     });
     const sid = await signInWithDiscord(req);
@@ -768,13 +856,17 @@ describe('host calendar thumbnails', () => {
       res.text.match(
         /<span class="ev-thumb ev-thumb-none" aria-hidden="true"><\/span>/g,
       ),
-    ).toHaveLength(3);
+    ).toHaveLength(6);
     expect(res.text).not.toContain('evil.example');
+    expect(res.text).not.toContain('me@secure');
+    expect(res.text).not.toContain(':444/');
     expect(res.text).not.toContain('http://secure.meetupstatic.com');
     // The host CSP admits that image host and same-origin fetch, nothing more.
     const csp = res.headers['content-security-policy'];
     expect(csp).toContain("img-src 'self' https://secure.meetupstatic.com;");
     expect(csp).toContain("connect-src 'self';");
     expect(csp).toContain("default-src 'none'");
+    expect(csp).toContain("script-src 'nonce-");
+    expect(csp).not.toMatch(/img-src[^;]*\*/);
   });
 });

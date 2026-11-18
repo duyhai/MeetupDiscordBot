@@ -5,7 +5,6 @@ import {
   attendanceUrl,
   groupCalendar,
   hostedEvents,
-  eventPhotoThumb,
   toHostEvent,
 } from '../../../src/lib/hosts/hostEvents.js';
 
@@ -159,12 +158,15 @@ describe('toHostEvent', () => {
       { thumbUrl: 'http://secure.meetupstatic.com/x.jpg' },
       { thumbUrl: 'https://evil.example/x.jpg' },
       { thumbUrl: 'javascript:alert(1)' },
+      { thumbUrl: 'https://secure.meetupstatic.com.evil.example/x.jpg' },
+      { thumbUrl: 'https://u:p@secure.meetupstatic.com/x.jpg' },
+      { thumbUrl: 'https://secure.meetupstatic.com:444/x.jpg' },
+      {},
     ]) {
       const event = toHostEvent({ ...base, featuredEventPhoto });
       expect(event.photoUrl).toBeUndefined();
       expect('photoUrl' in event).toBe(false);
     }
-    expect(eventPhotoThumb(thumb)).toBe(thumb);
   });
 });
 

@@ -847,6 +847,8 @@ export interface TimelineChunk {
   events: HostEvent[];
   /** `?before=` for the next chunk; undefined when nothing older is left. */
   nextBefore: number | undefined;
+  /** The newest year the next chunk starts with (its label). */
+  nextYear: number | undefined;
 }
 
 /**
@@ -881,6 +883,7 @@ export function timelineChunk(
     events: events.filter((e) => inChunk.has(yearOf(e))),
     nextBefore:
       candidates.length > years.length ? years[years.length - 1] : undefined,
+    nextYear: candidates[years.length],
   };
 }
 
@@ -955,7 +958,7 @@ function timelineYear(year: number, events: HostEvent[]): SafeHtml {
  * The year rail: every year with a listed event. A loaded year is an
  * in-page link; an older one opens the list from that year
  * (`?before=year+1`). TIMELINE_SCRIPT loads the years in between instead,
- * and marks the year being read (aria-current).
+ * and marks the year being read (aria-current="location").
  */
 function yearRail(
   years: number[],
@@ -972,7 +975,7 @@ function yearRail(
     // aria-current is a literal: the first loaded year starts current.
     return y === years.find((x) => loaded.has(x))
       ? html`<li>
-          <a href="${href}" data-year="${y}" aria-current="true"
+          <a href="${href}" data-year="${y}" aria-current="location"
             >${String(y)}</a
           >
         </li>`
@@ -1044,23 +1047,31 @@ function historyBody(
             <a href="${historyLink({ type: selected, year, all: true })}"
               >Show excluded</a
             >`;
+  // A ?before= past the newest year is the whole list: no Newer link.
+  const shownYears = timelineYears(shown);
+  const from =
+    before !== undefined && shownYears.length > 0 && before <= shownYears[0]
+      ? before
+      : undefined;
   // A day filter lists that day alone; otherwise one chunk of the timeline.
-  const chunk = day
+  const chunk: TimelineChunk = day
     ? {
         years: timelineYears(byDay.get(day) ?? []),
         events: byDay.get(day) ?? [],
         nextBefore: undefined,
+        nextYear: undefined,
       }
-    : timelineChunk(shown, before);
-  const allYears = day ? chunk.years : timelineYears(shown);
+    : timelineChunk(shown, from);
+  const allYears = day ? chunk.years : shownYears;
   const yearSections = chunk.years.map((y) =>
     timelineYear(
       y,
       chunk.events.filter((e) => yearOf(e) === y),
     ),
   );
+  // Whenever the list starts part-way, there is a way back to the top.
   const newer =
-    !day && before !== undefined && allYears.some((y) => y >= before)
+    !day && from !== undefined
       ? html`<p class="tl-newer">
           <a class="button ghost" href="${listLink(undefined)}"
             >↑ Newer events</a
@@ -1068,18 +1079,19 @@ function historyBody(
         </p>`
       : '';
   const more =
-    chunk.nextBefore === undefined
+    chunk.nextBefore === undefined || chunk.nextYear === undefined
       ? ''
       : html`<p class="tl-more" data-timeline-more>
           <a class="button ghost" href="${listLink(chunk.nextBefore)}"
-            >Older events (${String(chunk.nextBefore - 1)} and before)</a
+            >Older events (${String(chunk.nextYear)} and before)</a
           >
         </p>`;
   const list =
     chunk.events.length === 0
       ? html`<p class="muted">
-          ${day ? `No events on ${dayLabel(day)}.` : 'No events to show.'}
-        </p>`
+            ${day ? `No events on ${dayLabel(day)}.` : 'No older events.'}
+          </p>
+          ${newer}`
       : html`<div class="timeline-wrap">
           ${
             allYears.length > 1

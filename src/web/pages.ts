@@ -441,17 +441,21 @@ nav.year-rail li{flex:none}
 nav.year-rail a{display:inline-flex;align-items:center;min-height:36px;padding:0 var(--s3);border-radius:999px;
   color:var(--muted);font-size:var(--t-sm);font-weight:600;text-decoration:none;font-variant-numeric:tabular-nums}
 nav.year-rail a:hover{color:var(--fg);background:var(--raised)}
-nav.year-rail a[aria-current="true"]{color:var(--accent-ink);background:var(--accent-soft)}
+nav.year-rail a[aria-current]{color:var(--accent-ink);background:var(--accent-soft)}
 @media (min-width:1024px){.timeline-wrap{grid-template-columns:minmax(0,1fr) 5rem;gap:var(--s4)}
   .timeline{grid-column:1;grid-row:1}
   nav.year-rail{grid-column:2;grid-row:1;position:sticky;top:var(--s4);align-self:start;
     max-height:calc(100vh - 2 * var(--s4));overflow-y:auto}
   nav.year-rail ol{flex-direction:column;overflow-x:visible;padding:0 0 0 var(--s2);border-left:1px solid var(--line)}}
-.tl-year{--tl-year-h:3rem;margin:0 0 var(--s4)}
+:root{--tl-year-h:3rem;--tl-month-h:2.25rem}
+/* Focus moving up (Shift+Tab) or a #y2026 landing never ends under the two sticky headings (WCAG 2.4.11). */
+html:has(div.timeline){scroll-padding-top:calc(var(--tl-year-h) + var(--tl-month-h) + var(--s2))}
+.tl-year{margin:0 0 var(--s4)}
 .tl-target{display:block;scroll-margin-top:0}
 h3.tl-year-head{position:sticky;top:0;z-index:3;display:flex;align-items:center;height:var(--tl-year-h);margin:0;
   background:var(--surface);font-size:var(--t-xl);font-variant-numeric:tabular-nums}
-h4.tl-month-head{position:sticky;top:var(--tl-year-h);z-index:2;display:flex;align-items:baseline;gap:var(--s2);
+h4.tl-month-head{position:sticky;top:var(--tl-year-h);min-height:var(--tl-month-h);box-sizing:border-box;
+  z-index:2;display:flex;align-items:baseline;gap:var(--s2);
   margin:0;padding:var(--s1) 0;background:var(--surface);border-bottom:1px solid var(--line);font-size:var(--t-base)}
 .tl-count{font-size:var(--t-sm);font-weight:400;color:var(--muted)}
 .tl-month{margin:0 0 var(--s3)}

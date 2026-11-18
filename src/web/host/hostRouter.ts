@@ -23,7 +23,7 @@ import { DuplicateMeetupAccountError } from '../../lib/helpers/memberLink.js';
 import { NonMemberError } from '../../lib/helpers/onboardUser.js';
 import { VerificationSummary } from '../../lib/helpers/verificationSummary.js';
 import { WebLinkStore, linkDiscordFromWeb } from '../../lib/hosts/webLink.js';
-import { MEETUP_PHOTO_HOST } from '../../lib/hosts/hostEvents.js';
+import { MEETUP_PHOTO_HOST } from '../../lib/helpers/meetupPhotoUrl.js';
 import {
   clearCookie,
   parseCookieValues,
