@@ -234,10 +234,55 @@ function resultCode(result: WorkspaceActionResult): WorkspaceResultCode {
 export const ROW_PAGE_DEADLINE_MS = 2_000;
 
 /**
- * The month URL that lands on one card: its current page (listRows' order,
- * PAGE_SIZE a page), `row` to open its section and mark it, and #acted.
- * Without the position (unknown, or the read failed or was slow) the page
- * is left out: page 1, as before. Never rejects.
+ * Which page of its month a card is on now (listRows' order, PAGE_SIZE a
+ * page): 'unknown' when the month has no such row, 'failed' when the read
+ * failed or ran past ROW_PAGE_DEADLINE_MS. Never rejects.
+ */
+export async function actedCardPage(
+  workspace: DashboardPageDeps['workspace'],
+  period: Period,
+  rowId: number,
+): Promise<number | 'unknown' | 'failed'> {
+  try {
+    const pos = await withDeadline(ROW_PAGE_DEADLINE_MS, async () =>
+      (await workspace()).rowPosition(period, rowId),
+    );
+    if (pos === undefined) {
+      return 'unknown';
+    }
+    return Number.isSafeInteger(pos) && pos > 0
+      ? Math.ceil(pos / PAGE_SIZE)
+      : 'failed';
+  } catch (error: unknown) {
+    logger.warn(
+      `Workspace card position failed: ${error instanceof Error ? error.name : 'Error'}`,
+    );
+    return 'failed';
+  }
+}
+
+/** The month URL for one card on a known page: `row` opens its section and marks it, and #acted. */
+export function actedCardUrl(
+  period: Period,
+  rowId: number,
+  page: number,
+  result?: unknown,
+): string {
+  const query = [
+    isResultCode(result) ? `result=${result}` : '',
+    page > 1 ? `page=${page}` : '',
+    `row=${rowId}`,
+  ]
+    .filter(Boolean)
+    .join('&');
+  return `${monthPath(DASHBOARD_PATHS.workspaceMonth, period)}?${query}#acted`;
+}
+
+/**
+ * The month URL that lands on one card: its current page, `row` and
+ * #acted. Without the position (unknown, or the read failed or was slow)
+ * the page is left out; the month page then looks the card up again and
+ * sends the reader on to its page (registerWorkspaceRoutes). Never rejects.
  */
 export async function actedCardPath(
   workspace: DashboardPageDeps['workspace'],
@@ -245,27 +290,13 @@ export async function actedCardPath(
   rowId: number,
   result?: WorkspaceResultCode,
 ): Promise<string> {
-  let page = 1;
-  try {
-    const pos = await withDeadline(ROW_PAGE_DEADLINE_MS, async () =>
-      (await workspace()).rowPosition(period, rowId),
-    );
-    if (pos !== undefined && Number.isSafeInteger(pos) && pos > 0) {
-      page = Math.ceil(pos / PAGE_SIZE);
-    }
-  } catch (error: unknown) {
-    logger.warn(
-      `Workspace card position failed: ${error instanceof Error ? error.name : 'Error'}`,
-    );
-  }
-  const query = [
-    result === undefined ? '' : `result=${result}`,
-    page > 1 ? `page=${page}` : '',
-    `row=${rowId}`,
-  ]
-    .filter(Boolean)
-    .join('&');
-  return `${monthPath(DASHBOARD_PATHS.workspaceMonth, period)}?${query}#acted`;
+  const page = await actedCardPage(workspace, period, rowId);
+  return actedCardUrl(
+    period,
+    rowId,
+    typeof page === 'number' ? page : 1,
+    result,
+  );
 }
 
 /** The 409 page: Nothing saved, and a link back to that card where it is now. No result notice. */

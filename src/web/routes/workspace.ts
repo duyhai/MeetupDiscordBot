@@ -90,6 +90,9 @@ import { confirmModal, modal } from '../ui/modal.js';
 import {
   LeadershipAnswer,
   WORKSPACE_RESULT_MESSAGES,
+  actedCardPage,
+  actedCardPath,
+  actedCardUrl,
   leadershipOf,
   workspaceResultNotice,
 } from './workspaceActions.js';
@@ -585,7 +588,9 @@ function recordSection(
     </form>
     <p class="muted">The length and fee are checked again when you record.</p>
     <p>
-      <a href="${localUrl(workspaceRowPath(row.period, row.id, 'suspend'))}"
+      <a
+        href="${localUrl(workspaceRowPath(row.period, row.id, 'suspend'))}"
+        data-keep-place-link
         >Use a different date…</a
       >
     </p>
@@ -831,11 +836,20 @@ function cardHtml(v: CardView): SafeHtml {
   ${v.banned ? html`<span class="badge attn">Banned</span>` : ''}`;
   // The id is a literal (html.ts never takes one interpolated): only the
   // card the redirect named carries it, so #acted lands there.
-  const heading = v.acted
-    ? html`<h2 id="acted" class="ws-acted">${headingBody}</h2>`
-    : html`<h2>${headingBody}</h2>`;
+  // The landing focuses it (tabindex -1); with a result notice, the
+  // heading names it as its description, so a screen reader says what
+  // happened along with whose card it is.
+  // prettier-ignore
+  const heading = !v.acted
+    ? html`<h2>${headingBody}</h2>`
+    : v.notice
+      ? html`<h2 id="acted" class="ws-acted" tabindex="-1" aria-describedby="acted-result">${headingBody}</h2>`
+      : html`<h2 id="acted" class="ws-acted" tabindex="-1">${headingBody}</h2>`;
   const history = memberHistoryLink(row.memberId);
-  return html`<div class="card ws-card">
+  // data-keep-place: a form sent from this card saves where it was on
+  // screen, for this row, and the landing on #acted puts it back there
+  // (KIT_SCRIPT).
+  return html`<div class="card ws-card" data-keep-place="${row.id}">
     ${heading}
     ${
       history
@@ -844,7 +858,7 @@ function cardHtml(v: CardView): SafeHtml {
           </p>`
         : ''
     }
-    ${v.acted ? v.notice : ''}
+    ${v.acted && v.notice ? html`<div id="acted-result">${v.notice}</div>` : ''}
     ${
       row.inLatestSnapshot
         ? ''
@@ -900,6 +914,7 @@ function cardHtml(v: CardView): SafeHtml {
           ? html`<a
               class="button"
               href="${localUrl(workspaceRowPath(row.period, row.id, 'suspend'))}"
+              data-keep-place-link
               >Record suspension…</a
             >`
           : ''
@@ -1198,6 +1213,26 @@ export function registerWorkspaceRoutes(
     }
     const page = parsePage(req.query.page);
     const offset = (page - 1) * PAGE_SIZE;
+    // The card the last action was on (`?row=`). The POST's redirect names
+    // its page when it can; this looks again, so a card on another page (a
+    // slow position read, a link without `page`, a card that moved) is
+    // followed there instead of landing on the top of this one.
+    const actedId = parseRowId(req.query.row);
+    const actedAt =
+      actedId === undefined
+        ? 'unknown'
+        : await actedCardPage(deps.workspace, period, actedId);
+    if (
+      actedId !== undefined &&
+      typeof actedAt === 'number' &&
+      actedAt !== page
+    ) {
+      res.redirect(
+        303,
+        actedCardUrl(period, actedId, actedAt, req.query.result),
+      );
+      return;
+    }
     const { session } = dashboardLocals(res);
     // In parallel with the reads; it only decides what the cards show, so
     // a cached answer (up to 60 s) is enough here. The confirm page and
@@ -1358,7 +1393,13 @@ export function registerWorkspaceRoutes(
           </p>`
         : '';
     const names = await staffNames;
-    const actedId = parseRowId(req.query.row);
+    // Looked up and still not here (the read failed, or the card moved
+    // between the look-up and the list): say so at the top, with a link
+    // that looks again, rather than leave the reader at the top unaware.
+    const actedLost =
+      actedId !== undefined &&
+      actedAt !== 'unknown' &&
+      !rows.some((r) => r.id === actedId);
     const cardOf = (row: WorkspaceRow) =>
       cardHtml({
         row,
@@ -1385,6 +1426,19 @@ export function registerWorkspaceRoutes(
       body: html`<div class="card">
           <h1>No-show workspace — ${label}</h1>
           ${workspaceResultNotice(req.query.result)}
+          ${
+            actedLost
+              ? html`<p class="note attn">
+                  The card you just acted on is not on this page.
+                  <a
+                    href="${localUrl(
+                      actedCardUrl(period, actedId, page, req.query.result),
+                    )}"
+                    >Find it</a
+                  >
+                </p>`
+              : ''
+          }
           ${refreshNotice(req.query.refresh)} ${leadershipNote(answer)}
           ${
             banStatusKnown
@@ -1449,12 +1503,16 @@ export function registerWorkspaceRoutes(
       notFound(res);
       return;
     }
-    const back = localUrl(monthPath(DASHBOARD_PATHS.workspaceMonth, period));
+    // Back to this card where it is now (its page, section open, #acted),
+    // not the top of the month page. data-keep-place-for on each body below
+    // keeps the place saved for this row while the page is read
+    // (KIT_SCRIPT), so Cancel or recording puts the card back there.
+    const back = localUrl(await actedCardPath(deps.workspace, period, row.id));
     if (banned) {
       // The POST refuses too (applyAction, after the member lock).
       dashboardPage(res, {
         title: 'Record suspension',
-        body: html`<div class="card">
+        body: html`<div class="card" data-keep-place-for="${row.id}">
           <h1>
             Record suspension —
             ${memberLink({ id: row.memberId, name: row.memberName })}
@@ -1468,7 +1526,7 @@ export function registerWorkspaceRoutes(
     if (!allowedActions(row).includes('record_suspension')) {
       dashboardPage(res, {
         title: 'Record suspension',
-        body: html`<div class="card">
+        body: html`<div class="card" data-keep-place-for="${row.id}">
           <h1>
             Record suspension —
             ${memberLink({ id: row.memberId, name: row.memberName })}
@@ -1504,7 +1562,7 @@ export function registerWorkspaceRoutes(
     if (min > today) {
       dashboardPage(res, {
         title: 'Record suspension',
-        body: html`<div class="card">
+        body: html`<div class="card" data-keep-place-for="${row.id}">
           <h1>
             Record suspension —
             ${memberLink({ id: row.memberId, name: row.memberName })}
@@ -1523,7 +1581,7 @@ export function registerWorkspaceRoutes(
     const confirmUrl = localUrl(workspaceRowPath(period, row.id, 'suspend'));
     dashboardPage(res, {
       title: 'Record suspension',
-      body: html`<div class="card">
+      body: html`<div class="card" data-keep-place-for="${row.id}">
         <h1>
           Record suspension —
           ${memberLink({ id: row.memberId, name: row.memberName })}

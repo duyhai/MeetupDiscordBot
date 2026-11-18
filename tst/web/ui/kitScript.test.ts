@@ -39,6 +39,12 @@ function harness(options: {
   clipboard?: { writeText: Write } | undefined;
   textarea?: boolean;
   byId?: string;
+  /** The workspace card the form sits in ([data-keep-place]), and the window it is in. */
+  card?: {
+    getBoundingClientRect(): { top: number };
+    getAttribute(name: string): string | null;
+  };
+  window?: unknown;
 }) {
   const submit = vi.fn();
   const select = vi.fn();
@@ -56,7 +62,16 @@ function harness(options: {
       ? 'Copy warning'
       : 'Copy suspension message',
     disabled: false,
-    form: options.thenSubmit ? { submit } : null,
+    form: options.thenSubmit
+      ? {
+          submit,
+          closest(selector: string) {
+            return selector === '[data-keep-place]'
+              ? (options.card ?? null)
+              : null;
+          },
+        }
+      : null,
     closest(selector: string) {
       return selector === '[data-copy-box]' && !options.byId ? box : null;
     },
@@ -73,6 +88,7 @@ function harness(options: {
     },
   };
   const document = {
+    addEventListener: () => undefined,
     querySelectorAll(selector: string) {
       return selector === 'button[data-copy]' ? [button] : [];
     },
@@ -82,7 +98,7 @@ function harness(options: {
         : null;
     },
   };
-  runKit(document, { clipboard: options.clipboard });
+  runKit(document, { clipboard: options.clipboard }, options.window);
   const click = () => {
     const preventDefault = vi.fn();
     onClick?.({ preventDefault });
@@ -110,6 +126,63 @@ describe('KIT_SCRIPT: copy', () => {
     await settle();
     expect(h.submit).toHaveBeenCalledTimes(1);
     expect(h.button.disabled).toBe(true);
+  });
+
+  it('Copy warning keeps its card’s place before it submits (the landing puts the card back there)', async () => {
+    const order: string[] = [];
+    const setItem = vi.fn((key: string, value: string) => {
+      order.push(`save ${key} ${value}`);
+    });
+    const writeText = vi.fn<Write>(async () => undefined);
+    const h = harness({
+      thenSubmit: true,
+      clipboard: { writeText },
+      card: {
+        getBoundingClientRect: () => ({ top: 412.4 }),
+        getAttribute(name: string) {
+          return name === 'data-keep-place' ? '17' : null;
+        },
+      },
+      window: {
+        addEventListener: () => undefined,
+        location: { pathname: '/dashboard/no-shows/2026-09', hash: '' },
+        sessionStorage: { setItem },
+      },
+    });
+    h.submit.mockImplementation(() => order.push('submit'));
+    vi.spyOn(Date, 'now').mockReturnValue(1_000);
+    h.click();
+    await settle();
+    expect(order).toEqual([
+      'save ui-keep-place {"p":"/dashboard/no-shows/2026-09","r":"17","t":412,"at":1000}',
+      'submit',
+    ]);
+  });
+
+  it('a storage that throws (private mode) still submits', async () => {
+    const writeText = vi.fn<Write>(async () => undefined);
+    const h = harness({
+      thenSubmit: true,
+      clipboard: { writeText },
+      card: {
+        getBoundingClientRect: () => ({ top: 10 }),
+        getAttribute(name: string) {
+          return name === 'data-keep-place' ? '17' : null;
+        },
+      },
+      window: {
+        addEventListener: () => undefined,
+        location: { pathname: '/dashboard/no-shows/2026-09', hash: '' },
+        sessionStorage: {
+          setItem: () => {
+            throw new Error('SecurityError');
+          },
+        },
+      },
+    });
+    h.click();
+    await settle();
+    expect(h.submit).toHaveBeenCalledTimes(1);
   });
 
   it('does not submit when the clipboard write is rejected', async () => {
@@ -325,6 +398,7 @@ function modalHarness(
   };
   const created: ReturnType<typeof element>[] = [];
   const document = {
+    addEventListener: () => undefined,
     querySelectorAll: (selector: string) => {
       return selector === 'details[data-modal]' ? [details] : [];
     },
@@ -459,6 +533,7 @@ function accordionHarness(openIndex?: number) {
     },
   };
   const document = {
+    addEventListener: () => undefined,
     querySelectorAll: (selector: string) => {
       return selector === '[data-accordion]' ? [nav] : [];
     },
