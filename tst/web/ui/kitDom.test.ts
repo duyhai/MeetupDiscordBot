@@ -65,6 +65,7 @@ interface HTMLDialogElement extends El {
 }
 interface Document {
   activeElement: El | null;
+  readyState: string;
   defaultView: Win | null;
   querySelectorAll<T extends El = El>(selector: string): T[];
   getElementById(id: string): El | null;
@@ -73,6 +74,7 @@ interface Document {
 }
 interface Win {
   document: Document;
+  addEventListener(type: string, fn: (value?: unknown) => void): void;
   navigator: object;
   eval(code: string): unknown;
   Event: new (type: string) => object;
@@ -98,7 +100,9 @@ afterEach(() => {
 const OCT_17 = new Date('2026-10-17T16:00:00Z');
 
 /** The September month page with one suspended card, as a Leadership member sees it. */
-async function monthPage(): Promise<string> {
+async function monthPage(
+  path = '/dashboard/no-shows/2026-09',
+): Promise<string> {
   const ws = fakeWorkspace({
     rows: [
       workspaceRow({
@@ -157,16 +161,17 @@ async function monthPage(): Promise<string> {
       }),
   });
   const cookie = await signIn(req);
-  const res = await req
-    .get('/dashboard/no-shows/2026-09')
-    .set('Cookie', cookie);
+  const res = await req.get(path).set('Cookie', cookie);
   expect(res.status).toBe(200);
   return res.text;
 }
 
 /** The page in jsdom (its own scripts never run), with the dialog polyfill and a clipboard. */
-function load(page: string) {
-  const dom = new JSDOM(page, { runScripts: 'outside-only' });
+function load(page: string, url?: string) {
+  const dom = new JSDOM(page, {
+    runScripts: 'outside-only',
+    ...(url === undefined ? {} : { url }),
+  });
   const window = dom.window as Win;
   const proto = window.HTMLDialogElement.prototype as unknown as {
     showModal: () => void;
@@ -497,5 +502,125 @@ describe('KIT_SCRIPT in a real DOM: the nav accordion', () => {
     );
     expect(noShows.open).toBe(false);
     expect(document.activeElement).toBe(noShows.querySelector('summary'));
+  });
+});
+
+describe('KIT_SCRIPT in a real DOM: back on the acted card, where it was', () => {
+  const MONTH = 'http://localhost/dashboard/no-shows/2026-09';
+  const LANDING = `${MONTH}?result=done&row=2#acted`;
+  const KEY = 'ui-keep-place';
+  interface Storage {
+    getItem(key: string): string | null;
+    setItem(key: string, value: string): void;
+  }
+  type Landing = Win & {
+    sessionStorage: Storage;
+    scrollBy: (x: number, y: number) => void;
+  };
+  /** jsdom has no layout: the card says where it is. */
+  const placeCard = (card: El | null, top: number) => {
+    expect(card).not.toBeNull();
+    (
+      card as unknown as { getBoundingClientRect: () => object }
+    ).getBoundingClientRect = () => ({ top });
+  };
+  /** The page as a browser has it after the redirect: the fragment scroll put the acted card's heading near the top. */
+  async function landed(saved: object | undefined) {
+    const { window, document, run } = load(
+      await monthPage('/dashboard/no-shows/2026-09?result=done&row=2'),
+      LANDING,
+    );
+    const w = window as Landing;
+    if (saved !== undefined) {
+      w.sessionStorage.setItem(KEY, JSON.stringify(saved));
+    }
+    const scrollBy = vi.fn();
+    w.scrollBy = scrollBy;
+    const acted = document.getElementById('acted');
+    placeCard(acted?.closest('[data-keep-place]') ?? null, 16);
+    run();
+    if (document.readyState !== 'complete') {
+      await new Promise((r) => {
+        window.addEventListener('load', r);
+      });
+    }
+    return { w, document, acted, scrollBy };
+  }
+
+  it('puts the card back at the height it was when the action was sent, and focuses its heading', async () => {
+    const { w, document, acted, scrollBy } = await landed({
+      p: '/dashboard/no-shows/2026-09',
+      t: 300,
+      at: Date.now() - 2_000,
+    });
+    // From 16px down the viewport back to 300px: scroll up by 284.
+    expect(scrollBy).toHaveBeenCalledExactlyOnceWith(0, -284);
+    expect(document.activeElement).toBe(acted);
+    expect(acted?.getAttribute('tabindex')).toBe('-1');
+    // Used once: a later visit to the same link is a plain landing.
+    expect(w.sessionStorage.getItem(KEY)).toBeNull();
+  });
+
+  it.each<[string, object | undefined]>([
+    ['nothing saved (no JavaScript before, or a link)', undefined],
+    [
+      'another page’s place',
+      { p: '/dashboard/no-shows/2026-10', t: 300, at: Date.now() },
+    ],
+    [
+      'a place saved over ten minutes ago',
+      {
+        p: '/dashboard/no-shows/2026-09',
+        t: 300,
+        at: Date.now() - 11 * 60_000,
+      },
+    ],
+    [
+      'a place saved in the future (clock change)',
+      { p: '/dashboard/no-shows/2026-09', t: 300, at: Date.now() + 60_000 },
+    ],
+    ['junk', { p: '/dashboard/no-shows/2026-09', t: '300', at: 'x' }],
+  ])(
+    '%s: the browser’s own landing on the card stands, and its heading still takes focus',
+    async (_why, saved) => {
+      const { document, acted, scrollBy } = await landed(saved);
+      expect(scrollBy).not.toHaveBeenCalled();
+      expect(document.activeElement).toBe(acted);
+    },
+  );
+
+  it('a form sent from inside a card saves that card’s place; one outside a card saves nothing', async () => {
+    const { window, document, run } = load(await monthPage(), MONTH);
+    const w = window as Landing;
+    run();
+    const card = document.querySelectorAll('[data-keep-place]')[0];
+    placeCard(card, 412);
+    const inCard = card.querySelector('form');
+    expect(inCard).not.toBeNull();
+    inCard?.dispatchEvent(
+      new (
+        window as unknown as { Event: new (t: string, i: object) => object }
+      ).Event('submit', { bubbles: true, cancelable: true }),
+    );
+    const saved = JSON.parse(w.sessionStorage.getItem(KEY) ?? 'null') as {
+      p: string;
+      t: number;
+      at: number;
+    };
+    expect(saved.p).toBe('/dashboard/no-shows/2026-09');
+    expect(saved.t).toBe(412);
+    expect(Math.abs(saved.at - Date.now())).toBeLessThan(5_000);
+
+    w.sessionStorage.setItem(KEY, 'untouched');
+    const outside = [...document.querySelectorAll('form')].find(
+      (f) => f.closest('[data-keep-place]') === null,
+    );
+    expect(outside).toBeDefined();
+    outside?.dispatchEvent(
+      new (
+        window as unknown as { Event: new (t: string, i: object) => object }
+      ).Event('submit', { bubbles: true, cancelable: true }),
+    );
+    expect(w.sessionStorage.getItem(KEY)).toBe('untouched');
   });
 });

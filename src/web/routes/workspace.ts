@@ -90,6 +90,7 @@ import { confirmModal, modal } from '../ui/modal.js';
 import {
   LeadershipAnswer,
   WORKSPACE_RESULT_MESSAGES,
+  actedCardPath,
   leadershipOf,
   workspaceResultNotice,
 } from './workspaceActions.js';
@@ -585,7 +586,9 @@ function recordSection(
     </form>
     <p class="muted">The length and fee are checked again when you record.</p>
     <p>
-      <a href="${localUrl(workspaceRowPath(row.period, row.id, 'suspend'))}"
+      <a
+        href="${localUrl(workspaceRowPath(row.period, row.id, 'suspend'))}"
+        data-keep-place-link
         >Use a different date…</a
       >
     </p>
@@ -832,10 +835,10 @@ function cardHtml(v: CardView): SafeHtml {
   // The id is a literal (html.ts never takes one interpolated): only the
   // card the redirect named carries it, so #acted lands there.
   const heading = v.acted
-    ? html`<h2 id="acted" class="ws-acted">${headingBody}</h2>`
+    ? html`<h2 id="acted" class="ws-acted" tabindex="-1">${headingBody}</h2>`
     : html`<h2>${headingBody}</h2>`;
   const history = memberHistoryLink(row.memberId);
-  return html`<div class="card ws-card">
+  return html`<div class="card ws-card" data-keep-place>
     ${heading}
     ${
       history
@@ -900,6 +903,7 @@ function cardHtml(v: CardView): SafeHtml {
           ? html`<a
               class="button"
               href="${localUrl(workspaceRowPath(row.period, row.id, 'suspend'))}"
+              data-keep-place-link
               >Record suspension…</a
             >`
           : ''
@@ -1449,7 +1453,9 @@ export function registerWorkspaceRoutes(
       notFound(res);
       return;
     }
-    const back = localUrl(monthPath(DASHBOARD_PATHS.workspaceMonth, period));
+    // Back to this card where it is now (its page, section open, #acted),
+    // not the top of the month page.
+    const back = localUrl(await actedCardPath(deps.workspace, period, row.id));
     if (banned) {
       // The POST refuses too (applyAction, after the member lock).
       dashboardPage(res, {

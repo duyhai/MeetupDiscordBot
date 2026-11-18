@@ -204,7 +204,9 @@ const unescape = (text: string) =>
 /** Each member card's markup, in page order. */
 const cards = (body: string) =>
   body
-    .split('<div class="card ws-card">')
+    // data-keep-place: a form sent from the card saves its place, and the
+    // landing on #acted puts the card back there (KIT_SCRIPT).
+    .split('<div class="card ws-card" data-keep-place>')
     .slice(1)
     .map(
       (card) => card.split(/<nav class="pager" aria-label="Pages">|<script/)[0],
@@ -677,7 +679,7 @@ describe('GET /dashboard/no-shows/:period (month cards)', () => {
           'The length and fee are checked again when you record.',
         );
         expect(d).toContain(
-          '<a href="/dashboard/no-shows/2026-09/rows/2/suspend">Use a different date…</a>',
+          '<a href="/dashboard/no-shows/2026-09/rows/2/suspend" data-keep-place-link>Use a different date…</a>',
         );
         // The card itself no longer carries the separate link.
         expect(closed(suspension)).not.toContain('Record suspension…');
@@ -746,7 +748,7 @@ describe('GET /dashboard/no-shows/:period (month cards)', () => {
         });
         const [card] = cards((await get(MONTH)).text);
         expect(closed(card)).toContain(
-          '<a class="button" href="/dashboard/no-shows/2026-09/rows/2/suspend">Record suspension…</a>',
+          '<a class="button" href="/dashboard/no-shows/2026-09/rows/2/suspend" data-keep-place-link>Record suspension…</a>',
         );
       });
     });
@@ -1154,7 +1156,7 @@ describe('GET /dashboard/no-shows/:period (month cards)', () => {
     // Recording sits in the Suspend member pop-up.
     expect(open).toContain('value="record_suspension"');
     expect(open).toContain(
-      '<a href="/dashboard/no-shows/2026-09/rows/2/suspend">Use a different date…</a>',
+      '<a href="/dashboard/no-shows/2026-09/rows/2/suspend" data-keep-place-link>Use a different date…</a>',
     );
     expect(suspended).toContain('value="void"');
     expect(suspended).toContain('maxlength="500"');
@@ -1502,7 +1504,7 @@ describe('month page sections, summary and position (Hai, 2026-11-17)', () => {
     expect(words(summary)).toBe('To do 1 On hold 1 Done 2');
     // Above the cards.
     expect(res.text.indexOf('<dl class="stats ws-summary">')).toBeLessThan(
-      res.text.indexOf('<div class="card ws-card">'),
+      res.text.indexOf('<div class="card ws-card" data-keep-place>'),
     );
   });
 
@@ -1517,6 +1519,10 @@ describe('month page sections, summary and position (Hai, 2026-11-17)', () => {
     const { get } = await setup({ seed: seed(rowsInEveryGroup()) });
     const res = await get(`${MONTH}?result=done&row=4`);
     expect(res.text.match(/id="acted"/g)).toHaveLength(1);
+    // Focusable by script only: the landing puts keyboard focus on it.
+    expect(res.text).toContain(
+      '<h2 id="acted" class="ws-acted" tabindex="-1">',
+    );
     const acted = cards(res.text).find((c) => c.includes('id="acted"')) ?? '';
     expect(acted).toContain('/rows/4"');
     // The result notice again, on the card the reader lands on.
@@ -1766,7 +1772,9 @@ describe('banned members in the workspace', () => {
     expect(words(res.text)).toContain('This member is banned.');
     expect(res.text).not.toContain('value="record_suspension"');
     expect(res.text).not.toContain('name="date"');
-    expect(res.text).toContain('href="/dashboard/no-shows/2026-09"');
+    expect(res.text).toContain(
+      'href="/dashboard/no-shows/2026-09?row=2#acted">Back to the workspace</a>',
+    );
   });
 });
 
@@ -1847,7 +1855,11 @@ describe('GET /dashboard/no-shows/:period/rows/:rowId/suspend (confirm)', () => 
     expect(res.text).toMatch(confirmForm);
     expect(res.text).toContain(`<bdi>${RTL}</bdi>`);
     expect(res.text).toContain('Member 1');
-    expect(res.text).toContain('href="/dashboard/no-shows/2026-09">Cancel</a>');
+    // Cancel goes back to this card (its section open, #acted on it), not
+    // the top of the month page.
+    expect(res.text).toContain(
+      'href="/dashboard/no-shows/2026-09?row=2#acted">Cancel</a>',
+    );
   });
 
   it('after a pop-up sent across midnight, says the day changed and shows today', async () => {
@@ -2061,7 +2073,7 @@ describe('GET /dashboard/no-shows/:period/rows/:rowId/suspend (confirm)', () => 
         'method="post" action="/dashboard/no-shows/2026-09/rows/2"',
       );
       expect(res.text).toContain(
-        'href="/dashboard/no-shows/2026-09">Back to the workspace</a>',
+        'href="/dashboard/no-shows/2026-09?row=2#acted">Back to the workspace</a>',
       );
     });
 
@@ -2136,6 +2148,18 @@ describe('GET /dashboard/no-shows/:period/rows/:rowId/suspend (confirm)', () => 
       /<p class="note attn">\s*This card cannot be suspended from here/,
     );
     expect(res.text).not.toContain('type="date"');
+    expect(res.text).toContain(
+      'href="/dashboard/no-shows/2026-09?row=1#acted">Back to the workspace</a>',
+    );
+  });
+
+  it('the confirm page links back to its card on the page it is on now', async () => {
+    const { get, ws } = await setup({ leader: true });
+    ws.rowPosition.mockResolvedValueOnce(51);
+    const res = await get(CONFIRM);
+    expect(res.text).toContain(
+      'href="/dashboard/no-shows/2026-09?page=2&amp;row=2#acted">Cancel</a>',
+    );
   });
 
   it('confirm page 404s for an unknown row or a junk row id', async () => {
