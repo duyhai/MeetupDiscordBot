@@ -212,7 +212,7 @@ export function hostRouterFromEnv(
         now: () => new Date(),
         profiles: {
           hostedEvents: async (meetupId) =>
-            (await PostgresSnapshotRepository.instance()).hostedEvents(
+            (await PostgresSnapshotRepository.instance()).profileEvents(
               meetupId,
             ),
           isPromoted: async (meetupId) =>

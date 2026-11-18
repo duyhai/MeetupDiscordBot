@@ -19,8 +19,9 @@ import {
   LeaderboardView,
   streaksFor,
 } from '../../lib/leaderboard/leaderboard.js';
-import { Medal } from '../../lib/leaderboard/standings.js';
-import type { HostedEvent } from '../../lib/wrapped/stats.js';
+import { LeaderboardEvent, Medal } from '../../lib/leaderboard/standings.js';
+import type { ProfileEvent } from '../../lib/repositories/postgresSnapshotRepository.js';
+import { GUEST_HOST_MEETUP_BLACKLIST } from '../../constants.js';
 import { SafeHtml, html, memberText, pageLink } from '../html.js';
 import { eventLink } from '../links.js';
 import { dateLabel, hostPage } from './hostPageKit.js';
@@ -39,8 +40,11 @@ import {
 const logger = new Logger({ name: 'hostDashboard' });
 
 export interface HostProfileDeps {
-  /** The host's live past events with Meetup's YES + ATTENDED count (Wrapped's number). */
-  hostedEvents: (meetupId: string) => Promise<HostedEvent[]>;
+  /**
+   * The host's live past events with Meetup's YES + ATTENDED count
+   * (Wrapped's number), undefined where the snapshot has none.
+   */
+  hostedEvents: (meetupId: string) => Promise<ProfileEvent[]>;
   isPromoted: (meetupId: string) => Promise<boolean>;
 }
 
@@ -65,16 +69,28 @@ const notFoundBody = card(
   </p>`,
 );
 
-function tierBadge(promoted: boolean | undefined): SafeHtml | '' {
-  if (promoted === undefined) {
-    return '';
-  }
-  return promoted
+/**
+ * Community Host for a promoted host, else no tier badge: "not promoted" is
+ * not "Guest Host" (organizers, moderators and past hosts are not promoted
+ * either). Never for an id on the Guest Host blacklist.
+ */
+export function tierBadge(
+  memberId: string,
+  promoted: boolean | undefined,
+): SafeHtml | '' {
+  return promoted === true && !GUEST_HOST_MEETUP_BLACKLIST.includes(memberId)
     ? html`<span class="badge ok">Community Host</span>`
-    : html`<span class="badge neutral">Guest Host</span>`;
+    : '';
 }
 
-function eventsTable(events: HostedEvent[], caption: string): SafeHtml {
+/** Unknown attendance (never read from Meetup) shows as a dash. */
+function attendanceCell(n: number | undefined): SafeHtml {
+  return n === undefined
+    ? html`<span title="No attendance data">–</span>`
+    : html`${n}`;
+}
+
+function eventsTable(events: ProfileEvent[], caption: string): SafeHtml {
   const rows = events.map(
     (e) =>
       html`<tr>
@@ -82,7 +98,7 @@ function eventsTable(events: HostedEvent[], caption: string): SafeHtml {
           <span class="when">${dateLabel(e.dateTime)}</span>
         </td>
         <td class="event" data-label="Event">${eventLink(e)}</td>
-        <td data-label="Attendees">${e.attendance}</td>
+        <td data-label="Attendees">${attendanceCell(e.attendance)}</td>
       </tr>`,
   );
   return html`<table class="stack">
@@ -123,7 +139,7 @@ function medalList(medals: Medal[]): SafeHtml {
   </ul>`;
 }
 
-function typeList(events: HostedEvent[]): SafeHtml {
+function typeList(events: LeaderboardEvent[]): SafeHtml {
   const counts = new Map<EventType, number>();
   events.forEach((e) => {
     const type = classifyEventType(e.title);
@@ -146,20 +162,27 @@ export function profileBody(
   data: LeaderboardView,
   memberId: string,
   selfId: string,
-  hosted: HostedEvent[],
+  hosted: ProfileEvent[],
   promoted: boolean | undefined,
 ): SafeHtml {
   const name = data.names.get(memberId);
-  const counted = new Set((data.byHost.get(memberId) ?? []).map((e) => e.id));
-  // The snapshot's counted events only (countedEvents.ts), newest first.
-  const events = hosted
-    .filter((e) => counted.has(e.id))
-    .sort((a, b) => dayjs(b.dateTime).valueOf() - dayjs(a.dateTime).valueOf());
-  const attendees = events.reduce((sum, e) => sum + e.attendance, 0);
+  // Counts come from the Leaderboard's own counted events, so the two pages
+  // always agree; the attendance rows are only for sums and lists.
+  const countedEvents = data.byHost.get(memberId) ?? [];
+  const counted = new Set(countedEvents.map((e) => e.id));
+  const newestFirst = (a: ProfileEvent, b: ProfileEvent) =>
+    dayjs(b.dateTime).valueOf() - dayjs(a.dateTime).valueOf();
+  const events = hosted.filter((e) => counted.has(e.id)).sort(newestFirst);
+  const known = events.filter(
+    (e): e is ProfileEvent & { attendance: number } =>
+      e.attendance !== undefined,
+  );
+  const attendees = known.reduce((sum, e) => sum + e.attendance, 0);
   const medals = data.medals.filter((m) => m.memberId === memberId);
   const streaks = streaksFor(data, memberId);
-  const top = [...events]
-    .sort((a, b) => b.attendance - a.attendance)
+  // Ties in attendance: the more recent event first.
+  const top = [...known]
+    .sort((a, b) => b.attendance - a.attendance || newestFirst(a, b))
     .slice(0, PROFILE_TOP_EVENTS);
   const you =
     memberId === selfId ? html` <span class="badge info">You</span>` : '';
@@ -170,11 +193,11 @@ export function profileBody(
         >
       </p>
       <h1>${name ? memberText(name) : 'Unnamed host'}${you}</h1>
-      <p>${tierBadge(promoted)}</p>
+      <p>${tierBadge(memberId, promoted)}</p>
       <dl class="stats profile">
         <div class="stat">
           <dt>Events hosted</dt>
-          <dd>${events.length}</dd>
+          <dd>${countedEvents.length}</dd>
         </div>
         <div class="stat">
           <dt>Attendees hosted</dt>
@@ -213,12 +236,14 @@ export function profileBody(
       <h2>Medals</h2>
       ${medalList(medals)}
       <h2>Event types</h2>
-      ${typeList(events)}
+      ${typeList(countedEvents)}
       <p class="muted">Types are guessed from event titles.</p>
     </div>
     <div class="card">
       <h2>Top events</h2>
-      <p class="muted">By attendees, all time.</p>
+      <p class="muted">
+        By attendees, all time. Events without attendance data are left out.
+      </p>
       ${eventsTable(top, 'Top events by attendees')}
     </div>
     <div class="card">
@@ -250,7 +275,7 @@ export function registerHostProfile(
       return;
     }
     let data: LeaderboardData;
-    let hosted: HostedEvent[];
+    let hosted: ProfileEvent[];
     try {
       data = await load();
       hosted =

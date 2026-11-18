@@ -232,4 +232,37 @@ describe('createLeaderboardLoader', () => {
     expect(award).toHaveBeenCalledTimes(1);
     finish();
   });
+
+  it('a slower build for an older snapshot run never replaces the newer cache', async () => {
+    const events = [ev('2026-11-10', ['1'])];
+    const { s: st, hostedEvents } = store(events);
+    let release: () => void = () => {};
+    hostedEvents.mockImplementationOnce(
+      () =>
+        new Promise<LeaderboardEvent[]>((resolve) => {
+          release = () => resolve(events);
+        }),
+    );
+    let runId = 1;
+    const listedAt = new Date('2026-11-17T08:00:00Z');
+    const l = createLeaderboardLoader({
+      store: async () => st,
+      snapshot: async () => ({
+        hasFinishedFull: async () => true,
+        lastFinishedRun: async () => run(listedAt, runId),
+        lastCompleteListing: async () => listedAt,
+      }),
+      now: () => new Date('2026-11-17T18:00:00Z'),
+    });
+    const older = l.load(); // run 1: its build hangs
+    await new Promise((r) => {
+      setTimeout(r, 0);
+    });
+    runId = 2;
+    await l.load(); // run 2: built and cached
+    release();
+    await older;
+    await l.load(); // still run 2's cache
+    expect(hostedEvents).toHaveBeenCalledTimes(2);
+  });
 });

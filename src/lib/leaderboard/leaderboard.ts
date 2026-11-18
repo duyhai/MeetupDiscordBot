@@ -281,6 +281,10 @@ export function createLeaderboardLoader(deps: LeaderboardDeps): {
         building = mine;
         promise
           .then(({ view, cacheable }) => {
+            // A slower build for an older run never replaces a newer one.
+            if (building !== mine) {
+              return;
+            }
             cached = cacheable
               ? { key, at: nowDate.getTime(), view }
               : undefined;
