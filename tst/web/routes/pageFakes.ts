@@ -58,6 +58,8 @@ import {
   WorkspaceSyncCode,
 } from '../../../src/lib/workspace/service.js';
 import {
+  OPEN_STATUSES,
+  PARKED_STATUSES,
   WorkspaceEvent,
   WorkspaceMonthState,
   WorkspaceRow,
@@ -671,6 +673,14 @@ export const WORKSPACE_SEED = (): WorkspaceSeed => ({
   events: [],
 });
 
+/** listRows' first sort key: 0 to do, 1 on hold, 2 done. */
+const statusGroup = (status: WorkspaceStatus): number => {
+  if (OPEN_STATUSES.includes(status)) {
+    return 0;
+  }
+  return PARKED_STATUSES.includes(status) ? 1 : 2;
+};
+
 const periodMatch = (a: Period, b: Period) =>
   a.year === b.year && a.month === b.month;
 
@@ -691,10 +701,11 @@ export function fakeWorkspace(seed: WorkspaceSeed = WORKSPACE_SEED()) {
         period: Period,
         page: { offset: number; limit: number },
       ): Promise<WorkspaceRow[]> =>
-        inMonth(period).slice(
-          page.offset,
-          page.offset + Math.min(50, page.limit),
-        ),
+        // As the repository: to do, then on hold, then done (a stable sort,
+        // so seed order stands within each group).
+        [...inMonth(period)]
+          .sort((a, b) => statusGroup(a.status) - statusGroup(b.status))
+          .slice(page.offset, page.offset + Math.min(50, page.limit)),
     ),
     countRows: vi.fn(
       async (period: Period): Promise<{ total: number; inLatest: number }> => ({

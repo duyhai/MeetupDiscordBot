@@ -224,7 +224,7 @@ describe('KIT_SCRIPT in a real DOM', () => {
     const dialogs = [...document.querySelectorAll('dialog')];
     expect(dialogs).toHaveLength(3);
     for (const d of dialogs) {
-      expect(d.closest('details')).toBeNull();
+      expect(d.closest('details[data-modal]')).toBeNull();
       const title = document.getElementById(
         d.getAttribute('aria-labelledby') ?? '',
       );

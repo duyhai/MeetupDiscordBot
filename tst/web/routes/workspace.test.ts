@@ -1402,6 +1402,196 @@ describe('GET /dashboard/no-shows/:period (month cards)', () => {
   });
 });
 
+describe('month page sections, summary and position (Hai, 2026-11-17)', () => {
+  const STAFF = '123456789012345678';
+  const rowsInEveryGroup = () => [
+    warningRow({ id: 1, memberId: '2000', status: 'warning_sent' }),
+    suspensionCardRow({ id: 2, status: 'on_hold' }),
+    workspaceRow({ id: 3, memberId: '2002', status: 'new' }),
+    workspaceRow({ id: 4, memberId: '2003', status: 'skipped' }),
+  ];
+  /** Each section's title and whether it starts open, in page order. */
+  const sections = (body: string) =>
+    [
+      ...body.matchAll(
+        /<details class="ui-collapsible"( open)?><summary><span class="ui-collapsible-title">([^<]+)<\/span>/g,
+      ),
+    ].map((m) => [m[2], m[1] === ' open']);
+  /** The card ids of one section, in order. */
+  const idsIn = (body: string, title: string) => {
+    const start = body.indexOf(
+      `<span class="ui-collapsible-title">${title}</span>`,
+    );
+    const end = body.indexOf('<details class="ui-collapsible"', start);
+    const section = body.slice(start, end === -1 ? undefined : end);
+    return [
+      ...section.matchAll(/name="version" value="1"[\s\S]*?\/rows\/(\d+)/g),
+    ]
+      .map((m) => m[1])
+      .filter((id, i, all) => all.indexOf(id) === i);
+  };
+
+  it('To do and On hold start open, Done closed, undone cards first', async () => {
+    const { get } = await setup({ seed: seed(rowsInEveryGroup()) });
+    const res = await get(MONTH);
+    expect(sections(res.text)).toEqual([
+      ['To do', true],
+      ['On hold', true],
+      ['Done', false],
+    ]);
+    const order = [
+      ...res.text.matchAll(
+        /action="\/dashboard\/no-shows\/2026-09\/rows\/(\d+)"/g,
+      ),
+    ]
+      .map((m) => m[1])
+      .filter((id, i, all) => all.indexOf(id) === i);
+    expect(order).toEqual(['3', '2', '1', '4']);
+    expect(words(res.text)).toContain('To do 1 card');
+    expect(words(res.text)).toContain('Done 2 cards');
+    expect(idsIn(res.text, 'On hold')).toEqual(['2']);
+  });
+
+  it('an empty section says so', async () => {
+    const { get } = await setup({
+      seed: seed([warningRow({ status: 'warning_sent' })]),
+    });
+    const text = words((await get(MONTH)).text);
+    expect(text).toContain('Nothing to do on this page.');
+    expect(text).toContain('Nothing on hold on this page.');
+  });
+
+  it('a summary at the top counts the month as the months list does', async () => {
+    const { get, ws } = await setup({ seed: seed(rowsInEveryGroup()) });
+    const res = await get(MONTH);
+    expect(ws.statusCounts).toHaveBeenCalledWith([SEPT]);
+    const summary =
+      /<dl class="stats ws-summary">[\s\S]*?<\/dl>/.exec(res.text)?.[0] ?? '';
+    expect(words(summary)).toBe('To do 1 On hold 1 Done 2');
+    // Above the cards.
+    expect(res.text.indexOf('<dl class="stats ws-summary">')).toBeLessThan(
+      res.text.indexOf('<div class="card ws-card">'),
+    );
+  });
+
+  it('no summary before the month is set up', async () => {
+    const { get } = await setup({ seed: seed([], { months: [] }) });
+    expect((await get(MONTH)).text).not.toContain(
+      '<dl class="stats ws-summary">',
+    );
+  });
+
+  it('?row= marks that card #acted and opens Done when it is there', async () => {
+    const { get } = await setup({ seed: seed(rowsInEveryGroup()) });
+    const res = await get(`${MONTH}?result=done&row=4`);
+    expect(res.text.match(/id="acted"/g)).toHaveLength(1);
+    const acted = cards(res.text).find((c) => c.includes('id="acted"')) ?? '';
+    expect(acted).toContain('/rows/4"');
+    // The result notice again, on the card the reader lands on.
+    expect(words(acted)).toContain(WORKSPACE_RESULT_MESSAGES.done);
+    expect(sections(res.text)).toEqual([
+      ['To do', true],
+      ['On hold', true],
+      ['Done', true],
+    ]);
+  });
+
+  it('a junk or unknown ?row= marks nothing and leaves Done closed', async () => {
+    const { get } = await setup({ seed: seed(rowsInEveryGroup()) });
+    for (const row of ['99', '0', '4x', '"><b>', '']) {
+      // eslint-disable-next-line no-await-in-loop -- one page at a time
+      const res = await get(`${MONTH}?row=${encodeURIComponent(row)}`);
+      expect(res.text, row).not.toContain('id="acted"');
+      expect(sections(res.text)[2], row).toEqual(['Done', false]);
+    }
+  });
+
+  it('a sent warning offers its text as Warning message, not Send warning (items 28-38)', async () => {
+    const { get } = await setup({
+      seed: seed([
+        warningRow({ id: 1, status: 'warning_sent' }),
+        warningRow({ id: 5, memberId: '2001', status: 'new' }),
+      ]),
+    });
+    const res = await get(MONTH);
+    const [todo, sent] = cards(res.text);
+    expect(todo).toContain('Send warning');
+    expect(todo).toContain('Mark as sent');
+    expect(sent).not.toContain('Send warning');
+    expect(sent).not.toContain('Mark as sent');
+    expect(sent).toMatch(/<summary class="button ghost">\s*Warning message/);
+  });
+
+  it('each card links the member to their no-show history', async () => {
+    const { get } = await setup();
+    const [card] = cards((await get(MONTH)).text);
+    expect(card).toContain(
+      '<a href="/dashboard/no-show-history/members/2000">No-show history</a>',
+    );
+  });
+
+  it('names who acted and who voided, in one lookup', async () => {
+    const staffNames = vi.fn(async () => ({ [STAFF]: 'Hai<b>' }));
+    const event: WorkspaceEvent = {
+      id: '1',
+      rowId: 2,
+      actor: STAFF,
+      action: 'hold',
+      oldStatus: 'new',
+      newStatus: 'on_hold',
+      note: null,
+      suspensionRecordId: null,
+      createdAt: new Date('2026-10-02T17:00:00Z'),
+    };
+    const { get } = await setup({
+      seed: seed(
+        [suspensionCardRow({ status: 'suspended', suspensionRecordId: 12 })],
+        { events: [event] },
+      ),
+      records: [
+        suspensionRecord({
+          id: 12,
+          memberId: '2001',
+          voidedAt: new Date('2026-10-03T18:00:00Z'),
+          voidedBy: STAFF,
+          voidReason: 'typo',
+        }),
+      ],
+      pages: { staffNames },
+    });
+    const [card] = cards((await get(MONTH)).text);
+    expect(staffNames).toHaveBeenCalledTimes(1);
+    expect(staffNames).toHaveBeenCalledWith([STAFF]);
+    expect(card.match(/<bdi>Hai&lt;b&gt;<\/bdi>/g)).toHaveLength(2);
+    expect(card).not.toContain('>staff member<');
+  });
+
+  it('a failing name lookup still renders, with "staff member"', async () => {
+    const event: WorkspaceEvent = {
+      id: '1',
+      rowId: 1,
+      actor: STAFF,
+      action: 'hold',
+      oldStatus: 'new',
+      newStatus: 'on_hold',
+      note: null,
+      suspensionRecordId: null,
+      createdAt: new Date('2026-10-02T17:00:00Z'),
+    };
+    const { get } = await setup({
+      seed: seed([warningRow({ status: 'on_hold' })], { events: [event] }),
+      pages: {
+        staffNames: async () => {
+          throw new Error('discord down');
+        },
+      },
+    });
+    const res = await get(MONTH);
+    expect(res.status).toBe(200);
+    expect(res.text).toContain('target="_blank">staff member</a>');
+  });
+});
+
 describe('banned members in the workspace', () => {
   const OCT_MONTH = '/dashboard/no-shows/2026-10';
   const banned = (period: Period, id: number) =>

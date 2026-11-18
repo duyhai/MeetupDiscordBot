@@ -28,6 +28,7 @@ import {
 import {
   PAGE_NOW,
   WEBP_BYTES,
+  DISCORD_SUBJECT,
   banRow,
   fakeBanActions,
   fakeBans,
@@ -309,6 +310,61 @@ describe('Banned tab', () => {
       bans: () => Promise.reject(new Error('down')),
     });
     expect((await get(TAB)).status).toBe(503);
+  });
+});
+
+describe('Banned tab names staff and links history (Hai, 2026-11-17)', () => {
+  const B = '223456789012345678';
+  const C = '323456789012345678';
+
+  it('names who recorded, uploaded and lifted, in one lookup', async () => {
+    const staffNames = vi.fn(async () => ({
+      [DISCORD_SUBJECT]: 'Hai',
+      [B]: 'Stacey',
+      [C]: 'Kristen',
+    }));
+    const lifted = banRow({
+      liftedAt: new Date('2026-10-01T17:00:00Z'),
+      liftedBy: C,
+      liftReason: 'appeal',
+    });
+    const { get } = await setup(
+      {
+        active: [
+          banRow({
+            hasPhoto: true,
+            photoSource: 'upload',
+            photoUpdatedAt: new Date('2026-09-20T17:00:00Z'),
+            photoUpdatedBy: B,
+          }),
+        ],
+        lifted: [lifted],
+      },
+      {},
+      { staffNames },
+    );
+    const active = await get(TAB);
+    expect(words(active.text)).toContain('Hai');
+    expect(words(active.text)).toContain('Uploaded by Stacey on');
+    expect(active.text).not.toContain('>staff member<');
+    expect(staffNames).toHaveBeenLastCalledWith([DISCORD_SUBJECT, B]);
+    const liftedTab = await get(`${TAB}&show=lifted`);
+    expect(liftedTab.text).toContain('<bdi>Kristen</bdi>');
+  });
+
+  it('falls back to "staff member" without names', async () => {
+    const { get } = await setup();
+    const res = await get(TAB);
+    expect(res.text).toContain('target="_blank">staff member</a>');
+  });
+
+  it('links each banned member to their no-show history', async () => {
+    const ban = banRow({ memberId: '465124222' });
+    const { get } = await setup({ active: [ban] });
+    const res = await get(TAB);
+    expect(res.text).toContain(
+      '<a href="/dashboard/no-show-history/members/465124222">No-show history</a>',
+    );
   });
 });
 

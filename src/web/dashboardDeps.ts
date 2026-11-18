@@ -50,6 +50,9 @@ import {
   organizerFetchMany,
 } from '../lib/workspace/upcoming.js';
 import { ApplicationCache } from '../util/cache.js';
+import { resolveDisplayNames } from '../lib/wrapped/displayNames.js';
+import { cachedDisplayNames, displayNames } from './host/serverJoin.js';
+import { STAFF_NAMES_BUDGET_MS } from './staffNames.js';
 import { PostgresWrappedAnnouncementRepository } from '../lib/repositories/postgresWrappedAnnouncementRepository.js';
 import { PostgresSnapshotRepository } from '../lib/repositories/postgresSnapshotRepository.js';
 import {
@@ -352,6 +355,18 @@ export function dashboardPageDeps(): DashboardPageDeps {
     },
     banActions: banActions(isLeadership),
     upcoming: upcomingLoader,
+    // The Wrapped's name cache (a day in Redis, keyed by Discord id), behind
+    // the dashboard's 2 s Redis deadline; loadStaffNames bounds the page.
+    staffNames: async (ids) =>
+      (
+        await resolveDisplayNames(
+          await dashboardCache(),
+          ids,
+          (missing) =>
+            displayNames(() => discordClient, missing, STAFF_NAMES_BUDGET_MS),
+          (asked) => cachedDisplayNames(() => discordClient, asked),
+        )
+      ).names,
     eventRequests: () => PostgresEventRequestRepository.instance(),
     publishRequest: productionPublisher(() => discordClient),
     findExistingEvent: productionPublishDeps(() => discordClient).findExisting,

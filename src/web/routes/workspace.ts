@@ -61,11 +61,13 @@ import {
   staticHtml,
 } from '../html.js';
 import {
-  discordUserLink,
   eventLink,
   meetupProfileUrl,
+  memberHistoryLink,
   memberLink,
 } from '../links.js';
+import { loadStaffNames, staffLink } from '../staffNames.js';
+import { collapsible } from '../ui/collapsible.js';
 import {
   builtByHtml,
   dashboardPage,
@@ -327,6 +329,12 @@ interface CardView {
   banned: boolean;
   /** The bans read answered. When false, no card offers record or link and none shows Banned. */
   banStatusKnown: boolean;
+  /** Staff display names (loadStaffNames); a missing one is "staff member". */
+  staffNames: Readonly<Record<string, string>>;
+  /** The card the last action was on (`?row=`): its heading carries the fixed id the redirect's #acted lands on. */
+  acted: boolean;
+  /** On the acted card: the result notice again, where the reader now is. */
+  notice: SafeHtml | '';
 }
 
 function caseBody(v: CardView): SafeHtml | '' {
@@ -410,8 +418,7 @@ function suspensionBody(v: CardView): SafeHtml | '' {
   return html`${span}
     <p class="note">
       Voided ${pacificDateTime(r.voidedAt)} by
-      ${discordUserLink(r.voidedBy, 'staff member')}:
-      ${memberText(r.voidReason ?? '')}
+      ${staffLink(r.voidedBy, v.staffNames)}: ${memberText(r.voidReason ?? '')}
     </p>`;
 }
 
@@ -432,6 +439,25 @@ function meetupButton(profile: SafeUrl | undefined): SafeHtml | '' {
           (send the message there while signed in as the organizer account)
         </p>`
     : '';
+}
+
+/**
+ * The message pop-up's button. A warning still to do says Send warning
+ * (primary); once sent, skipped or on hold it is only the text to look
+ * at again, so it says Warning message (ghost), as a suspended card's
+ * Suspension message does. A teammate looking for Mark as sent on a sent
+ * card read the primary Send warning as work left (2026-11-17).
+ */
+function warningTrigger(
+  warning: boolean,
+  status: WorkspaceStatus,
+): { label: string; tone: 'primary' | 'ghost' } {
+  if (!warning) {
+    return { label: 'Suspend member', tone: 'primary' };
+  }
+  return OPEN_STATUSES.includes(status)
+    ? { label: 'Send warning', tone: 'primary' }
+    : { label: 'Warning message', tone: 'ghost' };
 }
 
 /** Where the message goes: the member's Meetup profile, opened by the organizer account. */
@@ -632,9 +658,7 @@ function messagePart(
   const carriesRecord = !warning && actions.has('record_suspension');
   return {
     modal: modal({
-      trigger: warning
-        ? { label: 'Send warning', tone: 'primary' }
-        : { label: 'Suspend member', tone: 'primary' },
+      trigger: warningTrigger(warning, v.row.status),
       title: warning ? `Warning for ${name}` : `Suspend ${name}`,
       body: html`${copy} ${meetupButton(profile)}
       ${carriesRecord ? recordSection(v, fields, rowUrl) : ''}`,
@@ -644,7 +668,10 @@ function messagePart(
   };
 }
 
-function historyBody(events: WorkspaceEvent[]): SafeHtml {
+function historyBody(
+  events: WorkspaceEvent[],
+  staffNames: Readonly<Record<string, string>>,
+): SafeHtml {
   if (events.length === 0) {
     return html`<p class="muted">Nothing yet.</p>`;
   }
@@ -659,7 +686,7 @@ function historyBody(events: WorkspaceEvent[]): SafeHtml {
           ${
             e.actor === 'sync'
               ? 'automatic update'
-              : discordUserLink(e.actor, 'staff member')
+              : staffLink(e.actor, staffNames)
           }
           · ${actionTitle(e.action)} · ${statusLabel(e.oldStatus)} →
           ${statusLabel(e.newStatus)}${
@@ -775,17 +802,33 @@ function cardHtml(v: CardView): SafeHtml {
   const profile = meetupProfileUrl(row.memberId);
   const message = messagePart(v, fields, rowUrl, actions, profile);
   const recordId = v.linked?.id ?? row.suspensionRecordId;
+  const headingBody = html`${memberLink({
+    id: row.memberId,
+    name: row.memberName,
+  })}
+  ${
+    row.classification === 'suspension'
+      ? html`<span class="badge info">Suspension candidate</span>`
+      : html`<span class="badge attn">Warning</span>`
+  }
+  ${statusBadge(row.status)}
+  ${v.banned ? html`<span class="badge attn">Banned</span>` : ''}`;
+  // The id is a literal (html.ts never takes one interpolated): only the
+  // card the redirect named carries it, so #acted lands there.
+  const heading = v.acted
+    ? html`<h2 id="acted" class="ws-acted">${headingBody}</h2>`
+    : html`<h2>${headingBody}</h2>`;
+  const history = memberHistoryLink(row.memberId);
   return html`<div class="card ws-card">
-    <h2>
-      ${memberLink({ id: row.memberId, name: row.memberName })}
-      ${
-        row.classification === 'suspension'
-          ? html`<span class="badge info">Suspension candidate</span>`
-          : html`<span class="badge attn">Warning</span>`
-      }
-      ${statusBadge(row.status)}
-      ${v.banned ? html`<span class="badge attn">Banned</span>` : ''}
-    </h2>
+    ${heading}
+    ${
+      history
+        ? html`<p class="ws-links">
+            <a href="${history}">No-show history</a>
+          </p>`
+        : ''
+    }
+    ${v.acted ? v.notice : ''}
     ${
       row.inLatestSnapshot
         ? ''
@@ -872,7 +915,7 @@ function cardHtml(v: CardView): SafeHtml {
     </div>
     <details>
       <summary>History</summary>
-      ${historyBody(v.events)}
+      ${historyBody(v.events, v.staffNames)}
     </details>
   </div>`;
 }
@@ -881,6 +924,72 @@ const sum = (
   counts: Partial<Record<WorkspaceStatus, number>> | undefined,
   statuses: readonly WorkspaceStatus[],
 ) => statuses.reduce((n, s) => n + (Number(counts?.[s]) || 0), 0);
+
+/**
+ * The month's To do / On hold / Done, from statusCounts: the same numbers
+ * as the months list and Home. Classes are literals; only counts are data.
+ */
+function statusSummary(
+  counts: Partial<Record<WorkspaceStatus, number>> | undefined,
+): SafeHtml {
+  return html`<dl class="stats ws-summary">
+    <div class="stat todo">
+      <dt>To do</dt>
+      <dd>${sum(counts, OPEN_STATUSES)}</dd>
+    </div>
+    <div class="stat">
+      <dt>On hold</dt>
+      <dd>${sum(counts, PARKED_STATUSES)}</dd>
+    </div>
+    <div class="stat done">
+      <dt>Done</dt>
+      <dd>${sum(counts, DONE_STATUSES)}</dd>
+    </div>
+  </dl>`;
+}
+
+type CardGroup = 'todo' | 'hold' | 'done';
+
+function groupOf(status: WorkspaceStatus): CardGroup {
+  if (OPEN_STATUSES.includes(status)) {
+    return 'todo';
+  }
+  return PARKED_STATUSES.includes(status) ? 'hold' : 'done';
+}
+
+const GROUPS: readonly {
+  group: CardGroup;
+  title: string;
+  empty: string;
+}[] = [
+  { group: 'todo', title: 'To do', empty: 'Nothing to do on this page.' },
+  { group: 'hold', title: 'On hold', empty: 'Nothing on hold on this page.' },
+  { group: 'done', title: 'Done', empty: 'Nothing done on this page yet.' },
+];
+
+/**
+ * This page's cards in three folding sections: To do and On hold open, Done
+ * closed unless it holds the card just acted on. listRows sorts by the same
+ * groups, so undone cards come first across pages too.
+ */
+function cardSections(
+  rows: WorkspaceRow[],
+  actedId: number | undefined,
+  cardOf: (row: WorkspaceRow) => SafeHtml,
+): SafeHtml {
+  return html`${GROUPS.map(({ group, title, empty }) => {
+    const inGroup = rows.filter((r) => groupOf(r.status) === group);
+    const open = group !== 'done' || inGroup.some((r) => r.id === actedId);
+    return collapsible({
+      summary: title,
+      meta: plural(inGroup.length, 'card', 'cards'),
+      open,
+      body: inGroup.length
+        ? html`${inGroup.map(cardOf)}`
+        : html`<p class="muted">${empty}</p>`,
+    });
+  })}`;
+}
 
 /** The months as links, the current one plain text. */
 function monthPicker(period: Period, now: Date): SafeHtml {
@@ -994,6 +1103,7 @@ export function registerWorkspaceRoutes(
     | 'upcoming'
     | 'isLeadership'
     | 'bans'
+    | 'staffNames'
   >,
 ): void {
   const displayLeadership = new LeadershipDisplayCache(() =>
@@ -1078,11 +1188,13 @@ export function registerWorkspaceRoutes(
         deps.snapshots(),
         deps.suspensions(),
       ]);
-      const [state, rows, counts, snapshot] = await Promise.all([
+      const [state, rows, counts, snapshot, statusCounts] = await Promise.all([
         ws.monthState(period),
         ws.listRows(period, { offset, limit: PAGE_SIZE }),
         ws.countRows(period),
         snapshots.getCurrent('no_show', period),
+        // The months list's and Home's counts, so the three numbers agree.
+        ws.statusCounts([period]),
       ]);
       const rowIds = rows.map((r) => r.id);
       const memberIds = [...new Set(rows.map((r) => r.memberId))];
@@ -1116,6 +1228,7 @@ export function registerWorkspaceRoutes(
         rows,
         counts,
         snapshot,
+        statusCounts,
         events,
         records,
         linked,
@@ -1133,12 +1246,19 @@ export function registerWorkspaceRoutes(
       rows,
       counts,
       snapshot,
+      statusCounts,
       events,
       records,
       linked,
       linkedElsewhere,
       banStatus,
     } = loaded.value;
+    // Who acted and who voided, named in one lookup; never rejects, and
+    // bounded by its own budget (a miss is "staff member").
+    const staffNames = loadStaffNames(deps.staffNames, [
+      ...[...events.values()].flat().map((e) => e.actor),
+      ...linked.map((r) => r.voidedBy),
+    ]);
     // loadOptional never rejects and has its own deadline.
     const bans = await banStatus;
     const banStatusKnown = bans.ok;
@@ -1214,7 +1334,9 @@ export function registerWorkspaceRoutes(
             The build alerts have the details.
           </p>`
         : '';
-    const cards = rows.map((row) =>
+    const names = await staffNames;
+    const actedId = parseRowId(req.query.row);
+    const cardOf = (row: WorkspaceRow) =>
       cardHtml({
         row,
         csrf,
@@ -1230,8 +1352,11 @@ export function registerWorkspaceRoutes(
         leader,
         banned: bannedIds.has(row.memberId),
         banStatusKnown,
-      }),
-    );
+        staffNames: names,
+        acted: row.id === actedId,
+        notice: workspaceResultNotice(req.query.result),
+      });
+    const monthCounts = statusCounts.get(periodKey(period));
     dashboardPage(res, {
       title: `No-show workspace ${label}`,
       body: html`<div class="card">
@@ -1246,7 +1371,8 @@ export function registerWorkspaceRoutes(
                   hidden. Reload in a minute.
                 </p>`
           }
-          ${monthPicker(period, now)} ${built} ${unreadable} ${setUp}
+          ${monthPicker(period, now)} ${state ? statusSummary(monthCounts) : ''}
+          ${built} ${unreadable} ${setUp}
           ${refreshForm(period, csrf, 'workspace')}
         </div>
         ${
@@ -1254,7 +1380,7 @@ export function registerWorkspaceRoutes(
             ? html`<div class="card"><p>No cards on this page.</p></div>`
             : ''
         }
-        ${cards}
+        ${rows.length > 0 ? cardSections(rows, actedId, cardOf) : ''}
         ${pageNav(
           monthPath(DASHBOARD_PATHS.workspaceMonth, period),
           page,

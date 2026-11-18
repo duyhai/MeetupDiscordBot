@@ -57,6 +57,8 @@ afterEach(() => {
 const ROW = '/dashboard/no-shows/2026-09/rows/1';
 const SYNC = '/dashboard/no-shows/2026-09/sync';
 const MONTH = '/dashboard/no-shows/2026-09';
+/** The row actions come back to row 1's card (its section open, #acted on its heading). */
+const ACTED = '&row=1#acted';
 
 type Perform = (input: WorkspaceActionInput) => Promise<WorkspaceActionResult>;
 type Sync = (period: Period) => Promise<WorkspaceSyncCode>;
@@ -183,7 +185,7 @@ describe('workspace action routes', () => {
     const { post, perform } = await setup();
     const res = await post(ROW, { action: 'mark_sent', version: '3' });
     expect(res.status).toBe(303);
-    expect(location(res)).toBe(`${MONTH}?result=done`);
+    expect(location(res)).toBe(`${MONTH}?result=done${ACTED}`);
     expect(perform).toHaveBeenCalledTimes(1);
     expect(perform.mock.calls[0][0]).toMatchObject({
       period: SEPT,
@@ -267,7 +269,7 @@ describe('workspace action routes', () => {
   it('a repeated action field is invalid and performs nothing', async () => {
     const { postRaw, perform } = await setup({ leader: true });
     const res = await postRaw(ROW, 'action=hold&action=void&version=2');
-    expect(location(res)).toBe(`${MONTH}?result=invalid`);
+    expect(location(res)).toBe(`${MONTH}?result=invalid${ACTED}`);
     expect(perform).not.toHaveBeenCalled();
   });
 
@@ -283,7 +285,7 @@ describe('workspace action routes', () => {
     const { post, perform } = await setup();
     const res = await post(ROW, body);
     expect(res.status).toBe(303);
-    expect(location(res)).toBe(`${MONTH}?result=invalid`);
+    expect(location(res)).toBe(`${MONTH}?result=invalid${ACTED}`);
     expect(perform).not.toHaveBeenCalled();
   });
 
@@ -296,7 +298,7 @@ describe('workspace action routes', () => {
         version: '1',
         recordId,
       });
-      expect(location(res), recordId).toBe(`${MONTH}?result=invalid`);
+      expect(location(res), recordId).toBe(`${MONTH}?result=invalid${ACTED}`);
     }
     expect(perform).not.toHaveBeenCalled();
   });
@@ -317,7 +319,7 @@ describe('workspace action routes', () => {
         version: '1',
         date,
       });
-      expect(location(res), date).toBe(`${MONTH}?result=bad-date`);
+      expect(location(res), date).toBe(`${MONTH}?result=bad-date${ACTED}`);
     }
     expect(perform).not.toHaveBeenCalled();
   });
@@ -335,7 +337,7 @@ describe('workspace action routes', () => {
     it('sent the same day, it records as dated', async () => {
       const { post, perform } = await setup({ leader: true });
       const res = await post(ROW, popupForm);
-      expect(location(res)).toBe(`${MONTH}?result=done`);
+      expect(location(res)).toBe(`${MONTH}?result=done${ACTED}`);
       expect(perform).toHaveBeenCalledTimes(1);
       expect(perform.mock.calls[0][0]).toMatchObject({
         action: 'record_suspension',
@@ -358,7 +360,7 @@ describe('workspace action routes', () => {
       advance(24 * 3600 * 1000);
       const { from: _from, ...confirmForm } = popupForm;
       const res = await post(ROW, confirmForm);
-      expect(location(res)).toBe(`${MONTH}?result=done`);
+      expect(location(res)).toBe(`${MONTH}?result=done${ACTED}`);
       expect(perform).toHaveBeenCalledTimes(1);
     });
 
@@ -366,7 +368,7 @@ describe('workspace action routes', () => {
       const { post, perform, advance } = await setup({ leader: false });
       advance(24 * 3600 * 1000);
       const res = await post(ROW, popupForm);
-      expect(location(res)).toBe(`${MONTH}?result=not-leadership`);
+      expect(location(res)).toBe(`${MONTH}?result=not-leadership${ACTED}`);
       expect(perform).not.toHaveBeenCalled();
     });
 
@@ -388,7 +390,7 @@ describe('workspace action routes', () => {
         version: '1',
         date,
       });
-      expect(location(res), date).toBe(`${MONTH}?result=bad-date`);
+      expect(location(res), date).toBe(`${MONTH}?result=bad-date${ACTED}`);
     }
     expect(perform).not.toHaveBeenCalled();
   });
@@ -400,13 +402,13 @@ describe('workspace action routes', () => {
       version: '1',
       note: 'x'.repeat(NOTES_MAX + 1),
     });
-    expect(location(long)).toBe(`${MONTH}?result=note-too-long`);
+    expect(location(long)).toBe(`${MONTH}?result=note-too-long${ACTED}`);
     const longVoid = await post(ROW, {
       action: 'void',
       version: '1',
       note: 'x'.repeat(VOID_REASON_MAX + 1),
     });
-    expect(location(longVoid)).toBe(`${MONTH}?result=note-too-long`);
+    expect(location(longVoid)).toBe(`${MONTH}?result=note-too-long${ACTED}`);
     expect(perform).not.toHaveBeenCalled();
     // At the limit (counted in code points, after trimming) it goes through.
     await post(ROW, {
@@ -467,7 +469,7 @@ describe('workspace action routes', () => {
       });
       const res = await post(ROW, { action: 'hold', version: '1', note: 'x' });
       expect(res.status).toBe(303);
-      expect(location(res)).toBe(`${MONTH}?result=${code}`);
+      expect(location(res)).toBe(`${MONTH}?result=${code}${ACTED}`);
     },
   );
 
@@ -484,13 +486,13 @@ describe('workspace action routes', () => {
       leadershipForm('record_suspension'),
     );
     // The record id is never echoed: the page finds the offer itself.
-    expect(location(offer)).toBe(`${MONTH}?result=already-suspended`);
+    expect(location(offer)).toBe(`${MONTH}?result=already-suspended${ACTED}`);
     const overlap = await setup({
       leader: true,
       perform: async () => ({ code: 'already-suspended' }),
     });
     const res = await overlap.post(ROW, leadershipForm('record_suspension'));
-    expect(location(res)).toBe(`${MONTH}?result=suspension-overlap`);
+    expect(location(res)).toBe(`${MONTH}?result=suspension-overlap${ACTED}`);
     expect(WORKSPACE_RESULT_MESSAGES['already-suspended']).not.toBe(
       WORKSPACE_RESULT_MESSAGES['suspension-overlap'],
     );
@@ -534,7 +536,7 @@ describe('workspace action routes', () => {
       // eslint-disable-next-line no-await-in-loop -- as above
       const res = await post(ROW, leadershipForm(action));
       expect(res.status).toBe(303);
-      expect(location(res)).toBe(`${MONTH}?result=banned`);
+      expect(location(res)).toBe(`${MONTH}?result=banned${ACTED}`);
     }
     expect(WORKSPACE_RESULT_MESSAGES.banned).toBe('This member is banned.');
     expect(String(workspaceResultNotice('banned'))).toBe(
@@ -548,7 +550,7 @@ describe('workspace action routes', () => {
         ({ code: '<script>' }) as unknown as WorkspaceActionResult,
     });
     const res = await post(ROW, { action: 'hold', version: '1', note: 'x' });
-    expect(location(res)).toBe(`${MONTH}?result=error`);
+    expect(location(res)).toBe(`${MONTH}?result=error${ACTED}`);
   });
 
   it('a service error redirects with result=error and logs the class name only', async () => {
@@ -559,7 +561,7 @@ describe('workspace action routes', () => {
       },
     });
     const res = await post(ROW, { action: 'hold', version: '1', note: 'x' });
-    expect(location(res)).toBe(`${MONTH}?result=error`);
+    expect(location(res)).toBe(`${MONTH}?result=error${ACTED}`);
     const lines = warn.mock.calls.map((c) => String(c[0]));
     expect(lines).toContain('Dashboard workspace action failed: TypeError');
     expect(lines.join('\n')).not.toContain('secret detail');
@@ -659,7 +661,7 @@ describe('Leadership-only workspace actions', () => {
       });
       const res = await post(ROW, leadershipForm(action));
       expect(res.status).toBe(303);
-      expect(location(res)).toBe(`${MONTH}?result=done`);
+      expect(location(res)).toBe(`${MONTH}?result=done${ACTED}`);
       expect(isLeadership).toHaveBeenCalledWith(USER.id);
       expect(perform).toHaveBeenCalledTimes(1);
       expect(perform.mock.calls[0][0].action).toBe(action);
@@ -677,7 +679,7 @@ describe('Leadership-only workspace actions', () => {
       const { post, perform, moderationLog } = await setup({ leader: false });
       const res = await post(ROW, leadershipForm(action));
       expect(res.status).toBe(303);
-      expect(location(res)).toBe(`${MONTH}?result=not-leadership`);
+      expect(location(res)).toBe(`${MONTH}?result=not-leadership${ACTED}`);
       expect(perform).not.toHaveBeenCalled();
       await settle();
       expect(moderationLog).toHaveBeenCalledTimes(1);
@@ -693,7 +695,7 @@ describe('Leadership-only workspace actions', () => {
   it('a Moderator posting record without the confirm step is refused too', async () => {
     const { post, perform, moderationLog } = await setup({ leader: false });
     const res = await post(ROW, { action: 'record_suspension', version: '1' });
-    expect(location(res)).toBe(`${MONTH}?result=not-leadership`);
+    expect(location(res)).toBe(`${MONTH}?result=not-leadership${ACTED}`);
     expect(perform).not.toHaveBeenCalled();
     await settle();
     expect(moderationLog).toHaveBeenCalledTimes(1);
@@ -708,7 +710,9 @@ describe('Leadership-only workspace actions', () => {
       });
       const res = await post(ROW, leadershipForm(action));
       expect(res.status).toBe(303);
-      expect(location(res)).toBe(`${MONTH}?result=leadership-unavailable`);
+      expect(location(res)).toBe(
+        `${MONTH}?result=leadership-unavailable${ACTED}`,
+      );
       expect(perform).not.toHaveBeenCalled();
       await settle();
       expect(moderationLog).toHaveBeenCalledWith(
@@ -723,12 +727,12 @@ describe('Leadership-only workspace actions', () => {
   it('the role removed between page load and POST: refused', async () => {
     const { post, perform, isLeadership } = await setup({ leader: true });
     expect(location(await post(ROW, leadershipForm('void')))).toBe(
-      `${MONTH}?result=done`,
+      `${MONTH}?result=done${ACTED}`,
     );
     // The role is taken away in Discord; the session still admits them (a Moderator too).
     isLeadership.mockResolvedValue(false);
     const res = await post(ROW, leadershipForm('void'));
-    expect(location(res)).toBe(`${MONTH}?result=not-leadership`);
+    expect(location(res)).toBe(`${MONTH}?result=not-leadership${ACTED}`);
     expect(perform).toHaveBeenCalledTimes(1);
     expect(isLeadership).toHaveBeenCalledTimes(2);
   });
@@ -740,7 +744,9 @@ describe('Leadership-only workspace actions', () => {
     for (const action of LEADERSHIP_ONLY_ACTIONS) {
       // eslint-disable-next-line no-await-in-loop -- in order, so the first one is the one posted
       const res = await post(ROW, leadershipForm(action));
-      expect(location(res), action).toBe(`${MONTH}?result=not-leadership`);
+      expect(location(res), action).toBe(
+        `${MONTH}?result=not-leadership${ACTED}`,
+      );
     }
     await settle();
     expect(moderationLog).toHaveBeenCalledTimes(1);
@@ -755,7 +761,7 @@ describe('Leadership-only workspace actions', () => {
     );
     advance(WORKSPACE_REFUSAL_POST_WINDOW_MS);
     expect(location(await post(ROW, leadershipForm('void')))).toBe(
-      `${MONTH}?result=not-leadership`,
+      `${MONTH}?result=not-leadership${ACTED}`,
     );
     await settle();
     expect(moderationLog).toHaveBeenCalledTimes(2);
@@ -787,7 +793,7 @@ describe('Leadership-only workspace actions', () => {
       .set('Origin', ORIGIN)
       .type('form')
       .send({ _csrf: token, ...leadershipForm('void') });
-    expect(location(res)).toBe(`${MONTH}?result=not-leadership`);
+    expect(location(res)).toBe(`${MONTH}?result=not-leadership${ACTED}`);
     await settle();
   });
 
@@ -796,7 +802,7 @@ describe('Leadership-only workspace actions', () => {
     async (action) => {
       const { post, perform, isLeadership } = await setup({ leader: false });
       const res = await post(ROW, { action, version: '1', note: 'why' });
-      expect(location(res)).toBe(`${MONTH}?result=done`);
+      expect(location(res)).toBe(`${MONTH}?result=done${ACTED}`);
       expect(perform).toHaveBeenCalledTimes(1);
       expect(perform.mock.calls[0][0].leadershipConfirmed).toBeUndefined();
       expect(isLeadership).not.toHaveBeenCalled();
@@ -921,7 +927,7 @@ describe('workspace request deadlines', () => {
     await vi.advanceTimersByTimeAsync(1);
     const res = await pending;
     expect(res.status).toBe(303);
-    expect(location(res)).toBe(`${MONTH}?result=error`);
+    expect(location(res)).toBe(`${MONTH}?result=error${ACTED}`);
     expect(warn.mock.calls.map((c) => String(c[0]))).toContain(
       'Dashboard workspace action failed: WorkspaceDeadlineError',
     );
@@ -965,7 +971,9 @@ describe('workspace request deadlines', () => {
     expect(settled).toBe(false);
     await vi.advanceTimersByTimeAsync(1);
     const res = await pending;
-    expect(location(res)).toBe(`${MONTH}?result=leadership-unavailable`);
+    expect(location(res)).toBe(
+      `${MONTH}?result=leadership-unavailable${ACTED}`,
+    );
     expect(perform).not.toHaveBeenCalled();
     vi.useRealTimers();
     await settle();
@@ -986,7 +994,7 @@ describe('workspace request deadlines', () => {
       await vi.advanceTimersByTimeAsync(LEADERSHIP_CHECK_DEADLINE_MS);
       // eslint-disable-next-line no-await-in-loop -- one request at a time
       expect(location(await pending)).toBe(
-        `${MONTH}?result=leadership-unavailable`,
+        `${MONTH}?result=leadership-unavailable${ACTED}`,
       );
     }
     vi.useRealTimers();
@@ -998,7 +1006,7 @@ describe('workspace request deadlines', () => {
     const { post } = await setup({ leader: true });
     fakeTimers();
     expect(location(await post(ROW, leadershipForm('void')))).toBe(
-      `${MONTH}?result=done`,
+      `${MONTH}?result=done${ACTED}`,
     );
     expect(location(await post(SYNC))).toBe(`${MONTH}?result=synced`);
     expect(vi.getTimerCount()).toBe(0);

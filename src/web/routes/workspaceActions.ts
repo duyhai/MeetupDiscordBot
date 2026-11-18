@@ -273,10 +273,12 @@ export function registerWorkspaceActionRoutes(
       notFound(res);
       return;
     }
+    // Back to the card acted on: `row` (a parsed id) opens its section and
+    // marks its heading with the fixed id #acted lands on.
     const back = (code: WorkspaceResultCode) =>
       res.redirect(
         303,
-        `${monthPath(DASHBOARD_PATHS.workspaceMonth, period)}?result=${code}`,
+        `${monthPath(DASHBOARD_PATHS.workspaceMonth, period)}?result=${code}&row=${rowId}#acted`,
       );
     const body = req.body as Record<string, unknown> | undefined;
     const action = field(body, 'action');

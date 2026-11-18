@@ -13,7 +13,8 @@ import {
   dashboardPath,
 } from '../../lib/reports/dashboardPaths.js';
 import { SafeHtml, html, localUrl, memberText } from '../html.js';
-import { discordUserLink, memberLink } from '../links.js';
+import { memberHistoryLink, memberLink } from '../links.js';
+import { staffLink } from '../staffNames.js';
 import { pacificDate, pacificDateTime } from '../pageKit.js';
 import { PAGE_SIZE, pageNav } from '../paging.js';
 
@@ -128,6 +129,8 @@ export interface BannedTabView {
   csrf: string;
   /** Pacific today ('YYYY-MM-DD'): the date field's max. */
   today: string;
+  /** Staff display names (loadStaffNames); a missing one is "staff member". */
+  staffNames: StaffNames;
 }
 
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
@@ -187,14 +190,20 @@ function photoCell(row: BanRow): SafeHtml {
     : html`<span class="muted">No photo</span>`;
 }
 
-function photoSourceCell(row: BanRow): SafeHtml | '' {
+type StaffNames = Readonly<Record<string, string>>;
+
+/** The staff ids a page of bans names: who recorded, uploaded and lifted. */
+export function banStaffIds(rows: BanRow[]): (string | null)[] {
+  return rows.flatMap((r) => [r.recordedBy, r.photoUpdatedBy, r.liftedBy]);
+}
+
+function photoSourceCell(row: BanRow, names: StaffNames): SafeHtml | '' {
   if (!row.hasPhoto || row.photoUpdatedAt === null) {
     return '';
   }
   const on = pacificDate(row.photoUpdatedAt);
   if (row.photoSource === 'upload') {
-    return html`Uploaded by
-    ${discordUserLink(row.photoUpdatedBy, 'staff member')} on ${on}`;
+    return html`Uploaded by ${staffLink(row.photoUpdatedBy, names)} on ${on}`;
   }
   if (row.photoSource === 'profile') {
     return html`From their profile on ${on}`;
@@ -259,28 +268,34 @@ function banRowHtml(
   row: BanRow,
   lifted: boolean,
   actions: SafeHtml | undefined,
+  names: StaffNames,
 ): SafeHtml {
+  const history = memberHistoryLink(row.memberId);
   return html`<tr>
     <td data-label="Photo" class="ban-fixed">${photoCell(row)}</td>
     <td data-label="Member">
       ${memberLink({ id: row.memberId, name: row.memberName || row.memberId })}
-      (${row.memberId})
+      (${row.memberId})${
+        history ? html` · <a href="${history}">No-show history</a>` : ''
+      }
     </td>
     <td data-label="Banned" class="ban-date">
       ${row.bannedOn ?? 'Date unknown'}
     </td>
     <td data-label="Recorded by" class="ban-fixed">
-      ${discordUserLink(row.recordedBy, 'staff member')}
+      ${staffLink(row.recordedBy, names)}
     </td>
     <td data-label="Notes">${row.notes ? memberText(row.notes) : ''}</td>
-    <td data-label="Photo from" class="ban-fixed">${photoSourceCell(row)}</td>
+    <td data-label="Photo from" class="ban-fixed">
+      ${photoSourceCell(row, names)}
+    </td>
     ${
       lifted
         ? html`<td data-label="Lifted" class="ban-fixed">
               ${pacificDateTime(row.liftedAt ?? '')} Pacific
             </td>
             <td data-label="Lifted by" class="ban-fixed">
-              ${discordUserLink(row.liftedBy, 'staff member')}
+              ${staffLink(row.liftedBy, names)}
             </td>
             <td data-label="Reason">
               ${row.liftReason ? memberText(row.liftReason) : ''}
@@ -349,6 +364,7 @@ function bansTable(view: BannedTabView): SafeHtml {
                   ${banPhotoForm(row, view.csrf)} ${liftForm(row, view.csrf)}
                 </td>`
               : undefined,
+            view.staffNames,
           ),
         )}
       </tbody>
