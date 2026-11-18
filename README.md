@@ -85,6 +85,8 @@ yarn test:integration:docker
 ```
 (This leaves the containers running; use `yarn docker:down` afterwards.)
 
+**Rare local hang under Colima.** About 1 full integration run in 40 can stop with "Test timed out in 20000ms" or "Hook timed out in 10000ms", in a random file, with a `pool.end()` in `afterAll` hanging after it. That is a Postgres connect that never completes through Colima's port forward: a connect storm against the forwarded port stalled about 2 connects in 36,000, with no error and no server backend, and one suite run opens about 216 connections. The test pools set no `connectionTimeoutMillis`, so the stalled connect waits forever. CI has never shown it (no timeouts in 12 failed integration jobs across 200 runs, as of 2026-11-18). Rerun before blaming the branch.
+
 The Postgres data volume survives `yarn docker:down`. If the schema ever changes shape or you want a clean slate, reset with `docker compose down -v`.
 
 # Deployment

@@ -155,8 +155,9 @@ async function pollUntil(
       }
       // Released: ensure goes through. The advisory lock is database-wide,
       // so other files' schema boots may hold or queue for it right now;
-      // this call waits its turn at the production lock_timeout, not 200 ms.
-      await ensureBanSchema(pool);
+      // this call waits its turn. 10 s, not 200 ms, and under the 20 s
+      // testTimeout so a stuck lock still fails as a lock timeout.
+      await ensureBanSchema(pool, { lockTimeoutMs: 10_000 });
     });
 
     it(
