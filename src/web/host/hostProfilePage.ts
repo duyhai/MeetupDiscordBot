@@ -25,7 +25,7 @@ import { GUEST_HOST_MEETUP_BLACKLIST } from '../../constants.js';
 import { SafeHtml, html, memberText, pageLink } from '../html.js';
 import { eventLink } from '../links.js';
 import { dateLabel, hostPage } from './hostPageKit.js';
-import { MAP_PAGE, PROFILE_MAP_MIN_EVENTS, hostMap } from './hostMap.js';
+import { MAP_PAGE, PROFILE_PLACE_RULE, hostMap } from './hostMap.js';
 import { eventPlaces } from '../../lib/leaderboard/places.js';
 import { hostLocals } from './hostRouter.js';
 import {
@@ -262,11 +262,8 @@ export function profileBody(
         ? html`<div class="card">
             <h2>Where they've hosted</h2>
             ${hostMap(
-              eventPlaces(countedEvents, {
-                minEventsPerCell: PROFILE_MAP_MIN_EVENTS,
-              }),
+              eventPlaces(countedEvents, PROFILE_PLACE_RULE),
               name ? `${name} has` : 'this host has',
-              PROFILE_MAP_MIN_EVENTS,
             )}
           </div>`
         : ''

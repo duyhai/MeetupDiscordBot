@@ -1,13 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
-import { FieldNode, Kind, SelectionSetNode, parse } from 'graphql';
+import { parse, visit } from 'graphql';
 import {
   getEventRsvpsForSnapshot,
   getGroupEventsForSnapshot,
 } from '../../../src/lib/client/meetup/queries.js';
 
 import { TITLE_MAX } from '../../../src/lib/eventAudit/meetup.js';
-import { GQL_EXT_FIELDS } from '../../fixtures/gqlExtFields.js';
+import { GQL_EXT_TYPES } from '../../fixtures/gqlExtFields.js';
 import {
   HOST_NAME_MAX,
   toPlace,
@@ -204,50 +204,84 @@ describe('snapshot queries', () => {
     expect(q).not.toMatch(/\bname\b|UserDetails/);
   });
 
-  describe('the listing query against gql-ext', () => {
-    /** Field names selected under `node`, by gql-ext type. */
-    function selections(): Record<string, string[]> {
-      const doc = parse(String(getGroupEventsForSnapshot));
-      const names = (set: SelectionSetNode | undefined) =>
-        (set?.selections ?? []).filter(
-          (s): s is FieldNode => s.kind === Kind.FIELD,
-        );
-      const find = (set: SelectionSetNode | undefined, path: string[]) =>
-        path.reduce<SelectionSetNode | undefined>(
-          (at, name) =>
-            names(at).find((f) => f.name.value === name)?.selectionSet,
-          set,
-        );
-      const op = doc.definitions[0];
-      if (op.kind !== Kind.OPERATION_DEFINITION) {
-        throw new Error('no operation');
-      }
-      const node = find(op.selectionSet, [
-        'groupByUrlname',
-        'events',
-        'edges',
-        'node',
-      ]);
-      const fieldNames = (set: SelectionSetNode | undefined) =>
-        names(set).map((f) => f.name.value);
-      return {
-        Event: fieldNames(node),
-        Venue: fieldNames(find(node, ['venue'])),
-        EventHost: fieldNames(find(node, ['eventHosts'])),
-        Member: fieldNames(find(node, ['eventHosts', 'member'])),
-      };
+  describe('the snapshot queries against gql-ext', () => {
+    /**
+     * Every field of the document, with the gql-ext type it sits on, by
+     * walking it with graphql's visit. Fragments are refused: they could
+     * select a field on a type this walk does not follow.
+     */
+    function fieldsOf(document: unknown): string[] {
+      const types: (string | null)[] = [];
+      const seen: string[] = [];
+      visit(parse(String(document)), {
+        OperationDefinition: {
+          enter: () => {
+            types.push('Query');
+          },
+          leave: () => {
+            types.pop();
+          },
+        },
+        FragmentSpread: () => {
+          throw new Error('fragment spread');
+        },
+        InlineFragment: () => {
+          throw new Error('inline fragment');
+        },
+        FragmentDefinition: () => {
+          throw new Error('fragment definition');
+        },
+        Field: {
+          enter: (node) => {
+            const parent = types[types.length - 1];
+            const name = node.name.value;
+            if (parent === null || parent === undefined) {
+              throw new Error(`${name} selected under a leaf`);
+            }
+            const fields = GQL_EXT_TYPES[parent];
+            if (!fields || !(name in fields)) {
+              throw new Error(`${parent}.${name} is not a gql-ext field`);
+            }
+            seen.push(`${parent}.${name}`);
+            types.push(node.selectionSet ? fields[name] : null);
+          },
+          leave: () => {
+            types.pop();
+          },
+        },
+      });
+      return seen;
     }
 
-    it('asks only for fields gql-ext has (isOnline is a /gql2 field)', () => {
-      const asked = selections();
-      expect(asked.Event).toContain('venue');
-      Object.entries(asked).forEach(([type, fields]) => {
-        fields.forEach((f) => {
-          expect(GQL_EXT_FIELDS[type], `${type}.${f}`).toContain(f);
-        });
-      });
-      expect(asked.Event).not.toContain('isOnline');
-      expect(asked.Venue).toEqual(['lat', 'lon', 'city']);
+    it('the listing asks only for gql-ext fields, all the way down', () => {
+      const fields = fieldsOf(getGroupEventsForSnapshot);
+      expect(fields).toContain('Event.venue');
+      expect(fields).toContain('Venue.lat');
+      expect(fields).not.toContain('Event.isOnline');
+      expect(fields.filter((f) => f.startsWith('Venue.'))).toEqual([
+        'Venue.lat',
+        'Venue.lon',
+        'Venue.city',
+      ]);
+    });
+
+    it('the RSVP read asks only for gql-ext fields', () => {
+      expect(fieldsOf(getEventRsvpsForSnapshot)).toContain('Rsvp.status');
+    });
+
+    it('the walk catches what a path check would miss', () => {
+      expect(() =>
+        fieldsOf('query { event(id: 1) { ... on Event { isOnline } } }'),
+      ).toThrow('inline fragment');
+      expect(() =>
+        fieldsOf('query { event(id: 1) { rsvps { madeUp } } }'),
+      ).toThrow('RsvpConnection.madeUp is not a gql-ext field');
+      expect(() => fieldsOf('query { event(id: 1) { isOnline } }')).toThrow(
+        'Event.isOnline is not a gql-ext field',
+      );
+      expect(() =>
+        fieldsOf('query { event(id: 1) { title { nested } } }'),
+      ).toThrow('nested selected under a leaf');
     });
   });
 });

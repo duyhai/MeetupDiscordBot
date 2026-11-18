@@ -19,7 +19,12 @@ import { SafeHtml, html, memberText, pageLink } from '../html.js';
 import { hostPage } from './hostPageKit.js';
 import { hostLocals } from './hostRouter.js';
 import { HostProfileDeps, registerHostProfile } from './hostProfilePage.js';
-import { MAP_PAGE, hostMap, registerMapAssets } from './hostMap.js';
+import {
+  HALL_OF_FAME_PLACE_RULE,
+  MAP_PAGE,
+  hostMap,
+  registerMapAssets,
+} from './hostMap.js';
 import { eventPlaces } from '../../lib/leaderboard/places.js';
 import {
   LEADERBOARD_PATH,
@@ -298,7 +303,10 @@ function hallOfFameBody(data: Ready, selfId: string): SafeHtml {
     </div>
     <div class="card">
       <h2>Where we've hosted</h2>
-      ${hostMap(eventPlaces(data.events), 'the group has')}
+      ${hostMap(
+        eventPlaces(data.events, HALL_OF_FAME_PLACE_RULE),
+        'the group has',
+      )}
     </div>`;
 }
 

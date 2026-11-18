@@ -378,10 +378,19 @@ describe('host leaderboard', () => {
   });
 
   it('the Hall of fame draws a map from our own Leaflet, with OSM tiles allowed on that page only', async () => {
-    const store = fakeStore(EVENTS, NAMES);
+    const seattle = { latE2: 4761, lonE2: -12233, city: HOSTILE };
+    const events = [
+      // 3 events from 2 hosts: drawn and named (escaped).
+      { ...ev('2026-10-02', ['1']), place: seattle },
+      { ...ev('2026-10-03', ['1']), place: seattle },
+      { ...ev('2026-10-04', ['2']), place: seattle },
+      // Before the venue fields: not collected yet.
+      ev('2026-10-05', ['2']),
+    ];
+    const store = fakeStore(events, NAMES);
     const { req, sid } = await app(store);
     const all = await req.get('/host/leaderboard?view=all').set('Cookie', sid);
-    expect(all.text).toContain('data-map-cells="[[47.61,-122.33,2]]"');
+    expect(all.text).toContain('data-map-cells="[[47.61,-122.33,3]]"');
     expect(all.text).toMatch(
       /<script nonce="[^"]+" src="\/host\/assets\/leaflet\.js\?v=1\.9\.4"><\/script>/,
     );
@@ -389,11 +398,11 @@ describe('host leaderboard', () => {
       /<link rel="stylesheet" href="\/host\/assets\/leaflet\.css\?v=1\.9\.4" nonce="[^"]+" \/>/,
     );
     // The city list says the same for no-JS and screen readers; escaped.
-    expect(all.text).toContain('<li><bdi>Seattle</bdi>: 1 event</li>');
-    expect(all.text).toContain('<bdi>&lt;script&gt;alert(1)&lt;/script&gt;');
-    // The other counted events predate the venue fields.
     expect(all.text).toContain(
-      'Venue data for 7 events is still being collected.',
+      '<li><bdi>&lt;script&gt;alert(1)&lt;/script&gt;&quot;&gt;&lt;img src=x&gt;</bdi>: 3 events</li>',
+    );
+    expect(all.text).toContain(
+      'Venue data for 1 event is still being collected.',
     );
     expect(all.text).toContain('role="region"');
     const csp = String(all.headers['content-security-policy']);
@@ -409,6 +418,29 @@ describe('host leaderboard', () => {
       'tile.openstreetmap.org',
     );
     expect(month.text).not.toContain('leaflet.js');
+  });
+
+  it('Smallville: one host’s small home area is neither drawn nor named on the Hall of fame', async () => {
+    const seattle = { latE2: 4761, lonE2: -12233, city: 'Seattle' };
+    const smallville = { latE2: 4790, lonE2: -12250, city: 'Smallville' };
+    const events = [
+      { ...ev('2026-10-02', ['1']), place: seattle },
+      { ...ev('2026-10-03', ['2']), place: seattle },
+      { ...ev('2026-10-04', ['3']), place: seattle },
+      // Host 9 hosts twice at home, and also three times alone elsewhere.
+      { ...ev('2026-10-05', ['9']), place: smallville },
+      { ...ev('2026-10-06', ['9']), place: smallville },
+    ];
+    const store = fakeStore(events, NAMES);
+    const { req, sid } = await app(store);
+    const all = await req.get('/host/leaderboard?view=all').set('Cookie', sid);
+    expect(all.text).toContain('data-map-cells="[[47.61,-122.33,3]]"');
+    expect(all.text).not.toContain('47.9');
+    expect(all.text).not.toContain('Smallville');
+    expect(all.text).toContain('<li>Elsewhere or unknown area: 2 events</li>');
+    expect(all.text).toContain(
+      '2 events in areas with fewer than 3 events or 2 hosts are counted above but not drawn.',
+    );
   });
 
   it('serves Leaflet’s two files with their types, and nothing else under assets', async () => {
