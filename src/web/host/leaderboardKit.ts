@@ -129,3 +129,15 @@ export function profileUrl(memberId: string): SafeUrl | undefined {
     ? localUrl(`${HOST_BASE}/hosts/${memberId}`)
     : undefined;
 }
+
+/**
+ * Host names come from the snapshot's listing (meetup_host_names), written
+ * by every run's listing; before the first one after deploy there are none.
+ */
+export function namesNote(names: Map<string, string>): SafeHtml | '' {
+  return names.size === 0
+    ? html`<p class="note info">
+        Host names appear after the next daily update from Meetup.
+      </p>`
+    : '';
+}

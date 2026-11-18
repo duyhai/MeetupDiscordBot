@@ -2,7 +2,11 @@ import express from 'express';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { HostResolution } from '../../../src/lib/hosts/eligibility.js';
-import { LeaderboardDeps } from '../../../src/lib/leaderboard/leaderboard.js';
+import {
+  LeaderboardDeps,
+  LeaderboardView,
+  createLeaderboardLoader,
+} from '../../../src/lib/leaderboard/leaderboard.js';
 import {
   LeaderboardEvent,
   Medal,
@@ -11,7 +15,9 @@ import { LeaderboardStore } from '../../../src/lib/repositories/postgresLeaderbo
 import { SnapshotRun } from '../../../src/lib/repositories/postgresSnapshotRepository.js';
 import { createHostRouter } from '../../../src/web/host/hostRouter.js';
 import {
+  LIFETIME_TABLE_ROWS,
   leaderboardMonth,
+  lifetimeTable,
   registerLeaderboardPage,
 } from '../../../src/web/host/leaderboardPage.js';
 import { clientFor, listen } from '../../setup/loopbackServer.js';
@@ -580,5 +586,50 @@ describe('host leaderboard', () => {
     const archive = res.text.slice(res.text.indexOf('<h2>Archive</h2>'));
     expect(archive).toContain('October 2026');
     expect(archive).toContain('medals not awarded yet');
+  });
+
+  it('before any names are collected, the pages say when they will appear', async () => {
+    const store = fakeStore(EVENTS, {});
+    const { req, sid } = await app(store);
+    for (const path of ['/host/leaderboard', '/host/leaderboard?view=all']) {
+      // eslint-disable-next-line no-await-in-loop
+      const res = await req.get(path).set('Cookie', sid);
+      expect(res.text).toContain(
+        'Host names appear after the next daily update from Meetup.',
+      );
+      expect(res.text).toContain('Unnamed host');
+    }
+    const named = await app(fakeStore(EVENTS, NAMES));
+    const res = await named.req
+      .get('/host/leaderboard?view=all')
+      .set('Cookie', named.sid);
+    expect(res.text).not.toContain('Host names appear after');
+  });
+
+  it('the lifetime table shows every host by default and can be capped', async () => {
+    const store = fakeStore(EVENTS, NAMES);
+    const { req, sid } = await app(store);
+    const res = await req.get('/host/leaderboard?view=all').set('Cookie', sid);
+    const table = res.text.slice(
+      res.text.indexOf('Every host, by events hosted'),
+      res.text.indexOf('<h2>All-time awards</h2>'),
+    );
+    expect(LIFETIME_TABLE_ROWS).toBeUndefined();
+    expect(table.match(/<tr>/g)).toHaveLength(1 + 4); // header + 4 hosts
+    expect(table).not.toContain('not shown');
+
+    const view = (await createLeaderboardLoader({
+      store: async () => fakeStore(EVENTS, NAMES),
+      snapshot: async () => ({
+        hasFinishedFull: async () => true,
+        lastFinishedRun: async () => RUN,
+        lastCompleteListing: async () => RUN.listedAt,
+      }),
+      now: () => NOW,
+    }).load()) as LeaderboardView;
+    const capped = lifetimeTable(view, '4242', 2).value;
+    expect(capped.match(/<tr>/g)).toHaveLength(1 + 2);
+    expect(capped).toContain('2 more hosts not shown.');
+    expect(capped).toContain('4 hosts, 9 events.');
   });
 });

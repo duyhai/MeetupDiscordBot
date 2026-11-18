@@ -44,6 +44,8 @@ interface FakeEvent {
   status: 'PAST' | 'ACTIVE' | 'CANCELLED';
   daysAgo: number;
   members: number;
+  /** Its host, if not the default member '1' (who has no name). */
+  host?: { id: string; name?: string };
 }
 
 /** A group on Meetup: listing pages of 100, RSVP pages of 100. */
@@ -117,7 +119,7 @@ class FakeGroup implements SnapshotMeetup {
           this.clock().getTime() - e.daysAgo * DAY,
         ).toISOString(),
         eventUrl: `https://www.meetup.com/g/events/${e.id}/`,
-        eventHosts: [{ member: { id: '1' } }],
+        eventHosts: [{ member: e.host ?? { id: '1' } }],
         attendance: { totalCount: e.members },
         waitlist: { totalCount: 0 },
       })),
@@ -330,6 +332,31 @@ describe('runSnapshotTick', () => {
     await tickUntilFinished(env);
     expect(await env.store.pastEventCount()).toBe(99);
     expect(env.store.events.get('199')?.deletedAt).toBeInstanceOf(Date);
+  });
+
+  it('every run’s listing names the hosts of every past event, old ones too (the first run after deploy)', async () => {
+    const env = setup();
+    // Before deploy: listings carried no names.
+    env.group.events = past(250).map((e, i) => ({
+      ...e,
+      host: { id: String(5000 + i) },
+    }));
+    await tickUntilFinished(env);
+    expect(env.store.hostNames.size).toBe(0);
+    // After deploy: the next (incremental) run's listing has names.
+    env.group.events = env.group.events.map((e, i) => ({
+      ...e,
+      host: { id: String(5000 + i), name: `Host ${i}` },
+    }));
+    env.advance(SNAPSHOT_RUN_INTERVAL_MS);
+    expect(await runSnapshotTick(env.deps)).toMatchObject({
+      kind: 'ran',
+      listed: true,
+    });
+    expect(env.store.runs[1].kind).toBe('incremental');
+    // All 250, though the oldest happened 1,000 days ago and need no RSVP read.
+    expect(env.store.hostNames.size).toBe(250);
+    expect(env.store.hostNames.get('5000')).toBe('Host 0');
   });
 
   it('applies the event audit’s confirmed deletions in the listing phase', async () => {

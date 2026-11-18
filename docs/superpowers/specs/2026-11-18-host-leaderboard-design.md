@@ -24,6 +24,11 @@ public. The event and RSVP tables stay name-free. Names are shown with
 one, it matches My history's co-host names, and it needs no Discord lookup.
 Control characters are stripped at ingest. Names of hosts who have left are
 not purged (noted for later; they stay as long as their events do).
+Names are written only by a snapshot listing, which every run (full or
+incremental) starts with and which covers every past, cancelled and upcoming
+event, so the first run after deploy names every past host. Until it runs
+(up to a day, or "Refresh snapshot now"), there are none: the pages show
+"Unnamed host" with a note that names appear after the next daily update.
 
 ## Counting (PR 1)
 
@@ -239,7 +244,10 @@ all-time awards (eg: highest weekly streak top 10, highest daily streak top
 look at the historic monthly hall of fame rankings."
 
 **Layout 2.** The Hall of fame view keeps today's lifetime table of every
-host on top, unchanged (it is the "most events hosted" board). Below it, an
+host on top, unchanged (it is the "most events hosted" board). Hai called it
+"a long … list" at 452 hosts; how to shorten it is his call, so the table
+takes a row limit (`LIFETIME_TABLE_ROWS`, unset: every host) and says how
+many hosts it leaves out when set. Below it, an
 **All-time awards** section of nine boards, each collapsible (UI kit) and
 stacked on a phone; below that, the map; then the **archive**.
 

@@ -33,6 +33,7 @@ import {
   medalBadge,
   medalTally,
   monthName,
+  namesNote,
   plural,
   profileUrl,
   streakBadges,
@@ -222,7 +223,8 @@ function monthBody(
   return html`<div class="card">
     <h1>Leaderboard</h1>
     ${viewNav('month', month)} ${monthNav(month, first, current)}
-    ${medalsNote(data)} ${monthStatus(data, month, current)}
+    ${namesNote(data.names)} ${medalsNote(data)}
+    ${monthStatus(data, month, current)}
     ${
       rows.length === 0
         ? html`<p class="muted">
@@ -252,18 +254,30 @@ function medalCell(awarded: boolean, content: SafeHtml | ''): SafeHtml | '' {
   return awarded ? html`<td data-label="Medal">${content}</td>` : '';
 }
 
-function hallOfFameBody(data: Ready, selfId: string): SafeHtml {
+/**
+ * How many rows the Hall of fame's lifetime table shows; undefined shows
+ * every host (today's behaviour). Hai is deciding how to shorten it; set
+ * this to cap it (the table then says how many hosts are not shown).
+ */
+export const LIFETIME_TABLE_ROWS: number | undefined = undefined;
+
+/** The lifetime table: every host by events hosted, at most `limit` rows. */
+export function lifetimeTable(
+  data: Ready,
+  selfId: string,
+  limit: number | undefined = LIFETIME_TABLE_ROWS,
+): SafeHtml {
   const nameOf = (id: string) => data.names.get(id) ?? '';
-  const nameOfHost = (id: string) => nameCell(data, id, selfId);
   const counts = new Map(
     [...data.byHost].map(([id, events]) => [id, events.length]),
   );
   const standings = rank(counts, nameOf);
+  const shown = limit === undefined ? standings : standings.slice(0, limit);
   const medalsByHost = new Map<string, Medal[]>();
   data.medals.forEach((m) => {
     medalsByHost.set(m.memberId, [...(medalsByHost.get(m.memberId) ?? []), m]);
   });
-  const rows = standings.map((s) => {
+  const rows = shown.map((s) => {
     const hostStreaks = streaksFor(data, s.memberId);
     return html`<tr>
       <td data-label="Place">${s.place}</td>
@@ -280,28 +294,41 @@ function hallOfFameBody(data: Ready, selfId: string): SafeHtml {
       </td>
     </tr>`;
   });
+  const hidden = standings.length - shown.length;
+  return html`<p>
+      Every host, by events hosted since the group began.
+      ${`${plural(standings.length, 'host')}, ${plural(data.events.length, 'event')}.`}
+    </p>
+    <table class="stack leaderboard">
+      <thead>
+        <tr>
+          <th>Place</th>
+          <th>Host</th>
+          <th>Events</th>
+          <th>Medals</th>
+          <th>Streaks</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${rows}
+      </tbody>
+    </table>
+    ${
+      hidden > 0
+        ? html`<p class="muted">
+            ${`${plural(hidden, 'more host')} not shown.`}
+          </p>`
+        : ''
+    }`;
+}
+
+function hallOfFameBody(data: Ready, selfId: string): SafeHtml {
+  const nameOfHost = (id: string) => nameCell(data, id, selfId);
   return html`<div class="card">
       <h1>Leaderboard</h1>
-      ${viewNav('all', data.today.slice(0, 7))} ${medalsNote(data)}
-      <p>
-        Every host, by events hosted since the group began.
-        ${`${plural(standings.length, 'host')}, ${plural(data.events.length, 'event')}.`}
-      </p>
-      <table class="stack leaderboard">
-        <thead>
-          <tr>
-            <th>Place</th>
-            <th>Host</th>
-            <th>Events</th>
-            <th>Medals</th>
-            <th>Streaks</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${rows}
-        </tbody>
-      </table>
-      ${streakNote()} ${updatedLine(data)}
+      ${viewNav('all', data.today.slice(0, 7))} ${namesNote(data.names)}
+      ${medalsNote(data)} ${lifetimeTable(data, selfId)} ${streakNote()}
+      ${updatedLine(data)}
     </div>
     ${awardsSection(data, nameOfHost)}
     <div class="card">
