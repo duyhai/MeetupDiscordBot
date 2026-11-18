@@ -67,7 +67,7 @@ import {
   HISTORY_SCRIPT,
   TIMELINE_SCRIPT,
 } from './hostScripts.js';
-import { COPY_ICON, MEETUP_MARK } from '../ui/icons.js';
+import { COPY_ICON, LIST_ICON, MEETUP_MARK, TILES_ICON } from '../ui/icons.js';
 import { HOST_BASE, HostSession } from './hostSession.js';
 
 const logger = new Logger({ name: 'hostDashboard' });
@@ -659,7 +659,6 @@ function choices<K extends string>(
   options: readonly { key: K; label: string }[],
   current: K,
   href: (key: K) => ReturnType<typeof pageLink>,
-  viewSwitch = false,
   unavailable?: { key: K; why: string },
 ): SafeHtml {
   const items = options.map((o) => {
@@ -673,12 +672,7 @@ function choices<K extends string>(
     }
     return html`<a href="${href(o.key)}">${o.label}</a>`;
   });
-  // Two literals: html never interpolates inside a tag.
-  return viewSwitch
-    ? html`<nav class="pager choices" aria-label="${label}" data-cal-views>
-        ${items}
-      </nav>`
-    : html`<nav class="pager choices" aria-label="${label}">${items}</nav>`;
+  return html`<nav class="pager choices" aria-label="${label}">${items}</nav>`;
 }
 
 const CALENDAR_TABS = [
@@ -689,6 +683,45 @@ const CALENDAR_VIEWS = [
   { key: 'tiles', label: 'Tiles' },
   { key: 'list', label: 'List' },
 ] as const;
+
+/**
+ * The Layout switch: an icon button per view, the same links as before
+ * (CALENDAR_VIEW_SCRIPT listens on [data-cal-views] a). The current one is
+ * aria-current text, named by hidden text; the other is a link named by
+ * aria-label. Both carry a title, the tooltip. The nav's aria-label names
+ * the group.
+ */
+function viewSwitch(
+  month: string,
+  tab: CalendarTab,
+  view: CalendarView,
+): SafeHtml {
+  const items = CALENDAR_VIEWS.map((o) => {
+    const icon = o.key === 'tiles' ? TILES_ICON : LIST_ICON;
+    if (o.key === view) {
+      return html`<strong
+        class="button ghost icon-only"
+        aria-current="page"
+        title="${o.label}"
+        >${icon}<span class="sr-only">${o.label}</span></strong
+      >`;
+    }
+    return html`<a
+      class="button ghost icon-only"
+      href="${calendarLink({ month, tab, view: o.key })}"
+      aria-label="${o.label}"
+      title="${o.label}"
+      >${icon}</a
+    >`;
+  });
+  return html`<nav
+    class="pager choices view-switch"
+    aria-label="Layout"
+    data-cal-views
+  >
+    ${items}
+  </nav>`;
+}
 
 /**
  * One day of the day-by-day list, as rows or tiles. The tabs split past
@@ -761,16 +794,9 @@ function dayByDay(
         CALENDAR_TABS,
         tab,
         (key) => calendarLink({ month, tab: key, view }),
-        false,
         hasPast ? undefined : { key: 'past', why: 'no days have passed yet' },
       )}
-      ${choices(
-        'Layout',
-        CALENDAR_VIEWS,
-        view,
-        (key) => calendarLink({ month, tab, view: key }),
-        true,
-      )}
+      ${viewSwitch(month, tab, view)}
     </div>
     ${
       shown.length === 0

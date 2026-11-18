@@ -583,6 +583,10 @@ ul.cal-items>li{display:flex;align-items:flex-start;gap:var(--s3);margin:0 0 var
 /* Day by day's bar: the Upcoming/Past tabs, then the Tiles/List switch, wrapping on a phone. */
 .cal-bar{display:flex;flex-wrap:wrap;justify-content:space-between;gap:0 var(--s4);margin:0 0 var(--s3)}
 .cal-bar nav.pager{margin:0 0 var(--s2)}
+/* The Layout switch: icon buttons (44px targets). The current one is filled and carries a bar along its foot,
+   so it never differs by colour alone; the specificity beats every Style's .button rules. */
+nav.pager.view-switch .button.icon-only{padding:var(--s2);min-width:var(--tap)}
+nav.pager.view-switch strong.button{box-shadow:inset 0 -3px 0 var(--accent)}
 /* Tiles: a 2:1 photo box (sized by aspect-ratio and the img's width/height, so nothing shifts), then the text.
    One column at phone width. The title link covers the tile, so the whole tile opens the event. */
 ul.cal-tiles{list-style:none;padding:0;margin:var(--s2) 0 var(--s3);display:grid;
