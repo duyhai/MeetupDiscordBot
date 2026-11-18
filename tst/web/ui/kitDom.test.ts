@@ -238,6 +238,25 @@ describe('KIT_SCRIPT in a real DOM', () => {
     }
   });
 
+  it('the trigger button keeps the summary’s hover hint, and gets none without one', () => {
+    const page = `<!doctype html><body><main>${
+      modal({
+        trigger: { label: 'Hinted', hint: 'Why "this" & that' },
+        title: 'A',
+        body: html`<p>a</p>`,
+      }).value
+    }${
+      modal({ trigger: { label: 'Plain' }, title: 'B', body: html`<p>b</p>` })
+        .value
+    }</main></body>`;
+    const { document, run } = load(page);
+    run();
+    expect(trigger(document, 'Hinted').getAttribute('title')).toBe(
+      'Why "this" & that',
+    );
+    expect(trigger(document, 'Plain').hasAttribute('title')).toBe(false);
+  });
+
   it('Void suspension: the moved form carries _csrf, version, action and note', async () => {
     const { document, run } = load(await monthPage());
     run();

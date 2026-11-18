@@ -363,13 +363,15 @@ describe('button variants', () => {
     expect(text).toContain('<button type="submit">Mark as sent</button>');
     // Hold, skip and notes open a modal (a ghost trigger), whose confirm
     // button is primary.
-    expect(text).toContain(
-      '<summary class="button ghost">Put on hold</summary>',
+    expect(text).toMatch(
+      /<summary class="button ghost" title="[^"]+">Put on hold<\/summary>/,
     );
     expect(text).toContain(
       '<button type="submit">Put this card on hold</button>',
     );
-    expect(text).toContain('<summary class="button ghost">Skip</summary>');
+    expect(text).toMatch(
+      /<summary class="button ghost" title="[^"]+">Skip<\/summary>/,
+    );
     expect(text).toContain('<button type="submit">Skip this card</button>');
     expect(text).toContain(
       '<button type="submit" class="ghost">Reopen</button>',

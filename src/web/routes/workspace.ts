@@ -697,12 +697,22 @@ function historyBody(
   </ul>`;
 }
 
+// Hold parks a card that is not decided yet (it stays open work); skip closes
+// one that needs nothing (it counts as done). The hint shows on hover only,
+// so each tip repeats the difference for touch devices.
+const HOLD_HINT =
+  'Not decided yet: the card stays open as On hold until someone reopens it.';
 const HOLD_TIP =
-  'The card moves to On hold until someone presses Reopen, which puts it ' +
-  'back where it was. Say why, so the next person knows.';
+  "Use this when the card can't be finished yet, for example while you wait " +
+  'on the member, a host or Leadership. It stays visible as On hold, not ' +
+  'done, until someone reopens it, skips it or (for a suspension, Leadership ' +
+  'only) records the suspension. Say why, so the next person knows.';
+const SKIP_HINT = 'Decided: no action needed. The card counts as done.';
 const SKIP_TIP =
-  'The card moves to Skipped and no message is sent for it. Reopen puts ' +
-  'it back where it was. Say why, so the next person knows.';
+  "Use this when you've decided nothing is needed, for example a host's " +
+  'mistake, a valid excuse, or waiting for the third no-show before ' +
+  'suspending. Nothing more is sent and the card counts as done. Reopen ' +
+  'puts it back as it was before. Say why, so the next person knows.';
 const NOTES_TIP =
   'For staff only: shown on this card. Each save is kept in the card ' +
   'history and posted to the moderation log.';
@@ -744,6 +754,8 @@ function cardHtml(v: CardView): SafeHtml {
     action: 'hold' | 'skip' | 'void',
     copy: {
       trigger: string;
+      /** A hover hint on the trigger button; the tip must cover it too. */
+      hint?: string;
       title: string;
       /** The confirm button: never the trigger's own words. */
       confirm: string;
@@ -759,7 +771,11 @@ function cardHtml(v: CardView): SafeHtml {
     // a card is secondary: ghost.
     const danger = action === 'void';
     return confirmModal({
-      trigger: { label: copy.trigger, tone: danger ? 'danger' : 'ghost' },
+      trigger: {
+        label: copy.trigger,
+        tone: danger ? 'danger' : 'ghost',
+        ...(copy.hint === undefined ? {} : { hint: copy.hint }),
+      },
       title: copy.title,
       tip: copy.tip,
       action: rowUrl,
@@ -855,6 +871,7 @@ function cardHtml(v: CardView): SafeHtml {
       }
       ${noteAction('hold', {
         trigger: 'Put on hold',
+        hint: HOLD_HINT,
         title: 'Put this card on hold',
         confirm: 'Put this card on hold',
         tip: HOLD_TIP,
@@ -863,6 +880,7 @@ function cardHtml(v: CardView): SafeHtml {
       })}
       ${noteAction('skip', {
         trigger: 'Skip',
+        hint: SKIP_HINT,
         title: 'Skip this card',
         confirm: 'Skip this card',
         tip: SKIP_TIP,
