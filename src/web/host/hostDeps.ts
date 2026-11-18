@@ -41,6 +41,8 @@ import { registerHostPages } from './hostPages.js';
 import { createHostRouter } from './hostRouter.js';
 import { registerCreatePages } from './createPage.js';
 import { registerWrappedPage } from './wrappedPage.js';
+import { registerLeaderboardPage } from './leaderboardPage.js';
+import { PostgresLeaderboardRepository } from '../../lib/repositories/postgresLeaderboardRepository.js';
 import {
   cachedDisplayNames,
   discordUsername,
@@ -202,6 +204,12 @@ export function hostRouterFromEnv(
         },
         dashboardOrigin(),
       );
+      // Snapshot only: no Meetup call on this page.
+      registerLeaderboardPage(router, {
+        store: () => PostgresLeaderboardRepository.instance(),
+        snapshot: () => PostgresSnapshotRepository.instance(),
+        now: () => new Date(),
+      });
       // The Discord command's cache, slot and lease; the member's own token
       // from the bot's store; the organizer credential as the RSVP fallback.
       registerWrappedPage(router, {

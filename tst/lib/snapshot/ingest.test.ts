@@ -320,6 +320,9 @@ describe('runSnapshotTick', () => {
     env.advance(SNAPSHOT_RUN_INTERVAL_MS);
     await tickUntilFinished(env);
     expect(env.store.runs[1].lastError).toBe('ShortListing');
+    // Kept on the run itself: a later good tick clears lastError.
+    expect(env.store.shortListings.get(env.store.runs[1].id)).toBe(true);
+    expect(env.store.shortListings.get(env.store.runs[0].id)).toBe(false);
     expect(await env.store.pastEventCount()).toBe(100);
 
     env.group.events = past(99);

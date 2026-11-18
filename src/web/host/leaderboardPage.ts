@@ -1,0 +1,455 @@
+/**
+ * /host/leaderboard: this month's hosting standings with medals, and the
+ * all-time Hall of fame, both from the group snapshot (no Meetup call).
+ * Hosts only. Rules: src/lib/leaderboard/standings.ts.
+ */
+import dayjs from 'dayjs';
+import express, { RequestHandler } from 'express';
+import { Logger } from 'tslog';
+
+import {
+  LeaderboardData,
+  LeaderboardDeps,
+  LeaderboardView,
+  createLeaderboardLoader,
+  streaksFor,
+} from '../../lib/leaderboard/leaderboard.js';
+import {
+  HostStreaks,
+  Medal,
+  MedalPlace,
+  rank,
+} from '../../lib/leaderboard/standings.js';
+import { tz } from '../../util/timezone.js';
+import { SafeHtml, html, memberText, pageLink } from '../html.js';
+import { hostPage } from './hostPageKit.js';
+import { hostLocals } from './hostRouter.js';
+import { HOST_BASE } from './hostSession.js';
+
+const logger = new Logger({ name: 'hostDashboard' });
+
+export const LEADERBOARD_PATH = `${HOST_BASE}/leaderboard`;
+
+const MEDAL_ICON: Record<MedalPlace, string> = { 1: '🥇', 2: '🥈', 3: '🥉' };
+const MEDAL_NAME: Record<MedalPlace, string> = {
+  1: 'Gold',
+  2: 'Silver',
+  3: 'Bronze',
+};
+
+const plural = (n: number, one: string, many = `${one}s`) =>
+  `${n} ${n === 1 ? one : many}`;
+
+const monthName = (month: string) => dayjs(`${month}-01`).format('MMMM YYYY');
+
+/** An emoji with its words for screen readers and on hover. */
+function emoji(icon: string, label: string): SafeHtml {
+  return html`<span role="img" aria-label="${label}" title="${label}"
+    >${icon}</span
+  >`;
+}
+
+export function medalBadge(place: MedalPlace, month?: string): SafeHtml {
+  const label = month
+    ? `${MEDAL_NAME[place]} medal, ${monthName(month)}`
+    : `${MEDAL_NAME[place]} medal`;
+  return emoji(MEDAL_ICON[place], label);
+}
+
+/** Icons per Hai: weekly is the prestige streak (💎), daily is being on fire (🔥). */
+export const WEEKLY_STREAK_ICON = '💎';
+export const DAILY_STREAK_ICON = '🔥';
+
+/**
+ * Current streaks with their counts, weekly first (the more prestigious);
+ * a broken streak is left out.
+ */
+export function streakBadges(streaks: HostStreaks): SafeHtml {
+  const { daily, weekly } = streaks;
+  const parts: SafeHtml[] = [];
+  if (weekly.current > 0) {
+    const label = `Weekly hosting streak: ${plural(weekly.current, 'week')}`;
+    parts.push(
+      html`<span class="streak"
+        >${emoji(WEEKLY_STREAK_ICON, label)} ${weekly.current}</span
+      >`,
+    );
+  }
+  if (daily.current > 0) {
+    const label = `Daily hosting streak: ${plural(daily.current, 'day')}`;
+    parts.push(
+      html`<span class="streak"
+        >${emoji(DAILY_STREAK_ICON, label)} ${daily.current}</span
+      >`,
+    );
+  }
+  return parts.length === 0
+    ? html`<span class="muted">None</span>`
+    : html`${parts}`;
+}
+
+function bestStreaks(streaks: HostStreaks): string {
+  return `Best: ${plural(streaks.weekly.best, 'week')} in a row, ${plural(
+    streaks.daily.best,
+    'day',
+  )} in a row`;
+}
+
+type Ready = LeaderboardView;
+
+/** `?month=YYYY-MM` within the first hosted month and this month; else this month. */
+export function leaderboardMonth(
+  query: unknown,
+  first: string,
+  current: string,
+): string {
+  return typeof query === 'string' &&
+    /^\d{4}-(0[1-9]|1[0-2])$/.test(query) &&
+    query >= first &&
+    query <= current
+    ? query
+    : current;
+}
+
+function viewNav(view: 'month' | 'all', month: string): SafeHtml {
+  const monthPart =
+    view === 'month'
+      ? html`<strong aria-current="page">This month</strong>`
+      : html`<a href="${pageLink(LEADERBOARD_PATH, { month })}">This month</a>`;
+  const allPart =
+    view === 'all'
+      ? html`<strong aria-current="page">Hall of fame</strong>`
+      : html`<a href="${pageLink(LEADERBOARD_PATH, { view: 'all' })}"
+          >Hall of fame</a
+        >`;
+  return html`<nav class="pager choices" aria-label="Leaderboard view">
+    ${monthPart}${allPart}
+  </nav>`;
+}
+
+function monthNav(month: string, first: string, current: string): SafeHtml {
+  const at = dayjs(`${month}-01`);
+  const prev = at.subtract(1, 'month').format('YYYY-MM');
+  const next = at.add(1, 'month').format('YYYY-MM');
+  const link = (m: string) => pageLink(LEADERBOARD_PATH, { month: m });
+  const label = (m: string) => dayjs(`${m}-01`).format('MMM');
+  const prevPart =
+    month > first
+      ? html`<a class="button ghost" href="${link(prev)}">← ${label(prev)}</a>`
+      : html`<span class="button ghost disabled"
+          >← ${label(prev)}<span class="sr-only">
+            (no earlier events)</span
+          ></span
+        >`;
+  const nextPart =
+    month < current
+      ? html`<a class="button ghost" href="${link(next)}">${label(next)} →</a>`
+      : html`<span class="button ghost disabled"
+          >${label(next)} →<span class="sr-only"> (not yet)</span></span
+        >`;
+  return html`<nav class="year-nav" aria-label="Month">
+    ${prevPart}<strong>${monthName(month)}</strong>${nextPart}
+  </nav>`;
+}
+
+function medalsNote(data: Ready): SafeHtml | '' {
+  return data.medalsUnavailable
+    ? html`<p class="note attn">
+        Medals cannot be loaded right now; the standings are complete.
+      </p>`
+    : '';
+}
+
+function updatedLine(data: Ready): SafeHtml {
+  return data.updatedAt
+    ? html`<p class="muted">
+        From Meetup as of ${tz(dayjs(data.updatedAt)).format('MMM D, h:mm A')}
+        (updated about once a day). Cancelled events and Open Houses do not
+        count, and every co-host of an event gets the event.
+      </p>`
+    : html``;
+}
+
+function nameCell(data: Ready, memberId: string, selfId: string): SafeHtml {
+  const name = data.names.get(memberId);
+  const shown = name
+    ? memberText(name)
+    : html`<span class="muted">Unnamed host</span>`;
+  return memberId === selfId
+    ? html`<strong>${shown}</strong> <span class="badge info">You</span>`
+    : shown;
+}
+
+interface MonthRow {
+  memberId: string;
+  events: number;
+  place: number;
+  medal?: MedalPlace;
+}
+
+/**
+ * The month's rows. For an awarded month the stored medalists come first,
+ * with the place and count they were awarded on (medals are kept whatever
+ * later corrections do); everyone else follows, ranked live from the place
+ * after them. Otherwise, the live standings.
+ */
+export function monthRows(data: Ready, month: string): MonthRow[] {
+  const nameOf = (id: string) => data.names.get(id) ?? '';
+  const live = rank(
+    data.byMonth.get(month) ?? new Map<string, number>(),
+    nameOf,
+  );
+  if (!data.awarded.has(month)) {
+    return live;
+  }
+  const stored = data.medals
+    .filter((m) => m.month === month)
+    .sort(
+      (a, b) =>
+        a.place - b.place ||
+        nameOf(a.memberId).localeCompare(nameOf(b.memberId)) ||
+        a.memberId.localeCompare(b.memberId),
+    );
+  const medalists = new Set(stored.map((m) => m.memberId));
+  const rest = rank(
+    new Map(
+      live
+        .filter((s) => !medalists.has(s.memberId))
+        .map((s) => [s.memberId, s.events]),
+    ),
+    nameOf,
+  );
+  return [
+    ...stored.map((m) => ({
+      memberId: m.memberId,
+      events: m.events,
+      place: m.place,
+      medal: m.place,
+    })),
+    ...rest.map((s) => ({ ...s, place: s.place + stored.length })),
+  ];
+}
+
+function monthStatus(data: Ready, month: string, current: string): SafeHtml {
+  if (data.awarded.has(month)) {
+    return html`<p>
+      Final standings. Medals went to the top three places when the month
+      closed, and are kept.
+    </p>`;
+  }
+  if (data.medalsUnavailable) {
+    return html`<p>Standings for ${monthName(month)}.</p>`;
+  }
+  if (month === current) {
+    return html`<p>
+      Standings so far. Medals go to the top three places once the month is
+      over.
+    </p>`;
+  }
+  return data.awardFailed
+    ? html`<p>
+        The month is over, but its medals could not be awarded just now. The
+        leaderboard tries again in a few minutes.
+      </p>`
+    : html`<p>
+        The month is over. Its medals are awarded once a complete update from
+        Meetup at least two days after the month ended is in.
+      </p>`;
+}
+
+function monthBody(
+  data: Ready,
+  month: string,
+  first: string,
+  selfId: string,
+): SafeHtml {
+  const current = data.today.slice(0, 7);
+  const awarded = data.awarded.has(month);
+  const rows = monthRows(data, month).map((row) => {
+    const hostStreaks = streaksFor(data, row.memberId);
+    return html`<tr>
+      <td data-label="Place">${row.place}</td>
+      ${medalCell(awarded, row.medal ? medalBadge(row.medal, month) : '')}
+      <td class="event" data-label="Host">
+        ${nameCell(data, row.memberId, selfId)}
+      </td>
+      <td data-label="Events">${row.events}</td>
+      <td data-label="Streaks">
+        ${streakBadges(hostStreaks)}
+        <span class="muted streak-best">${bestStreaks(hostStreaks)}</span>
+      </td>
+    </tr>`;
+  });
+  return html`<div class="card">
+    <h1>Leaderboard</h1>
+    ${viewNav('month', month)} ${monthNav(month, first, current)}
+    ${medalsNote(data)} ${monthStatus(data, month, current)}
+    ${
+      rows.length === 0
+        ? html`<p class="muted">
+            No hosted events in ${monthName(month)} yet.
+          </p>`
+        : html`<table class="stack leaderboard">
+            <thead>
+              <tr>
+                <th>Place</th>
+                ${awarded ? html`<th>Medal</th>` : ''}
+                <th>Host</th>
+                <th>Events</th>
+                <th>Streaks</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${rows}
+            </tbody>
+          </table>`
+    }
+    ${streakNote()} ${updatedLine(data)}
+  </div>`;
+}
+
+/** Only an awarded month has a Medal column. */
+function medalCell(awarded: boolean, content: SafeHtml | ''): SafeHtml | '' {
+  return awarded ? html`<td data-label="Medal">${content}</td>` : '';
+}
+
+function streakNote(): SafeHtml {
+  return html`<p class="muted">
+    ${emoji(WEEKLY_STREAK_ICON, 'Weekly streak')} counts weeks in a row (Monday
+    to Sunday) with a hosted event; ${emoji(DAILY_STREAK_ICON, 'Daily streak')}
+    counts days in a row. A streak keeps going until a whole week or day passes
+    without one.
+  </p>`;
+}
+
+function medalTally(medals: Medal[]): SafeHtml {
+  if (medals.length === 0) {
+    return html`<span class="muted">None yet</span>`;
+  }
+  const parts = ([1, 2, 3] as const).flatMap((place) => {
+    const n = medals.filter((m) => m.place === place).length;
+    return n === 0
+      ? []
+      : [
+          html`<span class="streak"
+            >${emoji(MEDAL_ICON[place], `${plural(n, `${MEDAL_NAME[place].toLowerCase()} medal`)}`)}
+            ×${n}</span
+          >`,
+        ];
+  });
+  return html`${parts}`;
+}
+
+function hallOfFameBody(data: Ready, selfId: string): SafeHtml {
+  const nameOf = (id: string) => data.names.get(id) ?? '';
+  const counts = new Map(
+    [...data.byHost].map(([id, events]) => [id, events.length]),
+  );
+  const standings = rank(counts, nameOf);
+  const medalsByHost = new Map<string, Medal[]>();
+  data.medals.forEach((m) => {
+    medalsByHost.set(m.memberId, [...(medalsByHost.get(m.memberId) ?? []), m]);
+  });
+  const rows = standings.map((s) => {
+    const hostStreaks = streaksFor(data, s.memberId);
+    return html`<tr>
+      <td data-label="Place">${s.place}</td>
+      <td class="event" data-label="Host">
+        ${nameCell(data, s.memberId, selfId)}
+      </td>
+      <td data-label="Events">${s.events}</td>
+      <td data-label="Medals">
+        ${medalTally(medalsByHost.get(s.memberId) ?? [])}
+      </td>
+      <td data-label="Streaks">
+        ${streakBadges(hostStreaks)}
+        <span class="muted streak-best">${bestStreaks(hostStreaks)}</span>
+      </td>
+    </tr>`;
+  });
+  return html`<div class="card">
+    <h1>Leaderboard</h1>
+    ${viewNav('all', data.today.slice(0, 7))} ${medalsNote(data)}
+    <p>
+      Every host, by events hosted since the group began.
+      ${`${plural(standings.length, 'host')}, ${plural(data.events.length, 'event')}.`}
+    </p>
+    <table class="stack leaderboard">
+      <thead>
+        <tr>
+          <th>Place</th>
+          <th>Host</th>
+          <th>Events</th>
+          <th>Medals</th>
+          <th>Streaks</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${rows}
+      </tbody>
+    </table>
+    ${streakNote()} ${updatedLine(data)}
+  </div>`;
+}
+
+const notReadyBody = html`<div class="card">
+  <h1>Leaderboard</h1>
+  <p>
+    The leaderboard is still being built from the group's event history. Please
+    check back in a few hours.
+  </p>
+</div>`;
+
+const unavailableBody = html`<div class="card">
+  <h1>Unavailable</h1>
+  <p>
+    The leaderboard cannot be loaded right now. Please try again in a minute.
+  </p>
+</div>`;
+
+export function registerLeaderboardPage(
+  router: express.Router,
+  deps: LeaderboardDeps,
+): void {
+  // One loader: its cache and award back-off are shared by every request.
+  const loader = createLeaderboardLoader(deps);
+  router.get('/leaderboard', (async (req, res) => {
+    const { session } = hostLocals(res);
+    // Members never reach here: the router keeps them to MEMBER_PATHS.
+    let data: LeaderboardData;
+    try {
+      data = await loader.load();
+    } catch (error: unknown) {
+      logger.warn(
+        `Leaderboard read failed: ${error instanceof Error ? error.name : 'Error'}`,
+      );
+      hostPage(res, {
+        title: 'Unavailable',
+        current: 'leaderboard',
+        status: 503,
+        body: unavailableBody,
+      });
+      return;
+    }
+    if (!data.ready) {
+      hostPage(res, {
+        title: 'Leaderboard',
+        current: 'leaderboard',
+        body: notReadyBody,
+      });
+      return;
+    }
+    const current = data.today.slice(0, 7);
+    const first = data.firstMonth ?? current;
+    const body =
+      req.query.view === 'all'
+        ? hallOfFameBody(data, session.userId)
+        : monthBody(
+            data,
+            leaderboardMonth(req.query.month, first, current),
+            first,
+            session.userId,
+          );
+    hostPage(res, { title: 'Leaderboard', current: 'leaderboard', body });
+  }) as RequestHandler);
+}

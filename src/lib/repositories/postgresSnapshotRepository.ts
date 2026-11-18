@@ -73,10 +73,12 @@ export interface SnapshotStore {
   markAuditDeletions(): Promise<number>;
   /** deleted_at = at on one event (a by-id read answered null). */
   markDeleted(eventId: string, at: Date): Promise<void>;
+  /** `short`: the listing had too few past events (kept on the run). */
   markListed(
     runId: number,
     listedAt: Date,
     eventsListed: number,
+    short?: boolean,
   ): Promise<void>;
   /**
    * PAST, not deleted, not failed during this run, and never read, read
@@ -311,6 +313,31 @@ export class PostgresSnapshotRepository
         listedAt,
       ],
     );
+    await this.upsertHostNames(events, listedAt);
+  }
+
+  /** The listing's host names; the latest listing wins. */
+  private async upsertHostNames(
+    events: SnapshotEvent[],
+    seenAt: Date,
+  ): Promise<void> {
+    const names = new Map<string, string>();
+    events.forEach((e) => {
+      Object.entries(e.hostNames ?? {}).forEach(([id, name]) => {
+        names.set(id, name);
+      });
+    });
+    if (names.size === 0) {
+      return;
+    }
+    await this.pool.query(
+      `INSERT INTO meetup_host_names (member_id, name, seen_at)
+       SELECT h.id, h.name, $3 FROM unnest($1::text[], $2::text[]) AS h(id, name)
+       ON CONFLICT (member_id) DO UPDATE SET
+         name = EXCLUDED.name, seen_at = EXCLUDED.seen_at
+       WHERE meetup_host_names.seen_at <= EXCLUDED.seen_at`,
+      [[...names.keys()], [...names.values()], seenAt],
+    );
   }
 
   async markDelisted(before: Date, at: Date): Promise<number> {
@@ -351,11 +378,36 @@ export class PostgresSnapshotRepository
     runId: number,
     listedAt: Date,
     eventsListed: number,
+    short = false,
   ): Promise<void> {
     await this.pool.query(
-      'UPDATE meetup_snapshot_runs SET listed_at = $2, events_listed = $3 WHERE id = $1',
-      [runId, listedAt, eventsListed],
+      `UPDATE meetup_snapshot_runs
+          SET listed_at = $2, events_listed = $3, listing_short = $4
+        WHERE id = $1`,
+      [runId, listedAt, eventsListed, short],
     );
+  }
+
+  /**
+   * When the latest finished run's listing ended, if that listing was
+   * complete: not short, and the run carries no error. Undefined otherwise
+   * (and before any run), so nothing permanent is decided off a partial
+   * listing. Per-event RSVP failures (`failed`) do not count against it:
+   * they never change an event's hosts.
+   */
+  async lastCompleteListing(): Promise<Date | undefined> {
+    const result = await this.pool.query<{
+      listed_at: Date | null;
+      listing_short: boolean;
+      last_error: string | null;
+    }>(
+      `SELECT listed_at, listing_short, last_error FROM meetup_snapshot_runs
+        WHERE finished_at IS NOT NULL ORDER BY finished_at DESC, id DESC LIMIT 1`,
+    );
+    const row = result.rows[0];
+    return row && !row.listing_short && row.last_error === null
+      ? (row.listed_at ?? undefined)
+      : undefined;
   }
 
   async eventsNeedingRsvps(

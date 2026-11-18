@@ -6,6 +6,7 @@ import {
 } from '../../../src/lib/client/meetup/queries.js';
 import { TITLE_MAX } from '../../../src/lib/eventAudit/meetup.js';
 import {
+  HOST_NAME_MAX,
   toSnapshotEvent,
   toSnapshotRsvp,
 } from '../../../src/lib/snapshot/meetup.js';
@@ -18,7 +19,10 @@ const node = (over: Record<string, unknown> = {}) => ({
   dateTime: '2024-03-02T19:00:00-08:00',
   eventUrl: URL,
   status: 'PAST',
-  eventHosts: [{ member: { id: '111' } }, { member: { id: '222' } }],
+  eventHosts: [
+    { member: { id: '111', name: ' Ana ' } },
+    { member: { id: '222', name: 'Bo' } },
+  ],
   attendance: { totalCount: 14 },
   waitlist: { totalCount: 2 },
   ...over,
@@ -33,6 +37,7 @@ describe('toSnapshotEvent', () => {
       eventUrl: URL,
       status: 'PAST',
       hostIds: ['111', '222'],
+      hostNames: { '111': 'Ana', '222': 'Bo' },
       yesCount: 14,
       waitlistCount: 2,
     });
@@ -62,6 +67,25 @@ describe('toSnapshotEvent', () => {
     expect(event?.yesCount).toBeNull();
     expect(event?.waitlistCount).toBeNull();
     expect(event?.hostIds).toEqual(['333']);
+  });
+
+  it('keeps host names bounded and drops blank ones or unusable ids', () => {
+    const event = toSnapshotEvent(
+      node({
+        eventHosts: [
+          { member: { id: '111', name: 'n'.repeat(HOST_NAME_MAX + 9) } },
+          { member: { id: '222', name: '   ' } },
+          { member: { id: 'x', name: 'Eve' } },
+          { member: { id: '333' } },
+          { member: { id: '444', name: 'Ze\u0000ro\u0007 ' } },
+        ],
+      }),
+    );
+    expect(event?.hostIds).toEqual(['111', '222', '333', '444']);
+    expect(event?.hostNames).toEqual({
+      '111': 'n'.repeat(HOST_NAME_MAX),
+      '444': 'Zero',
+    });
   });
 
   it('tolerates missing hosts and counts', () => {
@@ -98,7 +122,7 @@ describe('toSnapshotRsvp', () => {
 describe('snapshot queries', () => {
   const text = (doc: unknown) => String(doc);
 
-  it('the listing asks for counts and host ids, never names', () => {
+  it("the listing asks for counts and host ids, and no name but the hosts'", () => {
     const q = text(getGroupEventsForSnapshot);
     expect(q).toMatch(
       /attendance: rsvps\(filter: \{ rsvpStatus: \[YES, ATTENDED\] \}\)/,
@@ -106,8 +130,8 @@ describe('snapshot queries', () => {
     expect(q).toMatch(
       /waitlist: rsvps\(filter: \{ rsvpStatus: \[WAITLIST\] \}\)/,
     );
-    expect(q).toMatch(/eventHosts \{\s*member \{\s*id\s*\}\s*\}/);
-    expect(q).not.toMatch(/\bname\b/);
+    expect(q).toMatch(/eventHosts \{\s*member \{\s*id\s*name\s*\}\s*\}/);
+    expect(q.match(/\bname\b/g)).toHaveLength(1);
   });
 
   it('the RSVP read asks for member ids only', () => {

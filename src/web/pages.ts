@@ -265,6 +265,8 @@ border-radius:var(--radius-pill);color:var(--muted);background:var(--raised);ver
 .badge.attn{color:var(--attn-ink);background:var(--attn-soft)}
 .badge.info{color:var(--accent-ink);background:var(--accent-soft)}
 .badge.ok{color:var(--ok-ink);background:var(--ok-soft)}
+.streak{white-space:nowrap;margin-right:var(--s2)}
+.streak-best{display:block;font-size:var(--t-sm)}
 .note{color:var(--fg);background:var(--raised);border:1px solid var(--line);border-left:4px solid var(--field);
 border-radius:var(--radius-ctl);padding:var(--s3) var(--s4);margin:0 0 var(--s3);animation:note-in 200ms ease-out both}
 .note.attn{color:var(--attn-ink);background:var(--attn-soft);border-color:var(--attn-soft);

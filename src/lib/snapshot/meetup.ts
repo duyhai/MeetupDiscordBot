@@ -1,7 +1,8 @@
 /**
  * The group snapshot's view of Meetup nodes: validated the way the event
  * audit validates its own (digit ids, a parsable start, Meetup event URLs
- * only, bounded titles). Ids and statuses only; no names ever reach here.
+ * only, bounded titles). Ids and statuses only, except hosts' names (shown
+ * on every public event page), which the leaderboard keeps apart.
  */
 import dayjs from 'dayjs';
 
@@ -16,6 +17,11 @@ export interface SnapshotEvent {
   status: EventStatus | 'UNKNOWN';
   /** Meetup member ids. */
   hostIds: string[];
+  /**
+   * Each host's Meetup name by id, for meetup_host_names (the leaderboard).
+   * Optional: older callers and tests build events without it.
+   */
+  hostNames?: Record<string, string>;
   /** Meetup's YES + ATTENDED total at listing time. */
   yesCount: number | null;
   waitlistCount: number | null;
@@ -30,6 +36,8 @@ export interface SnapshotRsvp {
 }
 
 const DIGITS = /^[0-9]{1,20}$/;
+/** Longer Meetup names are cut, as titles are. */
+export const HOST_NAME_MAX = 100;
 const STATUSES: ReadonlySet<string> = new Set<EventStatus>([
   'ACTIVE',
   'AUTOSCHED',
@@ -68,6 +76,18 @@ function field(value: unknown, key: string): unknown {
     : undefined;
 }
 
+/** A trimmed, bounded name without control characters; undefined when there is none. */
+function hostName(value: unknown): string | undefined {
+  if (typeof value !== 'string') {
+    return undefined;
+  }
+  // Control characters out first: Postgres refuses U+0000 in text, which
+  // would fail the whole listing's write.
+  const clean = value.replace(/[\u0000-\u001f\u007f]/g, '').trim();
+  const name = Array.from(clean).slice(0, HOST_NAME_MAX).join('');
+  return name === '' ? undefined : name;
+}
+
 /** A listing node as a snapshot event, or undefined without a usable id or start. */
 export function toSnapshotEvent(node: unknown): SnapshotEvent | undefined {
   const n = node;
@@ -80,6 +100,17 @@ export function toSnapshotEvent(node: unknown): SnapshotEvent | undefined {
   const status = field(n, 'status');
   const url = field(n, 'eventUrl');
   const hosts = field(n, 'eventHosts');
+  const hostNames: Record<string, string> = {};
+  if (Array.isArray(hosts)) {
+    hosts.forEach((host: unknown) => {
+      const member = field(host, 'member');
+      const id = digits(field(member, 'id'));
+      const name = hostName(field(member, 'name'));
+      if (id !== undefined && name !== undefined) {
+        hostNames[id] = name;
+      }
+    });
+  }
   return {
     eventId,
     title: title(field(n, 'title')),
@@ -96,6 +127,7 @@ export function toSnapshotEvent(node: unknown): SnapshotEvent | undefined {
           return id === undefined ? [] : [id];
         })
       : [],
+    hostNames,
     yesCount: count(field(field(n, 'attendance'), 'totalCount')),
     waitlistCount: count(field(field(n, 'waitlist'), 'totalCount')),
   };

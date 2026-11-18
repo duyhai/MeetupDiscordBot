@@ -518,7 +518,8 @@ export interface SnapshotEventNode {
   status?: unknown;
   dateTime?: unknown;
   eventUrl?: unknown;
-  eventHosts?: ({ member?: { id?: unknown } | null } | null)[] | null;
+  eventHosts?:
+    ({ member?: { id?: unknown; name?: unknown } | null } | null)[] | null;
   attendance?: { totalCount?: unknown } | null;
   waitlist?: { totalCount?: unknown } | null;
 }
