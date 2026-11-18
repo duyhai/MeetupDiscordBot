@@ -97,8 +97,14 @@ export class FakeSnapshotStore implements SnapshotStore {
     ).length;
   }
 
+  /** meetup_host_names: each host's latest listed name. */
+  hostNames = new Map<string, string>();
+
   async upsertEvents(events: SnapshotEvent[], listedAt: Date): Promise<void> {
     events.forEach((e) => {
+      Object.entries(e.hostNames ?? {}).forEach(([id, name]) => {
+        this.hostNames.set(id, name);
+      });
       const previous = this.events.get(e.eventId);
       this.events.set(e.eventId, {
         ...e,

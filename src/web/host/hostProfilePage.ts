@@ -35,6 +35,7 @@ import {
   emoji,
   medalBadge,
   monthName,
+  namesNote,
   plural,
   updatedLine,
 } from './leaderboardKit.js';
@@ -211,6 +212,7 @@ export function profileBody(
         >
       </p>
       <h1>${name ? memberText(name) : 'Unnamed host'}${you}</h1>
+      ${namesNote(data.names, [memberId])}
       <p>${tierBadge(memberId, promoted)}</p>
       <dl class="stats profile">
         <div class="stat">

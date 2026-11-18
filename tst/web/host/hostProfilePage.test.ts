@@ -90,18 +90,19 @@ const EVENTS = [
   ),
 ];
 
-function store(): LeaderboardStore {
+const NAMES = new Map([
+  ['1', 'Bea'],
+  ['2', HOSTILE],
+  ['4242', 'Ann'],
+]);
+
+function store(names: Map<string, string> = NAMES): LeaderboardStore {
   const months = new Set<string>();
   const medals: Medal[] = [];
   return {
     hostedEvents: async (): Promise<LeaderboardEvent[]> =>
       EVENTS.map((e) => e.board),
-    hostNames: async () =>
-      new Map([
-        ['1', 'Bea'],
-        ['2', HOSTILE],
-        ['4242', 'Ann'],
-      ]),
+    hostNames: async () => names,
     medals: async () => [...medals],
     awardedMonths: async () => new Set(months),
     award: async (list) => {
@@ -118,9 +119,11 @@ async function app(
   {
     resolve,
     snapshot,
+    names,
   }: {
     resolve?: HostResolution;
     snapshot?: LeaderboardDeps['snapshot'];
+    names?: Map<string, string>;
   } = {},
 ) {
   const hostedEvents = vi.fn(async (id: string): Promise<ProfileEvent[]> =>
@@ -134,7 +137,7 @@ async function app(
     ...(resolve ? { resolve: vi.fn().mockResolvedValue(resolve) } : {}),
     pages: (router) =>
       registerLeaderboardPage(router, {
-        store: async () => store(),
+        store: async () => store(names),
         snapshot:
           snapshot ??
           (async () => ({
@@ -343,6 +346,15 @@ describe('host profile', () => {
     expect(res.text).not.toContain('<bdi>Seattle</bdi>');
     expect(res.text).toContain(
       '1 event in other areas (fewer than 3 events each) is not shown on the map or by city.',
+    );
+  });
+
+  it('a profile before any names are collected says when they will appear', async () => {
+    const { req, sid } = await app({}, { names: new Map() });
+    const res = await req.get('/host/hosts/1').set('Cookie', sid);
+    expect(res.text).toContain('<h1>Unnamed host');
+    expect(res.text).toContain(
+      'Missing host names appear after the next daily update from Meetup.',
     );
   });
 });

@@ -274,6 +274,18 @@ border-radius:var(--radius-pill);color:var(--muted);background:var(--raised);ver
 .host-map{margin:0}
 .host-map .map{height:22rem;margin:0 0 var(--s2);border:1px solid var(--line);border-radius:var(--radius-ctl);z-index:0}
 .host-map figcaption{font-size:var(--t-sm);margin:0 0 var(--s3)}
+.award-boards{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(22rem,100%),1fr));gap:var(--s3);align-items:start}
+.award-boards>.ui-collapsible{margin:0}
+.award-detail{display:block;font-size:var(--t-sm)}
+@media (min-width:640px){table.award-board th:first-child,table.award-board td:first-child{width:3.5rem;white-space:nowrap}
+table.award-board th:last-child,table.award-board td:last-child{white-space:nowrap;text-align:right}}
+.archive-months{list-style:none;padding:0;margin:0}
+.archive-months li{padding:var(--s1) 0;border-bottom:1px solid var(--line)}
+.archive-medalist{display:inline-block;margin-right:var(--s3);white-space:nowrap}
+table.leaderboard tr.phone-only,p.table-toggle.phone-only{display:none}
+table.leaderboard tr.you-row,table.leaderboard tr.you-row td{background:var(--accent-soft)}
+table.stack td.gap-cell{padding:var(--s2) var(--s3);text-align:center;color:var(--muted);font-size:var(--t-sm)}
+table.stack td.gap-cell::before{content:none}
 .note{color:var(--fg);background:var(--raised);border:1px solid var(--line);border-left:4px solid var(--field);
 border-radius:var(--radius-ctl);padding:var(--s3) var(--s4);margin:0 0 var(--s3);animation:note-in 200ms ease-out both}
 .note.attn{color:var(--attn-ink);background:var(--attn-soft);border-color:var(--attn-soft);
@@ -395,7 +407,10 @@ table.stack.tl-table td::before{content:attr(data-label);float:left;width:calc(6
 padding-right:var(--s3);box-sizing:content-box;font-size:var(--t-sm);font-weight:600;color:var(--muted)}}
 @media (min-width:640px) and (max-width:1023.98px){table.stack.tl-table td{padding-left:12rem}
 table.stack.tl-table td::before{width:calc(12rem - var(--s3));margin-left:-12rem}}
-@media (max-width:639.98px){h1{font-size:var(--t-xl)}
+@media (max-width:639.98px){table.leaderboard tr.phone-only{display:block}
+p.table-toggle.phone-only{display:block}
+table.leaderboard tr.desktop-only,p.table-toggle.desktop-only{display:none}
+h1{font-size:var(--t-xl)}
 h2{font-size:var(--t-lg)}
 h3{font-size:var(--t-base)}
 table.stack,table.stack tbody{display:block;width:100%}

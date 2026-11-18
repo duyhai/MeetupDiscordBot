@@ -33,6 +33,14 @@ export interface LeaderboardEvent {
    * venue; undefined when the snapshot has not collected it yet.
    */
   place?: EventPlace | null;
+  /** The event on Meetup, when the store has its URL. */
+  eventUrl?: string;
+  /**
+   * Meetup's YES + ATTENDED total (the number Wrapped and profiles use), or
+   * the stored RSVPs when the listing had none and they were read;
+   * undefined when there is no attendance data.
+   */
+  attendance?: number;
 }
 
 /** A month's medals: gold, silver, bronze. */
@@ -125,6 +133,18 @@ export function countsByMonth(
 }
 
 /**
+ * The tie order everywhere on the leaderboard: by name, then by id. Never
+ * one joined string: ICU collation ignores control characters, so "Ann"
+ * plus an id could sort after "Ann Lee".
+ */
+export function byNameThenId(
+  a: { name: string; id: string },
+  b: { name: string; id: string },
+): number {
+  return a.name.localeCompare(b.name) || a.id.localeCompare(b.id);
+}
+
+/**
  * Places by events hosted, competition-ranked. Ties are listed by
  * `nameOf` (then id), which never changes a place.
  */
@@ -138,8 +158,10 @@ export function rank(
     .sort(
       (a, b) =>
         b.events - a.events ||
-        nameOf(a.memberId).localeCompare(nameOf(b.memberId)) ||
-        a.memberId.localeCompare(b.memberId),
+        byNameThenId(
+          { name: nameOf(a.memberId), id: a.memberId },
+          { name: nameOf(b.memberId), id: b.memberId },
+        ),
     );
   let place = 0;
   return rows.map((row, i) => {

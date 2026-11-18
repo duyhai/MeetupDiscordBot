@@ -24,6 +24,11 @@ public. The event and RSVP tables stay name-free. Names are shown with
 one, it matches My history's co-host names, and it needs no Discord lookup.
 Control characters are stripped at ingest. Names of hosts who have left are
 not purged (noted for later; they stay as long as their events do).
+Names are written only by a snapshot listing, which every run (full or
+incremental) starts with and which covers every past, cancelled and upcoming
+event, so the first run after deploy names every past host. Until it runs
+(up to a day, or "Refresh snapshot now"), there are none: the pages show
+"Unnamed host" with a note that names appear after the next daily update.
 
 ## Counting (PR 1)
 
@@ -229,6 +234,97 @@ message, so coordinates or names never reach the process log.
 
 Recommended: 1, with 2's city list underneath for no-JS and screen readers.
 
+## All-time awards and the monthly archive (PR 4)
+
+Decided by Hai, 2026-11-18: "Go with Layout 2 and Ties A." From his
+request: "next to the Hall of Fame, we could also have an all-time high
+leaderboard. Or maybe in the Hall of Fame, we could have 10 different
+all-time awards (eg: highest weekly streak top 10, highest daily streak top
+10, etc), and then below that, we could have an archive where people can
+look at the historic monthly hall of fame rankings."
+
+**Layout 2.** The Hall of fame view keeps the lifetime table on top (it is
+the "most events hosted" board), shortened as Hai decided after calling it
+"a long … list" at 452 hosts: "let's do the first 5, and then three dots or
+some kind of styling to indicate skipping rows, and then the 3 people before
+you and 3 people after you with your current rank. If you're in the top 10,
+then just simply show the top 10." So: a viewer placed 10th or better (ties
+included), or not on the board, sees every row placed 10th or better.
+Anyone else sees rows 1 to 5, a gap row ("N hosts not shown (places A to
+B)"), then the 3 rows before them, their own row (true place, "You", tinted),
+and the 3 after (none after if they are last). Windows go by row order in
+the ranked list and places stay the true competition places; runs that
+touch merge, with no gap. "Show all N hosts" (`?view=all&hosts=all`,
+server-rendered, no JavaScript) shows every row, with a link back; both
+links are left out when the short list already shows everyone, and each
+is shown only on the widths whose short list leaves someone out (6 to 10
+hosts: phone only). A top-places list stops at 25 rows on desktop, as the
+award boards do, and 10 on a phone, then "and N more tied at Xth", always
+keeping the viewer's own row. Hosts after a width's last shown row get a
+closing line, "and N more hosts" (count only); "Show all N hosts" is the
+way to see them. A gap never repeats a place already shown above it: when the first
+skipped row is tied with the last shown one, the range starts at the next
+place, or the gap gives only a count if every skipped row is tied.
+
+On a phone (Hai: "just show one before and after, and only show top five if
+you are in the top five. Ten is too many for mobile."): a viewer placed 5th
+or better, or not on the board, sees rows placed 5th or better; anyone else
+(6th to 10th included) rows 1 to 5, a gap where rows are skipped, then 1 row
+before them, their row and 1 after, with touching runs merged. The page
+has no device detection: it renders the union of both widths' rows, marks
+rows one width hides (`desktop-only`, `phone-only`), and the stylesheet's
+phone block (the same 640 px breakpoint as the stacked tables) swaps them.
+A gap's text differs per width, so `shortList` computes both and the page
+renders each variant where its width needs it, the other hidden with
+`display:none` (not read out). A gap can be phone-only: a viewer placed
+9th sees the top 10 on desktop but 1 to 5, "places 6 to 7", 8th, themselves
+and 10th on a phone.
+
+A host's name links to their profile only when they have one (counted
+events): a medalist whose events were all cancelled since is named on the
+boards, the archive and the month page as plain text, not a link to a 404.
+
+| Board                    | Per host (or event)                                              | Source                                                                                                 |
+| ------------------------ | ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| Most attendees hosted    | sum of Meetup's YES + ATTENDED per counted event                 | attendance added to the Leaderboard's event read; events with no attendance data left out, with a note |
+| Longest weekly streak 💎 | best run of hosting weeks                                        | `streaks` (best)                                                                                       |
+| Longest daily streak 🔥  | best run of hosting days                                         | `streaks` (best)                                                                                       |
+| Most gold medals         | stored golds, for every stored medalist                          | `host_medals`                                                                                          |
+| Most medals              | stored medals, any place, for every stored medalist              | `host_medals`                                                                                          |
+| Most events in one month | the host's best month, named                                     | `byMonth`                                                                                              |
+| Biggest single event     | per counted event: attendance, title linked to Meetup, its hosts | the same attendance; unknown left out                                                                  |
+| Widest variety           | distinct event types hosted                                      | `classifyEventType`, once per event at load                                                            |
+| Most months active       | distinct months with a counted event                             | `byMonth`                                                                                              |
+
+Medals are permanent, so the two medal boards rank every stored medalist,
+including one whose events were later deleted or renamed "cancelled": they
+keep their medals there and in the archive, but with no counted events they
+are not in the lifetime table or on the other boards. Ties on every board
+go by name, then id, the same comparator as the standings.
+
+**Ties A.** Competition ranking: tied entries share a place and the next
+place is skipped. A board shows every entry placed 10th or better, so a tie
+for 10th runs it past 10 rows. A hard cap of **25 rows** stops a mass tie
+(say, 40 hosts with one medal): the rest are summed as "and N more tied at
+Xth". Rows past the cap are always tied with the 25th, since any later
+place would be past 10th. Zero values never place.
+
+**Archive.** Every closed month, newest first, grouped by year (each year
+collapsible, the latest open). An awarded month lists its medalists exactly
+as its `?month=` page does (the same `monthRows`: stored place and count),
+with a link to that page for the full standings. A month that is closed but
+not yet awarded says so; an awarded month with no hosted events says that.
+
+**Cost and constraints.** Snapshot only, no Meetup call. The boards and the
+archive's medalists (the same monthRows as the month page, per awarded
+month) are computed once per load in the cached loader and reused until the
+next snapshot run; the archive sends every year, older ones collapsed. Names link to profiles. Nothing about what anyone
+attended: attendance appears only as event totals, which Meetup shows
+publicly, and "biggest single event" lists only counted hosted events. No
+location-based board (the home-venue concern). Blacklisted hosts are
+treated like any other host (Hai: keep as is). Emoji keep their text
+alternatives.
+
 ## PR split
 
 1. **Leaderboard tab:** host names table, medal tables and awarding, monthly
@@ -236,3 +332,5 @@ Recommended: 1, with 2's city list underneath for no-JS and screen readers.
 2. **Host profiles:** profile page and lifetime stats; leaderboard names link
    to it.
 3. **Maps:** snapshot venue fields, profile map and Hall of fame map.
+4. **All-time awards and archive:** nine award boards under the Hall of
+   fame table, and the monthly archive.

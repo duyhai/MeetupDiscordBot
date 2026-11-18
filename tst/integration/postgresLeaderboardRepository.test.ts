@@ -293,5 +293,46 @@ const event = (
         (await repo.hostedEvents()).find((e) => e.id === '1')?.place,
       ).toBeNull();
     });
+
+    it('carries attendance as profiles do, and the event URL', async () => {
+      const at = new Date('2026-11-17T00:00:00Z');
+      await snapshot.upsertEvents(
+        [
+          event('1', {
+            yesCount: 9,
+            eventUrl: 'https://www.meetup.com/g/events/1/',
+          }),
+          // No listed count, RSVPs read: the stored YES/ATTENDED rows.
+          event('2', { yesCount: null }),
+          // No listed count, never read: unknown.
+          event('3', { yesCount: null }),
+        ],
+        at,
+      );
+      await snapshot.replaceRsvps(
+        '2',
+        [
+          { memberId: '501', status: 'YES' },
+          { memberId: '502', status: 'ATTENDED' },
+          { memberId: '503', status: 'WAITLIST' },
+        ],
+        at,
+      );
+      const rows = Object.fromEntries(
+        (await repo.hostedEvents()).map((e) => [
+          e.id,
+          [e.attendance, e.eventUrl],
+        ]),
+      );
+      expect(rows['1']).toEqual([9, 'https://www.meetup.com/g/events/1/']);
+      expect(rows['2'][0]).toBe(2);
+      expect(rows['2'][1]).toMatch(/\/events\/2\/$/);
+      expect(rows['3'][0]).toBeUndefined();
+      // The same numbers the profile reads.
+      const profile = Object.fromEntries(
+        (await snapshot.profileEvents('111')).map((e) => [e.id, e.attendance]),
+      );
+      expect(profile).toEqual({ '1': 9, '2': 2, '3': undefined });
+    });
   },
 );

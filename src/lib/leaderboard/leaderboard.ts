@@ -13,6 +13,8 @@ import { Logger } from 'tslog';
 
 import type { SnapshotRun } from '../repositories/postgresSnapshotRepository.js';
 import type { LeaderboardStore } from '../repositories/postgresLeaderboardRepository.js';
+import { AwardBoard, awardBoards } from './awards.js';
+import { MonthRow, archiveMedalists } from './monthRows.js';
 import {
   HostStreaks,
   LeaderboardEvent,
@@ -77,6 +79,10 @@ export interface LeaderboardView {
   streakDay: string;
   /** Pacific day now: the current month. */
   today: string;
+  /** The Hall of fame's all-time award boards, computed once per load. */
+  awards: AwardBoard[];
+  /** The archive: each awarded month's medalists, as its month page shows them. */
+  archive: Map<string, MonthRow[]>;
 }
 
 export type LeaderboardData = { ready: false } | LeaderboardView;
@@ -218,6 +224,8 @@ export function createLeaderboardLoader(deps: LeaderboardDeps): {
       firstMonth,
       streakDay,
       today: pacificDayOf(nowDate),
+      awards: awardBoards({ events, byHost, streaks, medals, names }),
+      archive: archiveMedalists({ names, byMonth, medals, awarded: months }),
     });
     if (awarded === undefined) {
       return { view: view([], new Set(), true), cacheable: false };

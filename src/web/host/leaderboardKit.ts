@@ -129,3 +129,23 @@ export function profileUrl(memberId: string): SafeUrl | undefined {
     ? localUrl(`${HOST_BASE}/hosts/${memberId}`)
     : undefined;
 }
+
+/**
+ * Host names come from the snapshot's listing (meetup_host_names), written
+ * by every run's listing; before the first one after deploy there are
+ * none, and a new host's arrives with the next. Shown whenever any host the
+ * page names has none yet; true whether some or all are missing.
+ */
+export function namesNote(
+  names: Map<string, string>,
+  memberIds: Iterable<string>,
+): SafeHtml | '' {
+  for (const id of memberIds) {
+    if (!names.has(id)) {
+      return html`<p class="note info">
+        Missing host names appear after the next daily update from Meetup.
+      </p>`;
+    }
+  }
+  return '';
+}
