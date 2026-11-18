@@ -16,8 +16,8 @@ export function hostPage(
     current?: HostNavKey;
     body: SafeHtml;
     status?: number;
-    /** A staticRaw constant run after the page loads. */
-    script?: SafeHtml;
+    /** staticRaw constants run after the page loads, each its own script. */
+    script?: SafeHtml | readonly SafeHtml[];
   },
 ) {
   const { session, nonce } = hostLocals(res);

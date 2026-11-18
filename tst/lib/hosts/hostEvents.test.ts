@@ -5,6 +5,7 @@ import {
   attendanceUrl,
   groupCalendar,
   hostedEvents,
+  eventPhotoThumb,
   toHostEvent,
 } from '../../../src/lib/hosts/hostEvents.js';
 
@@ -135,6 +136,35 @@ describe('toHostEvent', () => {
         eventHosts: [{ member: { id: '4242', name: 'Ann' } }, { member: null }],
       }),
     ).toMatchObject({ type: 'outdoors', hosts: [{ id: '4242', name: 'Ann' }] });
+  });
+
+  it('keeps the photo thumbnail only from Meetup’s photo host over https', () => {
+    const base = {
+      id: '9',
+      title: 'Hike',
+      dateTime: '2026-11-01T10:00:00-07:00',
+      eventUrl: 'https://www.meetup.com/g/events/9/',
+    };
+    const thumb =
+      'https://secure.meetupstatic.com/photos/event/d/2/2/5/thumb_536933797.jpeg';
+    expect(
+      toHostEvent({ ...base, featuredEventPhoto: { thumbUrl: thumb } })
+        .photoUrl,
+    ).toBe(thumb);
+    for (const featuredEventPhoto of [
+      null,
+      undefined,
+      { thumbUrl: null },
+      { thumbUrl: 42 },
+      { thumbUrl: 'http://secure.meetupstatic.com/x.jpg' },
+      { thumbUrl: 'https://evil.example/x.jpg' },
+      { thumbUrl: 'javascript:alert(1)' },
+    ]) {
+      const event = toHostEvent({ ...base, featuredEventPhoto });
+      expect(event.photoUrl).toBeUndefined();
+      expect('photoUrl' in event).toBe(false);
+    }
+    expect(eventPhotoThumb(thumb)).toBe(thumb);
   });
 });
 

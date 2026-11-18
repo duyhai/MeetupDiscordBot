@@ -23,6 +23,37 @@ export interface HostEvent {
    * countedOnly.
    */
   counted: boolean;
+  /**
+   * The event photo's 80x80 thumbnail, only when it is an https URL on
+   * Meetup's photo host (eventPhotoThumb); else absent.
+   */
+  photoUrl?: string;
+}
+
+/** Meetup's event photo host: the only image host the host site's CSP admits. */
+export const MEETUP_PHOTO_HOST = 'secure.meetupstatic.com';
+
+/**
+ * An event photo URL the page may show: https on MEETUP_PHOTO_HOST, with no
+ * port or credentials. Anything else is undefined.
+ */
+export function eventPhotoThumb(url: unknown): string | undefined {
+  if (typeof url !== 'string') {
+    return undefined;
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return undefined;
+  }
+  return parsed.protocol === 'https:' &&
+    parsed.hostname === MEETUP_PHOTO_HOST &&
+    parsed.port === '' &&
+    parsed.username === '' &&
+    parsed.password === ''
+    ? parsed.href
+    : undefined;
 }
 
 /** The events that count as hosted, in the order given. */
@@ -176,11 +207,14 @@ interface RawEventNode {
   eventUrl: string;
   status?: EventStatus | null;
   eventHosts?: { member?: { id?: unknown; name?: unknown } | null }[] | null;
+  featuredEventPhoto?: { thumbUrl?: unknown } | null;
 }
 
 export function toHostEvent(node: RawEventNode): HostEvent {
   const title = String(node.title ?? '');
+  const photoUrl = eventPhotoThumb(node.featuredEventPhoto?.thumbUrl);
   return {
+    ...(photoUrl === undefined ? {} : { photoUrl }),
     id: String(node.id),
     title,
     dateTime: String(node.dateTime),

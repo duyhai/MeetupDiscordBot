@@ -23,6 +23,7 @@ import { DuplicateMeetupAccountError } from '../../lib/helpers/memberLink.js';
 import { NonMemberError } from '../../lib/helpers/onboardUser.js';
 import { VerificationSummary } from '../../lib/helpers/verificationSummary.js';
 import { WebLinkStore, linkDiscordFromWeb } from '../../lib/hosts/webLink.js';
+import { MEETUP_PHOTO_HOST } from '../../lib/hosts/hostEvents.js';
 import {
   clearCookie,
   parseCookieValues,
@@ -1127,7 +1128,14 @@ export function createHostRouter(deps: HostRouterDeps): express.Router {
   router.use(function hostSecurityHeaders(_req, res, next) {
     const nonce = crypto.randomBytes(16).toString('base64');
     locals(res).nonce = nonce;
-    res.set(baseSecurityHeaders(nonce));
+    // Meetup's photo host for the calendar's thumbnails, and same-origin
+    // fetch for the history list's Older chunks; nothing else.
+    res.set(
+      baseSecurityHeaders(nonce, {
+        imgHosts: [MEETUP_PHOTO_HOST],
+        connectSelf: true,
+      }),
+    );
     next();
   });
   router.use(function hostHttpsRedirect(req, res, next) {

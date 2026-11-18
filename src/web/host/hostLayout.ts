@@ -52,8 +52,8 @@ export function hostLayout({
   user?: { username: string; csrfToken: string; role?: HostRole };
   current?: HostNavKey;
   body: SafeHtml;
-  /** One staticRaw constant: the page's progressive enhancement. */
-  script?: SafeHtml;
+  /** staticRaw constants, each its own script: the page's progressive enhancement. */
+  script?: SafeHtml | readonly SafeHtml[];
 }): string {
   const account = user
     ? html`<div class="account">
@@ -66,8 +66,10 @@ export function hostLayout({
     : '';
   const nav = user ? hostNav(current, user.role ?? 'host') : '';
   const themeToggle = themeToggleMarkup();
+  const scripts: readonly SafeHtml[] =
+    script === undefined ? [] : Array.isArray(script) ? script : [script];
   // prettier-ignore
-  const scriptTag = script ? html`<script nonce="${nonce}">${script}</script>` : '';
+  const scriptTag = scripts.map((s) => html`<script nonce="${nonce}">${s}</script>`);
   // prettier-ignore
   return html`<!doctype html>
 <html lang="en">

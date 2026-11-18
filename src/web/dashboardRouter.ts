@@ -199,14 +199,27 @@ function fail(res: Response, status: Parameters<typeof errorPage>[0]) {
  * Every dashboard response's headers, the not-set-up page included, so no
  * path can be framed, cached or sniffed.
  */
-export function baseSecurityHeaders(nonce: string): Record<string, string> {
+export function baseSecurityHeaders(
+  nonce: string,
+  options: {
+    /** Extra img-src hosts (https origins), e.g. Meetup's photo host. */
+    imgHosts?: readonly string[];
+    /** connect-src 'self': same-origin fetch (the history page's Older). */
+    connectSelf?: boolean;
+  } = {},
+): Record<string, string> {
+  const img = [
+    "'self'",
+    ...(options.imgHosts ?? []).map((h) => `https://${h}`),
+  ];
+  const connect = options.connectSelf ? "connect-src 'self'; " : '';
   return {
     'Cache-Control': 'no-store',
     Pragma: 'no-cache',
     'Content-Security-Policy':
       `default-src 'none'; style-src 'nonce-${nonce}'; ` +
-      `script-src 'nonce-${nonce}'; img-src 'self'; form-action 'self'; ` +
-      "frame-ancestors 'none'; base-uri 'none'",
+      `script-src 'nonce-${nonce}'; img-src ${img.join(' ')}; ${connect}` +
+      "form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
     'Strict-Transport-Security': 'max-age=15552000',
     'X-Content-Type-Options': 'nosniff',
     'X-Frame-Options': 'DENY',

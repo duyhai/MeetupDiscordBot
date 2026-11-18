@@ -26,12 +26,14 @@ import {
   SafeHtml,
   html,
   localUrl,
+  meetupPhotoSrc,
   memberText,
   pageLink,
   safeHref,
+  yearAnchor,
+  yearTarget,
 } from '../html.js';
 import { eventLink } from '../links.js';
-import { PAGE_SIZE, pageNav, parsePage } from '../paging.js';
 import {
   AnnounceRouteDeps,
   announceBadge,
@@ -60,7 +62,11 @@ import {
   timeLabel,
   unavailable,
 } from './hostPageKit.js';
-import { CALENDAR_SCRIPT, HISTORY_SCRIPT } from './hostScripts.js';
+import {
+  CALENDAR_SCRIPT,
+  HISTORY_SCRIPT,
+  TIMELINE_SCRIPT,
+} from './hostScripts.js';
 import { COPY_ICON, MEETUP_MARK } from '../ui/icons.js';
 import { HOST_BASE, HostSession } from './hostSession.js';
 
@@ -415,6 +421,28 @@ function eventLine(e: HostEvent): SafeHtml {
 }
 
 /**
+ * The event's Meetup photo as a 48px square beside it in the day-by-day
+ * list: lazy, fixed size (no layout shift), empty alt (the title is next
+ * to it). Only an https URL on Meetup's photo host is used (meetupPhotoSrc);
+ * anything else, or no photo, is a neutral placeholder of the same size.
+ */
+function eventThumb(e: HostEvent): SafeHtml {
+  const src = meetupPhotoSrc(e.photoUrl);
+  return src
+    ? html`<img
+        class="ev-thumb"
+        src="${src}"
+        alt=""
+        width="48"
+        height="48"
+        loading="lazy"
+        decoding="async"
+        referrerpolicy="no-referrer"
+      />`
+    : html`<span class="ev-thumb ev-thumb-none" aria-hidden="true"></span>`;
+}
+
+/**
  * A day's popover: a <details> whose <summary> (the count) opens it with a
  * click, a tap, Enter or Space, with no script. CALENDAR_SCRIPT adds
  * hover, one-open-at-a-time, Escape, tap-outside and placement. It lists
@@ -588,8 +616,13 @@ function calendarBody(
             </p>`
           : ''
       }
-      <ul>
-        ${d.events.map((e) => html`<li>${eventLine(e)}</li>`)}
+      <ul class="cal-items">
+        ${d.events.map(
+          (e) =>
+            html`<li>
+              ${eventThumb(e)}<span class="cal-item-text">${eventLine(e)}</span>
+            </li>`,
+        )}
       </ul>`;
     // The class is one of two literals: a past day is greyed out.
     return d.day < today
@@ -646,7 +679,8 @@ function calendarBody(
 /** The history page's query: what it filters on and which year it maps. */
 interface HistoryView {
   selected: EventType | undefined;
-  page: number;
+  /** `?before=YYYY`: the list starts with the newest year before this one. */
+  before: number | undefined;
   year: number;
   /** YYYY-MM-DD: only this day's events are listed. */
   day: string | undefined;
@@ -661,6 +695,7 @@ interface HistoryLinkParams {
   year?: number;
   day?: string;
   all?: boolean;
+  before?: number;
 }
 
 /** A history link that keeps the filters the caller passes. */
@@ -670,6 +705,7 @@ function historyLink(params: HistoryLinkParams): ReturnType<typeof pageLink> {
     year: params.year === undefined ? undefined : String(params.year),
     day: params.day,
     all: params.all ? '1' : undefined,
+    before: params.before === undefined ? undefined : String(params.before),
   });
 }
 
@@ -773,6 +809,13 @@ export function historyYear(
   return wanted >= earliest && wanted <= current ? wanted : current;
 }
 
+/** `?before=YYYY` as a year, or undefined for anything else. */
+export function beforeParam(value: unknown): number | undefined {
+  return typeof value === 'string' && /^[0-9]{4}$/.test(value)
+    ? Number(value)
+    : undefined;
+}
+
 /** A real YYYY-MM-DD date, or undefined. */
 function dayParam(value: unknown): string | undefined {
   if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
@@ -781,12 +824,173 @@ function dayParam(value: unknown): string | undefined {
   return dayjs(value).format('YYYY-MM-DD') === value ? value : undefined;
 }
 
+/**
+ * The fewest events one chunk of the history timeline holds: the server
+ * renders whole years, newest first, until it has at least this many (so
+ * the most recent year or so); "Older" loads the next chunk the same way.
+ */
+export const TIMELINE_CHUNK_MIN = 30;
+
+/** An event's Pacific year. */
+const yearOf = (event: HostEvent): number =>
+  Number(pacificDay(event.dateTime).slice(0, 4));
+
+/** Every year with an event, newest first. */
+export function timelineYears(events: HostEvent[]): number[] {
+  return [...new Set(events.map(yearOf))].sort((a, b) => b - a);
+}
+
+export interface TimelineChunk {
+  /** The years shown, newest first; whole years only. */
+  years: number[];
+  /** Their events, in the order given (newest first). */
+  events: HostEvent[];
+  /** `?before=` for the next chunk; undefined when nothing older is left. */
+  nextBefore: number | undefined;
+}
+
+/**
+ * One chunk of the timeline: from the newest year before `before` (every
+ * year when undefined), whole years until at least `min` events.
+ */
+export function timelineChunk(
+  events: HostEvent[],
+  before: number | undefined,
+  min: number = TIMELINE_CHUNK_MIN,
+): TimelineChunk {
+  const perYear = new Map<number, number>();
+  for (const event of events) {
+    const y = yearOf(event);
+    perYear.set(y, (perYear.get(y) ?? 0) + 1);
+  }
+  const candidates = timelineYears(events).filter(
+    (y) => before === undefined || y < before,
+  );
+  const years: number[] = [];
+  let count = 0;
+  for (const y of candidates) {
+    if (years.length > 0 && count >= min) {
+      break;
+    }
+    years.push(y);
+    count += perYear.get(y) ?? 0;
+  }
+  const inChunk = new Set(years);
+  return {
+    years,
+    events: events.filter((e) => inChunk.has(yearOf(e))),
+    nextBefore:
+      candidates.length > years.length ? years[years.length - 1] : undefined,
+  };
+}
+
+/** One timeline row: the day, the event, its type and the three actions. */
+function timelineRow(event: HostEvent): SafeHtml {
+  return html`<tr>
+    <td class="tl-date" data-label="Date">
+      <span class="when">${dayLabel(pacificDay(event.dateTime))}</span>
+    </td>
+    <td class="event" data-label="Event">
+      ${eventLink(event)}${excludedBadge(event)}
+    </td>
+    <td class="type" data-label="Type">${EVENT_TYPE_LABELS[event.type]}</td>
+    <td class="buttons" data-label="Actions">
+      <div class="actions row one-line">
+        ${attendanceButton(event)}${meetupButton(event)}${copyButton(event)}
+      </div>
+    </td>
+  </tr>`;
+}
+
+/**
+ * A year of the timeline: its sticky heading, then a sticky heading and a
+ * table per month, newest first. Every table has the same fixed columns,
+ * so they line up as one list; the column names are for screen readers
+ * (the month heading says what the rows are).
+ */
+function timelineYear(year: number, events: HostEvent[]): SafeHtml {
+  const months = new Map<string, HostEvent[]>();
+  for (const event of events) {
+    const key = pacificDay(event.dateTime).slice(0, 7);
+    months.set(key, [...(months.get(key) ?? []), event]);
+  }
+  const sections = [...months.entries()].map(([month, monthEvents]) => {
+    const count = monthEvents.length;
+    return html`<section class="tl-month">
+      <h4 class="tl-month-head">
+        ${dayjs(`${month}-01`).format('MMMM')}
+        <span class="tl-count"
+          >${count === 1 ? '1 event' : `${count} events`}</span
+        >
+      </h4>
+      <table class="stack tl-table">
+        <colgroup>
+          <col class="tl-c-date" />
+          <col />
+          <col class="tl-c-type" />
+          <col class="tl-c-actions" />
+        </colgroup>
+        <thead>
+          <tr>
+            <th>Date</th>
+            <th>Event</th>
+            <th>Type</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${monthEvents.map(timelineRow)}
+        </tbody>
+      </table>
+    </section>`;
+  });
+  return html`<section class="tl-year" data-year="${year}">
+    ${yearTarget(year)}
+    <h3 class="tl-year-head">${String(year)}</h3>
+    ${sections}
+  </section>`;
+}
+
+/**
+ * The year rail: every year with a listed event. A loaded year is an
+ * in-page link; an older one opens the list from that year
+ * (`?before=year+1`). TIMELINE_SCRIPT loads the years in between instead,
+ * and marks the year being read (aria-current).
+ */
+function yearRail(
+  years: number[],
+  loaded: Set<number>,
+  link: (before: number | undefined) => ReturnType<typeof pageLink>,
+): SafeHtml {
+  const newest = years[0];
+  const items = years.map((y) => {
+    const href = loaded.has(y)
+      ? yearAnchor(y)
+      : localUrl(
+          `${link(y === newest ? undefined : y + 1).href}${yearAnchor(y).href}`,
+        );
+    // aria-current is a literal: the first loaded year starts current.
+    return y === years.find((x) => loaded.has(x))
+      ? html`<li>
+          <a href="${href}" data-year="${y}" aria-current="true"
+            >${String(y)}</a
+          >
+        </li>`
+      : html`<li><a href="${href}" data-year="${y}">${String(y)}</a></li>`;
+  });
+  return html`<nav class="year-rail" aria-label="Jump to a year" data-year-rail>
+    <ol>
+      ${items}
+    </ol>
+  </nav>`;
+}
+
 function historyBody(
   everything: HostEvent[],
   view: HistoryView,
   today: string,
 ): SafeHtml {
-  const { selected, page, year, day, showExcluded } = view;
+  const { selected, before, year, day, showExcluded } = view;
   // Counts, the type filter and the map follow the shared rule; the host
   // can show the excluded events too.
   const counted = countedOnly(everything);
@@ -808,25 +1012,6 @@ function historyBody(
       (a, b) => dayjs(a.dateTime).valueOf() - dayjs(b.dateTime).valueOf(),
     );
   }
-  const listed = day ? (byDay.get(day) ?? []) : shown;
-  const slice = listed.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
-  const rows = slice.map(
-    (event) =>
-      html`<tr>
-        <td data-label="Date">
-          <span class="when">${dateLabel(event.dateTime)}</span>
-        </td>
-        <td class="event" data-label="Event">
-          ${eventLink(event)}${excludedBadge(event)}
-        </td>
-        <td class="type" data-label="Type">${EVENT_TYPE_LABELS[event.type]}</td>
-        <td class="buttons" data-label="Actions">
-          <div class="actions row one-line">
-            ${attendanceButton(event)}${meetupButton(event)}${copyButton(event)}
-          </div>
-        </td>
-      </tr>`,
-  );
   if (everything.length === 0) {
     return html`<div class="card">
       <h1>My hosting history</h1>
@@ -834,6 +1019,8 @@ function historyBody(
     </div>`;
   }
   const currentYear = Number(today.slice(0, 4));
+  const listLink = (b: number | undefined) =>
+    historyLink({ type: selected, year, all: showExcluded, before: b });
   const dayFilter = day
     ? html`<p class="day-filter">
         Showing ${dayLabel(day)}, ${day.slice(0, 4)} ·
@@ -857,6 +1044,53 @@ function historyBody(
             <a href="${historyLink({ type: selected, year, all: true })}"
               >Show excluded</a
             >`;
+  // A day filter lists that day alone; otherwise one chunk of the timeline.
+  const chunk = day
+    ? {
+        years: timelineYears(byDay.get(day) ?? []),
+        events: byDay.get(day) ?? [],
+        nextBefore: undefined,
+      }
+    : timelineChunk(shown, before);
+  const allYears = day ? chunk.years : timelineYears(shown);
+  const yearSections = chunk.years.map((y) =>
+    timelineYear(
+      y,
+      chunk.events.filter((e) => yearOf(e) === y),
+    ),
+  );
+  const newer =
+    !day && before !== undefined && allYears.some((y) => y >= before)
+      ? html`<p class="tl-newer">
+          <a class="button ghost" href="${listLink(undefined)}"
+            >↑ Newer events</a
+          >
+        </p>`
+      : '';
+  const more =
+    chunk.nextBefore === undefined
+      ? ''
+      : html`<p class="tl-more" data-timeline-more>
+          <a class="button ghost" href="${listLink(chunk.nextBefore)}"
+            >Older events (${String(chunk.nextBefore - 1)} and before)</a
+          >
+        </p>`;
+  const list =
+    chunk.events.length === 0
+      ? html`<p class="muted">
+          ${day ? `No events on ${dayLabel(day)}.` : 'No events to show.'}
+        </p>`
+      : html`<div class="timeline-wrap">
+          ${
+            allYears.length > 1
+              ? yearRail(allYears, new Set(chunk.years), listLink)
+              : ''
+          }
+          <div class="timeline" data-timeline>
+            ${newer}${yearSections}${more}
+            <p class="sr-only" role="status" data-timeline-status></p>
+          </div>
+        </div>`;
   return html`<div class="card">
       <h1>My hosting history</h1>
       <p>
@@ -884,31 +1118,7 @@ function historyBody(
         mark who came and who did not show. The Meetup mark opens the event, and
         the copy icon starts a new request with its details.
       </p>
-      ${
-        rows.length === 0
-          ? html`<p class="muted">
-              ${day ? `No events on ${dayLabel(day)}.` : 'No events on this page.'}
-            </p>`
-          : html`<table class="stack">
-              <thead>
-                <tr>
-                  <th>Date</th>
-                  <th>Event</th>
-                  <th>Type</th>
-                  <th>Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                ${rows}
-              </tbody>
-            </table>`
-      }
-      ${pageNav(HOST_PATHS.history, page, listed.length > page * PAGE_SIZE, {
-        type: selected,
-        year: String(year),
-        day,
-        all: showExcluded ? '1' : undefined,
-      })}
+      ${list}
     </div>`;
 }
 
@@ -1033,7 +1243,7 @@ export function registerHostPages(
     // An unknown type, year or day is ignored: the page falls back to all
     // types, this year and every day.
     const selected = isEventType(req.query.type) ? req.query.type : undefined;
-    const page = parsePage(req.query.page);
+    const before = beforeParam(req.query.before);
     let past: HostEvent[];
     try {
       past = await hostedEvents(deps.events, session.userId, 'past');
@@ -1054,10 +1264,10 @@ export function registerHostPages(
       current: 'history',
       body: historyBody(
         past,
-        { selected, page, year, day, earliest, showExcluded },
+        { selected, before, year, day, earliest, showExcluded },
         now,
       ),
-      script: HISTORY_SCRIPT,
+      script: [HISTORY_SCRIPT, TIMELINE_SCRIPT],
     });
   }) as RequestHandler);
 }

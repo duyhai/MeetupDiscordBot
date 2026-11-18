@@ -162,6 +162,11 @@ export const getEventRsvps = gql`
   ${UserFragment}
 `;
 
+/**
+ * A page of the group's events. featuredEventPhoto.thumbUrl (an 80x80
+ * secure.meetupstatic.com URL, checked against gql2 on 2026-11-17) is the
+ * calendar's thumbnail: it rides on this read, never a request per event.
+ */
 export const getGroupEvents = gql`
   query (
     $urlname: String!
@@ -192,6 +197,9 @@ export const getGroupEvents = gql`
             }
             maxTickets
             status
+            featuredEventPhoto {
+              thumbUrl
+            }
           }
         }
       }

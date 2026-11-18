@@ -10,11 +10,14 @@ import {
   isSafeHtml,
   isSafeUrl,
   localUrl,
+  meetupPhotoSrc,
   memberText,
   pageLink,
   safeHref,
   staticHtml,
   staticRaw,
+  yearAnchor,
+  yearTarget,
 } from '../../src/web/html.js';
 
 /** safeHref's result as text, for comparisons. */
@@ -224,10 +227,11 @@ describe('localUrl', () => {
     }
   });
 
-  it('localUrl takes the one fixed fragment, #acted', () => {
+  it('localUrl takes the fixed fragments, #acted and #y plus four digits', () => {
     for (const ok of [
       '/dashboard/no-shows/2026-09?row=4#acted',
       '/dashboard/no-shows/2026-09?page=2&row=4#acted',
+      '/host/history?before=2024#y2023',
     ]) {
       expect(localUrl(ok).href).toBe(ok);
     }
@@ -252,6 +256,10 @@ describe('localUrl', () => {
       '/dashboard/x#y',
       '/dashboard/x#actedx',
       '/dashboard/x#acted#acted',
+      '/host/history#y202',
+      '/host/history#y20255',
+      '/host/history#yabcd',
+      '/host/history#y2023#acted',
       '/dashboard/x?y=1#Acted',
       '/dashboard/../x#acted',
       ' /dashboard',
@@ -925,5 +933,50 @@ describe('fix round 4', () => {
     // prettier-ignore
     const form = html`<select class="${'f'}"><option value="${'a'}" selected>${'A'}</option></select><style>${css}</style>`;
     expect(form.value).toContain('<option value="a" selected>A</option>');
+  });
+});
+
+describe('timeline anchors and Meetup photos', () => {
+  it('yearAnchor and yearTarget take a four-digit integer only', () => {
+    expect(yearAnchor(2026).href).toBe('#y2026');
+    expect(String(yearTarget(2026))).toBe(
+      '<span class="tl-target" id="y2026"></span>',
+    );
+    for (const bad of [999, 10000, 2026.5, Number.NaN, -2026]) {
+      expect(() => yearAnchor(bad)).toThrow(RangeError);
+      expect(() => yearTarget(bad)).toThrow(RangeError);
+    }
+  });
+
+  it('meetupPhotoSrc takes plain https on secure.meetupstatic.com only', () => {
+    const ok =
+      'https://secure.meetupstatic.com/photos/event/1/c/5/6/thumb_536827254.jpeg';
+    expect(meetupPhotoSrc(ok)?.href).toBe(ok);
+    for (const bad of [
+      undefined,
+      null,
+      42,
+      '',
+      'http://secure.meetupstatic.com/x.jpg',
+      'https://secure.meetupstatic.com:8443/x.jpg',
+      'https://u:p@secure.meetupstatic.com/x.jpg',
+      'https://secure-content.meetupstatic.com/images/x.jpg',
+      'https://secure.meetupstatic.com.evil.example/x.jpg',
+      'https://evil.example/secure.meetupstatic.com/x.jpg',
+      'javascript:alert(1)',
+      'data:image/png;base64,AAAA',
+      '//secure.meetupstatic.com/x.jpg',
+    ]) {
+      expect(meetupPhotoSrc(bad)).toBeUndefined();
+    }
+  });
+
+  it('a photo src with quotes or brackets is escaped where it lands', () => {
+    const src = meetupPhotoSrc(
+      'https://secure.meetupstatic.com/x.jpg?a="><script>',
+    );
+    expect(src).toBeDefined();
+    const out = String(html`<img src="${src}" alt="" />`);
+    expect(out).not.toContain('"><script>');
   });
 });
