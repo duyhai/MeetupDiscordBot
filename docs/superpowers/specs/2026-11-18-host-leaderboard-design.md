@@ -3,6 +3,7 @@
 Status: drafted 2026-11-18 from Hai's feedback recording of 2026-11-17 (items
 5 to 8) and his follow-up decisions relayed by the lead. Three PRs, each
 standing on its own. Choices the brief left open are marked _my call_.
+Streak icons follow Hai's later decision: 💎 weekly, 🔥 daily.
 
 ## Data source: the group snapshot only
 
@@ -42,7 +43,10 @@ one, it matches My history's co-host names, and it needs no Discord lookup.
   first read backfills history), in one transaction under an advisory lock:
   `host_medal_months (month PK, awarded_at)` and
   `host_medals (month, member_id, place 1..3, events, PRIMARY KEY (month, member_id))`,
-  guarded `CREATE TABLE IF NOT EXISTS` in `SCHEMA_SQL`. The current month
+  guarded `CREATE TABLE IF NOT EXISTS` in `SCHEMA_SQL`. The page waits at
+  most 2 s for awarding (it carries on in the background past that), and an
+  award or medal read failure renders the page without medals, never an
+  error. The current month
   shows "standings so far", no medals.
 
 ## Streaks (PR 1)
@@ -50,13 +54,15 @@ one, it matches My history's co-host names, and it needs no Discord lookup.
 Hosting days are the Pacific calendar days of the host's counted events;
 hosting weeks are Monday-first Pacific weeks (as the calendar).
 
-- 💎 **Daily streak:** the longest run of consecutive hosting days ending
-  today or yesterday. Today is not over and today's events are not PAST
-  yet, so a streak breaks only once a whole day passes with no hosting.
-- 🔥 **Weekly streak:** the same over weeks, ending this week or last week.
+- 💎 **Weekly streak** (the more prestigious badge, listed first): the
+  longest run of consecutive hosting weeks ending this week or last week.
+- 🔥 **Daily streak** ("on fire"): the longest run of consecutive hosting
+  days ending today or yesterday. Today is not over and today's events are
+  not PAST yet, so a streak breaks only once a whole day passes with no
+  hosting.
 - Shown as icon plus count whenever the current streak is 1 or more, with the
   host's best (longest ever) beside it. No threshold. Every emoji badge has a
-  text alternative (`<span role="img" aria-label="Daily hosting streak: 3 days">`).
+  text alternative (`<span role="img" aria-label="Weekly hosting streak: 3 weeks">`).
 
 ## Pages
 

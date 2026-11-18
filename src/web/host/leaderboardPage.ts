@@ -60,26 +60,30 @@ export function medalBadge(place: MedalPlace, month?: string): SafeHtml {
   return emoji(MEDAL_ICON[place], label);
 }
 
-/** 💎 and 🔥 with counts, current streaks only; the best beside each. */
+/** Icons per Hai: weekly is the prestige streak (💎), daily is being on fire (🔥). */
+export const WEEKLY_STREAK_ICON = '💎';
+export const DAILY_STREAK_ICON = '🔥';
+
+/**
+ * Current streaks with their counts, weekly first (the more prestigious);
+ * a broken streak is left out.
+ */
 export function streakBadges(streaks: HostStreaks): SafeHtml {
   const { daily, weekly } = streaks;
   const parts: SafeHtml[] = [];
-  if (daily.current > 0) {
+  if (weekly.current > 0) {
+    const label = `Weekly hosting streak: ${plural(weekly.current, 'week')}`;
     parts.push(
       html`<span class="streak"
-        >${emoji('💎', `Daily hosting streak: ${plural(daily.current, 'day')}`)}
-        ${daily.current}</span
+        >${emoji(WEEKLY_STREAK_ICON, label)} ${weekly.current}</span
       >`,
     );
   }
-  if (weekly.current > 0) {
+  if (daily.current > 0) {
+    const label = `Daily hosting streak: ${plural(daily.current, 'day')}`;
     parts.push(
       html`<span class="streak"
-        >${emoji(
-          '🔥',
-          `Weekly hosting streak: ${plural(weekly.current, 'week')}`,
-        )}
-        ${weekly.current}</span
+        >${emoji(DAILY_STREAK_ICON, label)} ${daily.current}</span
       >`,
     );
   }
@@ -89,9 +93,9 @@ export function streakBadges(streaks: HostStreaks): SafeHtml {
 }
 
 function bestStreaks(streaks: HostStreaks): string {
-  return `Best: ${plural(streaks.daily.best, 'day')} in a row, ${plural(
-    streaks.weekly.best,
-    'week',
+  return `Best: ${plural(streaks.weekly.best, 'week')} in a row, ${plural(
+    streaks.daily.best,
+    'day',
   )} in a row`;
 }
 
@@ -152,6 +156,14 @@ function monthNav(month: string, first: string, current: string): SafeHtml {
   </nav>`;
 }
 
+function medalsNote(data: Ready): SafeHtml | '' {
+  return data.medalsUnavailable
+    ? html`<p class="note attn">
+        Medals cannot be loaded right now; the standings are complete.
+      </p>`
+    : '';
+}
+
 function updatedLine(data: Ready): SafeHtml {
   return data.updatedAt
     ? html`<p class="muted">
@@ -188,15 +200,17 @@ function monthBody(
   );
   const status = awarded
     ? html`<p>Final standings. Medals went to the top three places.</p>`
-    : month === current
-      ? html`<p>
-          Standings so far. Medals go to the top three places once the month is
-          over.
-        </p>`
-      : html`<p>
-          The month is over; medals are awarded a couple of days after it ends,
-          once late changes on Meetup are in.
-        </p>`;
+    : data.medalsUnavailable
+      ? html`<p>Standings for ${monthName(month)}.</p>`
+      : month === current
+        ? html`<p>
+            Standings so far. Medals go to the top three places once the month
+            is over.
+          </p>`
+        : html`<p>
+            The month is over; medals are awarded a couple of days after it
+            ends, once late changes on Meetup are in.
+          </p>`;
   const rows = standings.map((s) => {
     const medal = medalOf.get(s.memberId);
     const hostStreaks = streaks(s.memberId);
@@ -214,7 +228,8 @@ function monthBody(
   });
   return html`<div class="card">
     <h1>Leaderboard</h1>
-    ${viewNav('month', month)} ${monthNav(month, first, current)} ${status}
+    ${viewNav('month', month)} ${monthNav(month, first, current)}
+    ${medalsNote(data)} ${status}
     ${
       standings.length === 0
         ? html`<p class="muted">
@@ -246,9 +261,10 @@ function medalCell(awarded: boolean, content: SafeHtml | ''): SafeHtml | '' {
 
 function streakNote(): SafeHtml {
   return html`<p class="muted">
-    ${emoji('💎', 'Daily streak')} counts days in a row with a hosted event;
-    ${emoji('🔥', 'Weekly streak')} counts weeks in a row (Monday to Sunday). A
-    streak keeps going until a whole day or week passes without one.
+    ${emoji(WEEKLY_STREAK_ICON, 'Weekly streak')} counts weeks in a row (Monday
+    to Sunday) with a hosted event; ${emoji(DAILY_STREAK_ICON, 'Daily streak')}
+    counts days in a row. A streak keeps going until a whole week or day passes
+    without one.
   </p>`;
 }
 
@@ -299,7 +315,7 @@ function hallOfFameBody(
   });
   return html`<div class="card">
     <h1>Leaderboard</h1>
-    ${viewNav('all', data.today.slice(0, 7))}
+    ${viewNav('all', data.today.slice(0, 7))} ${medalsNote(data)}
     <p>
       Every host, by events hosted since the group began.
       ${`${plural(standings.length, 'host')}, ${plural(data.events.length, 'event')}.`}

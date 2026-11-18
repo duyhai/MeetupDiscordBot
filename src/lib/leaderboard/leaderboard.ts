@@ -26,6 +26,49 @@ export interface LeaderboardDeps {
     lastFinishedRun(): Promise<SnapshotRun | undefined>;
   }>;
   now: () => Date;
+  /** Tests: how long a read waits for awarding (AWARD_BUDGET_MS). */
+  awardBudgetMs?: number;
+}
+
+/**
+ * The longest a page read waits for awarding (the first read backfills
+ * every past month). Past it the award finishes in the background, under
+ * its lock, and this read shows the medals stored so far.
+ */
+export const AWARD_BUDGET_MS = 2000;
+
+/** The awarded months; undefined (logged) when they cannot be read. */
+async function awardedOrNone(
+  store: LeaderboardStore,
+): Promise<Set<string> | undefined> {
+  try {
+    return await store.awardedMonths();
+  } catch (error: unknown) {
+    // Medals are extra: the page shows the standings without them.
+    logger.warn(
+      `Medal months read failed: ${error instanceof Error ? error.name : 'Error'}`,
+    );
+    return undefined;
+  }
+}
+
+/** Awards, waiting at most `budgetMs`; never throws. */
+async function awardWithin(
+  store: LeaderboardStore,
+  months: { month: string; medals: Medal[] }[],
+  budgetMs: number,
+): Promise<void> {
+  const award = store.award(months).catch((error: unknown) => {
+    logger.warn(
+      `Medal award failed: ${error instanceof Error ? error.name : 'Error'}`,
+    );
+  });
+  let timer: NodeJS.Timeout | undefined;
+  const late = new Promise<void>((resolve) => {
+    timer = setTimeout(resolve, budgetMs);
+  });
+  await Promise.race([award, late]);
+  clearTimeout(timer);
 }
 
 export type LeaderboardData =
@@ -39,13 +82,17 @@ export type LeaderboardData =
       names: Map<string, string>;
       medals: Medal[];
       awarded: Set<string>;
+      /** Medals could not be read: the page says so and shows none. */
+      medalsUnavailable: boolean;
       /** YYYY-MM-DD, Pacific. */
       today: string;
     };
 
 /**
- * Throws when the snapshot cannot be read. Awarding failing is logged and
- * the medals already stored are shown: the next read awards again.
+ * Throws when the snapshot cannot be read. Medals never fail or hold up the
+ * page: awarding waits at most AWARD_BUDGET_MS and a failure is logged (the
+ * next read awards again); medals that cannot be read leave the page
+ * without them.
  */
 export async function loadLeaderboard(
   deps: LeaderboardDeps,
@@ -59,36 +106,55 @@ export async function loadLeaderboard(
     snapshot.lastFinishedRun(),
     store.hostedEvents(),
     store.hostNames(),
-    store.awardedMonths(),
+    awardedOrNone(store),
   ]);
   const events = countedEvents(all);
-  const listedAt = run?.listedAt;
-  const due = listedAt ? monthsToAward(events, awarded, listedAt) : [];
-  if (due.length > 0) {
-    try {
-      await store.award(
-        due.map((month) => ({
-          month,
-          medals: medalsFor(month, rank(monthCounts(events, month))),
-        })),
-      );
-    } catch (error: unknown) {
-      logger.warn(
-        `Medal award failed: ${error instanceof Error ? error.name : 'Error'}`,
-      );
-    }
-  }
-  const [medals, nowAwarded] =
-    due.length > 0
-      ? await Promise.all([store.medals(), store.awardedMonths()])
-      : [await store.medals(), awarded];
-  return {
+  const page = (
+    m: Medal[],
+    months: Set<string>,
+  ): Extract<LeaderboardData, { ready: true }> => ({
     ready: true,
     updatedAt: run?.finishedAt,
     events,
     names,
-    medals,
-    awarded: nowAwarded,
+    medals: m,
+    awarded: months,
+    medalsUnavailable: false,
     today: pacificDayOf(deps.now()),
-  };
+  });
+  const withoutMedals = (): LeaderboardData => ({
+    ...page([], new Set()),
+    medalsUnavailable: true,
+  });
+  const listedAt = run?.listedAt;
+  if (awarded === undefined) {
+    return withoutMedals();
+  }
+  const due = listedAt ? monthsToAward(events, awarded, listedAt) : [];
+  if (due.length > 0) {
+    await awardWithin(
+      store,
+      due.map((month) => ({
+        month,
+        medals: medalsFor(month, rank(monthCounts(events, month))),
+      })),
+      deps.awardBudgetMs ?? AWARD_BUDGET_MS,
+    );
+  }
+  let medals: Medal[] = [];
+  let nowAwarded = awarded;
+  try {
+    // Months first, then medals: an award committing in between can only
+    // add medals for a month not yet shown as awarded, never the reverse.
+    if (due.length > 0) {
+      nowAwarded = await store.awardedMonths();
+    }
+    medals = await store.medals();
+  } catch (error: unknown) {
+    logger.warn(
+      `Medal read failed: ${error instanceof Error ? error.name : 'Error'}`,
+    );
+    return withoutMedals();
+  }
+  return page(medals, nowAwarded);
 }

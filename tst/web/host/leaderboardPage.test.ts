@@ -142,8 +142,15 @@ describe('host leaderboard', () => {
     expect(res.text).toContain('November 2026');
     expect(res.text).toContain('Standings so far');
     expect(res.text).toContain('<strong><bdi>Ann</bdi></strong>');
-    expect(res.text).toContain('Daily hosting streak: 3 days');
-    expect(res.text).toContain('Weekly hosting streak: 2 weeks');
+    // 💎 weekly first (the prestige streak), then 🔥 daily.
+    const weekly = res.text.search(
+      /aria-label="Weekly hosting streak: 2 weeks"[^>]*>\s*💎/,
+    );
+    const daily = res.text.search(
+      /aria-label="Daily hosting streak: 3 days"[^>]*>\s*🔥/,
+    );
+    expect(weekly).toBeGreaterThan(0);
+    expect(daily).toBeGreaterThan(weekly);
     expect(res.text).not.toContain('Gold medal, November');
     // Every closed month was awarded on the way, October's medals stored.
     expect(store.months).toEqual(new Set(['2026-10']));
@@ -191,7 +198,7 @@ describe('host leaderboard', () => {
     );
     expect(res.text).toContain('4 hosts, 9 events.');
     expect(res.text).toContain('1 gold medal');
-    expect(res.text).toContain('Best: 3 days in a row, 2 weeks in a row');
+    expect(res.text).toContain('Best: 2 weeks in a row, 3 days in a row');
   });
 
   it('an out-of-range month falls back to this month', () => {
@@ -230,6 +237,39 @@ describe('host leaderboard', () => {
       .set('Cookie', two.sid);
     expect(ok.status).toBe(200);
     expect(ok.text).not.toContain('Gold medal');
+  });
+
+  it('waits at most the award budget for a slow first backfill', async () => {
+    const store = fakeStore(EVENTS, NAMES);
+    let finish: () => void = () => {};
+    store.award = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const { req, sid } = await app(store, { awardBudgetMs: 20 });
+    const res = await req.get('/host/leaderboard').set('Cookie', sid);
+    expect(res.status).toBe(200);
+    expect(res.text).toContain('Standings so far');
+    finish();
+  });
+
+  it('shows the standings without medals when medals cannot be read', async () => {
+    for (const fail of ['awardedMonths', 'medals'] as const) {
+      const store = fakeStore(EVENTS, NAMES);
+      store[fail] = vi.fn().mockRejectedValue(new Error('db down'));
+      // eslint-disable-next-line no-await-in-loop -- two cases in turn
+      const { req, sid } = await app(store);
+      // eslint-disable-next-line no-await-in-loop
+      const res = await req
+        .get('/host/leaderboard?month=2026-10')
+        .set('Cookie', sid);
+      expect(res.status).toBe(200);
+      expect(res.text).toContain('Medals cannot be loaded right now');
+      expect(res.text).toContain('<bdi>Bea</bdi>');
+      expect(res.text).not.toContain('Gold medal');
+    }
   });
 
   it('is not shown to a member who never hosted', async () => {
