@@ -137,6 +137,31 @@ export class MeetupGroupUnreadableError extends Error {
   }
 }
 
+/**
+ * A ClientError's message is JSON of its whole response and request: for
+ * the snapshot listing, partial data (venue coordinates, host names) would
+ * reach any log that prints it. This keeps the status, headers and the
+ * GraphQL error messages, and drops the data, the raw body and the query.
+ * Anything else is returned as is.
+ */
+export function withoutResponseData(
+  error: unknown,
+  operation: string,
+): unknown {
+  if (!(error instanceof ClientError)) {
+    return error;
+  }
+  const { status, headers, errors } = error.response;
+  return new ClientError(
+    {
+      status,
+      headers,
+      errors: errors?.map((e) => ({ message: String(e.message) })),
+    } as ClientError['response'],
+    { query: operation },
+  );
+}
+
 export class GqlMeetupClient {
   private client: GraphQLClient;
 
@@ -785,14 +810,19 @@ export class GqlMeetupClient {
     logger.info(
       `Calling getGroupEventsForSnapshot with input: ${JSON.stringify({ input, filter })}`,
     );
-    const result = await this.client.request<
-      GetGroupEventsForSnapshotResponse,
-      GetGroupEventsInput
-    >(getGroupEventsForSnapshot, {
-      urlname: Configuration.meetup.groupUrlName,
-      ...input,
-      filter,
-    });
+    let result: GetGroupEventsForSnapshotResponse;
+    try {
+      result = await this.client.request<
+        GetGroupEventsForSnapshotResponse,
+        GetGroupEventsInput
+      >(getGroupEventsForSnapshot, {
+        urlname: Configuration.meetup.groupUrlName,
+        ...input,
+        filter,
+      });
+    } catch (error: unknown) {
+      throw withoutResponseData(error, 'getGroupEventsForSnapshot');
+    }
     if (!result.groupByUrlname) {
       throw new MeetupGroupUnreadableError(Configuration.meetup.groupUrlName);
     }

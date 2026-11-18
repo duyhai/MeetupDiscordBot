@@ -226,6 +226,21 @@ BEGIN
   END IF;
 END
 $$;
+-- Whether a listing has set the place columns since they were added: false
+-- means "not collected yet" (rows from before the venue fields), not "no
+-- venue". Set by every listing.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+     WHERE table_schema = current_schema()
+       AND table_name = 'meetup_events'
+       AND column_name = 'place_listed'
+  ) THEN
+    ALTER TABLE meetup_events ADD COLUMN place_listed BOOLEAN NOT NULL DEFAULT false;
+  END IF;
+END
+$$;
 -- The host leaderboard reads every live past event.
 CREATE INDEX IF NOT EXISTS meetup_events_past_live_idx ON meetup_events (date_time)
   WHERE status = 'PAST' AND deleted_at IS NULL;

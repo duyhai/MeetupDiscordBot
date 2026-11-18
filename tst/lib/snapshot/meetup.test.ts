@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
+import { FieldNode, Kind, SelectionSetNode, parse } from 'graphql';
 import {
   getEventRsvpsForSnapshot,
   getGroupEventsForSnapshot,
 } from '../../../src/lib/client/meetup/queries.js';
+
 import { TITLE_MAX } from '../../../src/lib/eventAudit/meetup.js';
+import { GQL_EXT_FIELDS } from '../../fixtures/gqlExtFields.js';
 import {
   HOST_NAME_MAX,
   toPlace,
@@ -123,7 +126,6 @@ describe('toSnapshotRsvp', () => {
 
 describe('toPlace', () => {
   const venue = (over: Record<string, unknown> = {}) => ({
-    isOnline: false,
     eventType: 'PHYSICAL',
     venue: { lat: 47.61234, lon: -122.33567, city: ' Seattle ' },
     ...over,
@@ -139,7 +141,8 @@ describe('toPlace', () => {
   });
 
   it('leaves out online events, missing venues, the 0,0 placeholder and bad coordinates', () => {
-    expect(toPlace(venue({ isOnline: true }))).toBeNull();
+    // gql-ext has no isOnline: only the ONLINE type counts.
+    expect(toPlace(venue({ isOnline: true }))).not.toBeNull();
     expect(toPlace(venue({ eventType: 'ONLINE' }))).toBeNull();
     expect(toPlace(venue({ venue: null }))).toBeNull();
     expect(toPlace(venue({ venue: { lat: 0, lon: 0, city: 'X' } }))).toBeNull();
@@ -150,6 +153,14 @@ describe('toPlace', () => {
       toPlace(venue({ venue: { lat: Number.NaN, lon: -122.3 } })),
     ).toBeNull();
     expect(toPlace(null)).toBeNull();
+  });
+
+  it('strips C1 controls and bidi or zero-width format characters from the city', () => {
+    const city = (raw: string) =>
+      toPlace(venue({ venue: { lat: 47.6, lon: -122.3, city: raw } }))?.city;
+    expect(city('\u202Eelttaes')).toBe('elttaes');
+    expect(city('Sea\u0085ttle\u200B')).toBe('Seattle');
+    expect(city('\u2066Seattle\u2069')).toBe('Seattle');
   });
 
   it('cleans the city: no control characters, bounded, null when blank', () => {
@@ -183,9 +194,7 @@ describe('snapshot queries', () => {
     expect(q).toMatch(/eventHosts \{\s*member \{\s*id\s*name\s*\}\s*\}/);
     expect(q.match(/\bname\b/g)).toHaveLength(1);
     // The venue: coordinates and city only (rounded at ingest), no address.
-    expect(q).toMatch(
-      /isOnline\s*eventType\s*venue \{\s*lat\s*lon\s*city\s*\}/,
-    );
+    expect(q).toMatch(/eventType\s*venue \{\s*lat\s*lon\s*city\s*\}/);
     expect(q).not.toMatch(/address|postalCode|googleMapsUrl/);
   });
 
@@ -193,5 +202,52 @@ describe('snapshot queries', () => {
     const q = text(getEventRsvpsForSnapshot);
     expect(q).toMatch(/member \{\s*id\s*\}/);
     expect(q).not.toMatch(/\bname\b|UserDetails/);
+  });
+
+  describe('the listing query against gql-ext', () => {
+    /** Field names selected under `node`, by gql-ext type. */
+    function selections(): Record<string, string[]> {
+      const doc = parse(String(getGroupEventsForSnapshot));
+      const names = (set: SelectionSetNode | undefined) =>
+        (set?.selections ?? []).filter(
+          (s): s is FieldNode => s.kind === Kind.FIELD,
+        );
+      const find = (set: SelectionSetNode | undefined, path: string[]) =>
+        path.reduce<SelectionSetNode | undefined>(
+          (at, name) =>
+            names(at).find((f) => f.name.value === name)?.selectionSet,
+          set,
+        );
+      const op = doc.definitions[0];
+      if (op.kind !== Kind.OPERATION_DEFINITION) {
+        throw new Error('no operation');
+      }
+      const node = find(op.selectionSet, [
+        'groupByUrlname',
+        'events',
+        'edges',
+        'node',
+      ]);
+      const fieldNames = (set: SelectionSetNode | undefined) =>
+        names(set).map((f) => f.name.value);
+      return {
+        Event: fieldNames(node),
+        Venue: fieldNames(find(node, ['venue'])),
+        EventHost: fieldNames(find(node, ['eventHosts'])),
+        Member: fieldNames(find(node, ['eventHosts', 'member'])),
+      };
+    }
+
+    it('asks only for fields gql-ext has (isOnline is a /gql2 field)', () => {
+      const asked = selections();
+      expect(asked.Event).toContain('venue');
+      Object.entries(asked).forEach(([type, fields]) => {
+        fields.forEach((f) => {
+          expect(GQL_EXT_FIELDS[type], `${type}.${f}`).toContain(f);
+        });
+      });
+      expect(asked.Event).not.toContain('isOnline');
+      expect(asked.Venue).toEqual(['lat', 'lon', 'city']);
+    });
   });
 });

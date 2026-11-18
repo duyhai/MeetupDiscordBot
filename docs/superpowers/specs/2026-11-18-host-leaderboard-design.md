@@ -120,42 +120,63 @@ hosting weeks are Monday-first Pacific weeks (as the calendar).
 
 ## Map (PR 3)
 
-**Fields, verified 2026-11-18** against Meetup's schema (`/gql2` from Hai's
-signed-in tab, read-only): `Venue { lat: Float, lon: Float, city, venueType,
-name, address }` (note `lon`, not `lng`), `Event { isOnline: Boolean,
-eventType: EventType }` with `EventType` = HYBRID, ONLINE, PHYSICAL. Neither
-is in the snapshot; PR 3 adds `isOnline`, `eventType` and
-`venue { lat lon city }` to the listing query (no extra request). A sample of
-200 past group events: all PHYSICAL, 3 with no venue, 2 with the 0,0
-placeholder, all within the Seattle area.
+**Fields, verified 2026-11-18 on gql-ext** (`https://api.meetup.com/gql-ext`,
+the endpoint the organizer client uses; introspection, unauthenticated,
+schema-only, and the final listing query validated there): `Event.eventType`
+(HYBRID, ONLINE, PHYSICAL) and `Venue { lat lon city }` (note `lon`, not
+`lng`). **`Event.isOnline` does not exist on gql-ext** (the website's `/gql2`
+has it, which is where the first check was made, wrongly), so ONLINE is the
+only online signal. The fields are pinned in a test against a checked-in list
+(`tst/fixtures/gqlExtFields.ts`). Project rule from here on: a Meetup field
+counts as verified only once checked on gql-ext. A read-only sample of 200
+past group events (via `/gql2`): all PHYSICAL, 3 with no venue, 2 with the
+0,0 placeholder, all within the Seattle area.
 
-**Privacy:** online events (`isOnline` or `eventType = ONLINE`) and venues
-without coordinates (or Meetup's 0,0 placeholder) are left out. Coordinates
-are **rounded to a 0.01° grid (about 1 km) at ingest**; exact venue
-coordinates are never stored, so no residential pin can be plotted. The map
-shows grid cells sized by event count, with no venue names or addresses.
+**Privacy:** online events (`eventType = ONLINE`) and venues without
+coordinates (or Meetup's 0,0 placeholder) are left out. Coordinates are
+**rounded to a 0.01° grid (about 1 km) at ingest**; exact venue coordinates
+are never stored, so no residential pin can be plotted. City names are
+cleaned of control and format characters (bidi overrides, zero-width) at
+ingest and shown with `memberText`. No venue names or addresses anywhere. A
+failed listing's error is rethrown without the response data, and the
+snapshot job logs only the error class, HTTP status and first GraphQL
+message, so coordinates or names never reach the process log.
 
-**As built (PR 3).** `toPlace` (snapshot/meetup.ts) turns a listing node into
-grid indices (degrees × 100, rounded) and a cleaned city, or null; the
-columns `place_lat_e2`, `place_lon_e2`, `place_city` on `meetup_events` (a
-guarded ALTER) are refreshed by every listing, so existing events fill in on
-the next run. The Leaderboard's event read carries the cell, so the maps cost
-no extra query. Leaflet 1.9.4 is a pinned dependency served at
-`/host/assets/leaflet.{js,css}` (signed-in only); map pages (the Hall of fame
-and profiles) send the host CSP with `img-src 'self'
-https://tile.openstreetmap.org` and nothing else changed; other pages keep
-`img-src 'self'`. The map's zoom is capped at 14 (fitted at 12 at most), so a
-cell never reads as a street address. Hall of fame map: every counted
-event, blacklisted hosts included (it shows areas, not people). Profile map:
-that host's counted events, and none for an id on the Guest Host blacklist
-until Hai decides. Under each map, a city list (top 8 and "Elsewhere") and a
-count of events online or without a venue; the map container stays hidden
-without JavaScript.
+**As built (PR 3).**
+
+- `toPlace` (snapshot/meetup.ts) turns a listing node into grid indices
+  (degrees × 100, rounded) and a cleaned city, or null. Columns
+  `place_lat_e2`, `place_lon_e2`, `place_city` and `place_listed` on
+  `meetup_events` (guarded ALTERs) are refreshed by every listing.
+  `place_listed = false` means "not collected yet" (rows from before the
+  venue fields), which the page says as "Venue data … is still being
+  collected", not "no venue". **Deploy note:** trigger one snapshot run after
+  deploy so the maps fill in without waiting a day.
+- The Leaderboard's event read carries the cell, so the maps cost no extra
+  query.
+- Each cell is drawn as the ~1 km square it is (not a pin), darker with more
+  events; zoom stops at 13 (fitted at 12 at most).
+- Hall of fame map: every counted event, blacklisted hosts included (areas,
+  not people). Profile map: only areas where that host has hosted at least
+  `PROFILE_MAP_MIN_EVENTS` (3) events; the rest are counted in the text as
+  "in other areas … not drawn". No profile map for an id on the Guest Host
+  blacklist until Hai decides. The threshold and an opt-out are with Hai.
+- Under each map, text that accounts for every event exactly once: cities
+  (top 8, then "Elsewhere or unknown area"), areas not drawn, events online
+  or without a venue, events not collected yet. The map container is a
+  labelled region pointing at that list, and stays hidden without
+  JavaScript.
+- Leaflet 1.9.4 is a pinned dependency served at
+  `/host/assets/leaflet.{js,css}?v=1.9.4` (signed-in only, cached for a year,
+  gzipped once in memory since the app has no compression middleware: the
+  script is 147 KB raw, about 42 KB gzipped). Map pages send the host CSP
+  with `img-src 'self' https://tile.openstreetmap.org` and nothing else
+  changed; other pages keep `img-src 'self'`.
 
 **Rendering, compared:**
 
 1. _Self-hosted Leaflet 1.9 + OpenStreetMap tiles (recommended)._ Leaflet
-   (about 40 KB) is served from our own origin under the page nonce; the CSP
+   (147 KB raw, about 42 KB gzipped) is served from our own origin under the page nonce; the CSP
    gains only `img-src https://tile.openstreetmap.org`. OSM's tile policy
    asks for the "© OpenStreetMap contributors" attribution (Leaflet shows it),
    a valid Referer (our `same-origin` Referrer-Policy sends none, so the tile
