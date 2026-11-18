@@ -637,8 +637,14 @@ function within<T>(promise: Promise<T>, ms: number): Promise<T> {
           await holder.query('ROLLBACK');
           holder.release();
         }
-        // The lock is free again: the same repository saves normally.
-        expect((await quick.save(write())).id).toBeGreaterThan(0);
+        // The lock is free again: a save on the same pool goes through. The
+        // advisory lock is database-wide and backfill.poolOfOne.test.ts saves
+        // hall_of_fame 2026-09 too, so this save waits its turn: 10 s, not
+        // 300 ms, and under the 20 s testTimeout.
+        const patient = new PostgresReportSnapshotRepository(victimPool, {
+          lockTimeoutMs: 10_000,
+        });
+        expect((await patient.save(write())).id).toBeGreaterThan(0);
       });
 
       it('schema creation behind a stalled schema-lock holder fails at its lock_timeout', async () => {
