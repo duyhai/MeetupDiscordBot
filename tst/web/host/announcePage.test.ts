@@ -291,6 +291,9 @@ describe('Announce on the host home', () => {
     expect(text).toContain(`href="/host/events/${MINE}/announce"`);
     expect(text).not.toContain(`/host/events/${THEIRS}/announce`);
     expect(text).toContain('It goes out once per event.');
+    expect(text).toContain(
+      'If it was already announced on Meetup, nothing is sent again.',
+    );
     expect(text).toContain('Announcing: the guidelines');
     expect(text).toContain('Open RSVPs first.');
     expect(text).toContain('Announce 2–3 weeks ahead.');
@@ -632,6 +635,9 @@ describe('the pre-flight confirmation', () => {
     expect(res.text).toMatch(/type="checkbox" name="location"[^>]*required/);
     expect(res.text).toMatch(/type="checkbox" name="rsvps"[^>]*required/);
     expect(res.text).toContain('Confirm and announce');
+    expect(res.text).toContain(
+      'If it was already announced on Meetup, nothing is sent again.',
+    );
     expect(res.text).not.toContain('Tick all three');
   });
 
@@ -705,6 +711,8 @@ describe('the pre-flight confirmation', () => {
     expect(page.text).toContain(`action="/host/events/${MINE}/recreate"`);
     expect(page.text).toContain('The event photo is set (not the default)');
     expect(page.text).toContain('Confirm and announce');
+    // The copy is a new event, so the note about Meetup does not apply.
+    expect(page.text).not.toContain('already announced on Meetup');
     const res = await recreatePost(MINE, { photo: 'on' });
     expect(res.status).toBe(422);
     expect(res.text).toContain('Tick all three');
