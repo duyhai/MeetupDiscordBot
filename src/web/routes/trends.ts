@@ -136,19 +136,22 @@ export function registerTrendsRoutes(
         deps.snapshots(),
         deps.suspensions(),
       ]);
-      const [hallOfFame, noShows, suspended] = await Promise.all([
+      const [hallOfFame, noShows, suspended, undated] = await Promise.all([
         snapshots.listSummarySeries('hall_of_fame', { months }),
         snapshots.listSummarySeries('no_show', { months }),
         // UTC midnight of the first month's first day: suspended_at's own
         // convention, from the one helper that defines that boundary.
         suspensions.countByMonth(suspensionCutoff(previousPeriod(window[0]))),
+        // Records with a placeholder date: in no month, whatever the range.
+        suspensions.countUndated(),
       ]);
-      return { hallOfFame, noShows, suspended };
+      return { hallOfFame, noShows, suspended, undated };
     });
     if (!loaded.ok) {
       return;
     }
     const { hallOfFame, noShows, suspended } = loaded.value;
+    const undated = Math.max(0, Math.trunc(Number(loaded.value.undated)) || 0);
 
     const stored = [...asList(hallOfFame), ...asList(noShows)]
       .map((m) => m?.period)
@@ -167,11 +170,18 @@ export function registerTrendsRoutes(
       values: categories.map(value),
     });
 
-    const charts = [
-      chart({
+    // Each chart with the heading shown above it and the plain-words line
+    // under it. The svg already carries the title as its accessible name,
+    // so the visible heading is hidden from screen readers: read once.
+    const charts: {
+      title: string;
+      kind: 'bar' | 'line';
+      series: ReturnType<typeof series>[];
+      note?: SafeHtml | '';
+    }[] = [
+      {
         title: 'No-shows per month',
         kind: 'bar',
-        categories,
         series: [
           series('No-shows', (m) => count(ns.get(m), 'noShows')),
           series('Warnings', (m) => count(ns.get(m), 'warnings')),
@@ -179,28 +189,43 @@ export function registerTrendsRoutes(
             count(ns.get(m), 'suspensionCandidates'),
           ),
         ],
-      }),
-      chart({
+        note: html`<p class="muted chart-note">
+          No-shows: no-shows marked at that month’s events (a member who missed
+          two events counts twice). Warnings: members who no-showed that month
+          and are due a warning (it is their only no-show that counts).
+          Suspension candidates: those with two or more that count. A no-show
+          counts for 12 months, unless the member has been suspended since.
+          Warnings are members due one, not warnings sent.
+        </p>`,
+      },
+      {
         title: 'Suspensions recorded per month',
         kind: 'bar',
-        categories,
         series: [series('Suspensions', (m) => perMonth.get(m) ?? 0)],
-      }),
-      chart({
+        note:
+          undated > 0
+            ? html`<p class="muted chart-note">
+                ${undated} older ${undated === 1 ? 'suspension' : 'suspensions'}
+                with no recorded date ${undated === 1 ? 'is' : 'are'} not shown.
+              </p>`
+            : '',
+      },
+      {
         title: 'Events and distinct hosts per month',
         kind: 'line',
-        categories,
         series: [
           series('Events', (m) => count(hof.get(m), 'events')),
           series('Hosts', (m) => count(hof.get(m), 'hosts')),
         ],
-      }),
-      chart({
+        note: html`<p class="muted chart-note">
+          A month can have more hosts than events when events are co-hosted.
+        </p>`,
+      },
+      {
         title: 'New hosts per month',
         kind: 'bar',
-        categories,
         series: [series('New hosts', (m) => count(hof.get(m), 'newHosts'))],
-      }),
+      },
     ];
 
     dashboardPage(res, {
@@ -212,7 +237,19 @@ export function registerTrendsRoutes(
           Month by month from the stored reports. Months with no report show as
           0.
         </p>
-        ${charts.map((c) => html`<section>${c}</section>`)}
+        ${charts.map(
+          (c) =>
+            html`<section>
+              <h2 class="chart-title" aria-hidden="true">${c.title}</h2>
+              ${chart({
+                title: c.title,
+                kind: c.kind,
+                categories,
+                series: c.series,
+              })}
+              ${c.note ?? ''}
+            </section>`,
+        )}
       </div>`,
     });
   }) as RequestHandler);

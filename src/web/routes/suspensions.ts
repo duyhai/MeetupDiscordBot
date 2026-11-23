@@ -193,6 +193,11 @@ function recordRow(row: SuspensionPageRow, view: RowView): SafeHtml {
       <span class="nowrap">${utcDateOnly(row.suspendedAt)}</span> through
       <span class="nowrap">${row.lastDay}</span>
       ${
+        row.dateEstimated === true
+          ? html`<span class="badge attn">Date not recorded</span>`
+          : ''
+      }
+      ${
         edits.length > 0
           ? html`<ul class="rec-edits muted">
               ${edits.map((e) => editLine(e, names))}

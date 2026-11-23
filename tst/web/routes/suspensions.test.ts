@@ -142,6 +142,34 @@ describe('suspension records page', () => {
     expect(text).not.toContain('Voided by');
   });
 
+  it('marks a record whose date was not recorded, in its Suspended cell only', async () => {
+    const { get } = await setup({
+      past: [
+        suspensionRow({ id: 7, dateEstimated: true }),
+        suspensionRow({ id: 8 }),
+        // Anything but true is unmarked.
+        suspensionRow({ id: 9, dateEstimated: 'yes' as unknown as boolean }),
+      ],
+    });
+    const res = await get(`${PAGE}?state=past`);
+    expect(res.status).toBe(200);
+    const rows = [...res.text.matchAll(/<tr>([\s\S]*?)<\/tr>/g)]
+      .map((m) => m[1])
+      .filter((r) => r.includes('data-label="Record"'));
+    expect(rows).toHaveLength(3);
+    expect(rows.map((r) => words(r).includes('Date not recorded'))).toEqual([
+      true,
+      false,
+      false,
+    ]);
+    const cell = /<td data-label="Suspended"[^>]*>([\s\S]*?)<\/td>/.exec(
+      rows[0],
+    )?.[1];
+    expect(words(cell ?? '')).toContain(
+      '2026-09-01 through 2026-09-30 Date not recorded',
+    );
+  });
+
   it('names: the stored name, then the linked name, then the id', async () => {
     const { get } = await setup({
       active: [

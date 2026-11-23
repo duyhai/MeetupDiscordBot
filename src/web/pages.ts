@@ -261,6 +261,9 @@ code{overflow-wrap:anywhere}
 img.thumb{display:block;width:64px;max-width:100%;height:auto;aspect-ratio:1;object-fit:cover;border-radius:8px;
 border:1px solid var(--line);background:var(--raised)}
 figure{margin:0 0 var(--s5)}
+h2.chart-title{font-size:var(--t-lg);margin:var(--s5) 0 var(--s2)}
+figure:has(+ .chart-note){margin-bottom:var(--s2)}
+.chart-note{margin:0 0 var(--s5);font-size:var(--t-sm)}
 .muted{color:var(--muted)}
 .badge{display:inline-block;font-size:var(--t-sm);font-weight:600;line-height:1.4;padding:2px var(--s2);
 border-radius:var(--radius-pill);color:var(--muted);background:var(--raised);vertical-align:middle;white-space:nowrap}

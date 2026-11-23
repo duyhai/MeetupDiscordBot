@@ -305,6 +305,43 @@ if (!POSTGRES_AVAILABLE) {
         expect(edits.has(999)).toBe(false);
       });
 
+      it('clears the placeholder-date flag, and a refused edit leaves it', async () => {
+        const pool = (repo as unknown as { pool: pg.Pool }).pool;
+        const flagged = async (id: number) =>
+          (
+            await pool.query<{ date_estimated: boolean }>(
+              'SELECT date_estimated FROM suspension_records WHERE id = $1',
+              [id],
+            )
+          ).rows[0].date_estimated;
+        const target = await insertOn('2026-09-30');
+        await pool.query(
+          'UPDATE suspension_records SET date_estimated = true WHERE id = $1',
+          [target.id],
+        );
+        expect(
+          await repo.editDate({
+            id: target.id,
+            suspendedAt: day('2026-09-30'),
+            editedBy: LEAD,
+          }),
+        ).toEqual({ ok: false, reason: 'unchanged' });
+        expect(await flagged(target.id)).toBe(true);
+        expect(await repo.countUndated()).toBe(1);
+
+        const moved = await repo.editDate({
+          id: target.id,
+          suspendedAt: day('2026-06-14'),
+          editedBy: LEAD,
+        });
+        expect(moved.ok).toBe(true);
+        expect(await flagged(target.id)).toBe(false);
+        expect(await repo.countUndated()).toBe(0);
+        expect(await repo.countByMonth(day('2026-01-01'))).toEqual([
+          { month: '2026-06', count: 1 },
+        ]);
+      });
+
       it('refuses a move past another live record: void and re-record instead', async () => {
         const march = await insertOn('2026-03-01');
         const later = await insertOn('2026-11-08', 60);
@@ -709,6 +746,35 @@ if (!POSTGRES_AVAILABLE) {
         expect(await repo.countByMonth(at('2026-11-01'))).toEqual([]);
       });
 
+      it('a record with a placeholder date is in no month; countUndated counts the live ones', async () => {
+        const flag = (id: number) =>
+          (repo as unknown as { pool: pg.Pool }).pool.query(
+            'UPDATE suspension_records SET date_estimated = true WHERE id = $1',
+            [id],
+          );
+        await seed('3201', '2026-09-12', 30);
+        const undated = await seed('3202', '2026-09-30', 30);
+        const voidedUndated = await seed('3203', '2026-09-30', 30);
+        await flag(undated.id);
+        await flag(voidedUndated.id);
+        await repo.void(voidedUndated.id, '123456789012345678', 'dup');
+        expect(await repo.countByMonth(at('2026-01-01'))).toEqual([
+          { month: '2026-09', count: 1 },
+        ]);
+        expect(await repo.countUndated()).toBe(1);
+        // The records page still lists it, marked.
+        const rows = await page('past', '2026-12-01');
+        expect(rows.map((r) => [r.memberId, r.dateEstimated]).sort()).toEqual([
+          ['3201', false],
+          ['3202', true],
+        ]);
+      });
+
+      it('countUndated is 0 with none', async () => {
+        await seed('3301', '2026-09-30', 30);
+        expect(await repo.countUndated()).toBe(0);
+      });
+
       it('countByMonth refuses an invalid date, and no query runs', async () => {
         const pool = (repo as unknown as { pool: pg.Pool }).pool;
         const query = vi.spyOn(pool, 'query');
@@ -913,6 +979,8 @@ ALTER TABLE suspension_records
   ADD COLUMN IF NOT EXISTS voided_at   TIMESTAMPTZ,
   ADD COLUMN IF NOT EXISTS voided_by   TEXT,
   ADD COLUMN IF NOT EXISTS void_reason TEXT;
+ALTER TABLE suspension_records
+  ADD COLUMN IF NOT EXISTS date_estimated BOOLEAN NOT NULL DEFAULT false;
 CREATE INDEX IF NOT EXISTS suspension_records_member_id_idx
   ON suspension_records (member_id);
 DROP INDEX IF EXISTS suspension_records_member_suspended_at_idx;
@@ -1014,6 +1082,136 @@ ALTER TABLE suspension_records ADD COLUMN voided_at TIMESTAMPTZ,
         expect(await shapeAfter([partial, SCHEMA_SQL])).toEqual(
           await shapeAfter([partial, UNGUARDED_SCHEMA_SQL]),
         );
+      });
+    });
+
+    describe('date_estimated backfill (the 68 undated rows of the 2026-11-18 import)', () => {
+      const IMPORT_NOTE = 'Imported from the 2026-11-17 no-show tracker';
+      // [member, suspended_at, created_at, notes, voided]
+      const ROWS: [string, string, string, string | null, boolean][] = [
+        ['hit', '2026-09-30', '2026-11-18T20:15:00Z', IMPORT_NOTE, false],
+        // The import ran in the Pacific evening: already the 19th in UTC.
+        ['hit-late', '2026-09-30', '2026-11-19T05:00:00Z', IMPORT_NOTE, false],
+        [
+          'hit-suffix',
+          '2026-09-30',
+          '2026-11-18T20:15:00Z',
+          `${IMPORT_NOTE}; 2nd offence`,
+          false,
+        ],
+        ['hit-voided', '2026-09-30', '2026-11-18T20:15:00Z', IMPORT_NOTE, true],
+        // Same import, but the tracker had a date.
+        ['dated', '2026-09-12', '2026-11-18T20:15:00Z', IMPORT_NOTE, false],
+        ['dated-oct', '2025-10-30', '2026-11-18T20:15:00Z', IMPORT_NOTE, false],
+        // A real suspension on 2026-09-30, recorded at the time.
+        ['real', '2026-09-30', '2026-09-30T18:00:00Z', 'Two no-shows', false],
+        ['real-no-note', '2026-09-30', '2026-11-18T20:15:00Z', null, false],
+        [
+          'other-note',
+          '2026-09-30',
+          '2026-11-18T20:15:00Z',
+          'Recorded from the workspace',
+          false,
+        ],
+        // Import-style notes on that date, but another day's import.
+        ['early', '2026-09-30', '2026-11-17T23:59:59Z', IMPORT_NOTE, false],
+        ['later', '2026-09-30', '2026-11-19T08:00:00Z', IMPORT_NOTE, false],
+      ];
+      const EXPECTED_FLAGGED = ['hit', 'hit-late', 'hit-suffix', 'hit-voided'];
+
+      async function inScratchSchema<T>(
+        run: (client: pg.Client) => Promise<T>,
+      ): Promise<T> {
+        const name = `susp_backfill_${Math.random().toString(36).slice(2, 10)}`;
+        const client = new pg.Client({
+          connectionString: process.env.DATABASE_URL,
+        });
+        await client.connect();
+        try {
+          await client.query(`CREATE SCHEMA ${name}`);
+          await client.query(`SET search_path TO ${name}`);
+          return await run(client);
+        } finally {
+          await client.query(`DROP SCHEMA IF EXISTS ${name} CASCADE`);
+          await client.end();
+        }
+      }
+
+      /** Production's table as it is today: the current schema without the new column. */
+      async function tableBeforeTheColumn(client: pg.Client): Promise<void> {
+        await client.query(SCHEMA_SQL);
+        await client.query(
+          'ALTER TABLE suspension_records DROP COLUMN date_estimated',
+        );
+        for (const [member, suspended, created, notes, voided] of ROWS) {
+          // eslint-disable-next-line no-await-in-loop -- in order
+          await client.query(
+            `INSERT INTO suspension_records
+               (member_id, suspended_at, duration_days, notes, created_at, voided_at, voided_by, void_reason)
+             VALUES ($1, $2::date::timestamp AT TIME ZONE 'UTC', 30, $3, $4,
+                     CASE WHEN $5 THEN now() END,
+                     CASE WHEN $5 THEN 'mod' END,
+                     CASE WHEN $5 THEN 'dup' END)`,
+            [member, suspended, notes, created, voided],
+          );
+        }
+      }
+
+      const flaggedIn = async (client: pg.Client) =>
+        (
+          await client.query<{ member_id: string }>(
+            'SELECT member_id FROM suspension_records WHERE date_estimated ORDER BY member_id',
+          )
+        ).rows.map((r) => r.member_id);
+
+      it('flags exactly the undated import rows, and changes no date, length or note', async () => {
+        await inScratchSchema(async (client) => {
+          await tableBeforeTheColumn(client);
+          const snapshot = () =>
+            client.query(
+              `SELECT id, member_id, suspended_at, duration_days, notes, created_at, voided_at
+                 FROM suspension_records ORDER BY id`,
+            );
+          const before = (await snapshot()).rows;
+
+          await client.query(SCHEMA_SQL);
+
+          expect(await flaggedIn(client)).toEqual(EXPECTED_FLAGGED);
+          expect((await snapshot()).rows).toEqual(before);
+          const nulls = await client.query(
+            'SELECT 1 FROM suspension_records WHERE date_estimated IS NULL',
+          );
+          expect(nulls.rowCount).toBe(0);
+        });
+      });
+
+      it('runs once: a later boot does not flag again a record staff have fixed', async () => {
+        await inScratchSchema(async (client) => {
+          await tableBeforeTheColumn(client);
+          await client.query(SCHEMA_SQL);
+          // Staff cleared one (Edit date does this) but it still matches
+          // the criteria, e.g. cleared by hand without moving the date.
+          await client.query(
+            `UPDATE suspension_records SET date_estimated = false WHERE member_id = 'hit'`,
+          );
+          await client.query(SCHEMA_SQL);
+          await client.query(SCHEMA_SQL);
+          expect(await flaggedIn(client)).toEqual(
+            EXPECTED_FLAGGED.filter((m) => m !== 'hit'),
+          );
+        });
+      });
+
+      it('a fresh database gets the column with nothing flagged, and new records are unflagged', async () => {
+        await inScratchSchema(async (client) => {
+          await client.query(SCHEMA_SQL);
+          await client.query(
+            `INSERT INTO suspension_records (member_id, suspended_at, duration_days, notes)
+               VALUES ('new', '2026-09-30', 30, '${IMPORT_NOTE}')`,
+          );
+          await client.query(SCHEMA_SQL);
+          expect(await flaggedIn(client)).toEqual([]);
+        });
       });
     });
 

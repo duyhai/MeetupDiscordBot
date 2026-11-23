@@ -21,6 +21,21 @@ import {
 const logger = new Logger({ name: 'PostgresSuspensionRepository' });
 
 /**
+ * The one-time backfill of date_estimated (see SCHEMA_SQL). The spreadsheet
+ * import of 2026-11-18 recorded 134 suspensions; 68 of them had no date in
+ * the tracker and were all given 2026-09-30. Those are exactly the rows
+ * with that date, created by that import, whose notes carry its provenance
+ * line ("Imported from the <date> no-show tracker"). The notes text is read
+ * here only, never by a query at page time.
+ */
+export const UNDATED_IMPORT_BACKFILL_SQL = `UPDATE suspension_records
+       SET date_estimated = true
+     WHERE suspended_at = TIMESTAMPTZ '2026-09-30T00:00:00Z'
+       AND created_at >= TIMESTAMPTZ '2026-11-18T00:00:00Z'
+       AND created_at <  TIMESTAMPTZ '2026-11-19T08:00:00Z'
+       AND notes LIKE 'Imported from the % no-show tracker%'`;
+
+/**
  * Idempotent, so it runs on every boot and also upgrades tables created
  * before voiding existed. The pair is unique only among live rows: once a
  * wrong record is voided, the corrected one can be recorded on the same
@@ -56,6 +71,17 @@ BEGIN
       ADD COLUMN IF NOT EXISTS voided_at   TIMESTAMPTZ,
       ADD COLUMN IF NOT EXISTS voided_by   TEXT,
       ADD COLUMN IF NOT EXISTS void_reason TEXT;
+  END IF;
+  -- date_estimated: suspended_at is a placeholder because the real date is
+  -- not known. The backfill runs only in the transaction that adds the
+  -- column, so it happens once and never re-flags a record staff have fixed.
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+       WHERE table_schema = current_schema()
+         AND table_name = 'suspension_records'
+         AND column_name = 'date_estimated') THEN
+    ALTER TABLE suspension_records
+      ADD COLUMN date_estimated BOOLEAN NOT NULL DEFAULT false;
+    ${UNDATED_IMPORT_BACKFILL_SQL};
   END IF;
   IF to_regclass(quote_ident(current_schema()) || '.suspension_records_member_id_idx') IS NULL THEN
     CREATE INDEX IF NOT EXISTS suspension_records_member_id_idx
@@ -210,6 +236,8 @@ export type SuspensionState = 'active' | 'past' | 'voided';
 
 /** One row of the dashboard's suspension records page. */
 export interface SuspensionPageRow extends SuspensionRecord {
+  /** The date is a placeholder: the real one was not recorded. Cleared by editDate. */
+  dateEstimated: boolean;
   /** lastSuspendedDay (suspensionList.ts), computed in SQL: 'YYYY-MM-DD'. */
   lastDay: string;
   voidedAt: Date | null;
@@ -271,6 +299,7 @@ interface SuspensionRow {
   voided_at: Date | null;
   voided_by: string | null;
   void_reason: string | null;
+  date_estimated: boolean;
 }
 
 function toRecord(row: SuspensionRow): SuspensionRecord {
@@ -580,6 +609,7 @@ export class PostgresSuspensionRepository implements SuspensionRepository {
     ]);
     return result.rows.map((row) => ({
       ...toRecord(row),
+      dateEstimated: row.date_estimated === true,
       lastDay: row.last_day,
       voidedAt: row.voided_at,
       voidedBy: row.voided_by,
@@ -701,7 +731,9 @@ export class PostgresSuspensionRepository implements SuspensionRepository {
           }
         }
         const updated = await client.query<SuspensionRow>(
-          `UPDATE suspension_records SET suspended_at = $2, duration_days = $3
+          // The date is now one a person chose: no longer a placeholder.
+          `UPDATE suspension_records
+              SET suspended_at = $2, duration_days = $3, date_estimated = false
             WHERE id = $1 RETURNING *`,
           [id, suspendedAt, durationDays],
         );
@@ -798,7 +830,9 @@ export class PostgresSuspensionRepository implements SuspensionRepository {
    * Live (unvoided) records per UTC month of suspended_at, from `from` on,
    * oldest first; months with none are absent. suspended_at is UTC midnight
    * of a calendar date, so the UTC month is the date's month. At most one
-   * row per month (trends asks for 240 months at most).
+   * row per month (trends asks for 240 months at most). Records whose date
+   * is a placeholder (date_estimated) belong to no month and are left out;
+   * countUndated counts them.
    */
   async countByMonth(from: Date): Promise<{ month: string; count: number }[]> {
     if (!(from instanceof Date) || Number.isNaN(from.getTime())) {
@@ -808,11 +842,20 @@ export class PostgresSuspensionRepository implements SuspensionRepository {
       `SELECT to_char(date_trunc('month', suspended_at AT TIME ZONE 'UTC'), 'YYYY-MM') AS month,
               count(*)::int AS count
          FROM suspension_records
-        WHERE voided_at IS NULL AND suspended_at >= $1
+        WHERE voided_at IS NULL AND NOT date_estimated AND suspended_at >= $1
         GROUP BY 1 ORDER BY 1`,
       [from],
     );
     return result.rows.map((row) => ({ month: row.month, count: row.count }));
+  }
+
+  /** Live (unvoided) records whose date is a placeholder: the ones countByMonth leaves out. */
+  async countUndated(): Promise<number> {
+    const result = await this.pool.query<{ count: number }>(
+      `SELECT count(*)::int AS count FROM suspension_records
+        WHERE voided_at IS NULL AND date_estimated`,
+    );
+    return result.rows[0].count;
   }
 
   /**

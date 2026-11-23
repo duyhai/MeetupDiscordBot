@@ -42,12 +42,15 @@ const SEEDED: SeedRow[] = [
 interface Setup {
   rows?: SeedRow[];
   byMonth?: { month: string; count: number }[];
+  /** Live records with a placeholder date (countUndated). */
+  undated?: unknown;
   pages?: Partial<DashboardPageDeps>;
 }
 
 async function setup({
   rows = SEEDED,
   byMonth = [{ month: '2026-09', count: 3 }],
+  undated = 0,
   pages = {},
 }: Setup = {}) {
   const snapshots = fakeSnapshots(rows);
@@ -56,7 +59,7 @@ async function setup({
   snapshots.getCurrentMeta.mockRejectedValue(new Error('getCurrentMeta read'));
   snapshots.listSummaries.mockRejectedValue(new Error('listSummaries read'));
   snapshots.listMemberNoShowMonths.mockRejectedValue(new Error('member read'));
-  const suspensions = fakeSuspensions({}, byMonth);
+  const suspensions = fakeSuspensions({}, byMonth, [], [], undated as number);
   const { req } = await makeApp({
     now: () => PAGE_NOW.getTime(),
     protectedRoutes: (r) =>
@@ -231,6 +234,123 @@ describe('trends page', () => {
       '0',
       '0',
     ]);
+  });
+
+  describe('titles and notes (Stacey, 2026-11-23)', () => {
+    const TITLES = [
+      'No-shows per month',
+      'Suspensions recorded per month',
+      'Events and distinct hosts per month',
+      'New hosts per month',
+    ];
+    /** Each chart's <section>, in page order. */
+    const sections = (body: string) =>
+      [...body.matchAll(/<section>([\s\S]*?)<\/section>/g)].map((m) => m[1]);
+
+    it("shows each chart's title as a heading above it, read once by a screen reader", async () => {
+      const { get } = await setup();
+      const res = await get(PAGE);
+      const parts = sections(res.text);
+      expect(parts).toHaveLength(4);
+      parts.forEach((part, i) => {
+        const heading = /<h2([^>]*)>([^<]*)<\/h2>/.exec(part);
+        expect(heading?.[2].trim(), TITLES[i]).toBe(TITLES[i]);
+        // Above the chart, and hidden from screen readers because the svg
+        // keeps the title as its accessible name.
+        expect(part.indexOf('<h2')).toBeLessThan(part.indexOf('<svg'));
+        expect(heading?.[1]).toContain('aria-hidden="true"');
+        expect(part).toContain(`aria-label="${TITLES[i]}"`);
+        expect(part.match(/<h2/g)).toHaveLength(1);
+      });
+      // One h1, and no heading level skipped.
+      expect(res.text.match(/<h1/g)).toHaveLength(1);
+      expect(res.text).not.toMatch(/<h[3-6]/);
+    });
+
+    it("says what the first chart's three series are: due, not sent", async () => {
+      const { get } = await setup();
+      const [first] = sections((await get(PAGE)).text).map(words);
+      expect(first).toContain(
+        'No-shows: no-shows marked at that month’s events (a member who missed two events counts twice).',
+      );
+      expect(first).toContain(
+        'Warnings: members who no-showed that month and are due a warning (it is their only no-show that counts).',
+      );
+      expect(first).toContain(
+        'Suspension candidates: those with two or more that count.',
+      );
+      expect(first).toContain(
+        'A no-show counts for 12 months, unless the member has been suspended since.',
+      );
+      expect(first).toContain(
+        'Warnings are members due one, not warnings sent.',
+      );
+    });
+
+    it('says how a month can have more hosts than events, under the third chart only', async () => {
+      const { get } = await setup();
+      const parts = sections((await get(PAGE)).text).map(words);
+      const line =
+        'A month can have more hosts than events when events are co-hosted.';
+      expect(parts.map((p) => p.includes(line))).toEqual([
+        false,
+        false,
+        true,
+        false,
+      ]);
+    });
+
+    it('says how many suspensions with no recorded date the second chart leaves out', async () => {
+      const { suspensions, get } = await setup({
+        undated: 68,
+        byMonth: [{ month: '2026-09', count: 4 }],
+      });
+      const res = await get(PAGE);
+      expect(suspensions.countUndated).toHaveBeenCalledTimes(1);
+      const parts = sections(res.text).map(words);
+      const line = '68 older suspensions with no recorded date are not shown.';
+      expect(parts.map((p) => p.includes(line))).toEqual([
+        false,
+        true,
+        false,
+        false,
+      ]);
+      // The chart holds what countByMonth answered, nothing added back.
+      expect(
+        rowFor(res.text, 'Suspensions recorded per month', '2026-09'),
+      ).toEqual(['2026-09', '4']);
+    });
+
+    it('one is singular; none, or a junk count, says nothing', async () => {
+      const one = await setup({ undated: 1 });
+      expect(words((await one.get(PAGE)).text)).toContain(
+        '1 older suspension with no recorded date is not shown.',
+      );
+      for (const undated of [0, -3, 'x', null, Number.NaN]) {
+        // eslint-disable-next-line no-await-in-loop -- one app at a time
+        const { get } = await setup({ undated });
+        // eslint-disable-next-line no-await-in-loop
+        const res = await get(PAGE);
+        expect(res.status, String(undated)).toBe(200);
+        expect(words(res.text), String(undated)).not.toContain(
+          'no recorded date',
+        );
+      }
+    });
+
+    it('the range picker keeps the notes and the count', async () => {
+      const { get } = await setup({ undated: 68 });
+      for (const months of ['12', '60', 'all']) {
+        // eslint-disable-next-line no-await-in-loop
+        const text = words((await get(`${PAGE}?months=${months}`)).text);
+        expect(text, months).toContain(
+          '68 older suspensions with no recorded date are not shown.',
+        );
+        expect(text, months).toContain(
+          'Warnings are members due one, not warnings sent.',
+        );
+      }
+    });
   });
 
   it('has no link progress chart (Hai, 2026-11-18)', async () => {
