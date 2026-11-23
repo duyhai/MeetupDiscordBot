@@ -121,6 +121,14 @@ function memoryAid(): SafeHtml {
   </fieldset>`;
 }
 
+/**
+ * Beside every way to announce: an event announced on Meetup itself is
+ * unknown here (Meetup's API has no field that says so), so its Announce
+ * button still shows; Meetup refuses the second send.
+ */
+export const ALREADY_ON_MEETUP_NOTE =
+  'If it was already announced on Meetup, nothing is sent again.';
+
 export const CONFIRM_ALL_MESSAGE =
   'Tick all three to confirm before announcing. Nothing was sent.';
 
@@ -353,7 +361,7 @@ export function confirmBody(
             and announced, and this event is cancelled. The copy may be
             scheduled under the usual rules.
           </p>`
-        : ''
+        : html`<p class="muted">${ALREADY_ON_MEETUP_NOTE}</p>`
     }
     ${
       early

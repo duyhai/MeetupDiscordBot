@@ -35,6 +35,7 @@ import {
 } from '../html.js';
 import { eventLink } from '../links.js';
 import {
+  ALREADY_ON_MEETUP_NOTE,
   AnnounceRouteDeps,
   announceBadge,
   announceButton,
@@ -330,9 +331,9 @@ function homeBody(
         announcements && upcoming.length > 0
           ? html`<p class="muted">
                 Announce sends Meetup's announcement email about your event to
-                the group. It goes out once per event. A request made 10–4
-                Mon–Fri waits until 4 pm; the time is shown by the event, and
-                you can cancel it until then.
+                the group. It goes out once per event. ${ALREADY_ON_MEETUP_NOTE}
+                A request made 10–4 Mon–Fri waits until 4 pm; the time is shown
+                by the event, and you can cancel it until then.
               </p>
               ${announceGuidelines()}`
           : ''

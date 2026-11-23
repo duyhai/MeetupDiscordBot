@@ -123,30 +123,6 @@ export interface RsvpFilter {
   rsvpStatus: RsvpStatus[];
 }
 
-interface EventGroupInfo {
-  dateTime: string;
-  eventUrl: string;
-  group: { id: string };
-  id: string;
-  // TODO: This is broken. Need to ask devs where to get info in new API.
-  networkEvent: {
-    isAnnounced: boolean;
-  };
-  title: string;
-}
-
-export interface GetUserHostedEventsResponse {
-  self: {
-    id: string;
-    memberEvents: PaginatedData<EventGroupInfo>;
-  };
-}
-
-export type GetUserHostedEventsInput = {
-  after?: string;
-  first: number;
-};
-
 type RsvpStatus =
   | 'YES'
   | 'NO'

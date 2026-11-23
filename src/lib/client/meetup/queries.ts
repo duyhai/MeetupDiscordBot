@@ -44,37 +44,6 @@ export const getUserMembershipInfo = gql`
   }
 `;
 
-export const getUserHostedEvents = gql`
-  query ($first: Int!, $after: String) {
-    self {
-      id
-      memberEvents(first: $first, after: $after, isHosting: true) {
-        pageInfo {
-          hasNextPage
-          hasPreviousPage
-          startCursor
-          endCursor
-        }
-        totalCount
-        edges {
-          node {
-            id
-            dateTime
-            eventUrl
-            title
-            group {
-              id
-            }
-            networkEvent {
-              isAnnounced
-            }
-          }
-        }
-      }
-    }
-  }
-`;
-
 // Attendance history in one request. Verified against the live API: with
 // this filter self.rsvps returns 327 for a member whose unfiltered total is
 // 413, and a different groupId returns 1 -- so eventStatus/groupId genuinely
