@@ -171,8 +171,8 @@ export function registerTrendsRoutes(
     });
 
     // Each chart with the heading shown above it and the plain-words line
-    // under it. The svg already carries the title as its accessible name,
-    // so the visible heading is hidden from screen readers: read once.
+    // under it. The heading is a real one (in the heading list); the svg
+    // keeps the title as its accessible name too.
     const charts: {
       title: string;
       kind: 'bar' | 'line';
@@ -190,12 +190,10 @@ export function registerTrendsRoutes(
           ),
         ],
         note: html`<p class="muted chart-note">
-          No-shows: no-shows marked at that month’s events (a member who missed
-          two events counts twice). Warnings: members who no-showed that month
-          and are due a warning (it is their only no-show that counts).
-          Suspension candidates: those with two or more that count. A no-show
-          counts for 12 months, unless the member has been suspended since.
-          Warnings are members due one, not warnings sent.
+          No-shows: no-shows marked at that month’s events. Warnings and
+          Suspension candidates: members who no-showed that month and are due a
+          warning (one no-show in the last 12 months) or a suspension (two or
+          more), counting only no-shows since their last suspension.
         </p>`,
       },
       {
@@ -240,7 +238,7 @@ export function registerTrendsRoutes(
         ${charts.map(
           (c) =>
             html`<section>
-              <h2 class="chart-title" aria-hidden="true">${c.title}</h2>
+              <h2 class="chart-title">${c.title}</h2>
               ${chart({
                 title: c.title,
                 kind: c.kind,

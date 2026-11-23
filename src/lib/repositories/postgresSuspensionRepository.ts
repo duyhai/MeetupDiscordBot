@@ -22,17 +22,19 @@ const logger = new Logger({ name: 'PostgresSuspensionRepository' });
 
 /**
  * The one-time backfill of date_estimated (see SCHEMA_SQL). The spreadsheet
- * import of 2026-11-18 recorded 134 suspensions; 68 of them had no date in
- * the tracker and were all given 2026-09-30. Those are exactly the rows
- * with that date, created by that import, whose notes carry its provenance
- * line ("Imported from the <date> no-show tracker"). The notes text is read
- * here only, never by a query at page time.
+ * import of 2026-11-18 recorded 134 suspensions in one batch (created_at
+ * 2026-11-18T03:14:49Z); 68 of them had no date in the tracker and were all
+ * given 2026-09-30. The date is what tells them from the batch's other 66,
+ * the two-minute created_at window keeps out any record made at another
+ * time, and the notes carry the import's provenance line ("Imported from
+ * the <date> no-show tracker"). The notes text is read here only, never by
+ * a query at page time.
  */
 export const UNDATED_IMPORT_BACKFILL_SQL = `UPDATE suspension_records
        SET date_estimated = true
      WHERE suspended_at = TIMESTAMPTZ '2026-09-30T00:00:00Z'
-       AND created_at >= TIMESTAMPTZ '2026-11-18T00:00:00Z'
-       AND created_at <  TIMESTAMPTZ '2026-11-19T08:00:00Z'
+       AND created_at >= TIMESTAMPTZ '2026-11-18T03:14:00Z'
+       AND created_at <  TIMESTAMPTZ '2026-11-18T03:16:00Z'
        AND notes LIKE 'Imported from the % no-show tracker%'`;
 
 /**

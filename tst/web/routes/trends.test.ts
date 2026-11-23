@@ -247,7 +247,7 @@ describe('trends page', () => {
     const sections = (body: string) =>
       [...body.matchAll(/<section>([\s\S]*?)<\/section>/g)].map((m) => m[1]);
 
-    it("shows each chart's title as a heading above it, read once by a screen reader", async () => {
+    it("shows each chart's title as a real heading above it, and the chart keeps its name", async () => {
       const { get } = await setup();
       const res = await get(PAGE);
       const parts = sections(res.text);
@@ -255,10 +255,9 @@ describe('trends page', () => {
       parts.forEach((part, i) => {
         const heading = /<h2([^>]*)>([^<]*)<\/h2>/.exec(part);
         expect(heading?.[2].trim(), TITLES[i]).toBe(TITLES[i]);
-        // Above the chart, and hidden from screen readers because the svg
-        // keeps the title as its accessible name.
         expect(part.indexOf('<h2')).toBeLessThan(part.indexOf('<svg'));
-        expect(heading?.[1]).toContain('aria-hidden="true"');
+        // In the heading list: not hidden from assistive tech.
+        expect(heading?.[1]).not.toMatch(/hidden/);
         expect(part).toContain(`aria-label="${TITLES[i]}"`);
         expect(part.match(/<h2/g)).toHaveLength(1);
       });
@@ -267,24 +266,16 @@ describe('trends page', () => {
       expect(res.text).not.toMatch(/<h[3-6]/);
     });
 
-    it("says what the first chart's three series are: due, not sent", async () => {
+    it("says what the first chart's three series are, in two sentences: due, not sent", async () => {
       const { get } = await setup();
       const [first] = sections((await get(PAGE)).text).map(words);
       expect(first).toContain(
-        'No-shows: no-shows marked at that month’s events (a member who missed two events counts twice).',
+        'No-shows: no-shows marked at that month’s events. ' +
+          'Warnings and Suspension candidates: members who no-showed that month and are due a warning ' +
+          '(one no-show in the last 12 months) or a suspension (two or more), ' +
+          'counting only no-shows since their last suspension.',
       );
-      expect(first).toContain(
-        'Warnings: members who no-showed that month and are due a warning (it is their only no-show that counts).',
-      );
-      expect(first).toContain(
-        'Suspension candidates: those with two or more that count.',
-      );
-      expect(first).toContain(
-        'A no-show counts for 12 months, unless the member has been suspended since.',
-      );
-      expect(first).toContain(
-        'Warnings are members due one, not warnings sent.',
-      );
+      expect(first).not.toMatch(/sent/i);
     });
 
     it('says how a month can have more hosts than events, under the third chart only', async () => {
@@ -347,7 +338,7 @@ describe('trends page', () => {
           '68 older suspensions with no recorded date are not shown.',
         );
         expect(text, months).toContain(
-          'Warnings are members due one, not warnings sent.',
+          'counting only no-shows since their last suspension.',
         );
       }
     });

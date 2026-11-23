@@ -1088,36 +1088,39 @@ ALTER TABLE suspension_records ADD COLUMN voided_at TIMESTAMPTZ,
     describe('date_estimated backfill (the 68 undated rows of the 2026-11-18 import)', () => {
       const IMPORT_NOTE = 'Imported from the 2026-11-17 no-show tracker';
       // [member, suspended_at, created_at, notes, voided]
+      /** The import batch's created_at in production. */
+      const BATCH = '2026-11-18T03:14:49.467Z';
       const ROWS: [string, string, string, string | null, boolean][] = [
-        ['hit', '2026-09-30', '2026-11-18T20:15:00Z', IMPORT_NOTE, false],
-        // The import ran in the Pacific evening: already the 19th in UTC.
-        ['hit-late', '2026-09-30', '2026-11-19T05:00:00Z', IMPORT_NOTE, false],
+        ['hit', '2026-09-30', BATCH, IMPORT_NOTE, false],
         [
           'hit-suffix',
           '2026-09-30',
-          '2026-11-18T20:15:00Z',
+          BATCH,
           `${IMPORT_NOTE}; 2nd offence`,
           false,
         ],
-        ['hit-voided', '2026-09-30', '2026-11-18T20:15:00Z', IMPORT_NOTE, true],
-        // Same import, but the tracker had a date.
-        ['dated', '2026-09-12', '2026-11-18T20:15:00Z', IMPORT_NOTE, false],
-        ['dated-oct', '2025-10-30', '2026-11-18T20:15:00Z', IMPORT_NOTE, false],
+        ['hit-voided', '2026-09-30', BATCH, IMPORT_NOTE, true],
+        // Same batch, same note, but the tracker had a date (66 in production).
+        ['dated', '2026-09-15', BATCH, IMPORT_NOTE, false],
+        ['dated-sept', '2026-09-21', BATCH, IMPORT_NOTE, false],
+        ['dated-old', '2025-10-30', BATCH, IMPORT_NOTE, false],
         // A real suspension on 2026-09-30, recorded at the time.
         ['real', '2026-09-30', '2026-09-30T18:00:00Z', 'Two no-shows', false],
-        ['real-no-note', '2026-09-30', '2026-11-18T20:15:00Z', null, false],
+        ['real-no-note', '2026-09-30', BATCH, null, false],
         [
           'other-note',
           '2026-09-30',
-          '2026-11-18T20:15:00Z',
+          BATCH,
           'Recorded from the workspace',
           false,
         ],
-        // Import-style notes on that date, but another day's import.
-        ['early', '2026-09-30', '2026-11-17T23:59:59Z', IMPORT_NOTE, false],
-        ['later', '2026-09-30', '2026-11-19T08:00:00Z', IMPORT_NOTE, false],
+        // On that date with import-style notes, but not from the batch:
+        // just outside the window, and a later import the same day.
+        ['early', '2026-09-30', '2026-11-18T03:13:59.999Z', IMPORT_NOTE, false],
+        ['late', '2026-09-30', '2026-11-18T03:16:00Z', IMPORT_NOTE, false],
+        ['same-day', '2026-09-30', '2026-11-18T20:15:00Z', IMPORT_NOTE, false],
       ];
-      const EXPECTED_FLAGGED = ['hit', 'hit-late', 'hit-suffix', 'hit-voided'];
+      const EXPECTED_FLAGGED = ['hit', 'hit-suffix', 'hit-voided'];
 
       async function inScratchSchema<T>(
         run: (client: pg.Client) => Promise<T>,
