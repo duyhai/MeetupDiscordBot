@@ -15,6 +15,7 @@ export const FIRST_SUSPENSION_DAY = '2013-03-01';
 
 export type DateEditCode =
   | 'date-changed'
+  | 'date-confirmed'
   | 'date-unchanged'
   | 'not-live'
   | 'date-taken'
@@ -77,6 +78,18 @@ export async function editSuspensionDate(
     return {
       code: outcome.reason === 'unchanged' ? 'date-unchanged' : outcome.reason,
     };
+  }
+  if (outcome.confirmed === true) {
+    postWithoutWaiting(deps, {
+      title: 'Suspension date confirmed',
+      description:
+        `<@${input.actor}> confirmed the date of suspension #${input.id}, ` +
+        `which had no recorded date.\n` +
+        `${PUBLIC_APP_ORIGIN}${dashboardPath(DASHBOARD_PATHS.suspensions)}`,
+      fields: [{ name: 'Date', value: utcDateOnly(outcome.after.suspendedAt) }],
+    });
+    logger.info(`Suspension #${input.id} date confirmed`);
+    return { code: 'date-confirmed' };
   }
   postWithoutWaiting(deps, {
     title: 'Suspension date changed',

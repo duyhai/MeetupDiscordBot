@@ -203,8 +203,8 @@ export function registerTrendsRoutes(
         note:
           undated > 0
             ? html`<p class="muted chart-note">
-                ${undated} older ${undated === 1 ? 'suspension' : 'suspensions'}
-                with no recorded date ${undated === 1 ? 'is' : 'are'} not shown.
+                ${undated} ${undated === 1 ? 'suspension' : 'suspensions'} with
+                no recorded date ${undated === 1 ? 'is' : 'are'} not shown.
               </p>`
             : '',
       },

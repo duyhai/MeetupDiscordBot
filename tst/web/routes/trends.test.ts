@@ -299,7 +299,7 @@ describe('trends page', () => {
       const res = await get(PAGE);
       expect(suspensions.countUndated).toHaveBeenCalledTimes(1);
       const parts = sections(res.text).map(words);
-      const line = '68 older suspensions with no recorded date are not shown.';
+      const line = '68 suspensions with no recorded date are not shown.';
       expect(parts.map((p) => p.includes(line))).toEqual([
         false,
         true,
@@ -315,7 +315,7 @@ describe('trends page', () => {
     it('one is singular; none, or a junk count, says nothing', async () => {
       const one = await setup({ undated: 1 });
       expect(words((await one.get(PAGE)).text)).toContain(
-        '1 older suspension with no recorded date is not shown.',
+        '1 suspension with no recorded date is not shown.',
       );
       for (const undated of [0, -3, 'x', null, Number.NaN]) {
         // eslint-disable-next-line no-await-in-loop -- one app at a time
@@ -335,7 +335,7 @@ describe('trends page', () => {
         // eslint-disable-next-line no-await-in-loop
         const text = words((await get(`${PAGE}?months=${months}`)).text);
         expect(text, months).toContain(
-          '68 older suspensions with no recorded date are not shown.',
+          '68 suspensions with no recorded date are not shown.',
         );
         expect(text, months).toContain(
           'counting only no-shows since their last suspension.',

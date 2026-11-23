@@ -305,41 +305,107 @@ if (!POSTGRES_AVAILABLE) {
         expect(edits.has(999)).toBe(false);
       });
 
-      it('clears the placeholder-date flag, and a refused edit leaves it', async () => {
-        const pool = (repo as unknown as { pool: pg.Pool }).pool;
+      describe('a record with a placeholder date', () => {
+        const pool = () => (repo as unknown as { pool: pg.Pool }).pool;
         const flagged = async (id: number) =>
           (
-            await pool.query<{ date_estimated: boolean }>(
+            await pool().query<{ date_estimated: boolean }>(
               'SELECT date_estimated FROM suspension_records WHERE id = $1',
               [id],
             )
           ).rows[0].date_estimated;
-        const target = await insertOn('2026-09-30');
-        await pool.query(
-          'UPDATE suspension_records SET date_estimated = true WHERE id = $1',
-          [target.id],
-        );
-        expect(
-          await repo.editDate({
+        const insertFlagged = async (d: string) => {
+          const target = await insertOn(d);
+          await pool().query(
+            'UPDATE suspension_records SET date_estimated = true WHERE id = $1',
+            [target.id],
+          );
+          return target;
+        };
+
+        it('a move clears the flag; a refused move leaves it', async () => {
+          const target = await insertFlagged('2026-09-30');
+          await insertOn('2026-06-14', 30, 'm1');
+          expect(
+            await repo.editDate({
+              id: target.id,
+              suspendedAt: day('2026-06-14'),
+              editedBy: LEAD,
+            }),
+          ).toEqual({ ok: false, reason: 'date-taken' });
+          expect(await flagged(target.id)).toBe(true);
+          expect(await repo.countUndated()).toBe(1);
+
+          const moved = await repo.editDate({
+            id: target.id,
+            suspendedAt: day('2026-08-20'),
+            editedBy: LEAD,
+          });
+          expect(moved).toMatchObject({ ok: true });
+          expect(moved).not.toHaveProperty('confirmed');
+          expect(await flagged(target.id)).toBe(false);
+          expect(await repo.countUndated()).toBe(0);
+          expect(await repo.countByMonth(day('2026-01-01'))).toEqual([
+            { month: '2026-06', count: 1 },
+            { month: '2026-08', count: 1 },
+          ]);
+        });
+
+        it('the same date confirms it: flag cleared, nothing moved, the edit kept', async () => {
+          const target = await insertFlagged('2026-09-30');
+          const confirmed = await repo.editDate({
             id: target.id,
             suspendedAt: day('2026-09-30'),
             editedBy: LEAD,
-          }),
-        ).toEqual({ ok: false, reason: 'unchanged' });
-        expect(await flagged(target.id)).toBe(true);
-        expect(await repo.countUndated()).toBe(1);
-
-        const moved = await repo.editDate({
-          id: target.id,
-          suspendedAt: day('2026-06-14'),
-          editedBy: LEAD,
+          });
+          expect(confirmed).toMatchObject({
+            ok: true,
+            confirmed: true,
+            before: { suspendedAt: day('2026-09-30'), durationDays: 30 },
+            after: { suspendedAt: day('2026-09-30'), durationDays: 30 },
+          });
+          expect(await flagged(target.id)).toBe(false);
+          expect(await repo.countUndated()).toBe(0);
+          expect(await repo.countByMonth(day('2026-01-01'))).toEqual([
+            { month: '2026-09', count: 1 },
+          ]);
+          expect(
+            (await repo.listDateEdits([target.id])).get(target.id),
+          ).toEqual([
+            expect.objectContaining({
+              oldDay: '2026-09-30',
+              newDay: '2026-09-30',
+              oldDurationDays: 30,
+              newDurationDays: 30,
+              editedBy: LEAD,
+            }),
+          ]);
+          // Confirmed once: the same date again is the ordinary refusal,
+          // with no second audit row.
+          expect(
+            await repo.editDate({
+              id: target.id,
+              suspendedAt: day('2026-09-30'),
+              editedBy: LEAD,
+            }),
+          ).toEqual({ ok: false, reason: 'unchanged' });
+          expect(
+            (await repo.listDateEdits([target.id])).get(target.id),
+          ).toHaveLength(1);
         });
-        expect(moved.ok).toBe(true);
-        expect(await flagged(target.id)).toBe(false);
-        expect(await repo.countUndated()).toBe(0);
-        expect(await repo.countByMonth(day('2026-01-01'))).toEqual([
-          { month: '2026-06', count: 1 },
-        ]);
+
+        it('a voided flagged record cannot be confirmed', async () => {
+          const target = await insertFlagged('2026-09-30');
+          await repo.void(target.id, LEAD, 'dup');
+          expect(
+            await repo.editDate({
+              id: target.id,
+              suspendedAt: day('2026-09-30'),
+              editedBy: LEAD,
+            }),
+          ).toEqual({ ok: false, reason: 'not-live' });
+          expect(await flagged(target.id)).toBe(true);
+        });
       });
 
       it('refuses a move past another live record: void and re-record instead', async () => {

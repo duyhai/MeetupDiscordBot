@@ -65,6 +65,8 @@ export function suspensionDatePath(id: number): string {
 export const DATE_EDIT_MESSAGES = {
   'date-changed':
     'Date changed. The length and end date were worked out again, and the old date is kept on the record.',
+  'date-confirmed':
+    'Date confirmed. The suspension now counts in that month on Trends, and the confirmation is kept on the record.',
   'date-unchanged': 'That is already the date. Nothing changed.',
   'not-live': 'That suspension is voided or no longer exists. Nothing changed.',
   'date-taken':
@@ -99,7 +101,7 @@ function dateEditNotice(code: unknown): SafeHtml | '' {
   if (!isDateEditResult(code)) {
     return '';
   }
-  return code === 'date-changed'
+  return code === 'date-changed' || code === 'date-confirmed'
     ? html`<p class="note info">${DATE_EDIT_MESSAGES[code]}</p>`
     : html`<p class="note attn">${DATE_EDIT_MESSAGES[code]}</p>`;
 }
@@ -168,6 +170,13 @@ function editLine(
   edit: SuspensionDateEdit,
   names: Readonly<Record<string, string>>,
 ): SafeHtml {
+  if (edit.oldDay === edit.newDay) {
+    // A placeholder date confirmed as the real one: nothing moved.
+    return html`<li>
+      Date confirmed as ${edit.newDay} by ${staffLink(edit.editedBy, names)} on
+      ${pacificDate(edit.editedAt)}
+    </li>`;
+  }
   return html`<li>
     Was ${edit.oldDay} (${edit.oldDurationDays} days), changed to ${edit.newDay}
     (${edit.newDurationDays} days) by ${staffLink(edit.editedBy, names)} on
@@ -193,7 +202,7 @@ function recordRow(row: SuspensionPageRow, view: RowView): SafeHtml {
       <span class="nowrap">${utcDateOnly(row.suspendedAt)}</span> through
       <span class="nowrap">${row.lastDay}</span>
       ${
-        row.dateEstimated === true
+        row.dateEstimated === true && !voided
           ? html`<span class="badge attn">Date not recorded</span>`
           : ''
       }
@@ -300,7 +309,8 @@ const EDIT_DATE_TIP =
   'date, as when recording. The old date, the new one, you and the time are ' +
   'kept on the record and posted to the moderation log. Other suspensions ' +
   'are not changed: a date that passes another suspension, or overlaps ' +
-  'one, is refused. Nothing changes on Meetup.';
+  'one, is refused. Nothing changes on Meetup. On a record marked “Date ' +
+  'not recorded”, saving the date shown confirms it as the real one.';
 
 /** The Edit date pop-up for one live record: Leadership only (display; the POST asks Discord live). */
 function editDateForm(

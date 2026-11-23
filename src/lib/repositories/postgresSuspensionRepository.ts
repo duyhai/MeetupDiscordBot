@@ -215,7 +215,16 @@ export interface SuspensionDateEdit {
 
 /** editDate's answer. */
 export type EditDateOutcome =
-  | { ok: true; before: SuspensionRecord; after: SuspensionRecord }
+  | {
+      ok: true;
+      before: SuspensionRecord;
+      after: SuspensionRecord;
+      /**
+       * The date was a placeholder (date_estimated) and the same date was
+       * given: nothing moved, the flag was cleared and the edit kept.
+       */
+      confirmed?: true;
+    }
   | {
       ok: false;
       /**
@@ -627,7 +636,8 @@ export class PostgresSuspensionRepository implements SuspensionRepository {
    * member's live records before the new date (itself excluded). Other
    * records keep their lengths. Under the member lock the workspace and
    * bans take, in one dashboard transaction; the edit is kept in
-   * suspension_date_edits.
+   * suspension_date_edits. Either way the record's date is no longer a
+   * placeholder; giving a placeholder date again confirms it (`confirmed`).
    */
   async editDate(input: {
     id: number;
@@ -664,7 +674,28 @@ export class PostgresSuspensionRepository implements SuspensionRepository {
           return { ok: false, reason: 'not-live' } as const;
         }
         if (row.suspended_at.getTime() === suspendedAt.getTime()) {
-          return { ok: false, reason: 'unchanged' } as const;
+          if (row.date_estimated !== true) {
+            return { ok: false, reason: 'unchanged' } as const;
+          }
+          // A placeholder date that turns out to be the real one: the only
+          // way to say so. Nothing moves, so no other check applies.
+          const confirmed = await client.query<SuspensionRow>(
+            `UPDATE suspension_records SET date_estimated = false
+              WHERE id = $1 RETURNING *`,
+            [id],
+          );
+          await client.query(
+            `INSERT INTO suspension_date_edits
+               (record_id, old_suspended_at, new_suspended_at, old_duration_days, new_duration_days, edited_by)
+             VALUES ($1, $2, $2, $3, $3, $4)`,
+            [id, row.suspended_at, row.duration_days, editedBy],
+          );
+          return {
+            ok: true,
+            confirmed: true,
+            before: toRecord(row),
+            after: toRecord(confirmed.rows[0]),
+          } as const;
         }
         const taken = await client.query(
           `SELECT 1 FROM suspension_records

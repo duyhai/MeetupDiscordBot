@@ -150,7 +150,21 @@ describe('suspension records page', () => {
         // Anything but true is unmarked.
         suspensionRow({ id: 9, dateEstimated: 'yes' as unknown as boolean }),
       ],
+      // A voided record counts nowhere: no badge, flagged or not.
+      voided: [
+        suspensionRow({
+          id: 10,
+          dateEstimated: true,
+          voidedAt: new Date('2026-11-20T02:00:00Z'),
+          voidedBy: '223456789012345678',
+          voidReason: 'duplicate',
+        }),
+      ],
     });
+    const voided = await get(`${PAGE}?state=voided`);
+    expect(voided.status).toBe(200);
+    expect(words(voided.text)).toContain('#10');
+    expect(voided.text).not.toContain('Date not recorded');
     const res = await get(`${PAGE}?state=past`);
     expect(res.status).toBe(200);
     const rows = [...res.text.matchAll(/<tr>([\s\S]*?)<\/tr>/g)]
@@ -424,6 +438,16 @@ describe('Edit date (Hai, 2026-11-17)', () => {
           editedBy: LEAD,
           editedAt: new Date('2026-09-23T17:00:00Z'),
         },
+        // A placeholder date confirmed as the real one: old and new agree.
+        {
+          recordId: 13,
+          oldDay: '2026-09-01',
+          newDay: '2026-09-01',
+          oldDurationDays: 30,
+          newDurationDays: 30,
+          editedBy: LEAD,
+          editedAt: new Date('2026-11-24T18:00:00Z'),
+        },
       ],
     );
     const editDate = vi.fn(async () => ({ code: 'date-changed' as const }));
@@ -484,6 +508,15 @@ describe('Edit date (Hai, 2026-11-17)', () => {
     expect(text).toContain(
       'Was 2026-09-22 (30 days), changed to 2026-09-20 (60 days) by Hai on Sep 23, 2026',
     );
+  });
+
+  it('a confirmed date reads as confirmed, not as a change', async () => {
+    const { get } = await editSetup(false);
+    const text = words((await get(`${PAGE}?state=past`)).text);
+    expect(text).toContain(
+      'Date confirmed as 2026-09-01 by Hai on Nov 24, 2026',
+    );
+    expect(text).not.toContain('changed to 2026-09-01');
   });
 
   it('POST: Leadership is asked live, the session user edits, back to the tab', async () => {
@@ -567,6 +600,7 @@ describe('Edit date (Hai, 2026-11-17)', () => {
   it('every editSuspensionDate code has a message', () => {
     const codes: DateEditCode[] = [
       'date-changed',
+      'date-confirmed',
       'date-unchanged',
       'not-live',
       'date-taken',
@@ -586,6 +620,8 @@ describe('Edit date (Hai, 2026-11-17)', () => {
     const { get } = await editSetup(false);
     const ok = await get(`${PAGE}?result=date-changed`);
     expect(ok.text).toContain('<p class="note info">Date changed.');
+    const confirmed = await get(`${PAGE}?result=date-confirmed`);
+    expect(confirmed.text).toContain('<p class="note info">Date confirmed.');
     const junk = await get(`${PAGE}?result=%3Cb%3Ex`);
     expect(junk.text).not.toContain('<b>x');
     expect(junk.text).not.toContain('class="note attn"');
