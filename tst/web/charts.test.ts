@@ -296,3 +296,53 @@ describe('gridlines and line hover (Hai, 2026-11-17)', () => {
     expect((out.match(/class="grid"/g) ?? []).length).toBeLessThanOrEqual(11);
   });
 });
+
+describe('percent charts (the Retention page)', () => {
+  const percent = (input: Partial<ChartInput> = {}) =>
+    render({
+      unit: 'percent',
+      categories: ['1', '2'],
+      series: [{ label: 'Came to another', values: [72, 81] }],
+      ...input,
+    });
+
+  it('the axis runs 0 to 100 in steps of 25, labelled with %', () => {
+    const out = percent();
+    const labels = [
+      ...out.matchAll(/text-anchor="end"\s*>([^<]*)<\/text/g),
+    ].map((m) => m[1]);
+    expect(labels).toEqual(['0%', '25%', '50%', '75%', '100%']);
+  });
+
+  it('the scale does not stretch to the data: 50% is half the plot height', () => {
+    const out = percent({ series: [{ label: 'x', values: [50, 100] }] });
+    const heights = [...out.matchAll(/<rect[^>]*height="([\d.]+)"/g)].map((m) =>
+      Number(m[1]),
+    );
+    expect(heights).toHaveLength(2);
+    expect(heights[0] * 2).toBeCloseTo(heights[1], 1);
+    // 260 high less 12 above and 40 below.
+    expect(heights[1]).toBeCloseTo(208, 1);
+  });
+
+  it('hover titles and the data table say %', () => {
+    const bars = percent();
+    expect(bars).toContain('<title>1: 72%</title>');
+    expect(bars).toContain('<td>81%</td>');
+    const lines = percent({ kind: 'line' });
+    expect(lines).toContain('<title>2 · Came to another: 81%</title>');
+    expect(lines).toContain('<td>72%</td>');
+  });
+
+  it('a value over 100 is drawn at the top, never above the plot', () => {
+    const out = percent({ series: [{ label: 'x', values: [250, 100] }] });
+    const ys = [...out.matchAll(/<rect[^>]*\sy="([\d.]+)"/g)].map((m) =>
+      Number(m[1]),
+    );
+    expect(ys).toEqual([12, 12]);
+  });
+
+  it('a count chart is unchanged: no % anywhere', () => {
+    expect(render()).not.toContain('%');
+  });
+});

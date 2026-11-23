@@ -78,6 +78,10 @@ import type {
   PromotionEvent,
 } from '../../../src/lib/repositories/postgresPromotedHostRepository.js';
 import type { StaffRequestStore } from '../../../src/web/routes/hostRequests.js';
+import type {
+  CohortMonth,
+  RetentionView,
+} from '../../../src/lib/retention/retention.js';
 import type { EventAuditRequestResult } from '../../../src/lib/eventAudit/job.js';
 import type {
   EventChange,
@@ -1105,6 +1109,63 @@ export function fakeEventAudit(
   };
 }
 
+/** One first-event month with round numbers: 100 members unless given. */
+export function cohortMonth(
+  month: string,
+  over: Partial<CohortMonth> = {},
+): CohortMonth {
+  return {
+    month,
+    members: 100,
+    second90: 60,
+    third90: 40,
+    yearOn: 30,
+    reached2: 70,
+    reached3: 56,
+    reached4: 49,
+    reached5: 42,
+    reached6: 38,
+    sixPlus: 400,
+    sixPlusAgain: 372,
+    recentThree: 14,
+    recentUnderThree: 1,
+    ...over,
+  };
+}
+
+/**
+ * A snapshot finished on 2026-10-05 Pacific (PAGE_NOW): 100 first-timers
+ * every month from January 2023, the same rates each month. June 2026 is
+ * the latest month whose members have all had 90 days.
+ */
+export function retentionView(
+  over: Partial<RetentionView> = {},
+): RetentionView {
+  const months: string[] = [];
+  for (let year = 2023; year <= 2026; year += 1) {
+    for (let m = 1; m <= (year === 2026 ? 10 : 12); m += 1) {
+      months.push(`${year}-${String(m).padStart(2, '0')}`);
+    }
+  }
+  return {
+    ready: true,
+    updatedAt: PAGE_NOW,
+    asOf: '2026-10-05',
+    cohorts: months.map((month) => cohortMonth(month)),
+    months: months.map((month) => ({ month, active: 350, firstTimers: 100 })),
+    years: [2023, 2024, 2025, 2026].flatMap((cohort) =>
+      [2023, 2024, 2025, 2026]
+        .filter((year) => year >= cohort)
+        .map((year) => ({
+          cohort,
+          year,
+          members: year === cohort ? (cohort === 2026 ? 1000 : 1200) : 480,
+        })),
+    ),
+    ...over,
+  };
+}
+
 export function fakePageDeps(
   overrides: Partial<DashboardPageDeps> = {},
 ): DashboardPageDeps {
@@ -1181,6 +1242,7 @@ export function fakePageDeps(
     ]),
     revokeHostSessions: vi.fn(async () => undefined),
     hostAlert: vi.fn().mockResolvedValue(true),
+    retention: vi.fn(async () => retentionView()),
     // The same fake Leadership check says no, so runNow is never reached there.
     wrappedBackfill: {
       status: vi.fn(async () => ({

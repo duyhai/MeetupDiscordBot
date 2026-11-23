@@ -53,7 +53,9 @@ import { ApplicationCache } from '../util/cache.js';
 import { resolveDisplayNames } from '../lib/wrapped/displayNames.js';
 import { cachedDisplayNames, displayNames } from './host/serverJoin.js';
 import { STAFF_NAMES_BUDGET_MS } from './staffNames.js';
+import { PostgresRetentionRepository } from '../lib/repositories/postgresRetentionRepository.js';
 import { PostgresSnapshotRepository } from '../lib/repositories/postgresSnapshotRepository.js';
+import { createRetentionLoader } from '../lib/retention/retention.js';
 import {
   LastSnapshotTick,
   RSVP_SETTLE_DAYS,
@@ -310,6 +312,13 @@ function promotionReads(getClient: () => Client | undefined) {
   };
 }
 
+/** One per process: it holds the Retention page's per-snapshot-run cache. */
+const retentionLoader = createRetentionLoader({
+  store: () => PostgresRetentionRepository.instance(),
+  snapshot: () => PostgresSnapshotRepository.instance(),
+  now: () => new Date(),
+});
+
 /** Production page deps, each read wired to its repository's instance(). */
 export function dashboardPageDeps(): DashboardPageDeps {
   const isLeadership = discordRoleCheck(
@@ -377,6 +386,7 @@ export function dashboardPageDeps(): DashboardPageDeps {
     },
     banActions: banActions(isLeadership),
     upcoming: upcomingLoader,
+    retention: () => retentionLoader.load(),
     // The Wrapped's name cache (a day in Redis, keyed by Discord id), behind
     // the dashboard's 2 s Redis deadline; loadStaffNames bounds the page.
     staffNames: async (ids) =>

@@ -35,6 +35,12 @@ export interface ChartInput {
   height?: number;
   /** The data table's first column heading. Default 'Month'. */
   categoryLabel?: string;
+  /**
+   * 'percent': the values are whole percentages. The axis runs 0 to 100 in
+   * steps of 25 and the axis labels, hover titles and data table say "%".
+   * Left out, the values are counts.
+   */
+  unit?: 'percent';
 }
 
 const DEFAULT_WIDTH = 720;
@@ -197,15 +203,21 @@ export function chart(input: ChartInput): SafeHtml {
   const plotH = height - pad.top - pad.bottom;
   const baseline = pad.top + plotH;
   const n = input.categories.length;
+  const isPercent = input.unit === 'percent';
+  /** A value as its label says it: "62%" on a percent chart, else the number. */
+  function shown(v: number): string {
+    return isPercent ? `${v}%` : String(v);
+  }
   const dataMax = Math.max(
     1,
     ...input.series.flatMap((s) => s.values.slice(0, n).map(clean)),
   );
   // The scale tops out at the first gridline at or above the data, so the
   // top line is a labelled value.
-  const yStep = niceStep(dataMax);
-  const yMax = Math.ceil(dataMax / yStep) * yStep;
-  const y = (v: number) => baseline - (clean(v) / yMax) * plotH;
+  const yStep = isPercent ? 25 : niceStep(dataMax);
+  const yMax = isPercent ? 100 : Math.ceil(dataMax / yStep) * yStep;
+  // A percent chart's values stop at the top of its scale.
+  const y = (v: number) => baseline - (Math.min(clean(v), yMax) / yMax) * plotH;
   const slot = plotW / n;
   const x = (i: number) => pad.left + slot * (i + 0.5);
   const colorOf = (
@@ -245,7 +257,7 @@ export function chart(input: ChartInput): SafeHtml {
           width="${fmt(barW)}"
           height="${fmt(baseline - y(v))}"
           fill="${color}"
-          ><title>${input.categories[i]}: ${clean(v)}</title></rect
+          ><title>${input.categories[i]}: ${shown(clean(v))}</title></rect
         >`;
       });
       return seriesGroup(si, own, bars);
@@ -259,7 +271,9 @@ export function chart(input: ChartInput): SafeHtml {
           cy="${fmt(y(values[0]))}"
           r="3"
           fill="${color}"
-          ><title>${input.categories[0]}: ${clean(values[0])}</title></circle
+          ><title>
+            ${input.categories[0]}: ${shown(clean(values[0]))}
+          </title></circle
         >`,
       );
     }
@@ -269,7 +283,7 @@ export function chart(input: ChartInput): SafeHtml {
     const dots = tooltips
       ? values.map((v, i) => {
           // One line, so the hover text has no stray whitespace.
-          const tip = `${input.categories[i]} · ${s.label}: ${clean(v)}`;
+          const tip = `${input.categories[i]} · ${s.label}: ${shown(clean(v))}`;
           return html`<circle
             cx="${fmt(x(i))}"
             cy="${fmt(y(v))}"
@@ -324,7 +338,7 @@ export function chart(input: ChartInput): SafeHtml {
         y="${fmt(y(v) + 4)}"
         font-size="11"
         text-anchor="end"
-        >${v}</text
+        >${shown(v)}</text
       >`,
   );
   // The first swatch sits at the text's x; later ones get a gap. dx is a
@@ -373,7 +387,7 @@ export function chart(input: ChartInput): SafeHtml {
                 html`<tr>
                   <td>${c}</td>
                   ${input.series.map(
-                    (s) => html`<td>${clean(s.values[i] ?? 0)}</td>`,
+                    (s) => html`<td>${shown(clean(s.values[i] ?? 0))}</td>`,
                   )}
                 </tr>`,
             )}

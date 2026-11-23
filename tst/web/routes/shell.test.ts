@@ -172,12 +172,13 @@ describe('page shell', () => {
       ['/dashboard/hall-of-fame', 'Hall of Fame'],
       ['/dashboard/events', 'Event changes'],
       ['/dashboard/trends', 'Trends'],
+      ['/dashboard/retention', 'Retention'],
       ['/dashboard/settings', 'General'],
       ['/dashboard/sessions', 'Sessions'],
     ]);
   });
 
-  it('the grouped nav reaches the twelve pages it had before, plus Settings and Banned, minus Link progress', async () => {
+  it('the grouped nav reaches the twelve pages it had before, plus Settings, Banned and Retention, minus Link progress', async () => {
     const { get } = await setup();
     const nav = siteNav((await get('/dashboard/sessions')).text);
     const paths = [...nav.matchAll(/<a href="([^"]+)"/g)].map((m) => m[1]);
@@ -195,13 +196,15 @@ describe('page shell', () => {
       '/dashboard/trends',
       '/dashboard/sessions',
     ];
-    expect(paths).toHaveLength(13);
+    expect(paths).toHaveLength(14);
     // Link progress was removed (Hai, 2026-11-17); Banned is its own page.
     expect([...paths].sort()).toEqual(
       [
         ...before.filter((p) => p !== '/dashboard/link-progress'),
         '/dashboard/settings',
         '/dashboard/bans',
+        // Retention joined Analytics on 2026-11-23.
+        '/dashboard/retention',
       ].sort(),
     );
     // Each one answers.
@@ -232,7 +235,7 @@ describe('page shell', () => {
         'Hosts &amp; events',
         ['Requests', 'Promotion', 'Hall of Fame', 'Event changes'],
       ],
-      ['Analytics', ['Trends']],
+      ['Analytics', ['Trends', 'Retention']],
       ['Settings', ['General', 'Sessions']],
     ]);
     // Home is a plain link before the first group.
@@ -258,6 +261,8 @@ describe('page shell', () => {
     ['/dashboard/bans', 'Banned'],
     ['/dashboard/bans?show=lifted', 'Banned'],
     ['/dashboard/trends', 'Trends'],
+    ['/dashboard/retention', 'Retention'],
+    ['/dashboard/retention?months=all', 'Retention'],
     ['/dashboard/sessions', 'Sessions'],
     ['/dashboard/sessions?done=done', 'Sessions'],
     ['/dashboard/settings', 'General'],

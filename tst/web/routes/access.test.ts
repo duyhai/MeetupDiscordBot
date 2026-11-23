@@ -182,6 +182,7 @@ describe('access matrix', () => {
     expect(labels).toContain('GET /bans');
     expect(labels).toContain('POST /suspensions/:id/date');
     expect(labels).toContain('GET /trends');
+    expect(labels).toContain('GET /retention');
     expect(labels).toContain('GET /no-shows');
     expect(labels).toContain('GET /no-shows/:period');
     expect(labels).toContain('GET /no-shows/:period/rows/:rowId/suspend');
