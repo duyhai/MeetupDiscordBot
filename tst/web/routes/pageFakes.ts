@@ -363,6 +363,7 @@ export function suspensionRow(
     voidReason: null,
     linkedName: null,
     linkedDiscordId: null,
+    dateEstimated: false,
     ...overrides,
   };
 }
@@ -397,6 +398,7 @@ export function fakeSuspensions(
   byMonth: { month: string; count: number }[] = [],
   records: SuspensionRecordState[] = [],
   dateEdits: SuspensionDateEdit[] = [],
+  undated = 0,
 ) {
   const tab = (state: SuspensionState) => rows[state] ?? [];
   return {
@@ -448,6 +450,7 @@ export function fakeSuspensions(
       async (from: Date): Promise<{ month: string; count: number }[]> =>
         byMonth.filter((m) => m.month >= from.toISOString().slice(0, 7)),
     ),
+    countUndated: vi.fn(async (): Promise<number> => undated),
   } satisfies SuspensionPageReader;
 }
 

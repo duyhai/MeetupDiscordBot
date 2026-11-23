@@ -71,6 +71,7 @@ export type SuspensionPageReader = Pick<
   | 'listPage'
   | 'countByState'
   | 'countByMonth'
+  | 'countUndated'
   | 'listByMemberIds'
   | 'listByIds'
   | 'listDateEdits'

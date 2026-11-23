@@ -2284,6 +2284,7 @@ describe('workspace GETs', () => {
     expect(Object.keys(susp).sort()).toEqual([
       'countByMonth',
       'countByState',
+      'countUndated',
       'listByIds',
       'listByMemberIds',
       'listDateEdits',

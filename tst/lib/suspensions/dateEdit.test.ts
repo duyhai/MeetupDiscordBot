@@ -116,6 +116,27 @@ describe('editSuspensionDate', () => {
     }
   });
 
+  it('a confirmed placeholder date is date-confirmed, logged as a confirmation without the member', async () => {
+    const { deps } = setup({
+      ok: true,
+      confirmed: true,
+      before: record('2026-09-30', 30),
+      after: record('2026-09-30', 30),
+    });
+    expect(
+      await editSuspensionDate(deps, input({ date: '2026-09-30' })),
+    ).toEqual({ code: 'date-confirmed' });
+    await settle();
+    expect(deps.moderationLog).toHaveBeenCalledTimes(1);
+    const entry = JSON.stringify(deps.moderationLog.mock.calls[0]);
+    expect(entry).toContain('Suspension date confirmed');
+    expect(entry).toContain('suspension #12');
+    expect(entry).toContain('2026-09-30');
+    expect(entry).not.toContain('→');
+    expect(entry).not.toContain('Alexis');
+    expect(entry).not.toContain('465124222');
+  });
+
   it.each([
     ['not-live', 'not-live'],
     ['unchanged', 'date-unchanged'],
