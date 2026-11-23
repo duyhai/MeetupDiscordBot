@@ -2,7 +2,6 @@ import { MeetupCreateEventCommands } from './meetup/createEvent.js';
 import { MeetupGetEventStatsCommands } from './meetup/getEventStats.js';
 import { MeetupNoShowCommands } from './meetup/getNoShow.js';
 import { MeetupGetTokenCommands } from './meetup/getToken.js';
-import { MeetupGetUnannouncedEventsCommands } from './meetup/getUnannouncedEvents.js';
 import { IdentityReportCommands } from './meetup/identityReport.js';
 import { MeetupListSuspensionsCommands } from './meetup/listSuspensions.js';
 import { MeetupNoShowReportCommands } from './meetup/noShowReport.js';
@@ -21,7 +20,6 @@ const Commands = [
   MeetupGetEventStatsCommands,
   MeetupListSuspensionsCommands,
   MeetupGetTokenCommands,
-  MeetupGetUnannouncedEventsCommands,
   MeetupNoShowCommands,
   MeetupNoShowReportCommands,
   MeetupRecordSuspensionCommands,

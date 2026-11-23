@@ -36,7 +36,6 @@ import {
   getSelfPastRsvpCount,
   getSelfId,
   getSelfPastRsvpEvents,
-  getUserHostedEvents,
   getUserInfo,
   getUserMembershipInfo,
 } from './queries.js';
@@ -80,8 +79,6 @@ import {
   GetMemberRsvpsResponse,
   GetSelfPastRsvpEventsInput,
   GetSelfPastRsvpEventsResponse,
-  GetUserHostedEventsInput,
-  GetUserHostedEventsResponse,
   GetUserInfoResponse,
   GetUserMembershipInfoInput,
   GetUserMembershipInfoResponse,
@@ -325,25 +322,6 @@ export class GqlMeetupClient {
         return { meetupId: id, events };
       }
       after = rsvps.pageInfo.endCursor;
-    }
-  }
-
-  public async getUserHostedEvents(input: PaginationInput) {
-    logger.info(
-      `Calling getUserHostedEvents with input: ${JSON.stringify(input)}`,
-    );
-    try {
-      const result = await this.client.request<
-        GetUserHostedEventsResponse,
-        GetUserHostedEventsInput
-      >(getUserHostedEvents, {
-        ...input,
-      });
-      logger.info(`getUserHostedEvents result: ${JSON.stringify(result)}`);
-      return result;
-    } catch (error) {
-      logger.error(error);
-      throw error;
     }
   }
 
