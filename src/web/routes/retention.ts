@@ -15,6 +15,7 @@ import {
   FOLLOWING_YEARS,
   HeadlineTile,
   NINETY_DAYS,
+  WINDOW_MONTHS,
   Rate,
   RetentionData,
   RetentionView,
@@ -26,7 +27,7 @@ import {
   monthsBetween,
   percent,
   sumCohorts,
-  thirdEventContrast,
+  thirdEventFollowUp,
   yearRows,
 } from '../../lib/retention/retention.js';
 import { chart } from '../charts.js';
@@ -90,14 +91,43 @@ function shareOf(rate: Rate): string {
     : '–';
 }
 
+/** 'July 2025 to June 2026', or the one month. */
+function span(first: string, last: string): string {
+  return first === last
+    ? monthName(first)
+    : `${monthName(first)} to ${monthName(last)}`;
+}
+
+function monthCount(n: number): string {
+  return n === 1 ? '1 month' : `${n} months`;
+}
+
+/**
+ * A headline tile. The line under the number names the months actually
+ * counted: fewer than 12 when the data starts inside the window, and then
+ * it says how many.
+ */
 function tile(label: string, t: HeadlineTile): SafeHtml {
+  if (t.months === 0) {
+    return html`<div class="stat">
+      <dt>${label}</dt>
+      <dd>–</dd>
+      <dd class="stat-note">No first-timers have had the full time yet.</dd>
+    </div>`;
+  }
+  function short(n: number): string {
+    return n < WINDOW_MONTHS ? ` (${monthCount(n)} only)` : '';
+  }
+  const before =
+    t.previousMonths === 0
+      ? 'No earlier months to compare.'
+      : `Before that, ${span(t.previousFirst, t.previousLast)}${short(t.previousMonths)}: ${shareOf(t.previous)}.`;
   return html`<div class="stat">
     <dt>${label}</dt>
     <dd>${share(t.rate)}</dd>
     <dd class="stat-note">
       ${whole(t.rate.count)} of ${whole(t.rate.of)} members whose first event
-      was ${monthName(t.first)} to ${monthName(t.last)}. The 12 months before:
-      ${shareOf(t.previous)}.
+      was ${span(t.first, t.last)}${short(t.months)}. ${before}
     </dd>
   </div>`;
 }
@@ -114,6 +144,24 @@ const section = (
 
 const soFar = html` <span class="badge neutral">so far</span>`;
 
+/**
+ * The comparison under the ladder; nothing when either group is empty (no
+ * month in the range has had its 270 days, or everyone is in one group).
+ */
+function followUpNote(f: ReturnType<typeof thirdEventFollowUp>): SafeHtml | '' {
+  if (f.last === undefined || f.early.of === 0 || f.notEarly.of === 0) {
+    return '';
+  }
+  return html`<p class="chart-note">
+    An early third event goes with staying: of members whose first event was
+    ${span(f.first, f.last)}, ${shareOf(f.early)} of those who attended a third
+    event within 90 days of their first also attended an event 91 to 270 days
+    after it, against ${shareOf(f.notEarly)} of those who did not reach a third
+    event in 90 days. The two go together; this does not show that one causes
+    the other.
+  </p>`;
+}
+
 function body(view: RetentionView, range: RangeChoice): SafeHtml {
   const asOfMonth = view.asOf.slice(0, 7);
   const earliest = view.cohorts[0]?.month ?? asOfMonth;
@@ -125,7 +173,7 @@ function body(view: RetentionView, range: RangeChoice): SafeHtml {
 
   // The ladder: first events in the range, matured months only.
   const steps = ladder(sumCohorts(view.cohorts, first, matured));
-  const contrast = thirdEventContrast(view);
+  const followUp = thirdEventFollowUp(view, first);
   const years = yearRows(view);
 
   // 90-day rates by month: matured months that had first-timers.
@@ -162,9 +210,10 @@ function body(view: RetentionView, range: RangeChoice): SafeHtml {
     </dl>
     <p class="muted chart-note">
       Each number is for the latest 12 months of first-timers who have all had
-      the full time: 90 days after their first event for the first two, a year
-      for the third. “Still coming a year on” is the share who attended an event
-      9 to 12 months after their first.
+      the full time (fewer months when the data does not go back that far): 90
+      days after their first event for the first two, 365 days for the third.
+      “Still coming a year on” is the share who attended an event roughly 9 to
+      12 months after their first (days 271 to 365).
     </p>
     ${rangeNav(range)}
     <p class="muted">
@@ -181,24 +230,19 @@ function body(view: RetentionView, range: RangeChoice): SafeHtml {
         series: [
           {
             label: 'Came to another',
-            values: steps.map((s) => percent(s.rate) ?? 0),
+            // Nobody reached that many events: no bar, not a 0% one.
+            values: steps.map((s) => percent(s.rate) ?? null),
           },
         ],
       }),
       html`<p class="muted chart-note">
           Of members who attended that many events, the share who went on to
           attend one more, at any time since. Counts members whose first event
-          was ${monthName(first)} to ${monthName(matured)}: the latest three
-          months of first-timers are left out because they have had little time
-          to come back.
+          was ${span(first <= matured ? first : matured, matured)}. First-timers
+          after ${monthName(matured)} are left out: not all of them have had 90
+          days to come back.
         </p>
-        <p class="chart-note">
-          Why the third event matters: of members whose first event was
-          ${monthName(contrast.first)} to ${monthName(contrast.last)},
-          ${shareOf(contrast.reached)} of those who reached a third event
-          attended in the last 180 days, against ${shareOf(contrast.never)} of
-          those who did not.
-        </p>`,
+        ${followUpNote(followUp)}`,
     )}
     ${section(
       'The first steps, by first-event year',
@@ -217,9 +261,11 @@ function body(view: RetentionView, range: RangeChoice): SafeHtml {
             ${years.map(
               (y) =>
                 html`<tr>
-                  <td>${y.year}${y.filling ? soFar : ''}</td>
-                  <td>${whole(y.members)}</td>
-                  ${y.steps.map((s) => html`<td>${share(s)}</td>`)}
+                  <td>${y.year}</td>
+                  <td>${whole(y.members)}${y.filling ? soFar : ''}</td>
+                  ${y.steps.map(
+                    (s) => html`<td>${share(s)}${y.filling ? soFar : ''}</td>`,
+                  )}
                 </tr>`,
             )}
           </tbody>
@@ -228,8 +274,8 @@ function body(view: RetentionView, range: RangeChoice): SafeHtml {
       html`<p class="muted chart-note">
         For members whose first event was in each year: the share who attended a
         second event, then of those the share who attended a third, then a
-        fourth. A year marked “so far” still has first-timers with less than 90
-        days behind them, so its numbers will rise.
+        fourth. Numbers marked “so far” are for a year that still has
+        first-timers with less than 90 days behind them: they will change.
       </p>`,
     )}
     ${section(
@@ -312,9 +358,9 @@ function body(view: RetentionView, range: RangeChoice): SafeHtml {
               (y) =>
                 html`<tr>
                   <td>${y.year}</td>
-                  <td>${whole(y.members)}</td>
-                  <td>${share(y.oneOnly)}</td>
-                  <td>${share(y.fiveOrMore)}</td>
+                  <td>${whole(y.members)}${y.filling ? soFar : ''}</td>
+                  <td>${share(y.oneOnly)}${y.filling ? soFar : ''}</td>
+                  <td>${share(y.fiveOrMore)}${y.filling ? soFar : ''}</td>
                   ${y.following.map((f) => {
                     if (f.state === 'future') {
                       return html`<td></td>`;
@@ -332,7 +378,8 @@ function body(view: RetentionView, range: RangeChoice): SafeHtml {
         Each row is the members whose first event was in that year. “One event
         only” and “Five or more” count every event they have attended since. “1
         year later” is the share who attended at least one event in the next
-        calendar year, and so on. A year that is not over is marked “so far”.
+        calendar year, and so on. A year that is not over, and the newest year’s
+        own numbers, are marked “so far”.
       </p>`,
     )}
   </div>`;

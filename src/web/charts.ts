@@ -20,7 +20,8 @@ export const CHART_COLORS: readonly string[] = [
 
 export interface ChartSeries {
   label: string;
-  values: readonly number[];
+  /** null: nothing to show there (a rate with nobody to count). No mark, and a dash in the data table. */
+  values: readonly (number | null)[];
   color?: string;
 }
 
@@ -57,8 +58,8 @@ function fmt(n: number): string {
 }
 
 /** A drawable value: finite and positive, else 0. */
-function clean(v: number): number {
-  return Number.isFinite(v) && v > 0 ? v : 0;
+function clean(v: number | null | undefined): number {
+  return typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : 0;
 }
 
 /**
@@ -205,6 +206,10 @@ export function chart(input: ChartInput): SafeHtml {
   const n = input.categories.length;
   const isPercent = input.unit === 'percent';
   /** A value as its label says it: "62%" on a percent chart, else the number. */
+  /** A data table cell: a dash for a missing value. */
+  function cell(v: number | null | undefined): string {
+    return v === null ? '–' : shown(clean(v));
+  }
   function shown(v: number): string {
     return isPercent ? `${v}%` : String(v);
   }
@@ -240,7 +245,10 @@ export function chart(input: ChartInput): SafeHtml {
     const { color, own } = colorOf(s, si);
     const values = s.values.slice(0, n);
     if (input.kind === 'bar') {
-      const bars = values.map((v, i) => {
+      const bars = values.flatMap((v, i) => {
+        if (v === null) {
+          return [];
+        }
         const bx = fmt(pad.left + slot * i + slot * 0.1 + barW * si);
         if (!tooltips) {
           return html`<rect
@@ -262,7 +270,12 @@ export function chart(input: ChartInput): SafeHtml {
       });
       return seriesGroup(si, own, bars);
     }
+    if (values.length === 1 && values[0] === null) {
+      return seriesGroup(si, own, []);
+    }
     if (values.length === 1) {
+      // One line, so the hover text has no stray whitespace.
+      const only = `${input.categories[0]}: ${shown(clean(values[0]))}`;
       return seriesGroup(
         si,
         own,
@@ -271,27 +284,38 @@ export function chart(input: ChartInput): SafeHtml {
           cy="${fmt(y(values[0]))}"
           r="3"
           fill="${color}"
-          ><title>
-            ${input.categories[0]}: ${shown(clean(values[0]))}
-          </title></circle
+          ><title>${only}</title></circle
         >`,
       );
     }
-    const points = values.map((v, i) => `${fmt(x(i))},${fmt(y(v))}`).join(' ');
+    // A missing value has no point: the line runs between its neighbours.
+    const points = values
+      .flatMap((v, i) => {
+        return v === null ? [] : [`${fmt(x(i))},${fmt(y(v))}`];
+      })
+      .join(' ');
     // A dot per point carrying its value as a hover title, as the bars do
     // (up to MAX_TOOLTIP_CATEGORIES; past that the data table has them).
     const dots = tooltips
-      ? values.map((v, i) => {
-          // One line, so the hover text has no stray whitespace.
-          const tip = `${input.categories[i]} · ${s.label}: ${shown(clean(v))}`;
-          return html`<circle
+      ? values
+          .map((v, i) => {
+            if (v === null) {
+              return undefined;
+            }
+            // One line, so the hover text has no stray whitespace.
+            const tip = `${input.categories[i]} · ${s.label}: ${shown(clean(v))}`;
+            // The markup's own indentation is part of the output: kept as it
+            // was, so a count chart is byte-identical (charts.test.ts).
+            // prettier-ignore
+            return html`<circle
             cx="${fmt(x(i))}"
             cy="${fmt(y(v))}"
             r="3"
             fill="${color}"
             ><title>${tip}</title></circle
           >`;
-        })
+          })
+          .filter((dot): dot is SafeHtml => dot !== undefined)
       : [];
     return seriesGroup(si, own, [line(si, points, color), ...dots]);
   });
@@ -387,7 +411,7 @@ export function chart(input: ChartInput): SafeHtml {
                 html`<tr>
                   <td>${c}</td>
                   ${input.series.map(
-                    (s) => html`<td>${shown(clean(s.values[i] ?? 0))}</td>`,
+                    (s) => html`<td>${cell(s.values[i])}</td>`,
                   )}
                 </tr>`,
             )}

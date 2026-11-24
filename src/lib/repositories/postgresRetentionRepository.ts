@@ -10,8 +10,7 @@ import { dashboardPool } from './dashboardPool.js';
 
 /** What the retention loader reads. */
 export interface RetentionStore {
-  /** `asOf`: a Pacific day, YYYY-MM-DD (the snapshot's day). */
-  aggregates(asOf: string): Promise<RetentionAggregates>;
+  aggregates(): Promise<RetentionAggregates>;
 }
 
 /**
@@ -32,10 +31,9 @@ const ATTENDED = `r.status IN ('YES', 'ATTENDED')
  * aggregate small enough for the default work_mem: `members` is one row per
  * member, `member_months` one per member and month they attended. Rows
  * out: one per first-event month, one per month with attendance, one per
- * (first-event year, active year). No member id leaves the database.
- *
- * $1 is the as-of Pacific day: `recent` is an attended event in the 180
- * days up to it.
+ * (first-event year, active year). No member id leaves the database, and
+ * the statement takes no parameter: what counts as matured is decided from
+ * these rows by src/lib/retention/retention.ts.
  */
 const AGGREGATES = `
 WITH att AS MATERIALIZED (
@@ -56,8 +54,8 @@ members AS (
          count(*) AS total,
          min(day) FILTER (WHERE rn = 2) AS second_day,
          min(day) FILTER (WHERE rn = 3) AS third_day,
-         coalesce(bool_or(day - first_day BETWEEN 271 AND 365), false) AS year_on,
-         coalesce(bool_or(day > $1::date - 180), false) AS recent
+         bool_or(day - first_day BETWEEN 271 AND 365) AS year_on,
+         bool_or(day - first_day BETWEEN 91 AND 270) AS later
     FROM att
    GROUP BY member_id
 ),
@@ -72,11 +70,13 @@ cohorts AS (
          count(*) FILTER (WHERE total >= 4)::int AS "reached4",
          count(*) FILTER (WHERE total >= 5)::int AS "reached5",
          count(*) FILTER (WHERE total >= 6)::int AS "reached6",
-         -- Sixth-and-later attendances, and those of them that had a next.
-         coalesce(sum(greatest(total - 5, 0)), 0)::int AS "sixPlus",
-         coalesce(sum(greatest(total - 6, 0)), 0)::int AS "sixPlusAgain",
-         count(*) FILTER (WHERE recent AND total >= 3)::int AS "recentThree",
-         count(*) FILTER (WHERE recent AND total < 3)::int AS "recentUnderThree"
+         count(*) FILTER (WHERE total >= 7)::int AS "reached7",
+         -- Attended on days 91 to 270 after the first event, split by whether
+         -- the third event came within 90 days (a NULL third_day is "no").
+         count(*) FILTER (WHERE later AND third_day - first_day <= 90)::int
+           AS "laterThird90",
+         count(*) FILTER (WHERE later AND (third_day - first_day <= 90) IS NOT TRUE)::int
+           AS "laterNoThird90"
     FROM members
    GROUP BY 1
 ),
@@ -125,12 +125,12 @@ export class PostgresRetentionRepository implements RetentionStore {
     return this.singleton;
   }
 
-  async aggregates(asOf: string): Promise<RetentionAggregates> {
+  async aggregates(): Promise<RetentionAggregates> {
     const result = await this.pool.query<{
       cohorts: CohortMonth[];
       months: ActivityMonth[];
       years: YearCell[];
-    }>(AGGREGATES, [asOf]);
+    }>(AGGREGATES);
     const row = result.rows[0];
     return { cohorts: row.cohorts, months: row.months, years: row.years };
   }

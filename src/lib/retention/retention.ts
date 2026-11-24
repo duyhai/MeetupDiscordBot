@@ -34,18 +34,19 @@ export interface CohortMonth {
   third90: number;
   /** Of them: attended an event 271 to 365 days after the first. */
   yearOn: number;
-  /** Of them: attended at least 2, 3, 4, 5, 6 events (ever). */
+  /** Of them: attended at least 2, 3, 4, 5, 6, 7 events (ever). */
   reached2: number;
   reached3: number;
   reached4: number;
   reached5: number;
   reached6: number;
-  /** Their sixth-and-later attendances, and how many of those had a next. */
-  sixPlus: number;
-  sixPlusAgain: number;
-  /** Of them: attended in the 180 days to the as-of day, by total events (3+, under 3). */
-  recentThree: number;
-  recentUnderThree: number;
+  reached7: number;
+  /**
+   * Of them: attended an event 91 to 270 days after the first, split by
+   * whether their third event came within 90 days of the first or not.
+   */
+  laterThird90: number;
+  laterNoThird90: number;
 }
 
 /** One month with attendance. */
@@ -82,6 +83,8 @@ export type RetentionData = { ready: false } | RetentionView;
 
 /** The 90-day rates' window, and the one-year rate's. */
 export const NINETY_DAYS = 90;
+/** The follow-up window after the first 90 days ends on this day. */
+export const FOLLOW_UP_DAYS = 270;
 export const ONE_YEAR_DAYS = 365;
 /** Months in a headline window. */
 export const WINDOW_MONTHS = 12;
@@ -155,10 +158,9 @@ const FIELDS: readonly (keyof CohortSums)[] = [
   'reached4',
   'reached5',
   'reached6',
-  'sixPlus',
-  'sixPlusAgain',
-  'recentThree',
-  'recentUnderThree',
+  'reached7',
+  'laterThird90',
+  'laterNoThird90',
 ];
 
 /** The cohort months in [first, last], added up. */
@@ -179,14 +181,33 @@ export function sumCohorts(
 }
 
 export interface HeadlineTile {
-  /** The window's first and last first-event month. */
+  /**
+   * The window's first and last first-event month: the latest 12 matured
+   * months, or fewer when the data starts inside the window (`months` says
+   * how many).
+   */
   first: string;
   last: string;
+  months: number;
   rate: Rate;
-  /** The 12 months before the window. */
+  /** The up to 12 months before the window; `previousMonths` 0 with none. */
   previousFirst: string;
   previousLast: string;
+  previousMonths: number;
   previous: Rate;
+}
+
+/** [first, last] cut to start no earlier than `earliest`, and its length in months. */
+function covered(
+  first: string,
+  last: string,
+  earliest: string | undefined,
+): { first: string; months: number } {
+  if (earliest === undefined || earliest > last) {
+    return { first, months: 0 };
+  }
+  const from = earliest > first ? earliest : first;
+  return { first: from, months: monthsBetween(from, last).length };
 }
 
 function tile(
@@ -194,19 +215,27 @@ function tile(
   days: number,
   field: 'second90' | 'third90' | 'yearOn',
 ): HeadlineTile {
+  const earliest = view.cohorts.map((c) => c.month).sort()[0];
   const last = lastMatured(view.asOf, days);
-  const first = addMonths(last, 1 - WINDOW_MONTHS);
-  const previousLast = addMonths(first, -1);
-  const previousFirst = addMonths(previousLast, 1 - WINDOW_MONTHS);
-  const now = sumCohorts(view.cohorts, first, last);
-  const before = sumCohorts(view.cohorts, previousFirst, previousLast);
-  return {
-    first,
-    last,
-    rate: { count: now[field], of: now.members },
-    previousFirst,
+  const windowFirst = addMonths(last, 1 - WINDOW_MONTHS);
+  const previousLast = addMonths(windowFirst, -1);
+  const now = covered(windowFirst, last, earliest);
+  const before = covered(
+    addMonths(previousLast, 1 - WINDOW_MONTHS),
     previousLast,
-    previous: { count: before[field], of: before.members },
+    earliest,
+  );
+  const sums = sumCohorts(view.cohorts, now.first, last);
+  const earlier = sumCohorts(view.cohorts, before.first, previousLast);
+  return {
+    first: now.first,
+    last,
+    months: now.months,
+    rate: { count: sums[field], of: sums.members },
+    previousFirst: before.first,
+    previousLast,
+    previousMonths: before.months,
+    previous: { count: earlier[field], of: earlier.members },
   };
 }
 
@@ -227,7 +256,7 @@ export function headlines(view: RetentionAggregates & { asOf: string }): {
 }
 
 export interface LadderStep {
-  /** '1' to '5', then '6+'. */
+  /** '1' to '6'. */
   events: string;
   /** Members who attended that many events, and those who attended another. */
   rate: Rate;
@@ -241,7 +270,7 @@ export function ladder(sums: CohortSums): LadderStep[] {
     { events: '3', rate: { count: sums.reached4, of: sums.reached3 } },
     { events: '4', rate: { count: sums.reached5, of: sums.reached4 } },
     { events: '5', rate: { count: sums.reached6, of: sums.reached5 } },
-    { events: '6+', rate: { count: sums.sixPlusAgain, of: sums.sixPlus } },
+    { events: '6', rate: { count: sums.reached7, of: sums.reached6 } },
   ];
 }
 
@@ -309,31 +338,34 @@ export function yearRows(
 }
 
 /**
- * Why the third event matters: of members whose first event was one to five
- * years before the as-of month, the share who attended in the last 180
- * days, for those who reached a third event and those who did not.
+ * Whether an early third event goes with staying: members are split by
+ * whether their third event came within 90 days of the first, and for each
+ * group the share who attended an event 91 to 270 days after the first (a
+ * window that starts after the split is decided, so neither group is in it
+ * by definition). Counts first-event months from `from` whose members have
+ * all had the full 270 days. An association, not a cause. `last` is
+ * undefined when no month in the range has matured.
  */
-export function thirdEventContrast(
+export function thirdEventFollowUp(
   view: RetentionAggregates & { asOf: string },
-): { first: string; last: string; reached: Rate; never: Rate } {
-  const asOfMonth = view.asOf.slice(0, 7);
-  const last = addMonths(asOfMonth, -12);
-  const first = addMonths(asOfMonth, -59);
-  const sums = sumCohorts(view.cohorts, first, last);
+  from: string,
+): { first: string; last: string | undefined; early: Rate; notEarly: Rate } {
+  const last = lastMatured(view.asOf, FOLLOW_UP_DAYS);
+  const sums = sumCohorts(view.cohorts, from, last);
   return {
-    first,
-    last,
-    reached: { count: sums.recentThree, of: sums.reached3 },
-    never: {
-      count: sums.recentUnderThree,
-      of: Math.max(0, sums.members - sums.reached3),
+    first: from,
+    last: last >= from ? last : undefined,
+    early: { count: sums.laterThird90, of: sums.third90 },
+    notEarly: {
+      count: sums.laterNoThird90,
+      of: Math.max(0, sums.members - sums.third90),
     },
   };
 }
 
 export interface RetentionDeps {
   store: () => Promise<{
-    aggregates(asOf: string): Promise<RetentionAggregates>;
+    aggregates(): Promise<RetentionAggregates>;
   }>;
   snapshot: () => Promise<{
     hasFinishedFull(): Promise<boolean>;
@@ -352,8 +384,17 @@ export interface RetentionDeps {
 export function createRetentionLoader(deps: RetentionDeps): {
   load(): Promise<RetentionData>;
 } {
-  let cached: { key: string; view: RetentionView } | undefined;
-  let building: { key: string; promise: Promise<RetentionView> } | undefined;
+  type Entry<T> = { key: string; order: number; id: number } & T;
+  let cached: Entry<{ view: RetentionView }> | undefined;
+  let building: Entry<{ promise: Promise<RetentionView> }> | undefined;
+  /** Whether a run (finish time, then id) is older than the one an entry holds. */
+  const olderThan = (
+    order: number,
+    id: number,
+    entry: Entry<unknown> | undefined,
+  ): boolean =>
+    entry !== undefined &&
+    (order < entry.order || (order === entry.order && id < entry.id));
 
   return {
     async load(): Promise<RetentionData> {
@@ -362,28 +403,38 @@ export function createRetentionLoader(deps: RetentionDeps): {
         return { ready: false };
       }
       const run = await snapshot.lastFinishedRun();
+      const order = run?.finishedAt?.getTime() ?? 0;
+      const id = run?.id ?? 0;
       const key = `${run?.id ?? ''}:${run?.finishedAt?.getTime() ?? ''}`;
       if (cached?.key === key) {
+        return cached.view;
+      }
+      // A read that saw an older run than the one in flight or cached (two
+      // requests racing a finishing run) is answered with the newer one and
+      // never starts a build that could replace it.
+      if (building && olderThan(order, id, building)) {
+        return building.promise;
+      }
+      if (cached && olderThan(order, id, cached)) {
         return cached.view;
       }
       if (building?.key !== key) {
         const asOf = pacificDayOf(run?.finishedAt ?? deps.now());
         const promise = deps
           .store()
-          .then((store) => store.aggregates(asOf))
+          .then((store) => store.aggregates())
           .then((aggregates): RetentionView => ({
             ready: true,
             updatedAt: run?.finishedAt,
             asOf,
             ...aggregates,
           }));
-        const mine = { key, promise };
+        const mine = { key, order, id, promise };
         building = mine;
         promise
           .then((view) => {
-            // A slower build for an older run never replaces a newer one.
             if (building === mine) {
-              cached = { key, view };
+              cached = { key, order, id, view };
             }
           })
           .catch(() => undefined)

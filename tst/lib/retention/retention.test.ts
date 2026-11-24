@@ -13,7 +13,7 @@ import {
   monthsBetween,
   percent,
   sumCohorts,
-  thirdEventContrast,
+  thirdEventFollowUp,
   yearRows,
 } from '../../../src/lib/retention/retention.js';
 
@@ -31,10 +31,9 @@ const cohort = (
   reached4: 4,
   reached5: 3,
   reached6: 2,
-  sixPlus: 20,
-  sixPlusAgain: 18,
-  recentThree: 2,
-  recentUnderThree: 1,
+  reached7: 1,
+  laterThird90: 3,
+  laterNoThird90: 1,
   ...over,
 });
 
@@ -131,9 +130,11 @@ describe('headlines', () => {
     expect(third90).toEqual({
       first: '2025-07',
       last: '2026-06',
+      months: 12,
       rate: { count: 48, of: 120 },
       previousFirst: '2024-07',
       previousLast: '2025-06',
+      previousMonths: 12,
       previous: { count: 48, of: 120 },
     });
     expect(second90.rate).toEqual({ count: 72, of: 120 });
@@ -145,10 +146,46 @@ describe('headlines', () => {
     ]);
   });
 
-  it('with nothing stored the rates count nobody', () => {
+  it('with nothing stored the rates count nobody, over no months', () => {
     const { third90 } = headlines(view('2026-10-05', []));
     expect(third90.rate).toEqual({ count: 0, of: 0 });
     expect(third90.previous).toEqual({ count: 0, of: 0 });
+    expect([third90.months, third90.previousMonths]).toEqual([0, 0]);
+  });
+
+  it('a window the data only partly fills names the months it really covers', () => {
+    // Data from March 2026; the 90-day window would be July 2025 to June 2026.
+    const young = headlines(
+      view(
+        '2026-10-05',
+        monthsBetween('2026-03', '2026-10').map((m) => cohort(m)),
+      ),
+    );
+    expect(young.third90).toMatchObject({
+      first: '2026-03',
+      last: '2026-06',
+      months: 4,
+      rate: { count: 16, of: 40 },
+      previousMonths: 0,
+      previous: { count: 0, of: 0 },
+    });
+    // Nothing has had a year yet.
+    expect(young.yearOn).toMatchObject({ months: 0, rate: { of: 0 } });
+    // Data from January 2025: the earlier window is partly filled.
+    const older = headlines(
+      view(
+        '2026-10-05',
+        monthsBetween('2025-01', '2026-10').map((m) => cohort(m)),
+      ),
+    );
+    expect(older.third90).toMatchObject({
+      first: '2025-07',
+      months: 12,
+      previousFirst: '2025-01',
+      previousLast: '2025-06',
+      previousMonths: 6,
+      previous: { count: 24, of: 60 },
+    });
   });
 });
 
@@ -161,7 +198,8 @@ describe('ladder', () => {
       ['3', 4, 5],
       ['4', 3, 4],
       ['5', 2, 3],
-      ['6+', 18, 20],
+      // Members, like every other step: 2 reached a sixth, 1 a seventh.
+      ['6', 1, 2],
     ]);
   });
 });
@@ -226,19 +264,33 @@ describe('yearRows', () => {
   });
 });
 
-describe('thirdEventContrast', () => {
-  it('counts first events from five years to one year before the as-of month', () => {
-    const contrast = thirdEventContrast(
+describe('thirdEventFollowUp', () => {
+  it('counts months from the given one whose members have all had 270 days', () => {
+    // As of October 5, 2026: December 2025 is the last month with 270 days
+    // behind it (December 31 + 270 is September 27).
+    const followUp = thirdEventFollowUp(
       view('2026-10-05', [
-        cohort('2021-10'),
-        cohort('2021-11'),
+        cohort('2025-09'),
         cohort('2025-10'),
-        cohort('2025-11'),
+        cohort('2025-12'),
+        cohort('2026-01', { laterThird90: 99, laterNoThird90: 99 }),
       ]),
+      '2025-10',
     );
-    expect([contrast.first, contrast.last]).toEqual(['2021-11', '2025-10']);
-    expect(contrast.reached).toEqual({ count: 4, of: 10 });
-    expect(contrast.never).toEqual({ count: 2, of: 10 });
+    expect([followUp.first, followUp.last]).toEqual(['2025-10', '2025-12']);
+    // Of the 4 + 4 with an early third event, 3 + 3 came back later; of the
+    // other 6 + 6, 1 + 1.
+    expect(followUp.early).toEqual({ count: 6, of: 8 });
+    expect(followUp.notEarly).toEqual({ count: 2, of: 12 });
+  });
+
+  it('has no last month when the range starts after the last matured month', () => {
+    const followUp = thirdEventFollowUp(
+      view('2026-10-05', [cohort('2026-03')]),
+      '2026-02',
+    );
+    expect(followUp.last).toBeUndefined();
+    expect(followUp.early).toEqual({ count: 0, of: 0 });
   });
 });
 
@@ -260,13 +312,11 @@ describe('createRetentionLoader', () => {
 
   function setup(ready = true) {
     const state = { run: run(1, '2026-10-05T16:00:00Z') };
-    const aggregates = vi.fn(
-      async (_asOf: string): Promise<RetentionAggregates> => ({
-        cohorts: [cohort('2026-01')],
-        months: [],
-        years: [],
-      }),
-    );
+    const aggregates = vi.fn(async (): Promise<RetentionAggregates> => ({
+      cohorts: [cohort('2026-01')],
+      months: [],
+      years: [],
+    }));
     const loader = createRetentionLoader({
       store: async () => ({ aggregates }),
       snapshot: async () => ({
@@ -285,11 +335,10 @@ describe('createRetentionLoader', () => {
   });
 
   it("the as-of day is the run's Pacific day, not the clock's", async () => {
-    const { state, aggregates, loader } = setup();
+    const { state, loader } = setup();
     // 05:00 UTC on Oct 6 is still Oct 5 in Seattle.
     state.run = run(1, '2026-10-06T05:00:00Z');
     const data = await loader.load();
-    expect(aggregates).toHaveBeenCalledWith('2026-10-05');
     expect(data).toMatchObject({
       ready: true,
       asOf: '2026-10-05',
@@ -305,7 +354,6 @@ describe('createRetentionLoader', () => {
     state.run = run(2, '2026-10-06T16:00:00Z');
     await loader.load();
     expect(aggregates).toHaveBeenCalledTimes(2);
-    expect(aggregates).toHaveBeenLastCalledWith('2026-10-06');
     // The same run id finishing again (a resumed run) is a new key too.
     state.run = run(2, '2026-10-06T18:00:00Z');
     await loader.load();
@@ -322,6 +370,53 @@ describe('createRetentionLoader', () => {
     expect(aggregates).toHaveBeenCalledTimes(1);
     expect(a).toBe(b);
     expect(b).toBe(c);
+  });
+
+  it('a read that saw an older run never replaces or rebuilds a newer one', async () => {
+    const { state, aggregates, loader } = setup();
+    const newer = run(2, '2026-10-06T16:00:00Z');
+    const older = run(1, '2026-10-05T16:00:00Z');
+    // Cached: the newer run. A late read still sees the older run.
+    state.run = newer;
+    const fresh = await loader.load();
+    state.run = older;
+    expect(await loader.load()).toBe(fresh);
+    expect(aggregates).toHaveBeenCalledTimes(1);
+    // The same finish time with a lower id is older too.
+    state.run = run(1, '2026-10-06T16:00:00Z');
+    expect(await loader.load()).toBe(fresh);
+    expect(aggregates).toHaveBeenCalledTimes(1);
+  });
+
+  it('a read that saw an older run while a newer one is building waits for the newer', async () => {
+    const { state, aggregates, loader } = setup();
+    let release: (value: RetentionAggregates) => void = () => undefined;
+    aggregates.mockImplementationOnce(
+      () =>
+        new Promise<RetentionAggregates>((resolve) => {
+          release = resolve;
+        }),
+    );
+    state.run = run(2, '2026-10-06T16:00:00Z');
+    const building = loader.load();
+    // Let the first load reach its query before the second starts.
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
+    state.run = run(1, '2026-10-05T16:00:00Z');
+    const late = loader.load();
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
+    release({ cohorts: [cohort('2026-02')], months: [], years: [] });
+    const [a, b] = await Promise.all([building, late]);
+    expect(aggregates).toHaveBeenCalledTimes(1);
+    expect(b).toBe(a);
+    expect(a).toMatchObject({ asOf: '2026-10-06' });
+    // And the newer run is what stays cached.
+    state.run = run(2, '2026-10-06T16:00:00Z');
+    expect(await loader.load()).toBe(a);
+    expect(aggregates).toHaveBeenCalledTimes(1);
   });
 
   it('a failed read is thrown and not kept: the next read tries again', async () => {

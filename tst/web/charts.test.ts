@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -344,5 +346,95 @@ describe('percent charts (the Retention page)', () => {
 
   it('a count chart is unchanged: no % anywhere', () => {
     expect(render()).not.toContain('%');
+  });
+
+  it('a missing value has no bar and a dash in the table; 0 is still 0%', () => {
+    const out = percent({
+      categories: ['1', '2', '3'],
+      series: [{ label: 'Came to another', values: [72, null, 0] }],
+    });
+    expect(out.match(/<rect/g)).toHaveLength(2);
+    expect(out).toContain('<td>72%</td>');
+    expect(out).toContain('<td>–</td>');
+    expect(out).toContain('<td>0%</td>');
+    expect(out).not.toMatch(/NaN|null/);
+  });
+
+  it('a line skips a missing point and its dot', () => {
+    const out = percent({
+      kind: 'line',
+      categories: ['1', '2', '3'],
+      series: [{ label: 'x', values: [10, null, 30] }],
+    });
+    const points = /points="([^"]*)"/.exec(out)?.[1] ?? '';
+    expect(points.split(' ')).toHaveLength(2);
+    expect(out.match(/<circle/g)).toHaveLength(2);
+    const single = percent({
+      kind: 'line',
+      categories: ['1'],
+      series: [{ label: 'x', values: [null] }],
+    });
+    expect(single).not.toContain('<circle');
+    expect(single).toContain('<td>–</td>');
+  });
+});
+
+describe('count charts are byte-identical to before the percent option (PR 180)', () => {
+  // sha256 of chart(input).value from main at 0f6bb7f, before `unit` and
+  // null values existed: Trends and the host pages render exactly as they did.
+  const months = Array.from({ length: 70 }, (_unused, i) => `m${i}`);
+  const cases: [string, ChartInput, string][] = [
+    [
+      'bars, two series',
+      {
+        title: 'No-shows per month',
+        kind: 'bar',
+        categories: ['2026-08', '2026-09'],
+        series: [
+          { label: 'No-shows', values: [3, 5] },
+          { label: 'Warnings', values: [0, 12] },
+        ],
+      },
+      '4df68f2a2df7f0f308e18f6be763a2c4280f2ab0d34646c70cd9bbe144da7adb',
+    ],
+    [
+      'lines, two series',
+      {
+        title: 'Events and hosts',
+        kind: 'line',
+        categories: ['2026-07', '2026-08', '2026-09'],
+        series: [
+          { label: 'Events', values: [61, 58, 70] },
+          { label: 'Hosts', values: [40, 44, 39] },
+        ],
+      },
+      '3ef96ec3d0161eec2a4c3104a1c9413908a34075a84d75b60f785400f9950aaa',
+    ],
+    [
+      'a line with one point',
+      {
+        title: 'Events and hosts',
+        kind: 'line',
+        categories: ['2026-09'],
+        series: [{ label: 'Events', values: [61] }],
+      },
+      '4068c253c229e2008b2669ad6794f3e464dc68c4fff61b1201fe70356db0e113',
+    ],
+    [
+      'bars past the tooltip limit',
+      {
+        title: 'New hosts per month',
+        kind: 'bar',
+        categories: months,
+        series: [{ label: 'New hosts', values: months.map((_m, i) => i % 7) }],
+      },
+      '8bddd9c575407b181067e41bb0bdcb916ba86bace2a5f55f631019ff5e45e7e2',
+    ],
+  ];
+
+  it.each(cases)('%s', (_name, input, digest) => {
+    const out = chart(input).value;
+    expect(createHash('sha256').update(out).digest('hex')).toBe(digest);
+    expect(out).toContain('<title>');
   });
 });

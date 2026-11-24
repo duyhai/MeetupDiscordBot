@@ -116,17 +116,50 @@ describe('retention page', () => {
       [
         'Third event within 90 days',
         '40%',
-        '480 of 1,200 members whose first event was July 2025 to June 2026. The 12 months before: 35% (420 of 1,200).',
+        '480 of 1,200 members whose first event was July 2025 to June 2026. ' +
+          'Before that, July 2024 to June 2025: 35% (420 of 1,200).',
       ],
       [
         'Second event within 90 days',
         '60%',
-        '720 of 1,200 members whose first event was July 2025 to June 2026. The 12 months before: 60% (720 of 1,200).',
+        '720 of 1,200 members whose first event was July 2025 to June 2026. ' +
+          'Before that, July 2024 to June 2025: 60% (720 of 1,200).',
       ],
       [
         'Still coming a year on',
         '30%',
-        '360 of 1,200 members whose first event was October 2024 to September 2025. The 12 months before: 30% (360 of 1,200).',
+        '360 of 1,200 members whose first event was October 2024 to September 2025. ' +
+          'Before that, October 2023 to September 2024: 30% (360 of 1,200).',
+      ],
+    ]);
+  });
+
+  it('tiles with fewer than 12 matured months say which months they cover', async () => {
+    // Data from September 2025 only: ten months have had 90 days, one a year.
+    const view = retentionView();
+    const { get } = await setup(
+      retentionView({
+        cohorts: view.cohorts.filter((c) => c.month >= '2025-09'),
+      }),
+    );
+    expect(tiles((await get(PAGE)).text)).toEqual([
+      [
+        'Third event within 90 days',
+        '40%',
+        '400 of 1,000 members whose first event was September 2025 to June 2026 (10 months only). ' +
+          'No earlier months to compare.',
+      ],
+      [
+        'Second event within 90 days',
+        '60%',
+        '600 of 1,000 members whose first event was September 2025 to June 2026 (10 months only). ' +
+          'No earlier months to compare.',
+      ],
+      [
+        'Still coming a year on',
+        '30%',
+        '30 of 100 members whose first event was September 2025 (1 month only). ' +
+          'No earlier months to compare.',
       ],
     ]);
   });
@@ -134,9 +167,10 @@ describe('retention page', () => {
   it('says what the tiles count', async () => {
     const { get } = await setup();
     expect(words((await get(PAGE)).text)).toContain(
-      'Each number is for the latest 12 months of first-timers who have all had the full time: 90 days ' +
-        'after their first event for the first two, a year for the third. “Still coming a year on” is ' +
-        'the share who attended an event 9 to 12 months after their first.',
+      'Each number is for the latest 12 months of first-timers who have all had the full time ' +
+        '(fewer months when the data does not go back that far): 90 days after their first event ' +
+        'for the first two, 365 days for the third. “Still coming a year on” is the share who ' +
+        'attended an event roughly 9 to 12 months after their first (days 271 to 365).',
     );
   });
 
@@ -159,29 +193,30 @@ describe('retention page', () => {
     const { get } = await setup();
     const text = words((await get(PAGE)).text);
     expect(text).toContain(
-      'Of members who attended that many events, the share who went on to attend one more, at any time ' +
-        'since. Counts members whose first event was November 2024 to June 2026: the latest three months ' +
-        'of first-timers are left out because they have had little time to come back.',
+      'Of members who attended that many events, the share who went on to attend one more, ' +
+        'at any time since. Counts members whose first event was November 2024 to June 2026. ' +
+        'First-timers after June 2026 are left out: not all of them have had 90 days to come back.',
     );
     expect(text).toContain(
-      'For members whose first event was in each year: the share who attended a second event, then of ' +
-        'those the share who attended a third, then a fourth.',
+      'For members whose first event was in each year: the share who attended a second event, ' +
+        'then of those the share who attended a third, then a fourth. Numbers marked “so far” are ' +
+        'for a year that still has first-timers with less than 90 days behind them: they will change.',
     );
     expect(text).toContain(
-      'Of members whose first event was in each month, the share who attended a second event, and a ' +
-        'third, within 90 days of the first. A month appears once all its first-timers have had the full ' +
-        '90 days; a month with no first-timers is left out.',
+      'Of members whose first event was in each month, the share who attended a second event, ' +
+        'and a third, within 90 days of the first. A month appears once all its first-timers have ' +
+        'had the full 90 days; a month with no first-timers is left out.',
     );
     expect(text).toContain(
-      'Members who attended at least one event that month. New: it was their first event with the ' +
-        'group. Returning: they had attended before. The latest month is still filling in.',
+      'Members who attended at least one event that month. New: it was their first event with ' +
+        'the group. Returning: they had attended before. The latest month is still filling in.',
     );
     expect(text).toContain(
       'Each row is the members whose first event was in that year.',
     );
     expect(text).toContain(
-      '“1 year later” is the share who attended at least one event in the next calendar year, and so ' +
-        'on. A year that is not over is marked “so far”.',
+      '“1 year later” is the share who attended at least one event in the next calendar year, ' +
+        'and so on. A year that is not over, and the newest year’s own numbers, are marked “so far”.',
     );
   });
 
@@ -193,17 +228,62 @@ describe('retention page', () => {
       ['3', '88%'],
       ['4', '86%'],
       ['5', '90%'],
-      ['6+', '93%'],
+      // Members who reached a seventh event, of those who reached a sixth.
+      ['6', '92%'],
     ]);
   });
 
-  it('why the third event matters, for first events one to five years back', async () => {
+  it('an early third event and staying: a fair comparison, worded as an association', async () => {
     const { get } = await setup();
-    expect(words((await get(PAGE)).text)).toContain(
-      'Why the third event matters: of members whose first event was November 2021 to October 2025, ' +
-        '25% (476 of 1,904) of those who reached a third event attended in the last 180 days, against 2% ' +
-        '(34 of 1,496) of those who did not.',
+    const text = words((await get(PAGE)).text);
+    // December 2025 is the last month whose members have all had 270 days.
+    expect(text).toContain(
+      'An early third event goes with staying: of members whose first event was ' +
+        'November 2024 to December 2025, 75% (420 of 560) of those who attended a third event ' +
+        'within 90 days of their first also attended an event 91 to 270 days after it, against ' +
+        '20% (168 of 840) of those who did not reach a third event in 90 days. ' +
+        'The two go together; this does not show that one causes the other.',
     );
+    expect(text).not.toMatch(/why the third/i);
+  });
+
+  it('the comparison is left out when a group is empty or no month has had 270 days', async () => {
+    const view = retentionView();
+    // Everyone reached a third event early: nobody to compare with.
+    const everyone = await setup(
+      retentionView({
+        cohorts: view.cohorts.map((c) => ({ ...c, third90: c.members })),
+      }),
+    );
+    expect(words((await everyone.get(PAGE)).text)).not.toContain(
+      'An early third event',
+    );
+    // Data from March 2026 only: no month is 270 days old.
+    const young = await setup(
+      retentionView({
+        cohorts: view.cohorts.filter((c) => c.month >= '2026-03'),
+      }),
+    );
+    const text = words((await young.get(PAGE)).text);
+    expect(text).not.toContain('An early third event');
+    expect(text).not.toMatch(/– of those/);
+  });
+
+  it('a step nobody reached is a dash with no bar, not 0%', async () => {
+    const view = retentionView();
+    const { get } = await setup(
+      retentionView({
+        cohorts: view.cohorts.map((c) => ({ ...c, reached6: 0, reached7: 0 })),
+      }),
+    );
+    const res = await get(PAGE);
+    expect(dataTable(res.text, LADDER).slice(4)).toEqual([
+      ['5', '0%'],
+      ['6', '–'],
+    ]);
+    const start = res.text.indexOf(`aria-label="${LADDER}"`);
+    const svg = res.text.slice(start, res.text.indexOf('</svg>', start));
+    expect(svg.match(/<rect/g)).toHaveLength(5);
   });
 
   it('the monthly line has matured months only, and skips a month with no first-timers', async () => {
@@ -248,7 +328,7 @@ describe('retention page', () => {
       ['2023', '1,200', '70%', '80%', '88%'],
       ['2024', '1,200', '70%', '80%', '88%'],
       ['2025', '1,200', '70%', '80%', '88%'],
-      ['2026 so far', '1,000', '70%', '80%', '88%'],
+      ['2026', '1,000 so far', '70% so far', '80% so far', '88% so far'],
     ]);
   });
 
@@ -258,7 +338,8 @@ describe('retention page', () => {
       ['2023', '1,200', '30%', '42%', '40%', '40%', '40% so far', '', ''],
       ['2024', '1,200', '30%', '42%', '40%', '40% so far', '', '', ''],
       ['2025', '1,200', '30%', '42%', '40% so far', '', '', '', ''],
-      ['2026', '1,000', '30%', '42%', '', '', '', '', ''],
+      // The newest year's own numbers are still filling too.
+      ['2026', '1,000 so far', '30% so far', '42% so far', '', '', '', '', ''],
     ]);
   });
 
