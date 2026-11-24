@@ -162,8 +162,8 @@ function followUpNote(f: ReturnType<typeof thirdEventFollowUp>): SafeHtml | '' {
     Among members who came back within 90 days of their first event (first
     events ${span(f.first, f.last)}): ${shareOf(f.early)} of those who reached a
     third event in that time also attended on days 91 to 270 after their first,
-    against ${shareOf(f.stopped)} of those who stopped at two. The two go
-    together; this does not show that one causes the other.
+    against ${shareOf(f.stopped)} of those who stopped at two in that time. The
+    two go together; this does not show that one causes the other.
   </p>`;
 }
 

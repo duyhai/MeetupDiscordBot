@@ -244,7 +244,7 @@ describe('retention page', () => {
       'Among members who came back within 90 days of their first event ' +
         '(first events November 2024 to December 2025): 75% (420 of 560) of those who reached ' +
         'a third event in that time also attended on days 91 to 270 after their first, against ' +
-        '30% (84 of 280) of those who stopped at two. ' +
+        '30% (84 of 280) of those who stopped at two in that time. ' +
         'The two go together; this does not show that one causes the other.',
     );
     expect(text).not.toMatch(/why the third/i);
@@ -273,12 +273,16 @@ describe('retention page', () => {
     expect(await shown(few(6))).toBe(false);
     // 20 is enough.
     expect(await shown(few(7))).toBe(true);
-    // Too few with an early third event, the other way round.
-    expect(
-      await shown(
-        view.cohorts.map((c) => ({ ...c, third90: 1, laterThird90: 0 })),
-      ),
-    ).toBe(false);
+    // The same for the early group: 19 members with a third event within
+    // 90 days is one short, 20 is enough.
+    const fewEarly = (extra: number) =>
+      view.cohorts.map((c) => ({
+        ...c,
+        third90: c.month === '2025-01' ? extra : 1,
+        laterThird90: 0,
+      }));
+    expect(await shown(fewEarly(6))).toBe(false);
+    expect(await shown(fewEarly(7))).toBe(true);
     // Data from March 2026 only: no month is 270 days old.
     expect(await shown(view.cohorts.filter((c) => c.month >= '2026-03'))).toBe(
       false,
