@@ -216,7 +216,8 @@ describe('retention page', () => {
     );
     expect(text).toContain(
       '“1 year later” is the share who attended at least one event in the next calendar year, ' +
-        'and so on. A year that is not over, and the newest year’s own numbers, are marked “so far”.',
+        'and so on. A year that is not over, and the own numbers of a year whose first-timers ' +
+        'have not all had 90 days, are marked “so far”.',
     );
   });
 
@@ -233,40 +234,76 @@ describe('retention page', () => {
     ]);
   });
 
-  it('an early third event and staying: a fair comparison, worded as an association', async () => {
+  it('an early third event and staying: only members who came back within 90 days, worded as an association', async () => {
     const { get } = await setup();
     const text = words((await get(PAGE)).text);
     // December 2025 is the last month whose members have all had 270 days.
+    // Per month: 60 came back within 90 days; 40 reached a third in that
+    // time (30 back later), 20 stopped at two (6 back later).
     expect(text).toContain(
-      'An early third event goes with staying: of members whose first event was ' +
-        'November 2024 to December 2025, 75% (420 of 560) of those who attended a third event ' +
-        'within 90 days of their first also attended an event 91 to 270 days after it, against ' +
-        '20% (168 of 840) of those who did not reach a third event in 90 days. ' +
+      'Among members who came back within 90 days of their first event ' +
+        '(first events November 2024 to December 2025): 75% (420 of 560) of those who reached ' +
+        'a third event in that time also attended on days 91 to 270 after their first, against ' +
+        '30% (84 of 280) of those who stopped at two. ' +
         'The two go together; this does not show that one causes the other.',
     );
     expect(text).not.toMatch(/why the third/i);
   });
 
-  it('the comparison is left out when a group is empty or no month has had 270 days', async () => {
+  it('the comparison is left out when either group has under 20 members or no month has had 270 days', async () => {
     const view = retentionView();
-    // Everyone reached a third event early: nobody to compare with.
-    const everyone = await setup(
-      retentionView({
-        cohorts: view.cohorts.map((c) => ({ ...c, third90: c.members })),
-      }),
-    );
-    expect(words((await everyone.get(PAGE)).text)).not.toContain(
-      'An early third event',
-    );
+    const shown = async (cohorts: typeof view.cohorts) => {
+      const { get } = await setup(retentionView({ cohorts }));
+      const text = words((await get(PAGE)).text);
+      expect(text).not.toMatch(/– of those/);
+      return text.includes('Among members who came back within 90 days');
+    };
+    // Everyone who came back reached a third event: nobody stopped at two.
+    expect(
+      await shown(view.cohorts.map((c) => ({ ...c, third90: c.second90 }))),
+    ).toBe(false);
+    // 19 members stopped at two over the 14 months (one month has 6, the
+    // rest 1 each): one short.
+    const few = (extra: number) =>
+      view.cohorts.map((c) => ({
+        ...c,
+        second90: c.third90 + (c.month === '2025-01' ? extra : 1),
+        laterTwo90: 0,
+      }));
+    expect(await shown(few(6))).toBe(false);
+    // 20 is enough.
+    expect(await shown(few(7))).toBe(true);
+    // Too few with an early third event, the other way round.
+    expect(
+      await shown(
+        view.cohorts.map((c) => ({ ...c, third90: 1, laterThird90: 0 })),
+      ),
+    ).toBe(false);
     // Data from March 2026 only: no month is 270 days old.
-    const young = await setup(
+    expect(await shown(view.cohorts.filter((c) => c.month >= '2026-03'))).toBe(
+      false,
+    );
+  });
+
+  it('the notes name months that have data when the range starts before it', async () => {
+    const view = retentionView();
+    // Data from September 2025; the default range starts in November 2024,
+    // and 5 years in November 2021.
+    const { get } = await setup(
       retentionView({
-        cohorts: view.cohorts.filter((c) => c.month >= '2026-03'),
+        cohorts: view.cohorts.filter((c) => c.month >= '2025-09'),
       }),
     );
-    const text = words((await young.get(PAGE)).text);
-    expect(text).not.toContain('An early third event');
-    expect(text).not.toMatch(/– of those/);
+    for (const query of ['', '?months=60', '?months=all']) {
+      // eslint-disable-next-line no-await-in-loop
+      const text = words((await get(`${PAGE}${query}`)).text);
+      expect(text, query).toContain(
+        'Counts members whose first event was September 2025 to June 2026.',
+      );
+      expect(text, query).toContain(
+        '(first events September 2025 to December 2025)',
+      );
+    }
   });
 
   it('a step nobody reached is a dash with no bar, not 0%', async () => {

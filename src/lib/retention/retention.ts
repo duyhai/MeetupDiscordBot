@@ -42,11 +42,12 @@ export interface CohortMonth {
   reached6: number;
   reached7: number;
   /**
-   * Of them: attended an event 91 to 270 days after the first, split by
-   * whether their third event came within 90 days of the first or not.
+   * Of them: attended an event 91 to 270 days after the first, for members
+   * whose third event came within 90 days of the first, and for members who
+   * came back within 90 days but stopped at two events in that time.
    */
   laterThird90: number;
-  laterNoThird90: number;
+  laterTwo90: number;
 }
 
 /** One month with attendance. */
@@ -160,7 +161,7 @@ const FIELDS: readonly (keyof CohortSums)[] = [
   'reached6',
   'reached7',
   'laterThird90',
-  'laterNoThird90',
+  'laterTwo90',
 ];
 
 /** The cohort months in [first, last], added up. */
@@ -215,7 +216,7 @@ function tile(
   days: number,
   field: 'second90' | 'third90' | 'yearOn',
 ): HeadlineTile {
-  const earliest = view.cohorts.map((c) => c.month).sort()[0];
+  const earliest = earliestCohort(view.cohorts);
   const last = lastMatured(view.asOf, days);
   const windowFirst = addMonths(last, 1 - WINDOW_MONTHS);
   const previousLast = addMonths(windowFirst, -1);
@@ -337,28 +338,43 @@ export function yearRows(
   });
 }
 
+/** The comparison is not shown with fewer members than this in either group. */
+export const FOLLOW_UP_MIN_GROUP = 20;
+
+/** The earliest first-event month present; undefined with none. */
+export function earliestCohort(
+  cohorts: readonly CohortMonth[],
+): string | undefined {
+  return cohorts.map((c) => c.month).sort()[0];
+}
+
 /**
- * Whether an early third event goes with staying: members are split by
- * whether their third event came within 90 days of the first, and for each
- * group the share who attended an event 91 to 270 days after the first (a
- * window that starts after the split is decided, so neither group is in it
- * by definition). Counts first-event months from `from` whose members have
- * all had the full 270 days. An association, not a cause. `last` is
- * undefined when no month in the range has matured.
+ * Whether an early third event goes with staying, among members who came
+ * back at all: only members who attended a second event within 90 days of
+ * their first are counted, split into those who reached a third within 90
+ * days too and those who stopped at two in that time. For each group, the
+ * share who attended an event 91 to 270 days after the first: a window that
+ * starts after the split is decided, and one-event members (who would be a
+ * zero by definition) are in neither group. Counts first-event months from
+ * `from` (or the earliest month present, if later) whose members have all
+ * had the full 270 days. An association, not a cause. `last` is undefined
+ * when no month in the range has matured.
  */
 export function thirdEventFollowUp(
   view: RetentionAggregates & { asOf: string },
   from: string,
-): { first: string; last: string | undefined; early: Rate; notEarly: Rate } {
+): { first: string; last: string | undefined; early: Rate; stopped: Rate } {
+  const earliest = earliestCohort(view.cohorts);
+  const first = earliest !== undefined && earliest > from ? earliest : from;
   const last = lastMatured(view.asOf, FOLLOW_UP_DAYS);
-  const sums = sumCohorts(view.cohorts, from, last);
+  const sums = sumCohorts(view.cohorts, first, last);
   return {
-    first: from,
-    last: last >= from ? last : undefined,
+    first,
+    last: last >= first ? last : undefined,
     early: { count: sums.laterThird90, of: sums.third90 },
-    notEarly: {
-      count: sums.laterNoThird90,
-      of: Math.max(0, sums.members - sums.third90),
+    stopped: {
+      count: sums.laterTwo90,
+      of: Math.max(0, sums.second90 - sums.third90),
     },
   };
 }

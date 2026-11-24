@@ -281,34 +281,42 @@ interface Fixture {
         // Members, not attendances: 10 and 11 reached a sixth, only 10 a seventh.
         reached7: 1,
         laterThird90: 0,
-        laterNoThird90: 0,
+        laterTwo90: 0,
       });
     });
 
-    it('after the first 90 days: an event on days 91 to 270, split by an early third event', async () => {
+    it('after the first 90 days: an event on days 91 to 270, among members who came back within 90 days', async () => {
       const first = '2024-03-01';
       await seed([
-        { id: '1', at: at(first), yes: ['20', '21', '22', '23', '24', '25'] },
+        {
+          id: '1',
+          at: at(first),
+          yes: ['20', '21', '22', '23', '24', '25', '26', '27'],
+        },
         { id: '2', at: at(first, 10), yes: ['20', '21', '25'] },
-        // 20 and 21: a third event on day 20; 25: on day 90, the last day in.
+        // Third within 90 days: 20 and 21 on day 20, 25 on day 90 (the last
+        // day in).
         { id: '3', at: at(first, 20), yes: ['20', '21'] },
         { id: '4', at: at(first, 90), yes: ['25', '24'] },
-        // 20 comes back on day 91; 21 only on day 271, outside the window.
-        { id: '5', at: at(first, 91), yes: ['20', '23'] },
+        // Third in 90 days and back later: 20, on day 91. 21 only comes on
+        // day 271, outside the window; 25 never again.
+        { id: '5', at: at(first, 91), yes: ['20', '23', '27'] },
         { id: '6', at: at(first, 271), yes: ['21'] },
-        // 22 has two events, the second on day 270: later, no early third.
-        { id: '7', at: at(first, 270), yes: ['22'] },
-        // 23's third event is the day-91 one: not early, but it is attendance
-        // in the later window.
+        // Stopped at two in 90 days and back later: 23 (days 0, 5, then 91).
         { id: '8', at: at(first, 5), yes: ['23'] },
-        // 24 (days 0 and 90) and 25 (0, 10, 90) have nothing after day 90.
+        // Stopped at two and not back: 24 (days 0 and 90).
+        // In neither group, whatever they did later: 22 (second event on day
+        // 270), 27 (second on day 91, third on day 100) and 26 (one event).
+        { id: '7', at: at(first, 270), yes: ['22'] },
+        { id: '9', at: at(first, 100), yes: ['27'] },
       ]);
       const { cohorts } = await repo.aggregates();
       expect(cohort(cohorts, '2024-03')).toMatchObject({
-        members: 6,
+        members: 8,
+        second90: 5,
         third90: 3,
         laterThird90: 1,
-        laterNoThird90: 2,
+        laterTwo90: 1,
       });
     });
 
@@ -388,7 +396,7 @@ interface Fixture {
         second90: 1,
         reached3: 1,
         third90: 0,
-        laterNoThird90: 1,
+        laterTwo90: 1,
       });
       expect(months[0]).toEqual({
         month: '2025-06',

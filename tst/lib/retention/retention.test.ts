@@ -33,7 +33,7 @@ const cohort = (
   reached6: 2,
   reached7: 1,
   laterThird90: 3,
-  laterNoThird90: 1,
+  laterTwo90: 1,
   ...over,
 });
 
@@ -273,24 +273,39 @@ describe('thirdEventFollowUp', () => {
         cohort('2025-09'),
         cohort('2025-10'),
         cohort('2025-12'),
-        cohort('2026-01', { laterThird90: 99, laterNoThird90: 99 }),
+        cohort('2026-01', { laterThird90: 99, laterTwo90: 99 }),
       ]),
       '2025-10',
     );
     expect([followUp.first, followUp.last]).toEqual(['2025-10', '2025-12']);
-    // Of the 4 + 4 with an early third event, 3 + 3 came back later; of the
-    // other 6 + 6, 1 + 1.
+    // Each month: 6 came back within 90 days, 4 of them reached a third in
+    // that time (3 back later) and 2 stopped at two (1 back later). The 4
+    // who did not come back within 90 days are in neither group.
     expect(followUp.early).toEqual({ count: 6, of: 8 });
-    expect(followUp.notEarly).toEqual({ count: 2, of: 12 });
+    expect(followUp.stopped).toEqual({ count: 2, of: 4 });
   });
 
-  it('has no last month when the range starts after the last matured month', () => {
+  it('names the earliest month present when the range starts before the data', () => {
     const followUp = thirdEventFollowUp(
+      view('2026-10-05', [cohort('2025-08'), cohort('2025-11')]),
+      '2021-11',
+    );
+    expect([followUp.first, followUp.last]).toEqual(['2025-08', '2025-12']);
+  });
+
+  it('has no last month when nothing in the range has matured', () => {
+    const late = thirdEventFollowUp(
       view('2026-10-05', [cohort('2026-03')]),
       '2026-02',
     );
-    expect(followUp.last).toBeUndefined();
-    expect(followUp.early).toEqual({ count: 0, of: 0 });
+    expect(late.last).toBeUndefined();
+    expect(late.early).toEqual({ count: 0, of: 0 });
+    // The data itself starts after the last matured month.
+    const young = thirdEventFollowUp(
+      view('2026-10-05', [cohort('2026-03')]),
+      '2024-11',
+    );
+    expect(young.last).toBeUndefined();
   });
 });
 

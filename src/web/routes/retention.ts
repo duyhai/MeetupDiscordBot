@@ -13,6 +13,7 @@ import {
 import { monthLabel, parsePeriodKey } from '../../lib/reports/period.js';
 import {
   FOLLOWING_YEARS,
+  FOLLOW_UP_MIN_GROUP,
   HeadlineTile,
   NINETY_DAYS,
   WINDOW_MONTHS,
@@ -145,20 +146,24 @@ const section = (
 const soFar = html` <span class="badge neutral">so far</span>`;
 
 /**
- * The comparison under the ladder; nothing when either group is empty (no
- * month in the range has had its 270 days, or everyone is in one group).
+ * The comparison under the ladder; nothing when no month in the range has
+ * had its 270 days or either group has under FOLLOW_UP_MIN_GROUP members
+ * (a percentage of a handful says nothing).
  */
 function followUpNote(f: ReturnType<typeof thirdEventFollowUp>): SafeHtml | '' {
-  if (f.last === undefined || f.early.of === 0 || f.notEarly.of === 0) {
+  if (
+    f.last === undefined ||
+    f.early.of < FOLLOW_UP_MIN_GROUP ||
+    f.stopped.of < FOLLOW_UP_MIN_GROUP
+  ) {
     return '';
   }
   return html`<p class="chart-note">
-    An early third event goes with staying: of members whose first event was
-    ${span(f.first, f.last)}, ${shareOf(f.early)} of those who attended a third
-    event within 90 days of their first also attended an event 91 to 270 days
-    after it, against ${shareOf(f.notEarly)} of those who did not reach a third
-    event in 90 days. The two go together; this does not show that one causes
-    the other.
+    Among members who came back within 90 days of their first event (first
+    events ${span(f.first, f.last)}): ${shareOf(f.early)} of those who reached a
+    third event in that time also attended on days 91 to 270 after their first,
+    against ${shareOf(f.stopped)} of those who stopped at two. The two go
+    together; this does not show that one causes the other.
   </p>`;
 }
 
@@ -174,6 +179,10 @@ function body(view: RetentionView, range: RangeChoice): SafeHtml {
   // The ladder: first events in the range, matured months only.
   const steps = ladder(sumCohorts(view.cohorts, first, matured));
   const followUp = thirdEventFollowUp(view, first);
+  // The months the ladder note names: from the first month that has data,
+  // and never after the cut-off.
+  const dataFirst = earliest > first ? earliest : first;
+  const ladderFirst = dataFirst <= matured ? dataFirst : matured;
   const years = yearRows(view);
 
   // 90-day rates by month: matured months that had first-timers.
@@ -238,9 +247,9 @@ function body(view: RetentionView, range: RangeChoice): SafeHtml {
       html`<p class="muted chart-note">
           Of members who attended that many events, the share who went on to
           attend one more, at any time since. Counts members whose first event
-          was ${span(first <= matured ? first : matured, matured)}. First-timers
-          after ${monthName(matured)} are left out: not all of them have had 90
-          days to come back.
+          was ${span(ladderFirst, matured)}. First-timers after
+          ${monthName(matured)} are left out: not all of them have had 90 days
+          to come back.
         </p>
         ${followUpNote(followUp)}`,
     )}
@@ -378,8 +387,9 @@ function body(view: RetentionView, range: RangeChoice): SafeHtml {
         Each row is the members whose first event was in that year. “One event
         only” and “Five or more” count every event they have attended since. “1
         year later” is the share who attended at least one event in the next
-        calendar year, and so on. A year that is not over, and the newest year’s
-        own numbers, are marked “so far”.
+        calendar year, and so on. A year that is not over, and the own numbers
+        of a year whose first-timers have not all had 90 days, are marked “so
+        far”.
       </p>`,
     )}
   </div>`;

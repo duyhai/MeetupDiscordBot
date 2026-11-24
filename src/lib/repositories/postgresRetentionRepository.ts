@@ -71,12 +71,15 @@ cohorts AS (
          count(*) FILTER (WHERE total >= 5)::int AS "reached5",
          count(*) FILTER (WHERE total >= 6)::int AS "reached6",
          count(*) FILTER (WHERE total >= 7)::int AS "reached7",
-         -- Attended on days 91 to 270 after the first event, split by whether
-         -- the third event came within 90 days (a NULL third_day is "no").
+         -- Attended on days 91 to 270 after the first event, among members
+         -- who came back within 90 days: those whose third event was within
+         -- 90 days too, and those who stopped at two in that time (a NULL
+         -- third_day is "no third").
          count(*) FILTER (WHERE later AND third_day - first_day <= 90)::int
            AS "laterThird90",
-         count(*) FILTER (WHERE later AND (third_day - first_day <= 90) IS NOT TRUE)::int
-           AS "laterNoThird90"
+         count(*) FILTER (WHERE later AND second_day - first_day <= 90
+                            AND (third_day - first_day <= 90) IS NOT TRUE)::int
+           AS "laterTwo90"
     FROM members
    GROUP BY 1
 ),

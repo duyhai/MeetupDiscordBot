@@ -20,7 +20,11 @@ export const CHART_COLORS: readonly string[] = [
 
 export interface ChartSeries {
   label: string;
-  /** null: nothing to show there (a rate with nobody to count). No mark, and a dash in the data table. */
+  /**
+   * null: nothing to show there (a rate with nobody to count). No bar or
+   * dot, and a dash in the data table. A line does not break at a null: it
+   * runs straight between the neighbouring points.
+   */
   values: readonly (number | null)[];
   color?: string;
 }
@@ -206,12 +210,12 @@ export function chart(input: ChartInput): SafeHtml {
   const n = input.categories.length;
   const isPercent = input.unit === 'percent';
   /** A value as its label says it: "62%" on a percent chart, else the number. */
+  function shown(v: number): string {
+    return isPercent ? `${v}%` : String(v);
+  }
   /** A data table cell: a dash for a missing value. */
   function cell(v: number | null | undefined): string {
     return v === null ? '–' : shown(clean(v));
-  }
-  function shown(v: number): string {
-    return isPercent ? `${v}%` : String(v);
   }
   const dataMax = Math.max(
     1,
@@ -288,7 +292,8 @@ export function chart(input: ChartInput): SafeHtml {
         >`,
       );
     }
-    // A missing value has no point: the line runs between its neighbours.
+    // A missing value has no point, and the line is not broken there: it
+    // bridges from the point before to the point after.
     const points = values
       .flatMap((v, i) => {
         return v === null ? [] : [`${fmt(x(i))},${fmt(y(v))}`];

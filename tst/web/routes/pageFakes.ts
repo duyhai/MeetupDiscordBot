@@ -1127,7 +1127,7 @@ export function cohortMonth(
     reached6: 38,
     reached7: 35,
     laterThird90: 30,
-    laterNoThird90: 12,
+    laterTwo90: 6,
     ...over,
   };
 }
