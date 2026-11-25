@@ -30,6 +30,7 @@ export const DASHBOARD_PATHS = {
   identity: '/identity',
   identityThumb: '/identity/changes/:id/thumb/:side',
   trends: '/trends',
+  retention: '/retention',
   refresh: '/reports/:period/refresh',
   sessions: '/sessions',
   revokeSessions: '/sessions/revoke',

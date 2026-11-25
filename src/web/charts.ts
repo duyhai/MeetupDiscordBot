@@ -20,7 +20,12 @@ export const CHART_COLORS: readonly string[] = [
 
 export interface ChartSeries {
   label: string;
-  values: readonly number[];
+  /**
+   * null: nothing to show there (a rate with nobody to count). No bar or
+   * dot, and a dash in the data table. A line does not break at a null: it
+   * runs straight between the neighbouring points.
+   */
+  values: readonly (number | null)[];
   color?: string;
 }
 
@@ -35,6 +40,12 @@ export interface ChartInput {
   height?: number;
   /** The data table's first column heading. Default 'Month'. */
   categoryLabel?: string;
+  /**
+   * 'percent': the values are whole percentages. The axis runs 0 to 100 in
+   * steps of 25 and the axis labels, hover titles and data table say "%".
+   * Left out, the values are counts.
+   */
+  unit?: 'percent';
 }
 
 const DEFAULT_WIDTH = 720;
@@ -51,8 +62,8 @@ function fmt(n: number): string {
 }
 
 /** A drawable value: finite and positive, else 0. */
-function clean(v: number): number {
-  return Number.isFinite(v) && v > 0 ? v : 0;
+function clean(v: number | null | undefined): number {
+  return typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : 0;
 }
 
 /**
@@ -197,15 +208,25 @@ export function chart(input: ChartInput): SafeHtml {
   const plotH = height - pad.top - pad.bottom;
   const baseline = pad.top + plotH;
   const n = input.categories.length;
+  const isPercent = input.unit === 'percent';
+  /** A value as its label says it: "62%" on a percent chart, else the number. */
+  function shown(v: number): string {
+    return isPercent ? `${v}%` : String(v);
+  }
+  /** A data table cell: a dash for a missing value. */
+  function cell(v: number | null | undefined): string {
+    return v === null ? '–' : shown(clean(v));
+  }
   const dataMax = Math.max(
     1,
     ...input.series.flatMap((s) => s.values.slice(0, n).map(clean)),
   );
   // The scale tops out at the first gridline at or above the data, so the
   // top line is a labelled value.
-  const yStep = niceStep(dataMax);
-  const yMax = Math.ceil(dataMax / yStep) * yStep;
-  const y = (v: number) => baseline - (clean(v) / yMax) * plotH;
+  const yStep = isPercent ? 25 : niceStep(dataMax);
+  const yMax = isPercent ? 100 : Math.ceil(dataMax / yStep) * yStep;
+  // A percent chart's values stop at the top of its scale.
+  const y = (v: number) => baseline - (Math.min(clean(v), yMax) / yMax) * plotH;
   const slot = plotW / n;
   const x = (i: number) => pad.left + slot * (i + 0.5);
   const colorOf = (
@@ -228,7 +249,10 @@ export function chart(input: ChartInput): SafeHtml {
     const { color, own } = colorOf(s, si);
     const values = s.values.slice(0, n);
     if (input.kind === 'bar') {
-      const bars = values.map((v, i) => {
+      const bars = values.flatMap((v, i) => {
+        if (v === null) {
+          return [];
+        }
         const bx = fmt(pad.left + slot * i + slot * 0.1 + barW * si);
         if (!tooltips) {
           return html`<rect
@@ -245,12 +269,17 @@ export function chart(input: ChartInput): SafeHtml {
           width="${fmt(barW)}"
           height="${fmt(baseline - y(v))}"
           fill="${color}"
-          ><title>${input.categories[i]}: ${clean(v)}</title></rect
+          ><title>${input.categories[i]}: ${shown(clean(v))}</title></rect
         >`;
       });
       return seriesGroup(si, own, bars);
     }
+    if (values.length === 1 && values[0] === null) {
+      return seriesGroup(si, own, []);
+    }
     if (values.length === 1) {
+      // One line, so the hover text has no stray whitespace.
+      const only = `${input.categories[0]}: ${shown(clean(values[0]))}`;
       return seriesGroup(
         si,
         own,
@@ -259,25 +288,39 @@ export function chart(input: ChartInput): SafeHtml {
           cy="${fmt(y(values[0]))}"
           r="3"
           fill="${color}"
-          ><title>${input.categories[0]}: ${clean(values[0])}</title></circle
+          ><title>${only}</title></circle
         >`,
       );
     }
-    const points = values.map((v, i) => `${fmt(x(i))},${fmt(y(v))}`).join(' ');
+    // A missing value has no point, and the line is not broken there: it
+    // bridges from the point before to the point after.
+    const points = values
+      .flatMap((v, i) => {
+        return v === null ? [] : [`${fmt(x(i))},${fmt(y(v))}`];
+      })
+      .join(' ');
     // A dot per point carrying its value as a hover title, as the bars do
     // (up to MAX_TOOLTIP_CATEGORIES; past that the data table has them).
     const dots = tooltips
-      ? values.map((v, i) => {
-          // One line, so the hover text has no stray whitespace.
-          const tip = `${input.categories[i]} · ${s.label}: ${clean(v)}`;
-          return html`<circle
+      ? values
+          .map((v, i) => {
+            if (v === null) {
+              return undefined;
+            }
+            // One line, so the hover text has no stray whitespace.
+            const tip = `${input.categories[i]} · ${s.label}: ${shown(clean(v))}`;
+            // The markup's own indentation is part of the output: kept as it
+            // was, so a count chart is byte-identical (charts.test.ts).
+            // prettier-ignore
+            return html`<circle
             cx="${fmt(x(i))}"
             cy="${fmt(y(v))}"
             r="3"
             fill="${color}"
             ><title>${tip}</title></circle
           >`;
-        })
+          })
+          .filter((dot): dot is SafeHtml => dot !== undefined)
       : [];
     return seriesGroup(si, own, [line(si, points, color), ...dots]);
   });
@@ -324,7 +367,7 @@ export function chart(input: ChartInput): SafeHtml {
         y="${fmt(y(v) + 4)}"
         font-size="11"
         text-anchor="end"
-        >${v}</text
+        >${shown(v)}</text
       >`,
   );
   // The first swatch sits at the text's x; later ones get a gap. dx is a
@@ -373,7 +416,7 @@ export function chart(input: ChartInput): SafeHtml {
                 html`<tr>
                   <td>${c}</td>
                   ${input.series.map(
-                    (s) => html`<td>${clean(s.values[i] ?? 0)}</td>`,
+                    (s) => html`<td>${cell(s.values[i])}</td>`,
                   )}
                 </tr>`,
             )}

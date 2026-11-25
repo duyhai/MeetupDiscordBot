@@ -11,6 +11,7 @@ import { LogEntry } from '../../lib/helpers/discordLogger.js';
 import type { editSuspensionDate } from '../../lib/suspensions/dateEdit.js';
 import { RebuildResult } from '../../lib/reports/buildJob.js';
 import { Period } from '../../lib/reports/period.js';
+import type { RetentionData } from '../../lib/retention/retention.js';
 import { PostgresBanRepository } from '../../lib/repositories/postgresBanRepository.js';
 import { PostgresIdentityRepository } from '../../lib/repositories/postgresIdentityRepository.js';
 import { PostgresMemberRepository } from '../../lib/repositories/postgresMemberRepository.js';
@@ -41,6 +42,7 @@ import { HostRequestDeps, registerHostRequestRoutes } from './hostRequests.js';
 import { registerIdentityRoutes } from './identity.js';
 import { registerNoShowHistoryRoutes } from './noShowHistory.js';
 import { registerRefreshRoute } from './refresh.js';
+import { registerRetentionRoutes } from './retention.js';
 import { registerSessionRoutes } from './sessions.js';
 import { registerSuspensionRoutes } from './suspensions.js';
 import { registerTrendsRoutes } from './trends.js';
@@ -191,6 +193,11 @@ export interface DashboardPageDeps
   workspaceActions: WorkspaceActions;
   /** Live upcoming RSVPs for the workspace's suspension cards (createUpcomingLoader). Never rejects. */
   upcoming: (memberIds: string[]) => Promise<Map<string, UpcomingEntry>>;
+  /**
+   * The Retention page's numbers (createRetentionLoader: computed once per
+   * snapshot run). `ready: false` before the first full snapshot.
+   */
+  retention: () => Promise<RetentionData>;
   /** The Wrapped backfill card and its Run now action. */
   wrappedBackfill: WrappedBackfillControl;
   /**
@@ -219,6 +226,7 @@ export function registerDashboardPages(
   registerBanRoutes(router, deps);
   registerIdentityRoutes(router, deps);
   registerTrendsRoutes(router, deps);
+  registerRetentionRoutes(router, deps);
   registerHostRequestRoutes(router, deps);
   registerHostPromotionRoutes(router, deps);
   registerWrappedBackfillRoute(router, deps);

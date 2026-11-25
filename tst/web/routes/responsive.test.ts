@@ -148,6 +148,7 @@ const TABLE_PAGES = [
   '/dashboard/events',
   '/dashboard/events/311000001',
   '/dashboard/trends',
+  '/dashboard/retention',
 ];
 
 const SAMPLE_PARAMS: Record<string, string> = {
@@ -236,14 +237,15 @@ describe('tables on narrow screens', () => {
     },
   );
 
-  it.each([['/dashboard/trends', 4]])(
-    '%s keeps its wide data tables in scroll boxes',
-    async (path, count) => {
-      const { get } = await setup();
-      const scrolling = tables((await get(path)).text).filter((t) => t.scroll);
-      expect(scrolling).toHaveLength(count);
-    },
-  );
+  it.each([
+    ['/dashboard/trends', 4],
+    // Three chart data tables and the two yearly tables.
+    ['/dashboard/retention', 5],
+  ])('%s keeps its wide data tables in scroll boxes', async (path, count) => {
+    const { get } = await setup();
+    const scrolling = tables((await get(path)).text).filter((t) => t.scroll);
+    expect(scrolling).toHaveLength(count);
+  });
 
   it.each([
     [`/dashboard/no-show-history/members/${CASE_MEMBER}`, 2],
@@ -472,6 +474,7 @@ describe('per-page polish', () => {
 
   it.each([
     '/dashboard/trends',
+    '/dashboard/retention',
     '/dashboard/suspensions',
     '/dashboard/no-shows/2026-09',
   ])('%s: range choices are a segmented control', async (path) => {

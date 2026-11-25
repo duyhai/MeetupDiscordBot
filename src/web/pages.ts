@@ -332,6 +332,10 @@ dl.stats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:var(--s2
 .stat dd{margin:0;font-size:var(--t-2xl);font-weight:700;line-height:1.2;color:var(--fg)}
 .stat.todo dd{color:var(--attn)}
 .stat.done dd{color:var(--ok-ink)}
+/* Retention's headline tiles: a line under each number saying what was counted; one column on a phone. */
+.stat dd.stat-note{margin-top:var(--s1);font-size:var(--t-sm);font-weight:400;line-height:1.4;color:var(--muted)}
+dl.stats.retention{margin-bottom:var(--s2)}
+@media (max-width:640px){dl.stats.retention{grid-template-columns:minmax(0,1fr)}}
 .actions{display:flex;flex-wrap:wrap;gap:var(--s2);align-items:flex-start;margin:var(--s3) 0}
 .actions form{margin:0}
 /* A table row's actions on one line: icon-only links (the Meetup mark, copy) beside the one worded button. */
@@ -732,6 +736,7 @@ export type NavKey =
   | 'eventChanges'
   | 'identity'
   | 'trends'
+  | 'retention'
   | 'settings'
   | 'sessions';
 
@@ -808,7 +813,14 @@ const NAV: readonly (NavPage | { group: string; pages: readonly NavPage[] })[] =
     },
     {
       group: 'Analytics',
-      pages: [page('trends', dashboardPath(DASHBOARD_PATHS.trends), 'Trends')],
+      pages: [
+        page('trends', dashboardPath(DASHBOARD_PATHS.trends), 'Trends'),
+        page(
+          'retention',
+          dashboardPath(DASHBOARD_PATHS.retention),
+          'Retention',
+        ),
+      ],
     },
     {
       group: 'Settings',
